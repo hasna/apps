@@ -10,7 +10,7 @@ import {
 } from "./send.api.js";
 import type { Provider, SendEmailOptions } from "../types/index.js";
 
-// In the self-hosted client, outbound sending goes through the authenticated /v1
+// In the api client, outbound sending goes through the authenticated /v1
 // send endpoint via resolveMailDataSource().send(...). The local provider-adapter
 // send path (failover, local send-key auth, address-sendability +
 // domain-outbound-readiness + warming guards) does not exist client-side, so
@@ -66,18 +66,18 @@ describe("validateSendAttachments (pure)", () => {
   });
 });
 
-describe("assertWarmingLimit (self-hosted stub)", () => {
-  it("throws because warming rate limits are enforced on the self-hosted server", () => {
+describe("assertWarmingLimit (api stub)", () => {
+  it("throws because warming rate limits are enforced on the api server", () => {
     expect(() => assertWarmingLimit(baseOpts)).toThrow(
-      /assertWarmingLimit is not available in the self-hosted client/,
+      /assertWarmingLimit is not available in the api client/,
     );
   });
 });
 
-describe("assertDomainOutboundReady (self-hosted stub)", () => {
-  it("throws because outbound readiness is enforced on the self-hosted server", () => {
+describe("assertDomainOutboundReady (api stub)", () => {
+  it("throws because outbound readiness is enforced on the api server", () => {
     expect(() => assertDomainOutboundReady(fakeProvider({ name: "ses-real", id: "p9" }), baseOpts)).toThrow(
-      /Self-hosted sends must use the authenticated Emails \/v1 send endpoint/i,
+      /Api sends must use the authenticated Emails \/v1 send endpoint/i,
     );
   });
 
@@ -88,10 +88,10 @@ describe("assertDomainOutboundReady (self-hosted stub)", () => {
   });
 });
 
-describe("sendWithFailover (self-hosted stub)", () => {
+describe("sendWithFailover (api stub)", () => {
   it("throws directing callers to the /v1 send endpoint", async () => {
     await expect(sendWithFailover("prov-1", baseOpts)).rejects.toThrow(
-      /sendWithFailover is not available in the self-hosted client/,
+      /sendWithFailover is not available in the api client/,
     );
   });
 });

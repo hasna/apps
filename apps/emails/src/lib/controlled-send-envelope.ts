@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { link, lstat, open, realpath, unlink, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { selfHostedApiRequest } from "../db/self-hosted-store.js";
-import { SELF_HOSTED_SEND_ATTACHMENT_LIMITS } from "./send-attachment-limits.js";
+import { apiRequest } from "../db/api-store.js";
+import { API_SEND_ATTACHMENT_LIMITS } from "./send-attachment-limits.js";
 
 const MAX_DESCRIPTOR_BYTES = 128 * 1024;
 const MAX_BODY_SOURCE_BYTES = 2 * 1024 * 1024;
@@ -339,8 +339,8 @@ async function parseSendPayload(identity: ControlledDescriptorIdentity): Promise
   let attachments: ControlledSendPayload["attachments"];
   if (rawAttachments !== undefined) {
     if (!Array.isArray(rawAttachments)) throw schemaError("$.attachments", "must be an array");
-    if (rawAttachments.length > SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxFiles) {
-      throw schemaError("$.attachments", `must contain at most ${SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxFiles} files`);
+    if (rawAttachments.length > API_SEND_ATTACHMENT_LIMITS.maxFiles) {
+      throw schemaError("$.attachments", `must contain at most ${API_SEND_ATTACHMENT_LIMITS.maxFiles} files`);
     }
     let totalBytes = 0;
     attachments = [];
@@ -351,11 +351,11 @@ async function parseSendPayload(identity: ControlledDescriptorIdentity): Promise
       const content = await readPrivateFile(
         value["path"],
         `descriptor ${path}.path`,
-        SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxBytesPerFile,
+        API_SEND_ATTACHMENT_LIMITS.maxBytesPerFile,
       );
       totalBytes += content.byteLength;
-      if (totalBytes > SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxTotalBytes) {
-        throw schemaError("$.attachments", `must total at most ${SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxTotalBytes} bytes`);
+      if (totalBytes > API_SEND_ATTACHMENT_LIMITS.maxTotalBytes) {
+        throw schemaError("$.attachments", `must total at most ${API_SEND_ATTACHMENT_LIMITS.maxTotalBytes} bytes`);
       }
       const filename = value["filename"] === undefined
         ? basename(String(value["path"]))
@@ -683,13 +683,13 @@ export async function executeControlledSend(
     );
     const identity = parseDescriptorIdentity(descriptorBytes, requestId);
     if (operation === "readback") {
-      const response = selfHostedApiRequest("POST", "/messages/send-intents/lookup", {
+      const response = apiRequest("POST", "/messages/send-intents/lookup", {
         idempotency_key: identity.idempotencyKey,
       });
       outcome = readbackOutcome(response.status, response.json);
     } else {
       const payload = await parseSendPayload(identity);
-      const response = selfHostedApiRequest("POST", "/messages/send", payload);
+      const response = apiRequest("POST", "/messages/send", payload);
       outcome = sendOutcome(response.status, response.json);
     }
   } catch (error) {

@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { resolveResourceId } from "../db/self-hosted-store.js";
+import { resolveResourceId } from "../db/api-store.js";
 import { findAddressesByEmail, getAddress, listAddresses, type ListAddressOptions } from "../db/addresses.js";
 import { listProviderNamesByIds } from "../db/providers.js";
 import {

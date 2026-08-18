@@ -15,8 +15,8 @@ import {
   unassignAddressOwnerByRef,
 } from "../../lib/address-ownership.js";
 
-// `address provision` used to throw "is not available in the self-hosted client;
-// it runs on the self-hosted server". Both halves were false: the throw was
+// `address provision` used to throw "is not available in the api client;
+// it runs on the API server". Both halves were false: the throw was
 // unconditional, so it fired for the local SQLite client too, and there is no server route for
 // it to run on — `openapi.ts` exposes plain CRUD for `/v1/addresses` and no
 // provisioning route, and the container runs no reconciler. The orchestrator
@@ -47,11 +47,11 @@ const MAX_OWNER_HISTORY_LIMIT = 100;
 
 /**
  * Provider label for display. Legacy /v1 address rows may omit provider_id,
- * so an empty value is reported as `self-hosted` — the DomainType value it
+ * so an empty value is reported as `api` — the DomainType value it
  * corresponds to, not a claim about where it is served.
  */
 function providerLabel(address: { provider_name: string | null; provider_id: string }): string {
-  return address.provider_name ?? (address.provider_id || "self-hosted");
+  return address.provider_name ?? (address.provider_id || "server");
 }
 
 /**
@@ -66,7 +66,7 @@ function describeOwnership(detail: { address: { owner: { name: string; type: str
   return `owned by ${owner.name} (${owner.type})${adminText}`;
 }
 
-function resolveSelfHostedAddressId(ref: string): string {
+function resolveApiAddressId(ref: string): string {
   const exact = getAddress(ref);
   if (exact) return exact.id;
   // Matches the EMAIL as well as an id prefix: sibling address verbs (owner,
@@ -455,7 +455,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
             + "Pass the id instead.",
           ));
         }
-        const resolvedId = byEmail.length === 1 ? byEmail[0]!.id : resolveSelfHostedAddressId(ref);
+        const resolvedId = byEmail.length === 1 ? byEmail[0]!.id : resolveApiAddressId(ref);
         const before = getAddress(resolvedId);
         if (!before) handleError(new Error(`Address not found: ${ref}`));
         if (before!.verified) {
@@ -491,7 +491,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .option("--yes", "Skip confirmation prompt")
     .action(async (id: string, opts: { yes?: boolean }) => {
       try {
-        const resolvedId = resolveSelfHostedAddressId(id);
+        const resolvedId = resolveApiAddressId(id);
         const addr = getAddress(resolvedId);
         if (!addr) handleError(new Error(`Address not found: ${id}`));
         await confirmDestructiveAction(`Remove sender address ${addr.email}?`, opts.yes);
@@ -521,7 +521,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .description("Reactivate a suspended sender address")
     .action(async (id: string) => {
       try {
-        const resolvedId = resolveSelfHostedAddressId(id);
+        const resolvedId = resolveApiAddressId(id);
         const a = await activateAddress(resolvedId);
         output(a, chalk.green(`✓ Activated ${a.email} — sending allowed`));
       } catch (e) {
@@ -534,7 +534,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .description("Set a daily send quota for an address (use 'none' to clear)")
     .action(async (id: string, perDay: string) => {
       try {
-        const resolvedId = resolveSelfHostedAddressId(id);
+        const resolvedId = resolveApiAddressId(id);
         const quota = /^(none|null|unlimited|0?)$/i.test(perDay) && perDay !== "0"
           ? null
           : Number.parseInt(perDay, 10);

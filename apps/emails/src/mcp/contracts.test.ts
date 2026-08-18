@@ -270,7 +270,7 @@ describe("MCP CLI equivalents", () => {
       // shell comment and is how this map flags a documented inexactness.
       const runnable = (command.split(" # ")[0] ?? command).trim();
       expect(runnable, `${tool} advertises a command with no arguments substituted`).not.toContain("<");
-      expect(cliRefusalFor(runnable, "self-hosted"), `${tool} advertises ${runnable}`).toBeNull();
+      expect(cliRefusalFor(runnable, "server"), `${tool} advertises ${runnable}`).toBeNull();
     }
   });
 
@@ -328,7 +328,7 @@ describe("MCP CLI equivalents", () => {
     // `list_replies` refused unconditionally while `emails replies <id>` ran fine.
     expect(cliEquivalentForTool("list_replies", { email_id: "msg-1", limit: 5, offset: 1 }))
       .toBe("emails replies msg-1 --limit 5 --offset 1 --json");
-    expect(cliRefusalFor("emails replies msg-1 --json", "self-hosted")).toBeNull();
+    expect(cliRefusalFor("emails replies msg-1 --json", "server")).toBeNull();
   });
 
   it("still admits that a guarded tool names a refused command", () => {
@@ -338,7 +338,7 @@ describe("MCP CLI equivalents", () => {
     // `emails domain verify` is `notImplementedAnywhere`, because wiring a WRITE to
     // `getAdapter().verifyDomain` behind whatever ambient AWS credentials the calling
     // machine happens to carry is a decision nobody has made.
-    expect(cliRefusalFor(cliEquivalentForTool("verify_domain", { domain: "acme.example" }), "self-hosted"))
+    expect(cliRefusalFor(cliEquivalentForTool("verify_domain", { domain: "acme.example" }), "server"))
       .toBe("emails domain verify");
   });
 
@@ -372,7 +372,7 @@ describe("MCP CLI equivalents", () => {
   it("unguards get_dns_records' credential-free half while its CLI twin runs, and advertises the twin", () => {
     // The wholesale `get_dns_records` guard is GONE. Its no-provider path is pure
     // local computation (the generic SPF/DMARC pair from src/lib/dns.ts) and needs
-    // no credentials, so it now runs in self-hosted mode exactly like its CLI twin
+    // no credentials, so it now runs in api mode exactly like its CLI twin
     // `emails domain dns`. Only the provider-scoped half is refused, in the tool
     // body, for the credential reason documented on `assertMcpLocalStateAllowed`
     // — an MCP client's ambient AWS/Cloudflare environment is not the operator's
@@ -383,7 +383,7 @@ describe("MCP CLI equivalents", () => {
     // and this tool is not in the `unblocked` loop above that bans `<`.
     const runnable = (twin.split(" # ")[0] ?? twin).trim();
     expect(runnable).toBe("emails domain dns acme.example --json");
-    expect(cliRefusalFor(runnable, "self-hosted")).toBeNull();
+    expect(cliRefusalFor(runnable, "server")).toBeNull();
     // But the command must NOT be advertised bare: for a provider-backed domain it
     // performs the very adapter call the tool refuses to make, with the caller's
     // ambient credentials. An agent handed this has to be told that, or the refusal
@@ -395,7 +395,7 @@ describe("MCP CLI equivalents", () => {
     // but only AFTER the credential-free no-provider return (the order IS the
     // port); `verify_domain`'s guard stays installed. The regex tolerates the
     // calls' line wrapping; the behavior itself is pinned in
-    // src/mcp/domain-address-self-hosted.test.ts.
+    // src/mcp/domain-address-api.test.ts.
     const impl = readFileSync(new URL("./tools/domains-impl.ts", import.meta.url), "utf8");
     const getDnsGuard = impl.search(/assertMcpLocalStateAllowed\(\s*"get_dns_records"/);
     const genericReturn = impl.indexOf("No provider resolved: return the generic SPF/DMARC pair.");

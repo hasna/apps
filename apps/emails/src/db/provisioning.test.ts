@@ -179,7 +179,7 @@ function storeWith(patch: {
 /**
  * A store that serves addresses in the SERVER's order rather than SQLite's.
  *
- * `src/server/self-hosted/store.ts` orders `listAddresses` `created_at DESC, id ASC`; the
+ * `src/server/api/store.ts` orders `listAddresses` `created_at DESC, id ASC`; the
  * SQLite store orders it `created_at DESC, id DESC`. The `/v1` fixture translates HTTP into
  * the SQLite seam, so neither store variant above reproduces the server's tie order — which is
  * exactly why the address `id` tiebreaker survived mutation and why claiming it redundant
@@ -1134,7 +1134,7 @@ describe("the event log's order is this module's, not the store's", () => {
     // backwards, and a client that trusted it would print an entity's history in reverse.
     //
     // ONLY THE SQLITE SIDE IS ASSERTED. The service's spec orders the same resource
-    // `created_at ASC` (`src/server/self-hosted/resources.ts`), but
+    // `created_at ASC` (`src/server/api/resources.ts`), but
     // `src/test-support/v1-store-api.ts` translates HTTP into the SEAM rather than running the
     // service's own ordering, so over the HTTP fixture both sides come back in SQLite's order.
     // That is why this module sorts rather than trusting either.

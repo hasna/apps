@@ -27,7 +27,7 @@ const STATUS_BUILDERS = [
   "lib/agent-context.ts",
   "lib/status-facts.ts",
   // The enumeration EVERY status count is now built on. Same reason as
-  // db/self-hosted-page.ts below: a hardcoded `complete: true` here is the same lie
+  // db/api-page.ts below: a hardcoded `complete: true` here is the same lie
   // as a hardcoded `total: 0`.
   "lib/status-facts-enumeration.ts",
   "lib/status-types.ts",
@@ -36,10 +36,10 @@ const STATUS_BUILDERS = [
   "mcp/resources.ts",
   "mcp/resources.sqlite.ts",
   "mcp/resources.api.ts",
-  // The enumeration the self-hosted counts are built on: a hardcoded
+  // The enumeration the api counts are built on: a hardcoded
   // `complete: true` there is the same lie as a hardcoded `total: 0` here — it was
   // how 3473 of 3899 production rows got published as a total.
-  "db/self-hosted-page.ts",
+  "db/api-page.ts",
 ] as const;
 
 /**
@@ -168,7 +168,7 @@ describe("status builders never hardcode a measurement (G4)", () => {
   it("registers every status-builder source file", () => {
     const candidates = [...walkSourceFiles("lib"), ...walkSourceFiles("mcp"), ...walkSourceFiles("db")]
       .filter((relative) =>
-        /(^|\/)self-hosted-page\.ts$/.test(relative)
+        /(^|\/)api-page\.ts$/.test(relative)
         ||
         /(^|\/)(agent-context|status-facts|status-types|status-availability|status-commands)[^/]*\.ts$/.test(relative)
         || /(^|\/)resources[^/]*\.ts$/.test(relative)

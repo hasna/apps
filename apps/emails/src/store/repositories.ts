@@ -19,7 +19,7 @@
 //
 // 3. DERIVED FROM THE STRONGEST ARM — with the exceptions named, not glossed over.
 //    Record shapes, parameter shapes, nullability and method names follow
-//    `TenantScopedStore` (src/server/self-hosted/store.ts), the tenant-scoped Postgres
+//    `TenantScopedStore` (src/server/api/store.ts), the tenant-scoped Postgres
 //    store, wherever it HAS the operation. Where it does not, the honest accounting is:
 //
 //      * 22 operations have no counterpart there and were taken from the local arm

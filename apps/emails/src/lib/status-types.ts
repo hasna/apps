@@ -1,6 +1,6 @@
 // Shape of the `emails status` / `emails agent context` payload.
 //
-// ONE type, ONE shape, both modes. The self-hosted and local assemblers share
+// ONE type, ONE shape, both modes. The api and local assemblers share
 // this interface so a script or agent consuming `--json` sees the same keys
 // regardless of mode; a field the running mode cannot answer is `null` and
 // registered in `gaps`, never a plausible-looking zero.
@@ -16,7 +16,7 @@ import type { StatusAvailability } from "./status-availability.js";
 /**
  * One domain row in the readiness sample.
  *
- * `state` / `send_ready` / `receive_ready` are nullable because the self-hosted
+ * `state` / `send_ready` / `receive_ready` are nullable because the api
  * `/v1` domain entity carries no DKIM/SPF/DMARC evidence and no inbound/outbound
  * route state — only a single `verified` boolean. Deriving three DNS verdicts
  * from that boolean (which src/db/domains.api.ts apiToDomain does) invents

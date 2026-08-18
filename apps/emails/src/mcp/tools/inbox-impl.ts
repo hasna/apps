@@ -11,7 +11,7 @@ import {
 import {
   DEFAULT_ATTACHMENT_INVENTORY_LIMIT,
   MAX_ATTACHMENT_INVENTORY_LIMIT,
-  listSelfHostedAttachments,
+  listApiAttachments,
 } from "../../lib/attachment-inventory.js";
 import {
   MAILBOXES,
@@ -36,7 +36,7 @@ function inboxLimit(value: number | undefined, fallback: number): number {
 }
 
 async function runAutoPull(_opts: { s3?: boolean; limit?: number }) {
-  // Auto-pull was LOCAL S3 ingestion. The self-hosted client re-reads the API through
+  // Auto-pull was LOCAL S3 ingestion. The api client re-reads the API through
   // the seam on each poll, so there is nothing to pull.
   return { pulled: 0 };
 }
@@ -69,7 +69,7 @@ function mailboxSourceCliFlags(source: MailboxSource | undefined): string {
 }
 
 // Resolve a possibly-short id to a full id through the seam: local SQLite partial-id
-// resolution, or a bounded self-hosted prefix match (so a truncated id works in self-hosted too,
+// resolution, or a bounded api prefix match (so a truncated id works in api too,
 // matching the CLI).
 function resolveMailId(ds: MailDataSource, id: string): Promise<string> {
   return ds.resolveId(id);
@@ -90,7 +90,7 @@ function folderForListFlags(flags: { unread?: boolean; starred?: boolean; archiv
 }
 
 // The read/detail projection shared by get_inbound_email (and returned by the mail
-// mutation tools). Built from the seam's TuiMessage + MessageBody so self-hosted and local
+// mutation tools). Built from the seam's TuiMessage + MessageBody so api and local
 // yield the same shape.
 function messageDetail(msg: TuiMessage, body: MessageBody | null): Record<string, unknown> {
   return {
@@ -137,7 +137,7 @@ export function registerInboxTools(server: McpServer): void {
   // ─── INBOUND EMAILS ─────────────────────────────────────────────────────────
   // The latest inbound email for an address, body-free, via the seam so API-client configuration
   // reads the API (not the empty local store). verificationCandidates already scopes
-  // to recipient (client-side in self-hosted), excludes sent, and orders newest-first.
+  // to recipient (client-side in api), excludes sent, and orders newest-first.
   const getLatestInboundEmailForAddress = async (
     address: string,
     filters: { since?: string; from?: string; subject?: string },
@@ -581,7 +581,7 @@ export function registerInboxTools(server: McpServer): void {
   async ({ provider_id }) => {
     try {
       // local: wipes the inbound store, scoped by provider when provider_id is
-      // given. self-hosted: drains a server-side bulk delete over the inbox
+      // given. api: drains a server-side bulk delete over the inbox
       // folder, and REFUSES a provider_id outright (a /v1 message carries no
       // provider dimension, so honouring the scope is impossible and dropping it
       // would silently widen "clear one provider" to "clear the whole store").
@@ -656,7 +656,7 @@ export function registerInboxTools(server: McpServer): void {
 
   server.tool(
     "list_attachments",
-    "List one checkpointable page of self-hosted attachment metadata. Returns {items,next_cursor,cli_equivalent}; items contain message_id, attachment_index, filename, content_type, size_bytes, sha256, content_available, direction, and received_at, never attachment content. Pass next_cursor back as cursor to resume.",
+    "List one checkpointable page of api attachment metadata. Returns {items,next_cursor,cli_equivalent}; items contain message_id, attachment_index, filename, content_type, size_bytes, sha256, content_available, direction, and received_at, never attachment content. Pass next_cursor back as cursor to resume.",
     {
       limit: z.number().int().positive().max(MAX_ATTACHMENT_INVENTORY_LIMIT).optional()
         .describe(`Attachments per page (default ${DEFAULT_ATTACHMENT_INVENTORY_LIMIT}, max ${MAX_ATTACHMENT_INVENTORY_LIMIT})`),
@@ -666,7 +666,7 @@ export function registerInboxTools(server: McpServer): void {
     },
     async ({ limit, cursor, direction, since }) => {
       try {
-        return jsonText(await listSelfHostedAttachments({ limit, cursor, direction, since }));
+        return jsonText(await listApiAttachments({ limit, cursor, direction, since }));
       } catch (e) {
         return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true };
       }

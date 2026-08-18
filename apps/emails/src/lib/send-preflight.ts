@@ -18,7 +18,7 @@
 // nothing is the failure mode being fixed — so this must never guess "ok".
 //
 // It deliberately does NOT re-implement evaluateOutboundPolicy
-// (src/server/self-hosted/store.ts). That gate also weighs send-key authority,
+// (src/server/api/store.ts). That gate also weighs send-key authority,
 // daily quota, warming schedules, domain readiness and recipient suppression
 // against server-side state, and a second copy of a policy gate would drift from
 // the one that enforces it — the exact class of bug that made the dry run wrong in
@@ -39,7 +39,7 @@ export interface PreflightAddress {
 }
 
 /**
- * Codes mirror `OutboundPolicyCode` in src/server/self-hosted/store.ts by name, so
+ * Codes mirror `OutboundPolicyCode` in src/server/api/store.ts by name, so
  * a preview and the refusal an operator later sees in `headers.policy_denial` use
  * the same vocabulary.
  */
@@ -110,10 +110,10 @@ export interface AttachmentCapFinding {
  * Evaluate the REAL files against the mode's caps.
  *
  * These caps were printed as prose next to the attachment count and never checked,
- * so a set that the self-hosted route refuses previewed as fine.
+ * so a set that the api route refuses previewed as fine.
  * `readSendAttachments` only enforces the much larger local ceilings, so nothing
  * else caught it either. The exact numbers deliberately are not repeated here —
- * they live in `SELF_HOSTED_SEND_ATTACHMENT_LIMITS`, and a prose copy of them is
+ * they live in `API_SEND_ATTACHMENT_LIMITS`, and a prose copy of them is
  * how the prediction drifted from the enforcement in the first place.
  *
  * `sizes` are decoded byte lengths, not base64 lengths — the caps are on content.
@@ -158,8 +158,8 @@ function humanBytes(bytes: number): string {
  * will succeed" and "these specific checks passed", and omitting it is what let a
  * green-looking preview stand in for a guarantee it never made.
  */
-export function describeUncheckedSendPolicy(selfHosted: boolean): string {
-  if (!selfHosted) {
+export function describeUncheckedSendPolicy(api: boolean): string {
+  if (!api) {
     return "The local SQLite client has no outbound policy gate; a real send depends on provider credentials and acceptance, "
       + "which this preview does not test.";
   }

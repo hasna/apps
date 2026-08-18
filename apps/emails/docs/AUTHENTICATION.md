@@ -1,12 +1,12 @@
-# Self-hosted authentication
+# Api authentication
 
-Authentication applies to the operator-owned self-hosted `/v1` service. The
+Authentication applies to the operator-owned /v1 API service. The
 local SQLite dashboard has a separate loopback-oriented trust boundary and does
 not use these accounts.
 
 ## Client configuration
 
-A self-hosted client sets the service URL and one bearer credential:
+A api client sets the service URL and one bearer credential:
 
 ```bash
 export HASNA_EMAILS_API_URL="https://emails.example.com"
@@ -57,7 +57,7 @@ matching the email alone is not authorization.
 
 These similarly named commands manage different key classes:
 
-- `emails self-hosted key create/list/rotate/revoke` runs on the operator host
+- `emails server key create/list/rotate/revoke` runs on the operator host
   against Postgres and manages application keys used to establish the service.
 - `emails keys create/list/revoke` calls `/v1/keys` as an owner/admin session and
   manages tenant-scoped keys for the active organization. A new plaintext token

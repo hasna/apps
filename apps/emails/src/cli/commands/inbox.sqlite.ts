@@ -55,8 +55,8 @@ function resolveInboundEmailId(id: string): string {
 }
 
 // Resolve a possibly-short id (the 8-char id printed by `inbox list`) to a full id
-// through the seam: local SQLite partial-id resolution, or a bounded self-hosted prefix match
-// so the id shown by `inbox list` is usable verbatim in self-hosted read/mark/star/label.
+// through the seam: local SQLite partial-id resolution, or a bounded api prefix match
+// so the id shown by `inbox list` is usable verbatim in api read/mark/star/label.
 function resolveMailId(ds: MailDataSource, id: string): Promise<string> {
   return ds.resolveId(id);
 }
@@ -108,7 +108,7 @@ function seamMessageDetail(msg: TuiMessage, body: MessageBody | null): SeamMailD
       ? { filename: att.filename, s3_url: att.location! }
       : { filename: att.filename, local_path: att.location! }));
   // A read message must not display the system `unread` label alongside the "read" flag
-  // (the self-hosted read flow fetches the message while unread, then marks it read without
+  // (the API read flow fetches the message while unread, then marks it read without
   // re-fetching its labels). Suppress it here so `Flags:` reads just "read" — parity with
   // local, which has no such label.
   const label_ids = msg.is_read
@@ -534,7 +534,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         }
         // The per-address rollup is a backend method now: the local SQLite
         // implementation runs the SQL over inbound_recipients and the
-        // self-hosted data source delegates to the server endpoint, so the
+        // api data source delegates to the server endpoint, so the
         // capability is identical on both backends.:apps/emails/src/cli/commands/inbox.sqlite.ts
         const limit = parsePositiveIntOption(opts.limit, 50);
         const offset = parseNonNegativeIntOption(opts.offset);
@@ -894,7 +894,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     });
 
   // ─── READ-STATE / ARCHIVE / STAR / LABELS ─────────────────────────────────
-  // These commands write through the mail data source seam (local SQLite or self-hosted API).
+  // These commands write through the mail data source seam (local SQLite or the /v1 API).
 
   async function requireMessage(ds: MailDataSource, id: string): Promise<TuiMessage> {
     const msg = await ds.getMessage(await resolveMailId(ds, id));
@@ -1062,7 +1062,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
       try {
         const ds = resolveMailDataSource();
         const target = opts.provider ? `for provider ${opts.provider}` : "for all providers";
-        // Self-hosted mode deletes on the server (scoped to the inbox folder), so drop the
+        // Api mode deletes on the server (scoped to the inbox folder), so drop the
         // "local" wording; confirmation semantics are otherwise unchanged.
         const scope = ds.backend === "sqlite" ? "local inbox emails" : "inbox emails";
         // A provider-scoped clear is REFUSED when the API client is configured (a /v1 message
@@ -1070,12 +1070,12 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         // prompt rather than after, so the operator is not asked to confirm a
         // destructive action that cannot run.
         if (opts.provider && ds.backend !== "sqlite") {
-          const { SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED } = await import("../../lib/mail-types.js");
-          handleError(new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED));
+          const { API_PROVIDER_CLEAR_UNSUPPORTED } = await import("../../lib/mail-types.js");
+          handleError(new Error(API_PROVIDER_CLEAR_UNSUPPORTED));
         }
         await confirmDestructiveAction(`Clear ${scope} ${target}?`, opts.yes);
         // local: wipes the inbound store, scoped by provider when --provider is
-        // given. self-hosted: drains a bulk delete over the inbox folder, and
+        // given. api: drains a bulk delete over the inbox folder, and
         // refuses a provider scope outright (see above).
         const { cleared } = await ds.clear({ providerId: opts.provider });
         output(

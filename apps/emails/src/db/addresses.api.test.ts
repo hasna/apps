@@ -1,7 +1,7 @@
 // The address clamp defect, live in production TODAY. Every list-shaped read in
 // src/db/addresses.api.ts took ONE `/v1/addresses` page and treated it as the
 // table: `listAddresses()` with no limit sent NO limit at all — the server then
-// windows to its 100-row default (clampLimit in src/server/self-hosted/store.ts)
+// windows to its 100-row default (clampLimit in src/server/api/store.ts)
 // — and every other read sent `limit: 1000`, which the same clamp caps at 500.
 // Production holds 325 real addresses, so `listAddresses()` returned 100 of 325
 // AS IF COMPLETE, `getAddressByEmail` deduped against the first 500 rows only
@@ -9,7 +9,7 @@
 // 500 was silently wrong.
 //
 // The fix routes every read through the shared pager
-// (src/db/self-hosted-page.ts enumerateSelfHostedRows): full enumeration for
+// (src/db/api-page.ts enumerateApiRows): full enumeration for
 // unbounded reads and counts, a bounded `need` for windowed reads, and an
 // honest refusal when the pager can neither prove completeness nor fill the
 // window it was asked for — the contract src/db/events.api.ts established.
@@ -37,7 +37,7 @@ import {
   listAddressesForReadiness,
   listUsableSendingAddresses,
 } from "./addresses.js";
-import { SELF_HOSTED_ENUMERATION_PAGE_BUDGET, SELF_HOSTED_SERVER_PAGE_MAX } from "./self-hosted-page.js";
+import { API_ENUMERATION_PAGE_BUDGET, API_SERVER_PAGE_MAX } from "./api-page.js";
 
 let stub: V1Stub;
 beforeAll(async () => { stub = await startV1Stub(); });
@@ -236,7 +236,7 @@ describe("address counts and aggregates past one server page", () => {
 describe("honest refusals instead of silent lower bounds", () => {
   // Past this many rows the pager cannot walk the table inside its budget, so an
   // unbounded read has no way to prove it saw all of it.
-  const SCAN_CAP = SELF_HOSTED_ENUMERATION_PAGE_BUDGET * SELF_HOSTED_SERVER_PAGE_MAX;
+  const SCAN_CAP = API_ENUMERATION_PAGE_BUDGET * API_SERVER_PAGE_MAX;
 
   // When offset paging returns the same row twice the window MOVED, so the rows
   // read are a strict subset of the table: an unbounded read and a count must

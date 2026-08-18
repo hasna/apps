@@ -1,10 +1,10 @@
 // Automated provisioning (SES identity/MAIL FROM, Cloudflare DNS, S3 inbound
 // receipt rules, the reconciler daemon and round-trip acceptance tests) ships in
 // NO mode of this package: the local orchestrator was unreachable dead code and
-// has been deleted, and the self-hosted server exposes no /v1 provisioning route
+// has been deleted, and the API server exposes no /v1 provisioning route
 // and runs no reconciler. Every `provision` command therefore fails loud — and
-// must say so TRUTHFULLY. The previous text ("not available in the self-hosted
-// client; it runs on the self-hosted server") was false in both modes: it sent
+// must say so TRUTHFULLY. The previous text ("not available in the api
+// client; it runs on the API server") was false in both modes: it sent
 // operators looking for a server-side service that does not exist.
 import { describe, expect, it } from "bun:test";
 import { Command } from "commander";
@@ -55,8 +55,8 @@ describe("unimplemented provisioning commands", () => {
       expect(result.stderr).toContain("emails domain adopt");
       expect(result.stderr).toContain("emails aws setup-inbound");
       // The old claims were false in both local and API-client configuration.
-      expect(result.stderr).not.toContain("not available in the self-hosted client");
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
+      expect(result.stderr).not.toContain("not available in the api client");
+      expect(result.stderr).not.toContain("runs on the api server");
     });
   }
 

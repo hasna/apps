@@ -8,7 +8,7 @@ import { isSensitiveKey } from "./redaction.js";
  * This machine's emails data directory, resolved WITHOUT opening (or hardening)
  * the SQLite database.
  *
- * Both local and self-hosted client paths share the config/credentials file that
+ * Both local and api client paths share the config/credentials file that
  * lives here (Cloudflare/SES tokens, inbound bucket + mail-source registry, and
  * provider defaults), and so do the on-disk logs the CLI tails. `getDataDir()`
  * in src/db/database.ts resolves the same directory but additionally enforces
@@ -158,12 +158,12 @@ export function setConfigValue(key: string, value: unknown): void {
  * accepted anything in the file, and `saveConfig` re-seeds the in-process cache
  * so a write took effect immediately — most sharply for the retired
  * datastore-selection key, which used to decide whether the process talks to
- * local SQLite or the operator's self-hosted API, mid-session.
+ * local SQLite or the operator's /v1 API, mid-session.
  *
  * Deliberately EXCLUDED, and why:
- *   - the retired datastore-selection key (and the `mode`/`storage_mode`/
- *     `mailery_mode` migration trip-wires that died with the deleted selector
- *     module): it used to switch the datastore the process reads and writes.
+ *   - the retired datastore-selection key (and the mode-key migration
+ *     trip-wires that died with the deleted selector module): it used to
+ *     switch the datastore the process reads and writes.
  *     The client backend is now chosen by the storage contract
  *     (`HASNA_EMAILS_API_URL` plus a credential), an operator decision made
  *     once, out of band.

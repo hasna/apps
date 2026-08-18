@@ -1,14 +1,14 @@
-// Shared identity/tenant-context resolver for the self-hosted client.
+// Shared identity/tenant-context resolver for the api client.
 //
-// Calls GET /v1/me through the synchronous self-hosted transport and normalizes
+// Calls GET /v1/me through the synchronous api transport and normalizes
 // the response into an IdentityContext the CLI (`emails whoami`), MCP resources,
 // and the TUI header can all consume. The active tenant is derived server-side
 // from the bearer credential (a user session token or the operator API key) —
 // the client never sends a tenant. No secret is logged; the token lives only in
 // the transport's Authorization header.
 
-import { selfHostedApiRequest } from "../db/self-hosted-store.js";
-import { rethrowSelfHostedResponseFailure } from "./self-hosted-wire.js";
+import { apiRequest } from "../db/api-store.js";
+import { rethrowApiResponseFailure } from "./api-wire.js";
 
 export interface IdentityTenant {
   id: string | null;
@@ -95,7 +95,7 @@ export function normalizeIdentity(raw: unknown): IdentityContext {
 
 /** Fetch and normalize the caller's identity. Surfaces transport/HTTP errors. */
 export function fetchIdentity(): IdentityResult {
-  const { status, json } = selfHostedApiRequest("GET", "/me");
+  const { status, json } = apiRequest("GET", "/me");
   if (status < 200 || status >= 300) {
     const message = (json && typeof json === "object" && "error" in json
       ? String((json as { error?: unknown }).error ?? "")
@@ -115,7 +115,7 @@ export function fetchIdentitySafe(): IdentityContext | null {
     const result = fetchIdentity();
     return result.ok ? result.identity : null;
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     return null;
   }
 }

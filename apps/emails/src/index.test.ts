@@ -118,7 +118,7 @@ describe("public package entrypoint", () => {
     expect(typeof storage.runInTransaction).toBe("function");
     expect(typeof storage.resolvePartialId).toBe("function");
 
-    // The self-hosted PostgreSQL/S3 mirror surface is gone; the storage subpath
+    // The api PostgreSQL/S3 mirror surface is gone; the storage subpath
     // must not resurrect any of the removed sync internals.
     for (const removed of ["PG_MIGRATIONS", "PgAdapterAsync", "getStorageStatus", "storagePush", "storagePull", "storageSync"]) {
       expect((storage as Record<string, unknown>)[removed]).toBeUndefined();
@@ -262,7 +262,7 @@ void getEmail("message-id", 42 as unknown as string);
     ].filter((command) => command.includes("bun build"));
     const tuiRuntimeBuild = scripts["build:tui-runtime"] ?? "";
 
-    // pg-migrations was removed with the self-hosted PostgreSQL mirror subsystem.
+    // pg-migrations was removed with the api PostgreSQL mirror subsystem.
     expect(scripts["build:pg-migrations"]).toBeUndefined();
     expect(buildCommands).toHaveLength(4);
     expect(buildCommands.every((command) => command.includes("--packages external"))).toBe(true);

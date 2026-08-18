@@ -97,7 +97,7 @@ beforeEach(() => {
   resetDatabase();
   db = getDatabase();
   // `sandbox_emails.provider_id` is a real foreign key into `providers` locally (the
-  // self-hosted schema declares the same reference), so both providers this file writes for
+  // api schema declares the same reference), so both providers this file writes for
   // have to exist before anything captures mail for them.
   for (const id of [P1, P2]) {
     db.run("INSERT INTO providers (id, name, type, active) VALUES (?, ?, 'sandbox', 1)", [id, id]);

@@ -18,14 +18,14 @@ async function isApiClientRuntime(): Promise<boolean> {
   return isApiClientConfigured();
 }
 
-async function assertSelfHostedApiRouteReady(toolName: string): Promise<void> {
+async function assertApiApiRouteReady(toolName: string): Promise<void> {
   if (!(await isApiClientRuntime())) return;
   // The API-backed route requires the API client's strict configuration
-  // (HASNA_EMAILS_API_URL plus a credential); resolveSelfHostedConfig refuses
+  // (HASNA_EMAILS_API_URL plus a credential); resolveApiConfig refuses
   // with the config-help message when it is missing.
   try {
-    const { resolveSelfHostedConfig } = await import("../../db/self-hosted-store.js");
-    resolveSelfHostedConfig();
+    const { resolveApiConfig } = await import("../../db/api-store.js");
+    resolveApiConfig();
   } catch (error) {
     throw new Error(`MCP tool ${toolName} is API-backed: ${(error as Error).message}`);
   }
@@ -43,7 +43,7 @@ export function registerSequenceTools(server: McpServer): void {
   },
   async ({ limit, offset }) => {
     try {
-      await assertSelfHostedApiRouteReady("list_sequences");
+      await assertApiApiRouteReady("list_sequences");
       const { listSequences } = await import("../../db/sequences.js");
       const sequences = await listSequences({ limit: limit ?? 100, offset: offset ?? 0 });
       return { content: [{ type: "text", text: JSON.stringify(sequences, null, 2) }] };
@@ -62,7 +62,7 @@ export function registerSequenceTools(server: McpServer): void {
   },
   async ({ name, description }) => {
     try {
-      await assertSelfHostedApiRouteReady("create_sequence");
+      await assertApiApiRouteReady("create_sequence");
       const { createSequence } = await import("../../db/sequences.js");
       const sequence = await createSequence({ name, description });
       return { content: [{ type: "text", text: JSON.stringify(sequence, null, 2) }] };
@@ -74,7 +74,7 @@ export function registerSequenceTools(server: McpServer): void {
 
   // Sequence steps and enrollments are repository resources in every configuration
   // (local SQLite, `/v1/sequence-steps` and `/v1/sequence-enrollments` on the
-  // self-hosted server), and src/db/sequences.api.ts is a complete client for
+  // api server), and src/db/sequences.api.ts is a complete client for
   // both. The four step/enrollment tools below therefore carry no mode guard — they
   // are the MCP twins of `emails sequence step add|enroll|unenroll|enrollments`,
   // which already perform the same operations over the same route.
@@ -194,7 +194,7 @@ export function registerSequenceTools(server: McpServer): void {
   async ({ email_id, limit, offset }) => {
     try {
       // This refused unconditionally, in EVERY mode, claiming "inbound reply
-      // tracking runs on the self-hosted server" and that no API-backed
+      // tracking runs on the api server" and that no API-backed
       // implementation existed. Both halves were false: src/db/inbound.ts routes
       // `listReplySummaries`/`getReplyCount` to inbound.api.ts, which serves them
       // from the `/v1/messages` list+get routes, and the CLI twin

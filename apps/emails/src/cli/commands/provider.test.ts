@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the provider repo routes every read/write to `/v1/providers`
+// API-only: the provider repo routes every read/write to `/v1/providers`
 // (non-secret metadata only — credentials are never distributed to the client),
 // so these tests drive the REAL command against an out-of-process /v1 stub (see
 // src/test-support/v1-stub.ts). No local SQLite exists anymore.
@@ -115,7 +115,7 @@ describe("provider list command", () => {
   });
 });
 
-describe("provider add credential honesty (self-hosted)", () => {
+describe("provider add credential honesty (api)", () => {
   // 2026-07-25: `emails provider add --type ses --access-key … --secret-key …`
   // reported "Provider credentials are invalid" and sending kept using the ECS
   // task role. Both statements were false: the credentials were stripped by the

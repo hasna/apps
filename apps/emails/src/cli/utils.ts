@@ -2,7 +2,7 @@ import chalk from "../lib/chalk-lite.js";
 import { SCHEDULED_STATUSES, type ScheduledStatus } from "../db/scheduled.js";
 import { writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { resolveResourceId, listResourceIdMatches } from "../db/self-hosted-store.js";
+import { resolveResourceId, listResourceIdMatches } from "../db/api-store.js";
 import { getDatabase, listPartialIdMatches, resolvePartialIdOrThrow } from "../db/database.js";
 import { isApiClientConfigured } from "../store-resolution.js";
 import { keepAvailableCommands } from "../lib/status-commands.js";

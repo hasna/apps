@@ -1,7 +1,7 @@
 {
   "name": "@hasna/emails",
   "version": "1.3.16",
-  "description": "Emails \u2014 local SQLite and self-hosted email management CLI, MCP server, and library",
+  "description": "Emails \u2014 local SQLite and api email management CLI, MCP server, and library",
   "keywords": [
     "email",
     "smtp",
@@ -9,7 +9,7 @@
     "resend",
     "cloudflare",
     "sqlite",
-    "self-hosted",
+    "server",
     "cli",
     "mcp",
     "ai",
@@ -34,9 +34,9 @@
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
     },
-    "./selfhost": {
-      "types": "./dist/selfhost.d.ts",
-      "import": "./dist/selfhost.js"
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
     }
   },
   "files": [
@@ -54,9 +54,9 @@
     "build:tui-runtime": "bun run scripts/build-tui-runtime.ts",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external --splitting",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external --splitting",
-    "build:lib": "bun build src/index.ts src/storage.ts src/selfhost.ts --outdir dist --target bun --packages external --splitting",
+    "build:lib": "bun build src/index.ts src/storage.ts src/api.ts --outdir dist --target bun --packages external --splitting",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
-    "test:selfhost-sdk-types": "tsc -p tsconfig.selfhost-sdk-type-tests.json",
+    "test:api-sdk-types": "tsc -p tsconfig.api-sdk-type-tests.json",
     "test": "bash scripts/run-hermetic-tests.sh shared",
     "test:shared": "bash scripts/run-hermetic-tests.sh shared",
     "test:hermetic": "bash scripts/run-hermetic-tests.sh isolated",
@@ -65,7 +65,7 @@
     "no-cloud:pack": "bun scripts/no-cloud-artifact-scan.mjs",
     "contracts:conformance": "contracts conformance fixtures",
     "secrets:staged": "node scripts/scan-staged-secrets.mjs",
-    "pack:identity": "bun test src/self-hosted-container.test.ts --test-name-pattern \"packed manifest identities\"",
+    "pack:identity": "bun test src/api-container.test.ts --test-name-pattern \"packed manifest identities\"",
     "prepack": "bun run build && bun run no-cloud:source && bun run no-cloud:pack && bun run pack:identity",
     "prepublishOnly": "bun scripts/prepublish-local-test.mjs && bun run build && bun run no-cloud:pack && bun run pack:identity && bun run contracts:conformance && contracts no-cloud-scan .",
     "dev:cli": "bun run src/cli/index.tsx",

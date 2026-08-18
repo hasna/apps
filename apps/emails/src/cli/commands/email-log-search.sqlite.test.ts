@@ -1,6 +1,6 @@
 // Task db244cd4 — the top-level `emails search` verb, on the LOCAL SQLite store.
 //
-// The self-hosted surface carried this defect through `listMailbox("sent")`;
+// The api surface carried this defect through `listMailbox("sent")`;
 // this surface carried the SAME defect by a different route, calling
 // `searchEmails`, which enumerates the outbound ledger. Two implementations,
 // one blindness — so both now run the single shared `mailboxSearch`, and both

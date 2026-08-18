@@ -35,7 +35,7 @@ function isLogComponent(value: string): value is LogComponent {
  *
  * The honest answer was already in hand and thrown away.
  * `getEmailSystemStatusForRuntime()` is awaited here anyway, and its `provisioning`
- * block is built by `enumerateSelfHostedRows` and carries
+ * block is built by `enumerateApiRows` and carries
  * `availability.complete === false` with the reason "counts are lower bounds, not
  * totals" whenever it cannot walk the table.
  *
@@ -94,7 +94,7 @@ function formatDaemonStatus(status: Awaited<ReturnType<typeof daemonStatus>>): s
   lines.push("");
   lines.push(chalk.dim("  No schedule-aware 'due now' count is derivable over /v1; pending/failed are shown instead."));
   lines.push(chalk.dim("  No provisioning reconciler ships in this build; the queue above is not drained automatically."));
-  lines.push(chalk.dim("  Realtime ingestion runs on the self-hosted server; this client starts no worker."));
+  lines.push(chalk.dim("  Realtime ingestion runs on the api server; this client starts no worker."));
   return lines.join("\n");
 }
 
@@ -139,7 +139,7 @@ export function registerDaemonCommands(program: Command, output: (data: unknown,
         const result = {
           managed_process: false,
           reason: "No built-in supervisor or PID file is configured for this package; "
-            + "background workers run on the self-hosted server.",
+            + "background workers run on the API server.",
           start_commands: {},
           cli_equivalent: "emails daemon status --json",
         };
@@ -158,7 +158,7 @@ export function registerDaemonCommands(program: Command, output: (data: unknown,
   const logs = program.command("logs").description("Inspect emails logs written by this machine's own processes");
   logs
     .command("tail")
-    .description("Tail emails logs written by this machine's processes (NOT the self-hosted server's)")
+    .description("Tail emails logs written by this machine's processes (NOT the api server's)")
     .option("--component <name>", "daemon | sync | inbound | scheduler | nightly", "daemon")
     .option("--lines <n>", "Lines to show from each file", "80")
     .action((opts: { component: string; lines: string }) => {
@@ -172,7 +172,7 @@ export function registerDaemonCommands(program: Command, output: (data: unknown,
           : [
             chalk.dim(`No ${component} log files found in ${getEmailsDataDir()}.`),
             chalk.dim("This reads THIS machine's files only, and no process in this package writes them"),
-            chalk.dim("today. The self-hosted server's logs are not published over /v1 — read them where"),
+            chalk.dim("today. The api server's logs are not published over /v1 — read them where"),
             chalk.dim("the service runs (for example its container logs)."),
           ].join("\n");
         output({ ...result, scope: "this_machine", server_logs_available: false }, formatted);

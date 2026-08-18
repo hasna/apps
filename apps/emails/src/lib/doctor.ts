@@ -23,7 +23,7 @@
 // A DIAGNOSTIC THAT CANNOT CHECK SOMETHING MUST REFUSE, NOT REPORT HEALTH. This repo has
 // already shipped the inverse twice, and both are recorded in CHANGELOG.md: one command
 // answered "Nothing is missing" while the sibling command it recommended one line later
-// said "No records to check", and this very family reported `Self-hosted API: pass`
+// said "No records to check", and this very family reported `Api API: pass`
 // because a client configuration PARSED, without ever making a request. So:
 //
 //   * a store refusal is reported as a refusal, naming the code and the status;
@@ -98,7 +98,7 @@ export interface DiagnosticsOptions {
  * and nothing returns a total — so a count has to be assembled by enumerating, and the
  * deleted local arm's `SELECT COUNT(*)` has no equivalent here. 500 is what the SQLite store
  * and the service both cap a list at (`MAX_PAGE` in src/store-sqlite/resources.ts;
- * src/server/self-hosted/store.ts:829-830), so it is the most that can come back per request.
+ * src/server/api/store.ts:829-830), so it is the most that can come back per request.
  * It is a REQUEST, not an assumption: see `enumerate` for why nothing here relies on getting
  * 500 back.
  */
@@ -498,7 +498,7 @@ async function provisioningChecks(): Promise<DoctorCheck[]> {
  *   * none answered, some faulted -> `fail`. Every attempt errored; that is a real fault.
  *   * every read refused -> `unknown`. A refusal is NOT reachability evidence: the HTTP
  *     store decides a capability refusal locally, without sending a request, so a `pass`
- *     here would be the same fabrication as the `Self-hosted API: pass` this family shipped
+ *     here would be the same fabrication as the `Api API: pass` this family shipped
  *     for a client configuration that merely parsed.
  */
 function reachabilityCheck(store: EmailStore, kinds: ReadKind[]): DoctorCheck {

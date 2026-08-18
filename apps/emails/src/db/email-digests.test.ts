@@ -16,7 +16,7 @@
 //     columns, which the service JSON-encodes again behind a `::jsonb` cast. There is a
 //     recording-store test that the collapsed writer sends the raw array and the raw
 //     object.
-//   * only SQLite constrains `period`, `provider` and `status`; the self-hosted Postgres
+//   * only SQLite constrains `period`, `provider` and `status`; the api Postgres
 //     migration drops all three CHECKs. So an out-of-enum value was refused by one store
 //     and written by the other, and the written row was then unreadable, because every
 //     mapper in this family validates the enum on the way out. The collapsed writer
@@ -326,7 +326,7 @@ describe("saveEmailDigest", () => {
   }
 
   it("refuses an out-of-enum period, provider or status before any store is touched", async () => {
-    // ONLY SQLITE CONSTRAINS THESE COLUMNS — the self-hosted Postgres migration drops all
+    // ONLY SQLITE CONSTRAINS THESE COLUMNS — the api Postgres migration drops all
     // three CHECKs — so without this the same input is a refusal on one store and an
     // accepted, unreadable row on the other. No store is passed and none is configured to
     // be reachable: the refusal must not depend on having one.
@@ -351,7 +351,7 @@ describe("saveEmailDigest", () => {
     // WHY EACH HALF MATTERS.
     //
     // RAW JSON: the service JSON-encodes a `json: true` column itself and binds it behind
-    // a `::jsonb` cast (`src/server/self-hosted/store.ts`, `encodeColumn` /
+    // a `::jsonb` cast (`src/server/api/store.ts`, `encodeColumn` /
     // `createResource`). The deleted HTTP arm pre-serialized these four, so they landed as
     // jsonb STRING SCALARS rather than as an array and an object — readable only by that
     // arm's own parser, and by nothing that queried the jsonb.
@@ -378,8 +378,8 @@ describe("saveEmailDigest", () => {
     expect(Object.keys(input)).not.toContain("created_at");
     // Every key sent IS a declared writable column of the resource, checked against the
     // service's own registry rather than against a list copied into this test.
-    const { SELF_HOSTED_RESOURCES } = await import("../server/self-hosted/resources.js");
-    const spec = SELF_HOSTED_RESOURCES.find((resource) => resource.path === "email-digests");
+    const { API_RESOURCES } = await import("../server/api/resources.js");
+    const spec = API_RESOURCES.find((resource) => resource.path === "email-digests");
     expect(spec).toBeDefined();
     const declared = new Set((spec?.columns ?? []).map((column) => column.name));
     expect(Object.keys(input).filter((key) => !declared.has(key))).toEqual([]);
@@ -876,7 +876,7 @@ describe("the collapsed module", () => {
     const source = await Bun.file(new URL("./email-digests.ts", import.meta.url)).text();
     // Named indirectly on purpose: this file is inside the source-text guard's own scanned corpus.
     for (const fragment of [
-      ["isSelfHosted", "Mode"].join(""),
+      ["isApi", "Mode"].join(""),
       ["get", "EmailsMode"].join(""),
       ["EMAILS", "_MODE"].join(""),
       ["email-digests", ".sqlite.js"].join(""),

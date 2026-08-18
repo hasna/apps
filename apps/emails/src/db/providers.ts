@@ -29,7 +29,7 @@ export const assertProviderCredentialsStorable = routed("assertProviderCredentia
 export const createProvider = routed("createProvider");
 export const getProvider = routed("getProvider");
 // Credentialed reads are NOT a second mode dispatch: they reuse the same routed
-// `getProvider` and only ask it to unwrap the encrypted envelope. The self-hosted
+// `getProvider` and only ask it to unwrap the encrypted envelope. The api
 // arm returns the server's credential-free record and ignores the flag, so the
 // remote path is byte-identical to `getProvider`; the local SQLite arm attaches
 // the encrypted secrets it owns. Threading the flag through the existing dispatch

@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the sequences repo routes every read/write to `/v1/sequences`,
+// API-only: the sequences repo routes every read/write to `/v1/sequences`,
 // `/v1/sequence-steps`, and `/v1/sequence-enrollments`, so these tests drive the
 // REAL command against an out-of-process /v1 stub (see src/test-support/v1-stub.ts).
 // No local SQLite exists anymore; enrollments and steps are API-backed.

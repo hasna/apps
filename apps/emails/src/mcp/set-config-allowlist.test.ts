@@ -4,7 +4,7 @@
 // the in-process cache so a write takes effect immediately. So an agent could
 // rewrite anything in ~/.hasna/emails/config.json — including the retired
 // datastore-selection key that used to switch mid-session, which decides
-// whether this process talks to local SQLite or the operator's self-hosted
+// whether this process talks to local SQLite or the operator's api
 // API (mid-session), and every credential-bearing key, which points
 // an integration wherever the agent likes.
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";

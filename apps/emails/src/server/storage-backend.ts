@@ -15,7 +15,7 @@
 // this module existed the same choice was made by a DEPLOYMENT WORD whose two values
 // selected an entire product variant. That word had to stop deciding for a reason no amount
 // of documentation fixes: it meant OPPOSITE things in the two shipped binaries. In the
-// `emails` CLI, `self-hosted` means "become an HTTP client of somebody else's server"; here
+// `emails` CLI, `api` means "become an HTTP client of somebody else's server"; here
 // it meant "become a PostgreSQL server". One variable, two contradictory semantics, and a
 // deployment that set it for one binary silently reconfigured the other. Storage
 // configuration cannot contradict itself that way: a database URL is either present or it is

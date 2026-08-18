@@ -1,6 +1,6 @@
 // Live end-to-end proof that the six `emails domain warm*` commands actually
 // work. Every one of them used to be an unconditional `throw` claiming warming
-// "is not available in the self-hosted client; it runs on the self-hosted
+// "is not available in the api client; it runs on the api
 // server" — a refusal that fired in EVERY configuration even though the warming
 // repository (src/db/warming.ts), the `warming_schedules` table, and the
 // /v1/warming routes all existed.
@@ -101,10 +101,10 @@ interface WarmStatusPayload {
 }
 
 // The exact refusal these commands used to emit. It was false in BOTH
-// directions (local and self-hosted), so no warming surface may reproduce it.
+// directions (local and api), so no warming surface may reproduce it.
 const RETIRED_REFUSALS = [
-  "not available in the self-hosted client",
-  "it runs on the self-hosted server",
+  "not available in the api client",
+  "it runs on the API server",
 ];
 
 function expectNoRetiredRefusal(text: string): void {
@@ -143,7 +143,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
     });
     expect(created.schedule.id).toBeTruthy();
     // Exact, in every timezone: the ramp is anchored on the UTC calendar date,
-    // the same anchor the self-hosted server enforces the cap with.
+    // the same anchor the api server enforces the cap with.
     expect(created.current_day).toBe(7);
     expect(created.total_days).toBe(15);
     expect(created.final_day).toBe(15);

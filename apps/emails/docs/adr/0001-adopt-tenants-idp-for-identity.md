@@ -14,14 +14,14 @@
 
 `@hasna/emails` grew a complete, **private** identity system as part of the
 multi-tenancy build (design doc §3–§6, migrations `0012`/`0013` in
-`src/server/self-hosted/migrations.ts`):
+`src/server/api/migrations.ts`):
 
 - Its own `tenants`, `users`, `memberships`, `sessions`, `invitations`,
   `api_key_tenants`, `send_key_tenants` tables (migrations.ts ~:1489+). These are
   the **resolution layer**: read before a tenant is known, deliberately outside
   the generic resource surface and outside RLS.
 - Its own signup/login/verify/bootstrap-owner surface (`/v1/auth/*`,
-  `src/server/self-hosted/auth/service.ts`) and CLI (`src/cli/commands/auth.ts`).
+  `src/server/api/auth/service.ts`) and CLI (`src/cli/commands/auth.ts`).
 - Two credential classes, dispatched by prefix in `resolveRequestContext`
   (auth/service.ts:119): `hasna_…` HMAC API keys verified via
   `@hasna/contracts/auth` and mapped to a tenant through `api_key_tenants`, and
@@ -31,7 +31,7 @@ multi-tenancy build (design doc §3–§6, migrations `0012`/`0013` in
   Postgres RLS keyed on `app.current_tenant` (with the boot guard in
   `rls-guard.ts`), and `NOT NULL tenant_id` on every data table.
 
-Production (the deployed self-hosted service, server 1.3.0) runs this with real tenants,
+Production (the deployed api service, server 1.3.0) runs this with real tenants,
 ~325 addresses and ~170k messages. **Agents currently authenticate by
 materializing the owner's client-env bundle from the vault** — every agent is
 the owner. That works and is the problem: no per-agent identity, no per-agent
@@ -139,7 +139,7 @@ tenancy per-request from the IdP). Rejected because:
   `tenant_id → tenants(id)` locally and RLS policies compare against a local
   GUC. Cross-database FKs don't exist; dropping the FKs to point at a remote
   system trades a real integrity guarantee for a convention.
-- **The product must work standalone.** `@hasna/emails` is an OSS self-hosted
+- **The product must work standalone.** `@hasna/emails` is an OSS api
   product. A single operator on their own box must be able to run it without
   standing up a second identity service. Federation is opt-in configuration;
   delegation would be a hard dependency.

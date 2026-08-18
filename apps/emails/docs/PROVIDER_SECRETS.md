@@ -48,7 +48,7 @@ optionally rotate and revoke the transported root. Opening a database with
 encrypted provider rows and no matching root key fails closed; it does not
 generate a replacement or attempt a send.
 
-Self-hosted operation does not store provider credentials in tenant provider
+Api operation does not store provider credentials in tenant provider
 rows. The service sender uses operator-injected secret-manager values or its
 least-privilege workload role. Provider resources remain tenant-scoped metadata,
 and clients never retrieve service credentials.
@@ -64,5 +64,5 @@ authorized to send necessarily sees a credential briefly in memory.
 Independent review should verify the migration savepoint and raw-byte purge,
 AES-GCM AAD binding (`provider id`, `revision`, and purpose), root-key separation,
 locked-keyring failure paths, DTO projections, rotation crash points, restore
-rebind instructions, and tenant isolation in the self-hosted store. This
+rebind instructions, and tenant isolation in the api store. This
 document records the review surface; it is not itself an independent sign-off.

@@ -9,12 +9,12 @@ import type {
 } from "../types/index.js";
 import { DomainNotFoundError } from "../types/index.js";
 import { safeOffset, safeOptionalLimit } from "./pagination.js";
-import { selfHostedResource } from "./self-hosted-resource.js";
-import type { SelfHostedResourceStore } from "./self-hosted-store.js";
-import { assertHonestSelfHostedRead, enumerateSelfHostedRows } from "./self-hosted-page.js";
+import { apiResource } from "./api-resource.js";
+import type { ApiResourceStore } from "./api-store.js";
+import { assertHonestApiRead, enumerateApiRows } from "./api-page.js";
 
 // ============================================================================
-// Self-hosted (self-hosted) routing — self-hosted-ONLY client
+// Api (api) routing — API-only client
 // ============================================================================
 //
 // Every domain read/write routes to the operator's `/v1/domains` API. There is
@@ -23,7 +23,7 @@ import { assertHonestSelfHostedRead, enumerateSelfHostedRows } from "./self-host
 // reconstructed with sensible defaults by apiToDomain().
 const DOMAIN_RESOURCE = "domains";
 
-/** Map a self-hosted API domain entity to the local rich Domain shape (defaults filled). */
+/** Map a /v1 API domain entity to the local rich Domain shape (defaults filled). */
 function apiToDomain(e: Record<string, unknown>): Domain {
   const str = (v: unknown): string | null => (v == null ? null : String(v));
   const verified = Boolean(e["verified"]);
@@ -32,9 +32,9 @@ function apiToDomain(e: Record<string, unknown>): Domain {
   const createdAt = str(e["created_at"]) ?? updatedAt;
   return {
     id: String(e["id"]),
-    provider_id: str(e["provider"] ?? e["provider_id"]) ?? "self-hosted",
+    provider_id: str(e["provider"] ?? e["provider_id"]) ?? "server",
     domain: String(e["domain"] ?? ""),
-    domain_type: "self-hosted",
+    domain_type: "server",
     source_of_truth: "postgres",
     ownership_status: verified ? "verified" : "pending",
     inbound_status: "pending",
@@ -64,18 +64,18 @@ function apiToDomain(e: Record<string, unknown>): Domain {
 // The caller passes the `/v1/domains` resource store it reads so each lookup
 // site names the resource it walks.
 function readDomains(
-  store: SelfHostedResourceStore,
+  store: ApiResourceStore,
   bound: number | null,
   keep?: (domain: Domain) => boolean,
 ): Domain[] {
-  const enumeration = enumerateSelfHostedRows<Domain>(store, {
+  const enumeration = enumerateApiRows<Domain>(store, {
     ...(bound === null ? {} : { need: bound }),
     select: (row) => {
       const domain = apiToDomain(row);
       return keep && !keep(domain) ? null : domain;
     },
   });
-  assertHonestSelfHostedRead(enumeration, bound, {
+  assertHonestApiRead(enumeration, bound, {
     noun: "domain",
     narrowHint: "retry after narrowing the domain table or paging window.",
   });
@@ -83,27 +83,27 @@ function readDomains(
 }
 
 export function createDomain(provider_id: string, domain: string): Domain {
-  const created = selfHostedResource(DOMAIN_RESOURCE).create({ domain, provider: provider_id });
+  const created = apiResource(DOMAIN_RESOURCE).create({ domain, provider: provider_id });
   return apiToDomain(created);
 }
 
 export function getDomain(id: string): Domain | null {
-  const entity = selfHostedResource(DOMAIN_RESOURCE).get(id);
+  const entity = apiResource(DOMAIN_RESOURCE).get(id);
   return entity ? apiToDomain(entity) : null;
 }
 
 export function getDomainByName(_provider_id: string, domain: string): Domain | null {
-  // A self-hosted deployment is one operator-owned instance; match by domain
+  // A api deployment is one operator-owned instance; match by domain
   // name because the local provider row is not part of the service identity.
   // This lookup protects `domain adopt` from creating a duplicate, so it may
   // return null only after reaching the end of the table.
   const name = domain.trim().toLowerCase();
-  return readDomains(selfHostedResource(DOMAIN_RESOURCE), 1, (dm) => dm.domain.toLowerCase() === name)[0] ?? null;
+  return readDomains(apiResource(DOMAIN_RESOURCE), 1, (dm) => dm.domain.toLowerCase() === name)[0] ?? null;
 }
 
 export function findDomainsByName(domain: string): Domain[] {
   const name = domain.trim().toLowerCase();
-  return readDomains(selfHostedResource(DOMAIN_RESOURCE), null, (dm) => dm.domain.toLowerCase() === name)
+  return readDomains(apiResource(DOMAIN_RESOURCE), null, (dm) => dm.domain.toLowerCase() === name)
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
 }
 
@@ -119,7 +119,7 @@ export function listDomainsByProviderAndNames(pairs: Iterable<DomainProviderName
       .filter(Boolean),
   );
   if (wanted.size === 0) return [];
-  return readDomains(selfHostedResource(DOMAIN_RESOURCE), null, (dm) => wanted.has(dm.domain.toLowerCase()))
+  return readDomains(apiResource(DOMAIN_RESOURCE), null, (dm) => wanted.has(dm.domain.toLowerCase()))
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
 }
 
@@ -143,7 +143,7 @@ export function listDomains(provider_id?: string, opts?: ListDomainOptions): Dom
   // page, and `listDomains()` with no limit returned 100. The provider filter and
   // the window below need the full row set anyway; a table that fits in one page
   // still costs exactly one request.
-  let domains = enumerateSelfHostedRows(DOMAIN_RESOURCE).rows.map(apiToDomain);
+  let domains = enumerateApiRows(DOMAIN_RESOURCE).rows.map(apiToDomain);
   if (provider_id) domains = domains.filter((dm) => dm.provider_id === provider_id);
   domains.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   return lim === null ? domains : domains.slice(off, off + lim);
@@ -152,7 +152,7 @@ export function listDomains(provider_id?: string, opts?: ListDomainOptions): Dom
 export function listDomainsByProviderIds(providerIds: Iterable<string>): Domain[] {
   const ids = new Set([...providerIds].map((id) => id.trim()).filter(Boolean));
   if (ids.size === 0) return [];
-  return readDomains(selfHostedResource(DOMAIN_RESOURCE), null, (dm) => ids.has(dm.provider_id))
+  return readDomains(apiResource(DOMAIN_RESOURCE), null, (dm) => ids.has(dm.provider_id))
     .sort((a, b) => a.provider_id.localeCompare(b.provider_id) || (b.created_at ?? "").localeCompare(a.created_at ?? ""));
 }
 
@@ -172,20 +172,20 @@ export function listUsableDomains(opts: UsableDomainOptions = {}): Domain[] {
   // from a table too large to enumerate. An unlimited caller asks for the whole
   // set and must still prove it reached the end.
   const bound = lim === null ? null : off + lim;
-  const domains = readDomains(selfHostedResource(DOMAIN_RESOURCE), bound, (dm) => usableFilter(dm, opts))
+  const domains = readDomains(apiResource(DOMAIN_RESOURCE), bound, (dm) => usableFilter(dm, opts))
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   return lim === null ? domains : domains.slice(off, off + lim);
 }
 
 export function countUsableDomains(opts: Omit<UsableDomainOptions, "limit" | "offset"> = {}): number {
-  return readDomains(selfHostedResource(DOMAIN_RESOURCE), null, (dm) => usableFilter(dm, opts)).length;
+  return readDomains(apiResource(DOMAIN_RESOURCE), null, (dm) => usableFilter(dm, opts)).length;
 }
 
 export function updateDomain(
   id: string,
   input: Partial<Pick<Domain, "dkim_status" | "spf_status" | "dmarc_status" | "verified_at">>,
 ): Domain {
-  const store = selfHostedResource(DOMAIN_RESOURCE);
+  const store = apiResource(DOMAIN_RESOURCE);
   const current = store.get(id);
   if (!current) throw new DomainNotFoundError(id);
   const verified =
@@ -215,7 +215,7 @@ export interface DomainReadinessUpdate {
 export function updateDomainReadiness(id: string, _input: DomainReadinessUpdate): Domain {
   // The /v1 domain schema does not carry the local lifecycle/readiness fields;
   // return the current record so callers (e.g. `domain add`) still get a Domain.
-  const current = selfHostedResource(DOMAIN_RESOURCE).get(id);
+  const current = apiResource(DOMAIN_RESOURCE).get(id);
   if (!current) throw new DomainNotFoundError(id);
   return apiToDomain(current);
 }
@@ -228,7 +228,7 @@ export interface MoveDomainProviderResult {
 }
 
 export function moveDomainProvider(id: string, toProviderId: string): MoveDomainProviderResult {
-  const store = selfHostedResource(DOMAIN_RESOURCE);
+  const store = apiResource(DOMAIN_RESOURCE);
   const current = store.get(id);
   if (!current) throw new DomainNotFoundError(id);
   const domain = apiToDomain(current);
@@ -241,11 +241,11 @@ export function moveDomainProvider(id: string, toProviderId: string): MoveDomain
 }
 
 export function deleteDomain(id: string): boolean {
-  return selfHostedResource(DOMAIN_RESOURCE).del(id);
+  return apiResource(DOMAIN_RESOURCE).del(id);
 }
 
 export function updateDnsStatus(id: string, dkim: DnsStatus, spf: DnsStatus, dmarc: DnsStatus): Domain {
-  const store = selfHostedResource(DOMAIN_RESOURCE);
+  const store = apiResource(DOMAIN_RESOURCE);
   const current = store.get(id);
   if (!current) throw new DomainNotFoundError(id);
   const allVerified = dkim === "verified" && spf === "verified" && dmarc === "verified";

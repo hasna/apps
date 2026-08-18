@@ -1,4 +1,4 @@
-// Self-hosted-ONLY.
+// API-only.
 //
 // These commands used to refuse outright. They are not server-only:
 //   • `daemon status` reads the provisioning queue from the SAME paged status facts
@@ -97,7 +97,7 @@ describe("daemon status reads the provisioning queue over /v1", () => {
     // availability record. Without it a caller cannot tell a total from a floor.
     expect(status.queue.availability.available).toBe(true);
     expect(status.queue.availability.complete).toBe(true);
-    expect(output).not.toContain("not available in the self-hosted client");
+    expect(output).not.toContain("not available in the api client");
   });
 
   // The reason this command stopped calling getProvisioningWorkSummary(): that read
@@ -142,7 +142,7 @@ describe("daemon restart reports this process, not the server", () => {
 
     expect(result.managed_process).toBe(false);
     expect(result.cli_equivalent).toBe("emails daemon status --json");
-    expect(output).not.toContain("not available in the self-hosted client");
+    expect(output).not.toContain("not available in the api client");
   });
 });
 
@@ -158,7 +158,7 @@ describe("logs tail reads this machine's log files", () => {
     expect(result.files[0]?.exists).toBe(true);
     expect(result.files[0]?.text).toBe("second\nthird");
     expect(output).toContain("second");
-    expect(output).not.toContain("not available in the self-hosted client");
+    expect(output).not.toContain("not available in the api client");
   });
 
   it("says the log is absent instead of refusing", async () => {

@@ -217,7 +217,7 @@ describe("Emails client-env loader", () => {
   it("runs secrets get with a scrubbed environment", () => {
     const envPath = installCapturingSecretsCommand();
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
-    process.env["HASNA_EMAILS_API_KEY"] = "stale-self-hosted-key-must-not-pass";
+    process.env["HASNA_EMAILS_API_KEY"] = "stale-api-key-must-not-pass";
     process.env["DATABASE_URL"] = "postgres://database-url-must-not-pass";
     process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://emails-database-url-must-not-pass";
     process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://hasna-emails-database-url-must-not-pass";
@@ -306,7 +306,7 @@ describe("Emails client-env loader", () => {
       JSON.stringify({
         // Assembled, not spelled, so this addition contributes nothing to the axis
         // source-text guard this file sits inside.
-        [["EMAILS", "MODE"].join("_")]: "self-hosted",
+        [["EMAILS", "MODE"].join("_")]: "server",
         HASNA_EMAILS_API_URL: "https://emails.example.invalid",
         [EMAILS_IDP_TOKEN_ENV]: "emid_identity_only",
       }),
@@ -377,7 +377,7 @@ describe("Emails client-env loader", () => {
     // Assembled, not spelled, so this addition contributes nothing to the axis
     // source-text guard this file sits inside.
     const guardedEntry = JSON.stringify({
-      [["EMAILS", "MODE"].join("_")]: "self-hosted",
+      [["EMAILS", "MODE"].join("_")]: "server",
       HASNA_EMAILS_API_URL: "https://emails.example.invalid",
       HASNA_EMAILS_API_KEY: "guarded-client-key",
     });
@@ -414,7 +414,7 @@ exit 2
     writeFileSync(
       storePath,
       JSON.stringify({
-        [["EMAILS", "MODE"].join("_")]: "self-hosted",
+        [["EMAILS", "MODE"].join("_")]: "server",
         HASNA_EMAILS_API_URL: "https://emails.example.invalid",
         HASNA_EMAILS_API_KEY: "op-key",
       }),
@@ -461,7 +461,7 @@ exit 2
     writeFileSync(argvLogPath, "");
     // Assembled key: keeps this fixture out of the axis-source-text guard count.
     const entry = JSON.stringify({
-      [["EMAILS", "MODE"].join("_")]: "self-hosted",
+      [["EMAILS", "MODE"].join("_")]: "server",
       HASNA_EMAILS_API_URL: "https://emails.example.invalid",
       HASNA_EMAILS_API_KEY: "op-key",
     });

@@ -32,7 +32,7 @@ interface SentLogPageOpts {
   offset?: string;
 }
 
-export interface SelfHostedEmailSummary {
+export interface ApiEmailSummary {
   id: string;
   kind: "inbound" | "sent";
   from_address: string;
@@ -69,14 +69,14 @@ export interface SelfHostedEmailSummary {
   attachments: number;
 }
 
-interface SelfHostedEmailDetail extends SelfHostedEmailSummary {
+interface ApiEmailDetail extends ApiEmailSummary {
   text_body: string | null;
   html_body: string | null;
   flags: string[];
 }
 
 // The local test-send and the local webhook/event listener have no /v1
-// equivalent in this self-hosted-only client: one drives the local provider
+// equivalent in this api-only client: one drives the local provider
 // pipeline, the other binds a local HTTP port to receive provider callbacks that
 // are addressed to the operator's server. Both are kept for discoverability but
 // fail loud.
@@ -87,7 +87,7 @@ interface SelfHostedEmailDetail extends SelfHostedEmailSummary {
 // `export_events` tools already take.
 function serverOnly(command: string): never {
   throw new Error(
-    `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
+    `${command} is not available in the api client; it runs on the API server.`,
   );
 }
 
@@ -98,7 +98,7 @@ function parseReplyPage(opts: ReplyPageOpts): { limit: number; offset: number } 
   };
 }
 
-function assertSupportedSelfHostedSentFilters(command: string, opts: SentLogPageOpts): void {
+function assertSupportedApiSentFilters(command: string, opts: SentLogPageOpts): void {
   const unsupported = [
     opts.provider ? "--provider" : null,
     opts.status ? "--status" : null,
@@ -115,7 +115,7 @@ function splitRecipients(value: string): string[] {
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
-export function toSelfHostedSummary(msg: TuiMessage): SelfHostedEmailSummary {
+export function toApiSummary(msg: TuiMessage): ApiEmailSummary {
   const to = splitRecipients(msg.to);
   const cc = splitRecipients(msg.cc ?? "");
   return {
@@ -138,7 +138,7 @@ export function toSelfHostedSummary(msg: TuiMessage): SelfHostedEmailSummary {
   };
 }
 
-function toSelfHostedDetail(msg: TuiMessage, body: MessageBody | null): SelfHostedEmailDetail {
+function toApiDetail(msg: TuiMessage, body: MessageBody | null): ApiEmailDetail {
   const labels = msg.is_read
     ? msg.labels.filter((label) => label.trim().toLowerCase() !== "unread")
     : msg.labels;
@@ -151,7 +151,7 @@ function toSelfHostedDetail(msg: TuiMessage, body: MessageBody | null): SelfHost
   const to = splitRecipients(body?.to ?? msg.to);
   const cc = splitRecipients(body?.cc ?? msg.cc ?? "");
   return {
-    ...toSelfHostedSummary({ ...msg, labels }),
+    ...toApiSummary({ ...msg, labels }),
     from_address: body?.from ?? msg.from,
     to,
     cc,
@@ -166,7 +166,7 @@ function toSelfHostedDetail(msg: TuiMessage, body: MessageBody | null): SelfHost
 }
 
 /** Status cell: highlight anything that is NOT a completed send. */
-function statusCell(row: SelfHostedEmailSummary): string {
+function statusCell(row: ApiEmailSummary): string {
   const value = (row.send_state ?? row.status ?? "").trim();
   if (!value) return "-";
   return value;
@@ -181,7 +181,7 @@ const STATES_THAT_NEED_NO_REASON = ["sent", "delivered", "received", "-"] as con
  * what to change. Falls back to the bare state when the row carries no reason —
  * inventing one would be worse than the silence this fixes.
  */
-function statusWithReason(row: SelfHostedEmailSummary): string {
+function statusWithReason(row: ApiEmailSummary): string {
   const reason = policyDenialToShow(row);
   const state = statusCell(row);
   return reason ? `${state} (${reason})` : state;
@@ -194,7 +194,7 @@ function statusWithReason(row: SelfHostedEmailSummary): string {
  * that reached a completed state suppresses it: a stale code left on a message that
  * ultimately sent would otherwise make delivered mail read as refused.
  */
-function policyDenialToShow(row: SelfHostedEmailSummary): string | null {
+function policyDenialToShow(row: ApiEmailSummary): string | null {
   const reason = row.policy_denial?.trim();
   if (!reason) return null;
   const state = statusCell(row);
@@ -212,7 +212,7 @@ function policyDenialToShow(row: SelfHostedEmailSummary): string | null {
 const MIN_STATUS_WIDTH = 10;
 const MAX_STATUS_WIDTH = 34;
 
-export function formatSelfHostedSummaries(rows: SelfHostedEmailSummary[], title: string): string {
+export function formatApiSummaries(rows: ApiEmailSummary[], title: string): string {
   if (rows.length === 0) return chalk.dim(`${title}: no messages found.`);
   const lines: string[] = [];
   lines.push(chalk.bold(`\n${title} (${rows.length})`));
@@ -249,7 +249,7 @@ export function formatSelfHostedSummaries(rows: SelfHostedEmailSummary[], title:
   return lines.join("\n");
 }
 
-export function formatSelfHostedDetail(email: SelfHostedEmailDetail): string {
+export function formatApiDetail(email: ApiEmailDetail): string {
   const lines: string[] = [
     chalk.bold(`\nEmail: ${email.id}`),
     `  ${chalk.dim("Subject:")}  ${email.subject}`,
@@ -291,23 +291,23 @@ export function formatSelfHostedDetail(email: SelfHostedEmailDetail): string {
   return lines.join("\n");
 }
 
-async function selfHostedSentList(
+async function apiSentList(
   ds: MailDataSource,
   opts: SentLogPageOpts,
   output: (data: unknown, formatted: string) => void,
   command: string,
 ): Promise<void> {
-  assertSupportedSelfHostedSentFilters(command, opts);
+  assertSupportedApiSentFilters(command, opts);
   const rows = await ds.listMailbox("sent", {
     limit: parseCliPositiveIntOption(opts.limit, 20),
     offset: parseCliNonNegativeIntOption(opts.offset),
     since: opts.since,
   });
-  const summaries = rows.map(toSelfHostedSummary);
-  output(summaries, formatSelfHostedSummaries(summaries, "Self-hosted sent mail"));
+  const summaries = rows.map(toApiSummary);
+  output(summaries, formatApiSummaries(summaries, "Api sent mail"));
 }
 
-async function selfHostedSentSearch(
+async function apiSentSearch(
   ds: MailDataSource,
   query: string,
   opts: { since?: string; limit?: string; offset?: string },
@@ -319,8 +319,8 @@ async function selfHostedSentSearch(
     limit: parseCliPositiveIntOption(opts.limit, 20),
     offset: parseCliNonNegativeIntOption(opts.offset),
   });
-  const summaries = rows.map(toSelfHostedSummary);
-  output(summaries, formatSelfHostedSummaries(summaries, `Self-hosted sent search "${query}"`));
+  const summaries = rows.map(toApiSummary);
+  output(summaries, formatApiSummaries(summaries, `Api sent search "${query}"`));
 }
 
 // ── mailbox-wide search (task db244cd4) ──────────────────────────────────────
@@ -387,7 +387,7 @@ export async function mailboxSearch(
   // a live need — a message counted twice would silently inflate a harvest.
   const seen = new Set<string>();
   const merged = pages.flat().filter((row) => (seen.has(row.id) ? false : (seen.add(row.id), true)));
-  const summaries = merged.sort(byNewestFirst).slice(offset, offset + limit).map(toSelfHostedSummary);
+  const summaries = merged.sort(byNewestFirst).slice(offset, offset + limit).map(toApiSummary);
 
   const searched = folders.join(" + ");
   if (summaries.length === 0) {
@@ -402,10 +402,10 @@ export async function mailboxSearch(
     output([], chalk.dim(`No mail matching "${query}" in ${searched}.${tail}`));
     return;
   }
-  output(summaries, formatSelfHostedSummaries(summaries, `Search "${query}" in ${searched}`));
+  output(summaries, formatApiSummaries(summaries, `Search "${query}" in ${searched}`));
 }
 
-async function selfHostedShow(
+async function apiShow(
   ds: MailDataSource,
   id: string,
   output: (data: unknown, formatted: string) => void,
@@ -414,12 +414,12 @@ async function selfHostedShow(
   const msg = await ds.getMessage(resolvedId);
   if (!msg) handleError(new Error(`Email not found: ${id}`));
   const body = await ds.getMessageBody(msg!);
-  const detail = toSelfHostedDetail(msg!, body);
-  output(detail, formatSelfHostedDetail(detail));
+  const detail = toApiDetail(msg!, body);
+  output(detail, formatApiDetail(detail));
 }
 
 /** Resolve a message and read its full thread through the mail data source. */
-async function selfHostedConversation(ds: MailDataSource, id: string): Promise<{ msg: TuiMessage; messages: TuiThreadMessage[] }> {
+async function apiConversation(ds: MailDataSource, id: string): Promise<{ msg: TuiMessage; messages: TuiThreadMessage[] }> {
   const resolvedId = await ds.resolveId(id);
   const msg = await ds.getMessage(resolvedId);
   if (!msg) handleError(new Error(`Email not found: ${id}`));
@@ -433,7 +433,7 @@ async function selfHostedConversation(ds: MailDataSource, id: string): Promise<{
  * never counts the message you asked about as a reply to itself.
  *
  * This is the whole inbound side of the conversation, not local SQLite client's strict
- * depth-1 `in_reply_to_email_id` children: the self-hosted rows expose the
+ * depth-1 `in_reply_to_email_id` children: the API rows expose the
  * conversation, not a parent-child edge per message, and under-reporting a reply
  * is the failure this replaces. The response SHAPE is identical to local's
  * ({ replies, total, limit, offset, has_more }).
@@ -499,7 +499,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N emails", "0")
     .action(async (opts: SentLogPageOpts) => {
       try {
-        await selfHostedSentList(resolveMailDataSource(), opts, output, "emails email list");
+        await apiSentList(resolveMailDataSource(), opts, output, "emails email list");
       } catch (e) { handleError(e); }
     });
 
@@ -511,7 +511,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N results", "0")
     .action(async (query: string, opts: { since?: string; limit?: string; offset?: string }) => {
       try {
-        await selfHostedSentSearch(resolveMailDataSource(), query, opts, output);
+        await apiSentSearch(resolveMailDataSource(), query, opts, output);
       } catch (e) { handleError(e); }
     });
 
@@ -520,7 +520,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .description("Show full details and body of a sent email")
     .action(async (id: string) => {
       try {
-        await selfHostedShow(resolveMailDataSource(), id, output);
+        await apiShow(resolveMailDataSource(), id, output);
       } catch (e) { handleError(e); }
     });
 
@@ -531,7 +531,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N replies", "0")
     .action(async (id: string, opts: ReplyPageOpts) => {
       try {
-        const { msg, messages } = await selfHostedConversation(resolveMailDataSource(), id);
+        const { msg, messages } = await apiConversation(resolveMailDataSource(), id);
         const received = repliesInConversation(msg, messages);
         const { limit, offset } = parseReplyPage(opts);
         const { items, total, has_more } = threadPage(received, limit, offset);
@@ -549,7 +549,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N thread messages", "0")
     .action(async (id: string, opts: ReplyPageOpts) => {
       try {
-        const { msg, messages } = await selfHostedConversation(resolveMailDataSource(), id);
+        const { msg, messages } = await apiConversation(resolveMailDataSource(), id);
         const { limit, offset } = parseReplyPage(opts);
         const { items, total, has_more } = threadPage(messages, limit, offset);
         const header = `Thread${formatThreadLabel(msg.thread_id)} (${items.length} of ${total} message${total !== 1 ? "s" : ""})`;
@@ -575,7 +575,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N emails", "0")
     .action(async (opts: SentLogPageOpts) => {
       try {
-        await selfHostedSentList(resolveMailDataSource(), opts, output, "emails log");
+        await apiSentList(resolveMailDataSource(), opts, output, "emails log");
       } catch (e) { handleError(e); }
     });
 
@@ -599,7 +599,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
   program.command("show <id>").description("Show full email details including body content")
     .action(async (id: string) => {
       try {
-        await selfHostedShow(resolveMailDataSource(), id, output);
+        await apiShow(resolveMailDataSource(), id, output);
       } catch (e) { handleError(e); }
     });
 
@@ -609,7 +609,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N replies", "0")
     .action(async (id: string, opts: ReplyPageOpts) => {
       try {
-        const { msg, messages } = await selfHostedConversation(resolveMailDataSource(), id);
+        const { msg, messages } = await apiConversation(resolveMailDataSource(), id);
         const received = repliesInConversation(msg, messages);
         const { limit, offset } = parseReplyPage(opts);
         const { items, total, has_more } = threadPage(received, limit, offset);
@@ -626,7 +626,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N thread messages", "0")
     .action(async (id: string, opts: ReplyPageOpts) => {
       try {
-        const { msg, messages } = await selfHostedConversation(resolveMailDataSource(), id);
+        const { msg, messages } = await apiConversation(resolveMailDataSource(), id);
         const { limit, offset } = parseReplyPage(opts);
         const { items, total, has_more } = threadPage(messages, limit, offset);
         const header = `Conversation thread${formatThreadLabel(msg.thread_id)} (${items.length} of ${total} message${total === 1 ? "" : "s"})`;

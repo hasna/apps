@@ -20,7 +20,7 @@ describe("emails-serve storage backend", () => {
     // database URL is the whole resolution. A leftover variable — with any value, including
     // the old spellings of the selector — must not change the answer.
     const LEGACY = ["EMAILS", "MODE"].join("_");
-    for (const value of ["local", "self-hosted", "selfhosted", "whichever"]) {
+    for (const value of ["local", "server", "api", "whichever"]) {
       expect(resolveServerStorageBackend({ [LEGACY]: value })).toBe("sqlite");
       expect(
         resolveServerStorageBackend({ [LEGACY]: value, [SERVER_DATABASE_URL_SETTING]: POSTGRES }),
@@ -34,14 +34,14 @@ describe("emails-serve storage backend", () => {
     const source = readFileSync(join(import.meta.dir, "storage-backend.ts"), "utf8");
     expect(source).toContain("SERVER_DATABASE_URL_SETTING");
     expect(source).not.toMatch(/resolveEmailsMode/);
-    expect(source).not.toMatch(/isSelfHosted/);
+    expect(source).not.toMatch(/isApi/);
   });
 
   it("leaves no server module reading the selector to choose a store", () => {
     // A POSITIVE CONTROL for the absence claims below: the same scan run against a fixture
     // that DOES contain the offending read must find it, or this assertion proves nothing.
     // A one-character typo in the pattern would otherwise pass over every file in silence.
-    const offending = 'const mode = resolveEmailsModeSelection().mode;\nif (mode === "self-hosted") {}';
+    const offending = 'const mode = resolveEmailsModeSelection().mode;\nif (mode === "server") {}';
     const scan = (text: string): boolean =>
       /resolveEmailsMode(?:Selection)?\(/.test(text) || /\bgetEmailsMode\(/.test(text);
     expect(scan(offending)).toBe(true);
@@ -49,8 +49,8 @@ describe("emails-serve storage backend", () => {
     for (const relative of [
       "src/server/index.ts",
       "src/server/bind-options.ts",
-      "src/server/self-hosted/env.ts",
-      "src/server/self-hosted/migrate.ts",
+      "src/server/api/env.ts",
+      "src/server/api/migrate.ts",
     ]) {
       expect(scan(readFileSync(join(root, relative), "utf8")), `${relative} still reads the selector`)
         .toBe(false);

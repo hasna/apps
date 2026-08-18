@@ -2,7 +2,7 @@
 //
 // There are exactly two fail-closed backends:
 //   • SqliteMailDataSource — local SQLite, with no network/Postgres dependency.
-//   • SelfHostedMailDataSource — authenticated operator-owned /v1 HTTP API.
+//   • ApiMailDataSource — authenticated operator-owned /v1 HTTP API.
 //
 // The seam speaks the client's existing domain language (TuiMessage / Folder /
 // MailboxCounts / MessageBody / …) so callers stay independent of the backend.
@@ -10,7 +10,7 @@
 import { isApiClientConfigured } from "../store-resolution.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
-import { SelfHostedMailDataSource, resolveSelfHostedMailDataSource } from "./self-hosted-mail-data-source.js";
+import { ApiMailDataSource, resolveApiMailDataSource } from "./api-mail-data-source.js";
 import {
   addInboundLabelSummary,
   clearInboundEmails,
@@ -89,7 +89,7 @@ import { basename } from "node:path";
  * Which of the two client backends a data source talks to. The same vocabulary
  * as the store seam's `StorePlan.store`: a local SQLite file, or a client of an
  * Emails `/v1` API. The selector labels this field used to carry
- * (`"local" | "self-hosted"`) are gone with the concept they named.
+ * (`"local" | "server"`) are gone with the concept they named.
  */
 export type MailDataSourceBackend = "sqlite" | "api";
 
@@ -143,7 +143,7 @@ export interface MailboxFilterApplyResult {
   truncated: boolean;
 }
 
-/** A base64 inline attachment for local/provider or bounded self-hosted send. */
+/** A base64 inline attachment for local/provider or bounded api send. */
 export interface MailSendAttachment {
   filename: string;
   /** base64-encoded content. */
@@ -165,7 +165,7 @@ export interface MailSendInput {
    */
   html?: string;
   markdown?: boolean;
-  /** local outbound provider id; self-hosted resolves the sender server-side. */
+  /** local outbound provider id; api resolves the sender server-side. */
   providerId?: string;
   /** sending mailbox id (else resolved from `from`). */
   mailboxId?: string;
@@ -173,15 +173,15 @@ export interface MailSendInput {
   replyToId?: string;
   /** Reply-To header address(es), comma-separated. */
   replyTo?: string;
-  /** File attachments. Self-hosted JSON send enforces its documented caps. */
+  /** File attachments. Api JSON send enforces its documented caps. */
   attachments?: MailSendAttachment[];
-  /** ISO-8601 schedule time. Self-hosted send rejects this (no server-side scheduling). */
+  /** ISO-8601 schedule time. Api send rejects this (no server-side scheduling). */
   scheduledAt?: string;
-  /** Stable caller-provided key used to make self-hosted sends retry-safe. */
+  /** Stable caller-provided key used to make api sends retry-safe. */
   idempotencyKey?: string;
   /**
    * RFC 8058 one-click unsubscribe target: local providers inject the
-   * List-Unsubscribe / List-Unsubscribe-Post header pair. The self-hosted send
+   * List-Unsubscribe / List-Unsubscribe-Post header pair. The api send
    * contract cannot carry it, so that backend REFUSES rather than mailing
    * without the headers.
    */
@@ -206,7 +206,7 @@ export interface MailSendResult {
 
 /** Scope for a clear (bulk delete): local optionally scopes by provider. */
 export interface MailClearFilter {
-  /** Local provider filter; self-hosted resolves this to a mailbox-id scope. */
+  /** Local provider filter; api resolves this to a mailbox-id scope. */
   providerId?: string;
   /** Folder scope (defaults to inbox). */
   mailbox?: Mailbox;
@@ -581,7 +581,7 @@ export class SqliteMailDataSource implements MailDataSource {
 
 export interface ResolveMailDataSourceOptions {
   backend?: MailDataSourceBackend;
-  selfHosted?: SelfHostedMailDataSource;
+  api?: ApiMailDataSource;
 }
 
 let memoized: { backend: MailDataSourceBackend; source: MailDataSource } | null = null;
@@ -595,22 +595,22 @@ let memoized: { backend: MailDataSourceBackend; source: MailDataSource } | null 
  * variable to select it any more.
  */
 export function resolveMailDataSource(opts: ResolveMailDataSourceOptions = {}): MailDataSource {
-  const override = Boolean(opts.backend || opts.selfHosted);
+  const override = Boolean(opts.backend || opts.api);
   const backend = opts.backend ?? (isApiClientConfigured() ? "api" : "sqlite");
   if (!override && memoized?.backend === backend) {
     return memoized.source;
   }
   let source: MailDataSource;
   if (backend === "api") {
-    const selfHosted = opts.selfHosted ?? resolveSelfHostedMailDataSource();
-    if (!selfHosted) {
+    const api = opts.api ?? resolveApiMailDataSource();
+    if (!api) {
       throw new Error(
         "The Emails API client requires HASNA_EMAILS_API_URL and a credential " +
           "(HASNA_EMAILS_API_KEY, EMAILS_SESSION_TOKEN or EMAILS_IDP_TOKEN), or EMAILS_CLIENT_ENV_SECRET. " +
           "No hosted endpoint is inferred.",
       );
     }
-    source = selfHosted;
+    source = api;
   } else {
     source = new SqliteMailDataSource();
   }

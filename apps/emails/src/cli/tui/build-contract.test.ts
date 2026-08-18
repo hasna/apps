@@ -75,7 +75,7 @@ describe("emails ui build contract", () => {
     expect(source).not.toContain('from "solid-js"');
   });
 
-  it("keeps local and self-hosted TUI send graphs isolated behind the mode router", () => {
+  it("keeps local and api TUI send graphs isolated behind the mode router", () => {
     const source = readFileSync(join(root, "src", "cli", "tui", "data.ts"), "utf8");
     const localSource = readFileSync(join(root, "src", "cli", "tui", "data.sqlite.ts"), "utf8");
     const remoteSource = readFileSync(join(root, "src", "cli", "tui", "data.api.ts"), "utf8");
@@ -88,6 +88,6 @@ describe("emails ui build contract", () => {
     expect(source).toContain('from "./data.sqlite.js"');
     expect(source).toContain('from "./data.api.js"');
     expect(localSource).toContain('import("../../lib/send.sqlite.js")');
-    expect(remoteSource).toContain('selfHostedStoreFor("messages/send")');
+    expect(remoteSource).toContain('apiStoreFor("messages/send")');
   });
 });

@@ -90,7 +90,7 @@ describe("buildS3PullTargets", () => {
 
 describe("TUI autopull when the API client is configured", () => {
   it("no-ops before local S3 sync, forwarding, or SQLite writes", async () => {
-    const root = mkdtempSync(join(tmpdir(), "emails-autopull-self-hosted-"));
+    const root = mkdtempSync(join(tmpdir(), "emails-autopull-api-"));
     const home = join(root, "home");
     try {
       const script = `

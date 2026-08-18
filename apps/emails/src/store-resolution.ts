@@ -61,7 +61,7 @@ export const DATABASE_PATH_SETTINGS = Object.freeze(["HASNA_EMAILS_DB_PATH", "EM
 /**
  * The setting that names an Emails API origin. Defined in src/lib/client-env.ts
  * beside the credential settings and re-exported here under the role name the
- * resolution uses; the earlier self-hosted-URL spelling is gone with the
+ * resolution uses; the earlier api-URL spelling is gone with the
  * selector that carried it.
  */
 export const API_BASE_URL_SETTING = EMAILS_API_URL_ENV;
@@ -70,7 +70,7 @@ export const API_BASE_URL_SETTING = EMAILS_API_URL_ENV;
  * The settings that carry the API credential, in precedence order: an explicit user
  * session first, then the caller's own identity token — ADR-0002, an agent uses ITS
  * identity even when an operator key is also present in the env — then the operator
- * API key. The same order the existing client applies (src/db/self-hosted-store.ts,
+ * API key. The same order the existing client applies (src/db/api-store.ts,
  * `sessionToken || idpToken || apiKey`), so the two paths cannot disagree about
  * which credential a mixed environment means.
  */
@@ -195,7 +195,7 @@ function credentialFreeOrigin(value: string): string {
     return reject(`must be an http or https URL (it parsed as the "${parsed.protocol}" scheme)`);
   }
   // PLAINTEXT IS REFUSED EXCEPT ON LOOPBACK, and the refusal repeats the legacy
-  // client's sentence (src/db/self-hosted-store.ts) so operators meet ONE message on
+  // client's sentence (src/db/api-store.ts) so operators meet ONE message on
   // both paths. The store built from this origin puts the bearer credential in an
   // Authorization header on every request; over plaintext http to a non-loopback host
   // that is the credential on the wire for anything along the route. The allowed set

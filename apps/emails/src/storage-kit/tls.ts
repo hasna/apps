@@ -7,7 +7,7 @@
 // variants that previously existed across repos, all of which hardcoded
 // `{ rejectUnauthorized: false }` for any TLS connection — that silently
 // disables certificate verification even when the caller asked for
-// `verify-full`, which defeats the point of TLS against a self-hosted database.
+// `verify-full`, which defeats the point of TLS against a server database.
 //
 // The rule accepts familiar libpq `sslmode` names but intentionally applies a
 // stricter verification policy:
@@ -169,7 +169,7 @@ export function resolveTlsConfig(
   if (unsupportedClientCertificateParameter) {
     throw new Error(
       `${unsupportedClientCertificateParameter} is not supported in HASNA_EMAILS_DATABASE_URL; ` +
-        "Emails self-hosted supports verified server certificates through a CA bundle.",
+        "Emails api supports verified server certificates through a CA bundle.",
     );
   }
   const mode = sslModeFromConnectionString(connectionString);

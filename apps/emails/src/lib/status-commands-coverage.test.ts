@@ -12,7 +12,7 @@
 //
 // (the deleted HTTP-arm status module's domainFixCommands -> agent-context.ts
 // buildNextActions), and `isCommandAvailableForBackend` waved it through. Running it
-// throws "emails domain status is not available in the self-hosted client" — the
+// throws "emails domain status is not available in the api client" — the
 // exact "remedy that refuses" defect the registry was introduced to remove.
 //
 // WHY THE EXISTING TESTS COULD NOT CATCH IT. agent-context.sqlite.test.ts asserted
@@ -22,7 +22,7 @@
 // test proves nothing. This file's oracle is the CLI source.
 //
 // Precedent for source-scanning tests here: src/lib/status-fabrication-scan.test.ts,
-// src/server/self-hosted/list-order.test.ts, src/no-cloud-boundary.test.ts.
+// src/server/api/list-order.test.ts, src/no-cloud-boundary.test.ts.
 
 import { describe, expect, it } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
@@ -74,7 +74,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
 
   // POSITIVE CONTROL. If the regex, the directory or the exclusion rules ever
   // stop matching, every assertion below would pass over an empty set. Both the
-  // shared and the self-hosted-only partitions must be non-empty, and the scan
+  // shared and the api-only partitions must be non-empty, and the scan
   // must see the two helpers by name.
   it("finds a non-empty, correctly partitioned set of refusals", () => {
     // FLOORS ARE 1, NOT 10 — on purpose, and this is a strengthening rather than a
@@ -181,7 +181,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
       + "prefix to NEVER_AVAILABLE_COMMANDS:\n" + missing.join("\n")).toEqual([]);
   });
 
-  it("registers every self-hosted-only refusal in API_REFUSED_COMMANDS", () => {
+  it("registers every api-only refusal in API_REFUSED_COMMANDS", () => {
     const missing = refusals
       .filter((r) => !r.shared)
       .filter((r) => !covered(r.command, API_REFUSED_COMMANDS)

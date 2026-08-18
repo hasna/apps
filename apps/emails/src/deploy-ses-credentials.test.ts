@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 // The AWS module historically assumed SES lives in the same account as the ECS
 // tasks, so the API container had no way to present credentials at all
-// (src/server/self-hosted/sender.ts pins access_key/secret_key to null and
+// (src/server/api/sender.ts pins access_key/secret_key to null and
 // src/providers/ses.ts then falls back to the SDK default chain, i.e. the task
 // role). Any deployment whose production-access SES sits in a *different*
 // account than the ECS cluster therefore cannot send, and every external

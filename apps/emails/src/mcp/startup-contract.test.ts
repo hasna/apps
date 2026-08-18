@@ -169,10 +169,10 @@ describe("MCP startup contract", () => {
   });
 
   it("keeps sequence implementation dependencies lazy", () => {
-    // Self-hosted-only: sequences route through the /v1 resource store + the
+    // Api-only: sequences route through the /v1 resource store + the
     // client-backend selection.
     const lazyToolDeps = [
-      "../../db/self-hosted-store.js",
+      "../../db/api-store.js",
       "../../db/sequences.js",
       "../../store-resolution.js",
       "../helpers.js",
@@ -192,11 +192,11 @@ describe("MCP startup contract", () => {
   });
 
   it("keeps miscellaneous operation implementation dependencies lazy", () => {
-    // Self-hosted-only: misc ops route through the /v1 resource store + the
+    // Api-only: misc ops route through the /v1 resource store + the
     // client-backend selection; the remaining heavy libs
     // (analytics/doctor/export/email-verify) stay lazy.
     const lazyToolDeps = [
-      "../../db/self-hosted-store.js",
+      "../../db/api-store.js",
       "../../lib/analytics.js",
       "../../lib/doctor.js",
       "../../lib/export.js",

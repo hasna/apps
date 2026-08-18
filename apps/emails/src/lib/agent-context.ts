@@ -253,7 +253,7 @@ export async function getEmailSystemStatus(): Promise<EmailSystemStatus> {
 
 /**
  * Runtime status for `emails status`, `emails agent context` and the MCP status
- * resources/tools. Mode-aware: local reads SQLite, self-hosted reads `/v1`.
+ * resources/tools. Mode-aware: local reads SQLite, api reads `/v1`.
  */
 export async function getEmailSystemStatusForRuntime(): Promise<EmailSystemStatus> {
   return buildSystemStatus();

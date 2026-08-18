@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the addresses repo routes every read/write to the /v1
+// API-only: the addresses repo routes every read/write to the /v1
 // `addresses` API. This exercises the REAL synchronous curl transport against an
 // out-of-process /v1 stub (see src/test-support/v1-stub.ts for why the stub must
 // run in a separate process).

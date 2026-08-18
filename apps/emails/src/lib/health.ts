@@ -89,7 +89,7 @@ function buildProviderHealth(
 
 // Provider health metrics route to the `/v1`-backed domains + addresses repos.
 // The per-provider bounce rate is derived from the local delivery `events`
-// table, which has no `/v1` representation in the self-hosted client (delivery
+// table, which has no `/v1` representation in the api client (delivery
 // events live on the operator's server); it is therefore reported as 0 here.
 function listProviderHealthMetrics(providers: Provider[]): Map<string, ProviderLocalHealthMetrics> {
   const ids = [...new Set(providers.map((provider) => provider.id).filter(Boolean))];

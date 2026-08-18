@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the inbound repo routes every read/write to the /v1
+// API-only: the inbound repo routes every read/write to the /v1
 // `messages` resource (inbound + imported-sent mail unified as one message row).
 // Exercises the REAL synchronous curl transport against an out-of-process /v1
 // stub (see src/test-support/v1-stub.ts).
@@ -8,7 +8,7 @@
 //   - "returns newly stored inbound email without selecting the row back" and
 //     "reads attachment paths with a narrow projection": SQL-string / projection
 //     inspection of local SQLite (recordingDb). The attachment path shape is
-//     retained functionally (self-hosted derives paths from server-side
+//     retained functionally (api derives paths from server-side
 //     attachment metadata — no local_path column).
 //   - provider_id scoping ("filters by provider_id", "count filtered by
 //     provider_id", "clears by provider_id"): a /v1 message carries no provider
@@ -26,9 +26,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from "bun:test";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import {
-  SELF_HOSTED_ENUMERATION_PAGE_BUDGET,
-  SELF_HOSTED_SERVER_PAGE_MAX,
-} from "./self-hosted-page.js";
+  API_ENUMERATION_PAGE_BUDGET,
+  API_SERVER_PAGE_MAX,
+} from "./api-page.js";
 import {
   storeInboundEmail,
   getInboundEmail,
@@ -375,7 +375,7 @@ describe("clearInboundEmails", () => {
   });
 
   it("refuses before deleting when the mailbox exceeds the enumeration budget", async () => {
-    const scanBudget = SELF_HOSTED_ENUMERATION_PAGE_BUDGET * SELF_HOSTED_SERVER_PAGE_MAX;
+    const scanBudget = API_ENUMERATION_PAGE_BUDGET * API_SERVER_PAGE_MAX;
     const rows = bulkMessages(scanBudget + 1);
     await stub.seed({ messages: rows });
 

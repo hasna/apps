@@ -7,8 +7,8 @@
 // (`sequence_steps` / `/v1/sequence-steps`) and its enrollments
 // (`sequence_enrollments` / `/v1/sequence-enrollments`). Both physical stores hold all
 // three: the local database has carried the two sub-tables since migration 12, and the
-// self-hosted service registers both `/v1` resources with the same columns
-// (src/server/self-hosted/resources.ts). What is missing is only the DECLARATION — and
+// api service registers both `/v1` resources with the same columns
+// (src/server/api/resources.ts). What is missing is only the DECLARATION — and
 // `src/store/` is under audit and byte-identical in this change, so the declaration
 // cannot be added there yet.
 //

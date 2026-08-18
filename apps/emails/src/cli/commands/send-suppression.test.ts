@@ -7,7 +7,7 @@
 // was inverted: the flag that was supposed to be required to send anyway made no
 // difference at all.
 //
-// Self-hosted is covered against the out-of-process /v1 stub; local is covered
+// Api is covered against the out-of-process /v1 stub; local is covered
 // against an in-memory SQLite DB with a sandbox provider, because local SQLite client is
 // where there is no second gate.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
@@ -71,9 +71,9 @@ async function runSend(args: string[]): Promise<RunResult> {
   return { consoleOutput: consoleLines.join("\n"), errorOutput: errorLines.join("\n"), exited };
 }
 
-// ---- self-hosted -------------------------------------------------------------
+// ---- api -------------------------------------------------------------
 
-describe("emails send — suppressed recipients (self-hosted)", () => {
+describe("emails send — suppressed recipients (api)", () => {
   let stub: V1Stub;
 
   beforeAll(async () => { stub = await startV1Stub(); });
@@ -231,7 +231,7 @@ describe("suppression matches the recipient canonically, not by exact string", (
 
   // `contacts.email` has no COLLATE NOCASE and nothing canonicalized either
   // side, so an exact string comparison let a differently-spelled recipient
-  // through — while the self-hosted server, which canonicalizes both sides,
+  // through — while the api server, which canonicalizes both sides,
   // refused the same send. Local enforcement must not be the weaker one.
   const spellings = [
     "Blocked@ext.com",

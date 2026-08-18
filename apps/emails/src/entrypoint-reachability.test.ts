@@ -33,9 +33,9 @@ const ALLOWED_UNREACHABLE: Array<{ path: string; reason: string }> = [
   { path: "src/test-support/legacy-mail-seed.ts", reason: "test-only SQL seeder for legacy tables the server still reads" },
   { path: "src/test-support/cli-refusals.ts", reason: "test-only ORACLE: parses the CLI's serverOnly()/notImplementedAnywhere() call sites so a guard can check the refusal registry against the CLI instead of against itself. Deliberately not shipped — nothing at runtime may depend on reading its own source." },
   { path: "src/test-support/mcp-http.ts", reason: "test-only MCP HTTP fixture (bearer token + guarded transport), imported by *.test.ts" },
-  { path: "src/server/self-hosted/auth/test-support.ts", reason: "test-only auth deps, imported by *.test.ts" },
+  { path: "src/server/api/auth/test-support.ts", reason: "test-only auth deps, imported by *.test.ts" },
   {
-    path: "src/server/self-hosted/auth/idp-test-support.ts",
+    path: "src/server/api/auth/idp-test-support.ts",
     reason:
       "test-only Ed25519 IdP-token signer, imported by *.test.ts. Deliberately not shipped — emails only VERIFIES IdP tokens; minting belongs to the IdP, so no runtime module may sign one.",
   },
@@ -120,11 +120,11 @@ describe("shipped entrypoint reachability", () => {
     const entrypoints = shippedEntrypoints().map((file) => relative(REPO_ROOT, file)).sort();
     // The six package.json bin/exports builds plus the string-referenced TUI runtime.
     expect(entrypoints).toEqual([
+      "src/api.ts",
       "src/cli/index.tsx",
       "src/cli/tui/runtime.tsx",
       "src/index.ts",
       "src/mcp/index.ts",
-      "src/selfhost.ts",
       "src/server/index.ts",
       "src/storage.ts",
     ]);

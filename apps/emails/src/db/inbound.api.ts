@@ -1,4 +1,4 @@
-// Inbound (received + imported-sent) mail repository — self-hosted-ONLY.
+// Inbound (received + imported-sent) mail repository — API-only.
 //
 // Every read/write routes to the operator's `/v1/messages` API. There is no
 // local SQLite island. The `/v1` message row is snake_case and unifies inbound
@@ -12,13 +12,13 @@
 // Filters/sorts with no direct query surface are applied in JS over an honestly
 // enumerated page window. Scalar mailbox counts and watermarks use the server's
 // aggregate/query endpoints. Owner-scoped queries and local attachment-path
-// writes have no `/v1` equivalent and are stubbed per the self-hosted contract.
+// writes have no `/v1` equivalent and are stubbed per the api contract.
 
 import { cappedLimit, safeLimit, safeOffset, safeOptionalLimit } from "./pagination.js";
 import { now, uuid } from "./runtime.js";
-import { assertHonestSelfHostedRead, enumerateSelfHostedRows } from "./self-hosted-page.js";
+import { assertHonestApiRead, enumerateApiRows } from "./api-page.js";
 import {
-  selfHostedResource,
+  apiResource,
   carray,
   cbool,
   cnum,
@@ -27,9 +27,9 @@ import {
   cstrArray,
   cstrOrNull,
   ciso,
-} from "./self-hosted-resource.js";
-import { selfHostedApiRequest, SelfHostedHttpError } from "./self-hosted-store.js";
-import { SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED, type AttachmentPath } from "../lib/mail-types.js";
+} from "./api-resource.js";
+import { apiRequest, ApiHttpError } from "./api-store.js";
+import { API_PROVIDER_CLEAR_UNSUPPORTED, type AttachmentPath } from "../lib/mail-types.js";
 export type { AttachmentPath } from "../lib/mail-types.js";
 
 const MESSAGE_RESOURCE = "messages";
@@ -76,7 +76,7 @@ export type InboundEmailSummary = Omit<InboundEmail, "text_body" | "html_body" |
 // ── /v1 message row helpers ────────────────────────────────────────────────
 
 function messagesStore() {
-  return selfHostedResource(MESSAGE_RESOURCE);
+  return apiResource(MESSAGE_RESOURCE);
 }
 
 interface ReadMessageRowsOptions {
@@ -91,12 +91,12 @@ interface ReadMessageRowsOptions {
  * a moving mailbox window is detected rather than mistaken for a snapshot.
  */
 function readMessageRows(bound: number | null, opts: ReadMessageRowsOptions = {}): Record<string, unknown>[] {
-  const enumeration = enumerateSelfHostedRows(MESSAGE_RESOURCE, {
+  const enumeration = enumerateApiRows(MESSAGE_RESOURCE, {
     ...(bound === null ? {} : { need: bound }),
     query: opts.query,
     select: (row) => opts.keep && !opts.keep(row) ? null : row,
   });
-  assertHonestSelfHostedRead(enumeration, bound, {
+  assertHonestApiRead(enumeration, bound, {
     noun: "inbound message",
     narrowHint: "narrow the server-side message filters or ask for a smaller explicit window.",
   });
@@ -112,26 +112,26 @@ interface ServerMessageCounts {
 
 /** Exact server-side aggregates; malformed successes refuse rather than become zero. */
 function serverMessageCounts(): ServerMessageCounts {
-  const result = selfHostedApiRequest("GET", "/messages/counts");
+  const result = apiRequest("GET", "/messages/counts");
   if (result.status < 200 || result.status >= 300) {
-    throw new SelfHostedHttpError(result.status, "GET", "/messages/counts");
+    throw new ApiHttpError(result.status, "GET", "/messages/counts");
   }
   const counts = cobj(cobj(result.json)["counts"]);
   const integer = (key: "total" | "sent" | "unread"): number => {
     const value = counts[key];
     if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-      throw new Error(`Self-hosted GET /messages/counts returned an invalid ${key} count.`);
+      throw new Error(`Api GET /messages/counts returned an invalid ${key} count.`);
     }
     return value;
   };
   const total = integer("total");
   const sent = integer("sent");
   if (sent > total) {
-    throw new Error("Self-hosted GET /messages/counts returned sent greater than total.");
+    throw new Error("Api GET /messages/counts returned sent greater than total.");
   }
   const latest = counts["latest_received_at"];
   if (latest !== null && typeof latest !== "string") {
-    throw new Error("Self-hosted GET /messages/counts returned an invalid latest_received_at watermark.");
+    throw new Error("Api GET /messages/counts returned an invalid latest_received_at watermark.");
   }
   return { total, sent, unread: integer("unread"), latest_received_at: latest };
 }
@@ -329,7 +329,7 @@ export function storeInboundEmail(
 /** Local attachment-path bookkeeping has no /v1 field (attachments live on the server). */
 export function updateAttachmentPaths(_id: string, _paths: AttachmentPath[]): void {
   throw new Error(
-    "updateAttachmentPaths is not available in the self-hosted client; it runs on the self-hosted server.",
+    "updateAttachmentPaths is not available in the api client; it runs on the API server.",
   );
 }
 
@@ -486,7 +486,7 @@ export interface ListInboundOpts {
   recipientDomains?: string[];
 }
 
-// Note: `provider_id` scoping has no self-hosted equivalent (a message carries no
+// Note: `provider_id` scoping has no api equivalent (a message carries no
 // provider dimension over /v1); the filter is ignored rather than emptying views.
 function inboundRowMatches(
   row: Record<string, unknown>,
@@ -594,22 +594,22 @@ export function listInboundEmailSummaries(opts?: ListInboundOpts): InboundEmailS
 }
 
 // Owner-scoped queries resolve owner→address/alias joins that have no single /v1
-// mapping (ownership is server-side); stubbed per the self-hosted contract.
+// mapping (ownership is server-side); stubbed per the api contract.
 export function listInboundEmailsForOwner(_ownerId: string, _opts?: Omit<ListInboundOpts, "recipients" | "recipientDomains">): InboundEmail[] {
   throw new Error(
-    "listInboundEmailsForOwner is not available in the self-hosted client; it runs on the self-hosted server.",
+    "listInboundEmailsForOwner is not available in the api client; it runs on the API server.",
   );
 }
 
 export function listInboundEmailSummariesForOwner(_ownerId: string, _opts?: Omit<ListInboundOpts, "recipients" | "recipientDomains">): InboundEmailSummary[] {
   throw new Error(
-    "listInboundEmailSummariesForOwner is not available in the self-hosted client; it runs on the self-hosted server.",
+    "listInboundEmailSummariesForOwner is not available in the api client; it runs on the API server.",
   );
 }
 
 export function inboundEmailBelongsToOwner(_id: string, _ownerId: string): boolean {
   throw new Error(
-    "inboundEmailBelongsToOwner is not available in the self-hosted client; it runs on the self-hosted server.",
+    "inboundEmailBelongsToOwner is not available in the api client; it runs on the API server.",
   );
 }
 
@@ -626,7 +626,7 @@ export function deleteInboundEmail(id: string): boolean {
 // backend really does delete a provider's mail. A destructive operation must not
 // change meaning with configuration, and must never silently widen.
 export function clearInboundEmails(provider_id?: string): number {
-  if (provider_id) throw new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED);
+  if (provider_id) throw new Error(API_PROVIDER_CLEAR_UNSUPPORTED);
   const store = messagesStore();
   // Enumerate and prove completeness BEFORE the first delete. If the page budget
   // runs out or the offset window moves, nothing is deleted and the caller gets a
@@ -731,7 +731,7 @@ function mutateInboundLabel(id: string, label: string, remove: boolean): Record<
   const store = messagesStore();
   const current = store.get(id);
   if (!current) throw new Error(`Inbound email not found: ${id}`);
-  // The self-hosted server rebuilds the labels column from add_label/remove_label
+  // The api server rebuilds the labels column from add_label/remove_label
   // (a raw `labels` array in a PATCH is IGNORED by updateMessageStatus), so send
   // the delta — never the recomputed array — or the write is a silent no-op.
   return store.update(id, remove ? { remove_label: label } : { add_label: label });

@@ -13,7 +13,7 @@
  */
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
-import { selfHostedApiRequest } from "../../db/self-hosted-store.js";
+import { apiRequest } from "../../db/api-store.js";
 import { isApiClientConfigured } from "../../store-resolution.js";
 import { handleError, parseCliNonNegativeIntOption, parseCliPositiveIntOption } from "../utils.js";
 
@@ -30,10 +30,10 @@ export interface UncertainSendIntentRow {
   created_at: string;
 }
 
-function assertSelfHosted(command: string): void {
+function assertApi(command: string): void {
   if (isApiClientConfigured()) return;
   throw new Error(
-    `${command} operates on the self-hosted send-intent ledger, which only exists when the API client is configured. `
+    `${command} operates on the API send-intent ledger, which only exists when the API client is configured. `
       + "The local SQLite client sends synchronously and records no uncertain state.",
   );
 }
@@ -96,10 +96,10 @@ export function registerSendIntentCommands(program: Command, output: OutputFn): 
     .option("--offset <n>", "Skip first N rows", "0")
     .action((opts: { limit?: string; offset?: string }) => {
       try {
-        assertSelfHosted("emails send-intent uncertain");
+        assertApi("emails send-intent uncertain");
         const limit = parseCliPositiveIntOption(opts.limit, 100, 500);
         const offset = parseCliNonNegativeIntOption(opts.offset);
-        const { status, json } = selfHostedApiRequest(
+        const { status, json } = apiRequest(
           "GET",
           `/messages/send-intents/uncertain?limit=${limit}&offset=${offset}`,
         );
@@ -122,7 +122,7 @@ export function registerSendIntentCommands(program: Command, output: OutputFn): 
     .option("--provider-message-id <id>", "Provider message id — required when --outcome sent")
     .action((id: string, opts: { outcome: string; evidence: string; providerMessageId?: string }) => {
       try {
-        assertSelfHosted("emails send-intent reconcile");
+        assertApi("emails send-intent reconcile");
         const normalized = opts.outcome.trim().toLowerCase().replace(/-/g, "_");
         if (normalized !== "sent" && normalized !== "not_sent") {
           return handleError(new Error("--outcome must be 'sent' (it left the provider) or 'not-sent' (it did not)"));
@@ -135,7 +135,7 @@ export function registerSendIntentCommands(program: Command, output: OutputFn): 
             "--provider-message-id is required with --outcome sent: only the provider's own id proves the message left.",
           ));
         }
-        const { status, json } = selfHostedApiRequest("POST", "/messages/send-intents/reconcile", {
+        const { status, json } = apiRequest("POST", "/messages/send-intents/reconcile", {
           message_id: id.trim(),
           outcome: normalized,
           evidence,

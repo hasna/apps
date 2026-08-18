@@ -162,12 +162,12 @@ function createEmailsStore(initialMailbox?: Mailbox) {
   // the full list loads in the post-mount reload, so first paint isn't blocked on it.
   const defaultChoice = settings.defaultAddress ? addressChoiceByAddress(settings.defaultAddress) : ALL_ADDRESSES;
   const initialAddresses = defaultChoice.id === ALL_ADDRESSES.id ? [ALL_ADDRESSES] : [ALL_ADDRESSES, defaultChoice];
-  // The active mail data source: `local` (SQLite) or `self-hosted` (API client). All
+  // The active mail data source: `local` (SQLite) or `api` (API client). All
   // message reads/writes below flow through this seam so the TUI works in both
   // modes; local-only concepts (domains, address picker, settings, threaded
   // conversation bodies) still read the local store directly.
   const ds = resolveMailDataSource();
-  // Self-hosted-only: sources come from the server; the local S3 source list is gone.
+  // Api-only: sources come from the server; the local S3 source list is gone.
   const initialSources = [{ id: "all", label: "All sources" }];
   const [state, setState] = createStore<EmailsState>({
     mailbox: clampMailbox(initialMailbox ?? settings.defaultMailbox),
@@ -216,7 +216,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     return message ? await ds.getMessageBody(message) : null;
   });
   // Thread bodies flow through the seam so the reader's conversation view works in
-  // both modes (self-hosted: listThread + per-message bodies; local: SQLite conversation).
+  // both modes (api: listThread + per-message bodies; local: SQLite conversation).
   const [conversationResource] = createResource(currentMessage, async (message): Promise<TuiThreadBody[]> => {
     return message ? await ds.getConversationBodies(message, { limit: 12 }) : [];
   });
@@ -533,7 +533,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 	    setAddress(id: string) {
 	      setState({ selectedAddressId: id, page: 0, selectedMessageId: null });
 	      const address = state.addresses.find((item) => item.id === id);
-	      // REMEMBERING the choice is a convenience; MAKING it is the action. Self-hosted
+	      // REMEMBERING the choice is a convenience; MAKING it is the action. Api
 	      // mode has no settings store at all — getSettings() returns the defaults and
 	      // setSetting() throws — and that throw used to land AFTER selectedAddressId had
 	      // already been committed on the line above. So the inbox stayed scoped while the
@@ -696,9 +696,9 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       void reloadWorkspace();
     },
     async pullNow() {
-      // Auto-pull was LOCAL S3->SQLite ingestion. The self-hosted seam exposes only
+      // Auto-pull was LOCAL S3->SQLite ingestion. The api seam exposes only
       // insert-only inventory; edits and deletions require a refresh, so there is nothing to pull.
-      return { pulled: 0, ok: true, configured: false, reason: "self-hosted mode" };
+      return { pulled: 0, ok: true, configured: false, reason: "api mode" };
     },
   };
 

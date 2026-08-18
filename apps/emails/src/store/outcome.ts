@@ -1,7 +1,7 @@
 // The refusal vocabulary of the store seam.
 //
 // This is a DELIBERATE COPY of the field names in `OutboundPolicyDecision`
-// (src/server/self-hosted/store.ts), which already gets this right: a discriminated
+// (src/server/api/store.ts), which already gets this right: a discriminated
 // union whose refusal arm carries a machine-readable `code`, a human `message`, and
 // the HTTP `status` the API layer should answer with. Reusing those exact names is
 // the point — the send path and the store seam then converge on one refusal shape

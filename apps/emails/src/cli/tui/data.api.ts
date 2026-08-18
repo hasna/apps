@@ -1,9 +1,9 @@
 /**
- * Data layer for the Emails UI (`emails ui`) — self-hosted-ONLY.
+ * Data layer for the Emails UI (`emails ui`) — API-only.
  *
  * Presents a unified mail view over the operator's `/v1` API. This module stays
  * SYNCHRONOUS (the TUI and CLI import it without awaiting): all reads route
- * through the curl-backed synchronous self-hosted store (selfHostedStoreFor) and
+ * through the curl-backed synchronous api store (apiStoreFor) and
  * the already-/v1-routed repositories (domains, addresses, providers). The
  * shared mail DTOs + pure helpers live in ../../lib/mail-types.js and are
  * re-exported here for back-compat with existing importers.
@@ -16,8 +16,8 @@
  * contract failures and are never presented as an empty mailbox.
  */
 import { uuid } from "../../db/runtime.js";
-import { selfHostedStoreFor, type SelfHostedResourceStore } from "../../db/self-hosted-store.js";
-import { cbool, cnum, cobj, cstr, cstrArray, cstrOrNull, carray } from "../../db/self-hosted-resource.js";
+import { apiStoreFor, type ApiResourceStore } from "../../db/api-store.js";
+import { cbool, cnum, cobj, cstr, cstrArray, cstrOrNull, carray } from "../../db/api-resource.js";
 import {
   setInboundReadFlag, setInboundArchivedFlag, setInboundStarredFlag,
   addInboundLabelSummary, removeInboundLabelSummary,
@@ -33,7 +33,7 @@ import { getLatestActiveProviderId } from "../../db/providers.js";
 import { isApiClientConfigured } from "../../store-resolution.js";
 import { getInboundBuckets, loadConfig, saveConfig } from "../../lib/config.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
-import { rethrowSelfHostedResponseFailure } from "../../lib/self-hosted-wire.js";
+import { rethrowApiResponseFailure } from "../../lib/api-wire.js";
 import { describeIdentity, fetchIdentitySafe, type IdentityContext } from "../../lib/whoami.js";
 import { listS3Sources } from "../../lib/s3-sync.js";
 import { normalizeThemeMode, type TuiThemeMode } from "./theme.js";
@@ -78,31 +78,31 @@ const MESSAGE_RESOURCE = "messages";
 
 // Bounded, TTL-cached full scan. One scan serves list/counts/status/labels/
 // conversation within a short window; mutations invalidate it.
-const SELF_HOSTED_MAIL_PAGE = 500;
-const SELF_HOSTED_MAIL_SCAN_CAP = 5000;
-const SELF_HOSTED_MAIL_SCAN_TTL_MS = 4000;
+const API_MAIL_PAGE = 500;
+const API_MAIL_SCAN_CAP = 5000;
+const API_MAIL_SCAN_TTL_MS = 4000;
 
 let mailScanCache: { at: number; rows: Record<string, unknown>[] } | null = null;
 let priorityRuleCache: { at: number; rules: PrioritySenderRule[] } | null = null;
 
-function messagesStore(): SelfHostedResourceStore {
-  return selfHostedStoreFor(MESSAGE_RESOURCE);
+function messagesStore(): ApiResourceStore {
+  return apiStoreFor(MESSAGE_RESOURCE);
 }
 
 /** Full, bounded scan of the operator store. Degrades to [] if unreachable. */
 function scanAllMessages(): Record<string, unknown>[] {
   const cached = mailScanCache;
-  if (cached && Date.now() - cached.at < SELF_HOSTED_MAIL_SCAN_TTL_MS) return cached.rows;
+  if (cached && Date.now() - cached.at < API_MAIL_SCAN_TTL_MS) return cached.rows;
   const rows: Record<string, unknown>[] = [];
   try {
     const store = messagesStore();
-    for (let offset = 0; offset < SELF_HOSTED_MAIL_SCAN_CAP; offset += SELF_HOSTED_MAIL_PAGE) {
-      const page = store.list({ limit: SELF_HOSTED_MAIL_PAGE, offset });
+    for (let offset = 0; offset < API_MAIL_SCAN_CAP; offset += API_MAIL_PAGE) {
+      const page = store.list({ limit: API_MAIL_PAGE, offset });
       rows.push(...page);
-      if (page.length < SELF_HOSTED_MAIL_PAGE) break;
+      if (page.length < API_MAIL_PAGE) break;
     }
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     // A missing/unreachable serve yields an empty view rather than crashing the
     // TUI. Not cached, so the next read retries.
     return [];
@@ -115,7 +115,7 @@ function getMessageRow(id: string): Record<string, unknown> | null {
   try {
     return messagesStore().get(id);
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     return null;
   }
 }
@@ -126,7 +126,7 @@ function invalidateMailScan(): void {
 
 function currentPrioritySenderRules(): PrioritySenderRule[] {
   const cached = priorityRuleCache;
-  if (cached && Date.now() - cached.at < SELF_HOSTED_MAIL_SCAN_TTL_MS) return cached.rules;
+  if (cached && Date.now() - cached.at < API_MAIL_SCAN_TTL_MS) return cached.rules;
   const rules = listPrioritySenderRulesRemote();
   priorityRuleCache = { at: Date.now(), rules };
   return rules;
@@ -156,7 +156,7 @@ function v1Date(row: Record<string, unknown>): string {
 }
 
 // Drop the redundant system `unread` label on a read message (parity with the
-// async self-hosted data source).
+// async api data source).
 function visibleLabels(labels: string[], isRead: boolean): string[] {
   return isRead ? labels.filter((l) => l.trim().toLowerCase() !== "unread") : labels;
 }
@@ -274,7 +274,7 @@ function normalizeSubjectKey(subject: string): string {
 
 // ── client-backend helpers (read config, not the DB) ───────────────────────
 
-function isSelfHostedTuiMode(): boolean {
+function isApiTuiMode(): boolean {
   // The client storage contract decides: an API origin plus a credential names
   // the API client; anything else names the local SQLite client. A leftover
   // selector variable selects nothing and is never read.
@@ -411,15 +411,15 @@ export function searchMailbox(query: string, opts?: Omit<MailboxListOptions, "se
   return listMailbox(opts?.mailbox ?? "inbox", { ...opts, search: query });
 }
 
-// The self-hosted serve is a single shared store — expose it as one source so
+// The api serve is a single shared store — expose it as one source so
 // `inbox sources` / status stay informative rather than empty.
 export function listMailboxSources(opts?: ListMailboxSourcesOptions): MailboxSourceSummary[] {
   const stats = scanMailboxStats(undefined);
   const source: MailboxSourceSummary = {
     id: "all",
-    label: "Self-hosted Emails",
+    label: "Api Emails",
     kind: "all",
-    badges: ["self-hosted"],
+    badges: ["server"],
     counts: stats.counts,
     total: stats.total,
     unread: stats.unread,
@@ -606,7 +606,7 @@ export function activeProviderId(): string | null {
   try {
     return getLatestActiveProviderId();
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     return null;
   }
 }
@@ -618,7 +618,7 @@ export function providerIdForSender(address: string): string | null {
     const matches = findAddressesByEmail(normalized).filter((a) => (a.status ?? "active") === "active");
     return matches.find((a) => a.verified)?.provider_id ?? matches[0]?.provider_id ?? null;
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     return null;
   }
 }
@@ -635,7 +635,7 @@ export function defaultFromAddress(opts?: { source?: MailboxSource; fallback?: s
       .filter((address) => !domain || address.endsWith(`@${domain}`));
     return candidates[0] ?? "";
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     return "";
   }
 }
@@ -660,7 +660,7 @@ export async function sendComposed(input: ComposeInput): Promise<{ id: string; m
     idempotency_key: uuid(),
   };
   invalidateMailScan();
-  const created = selfHostedStoreFor("messages/send").create(body);
+  const created = apiStoreFor("messages/send").create(body);
   const rec = (created["message"] && typeof created["message"] === "object")
     ? created["message"] as Record<string, unknown>
     : created;
@@ -710,7 +710,7 @@ export async function listDomainSummaries(opts?: ListDomainSummaryOptions): Prom
         const key = domain.domain.toLowerCase();
         return {
           domain: domain.domain,
-          provider: domain.provider_id || "self-hosted",
+          provider: domain.provider_id || "server",
           addresses: addressCountByDomain.get(key) ?? 0,
           inbox: 0,
           unread: 0,
@@ -726,7 +726,7 @@ export async function listDomainSummaries(opts?: ListDomainSummaryOptions): Prom
       })
       .sort((a, b) => a.domain.localeCompare(b.domain));
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     return [];
   }
 }
@@ -784,7 +784,7 @@ export function listInboxAddresses(opts?: ListInboxAddressOptions): InboxAddress
       .slice(0, limit);
     return opts?.search?.trim() ? choices : [ALL_ADDRESSES, ...choices];
   } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
+    rethrowApiResponseFailure(error);
     return opts?.search?.trim() ? [] : [ALL_ADDRESSES];
   }
 }
@@ -808,7 +808,7 @@ export function addressChoiceByAddress(address: string | null | undefined): Inbo
 
 export interface InboxSource { id: string; label: string; providerId?: string; domain?: string }
 
-/** The selectable ingestion sources (a single shared self-hosted store). */
+/** The selectable ingestion sources (a single shared api store). */
 export function listSources(): InboxSource[] {
   return listMailboxSources().map((source) => ({
     id: source.id,
@@ -838,7 +838,7 @@ const DEFAULT_TUI_SETTINGS: TuiSettings = {
 };
 
 export function getSettings(): TuiSettings {
-  if (isSelfHostedTuiMode()) return { ...DEFAULT_TUI_SETTINGS };
+  if (isApiTuiMode()) return { ...DEFAULT_TUI_SETTINGS };
   const c = loadConfig();
   return {
     autoPull: c["tui_autopull"] === true,
@@ -851,8 +851,8 @@ export function getSettings(): TuiSettings {
 }
 
 export function setSetting<K extends keyof TuiSettings>(key: K, value: TuiSettings[K]): void {
-  if (isSelfHostedTuiMode()) {
-    throw new Error("TUI settings write local config and are disabled in self-hosted API-only mode.");
+  if (isApiTuiMode()) {
+    throw new Error("TUI settings write local config and are disabled in API-only mode.");
   }
   const c = loadConfig();
   const map: Record<keyof TuiSettings, string> = {

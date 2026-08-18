@@ -57,7 +57,7 @@
 //
 // 2. THE DURABLE RECEIVER ALREADY EXISTS ON THE OTHER SIDE, and says so in writing.
 //    `src/server/webhooks/receivers.ts:1-19` is "ONE implementation, mounted twice" — the
-//    local dashboard at `POST /webhook/*` over SQLite and the self-hosted service at
+//    local dashboard at `POST /webhook/*` over SQLite and the api service at
 //    `POST /v1/webhooks/*` over the operator's Postgres — and states its invariant as "when
 //    we host it, inbound mail AND delivery events are pulled into the storage the operator
 //    defines." So on an API-configured installation, delivery-event ingestion is the
@@ -82,7 +82,7 @@
 //      `(provider_id, provider_event_id)` and a `/v1` route that reports whether the row was
 //      newly created — note the service ALREADY has an idempotency ledger of this exact
 //      shape (`webhook_receipts`, keyed on `(provider, event_id)`,
-//      `src/server/self-hosted/webhooks.ts`), so the fence exists on that side; what is
+//      `src/server/api/webhooks.ts`), so the fence exists on that side; what is
 //      missing is a client-facing operation that exposes it;
 //   c. a capability, because a store that cannot fence must refuse the write rather than
 //      duplicate it.
@@ -143,7 +143,7 @@
 // twice: storage resolves to a LOCAL DATABASE while the deployment word claims a server-side
 // deployment. In 21 of the 24 that local database is EXPLICITLY configured, so this is not
 // merely "nothing was set". Two things about it. First, main's refusal there does NOT come from
-// the deleted arm at all — the mode read itself throws ("the self-hosted client is not
+// the deleted arm at all — the mode read itself throws ("the api client is not
 // configured") before any arm is chosen, so main never reached the stub. Second, running is the
 // correct answer: the storage settings say local SQLite, which is where the events would go, and
 // the word that disagreed is the axis being deleted. This class disappears with it.

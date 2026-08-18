@@ -23,7 +23,7 @@ import { startHttpServer } from "../mcp/http.js";
 import { mcpTestRequestInit, startTestMcpHttpServer } from "../test-support/mcp-http.js";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 
-// Template/contact/sequence parity in the self-hosted-ONLY client: the CLI, the
+// Template/contact/sequence parity in the API-only client: the CLI, the
 // MCP tools, and the exported library functions all operate on the SAME entities
 // over the /v1 API, so a workflow driven through any surface is observable via
 // the others. Outbound send + sandbox capture + delivery stats/analytics moved
@@ -125,7 +125,7 @@ describe("template/contact/sequence parity", () => {
       // Sequence steps and enrollments are `/v1/sequence-steps` and
       // `/v1/sequence-enrollments`, so writing them over MCP is IN parity: the row
       // the tool creates is the same row the exported library functions read back.
-      // These two calls used to be refused with "disabled in self-hosted API-only
+      // These two calls used to be refused with "disabled in api API-only
       // mode" while `emails sequence step add` / `emails sequence enroll` wrote the
       // very same rows over the very same route — the guard was the only refusal.
       await callTool(client, "add_sequence_step", {

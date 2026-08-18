@@ -36,7 +36,7 @@ function isolatedEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function selfHostedEnv(): NodeJS.ProcessEnv {
+function apiEnv(): NodeJS.ProcessEnv {
   return {
     ...isolatedEnv(),
     HASNA_EMAILS_API_URL: stub.baseUrl,
@@ -116,7 +116,7 @@ function largeDomains(): Array<Record<string, unknown>> {
     return {
       id: `slow-pipe-${serial}-${"i".repeat(72)}`,
       domain: `${serial}.${"d".repeat(180)}.example`,
-      provider_id: "self-hosted",
+      provider_id: "server",
       verified: false,
       dkim_status: "pending",
       spf_status: "pending",
@@ -144,7 +144,7 @@ afterEach(() => {
 describe("CLI JSON output safety", () => {
   it("fully drains a large JSON document to a slow pipe identically to a regular file", async () => {
     await stub.seed({ domains: largeDomains() });
-    const env = selfHostedEnv();
+    const env = apiEnv();
     const outputDir = mkdtempSync(join(tmpdir(), "emails-cli-output-files-"));
     tempDirs.push(outputDir);
     const regularPath = join(outputDir, "regular.json");
@@ -196,7 +196,7 @@ describe("CLI JSON output safety", () => {
       ["-lc", "set -o pipefail; bun src/cli/index.tsx --json domains list --limit 1000 | head -c 1 >/dev/null"],
       {
         cwd: process.cwd(),
-        env: selfHostedEnv(),
+        env: apiEnv(),
         encoding: "utf8",
       },
     );
@@ -210,7 +210,7 @@ describe("CLI JSON output safety", () => {
   }, 20_000);
 });
 
-describe("CLI self-hosted bootstrap failures", () => {
+describe("CLI api bootstrap failures", () => {
   it("redacts an invalid API URL loaded from client-env on human and JSON stderr", () => {
     for (const json of [false, true]) {
       const { env, sentinel, invalidUrl } = loadedClientEnvWithInvalidApiUrl();
@@ -236,7 +236,7 @@ describe("CLI self-hosted bootstrap failures", () => {
     for (const json of [false, true]) {
       const result = runCli(
         json ? ["--json", "status"] : ["status"],
-        { ...isolatedEnv(), [["EMAILS", "MODE"].join("_")]: "self-hosted" },
+        { ...isolatedEnv(), [["EMAILS", "MODE"].join("_")]: "server" },
       );
       const stdout = text(result.stdout);
       const stderr = text(result.stderr);
@@ -244,7 +244,7 @@ describe("CLI self-hosted bootstrap failures", () => {
       expect(result.exitCode, stderr).toBe(0);
       expect(stderr).toBe("");
       // A leftover selector variable selects nothing and is never read.
-      expect(stdout).not.toContain("self-hosted");
+      expect(stdout).not.toContain("server");
 
       if (json) {
         const parsed = JSON.parse(stdout) as { backend: string };

@@ -16,10 +16,10 @@ import {
 // The readiness service reads providers/domains/provisioning over the /v1 API,
 // so it runs against the out-of-process stub. The S3 mail-source registry is
 // pure client config (a file under $HOME/.hasna/emails), so a temp HOME isolates
-// it per test. stub.applyEnv() supplies the mandatory self-hosted endpoint that
+// it per test. stub.applyEnv() supplies the mandatory api endpoint that
 // config resolution requires.
 //
-// SELF-HOSTED REALITY: the /v1 domain entity is server-owned and minimal — it
+// API REALITY: the /v1 domain entity is server-owned and minimal — it
 // does NOT carry the client-writable lifecycle columns (inbound_status /
 // outbound_status). updateDomainReadiness is a no-op over /v1, so the client
 // records receive/send enablement as PROVISIONING state (inbound_ready /
@@ -52,10 +52,10 @@ afterEach(() => {
 });
 
 describe("domain readiness service", () => {
-  it("exposes typed lifecycle summaries and gates self-hosted inbound on live S3 evidence", async () => {
+  it("exposes typed lifecycle summaries and gates api inbound on live S3 evidence", async () => {
     const provider = createProvider({ name: "SES", type: "ses", region: "us-east-1" });
     const created = createDomain(provider.id, "example.com");
-    // A self-hosted domain becomes send-ready once its DNS is verified
+    // A api domain becomes send-ready once its DNS is verified
     // server-side (single all-or-nothing verified flag).
     const domain = updateDnsStatus(created.id, "verified", "verified", "verified");
 
@@ -72,7 +72,7 @@ describe("domain readiness service", () => {
     // `expect().toThrow()` cannot see a REJECTION, and an un-awaited promise never throws —
     // it would pass for a function that stopped guarding entirely.
     await expect(enableDomainInboundReadiness(domain.id))
-      .rejects.toThrow("Inbound self-hosted source is not configured");
+      .rejects.toThrow("Inbound api source is not configured");
 
     registerS3Source({
       bucket: "emails-inbound",

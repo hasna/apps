@@ -82,7 +82,7 @@ locals {
     # the API task, so the client address the auth rate limits key on is the LAST
     # XFF entry. Without this the service trusts no proxy and keys on the ALB's own
     # address, collapsing every client into one shared rate-limit bucket. See
-    # docs/SELF_HOSTED_RUNTIME.md "Trusted proxy depth".
+    # docs/API_RUNTIME.md "Trusted proxy depth".
     [{ name = "EMAILS_TRUSTED_PROXY_HOPS", value = "1" }],
     var.primary_super_admin_email == null || var.primary_super_admin_bootstrap_kid == null ? [] : [
       { name = "EMAILS_PRIMARY_SUPER_ADMIN_EMAIL", value = var.primary_super_admin_email },
@@ -123,7 +123,7 @@ locals {
   # entries read operator-owned Secrets Manager values through scoped names:
   #
   #   EMAILS_SES_ACCESS_KEY_ID / EMAILS_SES_SECRET_ACCESS_KEY
-  #     Read directly by the self-hosted sender. Generic AWS credential names
+  #     Read directly by the api sender. Generic AWS credential names
   #     are deliberately absent so unrelated SDK clients retain the task role.
   #
   # Injected into the API task only. The ingest worker keeps its own task role:

@@ -9,7 +9,7 @@ export interface AttachmentMeta {
   size: number;
   /**
    * Whether the backing store holds payload bytes. `undefined` = the source did
-   * not report it (local rows, or a self-hosted serve older than the
+   * not report it (local rows, or an API serve older than the
    * content_available contract) and must not be read as "unavailable".
    */
   content_available?: boolean;
@@ -27,7 +27,7 @@ export interface AttachmentPath {
   s3_url?: string;
   /**
    * Whether the backing store holds payload bytes for this attachment.
-   * `undefined` means "not reported" (local SQLite client, or a self-hosted serve older
+   * `undefined` means "not reported" (local SQLite client, or an API serve older
    * than the content_available contract) and MUST NOT be read as unavailable.
    */
   content_available?: boolean;

@@ -11,8 +11,8 @@ export const EMAILS_SESSION_TOKEN_ENV = "EMAILS_SESSION_TOKEN";
 /**
  * The caller's own identity token, minted by the `@hasna/tenants` identity
  * authority and verified by the server as a first-class principal
- * (src/server/self-hosted/auth/idp-token.ts). The same env key the legacy
- * client reads (src/db/self-hosted-store.ts), exported so the seam's
+ * (src/server/api/auth/idp-token.ts). The same env key the legacy
+ * client reads (src/db/api-store.ts), exported so the seam's
  * credential resolution and that client cannot drift apart on its name.
  */
 export const EMAILS_IDP_TOKEN_ENV = "EMAILS_IDP_TOKEN";
@@ -25,7 +25,7 @@ export const EMAILS_IDP_TOKEN_ENV = "EMAILS_IDP_TOKEN";
 export const HASNA_EMAILS_API_KEY_ENV = "HASNA_EMAILS_API_KEY";
 
 /**
- * Credential selection order for self-hosted clients. A live user session wins
+ * Credential selection order for api clients. A live user session wins
  * over an IdP token, and an IdP token wins over the operator key; transports may
  * fall through only from a selected session token that the server explicitly
  * rejects as needing reauthentication.
@@ -152,8 +152,7 @@ function hasCompleteCanonicalClientEnv(env: NodeJS.ProcessEnv): boolean {
 }
 
 // The `secrets` CLI needs its OWN backend configuration to resolve a vault path.
-// In a cloud-vault setup that means HASNA_SECRETS_STORAGE_MODE / HASNA_SECRETS_API_URL
-// / HASNA_SECRETS_API_KEY; other backends use similarly-prefixed vars. Stripping
+// In a vault-backed setup that means HASNA_SECRETS_API_URL / HASNA_SECRETS_API_KEY; other backends use similarly-prefixed vars. Stripping
 // these silently downgrades `secrets get` to the empty local store and the pointer
 // fails to load ("Not found"). Pass through the secrets-tooling config namespaces
 // (and only those) so the loader works regardless of the configured backend.
@@ -312,7 +311,7 @@ function writeClientEnvSecretMap(secretPath: string, map: Record<string, string>
 /**
  * Persist a user session token: always into the in-process env, and — when a
  * vault pointer is configured — durably into that entry. Callers must reset the
- * self-hosted config cache afterwards so the new credential takes effect.
+ * api config cache afterwards so the new credential takes effect.
  */
 export function persistClientEnvSessionToken(
   token: string,

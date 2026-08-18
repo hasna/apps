@@ -19,7 +19,7 @@
 //
 // THE TWO FIELDS THAT ARE ALWAYS NULL, stated rather than hidden:
 // `idempotency_key` and `send_payload_hash`. The service strips both from every
-// message it returns (`publicMessage`, src/server/self-hosted/service.ts:167-170), so
+// message it returns (`publicMessage`, src/server/api/service.ts:167-170), so
 // no response can carry them. They are mapped to null — and `createMessage` /
 // `upsertMessage` REFUSE a caller who tries to write them, so there is no write whose
 // read-back this null could contradict. Without that refusal this mapping would be a

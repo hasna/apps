@@ -597,7 +597,7 @@ function toEmailDigest(row: ResourceRow): EmailDigest {
  * NEITHER STORE'S LIST ORDER CAN ANSWER THIS, and that is why the whole set is read
  * rather than the first row. The SQLite resource path orders these rows by `created_at`
  * (`src/store-sqlite/resources.ts`, `describeTable`) and the service orders them by
- * `completed_at` (`src/server/self-hosted/resources.ts`, the `email-digests` spec), and
+ * `completed_at` (`src/server/api/resources.ts`, the `email-digests` spec), and
  * neither ordering is part of the seam's contract for
  * `ResourceRepository.list`. "Newest" is decided here, on `completed_at`, which is what
  * the deleted arms' `ORDER BY completed_at DESC` meant.

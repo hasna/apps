@@ -28,8 +28,8 @@
 //
 // `forwarding_deliveries` EXISTS IN LOCAL SQLITE AND NOWHERE ELSE — not on the seam
 // (`src/store/repositories.ts` publishes one `ForwardingRepository`, over `forwarding_rules`),
-// not on `/v1` (`src/store-http/routes.ts`, `RESOURCE_PATHS`), and not in the self-hosted
-// Postgres schema (`src/server/self-hosted/migrations.ts` creates `forwarding_rules` and
+// not on `/v1` (`src/store-http/routes.ts`, `RESOURCE_PATHS`), and not in the api
+// Postgres schema (`src/server/api/migrations.ts` creates `forwarding_rules` and
 // stops). `src/db/forwarding.ts` carries that evidence at length, and it is why its two ledger
 // operations REQUIRE the `Database` they read.
 //
@@ -86,7 +86,7 @@
 //  4. Storage resolves but the data directory is unsafe (an untrusted ancestor, a symlink).
 //     Was: the underlying path refusal surfaced raw. Now: the same message, wrapped in a
 //     refusal that says whether this installation forwards its own mail is not known.
-//  5. Deployment word says self-hosted, and NO storage setting names anything. Was: refused
+//  5. Deployment word says api, and NO storage setting names anything. Was: refused
 //     outright by the stub. Now: THE PIPELINE RUNS, against the default local database, because
 //     storage configuration names one and the word is no longer read.
 //
@@ -97,8 +97,8 @@
 // 5 IS THE ONE A READER MUST NOT SKIP, AND IT CARRIES A TIME BOMB THAT IS NOT MINE TO DEFUSE.
 // No mail escapes today: `sendWithFailover` reaches `getProvider`, which refuses in that
 // configuration at `src/db/providers.sqlite.ts` — and it refuses there through the shared
-// resource-routing helper (`src/db/self-hosted-resource.sqlite.ts`), which is ONE OF THE 44 CALL
-// SITES THE `selfHostedResourceBranches` COUNTER IS DRIVING TO ZERO. (Spelled as a file path
+// resource-routing helper (`src/db/api-resource.sqlite.ts`), which is ONE OF THE 44 CALL
+// SITES THE `apiResourceBranches` COUNTER IS DRIVING TO ZERO. (Spelled as a file path
 // rather than as a call, because the source-text guard's pattern is that identifier followed by an open
 // parenthesis and this comment is inside the corpus it scans — writing it out would RAISE a
 // counter that may only fall. That is not a detail: it is how a comment about the guard becomes

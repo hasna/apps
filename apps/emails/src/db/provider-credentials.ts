@@ -2,9 +2,9 @@
  * Where provider credentials may live, and what to say when they may not.
  *
  * The local SQLite client keeps per-provider credentials in its own SQLite row and uses them
- * to send. The self-hosted `/v1/providers` resource has NO credential columns —
+ * to send. The api `/v1/providers` resource has NO credential columns —
  * the server signs with credentials from its own environment. Passing
- * `--api-key`/`--access-key`/`--secret-key` at a self-hosted client therefore
+ * `--api-key`/`--access-key`/`--secret-key` at an API client therefore
  * used to be accepted, silently dropped on the wire, and then reported back as
  * "Provider credentials are invalid". Both halves of that were false, and the
  * send path kept using the deployment IAM role. One shared guard so no caller
@@ -14,17 +14,17 @@ import type { CreateProviderInput } from "../types/index.js";
 
 export const PROVIDER_CREDENTIAL_FIELDS = ["api_key", "access_key", "secret_key"] as const;
 
-export class SelfHostedProviderCredentialsUnsupportedError extends Error {
+export class ApiProviderCredentialsUnsupportedError extends Error {
   constructor(readonly fields: readonly string[]) {
     super(
-      `The self-hosted emails server does not store per-provider credentials (${fields.join(", ")}). ` +
+      `The api emails server does not store per-provider credentials (${fields.join(", ")}). ` +
         "It signs outbound mail with the credentials in the SERVER environment: " +
         "EMAILS_SES_ACCESS_KEY_ID + EMAILS_SES_SECRET_ACCESS_KEY (SES, injected from your secret store) " +
         "or RESEND_API_KEY (Resend), selected by EMAILS_SEND_PROVIDER. " +
         "Re-run without the credential flags to register provider metadata, " +
         "or set the credentials on the server and redeploy.",
     );
-    this.name = "SelfHostedProviderCredentialsUnsupportedError";
+    this.name = "ApiProviderCredentialsUnsupportedError";
   }
 }
 
@@ -39,5 +39,5 @@ export function suppliedProviderCredentialFields(input: Partial<CreateProviderIn
 /** Throw when credentials were supplied to a backend that cannot store them. */
 export function assertNoProviderCredentials(input: Partial<CreateProviderInput>): void {
   const supplied = suppliedProviderCredentialFields(input);
-  if (supplied.length > 0) throw new SelfHostedProviderCredentialsUnsupportedError(supplied);
+  if (supplied.length > 0) throw new ApiProviderCredentialsUnsupportedError(supplied);
 }

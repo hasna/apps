@@ -16,7 +16,7 @@
 //   * print a page prefix as if it were a total;
 //   * infer that a store is reachable from the fact that it refused.
 //
-// This repo has shipped every one of those. `Self-hosted API: pass` because a client
+// This repo has shipped every one of those. `Api API: pass` because a client
 // configuration PARSED, with no request ever made, was this very module.
 
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";

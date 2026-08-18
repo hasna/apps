@@ -19,7 +19,7 @@ import {
   type Database,
 } from "../db/database.js";
 
-// S3 → mailbox ingestion (syncS3Inbox) is STILL MODE-ROUTED and runs on the self-hosted
+// S3 → mailbox ingestion (syncS3Inbox) is STILL MODE-ROUTED and runs on the api
 // server: the thin client has no local inbound store to write into, so it is a loud stub.
 // The S3 *source registry* (register/list/retire) is pure client config backed by the
 // local config file with no database dependency, and it has COLLAPSED to one
@@ -52,16 +52,16 @@ afterEach(() => {
   Object.assign(process.env, INHERITED_ENV);
 });
 
-describe("syncS3Inbox (self-hosted stub)", () => {
-  it("throws because S3 inbound ingestion runs on the self-hosted server", async () => {
+describe("syncS3Inbox (api stub)", () => {
+  it("throws because S3 inbound ingestion runs on the api server", async () => {
     await expect(syncS3Inbox({ bucket: "test-bucket", providerId: "p1" })).rejects.toThrow(
-      /syncS3Inbox is not available in the self-hosted client/,
+      /syncS3Inbox is not available in the api client/,
     );
   });
 
   it("throws for a source-id driven sync too", async () => {
     await expect(syncS3Inbox({ sourceId: "s3-anything" })).rejects.toThrow(
-      /S3 inbound ingestion runs on the self-hosted server/,
+      /S3 inbound ingestion runs on the API server/,
     );
   });
 });

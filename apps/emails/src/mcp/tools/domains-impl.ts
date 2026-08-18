@@ -14,9 +14,9 @@ import { formatError, resolveId, DomainNotFoundError, AddressNotFoundError, Prov
 import type { Domain, EmailAddress } from '../../types/index.js';
 
 const MAX_MCP_OWNER_HISTORY_LIMIT = 100;
-const SELF_HOSTED_MCP_LIST_LIMIT = 1000;
+const API_MCP_LIST_LIMIT = 1000;
 
-function selfHostedDomainReadiness(domain: Domain) {
+function apiDomainReadiness(domain: Domain) {
   return assessDomainReadiness(domain, null, {
     backend: "api",
     source_of_truth: domain.source_of_truth,
@@ -32,7 +32,7 @@ function pageRows<T>(rows: T[], limit: number, offset: number): T[] {
 }
 
 function matchesDomainFilters(
-  domain: Domain & { readiness: ReturnType<typeof selfHostedDomainReadiness> },
+  domain: Domain & { readiness: ReturnType<typeof apiDomainReadiness> },
   filters: { provider_id?: string; send?: boolean; receive?: boolean },
 ): boolean {
   if (filters.provider_id && domain.provider_id !== filters.provider_id) return false;
@@ -42,9 +42,9 @@ function matchesDomainFilters(
   return true;
 }
 
-function selfHostedAddressReadiness(
+function apiAddressReadiness(
   address: EmailAddress,
-  domain: (Domain & { readiness: ReturnType<typeof selfHostedDomainReadiness> }) | null,
+  domain: (Domain & { readiness: ReturnType<typeof apiDomainReadiness> }) | null,
   includeUnverified: boolean | undefined,
   receive: boolean | undefined,
 ) {
@@ -63,10 +63,10 @@ function selfHostedAddressReadiness(
   };
 }
 
-function resolveSelfHostedAddressRef(ref: string): EmailAddress {
+function resolveApiAddressRef(ref: string): EmailAddress {
   const trimmed = ref.trim();
   const lowered = trimmed.toLowerCase();
-  const addresses = listAddresses(undefined, { limit: SELF_HOSTED_MCP_LIST_LIMIT, offset: 0 });
+  const addresses = listAddresses(undefined, { limit: API_MCP_LIST_LIMIT, offset: 0 });
   const exact = addresses.find((address) => address.id === trimmed || address.email.toLowerCase() === lowered);
   if (exact) return exact;
   const matches = addresses.filter((address) => address.id.startsWith(trimmed));
@@ -109,7 +109,7 @@ function assertMcpLocalStateAllowed(toolName: string, reason: string): void {
   if (!isApiClientConfigured()) return;
   throw new Error(
     `MCP tool ${toolName} is disabled for the API client because ${reason}. ` +
-      "Use a self-hosted API-backed operation when it is available, or run the local SQLite client for an explicit local store.",
+      "Use an API-backed operation when it is available, or run the local SQLite client for an explicit local store.",
   );
 }
 
@@ -128,7 +128,7 @@ export function registerDomainTools(server: McpServer): void {
     try {
       const pageLimit = limit ?? 100;
       const pageOffset = offset ?? 0;
-      const allDomains = listDomains(undefined, { limit: SELF_HOSTED_MCP_LIST_LIMIT, offset: 0 })
+      const allDomains = listDomains(undefined, { limit: API_MCP_LIST_LIMIT, offset: 0 })
         .filter((domain) => !provider_id || domain.provider_id === provider_id);
       const domains = pageRows(allDomains, pageLimit, pageOffset);
       return { content: [{ type: "text", text: JSON.stringify({
@@ -138,8 +138,8 @@ export function registerDomainTools(server: McpServer): void {
         offset: pageOffset,
         truncated: pageOffset + pageLimit < allDomains.length,
         backend: "api",
-        source: "self-hosted_api",
-        note: "Self-hosted domain listing uses API fields only; provider_id is matched directly and no local provider state was read.",
+        source: "api",
+        note: "Api domain listing uses API fields only; provider_id is matched directly and no local provider state was read.",
       }, null, 2) }] };
     } catch (e) {
       return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true };
@@ -161,12 +161,12 @@ export function registerDomainTools(server: McpServer): void {
 	    try {
         const pageLimit = limit ?? 100;
         const pageOffset = offset ?? 0;
-        const allDomains = listDomains(undefined, { limit: SELF_HOSTED_MCP_LIST_LIMIT, offset: 0 })
+        const allDomains = listDomains(undefined, { limit: API_MCP_LIST_LIMIT, offset: 0 })
           .map((domain) => ({
             ...domain,
             provider_name: null,
             provisioning: null,
-            readiness: selfHostedDomainReadiness(domain),
+            readiness: apiDomainReadiness(domain),
           }))
           .filter((domain) => matchesDomainFilters(domain, { provider_id, send, receive }));
         const domains = pageRows(allDomains, pageLimit, pageOffset);
@@ -177,8 +177,8 @@ export function registerDomainTools(server: McpServer): void {
           offset: pageOffset,
           truncated: pageOffset + pageLimit < allDomains.length,
           backend: "api",
-          source: "self-hosted_api",
-          note: "Self-hosted readiness is derived only from API domain fields; no local provider, provisioning, or config state was read.",
+          source: "api",
+          note: "Api readiness is derived only from API domain fields; no local provider, provisioning, or config state was read.",
           cli_equivalent: `emails domain usable${provider_id ? ` --provider ${provider_id}` : ""}${send ? " --send" : ""}${receive ? " --receive" : ""}${limit !== undefined ? ` --limit ${limit}` : ""}${offset !== undefined ? ` --offset ${offset}` : ""} --json`,
         }, null, 2) }] };
 
@@ -198,10 +198,10 @@ export function registerDomainTools(server: McpServer): void {
   async ({ provider_id, domain }) => {
     try {
 
-      // Self-hosted (self-hosted) mode: create the domain directly on the self-hosted HTTP
+      // Api (api) mode: create the domain directly on the api HTTP
       // API. Providers are local-only, so `provider_id` is carried through as a
       // label rather than resolved against the local providers table or passed
-      // to a provider adapter. Mirrors the CLI `domain add` self-hosted passthrough.
+      // to a provider adapter. Mirrors the CLI `domain add` api passthrough.
         const existing = getDomainByName(provider_id, domain);
         const d = existing ?? createDomain(provider_id, domain);
         return { content: [{ type: "text", text: JSON.stringify(d, null, 2) }] };
@@ -234,7 +234,7 @@ export function registerDomainTools(server: McpServer): void {
         // No provider resolved: return the generic SPF/DMARC pair. This path is
         // pure local computation (src/lib/dns.ts) and needs no credentials, so it
         // runs in BOTH configurations — the CLI twin `emails domain dns` does the
-        // same. In self-hosted mode the /v1 providers resource carries no
+        // same. In api mode the /v1 providers resource carries no
         // credential columns, so a provider that fails to resolve here is simply
         // absent server-side, exactly as in local mode.
         const { generateSpfRecord, generateDmarcRecord, formatDnsTable } = await import("../../lib/dns.js");
@@ -355,7 +355,7 @@ export function registerDomainTools(server: McpServer): void {
     try {
         const pageLimit = limit ?? 100;
         const pageOffset = offset ?? 0;
-        const allAddresses = listAddresses(undefined, { limit: SELF_HOSTED_MCP_LIST_LIMIT, offset: 0 })
+        const allAddresses = listAddresses(undefined, { limit: API_MCP_LIST_LIMIT, offset: 0 })
           .filter((address) => !provider_id || address.provider_id === provider_id)
           .map((address) => ({
             ...address,
@@ -371,8 +371,8 @@ export function registerDomainTools(server: McpServer): void {
           offset: pageOffset,
           truncated: pageOffset + pageLimit < allAddresses.length,
           backend: "api",
-          source: "self-hosted_api",
-          note: "Self-hosted address enrichment uses only API address fields; no local provider or owner state was read.",
+          source: "api",
+          note: "Api address enrichment uses only API address fields; no local provider or owner state was read.",
           cli_equivalent: `emails address list${provider_id ? ` --provider ${provider_id}` : ""}${limit !== undefined ? ` --limit ${limit}` : ""}${offset !== undefined ? ` --offset ${offset}` : ""} --json`,
         }, null, 2) }] };
 
@@ -398,19 +398,19 @@ export function registerDomainTools(server: McpServer): void {
 	    try {
         const pageLimit = limit ?? 100;
         const pageOffset = offset ?? 0;
-        let apiDomains: Array<Domain & { readiness: ReturnType<typeof selfHostedDomainReadiness> }> = [];
+        let apiDomains: Array<Domain & { readiness: ReturnType<typeof apiDomainReadiness> }> = [];
         try {
-          apiDomains = listDomains(undefined, { limit: SELF_HOSTED_MCP_LIST_LIMIT, offset: 0 })
-            .map((domain) => ({ ...domain, readiness: selfHostedDomainReadiness(domain) }));
+          apiDomains = listDomains(undefined, { limit: API_MCP_LIST_LIMIT, offset: 0 })
+            .map((domain) => ({ ...domain, readiness: apiDomainReadiness(domain) }));
         } catch {
           apiDomains = [];
         }
         const domainsByName = new Map(apiDomains.map((domain) => [domain.domain.toLowerCase(), domain]));
-        const allAddresses = listAddresses(undefined, { limit: SELF_HOSTED_MCP_LIST_LIMIT, offset: 0 })
+        const allAddresses = listAddresses(undefined, { limit: API_MCP_LIST_LIMIT, offset: 0 })
           .map((address) => {
             const domainName = address.email.split("@")[1]?.toLowerCase() ?? "";
             const domain = domainsByName.get(domainName) ?? null;
-            const readiness = selfHostedAddressReadiness(address, domain, include_unverified, receive);
+            const readiness = apiAddressReadiness(address, domain, include_unverified, receive);
             return {
               ...address,
               provider_name: null,
@@ -437,8 +437,8 @@ export function registerDomainTools(server: McpServer): void {
           offset: pageOffset,
           truncated: pageOffset + pageLimit < allAddresses.length,
           backend: "api",
-          source: "self-hosted_api",
-          note: "Self-hosted readiness is derived only from API domain/address fields; no local provider, owner, provisioning, or config state was read.",
+          source: "api",
+          note: "Api readiness is derived only from API domain/address fields; no local provider, owner, provisioning, or config state was read.",
           cli_equivalent: `emails address list${provider_id ? ` --provider ${provider_id}` : ""}${limit !== undefined ? ` --limit ${limit}` : ""}${offset !== undefined ? ` --offset ${offset}` : ""} --json`,
         }, null, 2) }] };
 
@@ -454,7 +454,7 @@ export function registerDomainTools(server: McpServer): void {
   // seam: owner rows go through the `owners` repository, owner_id/administrator_id
   // through `addresses`/`addressLifecycle`, and the audit trail through the
   // address-ownership ledger — all against whichever store this installation's
-  // STORAGE configuration names, so they carry no self-hosted guard.
+  // STORAGE configuration names, so they carry no api guard.
   server.tool(
   "get_address_owner",
   "Show owner and administering agent for an address by email or ID.",
@@ -595,10 +595,10 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ provider_id, email, display_name }) => {
     try {
-      // Self-hosted (self-hosted) mode: create the address directly on the self-hosted HTTP
+      // Api (api) mode: create the address directly on the api HTTP
       // API. Providers are local-only, so `provider_id` is carried through as a
       // label rather than resolved against the local providers table or passed
-      // to a provider adapter. Mirrors the CLI `address add` self-hosted passthrough.
+      // to a provider adapter. Mirrors the CLI `address add` api passthrough.
         const existing = getAddressByEmail(provider_id, email);
         const addr = existing ?? createAddress({ provider_id, email, display_name });
         return { content: [{ type: "text", text: JSON.stringify(addr, null, 2) }] };
@@ -617,7 +617,7 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ address_id }) => {
     try {
-        const addr = resolveSelfHostedAddressRef(address_id);
+        const addr = resolveApiAddressRef(address_id);
         return {
           content: [
             {
@@ -626,8 +626,8 @@ export function registerDomainTools(server: McpServer): void {
                 email: addr.email,
                 verified: Boolean(addr.verified),
                 backend: "api",
-                source: "self-hosted_api",
-                note: "Self-hosted verification status was read from the API address record; no local provider adapter or SQLite state was used.",
+                source: "api",
+                note: "Api verification status was read from the API address record; no local provider adapter or SQLite state was used.",
               }, null, 2),
             },
           ],

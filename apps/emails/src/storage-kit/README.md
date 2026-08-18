@@ -6,9 +6,9 @@ generated or compatible with `vendor-kit --check`.
 
 ## What it is
 
-A canonical Postgres storage kit for self-hosted Emails deployments. Mode and
+A canonical Postgres storage kit for api Emails deployments. Mode and
 database-URL resolution are NOT part of it — those live in `src/lib/mode.ts` and
-`src/server/self-hosted/env.ts`.
+`src/server/api/env.ts`.
 
 | File            | Purpose                                                              |
 | --------------- | ------------------------------------------------------------------- |
@@ -20,7 +20,7 @@ database-URL resolution are NOT part of it — those live in `src/lib/mode.ts` a
 
 ## PURE REMOTE (Amendment A1)
 
-Self-hosted mode = reads **and** writes go directly to self-hosted Postgres. This kit
+Api mode = reads **and** writes go directly to api Postgres. This kit
 contains **no sync engine, no cache-as-mode, and no merge logic**. In `local`
 mode there is no Postgres pool at all; SQLite is authoritative.
 

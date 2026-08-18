@@ -4,8 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import contract from "../hasna.contract.json" with { type: "json" };
-import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
-import { SELF_HOSTED_APP, SELF_HOSTED_APP_ALIASES } from "./server/self-hosted/env.js";
+import { emailsApiOpenApi } from "./server/api/openapi.js";
+import { API_APP, API_APP_ALIASES } from "./server/api/env.js";
 
 const root = join(import.meta.dir, "..");
 
@@ -50,7 +50,7 @@ describe("published package identity", () => {
   it("declares the readiness probe public when OpenAPI does", () => {
     const api = contract.serviceSurfaces.find((surface) => surface.kind === "api");
     expect(api?.readiness).toEqual({ method: "GET", path: "/ready", public: true });
-    expect(emailsSelfHostedOpenApi.paths["/ready"]?.get?.security).toEqual([]);
+    expect(emailsApiOpenApi.paths["/ready"]?.get?.security).toEqual([]);
   });
 
   it("asserts the canonical identity in CI", () => {
@@ -75,13 +75,13 @@ describe("api-key app slug", () => {
   it("mints under the canonical emails slug and still verifies mailery-era keys", () => {
     // The unreleased rename minted keys under "mailery". Those keep verifying as
     // an alias; new keys carry the canonical slug again.
-    expect(SELF_HOSTED_APP).toBe("emails");
-    expect([...SELF_HOSTED_APP_ALIASES]).toEqual(["mailery"]);
+    expect(API_APP).toBe("emails");
+    expect([...API_APP_ALIASES]).toEqual(["mailery"]);
   });
 
   it("keeps the contract's api-key app aligned with the server", () => {
-    expect(contract.metadata.apiKeyApp).toBe(SELF_HOSTED_APP);
-    expect(contract.metadata.apiKeyAppAliases).toEqual([...SELF_HOSTED_APP_ALIASES]);
+    expect(contract.metadata.apiKeyApp).toBe(API_APP);
+    expect(contract.metadata.apiKeyAppAliases).toEqual([...API_APP_ALIASES]);
   });
 });
 
@@ -101,11 +101,11 @@ describe("MAILERY_* environment surface", () => {
 
 describe("superseded and dead scaffolding", () => {
   it("keeps exactly one generated REST client", () => {
-    // src/selfhost.ts is generated from the live OpenAPI doc by
-    // scripts/generate-selfhost-sdk.ts and drift-checked in CI. sdk/ was a second,
+    // src/api.ts is generated from the live OpenAPI doc by
+    // scripts/generate-api-sdk.ts and drift-checked in CI. sdk/ was a second,
     // hand-maintained client that nothing built, published, or regenerated — yet
     // root `bun test` collected its tests and reported it green.
-    expect(existsSync(join(root, "src/selfhost.ts"))).toBe(true);
+    expect(existsSync(join(root, "src/api.ts"))).toBe(true);
     expect(existsSync(join(root, "sdk"))).toBe(false);
   });
 

@@ -16,11 +16,11 @@ backup during this procedure.
 
 Create one sealed evidence bundle per station. The two station identifiers must
 be distinct, and both bundles must name the same service tenant, release commit,
-and SHA-256 of `scripts/self-hosted-client-smoke.sh`. Each bundle records:
+and SHA-256 of `scripts/api-client-smoke.sh`. Each bundle records:
 
 - the station identifier, executor, timestamps, release commit, and service
   tenant identifier (never a token or database credential);
-- the aggregate JSON emitted by `./scripts/self-hosted-client-smoke.sh`, with a
+- the aggregate JSON emitted by `./scripts/api-client-smoke.sh`, with a
   zero exit status, plus the smoke-script SHA-256;
 - a canonical source manifest with an explicit row for the SQLite database and
   each `-wal`, `-shm`, and `-journal` sidecar, recording `MISSING` when a sidecar
@@ -48,14 +48,14 @@ state path. Keep client configuration and credentials out of the state move.
 ## 1. Two-station pre-stop barrier
 
 On each station, with both database-path variables **unset**, set the canonical
-self-hosted client environment and run the exact script from the reviewed
+api client environment and run the exact script from the reviewed
 release:
 
 ```bash
 test "${HASNA_EMAILS_DB_PATH+x}" != x
 test "${EMAILS_DB_PATH+x}" != x
 test -n "${EMAILS_CLIENT_ENV_SECRET:-}" || test -n "${HASNA_EMAILS_API_URL:-}"
-./scripts/self-hosted-client-smoke.sh >"$PRIVATE_EVIDENCE_DIR/pre-stop-smoke.json"
+./scripts/api-client-smoke.sh >"$PRIVATE_EVIDENCE_DIR/pre-stop-smoke.json"
 ```
 
 Independently restore and inspect each pre-stop backup. Compare its checksum,

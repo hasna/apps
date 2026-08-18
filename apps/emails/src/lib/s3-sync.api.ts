@@ -1,7 +1,7 @@
 /**
- * S3 inbox sync — SELF-HOSTED CLIENT. One export, and it refuses.
+ * S3 inbox sync — API CLIENT. One export, and it refuses.
  *
- * This module polled an S3 bucket for raw SES-stored emails once; in the self-hosted client there
+ * This module polled an S3 bucket for raw SES-stored emails once; in the api client there
  * is NO local inbound store, because the operator's server owns the SES → S3 → mailbox ingestion
  * pipeline. So `syncS3Inbox` is a fail-loud stub.
  *
@@ -42,13 +42,13 @@ export interface S3SyncResult {
 }
 
 /**
- * S3 → mailbox ingestion. In the self-hosted client this runs on the operator's
+ * S3 → mailbox ingestion. In the api client this runs on the operator's
  * server (SES receipt rule → S3 → server ingestion → mailbox). The thin client
  * has no local `inbound_emails` store to write into, so this fails loud while
  * preserving its signature/return type.
  */
 export async function syncS3Inbox(_opts: S3SyncOptions): Promise<S3SyncResult> {
   throw new Error(
-    "syncS3Inbox is not available in the self-hosted client; S3 inbound ingestion runs on the self-hosted server.",
+    "syncS3Inbox is not available in the api client; S3 inbound ingestion runs on the API server.",
   );
 }

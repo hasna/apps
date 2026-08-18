@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the sent-email log/search/show/thread commands route every
+// API-only: the sent-email log/search/show/thread commands route every
 // read through the mail-data-source seam to `/v1/messages` (direction=outbound
 // for the "sent log"). There is no local SQLite island. Local-only surfaces
 // (test-send, export/reporting, the webhook listener) have no /v1 equivalent and
@@ -125,7 +125,7 @@ describe("email list / log — routes to the /v1 sent log", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: "out-1", subject: "Server sent subject" });
-    expect(out).toContain("Self-hosted sent mail");
+    expect(out).toContain("Api sent mail");
   });
 
   it("rejects local-only sent-log filters that have no /v1 surface", async () => {
@@ -187,7 +187,7 @@ describe("search — routes search to /v1", () => {
 //
 // THESE TESTS ASSERT THE LITERAL OUTCOME — that a term carried ONLY by inbound
 // mail IS RETURNED — never that some banner or marker appears. The defect
-// already printed the word "sent" in its own header ('Self-hosted sent search
+// already printed the word "sent" in its own header ('Api sent search
 // "past due"') and that demonstrably did not save two workers on 2026-08-04, so
 // a test keyed on wording would pass against the broken build.
 //
@@ -429,15 +429,15 @@ describe("email thread / conversation / replies — routes to /v1", () => {
   });
 });
 
-describe("server-only commands block in the self-hosted client", () => {
+describe("server-only commands block in the api client", () => {
   const cases: Array<{ args: string[]; message: string }> = [
     {
       args: ["test"],
-      message: "emails test is not available in the self-hosted client; it runs on the self-hosted server.",
+      message: "emails test is not available in the api client; it runs on the API server.",
     },
     {
       args: ["webhook", "listen", "--port", "19877"],
-      message: "emails webhook listen is not available in the self-hosted client; it runs on the self-hosted server.",
+      message: "emails webhook listen is not available in the api client; it runs on the API server.",
     },
   ];
 
@@ -469,7 +469,7 @@ async function captureStdout(run: () => Promise<unknown>): Promise<string> {
   return lines.join("\n");
 }
 
-describe("emails export routes to /v1 in the self-hosted client", () => {
+describe("emails export routes to /v1 in the api client", () => {
   it("exports outbound messages as JSON from GET /v1/messages", async () => {
     await seed([
       outbound("export-1", "March invoice", "2026-03-01T00:00:00.000Z"),

@@ -3,7 +3,7 @@
 Emails supports two deployment configurations:
 
 - `local`: SQLite and local files are authoritative.
-- `self-hosted`: the operator's Postgres, S3, queues and provider accounts are authoritative.
+- `api`: the operator's Postgres, S3, queues and provider accounts are authoritative.
 
 Provider integrations are capabilities, not deployment configurations. AWS SES/S3/SNS/SQS,
 Route53, Cloudflare and Resend always use credentials supplied by the operator

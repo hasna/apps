@@ -28,7 +28,7 @@ export const allCommandModules = [
   "status",
   "daemon",
   "db",
-  "self-hosted",
+  "server",
   "auth",
 ] as const;
 
@@ -89,7 +89,7 @@ export const knownCommandNames = new Set([
   "daemon",
   "logs",
   "db",
-  "self-hosted",
+  "server",
   "auth",
   "keys",
   "whoami",
@@ -166,7 +166,7 @@ export function commandModulesFor(args: string[]): readonly CommandModule[] {
     case "daemon":
     case "logs": return ["daemon"];
     case "db": return ["db"];
-    case "self-hosted": return ["self-hosted"];
+    case "server": return ["server"];
     case "auth":
     case "keys":
     case "whoami": return ["auth"];

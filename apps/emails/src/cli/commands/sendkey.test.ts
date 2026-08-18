@@ -115,7 +115,7 @@ function seedKey(
  * Deliberately tiny and local: the shared store-backed fixture
  * (`src/test-support/v1-store-api.ts`) translates every request into a real store, and both
  * real stores available in a test process are backed by the SQLite schema, whose
- * `send_keys.owner_id` is `NOT NULL`. This row is legal in the self-hosted Postgres schema
+ * `send_keys.owner_id` is `NOT NULL`. This row is legal in the api Postgres schema
  * and cannot be produced by either of them, so it is served directly. It answers the
  * `{ items: [...] }` envelope and the empty second page that the enumeration terminates on,
  * both taken from the real route contract.
@@ -183,8 +183,8 @@ describe("sendkey list command", () => {
   it("renders a key whose owner is gone as '(no owner)' rather than blank", async () => {
     // A MEASURED SCHEMA ASYMMETRY, and the reason this one case configures an API instead of
     // the local file. `send_keys.owner_id` is `TEXT NOT NULL` in the local SQLite schema
-    // (src/db/database.ts) and plain `TEXT` — NULLABLE — in the self-hosted Postgres schema
-    // (src/server/self-hosted/migrations.ts), so a key that outlived its owner is unreachable
+    // (src/db/database.ts) and plain `TEXT` — NULLABLE — in the api Postgres schema
+    // (src/server/api/migrations.ts), so a key that outlived its owner is unreachable
     // through one store and perfectly ordinary through the other. The seam types it
     // `string | null` for exactly that reason, and the command used to call `.slice(0, 8)` on
     // it unconditionally. A key bound to nobody is the row a revocation review most needs to

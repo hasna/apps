@@ -8,7 +8,7 @@ import { MAX_ATTACHMENT_DOWNLOAD_BYTES, writeAttachmentFile } from "../../lib/at
 import {
   DEFAULT_ATTACHMENT_INVENTORY_LIMIT,
   MAX_ATTACHMENT_INVENTORY_LIMIT,
-  listSelfHostedAttachments,
+  listApiAttachments,
   type SafeAttachmentInventoryPage,
 } from "../../lib/attachment-inventory.js";
 import { resolveMailDataSource, type MailDataSource } from "../../lib/mail-data-source.js";
@@ -52,8 +52,8 @@ function normalizeUntilOption(value: string | undefined): string | undefined {
 }
 
 // Resolve a possibly-short id (the 8-char id printed by `inbox list`) to a full id
-// through the seam: local SQLite partial-id resolution, or a bounded self-hosted prefix match
-// so the id shown by `inbox list` is usable verbatim in self-hosted read/mark/star/label.
+// through the seam: local SQLite partial-id resolution, or a bounded api prefix match
+// so the id shown by `inbox list` is usable verbatim in api read/mark/star/label.
 function resolveMailId(ds: MailDataSource, id: string): Promise<string> {
   return ds.resolveId(id);
 }
@@ -114,7 +114,7 @@ function seamMessageDetail(msg: TuiMessage, body: MessageBody | null): SeamMailD
       ? { filename: att.filename, s3_url: att.location! }
       : { filename: att.filename, local_path: att.location! }));
   // A read message must not display the system `unread` label alongside the "read" flag
-  // (the self-hosted read flow fetches the message while unread, then marks it read without
+  // (the API read flow fetches the message while unread, then marks it read without
   // re-fetching its labels). Suppress it here so `Flags:` reads just "read" — parity with
   // local, which has no such label.
   const label_ids = msg.is_read
@@ -187,14 +187,14 @@ function mailboxSourceFromOptions(opts: { source?: string; provider?: string; ad
 }
 
 async function runAutoPull(_opts: { s3?: boolean; limit?: number }) {
-  // Auto-pull was LOCAL S3 ingestion. This client is self-hosted-only: the /v1 API
+  // Auto-pull was LOCAL S3 ingestion. This client is api-only: the /v1 API
   // is the source of truth and each read re-fetches it, so there is nothing to pull.
   return { pulled: 0, ok: true, configured: false, reason: "API client mode" };
 }
 
 // Local S3/SES ingestion, realtime wiring, SMTP listeners and local routing
-// diagnostics have no /v1 equivalent in this self-hosted-only client: production
-// ingestion runs on the self-hosted API/worker. These commands are kept for
+// diagnostics have no /v1 equivalent in this api-only client: production
+// ingestion runs on the API worker. These commands are kept for
 // discoverability but fail loud. Use `emails inbox list/read/mark-read/status`
 // (API-backed) for the mail view.
 //
@@ -210,7 +210,7 @@ async function runAutoPull(_opts: { s3?: boolean; limit?: number }) {
 // ingestion is still mode-routed.
 function serverOnly(command: string): never {
   throw new Error(
-    `emails inbox ${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
+    `emails inbox ${command} is not available in the api client; it runs on the API server.`,
   );
 }
 
@@ -474,7 +474,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .description("List local mailbox mail")
     .option("-j, --json", "Print JSON output", false)
     .option("--provider <id>", "Not supported for the API client: /v1 messages carry no provider provenance")
-    .option("--source <id>", "Ingestion source ID from `emails inbox sources` (self-hosted exposes exactly one: self-hosted)")
+    .option("--source <id>", "Ingestion source ID from `emails inbox sources` (api exposes exactly one: api)")
     .option("--folder <folder>", "Folder to list: inbox, unread, starred, sent, archived, spam, trash", "inbox")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
     .option("--domain <domain>", "Mailbox scope: recipient/sender domain")
@@ -559,7 +559,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
           output({ unread: counts.unread }, String(counts.unread));
           return;
         }
-        // The per-address rollup is served by the self-hosted server
+        // The per-address rollup is served by the API server
         // (GET /v1/messages/unread-by-address); the client delegates, so the
         // capability matches the local backend's semantics.
         const limit = parsePositiveIntOption(opts.limit, 50);
@@ -594,7 +594,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--label <label>", "Only mail carrying this label")
     .option("--limit <n>", "Max results", "20")
     .option("--offset <n>", "Skip first N local results", "0")
-    .option("--source <id>", "Ingestion source ID from `emails inbox sources` (self-hosted exposes exactly one: self-hosted)")
+    .option("--source <id>", "Ingestion source ID from `emails inbox sources` (api exposes exactly one: api)")
     .action(async (query: string, opts: { provider?: string; folder?: string; address?: string; domain?: string; label?: string; limit?: string; offset?: string; source?: string }) => {
       try {
         const limit = parsePositiveIntOption(opts.limit, 20);
@@ -646,7 +646,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .command("mailboxes")
     .description("List folder counts for a mailbox scope or ingestion source")
     .option("-j, --json", "Print JSON output", false)
-    .option("--source <id>", "Ingestion source ID from `emails inbox sources` (self-hosted exposes exactly one: self-hosted)")
+    .option("--source <id>", "Ingestion source ID from `emails inbox sources` (api exposes exactly one: api)")
     .option("--provider <id>", "Not supported for the API client: /v1 messages carry no provider provenance")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
     .option("--domain <domain>", "Mailbox scope: recipient/sender domain")
@@ -763,7 +763,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         output(source, [
           chalk.green(`✓ Recorded S3 source ${source.id} (status ${source.status}) in this machine's source registry.`),
           chalk.dim("  This registry is client-side provenance only. This client performs no S3 ingestion:"),
-          chalk.dim("  `emails inbox sync-s3` and `emails inbox watch` run on the self-hosted server, which"),
+          chalk.dim("  `emails inbox sync-s3` and `emails inbox watch` run on the API server, which"),
           chalk.dim("  owns the SES -> S3 -> mailbox pipeline and must be configured there."),
         ].join("\n"));
       } catch (e) {
@@ -841,7 +841,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     });
 
   // ─── READ-STATE / ARCHIVE / STAR / LABELS ─────────────────────────────────
-  // These commands write through the mail data source seam (local SQLite or self-hosted API).
+  // These commands write through the mail data source seam (local SQLite or the /v1 API).
 
   async function requireMessage(ds: MailDataSource, id: string): Promise<TuiMessage> {
     const msg = await ds.getMessage(await resolveMailId(ds, id));
@@ -910,7 +910,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   // ─── ATTACHMENTS INVENTORY ────────────────────────────────────────────────
   inboxCmd
     .command("attachments")
-    .description("List one checkpointable page of self-hosted attachment metadata")
+    .description("List one checkpointable page of api attachment metadata")
     .option("-j, --json", "Print JSON output", false)
     .option("--limit <n>", `Attachments per page (1-${MAX_ATTACHMENT_INVENTORY_LIMIT})`, String(DEFAULT_ATTACHMENT_INVENTORY_LIMIT))
     .option("--cursor <cursor>", "Opaque next_cursor from a previous page")
@@ -918,7 +918,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--since <date>", "Only include attachments from messages on or after this date")
     .action(async (opts: { limit?: string; cursor?: string; direction?: string; since?: string }) => {
       try {
-        const page = await listSelfHostedAttachments(opts);
+        const page = await listApiAttachments(opts);
         output(page, formatAttachmentInventoryPage(page));
       } catch (e) {
         handleError(e);
@@ -1032,13 +1032,13 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
       try {
         const ds = resolveMailDataSource();
         const target = opts.provider ? `for provider ${opts.provider}` : "for all providers";
-        // Self-hosted deletes on the server: drains a bulk delete over the inbox
+        // Api deletes on the server: drains a bulk delete over the inbox
         // folder. A provider-scoped clear is REFUSED there (a /v1 message carries
         // no provider dimension) — surface that BEFORE the confirmation prompt, so
         // the operator is not asked to confirm a destructive action that cannot run.
         if (opts.provider) {
-          const { SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED } = await import("../../lib/mail-types.js");
-          if (isApiClientConfigured()) handleError(new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED));
+          const { API_PROVIDER_CLEAR_UNSUPPORTED } = await import("../../lib/mail-types.js");
+          if (isApiClientConfigured()) handleError(new Error(API_PROVIDER_CLEAR_UNSUPPORTED));
         }
         await confirmDestructiveAction(`Clear inbox emails ${target}?`, opts.yes);
         const { cleared } = await ds.clear({ providerId: opts.provider });
@@ -1123,7 +1123,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .action(() => {
       try {
-        throw new Error("emails inbox open is not available in the self-hosted client because it writes a rendered HTML file locally; it runs on the self-hosted server. Use `emails inbox read <id>` for API-backed terminal output.");
+        throw new Error("emails inbox open is not available in the api client because it writes a rendered HTML file locally; it runs on the API server. Use `emails inbox read <id>` for API-backed terminal output.");
       } catch (e) { handleError(e); }
     });
 }
@@ -1272,7 +1272,7 @@ function formatEmailDetail(
     `  ID:      ${chalk.dim(email.id)}`,
   ];
   if (atts.length > 0) {
-    // A self-hosted attachment has no local path — the bytes live in the API,
+    // A api attachment has no local path — the bytes live in the API,
     // not on this machine — but it IS fetchable with
     // `inbox attachment <id> --index <n> --download`. Saying "no local download"
     // reads as "these bytes are gone", which is false and has cost real time on

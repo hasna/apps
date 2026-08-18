@@ -1,7 +1,7 @@
 // Row and value shapes for the store seam.
 //
 // DERIVED FROM THE STRONGEST IMPLEMENTATION, ON PURPOSE. Every shape here was read
-// off `TenantScopedStore` in src/server/self-hosted/store.ts — the tenant-scoped
+// off `TenantScopedStore` in src/server/api/store.ts — the tenant-scoped
 // Postgres store — and not off the SQLite arm.
 //
 // That direction matters more than it looks. The facades carry exactly 30

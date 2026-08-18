@@ -2,12 +2,12 @@ import type { Command } from "commander";
 import { handleError } from "../utils.js";
 
 // Provider event ingestion, local sent-log stats/analytics and the local
-// monitor are owned by the self-hosted server. This client is self-hosted-only,
+// monitor are owned by the API server. This client is api-only,
 // so these commands are kept for CLI discoverability but fail loud: there is no
 // local island to sync/aggregate and no /v1 equivalent to route them through.
 function serverOnly(command: string): never {
   throw new Error(
-    `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
+    `${command} is not available in the api client; it runs on the API server.`,
   );
 }
 

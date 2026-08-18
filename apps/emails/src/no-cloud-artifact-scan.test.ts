@@ -150,7 +150,7 @@ describe("packed hosted-control-plane scanner", () => {
     // that Bun strips from the .js bundles.
     expect(hostedControlPlaneFindings(
       "/** From identity — a verified SES address (alumia account). */",
-      "dist/server/self-hosted/auth/mailer.d.ts",
+      "dist/server/api/auth/mailer.d.ts",
     )).toContain("vendor infrastructure name");
     expect(hostedControlPlaneFindings('const environment = "xyz-infra";', "dist/chunk-aws.js"))
       .toContain("vendor infrastructure name");
@@ -253,7 +253,7 @@ describe("packed hosted-control-plane scanner", () => {
     // The URL-only `hosted endpoint` rule missed these shapes, which is exactly how
     // a vendor From-identity default and a vendor signup-allowlist default shipped.
     for (const leak of ["noreply@hasna.invalid", "hasna.*", "mail.hasna.example", "HASNA.INVALID"]) {
-      expect(sourceBoundaryFindings(`const value = "${leak}";`, "src/server/self-hosted/auth/allowed-email.ts"))
+      expect(sourceBoundaryFindings(`const value = "${leak}";`, "src/server/api/auth/allowed-email.ts"))
         .toContain("vendor hostname");
     }
     // Not hostnames: the service-contract names, the macOS bundle id, the
@@ -284,7 +284,7 @@ describe("packed hosted-control-plane scanner", () => {
       "hasna.events-api.io",
       "hasna.contract7.com",
     ]) {
-      expect(sourceBoundaryFindings(`const value = "${bypass}";`, "src/server/self-hosted/auth/allowed-email.ts"))
+      expect(sourceBoundaryFindings(`const value = "${bypass}";`, "src/server/api/auth/allowed-email.ts"))
         .toContain("vendor hostname");
       // The packed artifact surface must fail on the same shape.
       expect(hostedControlPlaneFindings(`var value = "${bypass}";`, "dist/chunk-fixture.js"))

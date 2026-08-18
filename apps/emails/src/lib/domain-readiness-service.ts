@@ -348,7 +348,7 @@ export async function updateDomainLifecycleReadiness(
 
   if (input.inbound_status === "ready") {
     if (!input.force && !before.readiness.receive_ready && !before.readiness.inbound_evidence_ready) {
-      throw new Error(`Inbound self-hosted source is not configured for ${domain.domain}; register an SES/S3 source or pass force after manual/provider setup.`);
+      throw new Error(`Inbound api source is not configured for ${domain.domain}; register an SES/S3 source or pass force after manual/provider setup.`);
     }
     update.last_inbound_check_at ??= timestamp;
   }

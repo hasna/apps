@@ -11,14 +11,14 @@ export function registerServeCommands(program: Command, output: (data: unknown, 
   // ─── SERVE ────────────────────────────────────────────────────────────────────
   program
     .command("serve")
-    .description("Start the self-hosted HTTP service")
+    .description("Start the API HTTP service")
     .option("--port <port>", "Port to listen on", "8080")
     .option("--host <host>", "Host to bind to (default: 0.0.0.0)", "0.0.0.0")
     .action(async (opts: { port?: string; host?: string }) => {
-      const { startSelfHostedServer } = await import("../../server/self-hosted/serve.js");
+      const { startApiServer } = await import("../../server/api/serve.js");
       const port = parseInt(opts.port ?? "8080", 10);
       const host = opts.host ?? "0.0.0.0";
-      await startSelfHostedServer(pkg.version, port, host);
+      await startApiServer(pkg.version, port, host);
     });
 
   // ─── MCP ──────────────────────────────────────────────────────────────────────

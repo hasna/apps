@@ -3,7 +3,7 @@
 // WHAT THIS FILE USED TO BE. A 14-line facade that read the deployment word and
 // dispatched its three exports to one of two sibling modules: a SQLite arm
 // (`priority-senders.sqlite.ts`) and a curl-bridge arm (`priority-senders.api.ts`).
-// Both are gone. The SQLite and self-hosted implementations now live in this single
+// Both are gone. The SQLite and api implementations now live in this single
 // file, under distinct names (`*Local` / `*Remote`), and the published surface
 // (the plain names) chooses between them by the process-wide store selection at
 // call time. The local arms (the TUI local data layer, the local mail data source,
@@ -11,8 +11,8 @@
 // ask where this installation is deployed; the remote arm imports the `*Remote`
 // implementations; the mode routing exists only at the facade.
 import { getDatabase, now, type Database } from "./database.js";
-import { selfHostedStoreFor } from "./self-hosted-store.js";
-import { ciso, cstr } from "./self-hosted-resource.js";
+import { apiStoreFor } from "./api-store.js";
+import { ciso, cstr } from "./api-resource.js";
 import { isApiClientConfigured } from "../store-resolution.js";
 import {
   normalizePriorityRuleInput,
@@ -75,10 +75,10 @@ export function removePrioritySenderRuleByValueLocal(kind: unknown, value: unkno
   return result.changes > 0;
 }
 
-// ---- self-hosted implementation (the operator's /v1 store) ------------------
+// ---- api implementation (the operator's /v1 store) ------------------
 //
 // Synchronous on purpose: the TUI and CLI import the data layer without an
-// await, and `selfHostedStoreFor` already performs its HTTP calls synchronously
+// await, and `apiStoreFor` already performs its HTTP calls synchronously
 // through the curl bridge.
 
 function remoteRowToRule(row: Record<string, unknown>): PrioritySenderRule {
@@ -92,12 +92,12 @@ function remoteRowToRule(row: Record<string, unknown>): PrioritySenderRule {
 }
 
 export function listPrioritySenderRulesRemote(): PrioritySenderRule[] {
-  return selfHostedStoreFor(RULES_RESOURCE).list({ limit: 1000 }).map(remoteRowToRule);
+  return apiStoreFor(RULES_RESOURCE).list({ limit: 1000 }).map(remoteRowToRule);
 }
 
 export function addPrioritySenderRuleRemote(kind: unknown, value: unknown): PrioritySenderRule {
   const normalized = normalizePriorityRuleInput(kind, value);
-  return remoteRowToRule(selfHostedStoreFor(RULES_RESOURCE).create({
+  return remoteRowToRule(apiStoreFor(RULES_RESOURCE).create({
     id: prioritySenderRuleId(normalized.kind, normalized.value),
     kind: normalized.kind,
     value: normalized.value,
@@ -105,7 +105,7 @@ export function addPrioritySenderRuleRemote(kind: unknown, value: unknown): Prio
 }
 
 export function removePrioritySenderRuleRemote(id: string): boolean {
-  return selfHostedStoreFor(RULES_RESOURCE).del(id);
+  return apiStoreFor(RULES_RESOURCE).del(id);
 }
 
 // ---- published surface ------------------------------------------------------

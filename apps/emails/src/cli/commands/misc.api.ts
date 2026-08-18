@@ -41,7 +41,7 @@ interface ScheduleListOptions {
 // work over the same route.
 function serverOnly(command: string): never {
   throw new Error(
-    `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
+    `${command} is not available in the api client; it runs on the API server.`,
   );
 }
 

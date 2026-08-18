@@ -1,6 +1,6 @@
 import type { CreateProviderInput, Provider, ProviderSummary, ProviderType } from "../types/index.js";
 import { ProviderNotFoundError } from "../types/index.js";
-import { selfHostedResource, selfHostedListQuery, selfHostedPage, cbool, ciso, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { apiResource, apiListQuery, apiPage, cbool, ciso, cstr, cstrOrNull } from "./api-resource.js";
 import { assertNoProviderCredentials } from "./provider-credentials.js";
 
 const PROVIDER_RESOURCE = "providers";
@@ -16,7 +16,7 @@ function assertSupportedProviderType(value: string): asserts value is ProviderTy
   }
 }
 
-// The self-hosted `providers` resource carries only NON-SECRET metadata (id,
+// The api `providers` resource carries only NON-SECRET metadata (id,
 // name, type, region, active, timestamps) — provider credentials (api_key/
 // secret_key/oauth tokens) are never distributed to or fetched by a client.
 // Secret columns map to null; the client uses server-side send (`/v1/send`), not
@@ -52,14 +52,14 @@ function apiToProvider(e: Record<string, unknown>): Provider {
 
 /** Bounded superset of providers restricted to supported types, mapped to Provider. */
 function listSupportedProviders(): Provider[] {
-  return selfHostedResource(PROVIDER_RESOURCE)
+  return apiResource(PROVIDER_RESOURCE)
     .list({ limit: 1000 })
     .filter((row) => isSupportedProviderType(cstr(row["type"])))
     .map(apiToProvider);
 }
 
 /**
- * The self-hosted `providers` resource has NO credential columns — the server
+ * The api `providers` resource has NO credential columns — the server
  * schema stores `name/type/region/active` only. Refuse credentials loudly, and
  * expose the check so a caller can fail fast BEFORE doing anything expensive.
  */
@@ -70,7 +70,7 @@ export function assertProviderCredentialsStorable(input: Partial<CreateProviderI
 export function createProvider(input: CreateProviderInput): Provider {
   assertSupportedProviderType(input.type);
   assertProviderCredentialsStorable(input);
-  return apiToProvider(selfHostedResource(PROVIDER_RESOURCE).create({
+  return apiToProvider(apiResource(PROVIDER_RESOURCE).create({
     name: input.name,
     type: input.type,
     region: input.region || null,
@@ -79,14 +79,14 @@ export function createProvider(input: CreateProviderInput): Provider {
 }
 
 export function getProvider(id: string): Provider | null {
-  const record = selfHostedResource(PROVIDER_RESOURCE).get(id);
+  const record = apiResource(PROVIDER_RESOURCE).get(id);
   return record ? apiToProvider(record) : null;
 }
 
 export function resolveProviderId(id: string): string | null {
   const trimmed = id.trim();
   if (!trimmed) return null;
-  const store = selfHostedResource(PROVIDER_RESOURCE);
+  const store = apiResource(PROVIDER_RESOURCE);
   if (trimmed.length >= 36) return store.get(trimmed) ? trimmed : null;
   const matches = store.list({ limit: 1000 })
     .map((row) => cstr(row["id"]))
@@ -104,28 +104,28 @@ export interface ListProviderOptions {
 }
 
 export function listProviders(opts?: ListProviderOptions): Provider[] {
-  const { query, limit, offset } = selfHostedListQuery(opts);
-  const rows = selfHostedResource(PROVIDER_RESOURCE).list(query)
+  const { query, limit, offset } = apiListQuery(opts);
+  const rows = apiResource(PROVIDER_RESOURCE).list(query)
     .filter((row) => isSupportedProviderType(cstr(row["type"])))
     .map(apiToProvider);
   rows.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
-  return selfHostedPage(rows, limit, offset);
+  return apiPage(rows, limit, offset);
 }
 
 export function listProviderSummaries(opts?: ListProviderOptions): ProviderSummary[] {
-  const { query, limit, offset } = selfHostedListQuery(opts);
-  const rows = selfHostedResource(PROVIDER_RESOURCE).list(query)
+  const { query, limit, offset } = apiListQuery(opts);
+  const rows = apiResource(PROVIDER_RESOURCE).list(query)
     .filter((row) => isSupportedProviderType(cstr(row["type"])))
     .map(apiToProviderSummary);
   rows.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
-  return selfHostedPage(rows, limit, offset);
+  return apiPage(rows, limit, offset);
 }
 
 export function listProviderNamesByIds(providerIds: Iterable<string>): Map<string, string> {
   const ids = new Set([...providerIds].map((id) => id.trim()).filter(Boolean));
   if (ids.size === 0) return new Map();
   const map = new Map<string, string>();
-  for (const row of selfHostedResource(PROVIDER_RESOURCE).list({ limit: 1000 })) {
+  for (const row of apiResource(PROVIDER_RESOURCE).list({ limit: 1000 })) {
     const id = cstr(row["id"]);
     if (ids.has(id)) map.set(id, cstr(row["name"]));
   }
@@ -139,11 +139,11 @@ export function listActiveProviders(type?: ProviderType): Provider[] {
 }
 
 export function listActiveProviderSummaries(type?: ProviderType, opts?: ListProviderOptions): ProviderSummary[] {
-  const { limit: pageLimit, offset: pageOffset } = selfHostedListQuery({ limit: opts?.limit, offset: opts?.offset });
+  const { limit: pageLimit, offset: pageOffset } = apiListQuery({ limit: opts?.limit, offset: opts?.offset });
   // listActiveProviders already returns fully-mapped Provider objects (a superset
   // of ProviderSummary); do not re-map raw rows.
   const rows: ProviderSummary[] = listActiveProviders(type);
-  return selfHostedPage(rows, pageLimit, pageOffset);
+  return apiPage(rows, pageLimit, pageOffset);
 }
 
 export function getLatestActiveProvider(type?: ProviderType): Provider | null {
@@ -159,7 +159,7 @@ export function updateProvider(
   input: Partial<CreateProviderInput> & { active?: boolean },
 ): Provider {
   assertProviderCredentialsStorable(input);
-  const store = selfHostedResource(PROVIDER_RESOURCE);
+  const store = apiResource(PROVIDER_RESOURCE);
   if (!store.get(id)) throw new ProviderNotFoundError(id);
   const patch: Record<string, unknown> = {};
   if (input.name !== undefined) patch["name"] = input.name;
@@ -173,7 +173,7 @@ export function updateProvider(
 }
 
 export function deleteProvider(id: string): boolean {
-  return selfHostedResource(PROVIDER_RESOURCE).del(id);
+  return apiResource(PROVIDER_RESOURCE).del(id);
 }
 
 export function getActiveProvider(): Provider {

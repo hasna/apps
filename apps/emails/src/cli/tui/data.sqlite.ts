@@ -377,7 +377,7 @@ function searchClause(search: string | undefined, columns: string[]): SqlClause 
 
 /**
  * Escape LIKE metacharacters so a term matches literally, mirroring the
- * self-hosted store's likeContains (src/server/self-hosted/store.ts). SQLite
+ * api store's likeContains (src/server/api/store.ts). SQLite
  * has NO default LIKE escape character, so every pattern built here must also
  * be paired with an explicit `ESCAPE '\'` clause.
  */
@@ -1631,7 +1631,7 @@ export interface ListDomainSummaryOptions {
 }
 
 // ASYNC BECAUSE THE PROVISIONING READS ARE. `src/db/provisioning` reaches the store seam,
-// where every operation returns a promise. The self-hosted twin is async for the same
+// where every operation returns a promise. The api twin is async for the same
 // reason: a routed export whose return type depends on the deployment word — a promise in
 // one configuration, an array in the other — is the split this programme removes.
 export function listDomainSummaries(db?: Database): Promise<DomainSummary[]>;

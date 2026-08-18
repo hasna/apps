@@ -119,7 +119,7 @@ describe("generateWarmingPlan", () => {
 });
 
 // The ramp is anchored on the UTC calendar date, matching warmingLimit() in
-// src/server/self-hosted/store.ts (the code that actually enforces the cap) and
+// src/server/api/store.ts (the code that actually enforces the cap) and
 // the UTC day window getTodaySentCountsByDomain counts over. A local-midnight
 // anchor put the client a day ahead of the server at every non-zero UTC offset.
 describe("warmingDayIndex", () => {

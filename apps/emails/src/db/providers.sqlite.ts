@@ -3,7 +3,7 @@ import type { CreateProviderInput, Provider, ProviderRow, ProviderSummary, Provi
 import { ProviderNotFoundError } from "../types/index.js";
 import { getDatabase, now, runInTransaction, uuid } from "./database.js";
 import { safeOffset, safeOptionalLimit } from "./pagination.js";
-import { selfHostedResource, selfHostedListQuery, selfHostedPage, cbool, ciso, cstr, cstrOrNull } from "./self-hosted-resource.sqlite.js";
+import { apiResource, apiListQuery, apiPage, cbool, ciso, cstr, cstrOrNull } from "./api-resource.sqlite.js";
 import { assertNoProviderCredentials } from "./provider-credentials.js";
 import {
   getProviderSecrets,
@@ -27,11 +27,11 @@ function assertSupportedProviderType(value: string): asserts value is ProviderTy
   }
 }
 
-// The selfHosted `providers` resource carries only NON-SECRET metadata (id, name,
+// The api `providers` resource carries only NON-SECRET metadata (id, name,
 // type, region, active, timestamps) — provider credentials (api_key/secret_key/
 // oauth tokens) are never distributed to or fetched by a client. Secret columns
-// map to null; a flipped client uses selfHosted-side send (`/v1/send`), not local
-// provider secrets. So `provider list` shows the selfHosted inventory, not secrets.
+// map to null; a flipped client uses api-side send (`/v1/send`), not local
+// provider secrets. So `provider list` shows the api inventory, not secrets.
 function apiToProviderSummary(e: Record<string, unknown>): ProviderSummary {
   const updatedAt = ciso(e["updated_at"]);
   const type = cstr(e["type"]);
@@ -119,18 +119,18 @@ function rowToProviderSummary(row: ProviderSummaryRow): ProviderSummary {
 
 /**
  * Local SQLite stores credentials only in its encrypted provider_secrets
- * envelope. The self-hosted compat branch has no per-provider secret store.
+ * envelope. The api compat branch has no per-provider secret store.
  */
 export function assertProviderCredentialsStorable(input: Partial<CreateProviderInput>): void {
-  if (selfHostedResource(PROVIDER_RESOURCE)) assertNoProviderCredentials(input);
+  if (apiResource(PROVIDER_RESOURCE)) assertNoProviderCredentials(input);
 }
 
 export function createProvider(input: CreateProviderInput, db?: Database): Provider {
   assertSupportedProviderType(input.type);
-  const selfHosted = selfHostedResource(PROVIDER_RESOURCE);
-  if (selfHosted) {
+  const api = apiResource(PROVIDER_RESOURCE);
+  if (api) {
     assertNoProviderCredentials(input);
-    return apiToProvider(selfHosted.create({
+    return apiToProvider(api.create({
       name: input.name,
       type: input.type,
       region: input.region || null,
@@ -171,15 +171,15 @@ export function getProviderWithCredentials(id: string, db?: Database): Provider 
 }
 
 // The single mode-gated provider read behind both the redacted and the
-// credentialed lookups. Keeping ONE self-hosted branch here — rather than one
+// credentialed lookups. Keeping ONE api branch here — rather than one
 // per public function — decides the arm and the credential envelope in the same
-// place: a self-hosted resource returns the server's own record, which never
+// place: an API resource returns the server's own record, which never
 // carries the local encrypted secret, so `withCredentials` only unwraps the
 // envelope on the SQLite store that owns it.
 function readProvider(id: string, db: Database | undefined, withCredentials: boolean): Provider | null {
-  const selfHosted = selfHostedResource(PROVIDER_RESOURCE);
-  if (selfHosted) {
-    const record = selfHosted.get(id);
+  const api = apiResource(PROVIDER_RESOURCE);
+  if (api) {
+    const record = api.get(id);
     return record ? apiToProvider(record) : null;
   }
   const d = db || getDatabase();
@@ -190,12 +190,12 @@ function readProvider(id: string, db: Database | undefined, withCredentials: boo
 }
 
 export function resolveProviderId(id: string, db?: Database): string | null {
-  const selfHosted = selfHostedResource(PROVIDER_RESOURCE);
-  if (selfHosted) {
+  const api = apiResource(PROVIDER_RESOURCE);
+  if (api) {
     const trimmed = id.trim();
     if (!trimmed) return null;
-    if (trimmed.length >= 36) return selfHosted.get(trimmed) ? trimmed : null;
-    const matches = selfHosted.list({ limit: 1000 })
+    if (trimmed.length >= 36) return api.get(trimmed) ? trimmed : null;
+    const matches = api.list({ limit: 1000 })
       .map((row) => cstr(row["id"]))
       .filter((providerId) => providerId.startsWith(trimmed));
     return matches.length === 1 ? matches[0]! : null;
@@ -223,14 +223,14 @@ export interface ListProviderOptions {
 }
 
 export function listProviders(db?: Database, opts?: ListProviderOptions): Provider[] {
-  const selfHosted = selfHostedResource(PROVIDER_RESOURCE);
-  if (selfHosted) {
-    const { query, limit, offset } = selfHostedListQuery(opts);
-    const rows = selfHosted.list(query)
+  const api = apiResource(PROVIDER_RESOURCE);
+  if (api) {
+    const { query, limit, offset } = apiListQuery(opts);
+    const rows = api.list(query)
       .filter((row) => isSupportedProviderType(cstr(row["type"])))
       .map(apiToProvider);
     rows.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
-    return selfHostedPage(rows, limit, offset);
+    return apiPage(rows, limit, offset);
   }
 
   const d = db || getDatabase();
@@ -243,14 +243,14 @@ export function listProviders(db?: Database, opts?: ListProviderOptions): Provid
 }
 
 export function listProviderSummaries(db?: Database, opts?: ListProviderOptions): ProviderSummary[] {
-  const selfHosted = selfHostedResource(PROVIDER_RESOURCE);
-  if (selfHosted) {
-    const { query, limit, offset } = selfHostedListQuery(opts);
-    const rows = selfHosted.list(query)
+  const api = apiResource(PROVIDER_RESOURCE);
+  if (api) {
+    const { query, limit, offset } = apiListQuery(opts);
+    const rows = api.list(query)
       .filter((row) => isSupportedProviderType(cstr(row["type"])))
       .map(apiToProviderSummary);
     rows.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
-    return selfHostedPage(rows, limit, offset);
+    return apiPage(rows, limit, offset);
   }
 
   const d = db || getDatabase();
@@ -314,8 +314,8 @@ export function updateProvider(
   input: Partial<CreateProviderInput> & { active?: boolean },
   db?: Database,
 ): Provider {
-  const selfHosted = selfHostedResource(PROVIDER_RESOURCE);
-  if (selfHosted) {
+  const api = apiResource(PROVIDER_RESOURCE);
+  if (api) {
     assertNoProviderCredentials(input);
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch["name"] = input.name;
@@ -325,7 +325,7 @@ export function updateProvider(
     }
     if (input.region !== undefined) patch["region"] = input.region || null;
     if (input.active !== undefined) patch["active"] = input.active;
-    return apiToProvider(selfHosted.update(id, patch));
+    return apiToProvider(api.update(id, patch));
   }
   const d = db || getDatabase();
   const provider = getProvider(id, d);
@@ -361,8 +361,8 @@ export function updateProvider(
 }
 
 export function deleteProvider(id: string, db?: Database): boolean {
-  const selfHosted = selfHostedResource(PROVIDER_RESOURCE);
-  if (selfHosted) return selfHosted.del(id);
+  const api = apiResource(PROVIDER_RESOURCE);
+  if (api) return api.del(id);
   const d = db || getDatabase();
   const result = d.run("DELETE FROM providers WHERE id = ?", [id]);
   return result.changes > 0;

@@ -7,7 +7,7 @@
 //     (src/store-sqlite/resources.ts, `describeTable`): `updated_at DESC` when the
 //     table has it, else `created_at DESC`, tie-broken by the id DESCENDING.
 //   * The API arm serves each family with a PER-RESOURCE order from the server's spec
-//     table (src/server/self-hosted/resources.ts, `resourceListOrderBy`): `name ASC`
+//     table (src/server/api/resources.ts, `resourceListOrderBy`): `name ASC`
 //     for groups, `scheduled_at ASC` for scheduled sends, `updated_at DESC` for
 //     contacts, … — always tie-broken by the resource key ASCENDING.
 //
@@ -33,11 +33,11 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import {
-  SELF_HOSTED_RESOURCES,
+  API_RESOURCES,
   resourceKeyColumn,
   resourceListOrderBy,
   resourceSpecForPath,
-} from "./server/self-hosted/resources.js";
+} from "./server/api/resources.js";
 import type { EmailStore } from "./store/email-store.js";
 import type { Outcome } from "./store/outcome.js";
 import type { ResourceRow } from "./store/records.js";
@@ -123,12 +123,12 @@ describe("uniform-family list order — the divergence that keeps order out of t
     // The server's spec table orders some families by a time column and others by a
     // NAME or ADDRESS column — proof by inspection that no single cross-family order
     // exists for the SQLite arm's uniform time-descending recipe to agree with.
-    const orders = new Map(SELF_HOSTED_RESOURCES.map((spec) => [spec.path, resourceListOrderBy(spec)]));
+    const orders = new Map(API_RESOURCES.map((spec) => [spec.path, resourceListOrderBy(spec)]));
     expect(orders.get("groups")).toBe("name ASC, id ASC");
     expect(orders.get("scheduled")).toBe("scheduled_at ASC, id ASC");
     // Every declared order is made total by the resource's own key, ascending — the
     // opposite direction from the SQLite arm's descending id tiebreak.
-    for (const spec of SELF_HOSTED_RESOURCES) {
+    for (const spec of API_RESOURCES) {
       const key = resourceKeyColumn(spec);
       const order = resourceListOrderBy(spec);
       expect(

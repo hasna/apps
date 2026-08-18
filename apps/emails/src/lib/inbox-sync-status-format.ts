@@ -2,7 +2,7 @@
 //
 // This was duplicated byte-for-byte in src/cli/commands/inbox.sqlite.ts and
 // inbox.api.ts, and BOTH copies painted a literal yellow `0` for the inbound
-// bucket count plus `0 legacy, 0 orphaned` sources — numbers the self-hosted
+// bucket count plus `0 legacy, 0 orphaned` sources — numbers the api
 // client never measured. One copy now, and it renders an unmeasured field as
 // "unavailable" with its reason instead of as a confident zero.
 
@@ -64,7 +64,7 @@ export function formatInboxSyncStatus(status: EmailSystemStatus): string {
   lines.push(...formatStatusDataGaps(status));
 
   // Only advertise commands that actually run in this mode: `emails pull` and
-  // `emails inbox watch` both refuse in self-hosted (the server owns ingestion),
+  // `emails inbox watch` both refuse in api (the server owns ingestion),
   // so printing them there is the same defect in hint form.
   //
   // The verb is `emails pull` (alias `emails provider sync`). This used to read

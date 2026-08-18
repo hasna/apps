@@ -90,7 +90,7 @@ function domainLifecycleFix(domainName: string, provider: Provider): string {
 
 export function assertDomainOutboundReady(provider: Provider, opts: SendEmailOptions, db?: Database): void {
   if (isApiClientConfigured()) {
-    throw new Error(`Self-hosted sends must use the authenticated Emails service endpoint for ${providerRef(provider)}.`);
+    throw new Error(`Api sends must use the authenticated Emails service endpoint for ${providerRef(provider)}.`);
   }
 
   // Sandbox is the explicit local/test provider. It must remain usable in OSS

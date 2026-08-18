@@ -8,8 +8,8 @@
 // would ACCEPT — and that asymmetry is the one this file pins, because it is the
 // one a collapse can get wrong quietly.
 //
-// The self-hosted half of the same surface is covered in
-// src/mcp/self-hosted-guards.test.ts against the out-of-process /v1 stub. This
+// The api half of the same surface is covered in
+// src/mcp/api-guards.test.ts against the out-of-process /v1 stub. This
 // file covers the local half, because local is where the deleted arm honoured
 // options the single send path cannot carry, and therefore where "collapsed and
 // silently dropped an option" would look exactly like success.

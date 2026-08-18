@@ -31,7 +31,7 @@
 //  2. THE TWO STORES ORDER THIS TABLE DIFFERENTLY, AND `ListOptions` ADMITS NO
 //     ORDERING. Both deleted arms promised newest-CREATED first; the SQLite store's
 //     generic list orders by `updated_at DESC` and the service by `created_at DESC`
-//     (src/server/self-hosted/resources.ts). A windowed read taken from either
+//     (src/server/api/resources.ts). A windowed read taken from either
 //     store's own order is a plausible, silently wrong page against the other. Every
 //     list here sorts the enumerated set itself and windows locally, so both stores
 //     answer the same question.
@@ -86,7 +86,7 @@ import { safeOffset, safeOptionalLimit } from "./pagination.js";
 // column into the other's TEXT-encoded one; the module they live in is named for the
 // axis being deleted, and relocating them belongs to that deletion rather than to
 // this collapse.
-import { cobj, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cobj, cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";

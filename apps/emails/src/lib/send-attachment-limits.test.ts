@@ -1,6 +1,6 @@
 // The send attachment caps, and the constraint that actually bound them.
 //
-// The self-hosted caps were 5 files / 512KiB each / 768KiB total, and 768KiB is
+// The api caps were 5 files / 512KiB each / 768KiB total, and 768KiB is
 // not an arbitrary number: attachments travel base64-encoded inside the JSON
 // send body, and base64(768KiB) is 1048576 bytes — EXACTLY the 1 MiB
 // `MAX_JSON_BODY_BYTES` the send route reads its body with. The attachment cap
@@ -20,7 +20,7 @@ import {
   LOCAL_SEND_ATTACHMENT_LIMITS,
   mimeEncodedUpperBound,
   requiredSendJsonBodyBytes,
-  SELF_HOSTED_SEND_ATTACHMENT_LIMITS,
+  API_SEND_ATTACHMENT_LIMITS,
   SES_MAX_MESSAGE_BYTES,
   type SendAttachmentLimits,
 } from "./send-attachment-limits.js";
@@ -48,21 +48,21 @@ describe("base64EncodedBytes", () => {
   });
 });
 
-describe("self-hosted send attachment caps carry a real document", () => {
+describe("api send attachment caps carry a real document", () => {
   test("a notarised scan fits under the per-file cap", () => {
     expect(NOTARISED_SCAN_BYTES).toBeLessThanOrEqual(
-      SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxBytesPerFile,
+      API_SEND_ATTACHMENT_LIMITS.maxBytesPerFile,
     );
   });
 
   test("two notarised scans fit under the total cap in one message", () => {
     expect(NOTARISED_SCAN_BYTES * 2).toBeLessThanOrEqual(
-      SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxTotalBytes,
+      API_SEND_ATTACHMENT_LIMITS.maxTotalBytes,
     );
   });
 
   test("the file-count cap still admits a two-document send", () => {
-    expect(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxFiles).toBeGreaterThanOrEqual(2);
+    expect(API_SEND_ATTACHMENT_LIMITS.maxFiles).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -71,7 +71,7 @@ describe("self-hosted send attachment caps carry a real document", () => {
 // from the other side too.
 describe("the caps still bound", () => {
   test("per-file and total caps are finite and ordered", () => {
-    const { maxFiles, maxBytesPerFile, maxTotalBytes } = SELF_HOSTED_SEND_ATTACHMENT_LIMITS;
+    const { maxFiles, maxBytesPerFile, maxTotalBytes } = API_SEND_ATTACHMENT_LIMITS;
     expect(Number.isFinite(maxBytesPerFile)).toBe(true);
     expect(Number.isFinite(maxTotalBytes)).toBe(true);
     expect(Number.isFinite(maxFiles)).toBe(true);
@@ -82,15 +82,15 @@ describe("the caps still bound", () => {
   });
 
   test("one byte over the per-file cap is over the per-file cap", () => {
-    expect(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxBytesPerFile + 1)
-      .toBeGreaterThan(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxBytesPerFile);
+    expect(API_SEND_ATTACHMENT_LIMITS.maxBytesPerFile + 1)
+      .toBeGreaterThan(API_SEND_ATTACHMENT_LIMITS.maxBytesPerFile);
   });
 
-  test("the self-hosted caps stay at or below the local ones", () => {
+  test("the api caps stay at or below the local ones", () => {
     // `src/lib/send.sqlite.ts` enforces its own 25MiB ceiling on the local send
-    // path. If the self-hosted per-file cap ever rose above it, that layer would
+    // path. If the api per-file cap ever rose above it, that layer would
     // start rejecting sends the hosted route had just accepted.
-    expect(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxBytesPerFile)
+    expect(API_SEND_ATTACHMENT_LIMITS.maxBytesPerFile)
       .toBeLessThanOrEqual(LOCAL_SEND_ATTACHMENT_LIMITS.maxBytesPerFile);
   });
 });
@@ -98,16 +98,16 @@ describe("the caps still bound", () => {
 // THE TEST THAT WOULD HAVE CAUGHT THE ORIGINAL DEFECT.
 describe("the JSON body budget can actually carry a full-size attachment set", () => {
   test("the send body budget exceeds the encoded worst-case attachment set", () => {
-    const encoded = base64EncodedBytes(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxTotalBytes);
-    expect(requiredSendJsonBodyBytes(SELF_HOSTED_SEND_ATTACHMENT_LIMITS))
+    const encoded = base64EncodedBytes(API_SEND_ATTACHMENT_LIMITS.maxTotalBytes);
+    expect(requiredSendJsonBodyBytes(API_SEND_ATTACHMENT_LIMITS))
       .toBeGreaterThan(encoded);
   });
 
   test("it leaves room for the envelope around the attachments", () => {
     // Subject, addresses, filenames, content types, and a text/html body all
     // share the same request body.
-    const encoded = base64EncodedBytes(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxTotalBytes);
-    const slack = requiredSendJsonBodyBytes(SELF_HOSTED_SEND_ATTACHMENT_LIMITS) - encoded;
+    const encoded = base64EncodedBytes(API_SEND_ATTACHMENT_LIMITS.maxTotalBytes);
+    const slack = requiredSendJsonBodyBytes(API_SEND_ATTACHMENT_LIMITS) - encoded;
     expect(slack).toBeGreaterThanOrEqual(1024 * 1024);
   });
 
@@ -115,11 +115,11 @@ describe("the JSON body budget can actually carry a full-size attachment set", (
     // Doubling the cap must move the budget. A constant that ignored its input
     // is exactly how the body cap and the attachment cap drifted apart.
     const doubled: SendAttachmentLimits = {
-      ...SELF_HOSTED_SEND_ATTACHMENT_LIMITS,
-      maxTotalBytes: SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxTotalBytes * 2,
+      ...API_SEND_ATTACHMENT_LIMITS,
+      maxTotalBytes: API_SEND_ATTACHMENT_LIMITS.maxTotalBytes * 2,
     };
     expect(requiredSendJsonBodyBytes(doubled))
-      .toBeGreaterThan(requiredSendJsonBodyBytes(SELF_HOSTED_SEND_ATTACHMENT_LIMITS));
+      .toBeGreaterThan(requiredSendJsonBodyBytes(API_SEND_ATTACHMENT_LIMITS));
   });
 });
 
@@ -131,12 +131,12 @@ describe("the caps stay inside the provider ceiling", () => {
   });
 
   test("a worst-case message stays under the SES ceiling", () => {
-    expect(mimeEncodedUpperBound(SELF_HOSTED_SEND_ATTACHMENT_LIMITS))
+    expect(mimeEncodedUpperBound(API_SEND_ATTACHMENT_LIMITS))
       .toBeLessThan(SES_MAX_MESSAGE_BYTES);
   });
 
   test("it keeps a real margin, not a rounding-error one", () => {
-    const margin = SES_MAX_MESSAGE_BYTES - mimeEncodedUpperBound(SELF_HOSTED_SEND_ATTACHMENT_LIMITS);
+    const margin = SES_MAX_MESSAGE_BYTES - mimeEncodedUpperBound(API_SEND_ATTACHMENT_LIMITS);
     expect(margin).toBeGreaterThan(5_000_000);
   });
 
@@ -153,8 +153,8 @@ describe("the caps stay inside the provider ceiling", () => {
 });
 
 describe("describeSendAttachmentLimits", () => {
-  test("renders the raised self-hosted caps", () => {
-    expect(describeSendAttachmentLimits(SELF_HOSTED_SEND_ATTACHMENT_LIMITS))
+  test("renders the raised api caps", () => {
+    expect(describeSendAttachmentLimits(API_SEND_ATTACHMENT_LIMITS))
       .toBe("5 files, 10MB each, 20MB total");
   });
 });

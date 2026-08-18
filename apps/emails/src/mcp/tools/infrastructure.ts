@@ -44,7 +44,7 @@ const MAX_DOMAIN_REGISTRATION_YEARS = 10;
  * down into `lib/aws-inbound.ts` / `lib/cloudflare-dns.ts` and the
  * `adapter.addDomain` call sites, which is a separate change.
  *
- * The self-hosted server exposes no route that performs provisioning, so this
+ * The api server exposes no route that performs provisioning, so this
  * refuses instead of claiming the work happens server-side. The local SQLite client still
  * runs the real thing.
  *
@@ -59,7 +59,7 @@ function assertProvisioningInfraAllowed(toolName: string): void {
     `MCP tool ${toolName} is disabled for the API client: it would mutate cloud infrastructure ` +
       "(SES identity, Cloudflare DNS records, SES receipt rules) using the ambient AWS/Cloudflare " +
       "environment of this client machine while recording the result in the operator's shared " +
-      "domain state, and the self-hosted server exposes no route that performs provisioning. " +
+      "domain state, and the api server exposes no route that performs provisioning. " +
       "Run it against the local SQLite client with cloud accounts this machine owns.",
   );
 }
@@ -399,9 +399,9 @@ export function registerInfrastructureTools(server: McpServer): void {
   },
   async () => {
     // Feedback was written to a local SQLite table with no /v1 equivalent in the
-    // self-hosted client. Fail loud (rule 6).
+    // api client. Fail loud (rule 6).
     return {
-      content: [{ type: "text" as const, text: "Error: send_feedback is not available in the self-hosted client; feedback is collected by the self-hosted server." }],
+      content: [{ type: "text" as const, text: "Error: send_feedback is not available in the api client; feedback is collected by the api server." }],
       isError: true,
     };
   },
@@ -421,10 +421,10 @@ export function registerInfrastructureTools(server: McpServer): void {
     },
     async () => {
       // No provisioning orchestrator ships in ANY mode: the local one was
-      // unreachable dead code and has been removed, and the self-hosted server
+      // unreachable dead code and has been removed, and the api server
       // exposes no /v1 provisioning route. Fail loud with the truth (rule 6).
       return {
-        content: [{ type: "text" as const, text: "Error: provision_domain is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. Register an already-verified domain with `emails domain adopt <domain> --provider <id>` and create the SES inbound bucket and receipt rules with `emails aws setup-inbound`." }],
+        content: [{ type: "text" as const, text: "Error: provision_domain is not implemented in this build: there is no local provisioning orchestrator and the api server exposes no provisioning route. Register an already-verified domain with `emails domain adopt <domain> --provider <id>` and create the SES inbound bucket and receipt rules with `emails aws setup-inbound`." }],
         isError: true,
       };
     },
@@ -450,7 +450,7 @@ export function registerInfrastructureTools(server: McpServer): void {
       // No provisioning orchestrator ships in ANY mode (see provision_domain).
       // Fail loud with the truth (rule 6).
       return {
-        content: [{ type: "text" as const, text: "Error: provision_address is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. Create the address with `emails address add <email> --provider <id>`." }],
+        content: [{ type: "text" as const, text: "Error: provision_address is not implemented in this build: there is no local provisioning orchestrator and the api server exposes no provisioning route. Create the address with `emails address add <email> --provider <id>`." }],
         isError: true,
       };
     },
@@ -540,7 +540,7 @@ export function registerInfrastructureTools(server: McpServer): void {
       // No provisioning orchestrator ships in ANY mode (see provision_domain).
       // Fail loud with the truth (rule 6).
       return {
-        content: [{ type: "text" as const, text: "Error: provision_status is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. List what is registered with `emails domain list --json` and `emails address list --json`." }],
+        content: [{ type: "text" as const, text: "Error: provision_status is not implemented in this build: there is no local provisioning orchestrator and the api server exposes no provisioning route. List what is registered with `emails domain list --json` and `emails address list --json`." }],
         isError: true,
       };
     },

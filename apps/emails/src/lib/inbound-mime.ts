@@ -1,8 +1,8 @@
-// Pure inbound-MIME normalizer shared by the local S3 sync and the self-hosted
+// Pure inbound-MIME normalizer shared by the local S3 sync and the api
 // ingest worker.
 //
 // Takes a raw RFC822 message (as fetched from the SES→S3 archive) and produces
-// the exact field shape the self-hosted message store expects for an *inbound* row,
+// the exact field shape the api message store expects for an *inbound* row,
 // mirroring the mapping the historical backfill used (`src/lib/s3-sync.ts`):
 //   - from_addr  = the full From header text ("Name <addr>")
 //   - to/cc      = the parsed address list (bare addresses)
@@ -25,7 +25,7 @@ export interface InboundAttachmentMeta {
   filename: string;
   content_type: string;
   size: number;
-  /** Base64 content persisted by self-hosted Postgres for authenticated retrieval. */
+  /** Base64 content persisted by api Postgres for authenticated retrieval. */
   content_base64: string;
 }
 

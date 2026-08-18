@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "bun:test";
 import type { TuiMessage } from "../../lib/mail-types.js";
-import { formatSelfHostedDetail, formatSelfHostedSummaries, toSelfHostedSummary } from "./email-log.api.js";
+import { formatApiDetail, formatApiSummaries, toApiSummary } from "./email-log.api.js";
 
 function sentMessage(over: Partial<TuiMessage> = {}): TuiMessage {
   return {
@@ -35,7 +35,7 @@ function sentMessage(over: Partial<TuiMessage> = {}): TuiMessage {
 
 describe("emails log --json summary", () => {
   it("serializes to, cc, cc_addresses, status, and send_state (not just to_addresses)", () => {
-    const summary = toSelfHostedSummary(sentMessage());
+    const summary = toApiSummary(sentMessage());
     expect(summary.to).toEqual(["accountant@client.example", "second@client.example"]);
     expect(summary.cc).toEqual(["copy@client.example"]);
     expect(summary.to_addresses).toEqual(["accountant@client.example", "second@client.example"]);
@@ -45,7 +45,7 @@ describe("emails log --json summary", () => {
   });
 
   it("keeps cc empty and status null when the backend does not report them", () => {
-    const summary = toSelfHostedSummary(sentMessage({ cc: undefined, status: undefined, send_state: undefined }));
+    const summary = toApiSummary(sentMessage({ cc: undefined, status: undefined, send_state: undefined }));
     expect(summary.cc).toEqual([]);
     expect(summary.cc_addresses).toEqual([]);
     expect(summary.status).toBeNull();
@@ -54,17 +54,17 @@ describe("emails log --json summary", () => {
 
   it("shows the send status in the single-message view (`emails show`) too", () => {
     const detail = {
-      ...toSelfHostedSummary(sentMessage()),
+      ...toApiSummary(sentMessage()),
       text_body: "hello",
       html_body: null,
       flags: [],
     };
-    const rendered = formatSelfHostedDetail(detail);
+    const rendered = formatApiDetail(detail);
     expect(rendered).toContain("Status:");
     expect(rendered).toContain("uncertain");
     // A delivered inbound message without ledger state shows no status line.
-    const plain = formatSelfHostedDetail({
-      ...toSelfHostedSummary(sentMessage({ status: undefined, send_state: undefined })),
+    const plain = formatApiDetail({
+      ...toApiSummary(sentMessage({ status: undefined, send_state: undefined })),
       text_body: null,
       html_body: null,
       flags: [],
@@ -73,9 +73,9 @@ describe("emails log --json summary", () => {
   });
 
   it("shows the send status in the table so an uncertain send can never render as delivered", () => {
-    const uncertain = toSelfHostedSummary(sentMessage());
-    const sent = toSelfHostedSummary(sentMessage({ id: "0198c9a2-0000-7000-8000-000000000002", status: "sent", send_state: "sent" }));
-    const table = formatSelfHostedSummaries([uncertain, sent], "Self-hosted sent mail");
+    const uncertain = toApiSummary(sentMessage());
+    const sent = toApiSummary(sentMessage({ id: "0198c9a2-0000-7000-8000-000000000002", status: "sent", send_state: "sent" }));
+    const table = formatApiSummaries([uncertain, sent], "Api sent mail");
     expect(table).toContain("Status");
     expect(table).toContain("uncertain");
     expect(table).toContain("sent");
@@ -107,11 +107,11 @@ describe("a blocked send states its reason (policy_denial)", () => {
   }
 
   it("carries policy_denial in the --json summary", () => {
-    expect(toSelfHostedSummary(blockedMessage()).policy_denial).toBe("sender_unverified");
+    expect(toApiSummary(blockedMessage()).policy_denial).toBe("sender_unverified");
   });
 
   it("is null — not undefined — when the row was not policy-refused", () => {
-    const summary = toSelfHostedSummary(sentMessage());
+    const summary = toApiSummary(sentMessage());
     expect(summary.policy_denial).toBeNull();
     // JSON.stringify drops undefined, which would make the field vanish from
     // `emails log --json` for exactly the rows a script iterates over.
@@ -119,8 +119,8 @@ describe("a blocked send states its reason (policy_denial)", () => {
   });
 
   it("names the reason in the single-message view (`emails show`)", () => {
-    const rendered = formatSelfHostedDetail({
-      ...toSelfHostedSummary(blockedMessage()),
+    const rendered = formatApiDetail({
+      ...toApiSummary(blockedMessage()),
       text_body: "documents attached",
       html_body: null,
       flags: [],
@@ -133,7 +133,7 @@ describe("a blocked send states its reason (policy_denial)", () => {
   });
 
   it("names the reason in the table (`emails log` / `emails email list`)", () => {
-    const table = formatSelfHostedSummaries([toSelfHostedSummary(blockedMessage())], "Self-hosted sent mail");
+    const table = formatApiSummaries([toApiSummary(blockedMessage())], "Api sent mail");
     expect(table).toContain("blocked (sender_unverified)");
   });
 
@@ -141,20 +141,20 @@ describe("a blocked send states its reason (policy_denial)", () => {
     // The column was a fixed 10 characters, which would render
     // `blocked (sender_unverified)` as `blocked (s` — losing the reason a second
     // time, in the renderer instead of the serializer.
-    const table = formatSelfHostedSummaries(
-      [toSelfHostedSummary(blockedMessage({ policy_denial: "address_quota_exceeded" }))],
-      "Self-hosted sent mail",
+    const table = formatApiSummaries(
+      [toApiSummary(blockedMessage({ policy_denial: "address_quota_exceeded" }))],
+      "Api sent mail",
     );
     expect(table).toContain("blocked (address_quota_exceeded)");
   });
 
   it("falls back to the bare state rather than inventing a reason", () => {
-    const noReason = toSelfHostedSummary(blockedMessage({ policy_denial: undefined }));
+    const noReason = toApiSummary(blockedMessage({ policy_denial: undefined }));
     expect(noReason.policy_denial).toBeNull();
-    const table = formatSelfHostedSummaries([noReason], "Self-hosted sent mail");
+    const table = formatApiSummaries([noReason], "Api sent mail");
     expect(table).toContain("blocked");
     expect(table).not.toContain("blocked (");
-    const detail = formatSelfHostedDetail({ ...noReason, text_body: null, html_body: null, flags: [] });
+    const detail = formatApiDetail({ ...noReason, text_body: null, html_body: null, flags: [] });
     expect(detail).toContain("blocked");
     expect(detail).not.toContain("Blocked by:");
   });
@@ -162,10 +162,10 @@ describe("a blocked send states its reason (policy_denial)", () => {
   it("never appends a reason to a delivered send", () => {
     // Defensive: a stale denial code left on a row that later succeeded must not
     // make a delivered message look refused.
-    const delivered = toSelfHostedSummary(
+    const delivered = toApiSummary(
       blockedMessage({ status: "sent", send_state: "sent", policy_denial: "sender_unverified" }),
     );
-    const table = formatSelfHostedSummaries([delivered], "Self-hosted sent mail");
+    const table = formatApiSummaries([delivered], "Api sent mail");
     expect(table).not.toContain("sent (sender_unverified)");
   });
 });

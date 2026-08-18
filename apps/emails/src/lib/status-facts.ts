@@ -736,7 +736,7 @@ function realtimeBlock(wiring: StorageWiring, gaps: StatusGaps): RealtimeStatusB
 function sourcesBlock(input: StatusFactsInput, source: string, gaps: StatusGaps): SourcesStatusBlock {
   // THE AGGREGATE ROW IS NOT A SOURCE. The mailbox view puts one at the head of its
   // list (`kind: "all"` — src/cli/tui/data.sqlite.ts, and it is the ONLY row the view
-  // in src/lib/self-hosted-mail-data-source.ts returns, because that store is a
+  // in src/lib/api-mail-data-source.ts returns, because that store is a
   // single shared one). The two deleted siblings disagreed about exactly this field
   // and BOTH were wrong in one direction:
   //

@@ -22,10 +22,10 @@
 //     (repositories.ts, `ForwardingRepository`). There is no deliveries repository and no
 //     pending-forward projection.
 //   * `/v1` has no forwarding-deliveries resource (`src/store-http/routes.ts`,
-//     `RESOURCE_PATHS`; the service's registry in `src/server/self-hosted/resources.ts`
+//     `RESOURCE_PATHS`; the service's registry in `src/server/api/resources.ts`
 //     declares `forwarding` over `forwarding_rules` and nothing else).
-//   * the self-hosted Postgres schema HAS NO SUCH TABLE — the migration creates
-//     `forwarding_rules` and stops (`src/server/self-hosted/migrations.ts`).
+//   * the api Postgres schema HAS NO SUCH TABLE — the migration creates
+//     `forwarding_rules` and stops (`src/server/api/migrations.ts`).
 //
 // So there never were two implementations of those two operations: there was ONE, in the
 // local arm, and a stub in the HTTP arm that threw. Collapsing them means deleting the stub
@@ -58,7 +58,7 @@
 //     the two implementations genuinely disagree: the SQLite resource path orders these rows
 //     `updated_at DESC, id DESC` (`src/store-sqlite/resources.ts`, `describeTable` — the
 //     table has `updated_at`) and the service orders them `source_address ASC,
-//     target_address ASC` (`src/server/self-hosted/resources.ts`, the `forwarding` spec).
+//     target_address ASC` (`src/server/api/resources.ts`, the `forwarding` spec).
 //     Both deleted arms published "by source then target". So a `LIMIT`/`OFFSET` push-down
 //     would have returned the first N of the STORE's order, re-sorted — plausible and wrong
 //     against SQLite. The filtered set is enumerated to an EMPTY page, sorted here, and then
@@ -80,13 +80,13 @@
 //  4. UNDECLARED WRITE COLUMNS. The deleted HTTP arm sent `id`, `created_at` and
 //     `updated_at` on create and `updated_at` on update. `/v1/forwarding` declares six
 //     writable columns and its request schema is `additionalProperties: false`
-//     (`src/server/self-hosted/openapi.ts`), so the real `HttpEmailStore` REFUSES all four
+//     (`src/server/api/openapi.ts`), so the real `HttpEmailStore` REFUSES all four
 //     of those writes — the deleted `curl` bridge did not validate them. Nothing below sends
 //     a column the resource does not have; the id and both timestamps come from whichever
 //     store performed the write.
 //  5. `mode` IS CONSTRAINED BY ONE STORE ONLY. SQLite has `CHECK(mode IN ('app-copy'))`
-//     (`src/db/database.ts`); the self-hosted migration DROPS
-//     `forwarding_rules_mode_check` (`src/server/self-hosted/migrations.ts`). So an
+//     (`src/db/database.ts`); the api migration DROPS
+//     `forwarding_rules_mode_check` (`src/server/api/migrations.ts`). So an
 //     out-of-enum mode was refused by one store and accepted by the other, and both deleted
 //     read mappers then CAST whatever came back to `ForwardingMode` — a value the type does
 //     not admit, on a field `src/cli/commands/forwarding.ts` prints next to every rule. It
@@ -100,7 +100,7 @@
 //     for `"TRUE"`. `enabled` decides whether mail is copied to a third party; guessing it
 //     is not acceptable.
 //  7. ABSENT IS NOT `now()`. The deleted HTTP arm read both timestamps through `ciso`
-//     (`src/db/self-hosted-resource.ts`), which returns `new Date().toISOString()` when the
+//     (`src/db/api-resource.ts`), which returns `new Date().toISOString()` when the
 //     value is MISSING — so a row whose `created_at` could not be read was reported as
 //     having been created at the moment it was read. Both columns are `NOT NULL` in both
 //     schemas and projected by both read paths, so an absent one means the store answered
@@ -367,7 +367,7 @@ function toRule(row: ResourceRow): ForwardingRule {
  * The first two are what both deleted arms published. `mode` and `id` are tiebreakers they
  * did not have, and they are not decoration: `(source_address, target_address, mode)` is the
  * unique key, so two rows CAN share a source and a target — and while SQLite's `CHECK` keeps
- * `mode` single-valued today, the self-hosted migration drops that constraint (header
+ * `mode` single-valued today, the api migration drops that constraint (header
  * note 5), which is exactly where the tie becomes reachable. Without a total order a page
  * boundary can repeat or drop a row between two pages of the same list.
  */
@@ -640,7 +640,7 @@ function toDelivery(row: ForwardingDeliveryRow): ForwardingDelivery {
  * `db` IS REQUIRED, AND THAT IS THE POINT. See the header: the pending-forward join spans
  * `forwarding_rules`, `inbound_recipients`, `inbound_emails` and the `forwarding_deliveries`
  * ledger, and the ledger exists in local SQLite ONLY — not on the seam, not on `/v1`, not in
- * the self-hosted Postgres schema. A default local handle would have let an API-configured
+ * the api Postgres schema. A default local handle would have let an API-configured
  * installation call this, read an empty local file, and be told its inbox is fully
  * forwarded. Requiring the storage makes that a compile error instead.
  *

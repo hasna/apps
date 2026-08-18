@@ -4,28 +4,28 @@ import type { AddressRow, AddressStatus, CreateAddressInput, EmailAddress } from
 import { AddressNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { safeOffset, safeOptionalLimit } from "./pagination.js";
-import { selfHostedStoreFor, type SelfHostedResourceStore } from "./self-hosted-store.js";
+import { apiStoreFor, type ApiResourceStore } from "./api-store.js";
 import { isApiClientConfigured } from "../store-resolution.js";
 
 // ============================================================================
-// Self-hosted (self-hosted) routing
+// Api (api) routing
 // ============================================================================
 //
-// When the client-flip resolves to selfHosted (mode=self-hosted + HASNA_EMAILS_API_URL
-// + HASNA_EMAILS_API_KEY), the `addresses` resource is served by the app's selfHosted
+// When the client-flip resolves to api (mode=api + HASNA_EMAILS_API_URL
+// + HASNA_EMAILS_API_KEY), the `addresses` resource is served by the app's api
 // HTTP API (<API_URL>/v1/addresses) instead of the local SQLite store — the same
 // cred-based gate the `domains` resource already uses. An explicit `db` selects
 // the caller-owned SQLite database and takes precedence over process-wide mode.
 export const ADDRESS_RESOURCE = "addresses";
 
-export function selfHostedAddresses(db?: Database): SelfHostedResourceStore | null {
+export function apiAddresses(db?: Database): ApiResourceStore | null {
   if (db) return null;
   if (!isApiClientConfigured()) return null;
-  return selfHostedStoreFor(ADDRESS_RESOURCE);
+  return apiStoreFor(ADDRESS_RESOURCE);
 }
 
-/** Map a selfHosted API address entity to the local EmailAddress shape (defaults filled).
- *  The self-hosted /v1/addresses record carries {id, email, domain, display_name,
+/** Map a /v1 API address entity to the local EmailAddress shape (defaults filled).
+ *  The api /v1/addresses record carries {id, email, domain, display_name,
  *  status, provider_id, created_at, updated_at}; omitted provider/owner/quota
  *  fields default to null (enrichment then resolves to "-" in the CLI). */
 export function apiToAddress(e: Record<string, unknown>): EmailAddress {
@@ -59,10 +59,10 @@ function rowToAddress(row: AddressRow): EmailAddress {
 }
 
 export function createAddress(input: CreateAddressInput, db?: Database): EmailAddress {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
+  const api = apiAddresses(db);
+  if (api) {
     return apiToAddress(
-      selfHosted.create({
+      api.create({
         email: input.email,
         display_name: input.display_name || null,
         provider_id: input.provider_id,
@@ -84,9 +84,9 @@ export function createAddress(input: CreateAddressInput, db?: Database): EmailAd
 }
 
 export function getAddress(id: string, db?: Database): EmailAddress | null {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
-    const e = selfHosted.get(id);
+  const api = apiAddresses(db);
+  if (api) {
+    const e = api.get(id);
     return e ? apiToAddress(e) : null;
   }
   const d = db || getDatabase();
@@ -96,13 +96,13 @@ export function getAddress(id: string, db?: Database): EmailAddress | null {
 }
 
 export function getAddressByEmail(provider_id: string, email: string, db?: Database): EmailAddress | null {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
+  const api = apiAddresses(db);
+  if (api) {
     // Preserve the explicit provider binding when this compatibility route uses
-    // the self-hosted API; a same-email row from another provider is not a match.
+    // the API client; a same-email row from another provider is not a match.
     const provider = provider_id.trim();
     const target = email.trim().toLowerCase();
-    const found = selfHosted
+    const found = api
       .list()
       .map(apiToAddress)
       .find((a) => a.provider_id === provider && a.email.trim().toLowerCase() === target);
@@ -115,10 +115,10 @@ export function getAddressByEmail(provider_id: string, email: string, db?: Datab
 }
 
 export function findAddressesByEmail(email: string, db?: Database): EmailAddress[] {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
+  const api = apiAddresses(db);
+  if (api) {
     const target = email.trim().toLowerCase();
-    return selfHosted
+    return api
       .list()
       .map(apiToAddress)
       .filter((a) => a.email.trim().toLowerCase() === target)
@@ -145,14 +145,14 @@ export interface AddressReadinessOptions extends ListAddressOptions {
 }
 
 export function listAddresses(provider_id?: string, db?: Database, opts?: ListAddressOptions): EmailAddress[] {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
+  const api = apiAddresses(db);
+  if (api) {
     const query: Record<string, string | number | undefined> = {};
     const lim = safeOptionalLimit(opts?.limit);
     if (lim !== null) query["limit"] = lim;
     const off = safeOffset(opts?.offset);
     if (off) query["offset"] = off;
-    let addresses = selfHosted.list(query).map(apiToAddress);
+    let addresses = api.list(query).map(apiToAddress);
     if (provider_id) addresses = addresses.filter((a) => a.provider_id === provider_id);
     addresses.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
     if (lim !== null) addresses = addresses.slice(off, off + lim);
@@ -178,12 +178,12 @@ export function listAddresses(provider_id?: string, db?: Database, opts?: ListAd
 export function listAddressesByProviderIds(providerIds: Iterable<string>, db?: Database): EmailAddress[] {
   const ids = [...new Set([...providerIds].map((id) => id.trim()).filter(Boolean))];
   if (ids.length === 0) return [];
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
-    // Self-hosted does not model the provider dimension; filter the selfHosted address set
-    // by provider_id (empty selfHosted-side) rather than falling back to local SQLite.
+  const api = apiAddresses(db);
+  if (api) {
+    // Api does not model the provider dimension; filter the api address set
+    // by provider_id (empty api-side) rather than falling back to local SQLite.
     const idSet = new Set(ids);
-    return selfHosted
+    return api
       .list()
       .map(apiToAddress)
       .filter((a) => idSet.has(a.provider_id));
@@ -384,13 +384,13 @@ export function updateAddress(
   input: Partial<Pick<EmailAddress, "display_name" | "verified">>,
   db?: Database,
 ): EmailAddress {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
-    if (!selfHosted.get(id)) throw new AddressNotFoundError(id);
+  const api = apiAddresses(db);
+  if (api) {
+    if (!api.get(id)) throw new AddressNotFoundError(id);
     const patch: Record<string, unknown> = {};
     if (input.display_name !== undefined) patch["display_name"] = input.display_name || null;
     if (input.verified !== undefined) patch["verified"] = input.verified;
-    return apiToAddress(selfHosted.update(id, patch));
+    return apiToAddress(api.update(id, patch));
   }
 
   const d = db || getDatabase();
@@ -410,18 +410,18 @@ export function updateAddress(
 }
 
 export function deleteAddress(id: string, db?: Database): boolean {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) return selfHosted.del(id);
+  const api = apiAddresses(db);
+  if (api) return api.del(id);
   const d = db || getDatabase();
   const result = d.run("DELETE FROM addresses WHERE id = ?", [id]);
   return result.changes > 0;
 }
 
 export function markVerified(id: string, db?: Database): EmailAddress {
-  const selfHosted = selfHostedAddresses(db);
-  if (selfHosted) {
-    if (!selfHosted.get(id)) throw new AddressNotFoundError(id);
-    return apiToAddress(selfHosted.update(id, { verified: true }));
+  const api = apiAddresses(db);
+  if (api) {
+    if (!api.get(id)) throw new AddressNotFoundError(id);
+    return apiToAddress(api.update(id, { verified: true }));
   }
 
   const d = db || getDatabase();

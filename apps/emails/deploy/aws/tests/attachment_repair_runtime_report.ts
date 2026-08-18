@@ -7,8 +7,8 @@ import {
   executeAttachmentRepairMaintenance,
   type AttachmentRepairMaintenanceDeps,
   type AttachmentRepairMaintenanceOptions,
-} from "../../../src/server/self-hosted/attachment-repair-maintenance.js";
-import type { AttachmentRepairLedgerRun } from "../../../src/server/self-hosted/store.js";
+} from "../../../src/server/api/attachment-repair-maintenance.js";
+import type { AttachmentRepairLedgerRun } from "../../../src/server/api/store.js";
 
 export interface AttachmentRepairRuntimeReportInput {
   taskArn: string;

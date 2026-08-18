@@ -5,7 +5,7 @@
 // both of which refused in the API client backend.
 //
 // `emails doctor` no longer refuses — src/lib/doctor.ts reads its facts through
-// the store seam — so the self-hosted examples below use `emails stats`, which
+// the store seam — so the api examples below use `emails stats`, which
 // still has no client-side aggregation over the delivery events table. Keeping a
 // runnable command in these fixtures would make them vacuously green.
 
@@ -26,7 +26,7 @@ describe("backend-aware command availability", () => {
     expect(isCommandAvailableForBackend("emails refresh", "api")).toBe(false);
   });
 
-  it("keeps the self-hosted-only refusals available in local backend", () => {
+  it("keeps the api-only refusals available in local backend", () => {
     for (const command of ["emails stats --json", "emails pull", "emails monitor"]) {
       expect(isCommandAvailableForBackend(command, "sqlite")).toBe(true);
     }
@@ -78,7 +78,7 @@ describe("backend-aware command availability", () => {
   });
 
   // `emails provision *` throws notImplementedAnywhere() in BOTH backends
-  // (src/cli/commands/provision.ts). Listing it only under self-hosted left
+  // (src/cli/commands/provision.ts). Listing it only under api left
   // `emails status` proposing it in local backend, where it refuses just as hard.
   it("rejects a never-implemented command in every backend, not just one", () => {
     for (const backend of ["sqlite", "api"] as const) {
@@ -145,7 +145,7 @@ describe("flag-conditional refusals the coverage scan cannot see", () => {
   });
 
   // The mirror-image half: `inbox unread-count --by-address` used to refuse in
-  // self-hosted and now RUNS there (server-side rollup over the /v1 endpoint),
+  // api and now RUNS there (server-side rollup over the /v1 endpoint),
   // so it must stay OUT of the flag-conditional refusal list — listing a
   // command that runs suppresses a real remedy from every suggestion path.
   it("serves unread-count --by-address in both backends", () => {

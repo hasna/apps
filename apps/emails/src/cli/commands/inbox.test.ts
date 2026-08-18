@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: every `emails inbox` read/write routes to the operator
+// API-only: every `emails inbox` read/write routes to the operator
 // `/v1/messages` API, so these tests drive the REAL commands against an
 // out-of-process /v1 stub (see src/test-support/v1-stub.ts). There is no local
 // SQLite island anymore; a handful of ingestion/diagnostic subcommands are
@@ -15,7 +15,7 @@ import {
   getInboundEmail,
   type InboundEmail,
 } from "../../db/inbound.js";
-import { resetSelfHostedConfigCache } from "../../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../../db/api-store.js";
 import { saveConfig } from "../../lib/config.js";
 import { mergeAttachmentDetails } from "../../lib/attachment-actions.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
@@ -193,7 +193,7 @@ function useAttachmentInventoryPages(
   attachmentInventoryPages = new Map(pages);
   process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
   process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
-  resetSelfHostedConfigCache();
+  resetApiConfigCache();
 }
 
 // ─── inbound repo round-trip (POST/GET /v1/messages) ─────────────────────────
@@ -450,12 +450,12 @@ describe("inbox read", () => {
     expect(getInboundEmail(email.id)?.is_read).toBe(false);
   });
 
-  // Self-hosted attachments have no local path (the bytes live in the API, not on
+  // Api attachments have no local path (the bytes live in the API, not on
   // this machine) but they ARE downloadable through
   // `inbox attachment <id> --index <n> --download`. The detail view must not tell
   // the operator the opposite: that wording is what makes real, present
   // attachments (tax filings, invoices) look unreachable.
-  it("tells the operator how to fetch self-hosted attachments instead of calling them undownloadable", async () => {
+  it("tells the operator how to fetch api attachments instead of calling them undownloadable", async () => {
     const id = crypto.randomUUID();
     await stub.seed({ messages: [msgRow({
       id,
@@ -731,12 +731,12 @@ describe("inbox mailboxes", () => {
 });
 
 describe("inbox sources", () => {
-  it("exposes the single self-hosted source with its counts", async () => {
+  it("exposes the single api source with its counts", async () => {
     await stub.seed({ messages: [msgRow({ is_read: false }), msgRow({ is_read: true })] });
 
     const { data } = await runInboxCommand(["inbox", "sources"]);
     const sources = data as Array<{ id: string; unread: number; counts: { inbox: number } }>;
-    expect(sources.map((s) => s.id)).toEqual(["self-hosted"]);
+    expect(sources.map((s) => s.id)).toEqual(["server"]);
     expect(sources[0]?.counts.inbox).toBe(2);
     expect(sources[0]?.unread).toBe(1);
   });
@@ -744,15 +744,15 @@ describe("inbox sources", () => {
   it("honors --search instead of returning the unfiltered list", async () => {
     await stub.seed({ messages: [msgRow({})] });
 
-    const matching = await runInboxCommand(["inbox", "sources", "--search", "self-hosted"]);
-    expect((matching.data as Array<{ id: string }>).map((s) => s.id)).toEqual(["self-hosted"]);
+    const matching = await runInboxCommand(["inbox", "sources", "--search", "server"]);
+    expect((matching.data as Array<{ id: string }>).map((s) => s.id)).toEqual(["server"]);
 
     const missing = await runInboxCommand(["inbox", "sources", "--search", "s3-bucket-that-is-not-here"]);
     expect(missing.data as unknown[]).toEqual([]);
   });
 });
 
-// The self-inflicted trap: `inbox sources` prints id "self-hosted" and
+// The self-inflicted trap: `inbox sources` prints id "server" and
 // `--source <id>` documents itself as taking that id back — but feeding it in
 // used to return an empty mailbox and all-zero folder counts, which reads
 // exactly like an empty store.
@@ -760,14 +760,14 @@ describe("inbox source scoping", () => {
   it("lists mail for the source id `inbox sources` prints", async () => {
     await stub.seed({ messages: [msgRow({ subject: "scoped-a" }), msgRow({ subject: "scoped-b" })] });
 
-    const { data } = await runInboxCommand(["inbox", "list", "--source", "self-hosted"]);
+    const { data } = await runInboxCommand(["inbox", "list", "--source", "server"]);
     expect((data as Array<{ subject: string }>).map((row) => row.subject).sort()).toEqual(["scoped-a", "scoped-b"]);
   });
 
   it("reports real folder counts for that source id", async () => {
     await stub.seed({ messages: [msgRow({}), msgRow({}), msgRow({ direction: "outbound" })] });
 
-    const { data } = await runInboxCommand(["inbox", "mailboxes", "--source", "self-hosted"]);
+    const { data } = await runInboxCommand(["inbox", "mailboxes", "--source", "server"]);
     const counts = (data as { counts: { inbox: number; sent: number } }).counts;
     expect(counts.inbox).toBe(2);
     expect(counts.sent).toBe(1);
@@ -1014,7 +1014,7 @@ describe("inbox attachments", () => {
       delete process.env.EMAILS_DB_PATH;
       process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
       process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
 
       const result = await runInboxCommand(["--json", "inbox", "attachments"]);
 
@@ -1033,11 +1033,11 @@ describe("inbox attachments", () => {
       if (previousSessionToken === undefined) delete process.env.EMAILS_SESSION_TOKEN;
       else process.env.EMAILS_SESSION_TOKEN = previousSessionToken;
       rmSync(configHome, { recursive: true, force: true });
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
     }
   });
 
-  it("returns one exact strict page envelope from the self-hosted inventory API", async () => {
+  it("returns one exact strict page envelope from the api inventory API", async () => {
     useAttachmentInventoryPages([["", {
       items: [{
         message_id: "message-1",
@@ -1447,7 +1447,7 @@ describe("inbox attachment", () => {
     try {
       process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${legacyServer.port}`;
       process.env.HASNA_EMAILS_API_KEY = ["legacy", "attachment", "test", "key"].join("-");
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       resetMailDataSource();
 
       const listed = await runInboxCommand(["inbox", "attachment", id]);
@@ -1484,7 +1484,7 @@ describe("inbox attachment", () => {
     } finally {
       legacyServer.stop(true);
       restoreProcessEnv(inheritedProcessEnv);
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       resetMailDataSource();
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1651,11 +1651,11 @@ describe("inbox delete / clear", () => {
 
 // ─── server-only subcommands (fail closed) ───────────────────────────────────
 
-describe("inbox open blocks in the self-hosted client", () => {
+describe("inbox open blocks in the api client", () => {
   it("fails closed pointing at `inbox read`", async () => {
     const result = await runInboxCommandExpectingExit(["inbox", "open", "abc123"]);
     expect(result.error).toBe("process.exit:1");
-    expect(result.stderr).toContain("emails inbox open is not available in the self-hosted client");
+    expect(result.stderr).toContain("emails inbox open is not available in the api client");
     expect(result.stderr).toContain("emails inbox read <id>");
   });
 });
@@ -1710,8 +1710,8 @@ describe("server-only ingestion/diagnostic subcommands", () => {
       const result = await runInboxCommandExpectingExit(args);
       expect(result.error).toBe("process.exit:1");
       expect(result.stderr).toContain(command);
-      expect(result.stderr).toContain("is not available in the self-hosted client");
-      expect(result.stderr).toContain("it runs on the self-hosted server");
+      expect(result.stderr).toContain("is not available in the api client");
+      expect(result.stderr).toContain("it runs on the API server");
     });
   }
 });
@@ -1748,7 +1748,7 @@ describe("inbox source lifecycle is a client-side registry", () => {
 
     expect(data).toEqual([]);
     expect(out).toContain("No sources configured.");
-    expect(out).not.toContain("not available in the self-hosted client");
+    expect(out).not.toContain("not available in the api client");
   });
 
   it("registers an S3 source with add-s3 and reads it back with list", async () => {

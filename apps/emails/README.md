@@ -1,6 +1,6 @@
 # @hasna/emails
 
-Open-source email infrastructure for local SQLite workflows and operator-owned self-hosted deployments, with a CLI, MCP server, library, dashboard, Resend, AWS SES, and Cloudflare-routed inbound mail.
+Open-source email infrastructure for local SQLite workflows and operator-owned server deployments, with a CLI, MCP server, library, dashboard, Resend, AWS SES, and Cloudflare-routed inbound mail.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -35,7 +35,7 @@ SQLite. Rotation, locked-keyring recovery, and backup rebind procedures are in
 
 ```bash
 # Add a provider (SES or Resend). Prefer an AWS profile locally or the
-# deployment IAM role in self-hosted AWS; avoid storing long-lived AWS keys.
+# deployment IAM role in the operator's AWS; avoid storing long-lived AWS keys.
 AWS_PROFILE=emails-operator emails provider add --name production-ses --type ses --region us-east-1
 emails provider add --name production-resend --type resend --api-key ...
 
@@ -68,9 +68,9 @@ emails inbox list --folder unread --source provider:<id>
 # Check sent email log
 emails email list
 
-# Operate a self-hosted PostgreSQL service
+# Operate the server's PostgreSQL service
 HASNA_EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails db migrate
-HASNA_EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails self-hosted key create
+HASNA_EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails server key create
 ```
 
 ## Domain Modes
@@ -120,13 +120,13 @@ API clients must set `HASNA_EMAILS_API_URL` and one bearer credential:
 and there is no synchronization between SQLite and the API client.
 
 After applying migrations, issue client keys on the operator host with
-`emails self-hosted key create`. The plaintext token is displayed once and only
+`emails server key create`. The plaintext token is displayed once and only
 its SHA-256 hash plus lifecycle metadata is stored in Postgres. Inspect metadata
-with `emails self-hosted key list` and immediately disable a key with
-`emails self-hosted key revoke <kid> --reason "rotation"`. The service denies
+with `emails server key list` and immediately disable a key with
+`emails server key revoke <kid> --reason "rotation"`. The service denies
 validly signed but unrecorded keys.
 
-`emails self-hosted key rotate` issues an Emails key while retaining the active
+`emails server key rotate` issues an Emails key while retaining the active
 Mailery-era key for rollback. Verify clients on the new key, then explicitly
 revoke the old key after the rollback window closes.
 
@@ -137,7 +137,7 @@ workspace for message lists, the reader, and domain status. Inbox can be scoped
 to all addresses or one address and filtered by ingestion source, folder,
 label, and search. Grouping, digests, attachment/link/raw views, live read
 state, local refresh, background auto-pull, and `auto`/`light`/`dark` themes are
-available in both local and self-hosted clients.
+available in both local and API clients.
 
 ```bash
 emails ui
@@ -174,7 +174,7 @@ emails owner             # ownership: register human/agent owners
 emails alias             # per-domain aliases + catch-all routing
 emails forwarding        # app-level forwarding for locally received/synced mail
 emails sendkey           # scoped send keys (restrict an agent to its own addresses)
-emails send-intent       # inspect/reconcile uncertain self-hosted send outcomes
+emails send-intent       # inspect/reconcile uncertain server send outcomes
 emails send              # send an email
 emails reply / forward   # reply (in-thread) or forward a sent/inbound email
 emails email             # sent email: list, search, show, replies, thread
@@ -184,11 +184,11 @@ emails contact           # contacts (suppression list)
 emails group             # recipient groups
 emails sequence          # drip sequences
 emails schedule          # scheduled emails: list, cancel, run
-emails db                # self-hosted PostgreSQL migration and status commands
-emails self-hosted key   # operator API-key create/list/rotate/revoke
-emails auth              # self-hosted signup/login/logout/tenant sessions
+emails db                # server PostgreSQL migration and status commands
+emails server key   # operator API-key create/list/rotate/revoke
+emails auth              # server signup/login/logout/tenant sessions
 emails keys              # tenant-scoped API keys for the active organization
-emails whoami            # current self-hosted principal and organization
+emails whoami            # current principal and organization
 emails aws               # AWS setup: SES receipt rules, S3 inbound bucket
 emails stats             # delivery statistics (--inbox for received mail)
 emails analytics         # email analytics
@@ -226,7 +226,7 @@ emails inbox attachments --cursor <opaque-next-cursor> --json
 emails inbox attachment <exact-id> --download --index 0 --output-dir ./attachments
 ```
 
-Self-hosted attachment inventory is cursor-based, not offset-based. Each page
+Server attachment inventory is cursor-based, not offset-based. Each page
 contains `items` and an opaque `next_cursor`; pass that cursor back unchanged to
 continue. Inventory rows contain only safe metadata:
 `message_id`, `attachment_index`, `filename`, `content_type`, `size_bytes`,
@@ -315,11 +315,11 @@ emails domain warm-delete example.com --yes             # remove it (needed to r
 One schedule per domain: `warm` refuses to shadow an existing one. `--target` and
 `--start-date` are fixed at creation, so retargeting means `warm-delete` then
 `warm` again. The ramp is anchored on the **UTC** calendar date, the same anchor
-the self-hosted server enforces the cap with, so `warm-status` reports the limit
+the server enforces the cap with, so `warm-status` reports the limit
 that will actually be applied regardless of your machine's timezone.
 
 Schedules live in the `warming_schedules` store, so they work the same whether
-the client is on local SQLite or pointed at a self-hosted server (where the
+the client is on local SQLite or pointed at a server (where the
 server also enforces the limit on `/v1/messages/send`). The MCP twins are
 `create_warming_schedule`, `get_warming_status`, `list_warming_schedules`, and
 `update_warming_status`.
@@ -476,7 +476,7 @@ Alternatively, point an SNS HTTP subscription at `POST /webhook/ses-inbound` on
 `EMAILS_AWS_ACCOUNT_IDS`; the route verifies the AWS signature and exact
 allowlists before it confirms or syncs a notification.
 
-## Self-Hosted Runtime (PostgreSQL/S3/SES)
+## Api Runtime (PostgreSQL/S3/SES)
 
 The server uses operator-owned Postgres and provider accounts. A client must
 configure `HASNA_EMAILS_API_URL` and one of
@@ -488,9 +488,9 @@ deployment IAM role; Resend uses `RESEND_API_KEY`. See
 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for signup, sessions,
 tenant-scoped keys, and optional IdP verification.
 
-`EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS` is the allowlist of email domains that may sign up, log in, or be invited (comma- or space-separated globs, `*` matching one DNS label — e.g. `example.com` or `example.*`), and `EMAILS_AUTH_FROM` is the sender identity for confirmation/reset/invite mail. **Neither has a default and the service refuses to boot without them**: this package ships no domain and no sender of its own, so a default would either lock your auth surface to someone else's organisation or open signup to everyone. See [docs/SELF_HOSTED_RUNTIME.md](docs/SELF_HOSTED_RUNTIME.md).
+`EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS` is the allowlist of email domains that may sign up, log in, or be invited (comma- or space-separated globs, `*` matching one DNS label — e.g. `example.com` or `example.*`), and `EMAILS_AUTH_FROM` is the sender identity for confirmation/reset/invite mail. **Neither has a default and the service refuses to boot without them**: this package ships no domain and no sender of its own, so a default would either lock your auth surface to someone else's organisation or open signup to everyone. See [docs/API_RUNTIME.md](docs/API_RUNTIME.md).
 
-Self-hosted client commands fail closed when the API URL or selected bearer
+Api client commands fail closed when the API URL or selected bearer
 credential is missing or invalid. With `--json`, the CLI emits one structured error object on
 stderr, exits nonzero, and leaves stdout empty. It does not open, create, or
 fall back to the local SQLite database.
@@ -498,9 +498,9 @@ fall back to the local SQLite database.
 Expose the service through an HTTPS reverse proxy or load balancer with edge
 rate limits, the 1 MiB request limit, bounded upstream timeouts, and network
 rules that keep Postgres and the container port private. The generated client
-rejects remote plaintext HTTP. Self-hosted sends require an idempotency key and
+rejects remote plaintext HTTP. Api sends require an idempotency key and
 support at most five inline attachments (512 KiB each, 768 KiB total);
-scheduled sends are not implemented by the self-hosted API. Mailbox read,
+scheduled sends are not implemented by the API. Mailbox read,
 star, archive, label, delete, bulk-by-explicit-id, and authenticated attachment
 retrieval are supported. Outbound rows carrying a send idempotency key are a
 durable delivery ledger and return `409` on delete so their replay fence cannot
@@ -512,7 +512,7 @@ outcome must be reconciled before another send.
 
 ### Legacy attachment repair
 
-The self-hosted repair ledger is tenant-scoped, bounded, idempotent, and
+The api repair ledger is tenant-scoped, bounded, idempotent, and
 checkpointed. Create a repair with
 `POST /v1/attachments/repairs`; omitting `apply` is a dry run. Each manifest
 entry may contain only `object_key`, `recipients`, and
@@ -568,7 +568,7 @@ sender-controlled and are never used to select a tenant.
 export HASNA_EMAILS_API_URL="https://emails.example.com"
 export HASNA_EMAILS_API_KEY="..."
 
-# On the self-hosted server
+# On the server
 export HASNA_EMAILS_DATABASE_URL="postgresql://..."
 export EMAILS_API_SIGNING_KEY="..."
 export EMAILS_SEND_PROVIDER=ses
@@ -583,7 +583,7 @@ There is no bidirectional database synchronization.
 ## Data
 
 Local mode stores SQLite data and attachment files in `~/.hasna/emails/`.
-Self-hosted mode uses the operator-configured PostgreSQL and object-storage
+Api mode uses the operator-configured PostgreSQL and object-storage
 services and never falls back to that local directory.
 
 ## Transport

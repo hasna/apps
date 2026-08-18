@@ -155,7 +155,7 @@ describe("configured store resolution — the four quadrants", () => {
     // THE CREDENTIAL RIDES ON THIS TRANSPORT. A store built from a plaintext URL puts
     // the bearer credential in an Authorization header on an unencrypted connection to
     // whatever answers at that host — the legacy client has always refused exactly this
-    // (src/db/self-hosted-store.ts), and the seam path replacing it must not quietly
+    // (src/db/api-store.ts), and the seam path replacing it must not quietly
     // drop the refusal. Same allowed set, same sentence: one message, not two dialects.
     for (const value of [
       "http://mail.example.test",
@@ -206,7 +206,7 @@ describe("configured store resolution — the four quadrants", () => {
 
   it("prefers session over identity over operator key, and says which it used", () => {
     // Precedence is pinned by NAME, not by index, and it mirrors the legacy client's
-    // `sessionToken || idpToken || apiKey` (src/db/self-hosted-store.ts): an explicit
+    // `sessionToken || idpToken || apiKey` (src/db/api-store.ts): an explicit
     // user session first, then the caller's own identity token — ADR-0002, an agent
     // uses ITS identity even when an operator key is also present — then the key.
     expect([...API_CREDENTIAL_SETTINGS]).toEqual([
@@ -340,7 +340,7 @@ describe("configured store resolution — configurations it will not guess at", 
   it("treats a blank setting as unset in every position", () => {
     // `FOO=` in a compose file, an unset shell variable expanded into an env block, and
     // a whitespace-only value are all "not configured". Without this, an empty
-    // `EMAILS_SELF_HOSTED_URL` beside a database path would be a boot error for a
+    // `EMAILS_API_URL` beside a database path would be a boot error for a
     // configuration that names exactly one store.
     for (const blank of ["", "   ", "\t\n"]) {
       const plan = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: "/tmp/x.db", [API_BASE_URL_SETTING]: blank }));
@@ -505,7 +505,7 @@ describe("what the resolver is not allowed to read", () => {
     expect(source).not.toContain("lib/mode");
     // The mode module's readers, spelled by construction so this file contributes
     // nothing to the hygiene guard it sits inside.
-    for (const reader of ["getEmails", "resolveEmails", "normalizeEmails", "isSelfHosted"]) {
+    for (const reader of ["getEmails", "resolveEmails", "normalizeEmails", "isApi"]) {
       expect(source, `${reader}… must not appear in the resolver`).not.toContain(`${reader}Mode`);
     }
     // The variable itself, assembled rather than written, for the same reason.

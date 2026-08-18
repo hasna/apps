@@ -108,7 +108,7 @@ export function updateMailboxFilter(
 ): MailboxFilter {
   const current = getMailboxFilter(identifier, db);
   if (!current) throw new MailboxFilterNotFoundError(identifier);
-  // PUT replaces criteria wholesale (parity with the self-hosted store); PATCH
+  // PUT replaces criteria wholesale (parity with the api store); PATCH
   // merges the criteria objects.
   const criteria = options.replaceCriteria
     ? (input.criteria ?? {})

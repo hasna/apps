@@ -84,7 +84,7 @@ export function normalizeAttachmentInventoryQuery(input: AttachmentInventoryQuer
   };
 }
 
-function selfHostedClientBaseUrl(v1BaseUrl: string): string {
+function apiClientBaseUrl(v1BaseUrl: string): string {
   const url = new URL(v1BaseUrl);
   const path = url.pathname.replace(/\/+$/, "");
   url.pathname = path.endsWith("/v1") ? path.slice(0, -3) || "/" : path || "/";
@@ -99,28 +99,28 @@ function nullableAttachmentSize(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") {
     if (Number.isSafeInteger(value) && value >= 0) return value;
-    throw new Error("self-hosted attachment inventory returned an invalid size_bytes");
+    throw new Error("api attachment inventory returned an invalid size_bytes");
   }
   if (typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)) {
     const parsed = Number(value);
     if (Number.isSafeInteger(parsed)) return parsed;
   }
-  throw new Error("self-hosted attachment inventory returned an invalid size_bytes");
+  throw new Error("api attachment inventory returned an invalid size_bytes");
 }
 
 function safeAttachmentInventoryItem(value: unknown): SafeAttachmentInventoryItem {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("self-hosted attachment inventory returned a malformed item");
+    throw new Error("api attachment inventory returned a malformed item");
   }
   const raw = value as Record<string, unknown>;
   if (typeof raw["message_id"] !== "string" || raw["message_id"].length === 0) {
-    throw new Error("self-hosted attachment inventory returned an item without message_id");
+    throw new Error("api attachment inventory returned an item without message_id");
   }
   if (!Number.isSafeInteger(raw["attachment_index"]) || Number(raw["attachment_index"]) < 0) {
-    throw new Error("self-hosted attachment inventory returned an invalid attachment_index");
+    throw new Error("api attachment inventory returned an invalid attachment_index");
   }
   if (typeof raw["content_available"] !== "boolean") {
-    throw new Error("self-hosted attachment inventory returned an invalid content_available");
+    throw new Error("api attachment inventory returned an invalid content_available");
   }
   const rawDirection = raw["direction"];
   const direction =
@@ -143,18 +143,18 @@ function safeAttachmentInventoryItem(value: unknown): SafeAttachmentInventoryIte
 
 function safeAttachmentInventoryPage(value: unknown): SafeAttachmentInventoryPage {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("self-hosted attachment inventory returned a malformed page");
+    throw new Error("api attachment inventory returned a malformed page");
   }
   const raw = value as Record<string, unknown>;
   if (!Array.isArray(raw["items"])) {
-    throw new Error("self-hosted attachment inventory returned a page without items");
+    throw new Error("api attachment inventory returned a page without items");
   }
   const nextCursor = raw["next_cursor"];
   if (
     nextCursor !== null
     && (typeof nextCursor !== "string" || nextCursor.trim().length === 0)
   ) {
-    throw new Error("self-hosted attachment inventory returned a malformed next_cursor");
+    throw new Error("api attachment inventory returned a malformed next_cursor");
   }
   return {
     items: raw["items"].map(safeAttachmentInventoryItem),
@@ -162,13 +162,13 @@ function safeAttachmentInventoryPage(value: unknown): SafeAttachmentInventoryPag
   };
 }
 
-export async function listSelfHostedAttachments(
+export async function listApiAttachments(
   input: AttachmentInventoryQueryInput = {},
 ): Promise<SafeAttachmentInventoryPage> {
   const query = normalizeAttachmentInventoryQuery(input);
-  const [{ resolveSelfHostedConfig }, { EmailsSelfHostClient }] = await Promise.all([
-    import("../db/self-hosted-store.js"),
-    import("../selfhost.js"),
+  const [{ resolveApiConfig }, { EmailsApiClient }] = await Promise.all([
+    import("../db/api-store.js"),
+    import("../api.js"),
   ]);
   // The client storage contract selects the API client; this surface is
   // API-backed and refuses for the local SQLite client.
@@ -176,9 +176,9 @@ export async function listSelfHostedAttachments(
   if (!isApiClientConfigured()) {
     throw new Error("attachment inventory is available only for the API client");
   }
-  const config = resolveSelfHostedConfig();
-  const client = new EmailsSelfHostClient({
-    baseUrl: selfHostedClientBaseUrl(config.baseUrl),
+  const config = resolveApiConfig();
+  const client = new EmailsApiClient({
+    baseUrl: apiClientBaseUrl(config.baseUrl),
     bearerToken: config.credential,
   });
   return safeAttachmentInventoryPage(await client.listAttachments(query));

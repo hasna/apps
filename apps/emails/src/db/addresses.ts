@@ -22,7 +22,7 @@ function routed<K extends keyof typeof remote & keyof typeof local>(key: K): Rou
   }) as RoutedFunction<K>;
 }
 
-export const selfHostedAddresses = routed("selfHostedAddresses");
+export const apiAddresses = routed("apiAddresses");
 export const apiToAddress = routed("apiToAddress");
 export const createAddress = routed("createAddress");
 export const getAddress = routed("getAddress");

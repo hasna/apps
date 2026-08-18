@@ -93,7 +93,7 @@ describe("local saved mailbox filters", () => {
     expect(result.truncated).toBe(false);
   });
 
-  it("matches LIKE metacharacters in criteria values literally, like the self-hosted store", () => {
+  it("matches LIKE metacharacters in criteria values literally, like the api store", () => {
     const literal = seedRaw({ subject: "sale", from_address: "100%_off@example.test", to_addresses: ["owner@example.test"] });
     seedRaw({ subject: "sale", from_address: "100xoff@example.test", to_addresses: ["owner@example.test"] });
     seedRaw({ subject: "sale", from_address: "100%off@example.test", to_addresses: ["owner@example.test"] });

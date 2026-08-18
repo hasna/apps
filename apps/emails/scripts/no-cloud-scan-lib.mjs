@@ -39,7 +39,7 @@ const boundaryPatterns = [
   { label: "typo-squat package name", scopes: BOTH, pattern: /@hasnaxyz\/(?:emails|mailery)/i },
   { label: "hosted endpoint", scopes: BOTH, pattern: /https?:\/\/(?:[^/]*\.)?(?:mailery\.co|emails\.hasna\.xyz)/i },
   // Control-plane billing/credit routes only. Auth/login|signup and /v1/tenants
-  // are legitimate self-hosted multi-tenant routes and are intentionally allowed.
+  // are legitimate server multi-tenant routes and are intentionally allowed.
   { label: "hosted billing route", scopes: BOTH, pattern: /\/(?:api\/)?v1\/(?:billing|checkout|portal|credits?)\b/i },
   // Cloud-account data fields only. `tenant_id` is a legitimate per-row isolation
   // column here and is intentionally NOT flagged.
@@ -202,7 +202,7 @@ const exactLegacyHostedEnvUnsetBridgeSpec = {
   path: "scripts/run-hermetic-tests.sh",
   startAnchor: "run_scrubbed() {\n",
   endAnchor: '    "$@"\n',
-  sha256: "f9a2663fb2e5795700b58c97537c375206510ac91503a8a9b55d4f09dae4068c",
+  sha256: "2bc6235912ac45af29f115db533b5c11a103015d95b34a1eea428f18c7f4dd59",
 };
 
 function locateExactLegacyHostedEnvUnsetBridge(content, path) {
@@ -261,7 +261,7 @@ const exactHistoricalHostedVocabularyBridges = new Map([
       content: [
         "# Emails on operator-owned AWS",
         "",
-        "This Terraform root configuration deploys the Emails self-hosted service into",
+        "This Terraform root configuration deploys the Emails server into",
         "an AWS account controlled by the operator. It contains no maintainer account,",
         "hostname, role, control plane, billing integration, fleet resource, or hosted",
         "service endpoint.",
@@ -289,10 +289,10 @@ const exactHistoricalHostedVocabularyBridges = new Map([
         "## 15. Implementation reconciliation (v3)",
         "",
         "The implementation now has exactly two deployment configurations: local SQLite and",
-        "operator-owned `self-hosted` PostgreSQL. It has no hosted SaaS control plane and",
+        "operator-owned PostgreSQL. It has no hosted SaaS control plane and",
         "no synchronization between the two backends. Passing an explicit Bun `Database` handle to",
         "the public library always selects that caller-owned SQLite database, even when",
-        "the process is otherwise configured as a self-hosted client.",
+        "the process is otherwise configured as an API client.",
       ].join("\n") + "\n",
       tokens: ["SaaS"],
     },

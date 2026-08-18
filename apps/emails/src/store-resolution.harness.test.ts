@@ -199,7 +199,7 @@ describe("the ambient test environment configures exactly one store", () => {
   });
 });
 
-describe("a consumer calling createConfiguredEmailStore() under a self-hosted test", () => {
+describe("a consumer calling createConfiguredEmailStore() under a api test", () => {
   it("reaches the API store and serves rows from the configured service", async () => {
     await stub.seed({
       domains: [

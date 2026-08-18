@@ -186,7 +186,7 @@ describe("the verification-code family has one implementation", () => {
    */
   it("reaches past no facade into an arm, and reads no selector module", () => {
     const suffixedImport = /from\s+["'](\.[^"']*)\.(?:sqlite|api)\.js["']/g;
-    const modeModuleImport = /from\s+["'][^"']*\/(?:self-hosted-store|mode)\.js["']/g;
+    const modeModuleImport = /from\s+["'][^"']*\/(?:api-store|mode)\.js["']/g;
 
     const pastFacade = (text: string, dir: string): string[] =>
       [...text.matchAll(suffixedImport)]
@@ -203,7 +203,7 @@ describe("the verification-code family has one implementation", () => {
     // Negative controls: a suffixed module with no facade sibling, and a plain module.
     expect(pastFacade('import { x } from "./sent-ledger.sqlite.js";', libDir)).toEqual([]);
     expect(pastFacade('import { safeLimit } from "../db/pagination.js";', libDir)).toEqual([]);
-    expect(new RegExp(modeModuleImport.source).test('import { m } from "../db/self-hosted-store.js";')).toBe(true);
+    expect(new RegExp(modeModuleImport.source).test('import { m } from "../db/api-store.js";')).toBe(true);
     expect(new RegExp(modeModuleImport.source).test('import { safeLimit } from "../db/pagination.js";')).toBe(false);
 
     const source = readFileSync(join(libDir, "verification-code.ts"), "utf8");

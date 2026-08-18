@@ -1,7 +1,7 @@
-// Self-hosted-ONLY end-to-end CLI contracts. These spawn the REAL `emails` CLI
+// API-only end-to-end CLI contracts. These spawn the REAL `emails` CLI
 // (bun src/cli/index.tsx) as a subprocess pointed at an out-of-process /v1 stub
 // (see src/test-support/v1-stub.ts) — the stub listens on TCP, so the spawned
-// process reaches it over HTTP/curl exactly like a real self-hosted server.
+// process reaches it over HTTP/curl exactly like a real api server.
 // The deleted commands (config, sandbox, refresh) and the old local-SQLite mode
 // are gone, so their contracts are gone; what remains is verified against /v1.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
@@ -72,11 +72,11 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("CLI JSON contracts (self-hosted /v1)", () => {
+describe("CLI JSON contracts (api /v1)", () => {
   it("prints valid credential-free JSON for provider CRUD routed to /v1", () => {
     const env = cliEnv();
 
-    // Credentials cannot be stored by the self-hosted server, so the command
+    // Credentials cannot be stored by the api server, so the command
     // must REFUSE them (and never echo them) rather than accept the flags and
     // silently drop the values on the wire.
     const refused = runCli([
@@ -201,7 +201,7 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
     expect(stderr).not.toContain("API_KEY");
   }, 15_000);
 
-  it("prints self-hosted agent context as stable redacted JSON", () => {
+  it("prints api agent context as stable redacted JSON", () => {
     const parsed = expectCliJsonOk<{ status: { backend: string } }>(
       runCli(["--json", "agent", "context"], cliEnv()),
     );
@@ -244,8 +244,8 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
   it("prints valid JSON for domains list routed to /v1", async () => {
     await stub.seed({
       domains: [
-        { id: "dom-1", domain: "one.example.com", provider: "self-hosted", verified: true },
-        { id: "dom-2", domain: "two.example.com", provider: "self-hosted", verified: false },
+        { id: "dom-1", domain: "one.example.com", provider: "server", verified: true },
+        { id: "dom-2", domain: "two.example.com", provider: "server", verified: false },
       ],
     });
     const rows = expectCliJsonOk<Array<{ domain: string }>>(

@@ -3,18 +3,18 @@ import chalk from "../../lib/chalk-lite.js";
 import { handleError } from "../utils.js";
 
 /**
- * `emails db` — self-hosted Postgres schema management.
+ * `emails db` — api Postgres schema management.
  */
 export function registerDbCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  const dbCmd = program.command("db").description("Self-hosted Postgres schema: migrate / status");
+  const dbCmd = program.command("db").description("Api Postgres schema: migrate / status");
 
   dbCmd
     .command("migrate")
-    .description("Apply all pending self-hosted schema migrations (idempotent)")
+    .description("Apply all pending api schema migrations (idempotent)")
     .option("--dry-run", "Report the migration plan without applying", false)
     .action(async (opts: { dryRun?: boolean }) => {
       try {
-        const { runMigrations } = await import("../../server/self-hosted/migrate.js");
+        const { runMigrations } = await import("../../server/api/migrate.js");
         const result = await runMigrations({ dryRun: opts.dryRun === true });
         const lines: string[] = [];
         if (opts.dryRun) {
@@ -34,13 +34,13 @@ export function registerDbCommands(program: Command, output: (data: unknown, for
 
   dbCmd
     .command("status")
-    .description("Show applied vs pending self-hosted schema migrations")
+    .description("Show applied vs pending api schema migrations")
     .action(async () => {
       try {
-        const { runMigrations } = await import("../../server/self-hosted/migrate.js");
+        const { runMigrations } = await import("../../server/api/migrate.js");
         const result = await runMigrations({ dryRun: true });
         const lines: string[] = [
-          chalk.bold("Self-hosted schema status:"),
+          chalk.bold("Api schema status:"),
           `  applied: ${result.alreadyApplied.length}`,
           `  pending: ${result.pending.length ? chalk.yellow(result.pending.join(", ")) : chalk.dim("(none)")}`,
         ];

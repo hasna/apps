@@ -30,7 +30,7 @@ export const REQUIRED_DEPLOYMENT_CHECKS = Object.freeze([
   "package-clean-install",
   "image-digest-binding",
   "safe-fixture-boundary",
-  "self-hosted-cli-status",
+  "api-cli-status",
   "mailbox-list",
   "mailbox-search",
   "message-read",
@@ -546,9 +546,9 @@ async function runGate(configPath, evidencePath) {
     const probes = [];
     const cliEnv = runtimeEnv(candidateInstall.home, config.baseUrl, apiKey, poisonDb);
     await versionProbe(config.baseUrl, config.candidate.version, probes);
-    const status = cliJson(candidateInstall.cli, ["status"], cliEnv, probes, "self-hosted-status");
+    const status = cliJson(candidateInstall.cli, ["status"], cliEnv, probes, "api-status");
     if (status?.backend !== "api" || status?.database?.data_dir !== null) {
-      fail("CLI status did not prove the explicit self-hosted store");
+      fail("CLI status did not prove the explicit api store");
     }
 
     const firstPage = cliJson(candidateInstall.cli, ["inbox", "list", "--search", config.fixture.searchToken, "--limit", "1", "--offset", "0"], cliEnv, probes, "mailbox-list-page-1");

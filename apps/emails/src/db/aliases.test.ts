@@ -42,7 +42,7 @@
 // `/v1/openapi.json` only on request, and the HTTP store validates every filter and every write
 // column against that document.
 //
-// THE SQLITE MIGRATION SEEDS A PROTECTED GLOBAL CATCH-ALL and the self-hosted schema does not,
+// THE SQLITE MIGRATION SEEDS A PROTECTED GLOBAL CATCH-ALL and the api schema does not,
 // so a freshly migrated database here already holds exactly one alias. That is a STORE fact
 // rather than a module one and it is pinned below rather than hidden; cases that need an empty
 // table delete it explicitly through `clearAliases()`, which is a raw SQL write and says so.
@@ -968,7 +968,7 @@ describe("resolveAlias", () => {
 describe("ensureDefaultCatchAll / getGlobalCatchAll", () => {
   it("finds the global catch-all the SQLite migration seeded", async () => {
     // A STORE FACT, pinned rather than hidden: the local migration seeds this row and the
-    // self-hosted schema does not, so the two stores genuinely start in different states. This
+    // api schema does not, so the two stores genuinely start in different states. This
     // suite's SQLite database is the seeded one.
     const seeded = await getGlobalCatchAll(sqliteStore());
     expect(seeded).toMatchObject({
@@ -1437,12 +1437,12 @@ describe("the collapsed module", () => {
     // Comments in this module discuss the axis by role, so the check is on IMPORTS and CALLS
     // rather than on prose.
     for (const forbidden of [
-      /from "\.\/self-hosted-store\.js"/,
-      /from "\.\/self-hosted-resource\.js"/,
+      /from "\.\/api-store\.js"/,
+      /from "\.\/api-resource\.js"/,
       /from "\.\/database-routing\.js"/,
       /from "\.\/aliases\.(local|remote)\.js"/,
       /from "\.\/database\.js"/,
-      /selfHostedResource\(/,
+      /apiResource\(/,
       /process\.env\[/,
     ]) {
       expect(forbidden.test(source), `aliases.ts still matches ${String(forbidden)}`).toBe(false);

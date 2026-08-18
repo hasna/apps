@@ -1,7 +1,7 @@
 # CLI reference
 
 This page describes the command tree shipped by `@hasna/emails` 1.3.3. It was
-checked against the live `--help` output in both `local` and `self-hosted`
+checked against the live `--help` output in both `local` and `api`
 modes. Use `emails <command> --help` for every option and argument; Commander
 help is the option-level source of truth.
 
@@ -37,12 +37,12 @@ errors are written to stderr.
 | `agent` | `context` |
 | `daemon` | `status`, `restart` |
 | `logs` | `tail` |
-| `db` | `migrate`, `status` for the self-hosted Postgres schema. |
-| `self-hosted` | `key create/list/rotate/revoke` for operator application keys. |
+| `db` | `migrate`, `status` for the api Postgres schema. |
+| `api` | `key create/list/rotate/revoke` for operator application keys. |
 | `auth` | `signup`, `login`, `logout`, `whoami`, `switch-tenant`, `verify-email`, `bootstrap` |
 | `keys` | `list`, `create`, `revoke` tenant-scoped API keys. |
 | `ui` | Start the full-screen OpenTUI client. |
-| `serve` | Start the local dashboard or self-hosted service selected by mode. |
+| `serve` | Start the local dashboard or api service selected by mode. |
 | `mcp` | Print or install MCP configuration for Claude Code, Codex, or Gemini. |
 | `remove` / `uninstall` | Remove MCP configuration from supported agent clients. |
 | `status` | Redacted health and next actions. |
@@ -88,10 +88,10 @@ domain has drifted into the half-provisioned shape.
 The root command names are the same in both modes, but storage and capability
 checks may refuse an operation that the selected store cannot perform.
 `emails inbox attachments` (cursor-based attachment inventory) is present only
-for the self-hosted client; `emails inbox attachment <email-id>` exists in both
+for the API client; `emails inbox attachment <email-id>` exists in both
 modes. `emails serve` defaults to the local dashboard at `127.0.0.1:3900` in
-local mode and the self-hosted `/v1` service at `0.0.0.0:8080` in
-`self-hosted` mode.
+local mode and the api `/v1` service at `0.0.0.0:8080` in
+`api` mode.
 
 ## Other shipped bins
 

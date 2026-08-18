@@ -15,7 +15,7 @@ import { formatThreadLabel } from "../tui/format.js";
  * suppressed address is mailed without the operator ever typing it.
  *
  * Neither command takes `--force`: there is no "send anyway" story for a reply
- * to a suppressed address, and the self-hosted server refuses it regardless
+ * to a suppressed address, and the api server refuses it regardless
  * (409 recipient_suppressed). Unsuppressing is the only path.
  */
 async function assertNoSuppressedRecipients(recipients: string[], command: string): Promise<void> {
@@ -47,7 +47,7 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
     .action(async (id: string, opts: { to: string[]; from: string; body?: string; provider?: string }) => {
       try {
         // Read the source message through the mail data source seam and forward
-        // via the server send API (self-hosted-only client).
+        // via the server send API (api-only client).
         const ds = resolveMailDataSource();
         const msg = await ds.getMessage(id);
         if (!msg) return handleError(new Error(`Email not found: ${id}`));

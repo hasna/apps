@@ -4,7 +4,7 @@
 // fabricated count — the payload states something untrue about the system. Before
 // this registry existed, `emails status` proposed `emails provision status` and
 // every JSON error proposed `emails doctor --json`, both of which refuse in
-// API-client configuration ("... runs on the self-hosted server"). An agent following the
+// API-client configuration ("... runs on the api server"). An agent following the
 // advice got a second failure and no closer to the truth.
 //
 // THE REGISTRY IS NOT THE SOURCE OF TRUTH — THE CLI IS. The first cut of this
@@ -22,7 +22,7 @@
 //
 // A command that refuses in EVERY mode does not belong in a per-mode list. Put it
 // in NEVER_AVAILABLE_COMMANDS: a per-mode entry only removes the suggestion from
-// the mode it is listed under, so `emails provision` sitting in the self-hosted
+// the mode it is listed under, so `emails provision` sitting in the api
 // list alone still let `emails status` propose it in LOCAL mode, where it refuses
 // just as hard.
 
@@ -109,14 +109,14 @@ export const API_REFUSED_COMMANDS: readonly string[] = [
   // suppress a real remedy from every suggestion path, which is the mirror image of
   // the defect this registry exists to prevent. Verify before adding.
   // `emails inbox unread-count --by-address` is deliberately NOT here either:
-  // it used to refuse in self-hosted and is now served by the /v1 server
+  // it used to refuse in api and is now served by the /v1 server
   // endpoint (GET /v1/messages/unread-by-address), so it RUNS in both modes.
   "emails inbox clear --provider",
   "emails monitor",
   "emails provider sync",
   "emails pull",
   // `emails refresh` moved to NEVER_AVAILABLE_COMMANDS — it is not a command in
-  // any mode, and a per-mode entry only suppressed it in self-hosted.
+  // any mode, and a per-mode entry only suppressed it in api.
   // The scheduler LOOP refuses (it needs the local send pipeline); reading and
   // cancelling the schedule over /v1/scheduled does not.
   "emails schedule run",

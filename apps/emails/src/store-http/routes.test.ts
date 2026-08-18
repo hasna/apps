@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { emailsSelfHostedOpenApi } from "../server/self-hosted/openapi.js";
+import { emailsApiOpenApi } from "../server/api/openapi.js";
 import { ROUTES } from "./routes.js";
 
 describe("HTTP priority sender rule routes", () => {
@@ -9,7 +9,7 @@ describe("HTTP priority sender rule routes", () => {
         (route) => route.method === "PATCH" && route.template === "/v1/priority-sender-rules/{id}",
       ),
     ).toBe(false);
-    const priorityPath = emailsSelfHostedOpenApi.paths["/v1/priority-sender-rules/{id}"] as
+    const priorityPath = emailsApiOpenApi.paths["/v1/priority-sender-rules/{id}"] as
       | Record<string, unknown>
       | undefined;
     expect(priorityPath?.patch).toBeUndefined();

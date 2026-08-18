@@ -2,7 +2,7 @@
  * Shared utilities for MCP tool modules.
  */
 
-import { resolveResourceIdOrThrow } from "../db/self-hosted-store.js";
+import { resolveResourceIdOrThrow } from "../db/api-store.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
 import { isApiClientConfigured } from "../store-resolution.js";
 import {
@@ -22,7 +22,7 @@ export function formatError(error: unknown): string {
 }
 
 // The historical SQL table names callers pass, mapped to the operator's `/v1`
-// resource path. Ids resolve against the self-hosted API — this client has no
+// resource path. Ids resolve against the API client — this client has no
 // local database.
 const RESOLVE_ID_RESOURCE: Record<string, string> = {
   emails: "messages",

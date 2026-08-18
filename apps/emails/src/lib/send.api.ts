@@ -28,9 +28,9 @@ export function validateSendAttachments(attachments: SendEmailOptions["attachmen
   }
 }
 
-// ── outbound send (server-side in the self-hosted client) ────────────────────
+// ── outbound send (server-side in the api client) ────────────────────
 //
-// Sending in the self-hosted client goes through the authenticated `/v1` send
+// Sending in the api client goes through the authenticated `/v1` send
 // endpoint via `resolveMailDataSource().send(...)`. The local provider-adapter
 // send path (failover across locally-configured providers, local send-key auth,
 // local address-sendability + domain-outbound-readiness + warming-rate guards)
@@ -42,13 +42,13 @@ export function validateSendAttachments(attachments: SendEmailOptions["attachmen
 // the family's own type unawaitable at every call site.
 export async function assertWarmingLimit(_opts: SendEmailOptions): Promise<void> {
   throw new Error(
-    "assertWarmingLimit is not available in the self-hosted client; warming rate limits are enforced on the self-hosted server.",
+    "assertWarmingLimit is not available in the api client; warming rate limits are enforced on the api server.",
   );
 }
 
 export function assertDomainOutboundReady(provider: Provider, _opts: SendEmailOptions): void {
   throw new Error(
-    `Self-hosted sends must use the authenticated Emails /v1 send endpoint for ${provider.name} (${provider.id}); outbound readiness is enforced on the self-hosted server.`,
+    `Api sends must use the authenticated Emails /v1 send endpoint for ${provider.name} (${provider.id}); outbound readiness is enforced on the api server.`,
   );
 }
 
@@ -57,6 +57,6 @@ export async function sendWithFailover(
   _opts: SendEmailOptions,
 ): Promise<SendResult> {
   throw new Error(
-    "sendWithFailover is not available in the self-hosted client; send through resolveMailDataSource().send(...), which posts to the authenticated /v1 send endpoint.",
+    "sendWithFailover is not available in the api client; send through resolveMailDataSource().send(...), which posts to the authenticated /v1 send endpoint.",
   );
 }

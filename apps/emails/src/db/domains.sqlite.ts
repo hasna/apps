@@ -13,27 +13,27 @@ import { DomainNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { parseJsonObject } from "./json.js";
 import { safeOffset, safeOptionalLimit } from "./pagination.js";
-import { selfHostedStoreFor, type SelfHostedResourceStore } from "./self-hosted-store.js";
+import { apiStoreFor, type ApiResourceStore } from "./api-store.js";
 import { isApiClientConfigured } from "../store-resolution.js";
 
 // ============================================================================
-// Self-hosted (self-hosted) routing
+// Api (api) routing
 // ============================================================================
 //
-// When the client-flip resolves to selfHosted (mode=self-hosted + HASNA_EMAILS_API_URL
-// + HASNA_EMAILS_API_KEY), the `domains` resource is served by the app's selfHosted
+// When the client-flip resolves to api (mode=api + HASNA_EMAILS_API_URL
+// + HASNA_EMAILS_API_KEY), the `domains` resource is served by the app's api
 // HTTP API (<API_URL>/v1/domains) instead of the local SQLite store. An explicit
 // `db` argument always means "use this local database" (tests / tooling), so
-// selfHosted routing is skipped whenever a caller passes `db`.
+// api routing is skipped whenever a caller passes `db`.
 const DOMAIN_RESOURCE = "domains";
 
-function selfHostedDomains(db?: Database): SelfHostedResourceStore | null {
+function apiDomains(db?: Database): ApiResourceStore | null {
   if (db) return null;
   if (!isApiClientConfigured()) return null;
-  return selfHostedStoreFor(DOMAIN_RESOURCE);
+  return apiStoreFor(DOMAIN_RESOURCE);
 }
 
-/** Map a selfHosted API domain entity to the local rich Domain shape (defaults filled). */
+/** Map a /v1 API domain entity to the local rich Domain shape (defaults filled). */
 function apiToDomain(e: Record<string, unknown>): Domain {
   const str = (v: unknown): string | null => (v == null ? null : String(v));
   const verified = Boolean(e["verified"]);
@@ -42,9 +42,9 @@ function apiToDomain(e: Record<string, unknown>): Domain {
   const createdAt = str(e["created_at"]) ?? updatedAt;
   return {
     id: String(e["id"]),
-    provider_id: str(e["provider"] ?? e["provider_id"]) ?? "self-hosted",
+    provider_id: str(e["provider"] ?? e["provider_id"]) ?? "server",
     domain: String(e["domain"] ?? ""),
-    domain_type: "self-hosted",
+    domain_type: "server",
     source_of_truth: "postgres",
     ownership_status: verified ? "verified" : "pending",
     inbound_status: "pending",
@@ -115,9 +115,9 @@ export function createDomain(
   domain: string,
   db?: Database,
 ): Domain {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
-    const created = selfHosted.create({ domain, provider: provider_id });
+  const api = apiDomains(db);
+  if (api) {
+    const created = api.create({ domain, provider: provider_id });
     return apiToDomain(created);
   }
 
@@ -135,9 +135,9 @@ export function createDomain(
 }
 
 export function getDomain(id: string, db?: Database): Domain | null {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
-    const entity = selfHosted.get(id);
+  const api = apiDomains(db);
+  if (api) {
+    const entity = api.get(id);
     return entity ? apiToDomain(entity) : null;
   }
 
@@ -148,12 +148,12 @@ export function getDomain(id: string, db?: Database): Domain | null {
 }
 
 export function getDomainByName(provider_id: string, domain: string, db?: Database): Domain | null {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
-    // A self-hosted deployment is one operator-owned instance; match by domain
+  const api = apiDomains(db);
+  if (api) {
+    // A api deployment is one operator-owned instance; match by domain
     // name because the local provider row is not part of the service identity.
     const name = domain.trim().toLowerCase();
-    const match = selfHosted
+    const match = api
       .list({ limit: 1000 })
       .map(apiToDomain)
       .find((dm) => dm.domain.toLowerCase() === name);
@@ -169,10 +169,10 @@ export function getDomainByName(provider_id: string, domain: string, db?: Databa
 }
 
 export function findDomainsByName(domain: string, db?: Database): Domain[] {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
+  const api = apiDomains(db);
+  if (api) {
     const name = domain.trim().toLowerCase();
-    return selfHosted
+    return api
       .list({ limit: 1000 })
       .map(apiToDomain)
       .filter((dm) => dm.domain.toLowerCase() === name)
@@ -222,14 +222,14 @@ export interface UsableDomainOptions extends ListDomainOptions {
 }
 
 export function listDomains(provider_id?: string, db?: Database, opts?: ListDomainOptions): Domain[] {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
+  const api = apiDomains(db);
+  if (api) {
     const query: Record<string, string | number | undefined> = {};
     const lim = safeOptionalLimit(opts?.limit);
     if (lim !== null) query["limit"] = lim;
     const off = safeOffset(opts?.offset);
     if (off) query["offset"] = off;
-    let domains = selfHosted.list(query).map(apiToDomain);
+    let domains = api.list(query).map(apiToDomain);
     if (provider_id) domains = domains.filter((dm) => dm.provider_id === provider_id);
     domains.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
     if (lim !== null) domains = domains.slice(off, off + lim);
@@ -336,14 +336,14 @@ export function updateDomain(
   input: Partial<Pick<Domain, "dkim_status" | "spf_status" | "dmarc_status" | "verified_at">>,
   db?: Database,
 ): Domain {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
-    const current = selfHosted.get(id);
+  const api = apiDomains(db);
+  if (api) {
+    const current = api.get(id);
     if (!current) throw new DomainNotFoundError(id);
     const verified =
       input.verified_at != null ||
       (input.dkim_status === "verified" && input.spf_status === "verified" && input.dmarc_status === "verified");
-    const updated = verified ? selfHosted.update(id, { verified: true }) : current;
+    const updated = verified ? api.update(id, { verified: true }) : current;
     return apiToDomain(updated);
   }
 
@@ -387,12 +387,12 @@ export function updateDomainReadiness(
   input: DomainReadinessUpdate,
   db?: Database,
 ): Domain {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
-    // The selfHosted domain schema does not carry the local lifecycle/readiness
-    // fields; return the current selfHosted record so callers (e.g. `domain add`)
+  const api = apiDomains(db);
+  if (api) {
+    // The api domain schema does not carry the local lifecycle/readiness
+    // fields; return the current api record so callers (e.g. `domain add`)
     // still get a valid Domain back.
-    const current = selfHosted.get(id);
+    const current = api.get(id);
     if (!current) throw new DomainNotFoundError(id);
     return apiToDomain(current);
   }
@@ -498,9 +498,9 @@ export function moveDomainProvider(id: string, toProviderId: string, db?: Databa
 }
 
 export function deleteDomain(id: string, db?: Database): boolean {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
-    return selfHosted.del(id);
+  const api = apiDomains(db);
+  if (api) {
+    return api.del(id);
   }
 
   const d = db || getDatabase();
@@ -515,12 +515,12 @@ export function updateDnsStatus(
   dmarc: DnsStatus,
   db?: Database,
 ): Domain {
-  const selfHosted = selfHostedDomains(db);
-  if (selfHosted) {
-    const current = selfHosted.get(id);
+  const api = apiDomains(db);
+  if (api) {
+    const current = api.get(id);
     if (!current) throw new DomainNotFoundError(id);
-    const allVerifiedSelfHosted = dkim === "verified" && spf === "verified" && dmarc === "verified";
-    const updated = allVerifiedSelfHosted ? selfHosted.update(id, { verified: true }) : current;
+    const allVerifiedApi = dkim === "verified" && spf === "verified" && dmarc === "verified";
+    const updated = allVerifiedApi ? api.update(id, { verified: true }) : current;
     return apiToDomain(updated);
   }
 

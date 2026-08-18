@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the domain repo routes every read/write to `/v1/domains`
+// API-only: the domain repo routes every read/write to `/v1/domains`
 // (and providers to `/v1/providers`), so these tests drive the REAL command
 // against an out-of-process /v1 stub (see src/test-support/v1-stub.ts). The
 // deleted `../../db/database.js` and all local-SQLite seeding are gone.
@@ -95,7 +95,7 @@ describe("domain add command", () => {
       domain: "example.com",
       provider_id: "sandbox",
       would_create_domain: true,
-      // The self-hosted client never calls a provider adapter — the /v1 API owns creation.
+      // The api client never calls a provider adapter — the /v1 API owns creation.
       would_call_provider: false,
     });
     expect(await stub.list("domains")).toHaveLength(0);
@@ -229,8 +229,8 @@ describe("domains lifecycle commands", () => {
       // Every refusal has to leave the operator somewhere to go, and the old
       // one-line message left them with a server that has no such route.
       expect(result.stderr).toMatch(/'emails [a-z]/);
-      expect(result.stderr).not.toContain("not available in the self-hosted client");
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
+      expect(result.stderr).not.toContain("not available in the api client");
+      expect(result.stderr).not.toContain("runs on the api server");
     }
   });
 });
@@ -275,7 +275,7 @@ describe("domain status command", () => {
     expect(result.stderr).toContain("emails domain status is not implemented in this build");
     expect(result.stderr).toContain("emails domains status [domain]");
     expect(result.stderr).toContain("emails domain check <domain>");
-    expect(result.stderr).not.toContain("not available in the self-hosted client");
+    expect(result.stderr).not.toContain("not available in the api client");
   });
 });
 

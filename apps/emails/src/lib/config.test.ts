@@ -12,7 +12,7 @@ import {
   CANONICAL_OPEN_EMAILS_RDS_SECRET_PATH,
   getCanonicalOpenEmailsRdsConfig,
 } from "./config.js";
-import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../db/api-store.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 let origHome: string | undefined;
@@ -33,9 +33,9 @@ const TMP_HOME = join("/tmp", `emails-config-test-${process.pid}`);
 // The client-backend tests set the API credentials explicitly inside the tests
 // that need the API context; everything else runs against the local SQLite
 // default. The selector variable is gone and never read.
-const SELF_HOSTED_URL = "https://emails.config.test";
-const SELF_HOSTED_KEY = "config-test-api-key";
-const SELF_HOSTED_ENV_KEYS = [
+const API_URL = "https://emails.config.test";
+const fixtureApiKey = "fixture.config.api-key";
+const API_ENV_KEYS = [
   "EMAILS_CLIENT_ENV_SECRET",
   "HASNA_EMAILS_API_URL",
   "HASNA_EMAILS_API_KEY",
@@ -50,16 +50,16 @@ beforeEach(() => {
   // world-writable tmp ancestor.
   mkdirSync(TMP_HOME, { recursive: true, mode: 0o700 });
   process.env.HOME = TMP_HOME;
-  for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
-  resetSelfHostedConfigCache();
+  for (const key of API_ENV_KEYS) delete process.env[key];
+  resetApiConfigCache();
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME;
   else process.env.HOME = origHome;
   if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true });
-  for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
-  resetSelfHostedConfigCache();
+  for (const key of API_ENV_KEYS) delete process.env[key];
+  resetApiConfigCache();
   restoreInheritedProcessEnv();
 });
 
@@ -188,11 +188,11 @@ describe("config", () => {
     try {
       process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.invalid";
       process.env["HASNA_EMAILS_API_KEY"] = "test-key";
-      setConfigValue("inbound_s3_bucket", "self-hosted-inbound");
+      setConfigValue("inbound_s3_bucket", "api-inbound");
 
       expect(getInboundAttachmentStorageConfig()).toMatchObject({
         attachment_storage: "s3",
-        s3_bucket: "self-hosted-inbound",
+        s3_bucket: "api-inbound",
         s3_region: "us-east-1",
         s3_prefix: "emails",
       });
@@ -231,11 +231,11 @@ describe("config", () => {
       process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.invalid";
       process.env["HASNA_EMAILS_API_KEY"] = "test-key";
       setConfigValue("attachment_storage", "local");
-      setConfigValue("attachment_s3_bucket", "self-hosted-attachments");
+      setConfigValue("attachment_s3_bucket", "api-attachments");
 
       expect(getInboundAttachmentStorageConfig()).toMatchObject({
         attachment_storage: "s3",
-        s3_bucket: "self-hosted-attachments",
+        s3_bucket: "api-attachments",
       });
     } finally {
       if (previousUrl === undefined) delete process.env["HASNA_EMAILS_API_URL"];
@@ -245,7 +245,7 @@ describe("config", () => {
     }
   });
 
-  it("does not export concrete self-hosted infrastructure defaults in the OSS package", () => {
+  it("does not export concrete api infrastructure defaults in the OSS package", () => {
     expect(CANONICAL_OPEN_EMAILS_S3_BUCKET).toBeNull();
     expect(CANONICAL_OPEN_EMAILS_S3_REGION).toBe("us-east-1");
     expect(CANONICAL_OPEN_EMAILS_SECRET_PATHS).toEqual({

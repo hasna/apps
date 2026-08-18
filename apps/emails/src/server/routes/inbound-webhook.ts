@@ -13,7 +13,7 @@
  *
  * The receiver itself — signature verification, the SNS topic/account allowlist,
  * SubscribeURL host pinning, parsing and the idempotency protocol — lives in
- * ../webhooks/receivers.ts and is shared verbatim with the self-hosted `/v1`
+ * ../webhooks/receivers.ts and is shared verbatim with the api `/v1`
  * mount. This module supplies ONLY the local destination store: every write here
  * goes through the `src/db/*.sqlite.ts` SQLite repositories.
  */

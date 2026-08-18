@@ -230,7 +230,7 @@ function tallyEvents(rows: ResourceRow[], sinceMs: number, providerId: string | 
   let unparseable = 0;
   for (const row of rows) {
     // Provider scoping is a real column on both event schemas (src/db/database.ts,
-    // src/server/self-hosted/migrations.ts), so here it is a measurement rather than a
+    // src/server/api/migrations.ts), so here it is a measurement rather than a
     // gap. A row with no provider never matches a named provider, which is correct: the
     // server's column is nullable and such a row is not attributable to anyone.
     if (providerId !== undefined && str(row["provider_id"]) !== providerId) continue;

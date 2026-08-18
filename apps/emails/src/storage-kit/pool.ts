@@ -3,10 +3,10 @@
 
 // Postgres pool factory for the Emails Postgres storage utilities.
 //
-// The single sanctioned way to open a self-hosted Postgres connection. TLS is
+// The single sanctioned way to open a server Postgres connection. TLS is
 // resolved through `tls.ts` (one correct approach). Mode and database-URL
 // resolution belong to the callers' resolvers (src/lib/mode.ts and
-// src/server/self-hosted/env.ts). PURE REMOTE (Amendment A1): a Pool is only
+// src/server/api/env.ts). PURE REMOTE (Amendment A1): a Pool is only
 // ever built for the API client; there is no local Postgres path.
 
 import pg from "pg";

@@ -1,6 +1,6 @@
-// `emails self-hosted idp-principal` — the operator surface for IdP-principal
+// `emails server idp-principal` — the operator surface for IdP-principal
 // federation grants (ADR-0001/0002), against the server's own database exactly
-// like `self-hosted key`.
+// like `server key`.
 //
 // Grants are privilege-granting rows (idp_principal_tenants): they decide
 // which tenant a verified IdP token may act in, and `revoked_at` on them is
@@ -10,11 +10,11 @@
 // is the separate, deliberate act that does.
 //
 // The store is injected so the command surface is testable without a
-// database; the default factory wires the self-hosted Postgres pool.
+// database; the default factory wires the server Postgres pool.
 
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
-import type { IdpPrincipalMapping } from "../../server/self-hosted/auth/store.js";
+import type { IdpPrincipalMapping } from "../../server/api/auth/store.js";
 
 /** The slice of AuthStore these verbs need (kept narrow for injection). */
 export interface IdpPrincipalStore {
@@ -39,13 +39,13 @@ export type IdpPrincipalStoreFactory = () => Promise<{
   close: () => Promise<void>;
 }>;
 
-/** Default factory: the self-hosted server's own Postgres (like `self-hosted key`). */
+/** Default factory: the api server's own Postgres (like `server key`). */
 async function defaultStoreFactory(): Promise<{ store: IdpPrincipalStore; close: () => Promise<void> }> {
-  const { getSelfHostedPool, closeSelfHostedPool } = await import("../../server/self-hosted/env.js");
-  const { AuthStore } = await import("../../server/self-hosted/auth/store.js");
+  const { getApiPool, closeApiPool } = await import("../../server/api/env.js");
+  const { AuthStore } = await import("../../server/api/auth/store.js");
   return {
-    store: new AuthStore(getSelfHostedPool().client),
-    close: () => closeSelfHostedPool(),
+    store: new AuthStore(getApiPool().client),
+    close: () => closeApiPool(),
   };
 }
 
@@ -55,11 +55,11 @@ function grantLine(grant: IdpPrincipalMapping & { note?: string | null; createdA
 }
 
 export function registerIdpPrincipalCommands(
-  selfHosted: Command,
+  api: Command,
   output: (data: unknown, formatted: string) => void,
   storeFactory: IdpPrincipalStoreFactory = defaultStoreFactory,
 ): void {
-  const idp = selfHosted
+  const idp = api
     .command("idp-principal")
     .description("Grant, revoke, restore, and list IdP-principal federation grants");
 

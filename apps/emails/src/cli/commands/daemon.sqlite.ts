@@ -34,7 +34,7 @@ function isLogComponent(value: string): value is LogComponent {
  * enumeration and each is `number | null` with a `StatusAvailability` record saying whether
  * the read finished. They are rendered through `renderStatusCount` for exactly that reason —
  * an incomplete enumeration prints `≥N`, a read that did not happen prints its reason, and
- * neither prints a confident integer it has not earned. That is what the self-hosted sibling
+ * neither prints a confident integer it has not earned. That is what the api sibling
  * (`daemon.api.ts`) already does, and its header records the shape of the failure on the
  * other side of the fence: "600 due domains rendered as `Due work: 500 domain(s)`".
  *

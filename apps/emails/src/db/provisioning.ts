@@ -212,7 +212,7 @@
 //   * `byNewestFirst`'s `id` tiebreaker. I called it redundant "against both real stores".
 //     It is not. `src/store-sqlite/registry.ts` orders `listAddresses`
 //     `created_at DESC, id DESC` but the SERVER orders it `created_at DESC, id ASC`
-//     (`src/server/self-hosted/store.ts`) — which divergence 6 says twenty lines above, so the
+//     (`src/server/api/store.ts`) — which divergence 6 says twenty lines above, so the
 //     claim contradicted its own file. The mutant survived because the HTTP variant of the
 //     suite runs against a fixture that translates HTTP into the SQLite seam and therefore
 //     serves SQLite's ordering, not because the term is dead. A case now drives the SERVER's
@@ -1319,7 +1319,7 @@ function combineQueueAvailability(domains: DueSide, addresses: DueSide): StatusA
  * whose shape can carry it and the only one with a human-facing renderer. Its four counts are
  * `number | null` and `availability` says which; `src/cli/commands/daemon.sqlite.ts` prints
  * them through `renderStatusCount`, so an incomplete read shows `≥N` and a read that did not
- * happen shows the reason rather than a zero. That is what its self-hosted sibling
+ * happen shows the reason rather than a zero. That is what its api sibling
  * (`daemon.api.ts`) already does, and the defect it was written to fix — four counts taken
  * from one clamped page and printed as bare integers — is divergence 1 on this side of the
  * fence.

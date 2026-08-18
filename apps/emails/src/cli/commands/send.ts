@@ -11,7 +11,7 @@ import { isApiClientConfigured } from "../../store-resolution.js";
 import {
   describeSendAttachmentLimits,
   LOCAL_SEND_ATTACHMENT_LIMITS,
-  SELF_HOSTED_SEND_ATTACHMENT_LIMITS,
+  API_SEND_ATTACHMENT_LIMITS,
 } from "../../lib/send-attachment-limits.js";
 import { findAddressesByEmail } from "../../db/addresses.js";
 import {
@@ -40,7 +40,7 @@ const ATTACHMENT_MIME_TYPES: Record<string, string> = {
  * Recipients of `--to-group <name>`.
  *
  * This used to be an unconditional refusal — "--to-group is not available in
- * the self-hosted client without a self-hosted group-members send API" — which
+ * the API client without an API group-members send endpoint" — which
  * was wrong twice: it fired for the local SQLite client too, and no send API is needed. Group
  * fan-out is a CLIENT-side recipient lookup. `src/db/groups.ts` reads the store
  * seam resolved from storage configuration, and `emails group members <name>`
@@ -81,7 +81,7 @@ async function resolveGroupRecipients(groupName: string): Promise<string[]> {
 }
 
 // Read + base64-encode attachment files, enforcing the count/size caps before
-// handing the composed message to the self-hosted send API via the seam.
+// handing the composed message to the api send API via the seam.
 function readSendAttachments(paths: string[] | undefined): MailSendAttachment[] {
   if (!paths || paths.length === 0) return [];
   if (paths.length > MAX_ATTACHMENT_COUNT) {
@@ -123,7 +123,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
     .option("--provider <id>", "Provider ID (uses first active if not specified)")
     .option("--template <name>", "Use a template by name")
     .option("--vars <json>", "Template variables as JSON string")
-    .option("--force", "Send even if recipients are suppressed (local SQLite client only; the self-hosted server refuses regardless)")
+    .option("--force", "Send even if recipients are suppressed (local SQLite client only; the api server refuses regardless)")
     .option("--dry-run", "Preview what would be sent without actually sending")
     .option("--schedule <datetime>", "Schedule email for later (ISO 8601 datetime)")
     .option("--unsubscribe-url <url>", "Inject List-Unsubscribe headers (RFC 8058 one-click)")
@@ -270,11 +270,11 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
         if (opts.dryRun) {
           // --dry-run PREDICTS the send, so every claim below must be true for the
           // backend that would actually run it. This block had no branch: in
-          // local SQLite client it announced "(self-hosted)", quoted the server's
+          // local SQLite client it announced "(api)", quoted the server's
           // attachment caps, and predicted that scheduling would fail — none of
           // which applies to a local send, which does support scheduling.
           const apiBacked = isApiClientConfigured();
-          const limits = apiBacked ? SELF_HOSTED_SEND_ATTACHMENT_LIMITS : LOCAL_SEND_ATTACHMENT_LIMITS;
+          const limits = apiBacked ? API_SEND_ATTACHMENT_LIMITS : LOCAL_SEND_ATTACHMENT_LIMITS;
           console.log(chalk.bold(`\n[DRY RUN] Would send (${apiBacked ? "API client" : "local"}):`));
           console.log(`  ${chalk.dim("From:")}    ${opts.from}`);
           console.log(`  ${chalk.dim("To:")}      ${toAddresses.join(", ")}`);
@@ -328,7 +328,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           if (attachments.length) {
             // Evaluate the REAL files against the mode's caps. These numbers were
             // printed as prose above and never checked, so an attachment set the
-            // self-hosted route refuses previewed as fine.
+            // api route refuses previewed as fine.
             const files = attachments.map((attachment) => ({
               filename: attachment.filename,
               bytes: Buffer.from(attachment.content, "base64").length,
@@ -348,7 +348,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           console.log(chalk.dim(`  Note:    ${describeUncheckedSendPolicy(apiBacked)}`));
           if (opts.schedule) {
             console.log(apiBacked
-              ? chalk.yellow(`  Schedule:    ${opts.schedule} — the self-hosted server does not accept a scheduled send (a real send would fail)`)
+              ? chalk.yellow(`  Schedule:    ${opts.schedule} — the api server does not accept a scheduled send (a real send would fail)`)
               : chalk.dim(`  Schedule:    ${opts.schedule} — a real send enqueues this locally; use \`emails schedule list\` to inspect the queue`));
           }
           console.log(chalk.yellow("\n  [NOT SENT] Use without --dry-run to send.\n"));
@@ -365,7 +365,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           markdown: false,
           replyTo: opts.replyTo,
           // `--provider` used to be parsed and then dropped on the floor in BOTH
-          // modes. Thread it through: local honours it, self-hosted refuses it
+          // modes. Thread it through: local honours it, api refuses it
           // explicitly (the server chooses the sender), so it is never silently
           // ignored again.
           providerId: opts.provider,

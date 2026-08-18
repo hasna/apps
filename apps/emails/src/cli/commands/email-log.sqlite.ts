@@ -21,7 +21,7 @@ import { listReplies, listReplySummaries, getReplyCount } from "../../db/inbound
 import type { InboundEmail, InboundEmailSummary } from "../../db/inbound.sqlite.js";
 import { readableMessageText } from "../tui/format.js";
 import { resolveMailDataSource } from "../../lib/mail-data-source.js";
-// The mailbox-wide search is shared with the self-hosted surface: it reads
+// The mailbox-wide search is shared with the API surface: it reads
 // through the routed MailDataSource, so it is mode-agnostic despite its module.
 import { mailboxSearch, type MailSearchOpts } from "./email-log.api.js";
 
@@ -286,7 +286,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
 
   // --- SEARCH -----------------------------------------------------------------
   // Received AND sent (task db244cd4). This surface carried the IDENTICAL
-  // sent-only blindness as the self-hosted one, by a different route: it called
+  // sent-only blindness as the API one, by a different route: it called
   // `searchEmails`, which enumerates the OUTBOUND ledger. Both now run ONE
   // implementation over the routed mail data source, because two copies of a
   // scope rule is exactly how this defect came to exist in two places at once.

@@ -2,17 +2,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../db/api-store.js";
 import { resetMailDataSource } from "../lib/mail-data-source.js";
 import { mcpTestRequestInit, MCP_TEST_HTTP_TOKEN, startTestMcpHttpServer } from "../test-support/mcp-http.js";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 
-// Self-hosted-ONLY: the MCP HTTP transport serves tools that route through the
+// API-only: the MCP HTTP transport serves tools that route through the
 // operator's /v1 API (no local SQLite). All fixtures are seeded on the /v1 stub;
 // the tool handlers read them back over their normal transport.
 //
 // NOTE (migration): several tests from the local-DB era were dropped because the
-// behaviour they exercised no longer exists in the self-hosted client — see the
+// behaviour they exercised no longer exists in the api client — see the
 // task report. Namely: send-key one-time tokens (createSendKey now refuses; tokens
 // are server-minted), address-ownership tools, prepare_inbox, provision_status,
 // group-member summaries, warming-schedule listing, and the structured remove_provider
@@ -222,7 +222,7 @@ describe("emails-mcp HTTP transport", () => {
     const inheritedProcessEnv = { ...process.env };
     process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${inventoryServer.port}`;
     process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "http", "test", "key"].join("-");
-    resetSelfHostedConfigCache();
+    resetApiConfigCache();
 
     try {
       await withClient("emails-mcp-attachment-inventory-contract-test", async (client) => {
@@ -280,7 +280,7 @@ describe("emails-mcp HTTP transport", () => {
       });
     } finally {
       restoreProcessEnv(inheritedProcessEnv);
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       resetMailDataSource();
     }
   });
@@ -317,7 +317,7 @@ describe("emails-mcp HTTP transport", () => {
     const inheritedProcessEnv = { ...process.env };
     process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${inventoryServer.port}`;
     process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "http", "test", "key"].join("-");
-    resetSelfHostedConfigCache();
+    resetApiConfigCache();
 
     try {
       await withClient("emails-mcp-attachment-inventory-redaction-test", async (client) => {
@@ -338,7 +338,7 @@ describe("emails-mcp HTTP transport", () => {
       });
     } finally {
       restoreProcessEnv(inheritedProcessEnv);
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       resetMailDataSource();
     }
   });

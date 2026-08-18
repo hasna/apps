@@ -50,7 +50,7 @@
 //  2. THE TWO STORES ORDER THE OWNERS TABLE DIFFERENTLY, AND `ListOptions` ADMITS NO
 //     ORDERING. The SQLite store's generic list orders by `updated_at DESC, id DESC`;
 //     the service orders `owners` by `created_at DESC, id ASC`
-//     (src/server/self-hosted/resources.ts). Both deleted arms promised newest-first
+//     (src/server/api/resources.ts). Both deleted arms promised newest-first
 //     by `created_at` — one via SQL with no tiebreaker, one by sorting with
 //     `localeCompare`, so the order it presented moved with the machine's locale.
 //     Every list below sorts the enumerated set itself — UTF-16 code-unit order, with
@@ -148,7 +148,7 @@ import { uuid } from "./runtime.js";
 // column into the other's TEXT-encoded one; the module they live in is named for the
 // axis being deleted, and relocating them belongs to that deletion rather than to
 // this collapse.
-import { cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";

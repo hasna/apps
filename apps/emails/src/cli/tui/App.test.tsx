@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
-// Self-hosted-ONLY: the TUI reads/writes the operator `/v1` API (createProvider,
+// Api-ONLY: the TUI reads/writes the operator `/v1` API (createProvider,
 // createAddress, storeInboundEmail, createDomain, and the mail data source all
 // route there). These tests drive the REAL App against an out-of-process /v1 stub
 // (see src/test-support/v1-stub.ts). The manual "Pull" affordance was LOCAL
-// S3→SQLite ingestion and no longer exists in the self-hosted-only client, so the
-// former local-Pull tests are gone and the self-hosted case simply asserts Pull is
-// absent. Local TUI settings writes throw in self-hosted mode, so the old
+// S3→SQLite ingestion and no longer exists in the api-only client, so the
+// former local-Pull tests are gone and the api case simply asserts Pull is
+// absent. Local TUI settings writes throw in api mode, so the old
 // setSetting() calls (and the autopull mock) are removed.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
@@ -263,7 +263,7 @@ describe("Emails Solid TUI", () => {
   });
 
   it("opens attachment details from the reader", async () => {
-    // Self-hosted derives attachment metadata (filename/type/size) from the server;
+    // Api derives attachment metadata (filename/type/size) from the server;
     // local file paths (local_path/s3_url) have no /v1 equivalent, so the reader shows
     // the metadata but not a local `file://` link.
     seedMessage("has attachment", "2026-01-01T10:00:00.000Z", "ops@example.com", [], [
@@ -284,7 +284,7 @@ describe("Emails Solid TUI", () => {
 
   // NOTE: the former "renders AI summaries below the email body" test was removed.
   // It validated a LOCAL-only join (the email_agents run summary folded into the
-  // message body). The self-hosted mail data source builds the reader body straight
+  // message body). The api mail data source builds the reader body straight
   // from the /v1 message row (v1ToMessageBody sets summary=""), so agent-run
   // summaries are not surfaced in the reader — surfacing them would be a separate
   // source feature, outside this migration's scope.
@@ -385,7 +385,7 @@ describe("Emails Solid TUI", () => {
   });
 
   it("opens inbox picker, compose, domains dialog, and settings dialog from visible buttons", async () => {
-    // The local S3 "Sources" list is gone in the self-hosted-only client (ingestion
+    // The local S3 "Sources" list is gone in the api-only client (ingestion
     // is a single server-owned store), so the former Sources sub-flow was removed.
     seedMessage("workspace smoke");
     createDomain(providerId, "example.com");
@@ -473,12 +473,12 @@ describe("Emails Solid TUI", () => {
   });
 
   // The manual Pull affordance triggered LOCAL S3→SQLite ingestion (autoPull) and no
-  // longer exists in the self-hosted-only client: the server ingests and the client
+  // longer exists in the api-only client: the server ingests and the client
   // syncs via the automatic delta. The toolbar row is isolated by the "Digest" line so
   // the empty-state "Pull mail…" copy can't be mistaken for a button.
   const toolbarLine = () => frame().split("\n").find((line) => line.includes("Digest")) ?? "";
 
-  it("does not render the manual Pull affordance (self-hosted ingests server-side)", async () => {
+  it("does not render the manual Pull affordance (api ingests server-side)", async () => {
     seedMessage("no manual pull");
     await renderApp();
 

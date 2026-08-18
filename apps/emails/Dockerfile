@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-# Reproducible Emails self-hosted runtime. No deployment or account defaults are
+# Reproducible Emails api runtime. No deployment or account defaults are
 # embedded in the image; the operator supplies Postgres, auth, and provider config.
 ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
 

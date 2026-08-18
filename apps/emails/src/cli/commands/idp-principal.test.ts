@@ -1,9 +1,9 @@
-// The `emails self-hosted idp-principal` operator verbs (ADR-0001/0002).
+// The `emails api idp-principal` operator verbs (ADR-0001/0002).
 //
 // The federation slice had NO CLI surface: creating a grant or throwing the
 // revoked_at kill switch meant hand SQL against production. These verbs make a
 // grant one command and — the incident path — a revocation one command,
-// against the server's own database exactly like `self-hosted key`.
+// against the server's own database exactly like `server key`.
 //
 // The store is injected, so this suite asserts the COMMAND: argument parsing,
 // tenant scoping, and what reaches the store. The store methods themselves are
@@ -62,13 +62,13 @@ function harness(overrides: Partial<IdpPrincipalStore> = {}) {
   };
   const program = new Command();
   program.exitOverride();
-  const selfHosted = program.command("self-hosted");
+  const api = program.command("server");
   registerIdpPrincipalCommands(
-    selfHosted,
+    api,
     (data) => outputs.push(data),
     async () => ({ store, close: async () => {} }),
   );
-  const run = (argv: string[]) => program.parseAsync(["node", "emails", "self-hosted", ...argv]);
+  const run = (argv: string[]) => program.parseAsync(["node", "emails", "server", ...argv]);
   return { run, calls, outputs };
 }
 

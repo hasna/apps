@@ -10,7 +10,7 @@
 // and they are exactly what the store seam exists to delete. A second label with the
 // same shape would rebuild them.
 //
-// (The `mode.mode === "self-hosted"` checks in src/lib/doctor.sqlite.ts are a DIFFERENT
+// (The `mode.mode === "server"` checks in src/lib/doctor.sqlite.ts are a DIFFERENT
 // thing — they read the selector variable directly, not this label. Conflating the two
 // would overstate the case.)
 //

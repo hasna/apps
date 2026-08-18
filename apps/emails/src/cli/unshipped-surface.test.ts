@@ -5,13 +5,13 @@
 //
 //   * `emails daemon status` printed "Start provisioner: emails provision
 //     daemon ..." — a command whose action is an unconditional throw.
-//   * `emails provision *` claimed it "runs on the self-hosted server"; the
+//   * `emails provision *` claimed it "runs on the api server"; the
 //     server has no provisioning route and its container runs no reconciler.
 //   * `emails domain setup-brandsight` was advertised in --help with a full
 //     option set while its only implementation (src/lib/brandsight-dns.ts) was
 //     unreachable from every entrypoint.
 //   * fifteen domain/address commands threw ONE sentence — "is not available in
-//     the self-hosted client; it runs on the self-hosted server" — from a shared
+//     the api client; it runs on the API server" — from a shared
 //     `serverOnly()` helper. Unconditional, so it fired for the local SQLite client; and there
 //     is no server route behind any of them, so it named a cause that does not
 //     exist. That is the class the CONTRACT below generalises: a refusal may
@@ -61,7 +61,7 @@ afterAll(() => {
 });
 
 describe("unshipped CLI surfaces tell the truth (live)", () => {
-  it("emails provision never claims a self-hosted server implements it", () => {
+  it("emails provision never claims a api server implements it", () => {
     const result = runCli(["--json", "provision", "status"]);
     expect(result.exitCode).toBe(1);
     const payload = JSON.parse(result.stderr) as CliError;
@@ -70,8 +70,8 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
     expect(payload.error.message).toContain("emails domain adopt");
     expect(payload.error.message).toContain("emails aws setup-inbound");
     // The two false claims that shipped before.
-    expect(payload.error.message).not.toContain("not available in the self-hosted client");
-    expect(payload.error.message).not.toContain("runs on the self-hosted server");
+    expect(payload.error.message).not.toContain("not available in the api client");
+    expect(payload.error.message).not.toContain("runs on the api server");
     // Machine-readable guidance must not loop back into the unimplemented surface.
     expect(payload.error.fix_commands.length).toBeGreaterThan(0);
     for (const command of payload.error.fix_commands) expect(command).not.toContain("emails provision");
@@ -159,33 +159,33 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   // asserting the capability lives in the other configuration, or telling the
   // operator to switch. Every pattern is proved to still fire below.
   const MODE_BLAME: RegExp[] = [
-    /not available in the self[\s-]?hosted client/i,
-    /runs on the self[\s-]?hosted server/i,
-    /available in the self[\s-]?hosted (?:client|server)/i,
-    /available in (?:local|self-hosted) backend/i,
-    /is (?:local|self[\s-]?hosted)[\s-]backend[\s-]only/i,
+    /not available in the api client/i,
+    /runs on the api server/i,
+    /available in the api (?:client|server)/i,
+    /available in (?:local|api) backend/i,
+    /is (?:local|api)[\s-]backend[\s-]only/i,
     // Lower-cased ON PURPOSE, matched case-insensitively, and ASSEMBLED rather than
     // spelled: the source-text guard (src/store-resolution.test.ts) pins the resolver's
-    // source and the hygiene guard (src/self-hosted-wire-regression.test.ts) derives
+    // source and the hygiene guard (src/api-wire-regression.test.ts) derives
     // every active environment key from the tree, so a guard against naming the
     // selector must not itself contribute a spelled occurrence of it.
     new RegExp("(?:set|use) " + ["emails", "backend"].join("_"), "i"),
-    /switch to (?:local|self[\s-]?hosted)/i,
+    /switch to (?:local|api)/i,
   ];
 
   // The exact sentences that shipped. Without this, a typo in any pattern above
   // silently turns the ban into a no-op while the suite stays green — the failure
   // backend this repo has already shipped twice.
   const HISTORICAL_LIES = [
-    "emails domain check is not available in the self-hosted client; it runs on the self-hosted server.",
-    "emails aws setup-inbound is not available in the self-hosted client; it runs on the self-hosted server.",
-    "--to-group is not available in the self-hosted client without a self-hosted group-members send API.",
+    "emails domain check is not available in the api client; it runs on the API server.",
+    "emails aws setup-inbound is not available in the api client; it runs on the API server.",
+    "--to-group is not available in the API client without an API group-members send endpoint.",
     // febe87e's wording for the same command, which blamed the backend twice: once
     // as a label and once as an instruction. Assembled rather than spelled for the
     // source-text guard reason above; the pattern is case-insensitive, so it still
     // catches the upper-case text that shipped.
     "`emails aws setup-inbound` is local-backend-only and unavailable in the API client API-only backend. "
-      + `Use the self-hosted server/operator API/workers for inbound AWS setup, or set ${["emails", "backend"].join("_")}=local intentionally.`,
+      + `Use the api server/operator API/workers for inbound AWS setup, or set ${["emails", "backend"].join("_")}=local intentionally.`,
   ];
 
   it("the backend-blame ban still fires against the messages that shipped", () => {
@@ -195,7 +195,7 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
     // Counter-control: the sanctioned shape must NOT trip the ban, or the guard
     // would forbid the honest finding along with the lie.
     const honest = "emails provision status is not implemented in this build: there is no local "
-      + "provisioning orchestrator and the self-hosted server exposes no provisioning route.";
+      + "provisioning orchestrator and the api server exposes no provisioning route.";
     for (const pattern of MODE_BLAME) expect(pattern.test(honest), String(pattern)).toBe(false);
   });
 

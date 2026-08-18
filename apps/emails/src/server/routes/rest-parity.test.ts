@@ -165,14 +165,14 @@ describe("emails serve REST parity smoke", () => {
     expect(stored.criteria).toEqual({ from: "other@example.com" });
   });
 
-  it("rejects non-object JSON bodies on mailbox-filter writes with 400 invalid_input (self-hosted parity)", async () => {
+  it("rejects non-object JSON bodies on mailbox-filter writes with 400 invalid_input (api parity)", async () => {
     const created = await json<{ id: string; name: string }>(
       "/api/mailbox-filters",
       postJson("/api/mailbox-filters", { name: "object-only", mailbox: "inbox", criteria: { subject: "x" } }),
     );
 
     // Primitive bodies used to TypeError into a 500 (PUT) or a silent no-op
-    // (PATCH); the self-hosted server rejects them with 400 invalid_input.
+    // (PATCH); the api server rejects them with 400 invalid_input.
     const stringPut = await call(`/api/mailbox-filters/${created.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

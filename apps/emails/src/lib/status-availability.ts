@@ -4,7 +4,7 @@
  * WHY THIS MODULE EXISTS
  * ----------------------
  * `emails status` is the FIRST command an operator or agent runs to decide
- * whether the system is usable. Before this module existed, the self-hosted
+ * whether the system is usable. Before this module existed, the api
  * status payload hardcoded `providers: { total: 0, active: 0, by_type: {} }`,
  * `domains: { total: 0, send_ready: 0, ... }` and `addresses: { total: 0, ... }`
  * while the server held 37 providers, 75 domains and 325 addresses. A zero is
@@ -39,7 +39,7 @@
  * Closed set of reasons a status field can be unavailable. Keep this small: a
  * new code means a genuinely new kind of gap, not a new phrasing.
  *
- * - `server_route_absent`     the self-hosted API has no route that answers this
+ * - `server_route_absent`     the API has no route that answers this
  * - `not_modelled_over_v1`    the data is not represented on any `/v1` entity
  * - `not_modelled_on_store`   the store the installation is configured with models
  *                             no data that answers this: no operation on
@@ -54,7 +54,7 @@
  * - `not_applicable`          the field has no meaning for this installation
  * - `enumeration_cap_exceeded` a count could only be bounded, not resolved
  * - `enumeration_unstable`    the source's paging window shifted, so the rows
- *                             counted are a subset (see src/db/self-hosted-page.ts
+ *                             counted are a subset (see src/db/api-page.ts
  *                             and src/lib/status-facts-enumeration.ts)
  */
 export const STATUS_UNAVAILABLE_CODES = [
@@ -72,7 +72,7 @@ export type StatusUnavailableCode = (typeof STATUS_UNAVAILABLE_CODES)[number];
 /**
  * STRUCTURAL: this mode / this deployment cannot answer the field AT ALL, by
  * construction. Permanent until a route or a data model changes; nothing an
- * operator does today will clear it. Self-hosted always has some of these (no
+ * operator does today will clear it. Api always has some of these (no
  * local SQLite dir, no `/v1/senders`, no DNS evidence on the `/v1` domain
  * entity); local SQLite client always has at least one (no server source inventory).
  */
@@ -132,7 +132,7 @@ export interface StatusAvailability {
   available: boolean;
   /** `<code>:<detail> — <prose>`, or null when available. */
   reason: string | null;
-  /** Provenance, e.g. `self-hosted_api:/v1/providers`, `local_sqlite:addresses`. */
+  /** Provenance, e.g. `api:/v1/providers`, `local_sqlite:addresses`. */
   source: string;
   basis: StatusBasis | null;
   /**

@@ -1,7 +1,7 @@
 // The email schedule, as ONE implementation over the store seam.
 //
 // WHAT WAS HERE. A facade that read the process-wide deployment word (the predicate at
-// src/db/self-hosted-store.ts, imported here until this commit) and handed each of eight
+// src/db/api-store.ts, imported here until this commit) and handed each of eight
 // operations to one of two sibling modules. Neither sibling disagreed about what
 // "schedule this email", "cancel it" or "which rows are due" MEANS — they differed only
 // in who ran the query — so both are deleted and this module is the only implementation,
@@ -14,7 +14,7 @@
 //     SQLite store's generic resource list orders by the table's time column
 //     (`created_at DESC, id DESC`, src/store-sqlite/resources.ts describeTable) and the
 //     API's generic list orders `scheduled_at ASC`
-//     (src/server/self-hosted/resources.ts) — the SAME family, ordered two different
+//     (src/server/api/resources.ts) — the SAME family, ordered two different
 //     ways, and `ListOptions` (src/store/records.ts) admits no ordering. So a read that
 //     asked the store for `limit + offset` rows and sorted them locally would return the
 //     first N rows of the STORE'S order re-sorted into ours: a plausible, silently WRONG
@@ -33,7 +33,7 @@
 //  4. WHO MINTS THE ID. One arm generated the uuid and `created_at` client-side; the
 //     other sent both to the service. Neither is possible through the seam, and that is
 //     correct: `id` and `created_at` are not writable columns on the generic resource
-//     contract (src/server/self-hosted/openapi.ts builds the request schema from the
+//     contract (src/server/api/openapi.ts builds the request schema from the
 //     column list alone, with `additionalProperties: false`), so the API store would
 //     REFUSE a create that named them. Both stores mint their own, and the created row
 //     is read back out of the store's own answer.
@@ -76,7 +76,7 @@ import { now } from "./runtime.js";
 // Value coercion only. These are pure functions that turn one store's JSON-typed column
 // into the other's TEXT-encoded one; the module they live in is named for the axis being
 // deleted, and relocating them belongs to that deletion rather than to this collapse.
-import { carray, ciso, cobj, cstr, cstrArray, cstrOrNull } from "./self-hosted-resource.js";
+import { carray, ciso, cobj, cstr, cstrArray, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import type { EmailStore } from "../store/email-store.js";

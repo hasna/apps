@@ -1,12 +1,12 @@
 import type { AddressStatus, CreateAddressInput, EmailAddress } from "../types/index.js";
 import { AddressNotFoundError } from "../types/index.js";
 import { safeOffset, safeOptionalLimit } from "./pagination.js";
-import { assertHonestSelfHostedRead, enumerateSelfHostedRows } from "./self-hosted-page.js";
-import { selfHostedResource } from "./self-hosted-resource.js";
-import type { SelfHostedResourceStore } from "./self-hosted-store.js";
+import { assertHonestApiRead, enumerateApiRows } from "./api-page.js";
+import { apiResource } from "./api-resource.js";
+import type { ApiResourceStore } from "./api-store.js";
 
 // ============================================================================
-// Self-hosted (self-hosted) routing — self-hosted-ONLY client
+// Api (api) routing — API-only client
 // ============================================================================
 //
 // Every address read/write routes to the operator's `/v1/addresses` API. There
@@ -16,11 +16,11 @@ import type { SelfHostedResourceStore } from "./self-hosted-store.js";
 // remains empty for legacy rows and enriches to "-" in the CLI.
 export const ADDRESS_RESOURCE = "addresses";
 
-export function selfHostedAddresses(): SelfHostedResourceStore {
-  return selfHostedResource(ADDRESS_RESOURCE);
+export function apiAddresses(): ApiResourceStore {
+  return apiResource(ADDRESS_RESOURCE);
 }
 
-/** Map a self-hosted API address entity to the local EmailAddress shape (defaults filled). */
+/** Map a /v1 API address entity to the local EmailAddress shape (defaults filled). */
 export function apiToAddress(e: Record<string, unknown>): EmailAddress {
   const str = (v: unknown): string | null => (v == null ? null : String(v));
   const updatedAt = str(e["updated_at"]) ?? new Date().toISOString();
@@ -44,7 +44,7 @@ export function apiToAddress(e: Record<string, unknown>): EmailAddress {
 
 export function createAddress(input: CreateAddressInput): EmailAddress {
   return apiToAddress(
-    selfHostedAddresses().create({
+    apiAddresses().create({
       email: input.email,
       display_name: input.display_name || null,
       provider_id: input.provider_id,
@@ -53,14 +53,14 @@ export function createAddress(input: CreateAddressInput): EmailAddress {
 }
 
 export function getAddress(id: string): EmailAddress | null {
-  const e = selfHostedAddresses().get(id);
+  const e = apiAddresses().get(id);
   return e ? apiToAddress(e) : null;
 }
 
 // Every list-shaped read below walks `/v1/addresses` through the shared pager
 // instead of taking ONE page and calling it the table. The server windows a
 // missing limit to 100 rows and caps every page at 500 (clampLimit in
-// src/server/self-hosted/store.ts), so the previous single-call convention —
+// src/server/api/store.ts), so the previous single-call convention —
 // `.list({ limit: 1000 })`, or no limit at all — silently returned 100 or 500
 // rows of a larger table as if complete; production crossed 100 addresses long
 // ago and holds 325 today. `/v1/addresses` declares no server-side filters, so
@@ -74,14 +74,14 @@ export function getAddress(id: string): EmailAddress | null {
 // once the window is full or the table ended first. A read that can prove
 // neither REFUSES instead of returning a plausible subset.
 function readAddresses(bound: number | null, keep?: (address: EmailAddress) => boolean): EmailAddress[] {
-  const enumeration = enumerateSelfHostedRows<EmailAddress>(ADDRESS_RESOURCE, {
+  const enumeration = enumerateApiRows<EmailAddress>(ADDRESS_RESOURCE, {
     ...(bound === null ? {} : { need: bound }),
     select: (row) => {
       const address = apiToAddress(row);
       return keep && !keep(address) ? null : address;
     },
   });
-  assertHonestSelfHostedRead(enumeration, bound, {
+  assertHonestApiRead(enumeration, bound, {
     noun: "address",
     narrowHint: "ask for a bounded page with an explicit limit (GET /v1/addresses windows on limit/offset).",
   });
@@ -256,7 +256,7 @@ export function updateAddress(
   id: string,
   input: Partial<Pick<EmailAddress, "display_name" | "verified">>,
 ): EmailAddress {
-  const store = selfHostedAddresses();
+  const store = apiAddresses();
   if (!store.get(id)) throw new AddressNotFoundError(id);
   const patch: Record<string, unknown> = {};
   if (input.display_name !== undefined) patch["display_name"] = input.display_name || null;
@@ -265,11 +265,11 @@ export function updateAddress(
 }
 
 export function deleteAddress(id: string): boolean {
-  return selfHostedAddresses().del(id);
+  return apiAddresses().del(id);
 }
 
 export function markVerified(id: string): EmailAddress {
-  const store = selfHostedAddresses();
+  const store = apiAddresses();
   if (!store.get(id)) throw new AddressNotFoundError(id);
   return apiToAddress(store.update(id, { verified: true }));
 }

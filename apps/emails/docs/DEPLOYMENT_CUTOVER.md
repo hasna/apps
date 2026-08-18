@@ -23,7 +23,7 @@ cluster, database URL, secret path, or default endpoint.
 
 Rename cutover is additive: released Mailery migration ids/checksums and the
 old API key remain valid during the rollback window. Apply the Emails bridge,
-mint a new key with `emails self-hosted key rotate`, move and verify clients,
+mint a new key with `emails server key rotate`, move and verify clients,
 then revoke the old key explicitly. Do not delete or rewrite historical
 migration-ledger rows.
 
@@ -1679,7 +1679,7 @@ jq -e --arg release_version "$RELEASE_VERSION" '
   ((keys | sort) == ["mode","name","status","version"])
   and (.status == "ok")
   and (.name == "emails")
-  and (.mode == "self-hosted")
+  and (.mode == "server")
   and (.version == $release_version)
 ' <<<"$VERSION_JSON" >/dev/null
 READY_JSON="$(curl --fail --silent --show-error "$EMAILS_ALB_URL/ready")"

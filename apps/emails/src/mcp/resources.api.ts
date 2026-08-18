@@ -23,14 +23,14 @@ function jsonResource(uri: string, value: unknown) {
   };
 }
 
-function selfHostedApiStatus(error?: unknown): Record<string, unknown> {
+function apiStatus(error?: unknown): Record<string, unknown> {
   return {
     available: error === undefined,
     error: error instanceof Error ? error.message : (error === undefined ? null : String(error)),
   };
 }
 
-// Self-hosted-ONLY resource payloads. Every read routes to the operator's `/v1`
+// API-only resource payloads. Every read routes to the operator's `/v1`
 // API through the resource repositories and mail data-source seam; there is no
 // local SQLite island to fall back to.
 
@@ -65,8 +65,8 @@ export async function domainsResourcePayloadForRuntime(): Promise<Record<string,
       limit: DOMAIN_RESOURCE_LIMIT,
       truncated,
       backend: "api",
-      source: "self-hosted_api",
-      api: selfHostedApiStatus(),
+      source: "api",
+      api: apiStatus(),
       cli_equivalent: `emails domain list --limit ${DOMAIN_RESOURCE_LIMIT} --json`,
     };
   } catch (error) {
@@ -76,7 +76,7 @@ export async function domainsResourcePayloadForRuntime(): Promise<Record<string,
     const availability = statusUnavailable(
       "source_unreachable",
       error instanceof Error ? error.message : String(error),
-      "self-hosted_api:/v1/domains",
+      "api:/v1/domains",
       "no local database or config state was read",
     );
     return {
@@ -87,8 +87,8 @@ export async function domainsResourcePayloadForRuntime(): Promise<Record<string,
       limit: DOMAIN_RESOURCE_LIMIT,
       truncated: null,
       backend: "api",
-      source: "self-hosted_api",
-      api: selfHostedApiStatus(error),
+      source: "api",
+      api: apiStatus(error),
       cli_equivalent: `emails domain list --limit ${DOMAIN_RESOURCE_LIMIT} --json`,
     };
   }
@@ -112,15 +112,15 @@ export async function addressesResourcePayloadForRuntime(): Promise<Record<strin
       limit: ADDRESS_RESOURCE_LIMIT,
       truncated,
       backend: "api",
-      source: "self-hosted_api",
-      api: selfHostedApiStatus(),
+      source: "api",
+      api: apiStatus(),
       cli_equivalent: `emails address list --limit ${ADDRESS_RESOURCE_LIMIT} --json`,
     };
   } catch (error) {
     const availability = statusUnavailable(
       "source_unreachable",
       error instanceof Error ? error.message : String(error),
-      "self-hosted_api:/v1/addresses",
+      "api:/v1/addresses",
       "no local database or config state was read",
     );
     return {
@@ -131,8 +131,8 @@ export async function addressesResourcePayloadForRuntime(): Promise<Record<strin
       limit: ADDRESS_RESOURCE_LIMIT,
       truncated: null,
       backend: "api",
-      source: "self-hosted_api",
-      api: selfHostedApiStatus(error),
+      source: "api",
+      api: apiStatus(error),
       cli_equivalent: `emails address list --limit ${ADDRESS_RESOURCE_LIMIT} --json`,
     };
   }
@@ -194,12 +194,12 @@ export function recentErrorsResourcePayloadForRuntime(): Record<string, unknown>
       address_provisioning: false,
     },
     backend: "api",
-    source: "self-hosted_api",
+    source: "api",
     api: {
       available: false,
       error: null,
     },
-    note: "No self-hosted API endpoint currently exposes provisioning/realtime error history; no local database or config state was read.",
+    note: "No API endpoint currently exposes provisioning/realtime error history; no local database or config state was read.",
     cli_equivalent: "emails status --json",
   };
 }

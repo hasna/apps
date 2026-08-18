@@ -3,18 +3,18 @@
 // Two things are guarded here, both of which were wrong before:
 //
 // 1. The pre-fix assembler had no backend branch at all, so LOCAL backend published the
-//    same hardcoded provider/domain/address/provisioning zeros as self-hosted.
+//    same hardcoded provider/domain/address/provisioning zeros as api.
 //    These tests read a real local SQLite database and assert the real counts.
 //
 // 2. `degraded` must be usable as a gate. The local SQLite client ALWAYS carries one
-//    structurally-unanswerable block (`sources.configured` is a self-hosted server
+//    structurally-unanswerable block (`sources.configured` is a api server
 //    inventory), so a definition of `degraded` that counted any gap pinned it to
 //    true on every healthy install — a flag that is never green is a flag nobody
 //    reads. Structural limits belong to `limited`/`limitations`; `degraded` is
 //    reserved for read failures and lower-bound counts.
 //
-// 3. `next_actions` must only propose commands that RUN here. The self-hosted
-//    guard (agent-context.self-hosted.test.ts) had no local mirror, so the
+// 3. `next_actions` must only propose commands that RUN here. The api
+//    guard (agent-context.api.test.ts) had no local mirror, so the
 //    provisioning-failure branch proposed `emails provision status` for the local SQLite client
 //    — a command that throws notImplementedAnywhere() in every backend. Advice that
 //    refuses is the same defect class as a fabricated count.
@@ -219,7 +219,7 @@ describe("local status payload", () => {
     expect(status.next_actions.length).toBeGreaterThan(0);
   });
 
-  // Mirror of the self-hosted guard in agent-context.self-hosted.test.ts. Without
+  // Mirror of the api guard in agent-context.api.test.ts. Without
   // it the provisioning-failure branch proposed `emails provision status` here,
   // which throws `... is not implemented in this build` in every backend.
   it("never proposes a command that refuses for the local SQLite client", async () => {
@@ -253,7 +253,7 @@ describe("local status payload", () => {
   it("renders an unmeasured provisioning count as unavailable, never the word null", async () => {
     await seedFailedProvisioning();
     const status = await getEmailSystemStatus();
-    // Self-hosted can measure domain failures without address failures; the
+    // Api can measure domain failures without address failures; the
     // renderer must not interpolate that null straight into the line.
     status.provisioning.addresses_failed = null;
 

@@ -195,7 +195,7 @@ emails://recent-errors     → latest provisioning/source errors
 2. **Provider credentials**: Never expose credentials in code — they're stored in the local DB. When listing providers, credentials are automatically redacted (`"***"`).
 3. **Domain warming**: If a warming schedule is active for a domain, `send_email` will block at the daily limit. Use `get_warming_status(domain)` first.
 4. **Suppression**: Always check `list_contacts(suppressed=true)` before bulk sends.
-5. **Attachment limits**: Local/provider flows may allow up to 25MB per attachment and 10 attachments. The self-hosted JSON send API is intentionally smaller: 5 inline attachments, 512KiB each, 768KiB total.
+5. **Attachment limits**: Local/provider flows may allow up to 25MB per attachment and 10 attachments. The api JSON send API is intentionally smaller: 5 inline attachments, 512KiB each, 768KiB total.
 6. **Server binding**: `emails serve` defaults to `127.0.0.1:3900` (localhost only). External local-dashboard binding requires both `EMAILS_ALLOW_REMOTE=1` and `--host 0.0.0.0`, and should sit behind an authenticating proxy or firewall.
 
 ## Development
@@ -243,17 +243,17 @@ src/
 │   ├── resend.ts, ses.ts, sandbox.ts
 │   └── interface.ts           # ProviderAdapter interface
 ├── mcp/                       # MCP server, modular tools, contracts, and resources
-├── server/                    # local dashboard API plus self-hosted /v1 service
+├── server/                    # local dashboard API plus api /v1 service
 └── index.ts                   # library exports
 ```
 
 ## Adding New Features
 
 The codebase follows these patterns:
-- **New DB table**: Add the SQLite migration/ensure-schema work in `db/database.ts`; if self-hosted, also add an immutable migration under `server/self-hosted/migrations.ts` and store/RLS coverage
+- **New DB table**: Add the SQLite migration/ensure-schema work in `db/database.ts`; if api, also add an immutable migration under `server/api/migrations.ts` and store/RLS coverage
 - **New CLI command**: Add to appropriate `cli/commands/*.ts` file
 - **New MCP tool**: Add `server.tool(...)` in `mcp/tools/*.ts` and wire a new registrar from `mcp/server.ts` when needed
-- **New REST endpoint**: Add local dashboard routes under `server/routes/`; add self-hosted `/v1` routes and OpenAPI under `server/self-hosted/`
+- **New REST endpoint**: Add local dashboard routes under `server/routes/`; add api `/v1` routes and OpenAPI under `server/api/`
 - **New library export**: Add to `src/index.ts`
 
 Test: `bun run test` — the hermetic runner owns DB isolation and must stay at 0 failures.

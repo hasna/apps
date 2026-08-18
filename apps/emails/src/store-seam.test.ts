@@ -530,10 +530,10 @@ describe("store seam", () => {
       .sort();
     expect(armFamilies.length, "no local arms were found at all").toBeGreaterThan(0);
 
-    // `self-hosted-resource` is routing infrastructure shared BY the families, not a
+    // `api-resource` is routing infrastructure shared BY the families, not a
     // family: it owns no rows. It is the one exclusion, named here so adding another
     // is a visible diff.
-    const notAFamily = ["self-hosted-resource"];
+    const notAFamily = ["api-resource"];
     const familyToRepository: Record<string, string> = {
       addresses: "addresses",
       "address-lifecycle": "addressLifecycle",

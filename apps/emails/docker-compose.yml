@@ -1,4 +1,4 @@
-name: emails-self-hosted
+name: emails-api
 
 services:
   emails-serve:

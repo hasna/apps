@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { EventsClient, type EmitOptions, type EmitResult, type EventInput } from "@hasna/events";
 
-// Self-hosted-only client: the local SQLite `getDataDir()` is gone, but the
+// Api-only client: the local SQLite `getDataDir()` is gone, but the
 // workflow event log is a local append-only store independent of any database.
 // Resolve its base directory directly.
 function emailsDataDir(): string {

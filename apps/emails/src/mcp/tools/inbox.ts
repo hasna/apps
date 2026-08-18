@@ -236,7 +236,7 @@ export function registerInboxTools(server: McpServer): void {
 
   server.tool(
     "list_attachments",
-    "List one checkpointable page of self-hosted attachment metadata. Returns {items,next_cursor,cli_equivalent}; items contain message_id, attachment_index, filename, content_type, size_bytes, sha256, content_available, direction, and received_at, never attachment content. Pass next_cursor back as cursor to resume.",
+    "List one checkpointable page of api attachment metadata. Returns {items,next_cursor,cli_equivalent}; items contain message_id, attachment_index, filename, content_type, size_bytes, sha256, content_available, direction, and received_at, never attachment content. Pass next_cursor back as cursor to resume.",
     {
       limit: z.number().int().positive().max(MAX_ATTACHMENT_INVENTORY_LIMIT).optional()
         .describe(`Attachments per page (default ${DEFAULT_ATTACHMENT_INVENTORY_LIMIT}, max ${MAX_ATTACHMENT_INVENTORY_LIMIT})`),

@@ -1,5 +1,5 @@
-// Self-hosted-ONLY: provider event ingestion, sent-log stats/analytics and the
-// live monitor are owned by the self-hosted server. This client keeps the
+// API-only: provider event ingestion, sent-log stats/analytics and the
+// live monitor are owned by the API server. This client keeps the
 // commands for discoverability but fails loud — there is no local island to
 // sync/aggregate and no /v1 equivalent to route them through.
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
@@ -15,7 +15,7 @@ const MODE_ENV_KEYS = [
 
 let originalModeEnv: Partial<Record<typeof MODE_ENV_KEYS[number], string>> = {};
 
-function enableSelfHostedMode() {
+function enableApiMode() {
   process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.test";
   process.env["HASNA_EMAILS_API_KEY"] = "test-api-key";
 }
@@ -65,7 +65,7 @@ afterEach(() => {
   }
 });
 
-describe("sync CLI commands (server-only in the self-hosted client)", () => {
+describe("sync CLI commands (server-only in the api client)", () => {
   const cases: Array<{ args: string[]; command: string }> = [
     { args: ["provider", "sync"], command: "emails provider sync" },
     { args: ["pull"], command: "emails pull" },
@@ -77,11 +77,11 @@ describe("sync CLI commands (server-only in the self-hosted client)", () => {
 
   for (const { args, command } of cases) {
     it(`fails loud for emails ${args.join(" ")}`, async () => {
-      enableSelfHostedMode();
+      enableApiMode();
 
       const error = await runSyncCommandExpectingExit(args);
 
-      expect(error).toContain(`${command} is not available in the self-hosted client; it runs on the self-hosted server.`);
+      expect(error).toContain(`${command} is not available in the api client; it runs on the API server.`);
     });
   }
 });
@@ -114,7 +114,7 @@ describe("sync JSON output", () => {
   });
 
   it("prints parseable JSON errors with a non-zero exit", async () => {
-    enableSelfHostedMode();
+    enableApiMode();
     const child = Bun.spawn({
       cmd: [process.execPath, "run", "src/cli/index.tsx", "pull", "--json"],
       cwd: process.cwd(),

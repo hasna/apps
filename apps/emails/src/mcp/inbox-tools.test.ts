@@ -1,16 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { listInboundEmails, storeInboundEmail } from "../db/inbound.js";
-import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../db/api-store.js";
 import { saveConfig } from "../lib/config.js";
 import { runInboxTool } from "./tools/inbox-impl.js";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Self-hosted-ONLY: inbox tools route through the mail-data-source seam, which in
+// API-only: inbox tools route through the mail-data-source seam, which in
 // API-client configuration reads/writes the /v1 messages store (no local SQLite). The
-// self-hosted serve is a single shared store, so there is no per-provider scoping.
+// api serve is a single shared store, so there is no per-provider scoping.
 
 let stub: V1Stub;
 let attachmentInventoryServer: ReturnType<typeof Bun.serve>;
@@ -60,7 +60,7 @@ function useAttachmentInventoryPages(
   attachmentInventoryPages = new Map(pages);
   process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
   process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
-  resetSelfHostedConfigCache();
+  resetApiConfigCache();
 }
 
 function seed(n: number) {
@@ -126,9 +126,9 @@ describe("inbound search primitives", () => {
   });
 });
 
-// ─── API-client configuration: tools route through SelfHostedMailDataSource (/v1) ───────
+// ─── API-client configuration: tools route through ApiMailDataSource (/v1) ───────
 
-describe("MCP inbox tools — self-hosted via seam", () => {
+describe("MCP inbox tools — api via seam", () => {
   it("list_inbound_emails returns inbox items (body-free) with truncation", async () => {
     seed(3);
     const result = await toolJson("list_inbound_emails", { limit: 1 });
@@ -343,7 +343,7 @@ describe("MCP inbox tools — self-hosted via seam", () => {
   });
 });
 
-describe("MCP list_attachments — self-hosted inventory API", () => {
+describe("MCP list_attachments — api inventory API", () => {
   it("honors the API client contract without opening usable SQLite", async () => {
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-mcp-config-only-inventory-"));
@@ -352,8 +352,8 @@ describe("MCP list_attachments — self-hosted inventory API", () => {
     const previousDbPath2 = process.env.HASNA_EMAILS_DB_PATH;
     const previousClientEnvSecret = process.env.EMAILS_CLIENT_ENV_SECRET;
     const previousSessionToken = process.env.EMAILS_SESSION_TOKEN;
-    const previousSelfHostedUrl = process.env.HASNA_EMAILS_API_URL;
-    const previousSelfHostedApiKey = process.env.HASNA_EMAILS_API_KEY;
+    const previousApiUrl = process.env.HASNA_EMAILS_API_URL;
+    const previousApiApiKey = process.env.HASNA_EMAILS_API_KEY;
     try {
       process.env.HOME = configHome;
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
@@ -362,7 +362,7 @@ describe("MCP list_attachments — self-hosted inventory API", () => {
       delete process.env.HASNA_EMAILS_DB_PATH;
       process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
       process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
 
       expect(await toolJson("list_attachments", {})).toEqual({ items: [], next_cursor: null });
       expect(attachmentInventoryRequests).toHaveLength(1);
@@ -379,12 +379,12 @@ describe("MCP list_attachments — self-hosted inventory API", () => {
       else process.env.EMAILS_CLIENT_ENV_SECRET = previousClientEnvSecret;
       if (previousSessionToken === undefined) delete process.env.EMAILS_SESSION_TOKEN;
       else process.env.EMAILS_SESSION_TOKEN = previousSessionToken;
-      if (previousSelfHostedUrl === undefined) delete process.env.HASNA_EMAILS_API_URL;
-      else process.env.HASNA_EMAILS_API_URL = previousSelfHostedUrl;
-      if (previousSelfHostedApiKey === undefined) delete process.env.HASNA_EMAILS_API_KEY;
-      else process.env.HASNA_EMAILS_API_KEY = previousSelfHostedApiKey;
+      if (previousApiUrl === undefined) delete process.env.HASNA_EMAILS_API_URL;
+      else process.env.HASNA_EMAILS_API_URL = previousApiUrl;
+      if (previousApiApiKey === undefined) delete process.env.HASNA_EMAILS_API_KEY;
+      else process.env.HASNA_EMAILS_API_KEY = previousApiApiKey;
       rmSync(configHome, { recursive: true, force: true });
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
     }
   });
 
@@ -562,8 +562,8 @@ describe("MCP list_attachments — self-hosted inventory API", () => {
   });
 });
 
-describe("mailbox source tools (self-hosted single shared store)", () => {
-  it("exposes the self-hosted source, folder counts, and search", async () => {
+describe("mailbox source tools (api single shared store)", () => {
+  it("exposes the api source, folder counts, and search", async () => {
     storeInboundEmail({
       provider_id: null,
       message_id: "mcp-source-a",
@@ -599,9 +599,9 @@ describe("mailbox source tools (self-hosted single shared store)", () => {
 
     const sources = await toolJson("list_mailbox_sources", {});
     const sourceItems = sources.sources as Array<{ id: string; badges: string[]; total: number }>;
-    const selfHosted = sourceItems.find((source) => source.id === "self-hosted");
-    expect(selfHosted).toMatchObject({ total: 2 });
-    expect(selfHosted?.badges).toContain("self-hosted");
+    const api = sourceItems.find((source) => source.id === "server");
+    expect(api).toMatchObject({ total: 2 });
+    expect(api?.badges).toContain("server");
 
     const status = await toolJson("list_mailboxes", {});
     expect((status.counts as { inbox: number }).inbox).toBe(2);
