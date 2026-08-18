@@ -10,6 +10,8 @@
 
 ## 0.0.7 - 2026-06-29
 
+First version published to the public npm registry (2026-08-18).
+
 ### Added
 
 - Shared provider operation registry derived from conformance contracts, exposed
@@ -100,9 +102,7 @@
 
 ## 0.0.2 - 2026-06-29
 
-Initial public release of `@hasna/banking`.
-
-Note: `0.0.1` was not used as the public release because npm rejected it as an unavailable previously published version while the public registry still returned 404.
+In-tree release; not a public npm publish. No version of `@hasna/banking` reached the public registry until 0.0.7 (first npm publish, 2026-08-18). `0.0.1` was skipped because npm refused it as an unavailable previously published version while the public registry still returned 404.
 
 ### Added
 

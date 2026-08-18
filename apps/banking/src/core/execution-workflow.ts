@@ -177,7 +177,8 @@ export async function approveExecutionRequest(input: ApproveExecutionInput): Pro
 
   const execution = canExecuteWithApproval(intent, approval, input.now);
   if (!execution.allowed) {
-    return { status: "approved", intentId: intent.id, idempotencyKey: intent.idempotencyKey, approvalId: approval.id, reasons: execution.reasons };
+    const outcome = approval.decision === "granted" ? "approved" : "denied";
+    return { status: outcome, intentId: intent.id, idempotencyKey: intent.idempotencyKey, approvalId: approval.id, reasons: execution.reasons };
   }
 
   const outbox = dryRunOutbox(intent, approval.policySnapshot.ruleHash, input.now, approval);

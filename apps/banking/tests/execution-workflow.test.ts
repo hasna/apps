@@ -62,6 +62,26 @@ describe("execution safety workflow", () => {
     expect(outbox?.payload.releaseGates).toContain("provider_sandbox");
   });
 
+  test("a rejected approval reports denied, not approved, and queues no outbox", async () => {
+    const store = createSqliteDevStore();
+    const envelope = paymentEnvelope();
+    await submitExecutionRequest({ store, envelope, actor: requester });
+
+    const denied = await approveExecutionRequest({
+      store,
+      intentId: envelope.intent.id,
+      decidedBy: approver,
+      decision: "rejected",
+      expiresAt: "2026-07-06T12:00:00.000Z",
+      now: new Date("2026-07-06T10:30:00.000Z"),
+    });
+
+    expect(denied.status).toBe("denied");
+    expect(denied.reasons).toContain("Approval is rejected.");
+    expect(denied.outboxId).toBeUndefined();
+    expect(await store.listPendingOutbox()).toHaveLength(0);
+  });
+
   test("execute marks the dry-run outbox sent without provider movement", async () => {
     const store = createSqliteDevStore();
     const envelope = paymentEnvelope();
