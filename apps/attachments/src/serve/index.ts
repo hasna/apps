@@ -12,11 +12,11 @@
  *   attachments-serve --no-migrate  Serve without running migrations on boot.
  */
 
-import { createCloudPoolFromEnv } from "../generated/storage-kit/pool.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/pool.js";
+import { resolveServerDataBackend } from "../generated/storage-kit/backend.js";
 import { MigrationLedger } from "../generated/storage-kit/migrations.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { ApiKeyStore } from "@hasna/contracts/auth";
-import { resolveStorageMode } from "../generated/storage-kit/mode.js";
 import { normalizeConfig, type AttachmentsConfig, type DeepPartial } from "../core/config.js";
 import { ATTACHMENTS_MIGRATIONS } from "../db/migrations.js";
 import { PgAttachmentsStore } from "../db/pg-store.js";
@@ -129,8 +129,12 @@ async function main(): Promise<void> {
   const migrateOnly = args.includes("migrate");
   const skipMigrate = args.includes("--no-migrate") || process.env.ATTACHMENTS_SKIP_MIGRATE === "1";
 
-  const modeResolution = resolveStorageMode(APP_SLUG);
-  const { client, connectionSource } = createCloudPoolFromEnv(APP_SLUG, {
+  // PURE REMOTE: the serve backend is the kit's resolved server data backend
+  // (postgresql when HASNA_ATTACHMENTS_DATABASE_URL is set, else sqlite). The
+  // kit rejects legacy storage-mode variables here (assertNoLegacyStorageMode).
+  const { backend } = resolveServerDataBackend(APP_SLUG);
+  const mode = backend === "postgresql" ? "cloud" : "local";
+  const { client, connectionSource } = createServerPoolFromEnv(APP_SLUG, {
     applicationName: "attachments-serve",
   });
 
@@ -155,9 +159,9 @@ async function main(): Promise<void> {
     store,
     config,
     version,
-    mode: modeResolution.mode,
+    mode,
     signingSecret,
-    isRevoked: keyStore.isRevoked,
+    keyStatus: keyStore.keyStatus,
     audit: (e) => console.log("[api_auth]", JSON.stringify(e)),
   });
 
@@ -165,7 +169,7 @@ async function main(): Promise<void> {
   const hostname = config.server.host;
   Bun.serve({ port, hostname, fetch: app.fetch, idleTimeout: 120 });
   console.log(
-    `attachments-serve listening on http://${hostname}:${port} (mode=${modeResolution.mode}, db_source=${connectionSource})`,
+    `attachments-serve listening on http://${hostname}:${port} (mode=${mode}, db_source=${connectionSource})`,
   );
 
   await new Promise<void>((resolve) => {

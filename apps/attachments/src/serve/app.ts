@@ -12,7 +12,7 @@ import { nanoid } from "nanoid";
 import { Readable } from "stream";
 import { createCipheriv, randomBytes, scryptSync } from "crypto";
 import { lookup as mimeLookup } from "mime-types";
-import { verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
+import { verifyApiKey, type ApiKeyVerifier, type KeyStatusResolver } from "@hasna/contracts/auth";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 import { checkHealth, checkReady } from "../generated/storage-kit/health.js";
 import { PgAttachmentsStore } from "../db/pg-store.js";
@@ -53,7 +53,7 @@ export interface ServeAppDeps {
   version: string;
   mode: string;
   signingSecret: string;
-  isRevoked?: (kid: string) => boolean | Promise<boolean>;
+  keyStatus?: KeyStatusResolver;
   audit?: (event: unknown) => void;
   /**
    * Email sender for email-gated share links. When undefined, the public
@@ -280,7 +280,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: APP_SLUG,
     signingSecret: deps.signingSecret,
-    ...(deps.isRevoked ? { isRevoked: deps.isRevoked } : {}),
+    ...(deps.keyStatus ? { keyStatus: deps.keyStatus } : {}),
     ...(deps.audit ? { audit: deps.audit as never } : {}),
   });
 

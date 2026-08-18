@@ -56,6 +56,7 @@ function makeApp() {
     version: "test",
     mode: "cloud",
     signingSecret: SIGNING,
+    keyStatus: async () => "active",
   });
 }
 
@@ -228,6 +229,7 @@ describe("/v1 presigned direct upload (ported from local-only)", () => {
       version: "test",
       mode: "cloud",
       signingSecret: SIGNING,
+    keyStatus: async () => "active",
     });
     const res = await appSmall.request("/v1/attachments/att_pending1/presign-upload/complete", {
       method: "POST",
