@@ -230,19 +230,16 @@ domains doctor --json
 
 Route 53 sync imports registered domains when the selected AWS account permits `route53domains:ListDomains`, and hosted zones when the account permits Route 53 hosted-zone reads. Domain-looking names from unrelated systems such as SSM parameters or Secrets Manager should only be imported after review because they do not prove registrar ownership.
 
-## Storage Modes
+## Storage
 
-The CLI and library use local SQLite by default. Client cloud mode is pure HTTP: configure the service URL and API key rather than exposing a database DSN to clients.
+The CLI and library use local SQLite by default. The client selects the hosted HTTP API when both `HASNA_DOMAINS_API_URL` and `HASNA_DOMAINS_API_KEY` are set — a database DSN is never exposed to clients.
 
 ```bash
-export HASNA_DOMAINS_STORAGE_MODE=cloud
 export HASNA_DOMAINS_API_URL=https://domains.example.com
 export HASNA_DOMAINS_API_KEY=dom_...
 ```
 
-The unprefixed `DOMAINS_API_URL` and `DOMAINS_API_KEY` aliases are also accepted. When both URL and key are present, the store selects cloud HTTP automatically unless an explicit storage mode overrides it.
-
-The standalone `domains-serve` process is the server-side exception: it connects directly to Postgres using `HASNA_DOMAINS_DATABASE_URL` and requires `HASNA_DOMAINS_API_SIGNING_KEY`. Apply owner-role migrations first with `domains db migrate`.
+The unprefixed `DOMAINS_API_URL` and `DOMAINS_API_KEY` aliases are also accepted. When only one of URL and key is set, the client refuses to start (fail-closed). The standalone `domains-serve` process is the server side: it connects directly to PostgreSQL using `HASNA_DOMAINS_DATABASE_URL` (SQLite when unset) and requires `HASNA_DOMAINS_API_SIGNING_KEY`. Apply owner-role migrations first with `domains db migrate`.
 
 ## MCP Server
 
@@ -327,11 +324,10 @@ const portfolio = await domains.listDomains({ status: "active" });
 | `DOMAINS_COMMAND_GROUPS` | Comma-separated optional command groups to load, or `all` |
 | `DOMAINS_ENABLE_EXTRAS` | Set to `1` to load all optional command groups |
 | `DOMAINS_MCP_SAFE_MODE` | Set to `1` to expose only read-only MCP tools |
-| `HASNA_DOMAINS_STORAGE_MODE`, `DOMAINS_STORAGE_MODE` | Client storage mode: `local` or `cloud` |
-| `HASNA_DOMAINS_API_URL`, `DOMAINS_API_URL` | Cloud HTTP API base URL for the CLI/library store |
-| `HASNA_DOMAINS_API_KEY`, `DOMAINS_API_KEY` | Cloud HTTP API key for the CLI/library store and SDK |
-| `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH` | Set to `1` to keep the cloud store even though a local path variable is set. Without it that combination is a hard error — see below |
-| `HASNA_DOMAINS_DATABASE_URL` | Server-side Postgres DSN used by `domains-serve` and DB migrations |
+| `HASNA_DOMAINS_API_URL`, `DOMAINS_API_URL` | Hosted HTTP API base URL for the CLI/library store (set together with the key) |
+| `HASNA_DOMAINS_API_KEY`, `DOMAINS_API_KEY` | Hosted HTTP API key for the CLI/library store and SDK (set together with the URL) |
+| `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH` | Set to `1` to keep the hosted store even though a local path variable is set. Without it that combination is a hard error — see below |
+| `HASNA_DOMAINS_DATABASE_URL` | Server-side PostgreSQL DSN used by `domains-serve` and DB migrations; SQLite backend when unset |
 | `HASNA_DOMAINS_API_SIGNING_KEY` | HMAC signing secret used by `domains-serve` to verify API keys |
 | `AWS_PROFILE` | AWS profile for Route 53 Domains and hosted zones |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | AWS credential fallback |
@@ -362,9 +358,9 @@ success. Nothing on any surface said which store it had used.
 To resolve it, say which you meant:
 
 ```sh
-HASNA_DOMAINS_STORAGE_MODE=local   # use the sqlite file the path variable names
-unset DOMAINS_DB_PATH              # use the cloud store
-HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1   # keep cloud with the variable present
+unset HASNA_DOMAINS_API_URL HASNA_DOMAINS_API_KEY   # use the sqlite file the path variable names
+unset DOMAINS_DB_PATH                                # use the hosted store
+HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1          # keep the hosted store with the variable present
 ```
 
 `domains doctor` names the store it resolved, in its `Store` section, before any other check

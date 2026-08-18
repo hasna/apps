@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Domain } from "./domain-records.js";
-import { ApiStore, LocalStore, domainsCloudEnv, getStore, isCloudStore } from "./store.js";
+import { ApiStore, LocalStore, getStore, isCloudStore } from "./store.js";
 
 function domain(overrides: Partial<Domain> = {}): Domain {
   return {
@@ -271,25 +271,25 @@ describe("ApiStore nested resources", () => {
 });
 
 describe("store resolution", () => {
-  test("keeps explicit local mode and resolves a LocalStore", () => {
-    const env = {
-      HASNA_DOMAINS_STORAGE_MODE: "local",
-      HASNA_DOMAINS_API_URL: "https://ignored.example",
-      HASNA_DOMAINS_API_KEY: "ignored",
-    };
-
-    expect(domainsCloudEnv(env)).toBe(env);
-    expect(getStore(env)).toBeInstanceOf(LocalStore);
-    expect(isCloudStore(env)).toBe(false);
+  test("no hosted env resolves a LocalStore", () => {
+    expect(getStore({})).toBeInstanceOf(LocalStore);
+    expect(isCloudStore({})).toBe(false);
   });
 
-  test("supports legacy URL/key aliases and refuses incomplete cloud config", () => {
+  test("supports the unprefixed DOMAINS_API_URL/key aliases", () => {
     const aliased = { DOMAINS_API_URL: "https://api.example", DOMAINS_API_KEY: "secret" };
-    expect(domainsCloudEnv(aliased)).toEqual({
-      ...aliased,
-      HASNA_DOMAINS_STORAGE_MODE: expect.any(String),
-    });
+    expect(isCloudStore({ ...aliased, NODE_ENV: "production" })).toBe(true);
+  });
 
-    expect(() => getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud" })).toThrow();
+  test("refuses a partial hosted config (URL without key)", () => {
+    expect(() => getStore({ HASNA_DOMAINS_API_URL: "https://api.example" })).toThrow(
+      /Misconfigured domains client/,
+    );
+  });
+
+  test("refuses a partial hosted config (key without URL)", () => {
+    expect(() => getStore({ HASNA_DOMAINS_API_KEY: "secret" })).toThrow(
+      /Misconfigured domains client/,
+    );
   });
 });
