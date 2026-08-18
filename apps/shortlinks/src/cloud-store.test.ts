@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { CloudShortlinksStore } from "./cloud-store.js";
 
 const CLOUD_ENV = {
-  HASNA_SHORTLINKS_MODE: "self_hosted",
   HASNA_SHORTLINKS_API_URL: "https://shortlinks.hasna.xyz",
   HASNA_SHORTLINKS_API_KEY: "hasna_shortlinks_test_key",
 } as const;
@@ -35,22 +34,27 @@ function mockFetch(handler: (call: Call) => { status?: number; json?: unknown })
 function store(handler: (call: Call) => { status?: number; json?: unknown }) {
   const { fetchImpl, calls } = mockFetch(handler);
   const s = CloudShortlinksStore.fromEnv(CLOUD_ENV, { fetchImpl });
-  if (!s) throw new Error("expected cloud-http store");
+  if (!s) throw new Error("expected hosted-API store");
   return { s, calls };
 }
 
-describe("CloudShortlinksStore.fromEnv flip", () => {
+describe("CloudShortlinksStore.fromEnv client selection", () => {
   test("returns null (local) when env is unset", () => {
     expect(CloudShortlinksStore.fromEnv({})).toBeNull();
   });
 
-  test("throws (no silent local drift) when cloud requested but misconfigured", () => {
-    // mode=self_hosted with no API_URL/API_KEY must fail loudly, never fall back
-    // silently to the local store.
-    expect(() => CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_MODE: "self_hosted" })).toThrow();
+  test("throws (no silent local drift) when the hosted client is partially configured", () => {
+    // API_URL without API_KEY (or the reverse) must fail loudly, never fall
+    // back silently to the local store.
+    expect(() =>
+      CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_URL: "https://shortlinks.hasna.xyz" }),
+    ).toThrow(/partially configured/);
+    expect(() =>
+      CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_KEY: "hasna_shortlinks_test_key" }),
+    ).toThrow(/partially configured/);
   });
 
-  test("returns a cloud store when fully configured", () => {
+  test("returns a hosted-API store when fully configured", () => {
     const s = CloudShortlinksStore.fromEnv(CLOUD_ENV);
     expect(s).not.toBeNull();
     expect(s!.baseUrl).toBe("https://shortlinks.hasna.xyz/v1");

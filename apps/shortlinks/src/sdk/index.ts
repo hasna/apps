@@ -5,8 +5,7 @@
  * OpenAPI document (src/serve/openapi.ts) by `bun run sdk:generate`. It is the
  * canonical client for the versioned `/v1` API with API-key auth.
  *
- * Client self_hosted mode reads `SHORTLINKS_API_URL` + `SHORTLINKS_API_KEY`
- * (never a DSN).
+ * The client reads `SHORTLINKS_API_URL` + `SHORTLINKS_API_KEY` (never a DSN).
  */
 
 export * from "./generated.js";

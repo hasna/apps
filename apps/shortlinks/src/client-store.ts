@@ -1,19 +1,18 @@
 // Client-side store resolver for @hasna/shortlinks.
 //
 // This is the single seam the CLI, MCP server, and SDK consult to obtain a
-// `Store`. It returns the cloud `ApiStore` when the client-flip env resolves to
-// `cloud-http` (mode=self_hosted/cloud AND HASNA_SHORTLINKS_API_URL +
-// HASNA_SHORTLINKS_API_KEY are set), otherwise the on-box `LocalStore`.
+// `Store`. It returns the hosted-API `ApiStore` when the client env is fully
+// configured (HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set),
+// otherwise the on-box `LocalStore`.
 //
 // There is NO postgres/DSN branch here: a client never reads or writes the raw
-// RDS. `resolveStore` throws (via CloudShortlinksStore.fromEnv) when cloud is
-// requested but misconfigured, so a client can never silently drift back to the
-// wrong dataset.
+// RDS. `resolveStore` throws (via CloudShortlinksStore.fromEnv) when the hosted
+// client is partially configured, so a client can never silently drift back to
+// the wrong dataset.
 
 import { CloudShortlinksStore } from "./cloud-store.js";
 import { ShortlinksStore } from "./store.js";
-import type { Env } from "@hasna/contracts/mode";
-import type { ListLinksOptions, Store, TotalStats } from "./store-interface.js";
+import type { Env, ListLinksOptions, Store, TotalStats } from "./store-interface.js";
 import type {
   AddDomainInput,
   Click,
@@ -24,7 +23,7 @@ import type {
   LinkStats,
 } from "./types.js";
 
-/** The self_hosted/cloud HTTP transport. Same client code for both tiers. */
+/** The hosted-API HTTP transport. */
 export { CloudShortlinksStore as ApiStore } from "./cloud-store.js";
 export type { Store } from "./store-interface.js";
 
@@ -106,16 +105,17 @@ export class LocalStore implements Store {
 }
 
 export interface ResolveStoreOptions {
-  /** Explicit local SQLite path (CLI `--db`); ignored in cloud mode. */
+  /** Explicit local SQLite path (CLI `--db`); ignored when the hosted API is selected. */
   dbPath?: string;
-  /** Transport overrides for the cloud client (test injection: fetchImpl, ...). */
+  /** Transport overrides for the hosted-API client (test injection: fetchImpl, ...). */
   cloudOverrides?: Parameters<typeof CloudShortlinksStore.fromEnv>[1];
 }
 
 /**
  * Resolve the active {@link Store} for the current environment. Returns the
- * cloud {@link ApiStore} when the client flip is on, otherwise a
- * {@link LocalStore}. Throws when cloud was requested but is misconfigured.
+ * hosted-API {@link ApiStore} when the client env is fully configured,
+ * otherwise a {@link LocalStore}. Throws when the hosted client is partially
+ * configured.
  */
 export function resolveStore(
   env: Env = process.env,

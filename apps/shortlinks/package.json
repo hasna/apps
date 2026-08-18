@@ -1,7 +1,7 @@
 {
   "name": "@hasna/shortlinks",
   "version": "0.2.7",
-  "description": "Shortlink manager for custom domains and click tracking, with local SQLite or self-hosted cloud (/v1 API + bearer key) storage and Cloudflare setup helpers",
+  "description": "Shortlink manager for custom domains and click tracking, with local SQLite or hosted /v1 API (bearer key) storage and Cloudflare setup helpers",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -45,11 +45,14 @@
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:pg": "bun scripts/pg-test-gate.ts",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/serve/index.ts",
     "verify:release": "bun run typecheck && bun run test && bun run build",
-    "prepublishOnly": "bun run verify:release"
+    "prepublishOnly": "bun run verify:release",
+    "prepack": "bun run build && bun run scan:artifact"
   },
   "keywords": [
     "shortlinks",
@@ -88,7 +91,7 @@
     "pg": "^8.13.3"
   },
   "devDependencies": {
-    "@hasna/contracts": "^0.5.2",
+    "@hasna/contracts": "^0.11.1",
     "@types/pg": "^8.11.11",
     "@types/bun": "^1.2.4",
     "typescript": "^5.7.3"

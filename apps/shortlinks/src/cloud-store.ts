@@ -1,17 +1,16 @@
-// Cloud (self_hosted) shortlinks store.
+// Hosted-API shortlinks store.
 //
 // Implements the same store surface as `ShortlinksStore` / `PgShortlinksStore`,
-// but routes every read and write to the app's cloud `/v1` HTTP API
+// but routes every read and write to the hosted `/v1` HTTP API
 // (https://shortlinks.hasna.xyz/v1) using the @hasna/contracts HTTP storage
-// client with a bearer API key. This is the client-side "self_hosted" path:
+// client with a bearer API key. This is the client-side hosted-API path:
 //
-//   flip resolves to cloud-http  ⇔  HASNA_SHORTLINKS_MODE=self_hosted (or cloud)
-//                                    AND HASNA_SHORTLINKS_API_URL is set
-//                                    AND HASNA_SHORTLINKS_API_KEY is set
+//   hosted client selected  ⇔  HASNA_SHORTLINKS_API_URL is set
+//                              AND HASNA_SHORTLINKS_API_KEY is set
 //
 // There is NO DSN / Postgres / local SQLite here — the raw RDS is never touched
-// from a client. If the flip does not resolve to cloud-http, `fromEnv` returns
-// null and the caller uses its local store instead (unset env => local).
+// from a client. If the flip does not resolve, `fromEnv` returns null and the
+// caller uses its local store instead (unset env => local).
 //
 // SAFETY: the API key lives only inside the transport; it is never logged.
 
@@ -19,8 +18,7 @@ import {
   resolveStorageClient,
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
-import type { Env } from "@hasna/contracts/mode";
-import type { ListLinksOptions, Store, TotalStats } from "./store-interface.js";
+import type { Env, ListLinksOptions, Store, TotalStats } from "./store-interface.js";
 import type {
   AddDomainInput,
   Click,
@@ -33,6 +31,16 @@ import type {
 
 const APP = "shortlinks";
 
+/** Read the first set env value as an OWN property (guards prototype pollution). */
+function ownEnv(env: Env, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    if (!Object.hasOwn(env, key)) continue;
+    const value = env[key]?.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
 function enc(value: string): string {
   return encodeURIComponent(value);
 }
@@ -43,7 +51,7 @@ function enc(value: string): string {
  * drop-in `RuntimeStore` for the CLI.
  */
 export class CloudShortlinksStore implements Store {
-  readonly kind = "cloud-http" as const;
+  readonly kind = "http" as const;
   readonly transport: HasnaStorageClient["transport"];
 
   private constructor(private readonly client: HasnaStorageClient) {
@@ -56,17 +64,28 @@ export class CloudShortlinksStore implements Store {
   }
 
   /**
-   * Resolve a cloud store from the environment. Returns the store when the
-   * client-flip resolves to `cloud-http` (self_hosted + API_URL + API_KEY), else
-   * null so the caller falls back to the local store. Throws only when cloud was
-   * explicitly requested but is misconfigured (never silent local drift).
+   * Resolve a hosted-API store from the environment. The contracts client
+   * seam (`resolveStorageClient`) decides: an explicit API URL + API key in
+   * the environment selects the hosted client, and the fleet app-config on
+   * disk is the fallback tier; otherwise the caller uses its local store.
+   * Throws when only one of URL/key is set in the environment tier — a
+   * partially configured hosted client must fail loudly, never silently
+   * drift to the local dataset.
    */
   static fromEnv(
     env: Env = process.env,
     overrides?: Parameters<typeof resolveStorageClient>[2],
   ): CloudShortlinksStore | null {
+    const apiUrl = ownEnv(env, ["HASNA_SHORTLINKS_API_URL", "SHORTLINKS_API_URL"]);
+    const apiKey = ownEnv(env, ["HASNA_SHORTLINKS_API_KEY", "SHORTLINKS_API_KEY"]);
+    if (Boolean(apiUrl) !== Boolean(apiKey)) {
+      throw new Error(
+        "Hosted API client is partially configured: set both HASNA_SHORTLINKS_API_URL " +
+          "and HASNA_SHORTLINKS_API_KEY (or neither).",
+      );
+    }
     const resolved = resolveStorageClient(APP, env, overrides);
-    if (resolved.transport !== "cloud-http") return null;
+    if (!resolved.client) return null;
     return new CloudShortlinksStore(resolved.client);
   }
 

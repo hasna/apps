@@ -506,7 +506,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "gateway", kitVersion: "0.4.1", pinned: "0.2.2" },
   { member: "instructions", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "logs", kitVersion: "0.4.2", pinned: "0.5.2" },
-  { member: "shortlinks", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
 ];

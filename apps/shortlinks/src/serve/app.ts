@@ -2,13 +2,13 @@
  * Shortlinks serve HTTP app.
  *
  * Surfaces the standard health/ready/version probes plus a versioned `/v1`
- * REST API guarded by @hasna/contracts API-key auth. PURE REMOTE (Amendment
- * A1): all reads/writes go through the injected Postgres store over the shared
- * RDS — there is no sync engine or cache in the service.
+ * REST API guarded by @hasna/contracts API-key auth. All reads/writes go
+ * through the injected Postgres store — there is no sync engine or cache in
+ * the service.
  */
 
 import { Hono, type Context } from "hono";
-import { verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
+import { verifyApiKey, type ApiKeyVerifier, type KeyStatusResolver } from "@hasna/contracts/auth";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 import { checkHealth, checkReady } from "../generated/storage-kit/health.js";
 import { PgShortlinksStore } from "../pg-store.js";
@@ -21,9 +21,11 @@ export interface ServeAppDeps {
   client: PoolQueryClient;
   store: PgShortlinksStore;
   version: string;
-  mode: string;
+  /** Server data backend label (`sqlite` | `postgresql`) for probe payloads. */
+  backend: string;
   signingSecret: string;
-  isRevoked?: (kid: string) => boolean | Promise<boolean>;
+  /** Lifecycle lookup for presented API keys (wire `store.keyStatus`). */
+  keyStatus?: KeyStatusResolver;
   audit?: (event: unknown) => void;
 }
 
@@ -36,12 +38,12 @@ const SECURITY_HEADERS: Record<string, string> = {
 
 export function createServeApp(deps: ServeAppDeps): Hono {
   const app = new Hono();
-  const { store, client, version, mode } = deps;
+  const { store, client, version, backend } = deps;
 
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: APP_SLUG,
     signingSecret: deps.signingSecret,
-    ...(deps.isRevoked ? { isRevoked: deps.isRevoked } : {}),
+    ...(deps.keyStatus ? { keyStatus: deps.keyStatus } : {}),
     ...(deps.audit ? { audit: deps.audit as never } : {}),
   });
 
@@ -75,7 +77,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
   app.get("/health", async (c) => {
     const health = await checkHealth(client);
     return c.json(
-      { status: health.ok ? "ok" : "degraded", version, mode, db_latency_ms: health.latencyMs },
+      { status: health.ok ? "ok" : "degraded", version, backend, db_latency_ms: health.latencyMs },
       health.ok ? 200 : 503,
     );
   });
@@ -86,7 +88,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       {
         status: ready.ok ? "ready" : "not_ready",
         version,
-        mode,
+        backend,
         pending_migrations: ready.pendingMigrations,
         ...(ready.error ? { error: ready.error } : {}),
       },
@@ -94,7 +96,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     );
   });
 
-  app.get("/version", (c) => c.json({ status: "ok", version, mode, name: `@hasna/${APP_SLUG}` }));
+  app.get("/version", (c) => c.json({ status: "ok", version, backend, name: `@hasna/${APP_SLUG}` }));
 
   app.get("/openapi.json", (c) => c.json(buildOpenApiDocument(version)));
 

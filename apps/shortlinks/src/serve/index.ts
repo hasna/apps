@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 /**
- * `shortlinks-serve` — the cloud HTTP service entrypoint.
+ * `shortlinks-serve` — the hosted HTTP service entrypoint.
  *
- * PURE REMOTE (Amendment A1): reads/writes the shared RDS Postgres directly via
- * the vendored storage kit. No sync engine, cache, or local database in the
- * service.
+ * Reads/writes PostgreSQL directly via the vendored storage kit: the server
+ * data backend is selected by `HASNA_SHORTLINKS_DATABASE_URL` (present →
+ * postgresql, absent → the pool factory fails closed). No sync engine, cache,
+ * or local database in the service.
  *
  * Usage:
  *   shortlinks-serve            Run migrations (idempotent) then serve.
@@ -12,10 +13,10 @@
  *   shortlinks-serve --no-migrate  Serve without running migrations on boot.
  */
 
-import { createCloudPoolFromEnv } from "../generated/storage-kit/pool.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/pool.js";
 import { MigrationLedger } from "../generated/storage-kit/migrations.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
-import { resolveStorageMode } from "../generated/storage-kit/mode.js";
+import { resolveServerDataBackend } from "../generated/storage-kit/backend.js";
 import { ApiKeyStore } from "@hasna/contracts/auth";
 import { SHORTLINKS_MIGRATIONS } from "../db/migrations.js";
 import { PgShortlinksStore } from "../pg-store.js";
@@ -58,8 +59,8 @@ async function main(): Promise<void> {
   const migrateOnly = args.includes("migrate");
   const skipMigrate = args.includes("--no-migrate") || process.env.SHORTLINKS_SKIP_MIGRATE === "1";
 
-  const modeResolution = resolveStorageMode(APP_SLUG);
-  const { client, connectionSource } = createCloudPoolFromEnv(APP_SLUG, {
+  const backendResolution = resolveServerDataBackend(APP_SLUG);
+  const { client, connectionSource } = createServerPoolFromEnv(APP_SLUG, {
     applicationName: "shortlinks-serve",
   });
 
@@ -82,9 +83,9 @@ async function main(): Promise<void> {
     client,
     store,
     version,
-    mode: modeResolution.mode,
+    backend: backendResolution.backend,
     signingSecret,
-    isRevoked: keyStore.isRevoked,
+    keyStatus: keyStore.keyStatus,
     audit: (e) => console.log("[api_auth]", JSON.stringify(e)),
   });
 
@@ -92,7 +93,7 @@ async function main(): Promise<void> {
   const hostname = process.env.HOST?.trim() || "0.0.0.0";
   Bun.serve({ port, hostname, fetch: app.fetch, idleTimeout: 120 });
   console.log(
-    `shortlinks-serve listening on http://${hostname}:${port} (mode=${modeResolution.mode}, db_source=${connectionSource})`,
+    `shortlinks-serve listening on http://${hostname}:${port} (backend=${backendResolution.backend}, db_source=${connectionSource})`,
   );
 
   await new Promise<void>((resolve) => {
