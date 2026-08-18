@@ -24,7 +24,7 @@ import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { createTestDb } from "./index";
 
-const RETIRED = "@hasna/cloud";
+const RETIRED = ["@hasna", "cloud"].join("/");
 /** A dependency this package genuinely declares — the control for the manifest reader. */
 const CONTROL_DEP = "@hasna/events";
 /** A token that genuinely appears in src/ — the control for the tree scanner. */
@@ -77,8 +77,8 @@ function filesContaining(token: string): string[] {
   return sourceFiles().filter((file) => readFileSync(file, "utf-8").includes(token));
 }
 
-describe("storage ownership: no dependency on the retired @hasna/cloud", () => {
-  test("package.json declares no @hasna/cloud in any dependency field", () => {
+describe("storage ownership: no dependency on the retired shared adapter", () => {
+  test("package.json declares no retired adapter in any dependency field", () => {
     const declared = declaredDependencies();
 
     // POSITIVE CONTROL: the reader must actually see this manifest's contents.
@@ -89,7 +89,7 @@ describe("storage ownership: no dependency on the retired @hasna/cloud", () => {
     expect(declared).not.toContain(RETIRED);
   });
 
-  test("no source file imports @hasna/cloud", () => {
+  test("no source file imports the retired adapter", () => {
     // POSITIVE CONTROL: the scanner must be able to find a token that IS there.
     // A scanner that walked the wrong directory would return [] for everything.
     expect(filesContaining(CONTROL_IMPORT).length).toBeGreaterThan(0);

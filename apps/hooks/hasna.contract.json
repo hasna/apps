@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.8.4",
-  "description": "Open source hooks library for AI coding agents. Storage is a data-backend switch, never a deployment mode: local SQLite at ~/.hasna/hooks/hooks.db by default, or PostgreSQL when HASNA_HOOKS_DATABASE_URL is set with HASNA_HOOKS_STORAGE_BACKEND=postgresql (src/db/storage-sync.ts). The retired HASNA_HOOKS_STORAGE_MODE / HOOKS_STORAGE_MODE deployment-mode variables are read as errors, not no-ops. The optional remote registry is a Cloudflare Workers API (D1 catalog + R2 artifacts, provisioned by `hooks cf deploy`) reached via HASNA_HOOKS_API_URL — an API route, not a storage backend. MCP is served by the `hooks mcp` subcommand (no separate mcp bin).",
+  "description": "Open source hooks library for AI coding agents. Storage is a data-backend switch, never a deployment mode: local SQLite at ~/.hasna/hooks/hooks.db by default, or PostgreSQL when HASNA_HOOKS_DATABASE_URL is set with HASNA_HOOKS_STORAGE_BACKEND=postgresql (src/db/storage-sync.ts). The retired HASNA_HOOKS_STORAGE_MODE / HOOKS_STORAGE_MODE deployment-mode variables are read as errors, not no-ops. The optional remote registry is a Cloudflare Workers API (D1 catalog + R2 artifacts, provisioned by `hooks cf deploy`) reached via HASNA_HOOKS_API_URL \u2014 an API route, not a storage backend. MCP is served by the `hooks mcp` subcommand (no separate mcp bin).",
   "bins": [
     "hooks",
     "hooks-serve"
@@ -43,22 +43,24 @@
         "method": "GET",
         "path": "/ready",
         "public": true,
-        "description": "Declared for the supported-api surface contract. hooks serve (src/serve.ts) implements GET /health and the /api/v1/* registry routes; GET /ready is not implemented yet and returns 404 today."
+        "description": "Implemented: GET /ready returns 200 {status: ready} when the hooks.lock store is readable, else 503 (src/serve.ts)."
       },
       "version": {
         "method": "GET",
         "path": "/version",
         "public": true,
-        "description": "Declared for the supported-api surface contract. hooks serve (src/serve.ts) implements GET /health and the /api/v1/* registry routes; GET /version is not implemented yet and returns 404 today."
+        "description": "Implemented: GET /version returns the installed @hasna/hooks version (src/serve.ts)."
       },
-      "apiBasePath": "/v1"
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
     },
     {
       "name": "typescript-sdk",
       "kind": "sdk",
       "status": "supported",
       "authMode": "local-only",
-      "exportSubpath": "."
+      "exportSubpath": ".",
+      "generatedFrom": "/openapi.json"
     }
   ],
   "storage": {
@@ -69,7 +71,11 @@
     ],
     "envPrefix": "HASNA_HOOKS_",
     "aliasEnvPrefix": "HOOKS_",
-    "sqlitePath": "~/.hasna/hooks/hooks.db"
+    "sqlitePath": "~/.hasna/hooks/hooks.db",
+    "pgTestGate": {
+      "envVar": "HASNA_HOOKS_TEST_DATABASE_URL",
+      "command": "HASNA_HOOKS_DATABASE_URL=\"${HASNA_HOOKS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" HASNA_HOOKS_STORAGE_BACKEND=postgresql bun test src/db/pg-live.test.ts"
+    }
   },
   "metadata": {
     "databaseUrlEnv": "HASNA_HOOKS_DATABASE_URL",
@@ -77,6 +83,11 @@
     "retiredStorageModeEnv": [
       "HASNA_HOOKS_STORAGE_MODE",
       "HOOKS_STORAGE_MODE"
-    ]
+    ],
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
   }
 }

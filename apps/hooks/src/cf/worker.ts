@@ -101,10 +101,12 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
   });
 
 function authorized(req: Request, env: Env): boolean {
-  if (!env.HOOKS_API_KEY) return false;
+  // hasna-credential-seam-waiver: Cloudflare Worker secret binding read to COMPARE an inbound bearer, the opposite of resolving a client credential
+  const apiKey = env.HOOKS_API_KEY;
+  if (!apiKey) return false;
   const header = req.headers.get("authorization") ?? "";
-  if (header.startsWith("Bearer ")) return secureEqual(header.slice("Bearer ".length), env.HOOKS_API_KEY);
-  return secureEqual(req.headers.get("x-api-key") ?? "", env.HOOKS_API_KEY);
+  if (header.startsWith("Bearer ")) return secureEqual(header.slice("Bearer ".length), apiKey);
+  return secureEqual(req.headers.get("x-api-key") ?? "", apiKey);
 }
 
 async function versionsFor(env: Env, name: string): Promise<string[]> {
@@ -269,6 +271,7 @@ export default {
 
     // Privacy lock-down: a configured API key gates every route except
     // /health (which stays open for probes). No binding -> reads stay open.
+    // hasna-credential-seam-waiver: Cloudflare Worker secret binding presence check for the inbound auth gate, not a client credential resolution
     if (env.HOOKS_API_KEY && !authorized(req, env)) {
       return json({ error: "unauthorized: valid API key required" }, 401);
     }

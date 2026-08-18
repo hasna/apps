@@ -30,7 +30,9 @@
     "dashboard:dev": "cd dashboard && bun run dev",
     "dashboard:build": "cd dashboard && bun run build",
     "dashboard:preview": "cd dashboard && bun run preview",
-    "postinstall": "mkdir -p $HOME/.hasna/hooks/profiles 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/hooks/profiles 2>/dev/null || true",
+    "scan:artifact": "bun scripts/artifact-scan.ts",
+    "prepack": "bun run build && bun run scan:artifact"
   },
   "keywords": [
     "claude-code",
@@ -49,7 +51,8 @@
     "@types/pg": "^8.15.6",
     "@types/react": "^18.2.0",
     "typescript": "^5",
-    "bun-types": "1.3.14"
+    "bun-types": "1.3.14",
+    "@hasna/contracts": "0.11.1"
   },
   "dependencies": {
     "@hasna/events": "^0.1.6",
@@ -64,7 +67,8 @@
     "ink-text-input": "^6.0.0",
     "pg": "^8.16.3",
     "react": "^18.2.0",
-    "zod": "3.25.76"
+    "zod": "3.25.76",
+    "@hasna/contracts": "0.11.1"
   },
   "engines": {
     "bun": ">=1.0.0"
