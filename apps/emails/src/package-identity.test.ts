@@ -43,8 +43,8 @@ describe("published package identity", () => {
     const result = ServiceContractManifestSchema.safeParse(contract);
     if (!result.success) throw new Error(result.error.message);
 
-    expect(contract.storage.mode).toBe("sqlite");
-    expect(contract.storage.engines).toEqual(["sqlite", "postgres"]);
+    expect(contract.storage.backend).toBe("sqlite");
+    expect(contract.storage.engines).toEqual(["sqlite", "postgresql"]);
     expect(contract.serviceSurfaces.every((surface) => !("deploymentModes" in surface))).toBe(true);
   });
 

@@ -43,7 +43,7 @@ function makeDeps(): SelfHostedServiceDeps {
   return {
     client: pgClient!,
     store: new EmailsSelfHostedStore(pgClient!),
-    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET }),
+    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET, keyStatus: async () => "active" }),
     sender: { provider: "ses", send: async () => `mock-${crypto.randomUUID()}` },
     migrations: emailsSelfHostedMigrations(),
     version: "test",

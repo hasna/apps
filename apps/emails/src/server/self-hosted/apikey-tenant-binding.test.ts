@@ -55,7 +55,7 @@ function fakeClient(): TypedQueryClient {
 function deps(): AuthServiceDeps {
   return {
     authStore: new AuthStore(fakeClient() as unknown as PoolQueryClient),
-    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET }),
+    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET, keyStatus: async () => "active" }),
     sender: { provider: "ses", send: async () => "provider-message-id" },
     keyStore: STUB_KEY_STORE,
     signingSecret: SIGNING_SECRET,

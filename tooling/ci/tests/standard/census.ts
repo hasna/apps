@@ -360,11 +360,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
   },
   {
-    member: "emails",
-    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. (The earlier no_cloud_guard cause no longer fires at main.)",
-    task: "todos e0ef3e32 (contracts task — emails)",
-  },
-  {
     member: "events",
     cause: "bins_match_package: package.json ships bin hasna-events (alias of events, npm parity with 0.1.15) that the manifest does not declare; hasna-events is not in CANONICAL_HASNA_BIN_ALIASES so it can never be allowlisted. Imported by #160.",
     task: "todos 9b78ba7e-d859-4928-a999-3184fa6baf97 (contracts task — events)",

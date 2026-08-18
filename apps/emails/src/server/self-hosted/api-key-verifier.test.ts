@@ -11,7 +11,7 @@ function headers(token: string): Headers {
 }
 
 describe("verifyApiKeyWithAliases (canonical emails app + mailery alias)", () => {
-  const verifier = verifyApiKeyWithAliases({ signingSecret: SIGNING }, APPS);
+  const verifier = verifyApiKeyWithAliases({ signingSecret: SIGNING, keyStatus: async () => "active" }, APPS);
 
   it("reports the canonical app slug", () => {
     expect(verifier.app).toBe("emails");
@@ -54,7 +54,7 @@ describe("verifyApiKeyWithAliases (canonical emails app + mailery alias)", () =>
     const revoking = verifyApiKeyWithAliases(
       {
         signingSecret: SIGNING,
-        isRevoked: (kid) => kid === minted.kid,
+        keyStatus: (kid) => (kid === minted.kid ? "revoked" : "active"),
         audit: (e) => { events.push({ outcome: e.outcome, kid: e.kid, reason: e.reason }); },
       },
       APPS,
@@ -77,7 +77,7 @@ describe("verifyApiKeyWithAliases (canonical emails app + mailery alias)", () =>
   it("fires the audit hook exactly once for an accepted alias key", async () => {
     const outcomes: string[] = [];
     const audited = verifyApiKeyWithAliases(
-      { signingSecret: SIGNING, audit: (e) => { outcomes.push(e.outcome); } },
+      { signingSecret: SIGNING, keyStatus: async () => "active", audit: (e) => { outcomes.push(e.outcome); } },
       APPS,
     );
     const token = mintApiKey({ app: "mailery", scopes: ["emails:*"], signingSecret: SIGNING }).token;

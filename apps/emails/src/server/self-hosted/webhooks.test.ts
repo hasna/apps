@@ -309,7 +309,7 @@ function harness(options: {
   const deps: SelfHostedServiceDeps = {
     client: db.client,
     store,
-    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET }),
+    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET, keyStatus: async () => "active" }),
     sender: { provider: "ses", send: async () => "provider-message-id" },
     migrations: emailsSelfHostedMigrations(),
     version: "9.9.9",

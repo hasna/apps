@@ -128,7 +128,7 @@ describe("contracts auth 0.4.2 -> current: issued keys keep verifying", () => {
 
   it("authenticates 0.4.2 keys through the real server verifier (canonical + alias)", async () => {
     const verifier = verifyApiKeyWithAliases(
-      { signingSecret: FIXTURE_SIGNING, nowMs: () => VERIFY_NOW_MS },
+      { signingSecret: FIXTURE_SIGNING, nowMs: () => VERIFY_NOW_MS, keyStatus: async () => "active" },
       [SELF_HOSTED_APP, ...SELF_HOSTED_APP_ALIASES] as [string, ...string[]],
     );
 

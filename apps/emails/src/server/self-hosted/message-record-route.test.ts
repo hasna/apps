@@ -104,7 +104,7 @@ function depsFor(recorder: Recorder): SelfHostedServiceDeps {
   return {
     client: recorder.client,
     store: selfScopedStore(recorder.client),
-    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET }),
+    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET, keyStatus: async () => "active" }),
     // A sender that FAILS THE TEST if it is ever called. The record route's central
     // claim is that it transmits nothing, and a stub that quietly succeeded would let a
     // future edit start sending from here with every assertion still green.
