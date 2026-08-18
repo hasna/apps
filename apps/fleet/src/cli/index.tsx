@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { writeFileSync } from "node:fs";
-import { APP_NAME, resolveDbPath, resolveStorageMode } from "../config.js";
+import { APP_NAME, resolveDbPath, resolveServerBackend } from "../config.js";
 import { APP_VERSION } from "../version.js";
 import { defaultAdapters } from "../adapters/index.js";
 import { getDatabase } from "../db/database.js";
@@ -95,9 +95,9 @@ function build(): Command {
 
   program
     .command("doctor")
-    .description("Show storage mode, database path, and health")
+    .description("Show storage backend, database path, and health")
     .action(() => {
-      emit({ app: APP_NAME, mode: safeMode(), dbPath: resolveDbPath(), health: health() });
+      emit({ app: APP_NAME, backend: safeBackend(), dbPath: resolveDbPath(), health: health() });
     });
 
   program
@@ -167,11 +167,11 @@ function build(): Command {
   return program;
 }
 
-function safeMode(): "local" | "cloud" {
+function safeBackend(): "sqlite" | "postgresql" {
   try {
-    return resolveStorageMode();
+    return resolveServerBackend();
   } catch {
-    return "cloud";
+    return "postgresql";
   }
 }
 

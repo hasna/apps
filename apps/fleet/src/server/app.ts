@@ -47,9 +47,9 @@ function rateLimited(key: string): boolean {
 
 export function buildApp(options: AppOptions = {}): Hono<{ Variables: Variables }> {
   const bindHost = options.bindHost ?? "127.0.0.1";
-  const mode = health().mode;
-  // Auth is decoupled from storage mode: required whenever NOT (loopback AND local).
-  const requireAuth = !(isLoopback(bindHost) && mode === "local");
+  const backend = health().backend;
+  // Auth is decoupled from the storage backend: required whenever NOT (loopback AND sqlite).
+  const requireAuth = !(isLoopback(bindHost) && backend === "sqlite");
 
   // Fail-closed: a non-loopback / cloud bind MUST have credentials configured.
   if (requireAuth && !isApiAuthConfigured()) {

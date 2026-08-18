@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { resolveDbPath, resolveStorageMode, scrubDatabaseUrlEnv, type StorageMode } from "../config.js";
+import { resolveDbPath, resolveServerBackend, scrubDatabaseUrlEnv, type ServerDataBackend } from "../config.js";
 import { ensureFleetAppHome, getDefaultFleetDbPath } from "../core/app-home.js";
 import { backupDatabaseBeforeMigration, shouldBackupBeforeMigration } from "./backup.js";
 import { runMigrations } from "./schema.js";
@@ -30,7 +30,7 @@ function ensureDir(filePath: string): void {
 }
 
 let _db: Database | null = null;
-let _mode: StorageMode = "local";
+let _backend: ServerDataBackend = "sqlite";
 
 /**
  * Open (or return the cached) local SQLite database and run idempotent
@@ -40,12 +40,12 @@ let _mode: StorageMode = "local";
 export function getDatabase(dbPath?: string): Database {
   if (_db) return _db;
 
-  const mode = resolveStorageMode();
-  _mode = mode;
+  const backend = resolveServerBackend();
+  _backend = backend;
 
-  if (mode === "cloud" && dbPath === undefined) {
+  if (backend === "postgresql" && dbPath === undefined) {
     throw new Error(
-      "cloud storage mode uses the vendored Postgres storage-kit (async). Use connectCloud() / the serve bootstrap, " +
+      "the postgresql backend uses the vendored Postgres storage-kit (async). Use connectCloud() / the serve bootstrap, " +
         "or pass an explicit SQLite path for local tooling.",
     );
   }
@@ -68,8 +68,8 @@ export function getDatabase(dbPath?: string): Database {
   return _db;
 }
 
-export function getMode(): StorageMode {
-  return _mode;
+export function getBackend(): ServerDataBackend {
+  return _backend;
 }
 
 export function closeDatabase(): void {
@@ -98,10 +98,10 @@ export function uuid(): string {
  * not exercised by the v0 local build/tests (no live DB).
  */
 export async function connectCloud(): Promise<{ connectionSource: string }> {
-  const mode = resolveStorageMode();
-  if (mode !== "cloud") throw new Error("connectCloud() requires storage mode 'cloud'.");
-  const { createCloudPoolFromEnv } = await import("../generated/storage-kit/pool.js");
-  const { client, connectionSource } = createCloudPoolFromEnv("fleet");
+  const backend = resolveServerBackend();
+  if (backend !== "postgresql") throw new Error("connectCloud() requires the postgresql backend.");
+  const { createServerPoolFromEnv } = await import("../generated/storage-kit/pool.js");
+  const { client, connectionSource } = createServerPoolFromEnv("fleet");
   // After the pool is built, scrub the broadcast DSN so child processes cannot read it.
   scrubDatabaseUrlEnv();
   // The pool/client is retained by the caller in a full cloud deployment; here we

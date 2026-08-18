@@ -32,12 +32,12 @@ function migrationsApplied(): number {
 export function registerStorageTools(server: McpServer, principal: ApiPrincipal): void {
   server.tool(
     "fleet_storage_status",
-    "Report storage status: mode, whether a DSN is present (boolean only), sqlite path, migrations applied, remote reachability. Never emits the DSN or any secret value.",
+    "Report storage status: backend, whether a DSN is present (boolean only), sqlite path, migrations applied, remote reachability. Never emits the DSN or any secret value.",
     {},
     async () => {
-      const mode = health().mode;
+      const backend = health().backend;
       return mcpText({
-        mode,
+        backend,
         dsn_present: databaseUrlPresent(),
         sqlite_path: resolveDbPath(),
         migrations_applied: migrationsApplied(),
@@ -96,10 +96,10 @@ function storageOp(op: "push" | "pull" | "sync", principal: ApiPrincipal, reques
   return mcpText({
     ok: true,
     op,
-    mode: health().mode,
+    backend: health().backend,
     tables,
     excluded_audit_tables: AUDIT_TABLES,
     rejected_requested_audit_tables: excluded,
-    note: "In local v0 this records the gated/audited intent; the cloud data path is wired via the vendored storage-kit for cloud mode.",
+    note: "In the sqlite v0 build this records the gated/audited intent; the postgresql data path is wired via the vendored storage-kit.",
   });
 }

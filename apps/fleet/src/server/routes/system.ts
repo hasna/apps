@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import type { Database } from "bun:sqlite";
 import { health } from "../health.js";
 
-// System endpoints (§6.2): exact { status, version, mode } shape for /health and
+// System endpoints (§6.2): exact { status, version, backend } shape for /health and
 // /version; /ready gates on a live DB connection.
 export function registerSystemRoutes<T extends { Variables: Record<string, unknown> }>(
   app: Hono<T>,

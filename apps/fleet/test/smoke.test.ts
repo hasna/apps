@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { resolveStorageMode, databaseUrlPresent } from "../src/config.js";
+import { resolveServerBackend, databaseUrlPresent } from "../src/config.js";
 import { health } from "../src/server/health.js";
 import { getDatabase } from "../src/db/database.js";
 import { cleanupTestDatabase, useTestDatabase } from "./helpers/database.js";
@@ -14,19 +14,19 @@ afterEach(() => {
   cleanupTestDatabase(dbPath);
 });
 
-describe("config storage mode", () => {
-  it("defaults to local", () => {
-    expect(resolveStorageMode({})).toBe("local");
+describe("config server data backend", () => {
+  it("defaults to sqlite", () => {
+    expect(resolveServerBackend({})).toBe("sqlite");
   });
 
-  it("resolves postgres backend when a DATABASE_URL is present", () => {
-    expect(resolveStorageMode({ HASNA_FLEET_DATABASE_URL: "postgres://x" })).toBe("cloud");
-    expect(resolveStorageMode({ FLEET_DATABASE_URL: "postgres://x" })).toBe("cloud");
+  it("resolves the postgresql backend when a DATABASE_URL is present", () => {
+    expect(resolveServerBackend({ HASNA_FLEET_DATABASE_URL: "postgres://x" })).toBe("postgresql");
+    expect(resolveServerBackend({ FLEET_DATABASE_URL: "postgres://x" })).toBe("postgresql");
   });
 
   it("ignores the retired HASNA_FLEET_STORAGE_MODE variable", () => {
-    expect(resolveStorageMode({ HASNA_FLEET_STORAGE_MODE: "self_hosted" })).toBe("local");
-    expect(resolveStorageMode({ HASNA_FLEET_STORAGE_MODE: "cloud" })).toBe("local");
+    expect(resolveServerBackend({ HASNA_FLEET_STORAGE_MODE: "self_hosted" })).toBe("sqlite");
+    expect(resolveServerBackend({ HASNA_FLEET_STORAGE_MODE: "cloud" })).toBe("sqlite");
   });
 
   it("detects DSN presence without reading its value", () => {
@@ -36,10 +36,10 @@ describe("config storage mode", () => {
 });
 
 describe("health + db", () => {
-  it("returns the { status, version, mode } contract shape", () => {
+  it("returns the { status, version, backend } contract shape", () => {
     const h = health();
     expect(h.status).toBe("ok");
-    expect(h.mode).toBe("local");
+    expect(h.backend).toBe("sqlite");
     expect(typeof h.version).toBe("string");
   });
 
