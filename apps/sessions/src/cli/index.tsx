@@ -60,6 +60,10 @@ import {
   parseConcurrency,
   parseJitterMs,
 } from "../lib/bulk.js";
+import { S3Client } from "../db/cloud/s3-client.js";
+import { resolveSessionObjectStoreConfig } from "../db/cloud/object-store-config.js";
+import { createSessionContentImport } from "../lib/session-content-object.js";
+import { syncRetryableSessionObjects } from "../lib/session-object-sync.js";
 
 const program = new Command();
 
@@ -1481,6 +1485,14 @@ async function runContentSyncOnce(opts: ApiSyncCliOptions): Promise<ContentSyncR
   }
   result.backup.verified = preCloudSyncBackupRecord();
 
+  let objectStore: S3Client | null = null;
+  try {
+    const objectStoreConfig = resolveSessionObjectStoreConfig();
+    if (objectStoreConfig) objectStore = new S3Client(objectStoreConfig);
+  } catch (error) {
+    result.warnings.push(`object store disabled: ${(error as Error).message}`);
+  }
+
   for (const { session: s, messages, toolCalls } of sessionsWithContent) {
     if (s.message_count > 0 && messages.length === 0) {
       result.errors.push(`${s.id}: local index reports ${s.message_count} message(s), but none were loaded; refusing to replace cloud content`);
@@ -1493,48 +1505,35 @@ async function runContentSyncOnce(opts: ApiSyncCliOptions): Promise<ContentSyncR
       continue;
     }
     result.attempted++;
+    let importedToApi = false;
     try {
       const imported = await store.importContent({
-        session: {
-          id: s.id,
-          source: s.source,
-          source_id: s.source_id,
-          source_path: s.source_path,
-          title: s.title,
-          project_path: s.project_path,
-          project_name: s.project_name,
-          model: s.model,
-          model_provider: s.model_provider,
-          git_branch: s.git_branch,
-          git_sha: s.git_sha,
-          git_origin_url: s.git_origin_url,
-          cli_version: s.cli_version,
-          is_subagent: s.is_subagent,
-          parent_session_id: s.parent_session_id,
-          total_input_tokens: s.total_input_tokens,
-          total_output_tokens: s.total_output_tokens,
-          total_cache_read_tokens: s.total_cache_read_tokens,
-          total_cache_write_tokens: s.total_cache_write_tokens,
-          total_thinking_tokens: s.total_thinking_tokens,
-          message_count: s.message_count,
-          tool_call_count: s.tool_call_count,
-          machine: s.machine,
-          started_at: s.started_at,
-          ended_at: s.ended_at,
-          duration_seconds: s.duration_seconds,
-          source_modified_at: s.source_modified_at,
-          metadata: s.metadata,
-        },
-        messages,
-        toolCalls,
+        ...createSessionContentImport(s, messages, toolCalls),
         backup: result.backup.verified ?? undefined,
       });
       result.messages += Math.max(0, imported.imported.messages - messages.length);
       result.toolCalls += Math.max(0, imported.imported.toolCalls - toolCalls.length);
       result.pushed++;
+      importedToApi = true;
     } catch (e) {
       result.errors.push(`${s.id}: ${(e as Error).message}`);
       result.failed++;
+    }
+
+    if (importedToApi && objectStore) {
+      try {
+        const objectResult = await syncRetryableSessionObjects({
+          objectStore,
+          sessionId: s.id,
+        });
+        for (const error of objectResult.errors) {
+          result.warnings.push(`object upload failed: ${error}`);
+        }
+      } catch (error) {
+        result.warnings.push(
+          `${s.id}: object upload queue could not run: ${(error as Error).message}`,
+        );
+      }
     }
   }
 

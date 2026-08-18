@@ -14,6 +14,7 @@ import { getParser, ingestSource, ingestAll } from "../src/lib/ingest/index.js";
 import { getDatabase, resetDatabase, closeDatabase } from "../src/db/database.js";
 import { getMessages, getSessionBySource, listSessions } from "../src/db/sessions.js";
 import { getFileState, getIngestionStats } from "../src/db/ingestion.js";
+import { getSessionObject } from "../src/db/session-objects.js";
 
 let root: string;
 
@@ -133,6 +134,41 @@ describe("ingestSource", () => {
     const sessions = listSessions({ source: "claude" });
     expect(sessions).toHaveLength(1);
     expect(sessions[0].source_id).toBe("c-ingest-1");
+  });
+
+  it("enqueues normalized content after local save when object storage is configured", () => {
+    process.env.HASNA_SESSIONS_S3_BUCKET = "fixture-sessions";
+    process.env.HASNA_SESSIONS_S3_REGION = "fixture-region-1";
+    process.env.HASNA_SESSIONS_S3_PREFIX = "normalized";
+    try {
+      expect(ingestSource("claude")).toMatchObject({ ingested: 1, errors: 0 });
+      const session = getSessionBySource("claude", "c-ingest-1");
+      expect(session).not.toBeNull();
+      const queued = getSessionObject(session!.id, "normalized_content");
+      expect(queued).toMatchObject({ status: "pending" });
+      expect(queued?.object_key).toContain(
+        `/sandbox=host/runtime=claude/agent=unresolved/session=${session!.id}/`,
+      );
+    } finally {
+      delete process.env.HASNA_SESSIONS_S3_BUCKET;
+      delete process.env.HASNA_SESSIONS_S3_REGION;
+      delete process.env.HASNA_SESSIONS_S3_PREFIX;
+    }
+  });
+
+  it("does not block local ingest on malformed optional object-store credentials", () => {
+    process.env.HASNA_SESSIONS_S3_BUCKET = "fixture-sessions";
+    process.env.HASNA_SESSIONS_S3_ACCESS_KEY_ID = "fixture-only-id";
+    delete process.env.HASNA_SESSIONS_S3_SECRET_ACCESS_KEY;
+    try {
+      expect(ingestSource("claude")).toMatchObject({ ingested: 1, errors: 0 });
+      const session = getSessionBySource("claude", "c-ingest-1");
+      expect(session).not.toBeNull();
+      expect(getSessionObject(session!.id, "normalized_content")).toBeNull();
+    } finally {
+      delete process.env.HASNA_SESSIONS_S3_BUCKET;
+      delete process.env.HASNA_SESSIONS_S3_ACCESS_KEY_ID;
+    }
   });
 
   it("skips unchanged files on the second run (mtime-gated)", () => {

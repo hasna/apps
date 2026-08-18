@@ -14,25 +14,30 @@ function applied(row: { id: string; checksum: string }): AppliedMigration {
 }
 
 describe("cloud migration ledger", () => {
-  test("accepts an existing base 0001 checksum and plans 0004 without rewriting applied migrations", async () => {
+  test("accepts an existing base 0001 checksum and plans new migrations without rewriting applied migrations", async () => {
     const migrations = loadMigrations();
     const initial = migrations.find((migration) => migration.id === "0001_init");
     const codewith = migrations.find((migration) => migration.id === "0004_codewith_session_source");
     const sourceIdIndex = migrations.find((migration) => migration.id === "0005_session_source_id_lookup_index");
+    const sessionObjects = migrations.find((migration) => migration.id === "0006_session_objects");
     expect(initial).toBeDefined();
     expect(codewith).toBeDefined();
     expect(sourceIdIndex).toBeDefined();
+    expect(sessionObjects).toBeDefined();
     expect(initial?.sql).toMatch(/CHECK\s*\(source IN \('claude', 'codex', 'gemini'\)\)/);
     expect(initial?.sql).not.toContain("codewith");
     expect(initial?.checksum).toBe(APPROVED_BASE_0001_CHECKSUM);
     expect(codewith?.sql).toContain("codewith");
     expect(sourceIdIndex?.sql).toContain("idx_sessions_source_id");
+    expect(sessionObjects?.sql).toContain("CREATE TABLE IF NOT EXISTS session_objects");
+    expect(sessionObjects?.sql).toContain("idx_session_objects_retry");
 
     const alreadyApplied = migrations
       .filter(
         (migration) =>
           migration.id !== "0004_codewith_session_source" &&
-          migration.id !== "0005_session_source_id_lookup_index",
+          migration.id !== "0005_session_source_id_lookup_index" &&
+          migration.id !== "0006_session_objects",
       )
       .map((migration) =>
         applied({
@@ -76,6 +81,7 @@ describe("cloud migration ledger", () => {
       ["0003_session_token_bigints", "already_applied"],
       ["0004_codewith_session_source", "pending"],
       ["0005_session_source_id_lookup_index", "pending"],
+      ["0006_session_objects", "pending"],
     ]);
   });
 });
