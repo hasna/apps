@@ -52,9 +52,11 @@ import type { Goal, GoalPlanNode, GoalRun, GoalStatus } from "../goal/types.js";
 import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
 import { publicWorkflowEvents } from "../workflow-events.js";
 import { resolveCloudStorage } from "../cloud/resolve.js";
-import type { HasnaStorageClient } from "../cloud/storage.js";
-import { HasnaHttpError } from "../cloud/transport.js";
-import type { Env } from "../cloud/transport.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { HasnaHttpError } from "@hasna/contracts/client";
+// Mirrors the seam's own Env definition; not re-exported from the client
+// subpath in the installed kit (0.10.x).
+type Env = Record<string, string | undefined>;
 import { Store } from "../store.js";
 import type {
   ExpiredRunLeaseCandidate,
