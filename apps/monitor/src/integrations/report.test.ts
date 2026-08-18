@@ -58,10 +58,22 @@ describe("runReportIntegrations", () => {
     const server = Bun.serve({
       port: 0,
       fetch: async (request) => {
+        const path = new URL(request.url).pathname;
         requests.push({
-          path: new URL(request.url).pathname,
+          path,
           body: await request.text(),
         });
+        // The conversations integration posts through the package-owned SDK
+        // (ConversationsClient.sendMessage -> POST /v1/messages), which expects
+        // the server's {message: {id, uuid}} pointer contract.
+        if (path === "/v1/messages") {
+          return new Response(
+            JSON.stringify({
+              message: { id: 1, uuid: "0f0a1b2c-3d4e-5f6a-8b9c-0d1e2f3a4b5c", channel: "monitor" },
+            }),
+            { status: 201, headers: { "content-type": "application/json" } }
+          );
+        }
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -88,7 +100,7 @@ describe("runReportIntegrations", () => {
     );
 
     expect(delivered).toEqual(["conversations", "emails"]);
-    expect(requests.some((entry) => entry.path === "/api/spaces/monitor/messages")).toBe(true);
+    expect(requests.some((entry) => entry.path === "/v1/messages")).toBe(true);
     expect(requests.some((entry) => entry.path === "/api/emails/send")).toBe(true);
   });
 });
