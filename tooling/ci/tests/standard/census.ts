@@ -465,7 +465,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "shield",
-    cause: "surface_matrix/service_api_topology: no supported API surface declared; surface_bindings: serviceSurfaces[2].exportSubpath targets missing ./sdk/dist files and generatedFrom is required. Imported by #74 after the original census; validated at 0.8.5 (no pinned dep, kitVersion resolution). (The earlier self_host_artifact cause no longer fires at main.)",
+    cause: "surface_matrix/service_api_topology: api and sdk surfaces declared deferred truthfully (shield-serve has no GET /ready, GET /version, /v1 base, or /openapi.json), so no supported API surface exists; the kit requires one for a service-capable cli-with-store. storage.engines postgresql is validator-forced (kit refuses the waiver for service-capable cli-with-store) and disclosed in metadata.conformance.notes. Mode vocabulary removed from src/db/database.ts and README.",
     task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
   },
   {

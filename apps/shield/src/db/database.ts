@@ -11,17 +11,11 @@ function homeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || homedir();
 }
 
-function resolveStorageMode(): "local" {
-  const mode = (process.env.HASNA_SHIELD_STORAGE_MODE || process.env.HASNA_SECURITY_STORAGE_MODE || "local").toLowerCase();
-  if (mode === "local") return "local";
-  throw new Error(
-    `Unsupported shield storage mode "${mode}". ` +
-      "Only local SQLite storage is supported by this package; remote storage must use shield-owned adapters.",
-  );
-}
+// The retired HASNA_SHIELD_STORAGE_MODE / HASNA_SECURITY_STORAGE_MODE
+// variables are deliberately NOT read: storage is local SQLite, selected by
+// the environment contract (SECURITY_DB path override) only.
 
 function getDbPath(): string {
-  resolveStorageMode();
   if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
   const projectSecurity = join(process.cwd(), ".security", "shield.db");
   if (existsSync(dirname(projectSecurity))) return projectSecurity;

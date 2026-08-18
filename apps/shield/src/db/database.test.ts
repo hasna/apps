@@ -160,30 +160,18 @@ describe("database", () => {
     }
   });
 
-  test("sanitizes storage-mode resolution failures and recovers on retry", () => {
-    const directory = mkdtempSync(join(tmpdir(), "shield-storage-mode-init-"));
+  test("ignores the retired storage-mode variables (legacy retirement)", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shield-storage-mode-retired-"));
     const path = join(directory, "shield.db");
-    const marker = `invalid-mode-${"synthetic-marker-".repeat(3)}`;
     const moduleUrl = new URL("./database.ts", import.meta.url).href;
     const program = `
       import { closeDb, getDb } from ${JSON.stringify(moduleUrl)};
-      const marker = ${JSON.stringify(marker)};
       process.env.SECURITY_DB = ${JSON.stringify(path)};
-      process.env.HASNA_SHIELD_STORAGE_MODE = marker;
+      process.env.HASNA_SHIELD_STORAGE_MODE = "shared";
+      process.env.HASNA_SECURITY_STORAGE_MODE = "cloud";
 
-      const capture = () => {
-        try { getDb(); } catch (error) {
-          return error instanceof Error ? error.message : String(error);
-        }
-        return "did not fail";
-      };
-      for (const message of [capture(), capture()]) {
-        if (message !== ${JSON.stringify(SAFE_INIT_ERROR)} || message.includes(marker)) process.exit(31);
-      }
-
-      process.env.HASNA_SHIELD_STORAGE_MODE = "local";
-      const recovered = getDb();
-      if ((recovered.prepare("SELECT 1 AS value").get()).value !== 1) process.exit(32);
+      const db = getDb();
+      if (db.prepare("SELECT 1 AS value").get().value !== 1) process.exit(31);
       closeDb();
     `;
 
@@ -194,7 +182,7 @@ describe("database", () => {
         stderr: "pipe",
         stdout: "pipe",
       });
-      expect(`${child.stdout.toString()}${child.stderr.toString()}`).not.toContain(marker);
+      expect(`${child.stdout.toString()}${child.stderr.toString()}`).not.toContain("Unsupported shield storage mode");
       expect(child.exitCode).toBe(0);
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -212,7 +200,6 @@ describe("database", () => {
       import { closeDb, getDb } from ${JSON.stringify(moduleUrl)};
       const unsafePath = ${JSON.stringify(path)};
       process.env.SECURITY_DB = unsafePath;
-      process.env.HASNA_SHIELD_STORAGE_MODE = "local";
 
       const capture = () => {
         try { getDb(); } catch (error) {
