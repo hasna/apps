@@ -39,7 +39,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("init")
-    .description("Create the local Open Announce data directory")
+    .description("Create the local Hasna Announce data directory")
     .action(() => {
       const dataDir = resolveAnnounceDataDir();
       new DeliveryLedger({ dataDir });
