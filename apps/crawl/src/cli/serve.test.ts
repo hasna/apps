@@ -82,7 +82,7 @@ describe("serve command", () => {
     const response = await waitForJson(port, proc);
     const body = await response.json();
 
-    expect(body.name).toBe("open-crawl");
+    expect(body.name).toBe("crawl");
     expect(body.port).toBe(port);
   });
 });

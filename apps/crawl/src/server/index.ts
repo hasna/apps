@@ -18,7 +18,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>open-crawl dashboard</title>
+  <title>crawl dashboard</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
@@ -56,7 +56,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>open-crawl</h1>
+    <h1>crawl</h1>
     <span>dashboard</span>
   </header>
   <main>
@@ -195,7 +195,7 @@ export async function handleCrawlRequest(req: Request, port = DEFAULT_PORT): Pro
       const acceptHeader = req.headers.get("accept") ?? "";
       if (acceptHeader.includes("application/json")) {
         return json({
-          name: "open-crawl",
+          name: "crawl",
           version: VERSION,
           apiVersion: "v1",
           port,
@@ -517,7 +517,7 @@ export function startCrawlServer(options: { port?: number; hostname?: string } =
     hostname,
     fetch: (req) => handleCrawlRequest(req, port),
   });
-  console.log(`open-crawl server running on http://${hostname}:${server.port}`);
+  console.log(`crawl server running on http://${hostname}:${server.port}`);
   return server;
 }
 

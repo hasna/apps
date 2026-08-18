@@ -80,7 +80,7 @@ function parseOffset(value: number | undefined): number {
 
 export function buildServer(): McpServer {
 const server = new McpServer({
-  name: "open-crawl",
+  name: "crawl",
   version: VERSION,
 });
 
@@ -613,7 +613,7 @@ server.tool(
 
 server.tool(
   "get_config",
-  "Get the current open-crawl configuration",
+  "Get the current crawl configuration",
   {},
   () => {
     try {
@@ -1091,7 +1091,7 @@ server.tool(
 
 server.tool(
   "storage_status",
-  "Show open-crawl remote storage configuration and local sync metadata",
+  "Show crawl remote storage configuration and local sync metadata",
   {},
   async () => ({
     content: [{
@@ -1103,7 +1103,7 @@ server.tool(
 
 server.tool(
   "storage_push",
-  "Push local open-crawl tables to the configured remote Postgres storage",
+  "Push local crawl tables to the configured remote Postgres storage",
   { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to push") },
   async ({ tables }) => ({
     content: [{ type: "text" as const, text: JSON.stringify(await storagePush({ tables }), null, 2) }],
@@ -1112,7 +1112,7 @@ server.tool(
 
 server.tool(
   "storage_pull",
-  "Pull open-crawl tables from the configured remote Postgres storage",
+  "Pull crawl tables from the configured remote Postgres storage",
   { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to pull") },
   async ({ tables }) => ({
     content: [{ type: "text" as const, text: JSON.stringify(await storagePull({ tables }), null, 2) }],
@@ -1121,7 +1121,7 @@ server.tool(
 
 server.tool(
   "storage_sync",
-  "Push then pull open-crawl tables with the configured remote Postgres storage",
+  "Push then pull crawl tables with the configured remote Postgres storage",
   { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to sync") },
   async ({ tables }) => ({
     content: [{ type: "text" as const, text: JSON.stringify(await storageSync({ tables }), null, 2) }],
@@ -1130,7 +1130,7 @@ server.tool(
 
 server.tool(
   "storage_artifacts_upload",
-  "Upload local open-crawl screenshot artifacts to configured S3 storage",
+  "Upload local crawl screenshot artifacts to configured S3 storage",
   {
     crawl_id: z.string().optional().describe("Limit uploads to one crawl"),
     page_id: z.string().optional().describe("Limit uploads to one page screenshot"),
@@ -1145,7 +1145,7 @@ server.tool(
 
 server.tool(
   "storage_artifacts_download",
-  "Download open-crawl screenshot artifacts from configured S3 storage",
+  "Download crawl screenshot artifacts from configured S3 storage",
   {
     crawl_id: z.string().optional().describe("Limit downloads to one crawl"),
     page_id: z.string().optional().describe("Limit downloads to one page screenshot"),

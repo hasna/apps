@@ -157,7 +157,7 @@ function parseRobotsTxt(
 
 export async function fetchRobotsTxt(
   domain: string,
-  userAgent = "open-crawl"
+  userAgent = "crawl"
 ): Promise<ParsedRobots> {
   const cacheKey = `${domain}:${userAgent}`;
   const cached = cache.get(cacheKey);

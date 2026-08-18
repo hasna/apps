@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function tempHome(): string {
-  const root = mkdtempSync(join(tmpdir(), "open-crawl-home-"));
+  const root = mkdtempSync(join(tmpdir(), "crawl-home-"));
   roots.push(root);
   process.env["HOME"] = root;
   delete process.env["USERPROFILE"];

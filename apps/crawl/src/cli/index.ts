@@ -344,7 +344,7 @@ program
         process.stdout.write(JSON.stringify({ ...s, usage }, null, 2) + "\n");
         return;
       }
-      process.stderr.write(chalk.bold("open-crawl stats\n") + chalk.gray("─".repeat(50)) + "\n");
+      process.stderr.write(chalk.bold("crawl stats\n") + chalk.gray("─".repeat(50)) + "\n");
       process.stderr.write(`  ${chalk.cyan("Total crawls:".padEnd(25))} ${chalk.white(String(s.totalCrawls))}\n`);
       process.stderr.write(`  ${chalk.cyan("Total pages:".padEnd(25))} ${chalk.white(String(s.totalPages))}\n`);
       process.stderr.write(`  ${chalk.cyan("Total words:".padEnd(25))} ${chalk.white(s.totalWords.toLocaleString())}\n`);
