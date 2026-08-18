@@ -1,20 +1,86 @@
 {
+  "$schema": "./node_modules/@hasna/contracts/src/hasna.contract.schema.json",
   "schema": "hasna.service_contract.v1",
   "name": "access",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
-  "description": "Non-human-identity governance CLI + MCP + serve: inventory of every agent/service identity, its credentials and MCP tool scopes, owner mapping, JIT elevation, access reviews and one-click revocation, plus the cohort MCP bearer-token issuer. Local mode uses SQLite at ~/.hasna/access/access.db; cloud mode (HASNA_ACCESS_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres.",
+  "kitVersion": "0.11.1",
+  "description": "Non-human-identity governance CLI + MCP + serve: inventory of every agent/service identity, its credentials and MCP tool scopes, owner mapping, JIT elevation, access reviews and one-click revocation, plus the cohort MCP bearer-token issuer. SQLite at ~/.hasna/access/access.db by default; operator-owned PostgreSQL when HASNA_ACCESS_DATABASE_URL is set.",
   "bins": [
     "access",
     "access-mcp",
     "access-serve"
   ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "access-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": ".",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "access-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "access",
+      "authMode": "local-only"
+    }
+  ],
   "storage": {
-    "mode": "local",
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_ACCESS_",
     "aliasEnvPrefix": "ACCESS_",
-    "databaseUrlSecretRef": "hasna/oss/access/database-url",
-    "sqlitePath": "~/.hasna/access/access.db"
+    "sqlitePath": "~/.hasna/access/access.db",
+    "pgTestGate": {
+      "envVar": "ACCESS_TEST_DATABASE_URL",
+      "command": "bun scripts/pg-test-gate.mjs"
+    }
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
   }
 }

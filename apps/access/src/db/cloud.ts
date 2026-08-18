@@ -43,9 +43,9 @@ export async function openCloudClient(): Promise<import("../generated/storage-ki
     throw new Error("cloud mode needs HASNA_ACCESS_DATABASE_URL (or _FILE); PURE REMOTE reads/writes go to cloud Postgres.");
   }
   assertCloudTlsPolicy(dsn);
-  const { createCloudPoolFromEnv } = await import("../generated/storage-kit/pool.js");
+  const { createServerPoolFromEnv } = await import("../generated/storage-kit/pool.js");
   const { scrubDatabaseDsn } = await import("../config.js");
-  const { client } = createCloudPoolFromEnv("access");
+  const { client } = createServerPoolFromEnv("access");
   scrubDatabaseDsn();
   return client;
 }

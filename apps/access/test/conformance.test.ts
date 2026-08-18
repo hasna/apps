@@ -13,9 +13,17 @@ describe("repo conformance", () => {
     expect(report.ok).toBe(true);
   });
 
-  it("declares the three access bins in the manifest", () => {
+  it("declares the three access bins and the full surface matrix in the manifest", () => {
     const ids = report().checks.map((c) => c.id);
-    for (const id of ["manifest_valid", "bins_allowlisted", "bins_match_package", "mode_enum_compliance", "no_cloud_guard"]) {
+    for (const id of [
+      "manifest_valid",
+      "bins_allowlisted",
+      "bins_match_package",
+      "surface_matrix",
+      "storage_capabilities",
+      "public_manifest_safety",
+      "no_cloud_guard",
+    ]) {
       expect(ids).toContain(id);
     }
   });
