@@ -40,8 +40,9 @@ const CONFIRM_PATTERNS: Array<[RegExp, string]> = [
 
 const BLOCK_PATTERNS: Array<[RegExp, string]> = [
   [SENSITIVE_PATH_PATTERN, "possible credential disclosure"],
-  [/\b(?:cat|grep|rg|sed|awk|head|tail)\b.*\b(?:access|api|auth|refresh|id|session)[_-](?:token|secret|key)\b/i, "possible credential disclosure"],
+  [/\b(?:cat|grep|rg|sed|awk|head|tail)\b.*\b(?:access|api|auth|refresh|id|session|client)[_-]?(?:token|secret|key)\b/i, "possible credential disclosure"],
   [/\b(?:curl|wget)\b.*\b(?:api[_-]?key|(?:access|auth|refresh|id)[_-]?token|client[_-]?secret|secret[_-]?key|token|secret|password)\s*=/i, "possible credential exfiltration"],
+  [/\b(?:curl|wget)\b.*\$[A-Za-z0-9_]*(?:token|secret|key|password|credential)[A-Za-z0-9_]*/i, "possible credential exfiltration"],
   [/\$\(|`|<\(|>\(/, "shell expansion can hide side effects"],
   [/\b(?:awk|perl|python|python3|ruby|node|bash|sh|zsh)\b.*\b(?:system|exec|spawn|eval|child_process)\b/i, "interpreter command can execute side effects"],
   [/\bfind\b.*(?:-exec|-delete|-execdir|-ok|-okdir)\b/i, "find action can mutate files or execute commands"],
