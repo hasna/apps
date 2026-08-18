@@ -9,18 +9,38 @@
     "docs"
   ],
   "metadata": {
-    "service": {
-      "port": 19436,
-      "healthPath": "/health",
-      "readyPath": "/ready",
-      "versionPath": "/version",
-      "apiVersion": "v1",
-      "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/docs/api-key-signing-secret"
+    "conformance": {
+      "waivedSurfaces": [
+        {
+          "kind": "api",
+          "reason": "Docs ships no HTTP API surface: it is a headless document SDK (ProseMirror/TipTap JSON model) with a CLI and a React component library; HTTP serve is not part of the shipped v1."
+        },
+        {
+          "kind": "mcp",
+          "reason": "Docs ships no MCP surface: there is no MCP server bin or tools surface in the package."
+        }
+      ]
     },
-    "client": {
-      "apiUrlEnv": "DOCS_API_URL",
-      "apiKeyEnv": "DOCS_API_KEY"
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
-  }
+  },
+  "serviceSurfaces": [
+    {
+      "name": "docs-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "docs-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "docs",
+      "authMode": "local-only"
+    }
+  ]
 }
