@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * API mode driven end-to-end: a real loopback `/v1` authority, the real CLI
+ * Hosted-API route driven end-to-end: a real loopback `/v1` authority, the real CLI
  * binary, the client's own default `fetch` (manual redirects, real headers, real
  * AbortController). Every other API-mode test injects `fetchImpl` and asserts on
  * a promise, so nothing else in the suite exercises the default transport or the
@@ -60,7 +60,6 @@ async function sendPrompt(): Promise<{ status: number; stdout: string; stderr: s
     env: {
       ...process.env,
       DISPATCH_DATA_DIR: dataDir,
-      HASNA_DISPATCH_STORAGE_MODE: "api",
       HASNA_DISPATCH_API_URL: `http://127.0.0.1:${server!.port}`,
       HASNA_DISPATCH_API_KEY: "test-key",
     },
@@ -73,10 +72,10 @@ async function sendPrompt(): Promise<{ status: number; stdout: string; stderr: s
   return { status, stdout, stderr };
 }
 
-describe("api mode against a live loopback authority", () => {
+describe("hosted API route against a live loopback authority", () => {
   test("a conforming dispatch is printed and exits 0", async () => {
     // Positive control. Without it, the failure cases below would also pass for a
-    // CLI that is simply broken in API mode.
+    // CLI that is simply broken on the hosted route.
     dispatchBody = { dispatch: record };
     const run = await sendPrompt();
 

@@ -1256,7 +1256,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     process.exitCode = 0;
   });
 
-  test("api mode routes CLI read, schedule, target, and daemon commands through HTTP", async () => {
+  test("hosted API route sends CLI read, schedule, target, and daemon commands through HTTP", async () => {
     const out: string[] = [];
     const calls: Array<{ path: string; method: string; body: unknown }> = [];
     const fetchImpl: FetchLike = async (url, init = {}) => {
@@ -1340,13 +1340,12 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     };
     const program = buildProgram({
       env: {
-        HASNA_DISPATCH_STORAGE_MODE: "api",
         HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
         HASNA_DISPATCH_API_KEY: "test-key",
       } as NodeJS.ProcessEnv,
       fetchImpl,
       runnerFactory: async () => {
-        throw new Error("API mode must not enumerate local tmux targets");
+        throw new Error("hosted API route must not enumerate local tmux targets");
       },
       out: (s) => out.push(s),
     });
@@ -1373,7 +1372,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     expect(JSON.parse(out[4]!)).toMatchObject({ health: "alive", scheduled: 1 });
   });
 
-  test("api mode fails closed on an empty authority response instead of answering from the local box", async () => {
+  test("hosted API fails closed on an empty authority response instead of answering from the local box", async () => {
     const out: string[] = [];
     const calls: string[] = [];
     const fetchImpl: FetchLike = async (url, init = {}) => {
@@ -1382,18 +1381,17 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     };
     const program = buildProgram({
       env: {
-        HASNA_DISPATCH_STORAGE_MODE: "api",
         HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
         HASNA_DISPATCH_API_KEY: "test-key",
       } as NodeJS.ProcessEnv,
       fetchImpl,
       runnerFactory: async () => {
-        throw new Error("API mode must not enumerate local tmux targets");
+        throw new Error("hosted API route must not enumerate local tmux targets");
       },
       out: (s) => out.push(s),
     });
 
-    // A body-less 204 is indistinguishable from "not API mode" if the route
+    // A body-less 204 is indistinguishable from "not the hosted route" if the route
     // decision is derived from the payload; each of these must surface the remote
     // failure rather than print local daemon/tmux state.
     await expect(program.parseAsync(["daemon", "status", "--json"], { from: "user" })).rejects.toThrow(/REMOTE_API_EMPTY_RESPONSE/);
@@ -1404,13 +1402,12 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     expect(out).toEqual([]);
   });
 
-  test("api mode fails closed on a null authority body instead of running the local fleet summary", async () => {
+  test("hosted API fails closed on a null authority body instead of running the local fleet summary", async () => {
     const out: string[] = [];
     const fetchImpl: FetchLike = async () =>
       new Response("null", { status: 200, headers: { "content-type": "application/json" } });
     const program = buildProgram({
       env: {
-        HASNA_DISPATCH_STORAGE_MODE: "api",
         HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
         HASNA_DISPATCH_API_KEY: "test-key",
       } as NodeJS.ProcessEnv,
@@ -1433,13 +1430,12 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       new Response("false", { status: 200, headers: { "content-type": "application/json" } });
     const program = buildProgram({
       env: {
-        HASNA_DISPATCH_STORAGE_MODE: "api",
         HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
         HASNA_DISPATCH_API_KEY: "test-key",
       } as NodeJS.ProcessEnv,
       fetchImpl,
       runnerFactory: async () => {
-        throw new Error("API mode must not enumerate local tmux targets");
+        throw new Error("hosted API route must not enumerate local tmux targets");
       },
       out: (s) => out.push(s),
       err: (s) => err.push(s),
@@ -1456,7 +1452,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
 
     // `daemon status` declares a DaemonStatus, and `false` is not one. It must
     // fail closed on the contract rather than print local daemon state — and it
-    // must still not be mistaken for "not API mode".
+    // must still not be mistaken for "not the hosted route".
     await expect(program.parseAsync(["daemon", "status", "--json"], { from: "user" })).rejects.toThrow(
       /REMOTE_API_MALFORMED_RESPONSE/,
     );
@@ -1464,32 +1460,20 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     process.exitCode = 0;
   });
 
-  test("a stale DISPATCH_STORAGE_MODE alias does not brick commands that the canonical mode governs", async () => {
-    const out: string[] = [];
-    const calls: string[] = [];
-    const fetchImpl: FetchLike = async (url, init = {}) => {
-      calls.push(`${init.method ?? "GET"} ${new URL(url).pathname}`);
-      return Response.json({ dispatches: [] });
-    };
-    const program = buildProgram({
-      env: {
-        HASNA_DISPATCH_STORAGE_MODE: "api",
-        // Left over from an older install; it loses to the canonical name above
-        // and is therefore never consulted, so it must not fail the run either.
-        DISPATCH_STORAGE_MODE: "sqlite",
-        HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
-        HASNA_DISPATCH_API_KEY: "test-key",
-      } as NodeJS.ProcessEnv,
-      fetchImpl,
-      runnerFactory: async () => {
-        throw new Error("API mode must not enumerate local tmux targets");
-      },
-      out: (s) => out.push(s),
-    });
-
-    await program.parseAsync(["list", "--json"], { from: "user" });
-
-    expect(calls).toEqual(["GET /v1/dispatches"]);
-    expect(JSON.parse(out[0]!)).toEqual([]);
+  test("a retired storage-mode variable fails the command loudly instead of selecting a backend", () => {
+    // Deployment modes no longer exist: a stale storage-mode variable is an
+    // error naming itself, never a silent selector — even beside a valid pair.
+    // The ratchet fires at program construction, so no command can run with a
+    // retired variable still set.
+    expect(() =>
+      buildProgram({
+        env: {
+          HASNA_DISPATCH_STORAGE_MODE: "api",
+          HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
+          HASNA_DISPATCH_API_KEY: "test-key",
+        } as NodeJS.ProcessEnv,
+        out: (s) => out.push(s),
+      }),
+    ).toThrow(/HASNA_DISPATCH_STORAGE_MODE/);
   });
 });

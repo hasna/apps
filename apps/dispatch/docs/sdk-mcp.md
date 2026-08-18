@@ -71,9 +71,11 @@ Full objects may contain prompt text. Request `verbose: true` only when needed.
 
 ## API route
 
-`HASNA_DISPATCH_STORAGE_MODE` has precedence over the compatibility alias
-`DISPATCH_STORAGE_MODE`. API modes (`api`, `self_hosted`, `remote`, `cloud`,
-`hybrid`) require an authority URL and key; `local` explicitly stays local.
+The hosted HTTP API is selected by the `HASNA_DISPATCH_API_URL` +
+`HASNA_DISPATCH_API_KEY` pair (with `DISPATCH_API_URL`/`DISPATCH_API_KEY` as
+prefix aliases); neither set selects the on-box store. There are no deployment
+modes (owner directive 2026-07-29): an incomplete pair fails closed naming the
+missing variable, and a retired `HASNA_DISPATCH_STORAGE_MODE` variable throws.
 The client validates every 2xx response, rejects redirects, retries only
 HTTP-idempotent methods, and submits side-effecting requests at most once. It
 sends an idempotency key but does not replay writes after an unknown timeout.

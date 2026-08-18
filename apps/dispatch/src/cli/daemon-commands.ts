@@ -29,7 +29,7 @@ export function registerDaemonCommands(program: Command, deps: DaemonCommandDeps
   const makeClient = deps.clientFactory ?? (() => createDispatchClientFromEnv());
 
   /**
-   * Run `fn` against the remote authority when the client route is API mode.
+   * Run `fn` against the remote authority when the client route is the hosted API.
    * The returned `routed` flag comes from the route decision alone — never from
    * the truthiness of the remote payload — so an empty or falsy remote answer can
    * never silently hand the command to the local box.

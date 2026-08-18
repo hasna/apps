@@ -60,17 +60,19 @@ rather than using tmux compatibility shims.
 
 ## Client route
 
-Local mode is the default and uses the on-box runner/store described below. API
-mode is selected with `HASNA_DISPATCH_STORAGE_MODE=api` (or
-`self_hosted`/`remote`/`cloud`/`hybrid`) plus `HASNA_DISPATCH_API_URL` and
-`HASNA_DISPATCH_API_KEY`. In API mode, CLI and MCP client commands route through
-the authenticated `/v1` authority for dispatch records, schedules, targets, fleet
-summary, and daemon actions. Invalid API configuration fails closed instead of
-falling back to local SQLite.
+The on-box runner/store described below is the default. The hosted HTTP API is
+selected by setting both `HASNA_DISPATCH_API_URL` and `HASNA_DISPATCH_API_KEY`;
+CLI and MCP client commands then route through the authenticated `/v1`
+authority for dispatch records, schedules, targets, fleet summary, and daemon
+actions. There are no deployment modes (owner directive 2026-07-29): an
+incomplete API pair — URL without a key, or key without a URL — fails closed
+instead of falling back to local SQLite, and a retired
+`HASNA_DISPATCH_STORAGE_MODE`/`DISPATCH_STORAGE_MODE` variable is an error,
+never a selector.
 
 The route decision is computed once per command and is never re-derived from the
-response value, so an empty or falsy authority payload cannot be mistaken for
-"local mode"; a body-less success raises `REMOTE_API_EMPTY_RESPONSE`. The client
+response value, so an empty or falsy authority payload cannot be mistaken for a
+local answer; a body-less success raises `REMOTE_API_EMPTY_RESPONSE`. The client
 retries only HTTP-idempotent methods, and never after a client-side abort/timeout,
 so a dispatch/exec/key/recover POST is submitted to a pane at most once.
 
