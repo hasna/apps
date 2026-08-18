@@ -24,6 +24,7 @@ import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import {
   extractRemoteFileText,
   readRemoteObject,
+  signRemoteFileDownload,
   type RemoteFileLocator,
   type RemoteObjectReader,
 } from "./file-content.js";
@@ -304,6 +305,15 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
               if (error instanceof SyntaxError) return err("Invalid extraction options", 400);
               return err("File content unavailable", 502);
             }
+          }
+          if (seg.length === 3 && seg[2] === "sign-download" && method === "POST") {
+            const locator = await authorizedFileLocator(client, decision.principal.kid, seg[1]!);
+            if (!locator) return err("File not found", 404);
+            const b = await body();
+            const url = await signRemoteFileDownload(locator, {
+              expires_in_seconds: typeof b.expires_in === "number" ? b.expires_in : undefined,
+            });
+            return json({ url });
           }
           if (seg.length === 2 && method === "GET") {
             const f = await store.getFile(client, seg[1]!);

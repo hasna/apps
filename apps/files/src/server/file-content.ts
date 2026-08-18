@@ -1,4 +1,5 @@
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Worker } from "node:worker_threads";
 import {
   normalizeExtractMaxBytes,
@@ -156,4 +157,28 @@ function responseBody(body: unknown): BodyInit {
     return candidate.transformToWebStream();
   }
   return body as BodyInit;
+}
+
+/**
+ * Server-signed S3 download URL for a remote file locator. The server owns the
+ * object-store credentials; presigning happens here so the client never
+ * touches S3 in api mode. Bounded to 1..3600 seconds, mirroring the local
+ * `get_file_url` clamp.
+ */
+export async function signRemoteFileDownload(
+  locator: RemoteFileLocator,
+  options: { expires_in_seconds?: number } = {},
+): Promise<string> {
+  const requested = options.expires_in_seconds;
+  const expiresIn = Number.isFinite(requested) ? Math.min(Math.max(Math.floor(requested ?? 3600), 1), 3600) : 3600;
+  const client = new S3Client({ region: locator.region ?? "us-east-1" });
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: locator.bucket,
+      Key: locator.object_key,
+      ...(locator.version_id ? { VersionId: locator.version_id } : {}),
+    }),
+    { expiresIn },
+  );
 }

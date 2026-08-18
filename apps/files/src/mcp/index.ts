@@ -8,7 +8,7 @@ import { listGoogleDriveItems, listGoogleDriveProfiles, preflightGoogleDriveSour
 import { indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
 import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "../lib/file-object.js";
 import { extractTextFromFile } from "../lib/extraction.js";
-import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
+import { buildExtractionSnapshot, extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
@@ -16,6 +16,7 @@ import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { store } from "../store/index.js";
+import { ApiStore } from "../store/api-store.js";
 import type { LogActivityInput } from "../store/types.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
 import { registerOrganizationTools } from "./organization-tools.js";
@@ -205,6 +206,17 @@ function requireLocalTransport(tool: string) {
     return mcpError(`${tool} runs on-box only and is unavailable on the hosted transport; the files service owns ingestion.`);
   }
   return null;
+}
+
+/**
+ * The active store when the client is on the hosted (api) transport, or null
+ * on the local transport. Read-side tools route through the {@link ApiStore}'s
+ * hosted routes here; every other tool keeps the `requireLocalTransport` gate
+ * above so api mode can never silently fall back to the on-box SQLite island.
+ */
+function apiStore(): ApiStore | null {
+  const files = store();
+  return files.transport === "api" ? (files as ApiStore) : null;
 }
 
 function mcpContextPackResult(
@@ -568,6 +580,25 @@ registerTool("download_file", "Download a file from S3 to a local path", {
   dest: z.string().optional().describe("Destination path (defaults to ~/Downloads/<filename>)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ id, dest, agent_id }) => {
+  const api = apiStore();
+  if (api) {
+    try {
+      let outPath = dest;
+      if (!outPath) {
+        const file = await api.getFile(id);
+        if (!file) return mcpError(`File not found: ${id}`);
+        outPath = join(homedir(), "Downloads", safeTempFileName(file.name));
+      }
+      mkdirSync(dirname(outPath), { recursive: true });
+      const chunks: Uint8Array[] = [];
+      await api.downloadFileContent(id, (chunk) => { chunks.push(chunk); });
+      writeFileSync(outPath, Buffer.concat(chunks));
+      if (agent_id) logActivity({ agent_id, action: "download", file_id: id, metadata: { dest: outPath } });
+      return { content: [{ type: "text", text: `Downloaded to: ${outPath}` }] };
+    } catch (error) {
+      return mcpError(error instanceof Error ? error.message : String(error));
+    }
+  }
   const denied = requireLocalTransport("download_file");
   if (denied) return denied;
   let resolved;
@@ -796,6 +827,16 @@ registerTool("get_file_url", "Get a pre-signed URL for temporary access to an S3
   id: z.string().describe("File ID"),
   expires_in: z.number().optional().default(3600).describe("URL expiry in seconds (default 1 hour)"),
 }, async ({ id, expires_in }) => {
+  const api = apiStore();
+  if (api) {
+    try {
+      const expiresIn = Math.min(Math.max(Math.floor(expires_in ?? 600), 1), 3600);
+      const url = await api.signFileDownload(id, expiresIn);
+      return { content: [{ type: "text", text: url }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+    }
+  }
   const denied = requireLocalTransport("get_file_url");
   if (denied) return denied;
   let resolved;
@@ -829,6 +870,35 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
   max_bytes: z.number().optional().default(102400).describe("Max bytes to read (default 100KB)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ id, max_bytes, agent_id }) => {
+  const api = apiStore();
+  if (api) {
+    try {
+      const limit = normalizeMcpReadLimit(max_bytes);
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let truncated = false;
+      await api.downloadFileContent(id, (chunk) => {
+        if (truncated || total >= limit) return;
+        const remaining = limit - total;
+        if (chunk.byteLength > remaining) {
+          chunks.push(chunk.subarray(0, remaining));
+          total += remaining;
+          truncated = true;
+        } else {
+          chunks.push(chunk);
+          total += chunk.byteLength;
+        }
+      });
+      const text = Buffer.concat(chunks).toString("utf8");
+      const suffix = truncated
+        ? `\n\n[truncated - ${total} bytes read, max ${limit} bytes]`
+        : "";
+      if (agent_id) logActivity({ agent_id, action: "read", file_id: id, metadata: { max_bytes: limit } });
+      return { content: [{ type: "text" as const, text: `${text}${suffix}` }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+    }
+  }
   const denied = requireLocalTransport("get_file_content");
   if (denied) return denied;
   try {
@@ -859,6 +929,19 @@ registerTool("extract_file_text", "Return chunk-ready extracted text metadata fo
   segment_chars: z.number().optional().default(4000).describe("Maximum characters per segment"),
   redact_patterns: z.array(z.string()).optional().describe("Regex patterns to redact from segment text"),
 }, async ({ id, max_bytes, segment_chars, redact_patterns }) => {
+  const api = apiStore();
+  if (api) {
+    try {
+      const result = await api.extractFileText(id, {
+        max_bytes: max_bytes === undefined ? undefined : max_bytes,
+        max_segment_chars: segment_chars,
+        redact_patterns: redact_patterns as string[] | undefined,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+    }
+  }
   const denied = requireLocalTransport("extract_file_text");
   if (denied) return denied;
   try {
@@ -879,6 +962,20 @@ registerTool("extract_file_snapshot", "Return a deterministic extraction snapsho
   segment_chars: z.number().optional().default(4000).describe("Maximum characters per source segment"),
   redact_patterns: z.array(z.string()).optional().describe("Regex patterns to redact from snapshot text"),
 }, async ({ id, max_bytes, segment_chars, redact_patterns }) => {
+  const api = apiStore();
+  if (api) {
+    try {
+      const result = await api.extractFileText(id, {
+        max_bytes: max_bytes === undefined ? undefined : max_bytes,
+        max_segment_chars: segment_chars,
+        redact_patterns: redact_patterns as string[] | undefined,
+      });
+      const snapshot = buildExtractionSnapshot(result);
+      return { content: [{ type: "text", text: JSON.stringify(snapshot, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+    }
+  }
   const denied = requireLocalTransport("extract_file_snapshot");
   if (denied) return denied;
   try {
@@ -1111,6 +1208,35 @@ registerTool("describe_file", "Get file metadata + first lines of content in one
   id: z.string().describe("File ID"),
   lines: z.number().optional().default(50).describe("Number of lines to preview (default 50)"),
 }, async ({ id, lines }) => {
+  const api = apiStore();
+  if (api) {
+    try {
+      const file = await api.getFile(id);
+      if (!file) return mcpError(`File not found: ${id}`);
+      const source = file.source_id ? await api.getSource(file.source_id) : null;
+      let preview = "(binary or unreadable)";
+      try {
+        const chunks: Uint8Array[] = [];
+        await api.downloadFileContent(id, (chunk) => { chunks.push(chunk); });
+        preview = Buffer.concat(chunks).toString("utf8").split("\n").slice(0, lines ?? 50).join("\n");
+      } catch {
+        // Unreadable content keeps the "(binary or unreadable)" preview.
+      }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            ...file,
+            source_name: source?.name ?? "remote",
+            storage: { kind: "remote" },
+            preview,
+          }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+    }
+  }
   const denied = requireLocalTransport("describe_file");
   if (denied) return denied;
   let resolved;
