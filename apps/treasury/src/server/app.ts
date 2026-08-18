@@ -133,8 +133,8 @@ export function createApp(): Hono {
       }
       try {
         const db = await openDatabase();
-        // Auth decoupled from mode: unauthenticated /v1 only when NOT configured
-        // (startup guard already forbids that on non-loopback / cloud).
+        // Auth decoupled from the storage backend: unauthenticated /v1 only when
+        // NOT configured (the startup guard already forbids that on non-loopback).
         const rc = principal ? contextFromPrincipal(db, principal) : localOwnerContext(db);
         const result = await op.run(rc, buildInput(op, c, body));
         return c.json(result as object);

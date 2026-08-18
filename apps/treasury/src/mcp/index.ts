@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { APP_VERSION } from "../version.js";
 import { isApiAuthConfigured, type ApiPrincipal } from "../server/auth.js";
-import { resolveStorageMode } from "../config.js";
+import { resolveServerBackend } from "../config.js";
 import { OPS, type Profile } from "../services/registry.js";
 import { registerStandardTools } from "./tools/standard.js";
 import { registerStorageTools } from "./tools/storage.js";
@@ -68,18 +68,20 @@ export function buildServer(principal: ApiPrincipal, profile: Profile = getProfi
 /**
  * Fail-closed guard for the stdio transport (BUILD-SPEC §5.1a). Unlike the HTTP
  * transport, stdio has no bearer channel: it always runs as the SYSTEM-bypass
- * localOwnerPrincipal(). That is only acceptable in local mode with auth off —
- * the SAME condition mcpAuthDisabled() enforces for the HTTP loopback dev path.
- * In cloud mode (or when API credentials are configured) stdio would hand a
- * caller full unauthenticated bypass access to production Postgres, so we refuse
- * to start instead of silently granting it.
+ * localOwnerPrincipal(). That is only acceptable on the sqlite backend with
+ * auth off — the SAME condition mcpAuthDisabled() enforces for the HTTP
+ * loopback dev path. When a DATABASE_URL selects the postgresql backend (or
+ * when API credentials are configured) stdio would hand a caller full
+ * unauthenticated bypass access to the configured database, so we refuse to
+ * start instead of silently granting it.
  */
 export function assertStdioSafety(): void {
-  if (resolveStorageMode() === "cloud") {
+  if (resolveServerBackend() === "postgresql") {
     throw new Error(
-      "Refusing to start treasury-mcp stdio transport in cloud mode: stdio grants an " +
-        "unauthenticated SYSTEM-bypass local-owner principal with full access to the cloud " +
-        "Postgres. Use --http with HASNA_TREASURY_API_CREDENTIALS, or run stdio only in local mode.",
+      "Refusing to start treasury-mcp stdio transport while a DATABASE_URL selects the postgresql backend: " +
+        "stdio grants an unauthenticated SYSTEM-bypass local-owner principal with full access to the " +
+        "configured database. Use --http with HASNA_TREASURY_API_CREDENTIALS, or unset the DATABASE_URL " +
+        "to run stdio on the sqlite backend.",
     );
   }
   if (isApiAuthConfigured()) {
@@ -99,7 +101,7 @@ async function main(): Promise<void> {
     await startHttpServer(resolveHttpPort());
     return;
   }
-  // stdio fallback for ad-hoc external clients — local mode, auth off only.
+  // stdio fallback for ad-hoc external clients — sqlite backend, auth off only.
   assertStdioSafety();
   const server = buildServer(localOwnerPrincipal());
   await server.connect(new StdioServerTransport());

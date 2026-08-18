@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { APP_NAME, resolveDbPath, resolveStorageMode } from "../config.js";
+import { APP_NAME, resolveDbPath, resolveServerBackend } from "../config.js";
 import { APP_VERSION } from "../version.js";
 import { registerOpCommands } from "./namespaces.js";
 import { buildCliContext } from "./context.js";
@@ -29,14 +29,14 @@ registerOpCommands(program, { json: () => jsonMode });
 
 program
   .command("doctor")
-  .description("Show storage mode, DB path, migration plan, and redacted storage status")
+  .description("Show storage backend, DB path, migration plan, and redacted storage status")
   .action(async () => {
     try {
       const rc = await buildCliContext();
       emit({
         app: APP_NAME,
         version: APP_VERSION,
-        mode: resolveStorageMode(),
+        backend: resolveServerBackend(),
         db_path: resolveDbPath(),
         migration_plan: getCurrentMigrationPlan(),
         storage_status: await storageStatus(rc),

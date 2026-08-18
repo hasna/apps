@@ -1,18 +1,19 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { resolveDatabaseUrl, resolveDbPath, resolveStorageMode, scrubDatabaseUrl, type StorageMode } from "../config.js";
+import { resolveDatabaseUrl, resolveDbPath, resolveServerBackend, scrubDatabaseUrl } from "../config.js";
 import { ensureTreasuryAppHome } from "../core/app-home.js";
 import { maybeBackupBeforeMigration } from "./backup.js";
 import { runSqliteMigrations, POSTGRES_MIGRATIONS } from "./schema.js";
 
 /**
  * A tiny dialect-agnostic async query surface shared by every service so the
- * SAME domain code runs over local SQLite and cloud Postgres. Services write
+ * SAME domain code runs over SQLite and PostgreSQL. Services write
  * `?`-placeholder SQL; the Postgres client rewrites to `$n`.
  */
 export interface QueryClient {
-  readonly mode: StorageMode;
+  /** The active server data backend this client is bound to (sqlite | postgresql). */
+  readonly backend: "sqlite" | "postgresql";
   all<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
   get<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T | null>;
   run(sql: string, params?: unknown[]): Promise<void>;
@@ -21,7 +22,7 @@ export interface QueryClient {
 }
 
 class SqliteClient implements QueryClient {
-  readonly mode: StorageMode = "local";
+  readonly backend: "sqlite" | "postgresql" = "sqlite";
   constructor(private readonly db: Database) {}
 
   async all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
@@ -73,7 +74,7 @@ interface KitClient extends KitExec {
 }
 
 class PostgresClient implements QueryClient {
-  readonly mode: StorageMode = "cloud";
+  readonly backend: "sqlite" | "postgresql" = "postgresql";
   constructor(
     private readonly client: KitExec,
     private readonly full?: KitClient,
@@ -104,28 +105,32 @@ export interface OpenOptions {
   /** Force a fresh client (ignore singleton). */
   fresh?: boolean;
   /**
-   * Force a specific storage mode instead of resolving it from env. Used by the
-   * storage push/pull/sync tools to open the OPPOSITE (counterpart) store so a
-   * transfer truly crosses local<->cloud. Cloud still fails closed without a DSN.
+   * Force a specific server data backend instead of resolving it from env.
+   * Used by the storage push/pull/sync tools to open the OPPOSITE
+   * (counterpart) store so a transfer truly crosses sqlite<->postgresql.
+   * PostgreSQL still fails closed without a DSN.
    */
-  mode?: StorageMode;
+  backend?: "sqlite" | "postgresql";
 }
 
 /**
  * Open the treasury store.
  *
- * - local: bun:sqlite at the resolved path (`:memory:` for tests) — authoritative.
- * - cloud: PURE REMOTE — a real pg pool built from the vendored storage-kit with
- *   `sslmode=verify-full`. It NEVER silently falls back to in-memory/SQLite; a
+ * - sqlite: bun:sqlite at the resolved path (`:memory:` for tests) —
+ *   authoritative when no DATABASE_URL is configured.
+ * - postgresql: a real pg pool built from the vendored storage-kit with
+ *   `sslmode=verify-full`, selected by HASNA_TREASURY_DATABASE_URL (or
+ *   *_DATABASE_URL_FILE). It NEVER silently falls back to in-memory/SQLite; a
  *   missing DSN or connection failure is a hard fail-closed error.
  */
 export async function openDatabase(opts: OpenOptions = {}): Promise<QueryClient> {
-  if (_client && !opts.fresh && !opts.path && !opts.mode) return _client;
+  if (_client && !opts.fresh && !opts.path && !opts.backend) return _client;
 
-  const mode = opts.mode ?? resolveStorageMode();
-  const client = opts.path !== undefined ? openLocal(opts.path) : mode === "cloud" ? await openCloud() : openLocal(resolveLocalPath());
+  const backend = opts.backend ?? resolveServerBackend();
+  const client =
+    opts.path !== undefined ? openLocal(opts.path) : backend === "postgresql" ? await openPostgres() : openLocal(resolveLocalPath());
 
-  if (!opts.path && !opts.fresh && !opts.mode) _client = client;
+  if (!opts.path && !opts.fresh && !opts.backend) _client = client;
   return client;
 }
 
@@ -147,23 +152,23 @@ function openLocal(path: string): QueryClient {
   return new SqliteClient(db);
 }
 
-async function openCloud(): Promise<QueryClient> {
+async function openPostgres(): Promise<QueryClient> {
   const dsn = resolveDatabaseUrl();
   if (!dsn) {
     throw new Error(
-      "cloud storage mode requires HASNA_TREASURY_DATABASE_URL (or *_FILE). " +
-        "PURE REMOTE refuses to fall back to local/in-memory SQLite.",
+      "postgresql storage requires HASNA_TREASURY_DATABASE_URL (or *_DATABASE_URL_FILE). " +
+        "Refusing to fall back to local/in-memory SQLite.",
     );
   }
   if (!/sslmode=verify-full/.test(dsn)) {
     throw new Error(
-      "cloud DSN must use sslmode=verify-full (BUILD-SPEC §4.8); sslmode=require is forbidden.",
+      "postgresql DSN must use sslmode=verify-full (BUILD-SPEC §4.8); sslmode=require is forbidden.",
     );
   }
   // Vendored kit only — runtime never imports @hasna/contracts (no_cloud_guard).
   //
   // Build the pool from the ALREADY-RESOLVED (file-aware) DSN. We must NOT call
-  // createCloudPoolFromEnv here: that helper re-resolves the DSN from env keys
+  // createServerPoolFromEnv here: that helper re-resolves the DSN from env keys
   // ONLY (HASNA_TREASURY_DATABASE_URL / TREASURY_DATABASE_URL) and cannot see a
   // *_DATABASE_URL_FILE mount — exactly how docker-compose and production inject
   // the secret (BUILD-SPEC §2.4). Passing the resolved `dsn` straight through
