@@ -23,6 +23,8 @@ export function packageVersion(): string {
     try {
       if (existsSync(candidate)) {
         const pkg = JSON.parse(readFileSync(candidate, "utf8")) as { name?: string; version?: string };
+        // `open-accounts` is the retired pre-monorepo checkout folder; kept so a
+        // leftover old-layout checkout still resolves its own version.
         if (pkg.version && (pkg.name === "@hasna/accounts" || candidate.includes("open-accounts") || candidate === "/app/package.json")) {
           cached = pkg.version;
           return cached;

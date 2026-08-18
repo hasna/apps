@@ -2,7 +2,7 @@
 project_id: prj_sny4dzzqz4vr
 project_slug: accounts
 project_name: accounts
-working_directory: /home/hasna/workspace/hasna/opensource/open-accounts
+working_directory: /home/hasna/workspace/repos/hasna/apps/accounts
 label: main
 machine_id: spark01
 is_primary: true
@@ -15,7 +15,7 @@ is_primary: true
 This agent session is scoped to the **main** working directory:
 
 ```
-/home/hasna/workspace/hasna/opensource/open-accounts
+/home/hasna/workspace/repos/hasna/apps/accounts
 ```
 
 **Only write files inside this directory** unless the user explicitly asks you to work elsewhere.
@@ -24,7 +24,7 @@ This agent session is scoped to the **main** working directory:
 
 ```bash
 # Open this project
-cd /home/hasna/workspace/hasna/opensource/open-accounts
+cd /home/hasna/workspace/repos/hasna/apps/accounts
 
 # Sync to S3
 projects sync accounts
