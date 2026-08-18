@@ -58,7 +58,7 @@ try {
     "package/dist/contracts.js", "package/dist/contracts.d.ts", "package/dist/providers.js", "package/dist/providers.d.ts",
     "package/dist/local-public.js", "package/dist/local-public.d.ts",
     "package/dist/storage.js", "package/dist/storage.d.ts", "package/dist/bin/computers.js", "package/dist/bin/computers-serve.js",
-    "package/dist/bin/computers-mcp.js", "package/dist/bin/computers-worker.js", "package/dist/bin/computers-resident.js", "package/dist/bin/computers-migrate.js",
+    "package/dist/bin/computers-mcp.js", "package/dist/bin/computers-worker.js", "package/dist/bin/computers-migrate.js",
     "package/schemas/openapi.json",
   ];
   for (const entry of required) assert(listing.includes(entry), `Packed archive is missing ${entry}`);
@@ -142,14 +142,11 @@ process.stdout.write("packed local provider config path passed\\n");
   const worker = await run([binary("computers-worker"), "--db", database, "--tenant", "tenant_pack"], consumer, environment);
   const worked = json(worker.stdout);
   assert(worker.exitCode === 0 && worker.stderr === "" && worked.handled === 0 && worked.providerAdaptersConfigured === false, "computers-worker contract failed");
-  const resident = await run([binary("computers-resident")], consumer, environment);
-  const residentStatus = json(resident.stdout);
-  assert(resident.exitCode === 1 && resident.stderr === "" && residentStatus.ready === false && residentStatus.mtlsTransport === false && residentStatus.privilegedDaemon === false, "computers-resident contract failed");
   const mcp = await run([binary("computers-mcp")], consumer, environment);
   assert(mcp.exitCode === 1 && mcp.stdout === "" && JSON.stringify(json(mcp.stderr)) === JSON.stringify({ error: { code: "configuration_error", message: "MCP controller configuration is invalid" } }), "computers-mcp contract failed");
   const serve = await run([binary("computers-serve")], consumer, { ...environment, COMPUTERS_AUTH: "{", COMPUTERS_DB: join(temporary, "must-not-exist.db") });
   assert(serve.exitCode === 1 && serve.stdout === "" && JSON.stringify(json(serve.stderr)) === JSON.stringify({ error: { code: "configuration_error", message: "Controller configuration is invalid" } }), "computers-serve contract failed");
-  process.stdout.write(`packed release verification passed (${listing.length} files, 6 exports, 6 binaries)\n`);
+  process.stdout.write(`packed release verification passed (${listing.length} files, 6 exports, 5 binaries)\n`);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

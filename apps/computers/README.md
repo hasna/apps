@@ -40,7 +40,7 @@ Agent-created child Computers reference a controller-created grant. A grant bind
 
 ## Surfaces
 
-Package exports are `.`, `./sdk`, `./contracts`, `./providers`, `./local`, and `./storage`. Binaries are `computers`, `computers-serve`, `computers-mcp`, `computers-worker`, `computers-resident`, and `computers-migrate`.
+Package exports are `.`, `./sdk`, `./contracts`, `./providers`, `./local`, and `./storage`. Binaries are `computers`, `computers-serve`, `computers-mcp`, `computers-worker`, and `computers-migrate`. The resident protocol is a library export only; no `computers-resident` bin is shipped until a privileged daemon exists (see `docs/resident.md`).
 
 The REST API is under `/v1`, with public `/health`, `/ready`, `/version`, and `/openapi.json` probes. Mutating routes do not enable wildcard CORS. The SDK uses a credential-provider abstraction, HTTPS except for exact loopback development hosts, bounded credentials/timeouts, and manual redirect handling. MCP speaks JSON-RPC 2.0 with MCP protocol version `2025-03-26` and intentionally omits delete, reassignment, restore, policy mutation, and Sandbox mutation.
 

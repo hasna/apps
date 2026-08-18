@@ -12,7 +12,6 @@ const entries: Record<string, string> = {
   "dist/bin/computers-serve.js": "src/bin/computers-serve.ts",
   "dist/bin/computers-mcp.js": "src/bin/computers-mcp.ts",
   "dist/bin/computers-worker.js": "src/bin/computers-worker.ts",
-  "dist/bin/computers-resident.js": "src/bin/computers-resident.ts",
   "dist/bin/computers-migrate.js": "src/bin/computers-migrate.ts",
 };
 

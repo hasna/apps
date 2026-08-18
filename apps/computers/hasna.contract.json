@@ -1,16 +1,33 @@
 {
   "schema": "hasna.service_contract.v1",
   "name": "computers",
-  "class": "library",
+  "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
-  "description": "Durable lifetime computers for AI employees.",
+  "kitVersion": "0.11.1",
+  "description": "Durable lifetime computers for AI employees: controller API, CLI, MCP and SDK surfaces over user-owned SQLite or PostgreSQL storage.",
   "hosting": [
     "user-hosted"
   ],
   "bins": [
-    "computers"
+    "computers",
+    "computers-serve",
+    "computers-mcp",
+    "computers-worker",
+    "computers-migrate"
   ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_COMPUTERS_",
+    "sqlitePath": "~/.hasna/computers/computers.db",
+    "pgTestGate": {
+      "envVar": "COMPUTERS_TEST_DATABASE_URL",
+      "command": "bun run test:postgres-migrations"
+    }
+  },
   "serviceSurfaces": [
     {
       "name": "computers-cli",
@@ -18,6 +35,62 @@
       "status": "supported",
       "bin": "computers",
       "authMode": "local-only"
+    },
+    {
+      "name": "computers-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "computers-serve",
+      "authMode": "api-key",
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      }
+    },
+    {
+      "name": "computers-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "clientClassName": "ComputersClient",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "computers-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "computers-mcp",
+      "authMode": "api-key"
     }
-  ]
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "verify:pack"
+      }
+    },
+    "service": {
+      "port": 7788,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key"
+    }
+  }
 }

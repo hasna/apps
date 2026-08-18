@@ -25,7 +25,7 @@ describe("release verification contract", () => {
     expect(packageJson.scripts["verify:release"]).toContain("bun run verify:pack");
     expect(packageJson.scripts["verify:release"]).not.toContain("bun pm pack");
     const script = readFileSync("scripts/verify-pack.ts", "utf8");
-    for (const required of ["--ignore-scripts", "--offline", "consumer.ts", "openapi-smoke.ts", "package/migrations/sqlite", "package/migrations/postgres", "package/schemas/openapi.json", "@hasna/computers/sdk", "@hasna/computers/contracts", "@hasna/computers/providers", "@hasna/computers/storage", "computers-serve", "computers-mcp", "computers-worker", "computers-resident", "computers-migrate"]) {
+    for (const required of ["--ignore-scripts", "--offline", "consumer.ts", "openapi-smoke.ts", "package/migrations/sqlite", "package/migrations/postgres", "package/schemas/openapi.json", "@hasna/computers/sdk", "@hasna/computers/contracts", "@hasna/computers/providers", "@hasna/computers/storage", "computers-serve", "computers-mcp", "computers-worker", "computers-migrate"]) {
       expect(script).toContain(required);
     }
     for (const forbidden of ["npm install", "bunx", "prepack"]) expect(script).not.toContain(forbidden);
