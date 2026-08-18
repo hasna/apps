@@ -11,8 +11,14 @@ set -e
 # The contracts 0.11.1 client selects the http transport purely from the API
 # URL + key pair (storage-mode variables are retired and the seam refuses
 # them), so the hermetic mechanism is clearing the pair: with neither set the
-# resolver stays on the local store. HOME is left intact; the fleet app-config
-# disk tier only applies to the process that exports the API URL.
+# resolver stays on the local store. The seam also consults the fleet
+# app-config disk tier (~/.hasna/cloud/<name>.env) when the environment is
+# silent, so HOME is pointed at a session temp dir here — a flipped machine
+# (flip state on disk) cannot route the local-isolation suite to the hosted
+# API either.
+TEST_HOME="$(mktemp -d)"
+trap 'rm -rf "$TEST_HOME"' EXIT
+export HOME="$TEST_HOME"
 unset HASNA_ATTACHMENTS_API_URL
 unset HASNA_ATTACHMENTS_API_KEY
 unset ATTACHMENTS_API_URL

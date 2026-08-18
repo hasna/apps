@@ -68,6 +68,7 @@ function makeApp() {
     version: "test",
     mode: "cloud",
     signingSecret: SIGNING,
+    keyStatus: async () => "active",
   });
 }
 
