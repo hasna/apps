@@ -62,4 +62,4 @@ Shared agent-registry tools:
 
 High-cardinality tools return compact text by default. Where the schema offers them, use `limit`, `verbose=true`, or `json=true`. Limits are clamped to 100 for MCP calls.
 
-The `sync` tool accepts `all`, any supported coding agent, or `loops`. It ingests on-box files only in local mode. In cloud-client mode it returns an explanatory no-op because all other data tools already use the shared API.
+The `sync` tool accepts `all`, any supported coding agent, or `loops`. It ingests on-box files (in local mode into the local SQLite; in cloud-client mode it reads the on-box files on this machine and pushes the rows to the shared API).

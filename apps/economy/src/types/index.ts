@@ -210,6 +210,8 @@ export interface SyncOptions {
   loops?: boolean
   verbose?: boolean
   dedupe?: boolean
+  /** Claude/Takumi JSONL root override (tests). */
+  projectsDir?: string
 }
 
 export interface SessionFilter {

@@ -17,8 +17,8 @@ The supported coding-agent values are `claude`, `takumi`, `codex`, `gemini`, `op
 
 | Command | Current behavior and principal options |
 | --- | --- |
-| `economy sync` | Ingest every local source, or select sources with `--claude`, `--takumi`, `--codex`, `--gemini`, `--opencode`, `--cursor`, `--pi`, `--hermes`, or `--loops`. Maintenance flags are `--force`, `--backfill-machine`, and `--recalculate`; `--verbose` prints source details. |
-| `economy today`, `week`, `month` | Auto-sync in local mode and print the corresponding summary. Auto-sync is skipped in cloud-client mode. |
+| `economy sync` | Ingest every local source, or select sources with `--claude`, `--takumi`, `--codex`, `--gemini`, `--opencode`, `--cursor`, `--pi`, `--hermes`, or `--loops`. Maintenance flags are `--force`, `--backfill-machine`, and `--recalculate`; `--verbose` prints source details. In cloud-client mode the on-box provider files are read on this machine and pushed to the shared API. |
+| `economy today`, `week`, `month` | Auto-sync (local SQLite, or cloud-client push of this machine's on-box provider files) and print the corresponding summary. |
 | `economy sessions` | List sessions. Filters: `--agent`, `--project`, `--account`, `--machine`, `--since`, and `--search`; `--limit` defaults to 20; `--format` is `table`, `compact`, `csv`, or `json`. |
 | `economy session <id>` | Show one session and its requests. IDs may be prefixes. `--limit` defaults to 20 and `--verbose` shows up to 50 requests. |
 | `economy top` | Rank expensive sessions with `-n`, `--agent`, and `--since`. |
@@ -58,7 +58,7 @@ Human output for high-cardinality commands is intentionally capped. Use the comm
 | `economy project` | `add <path> [--name]`, `list`, `show <nameOrPath>`, `rename <path> <name>`, `remove <path>`. |
 | `economy pricing` | `list`, `set <model>`, `remove <model>`. Set accepts `--input`, `--output`, `--cache-read`, `--cache-write`, `--cache-write-1h`, and `--cache-storage`. |
 | `economy subscriptions` | `set` (requires `--provider` and `--plan`; optional `--agent`, `--fee`, `--included`), `list`, `remove <id>`. |
-| `economy billing` | `sync` (`--days`, provider selectors), `show --period`, and `diff --period`. Provider sync is local-only. |
+| `economy billing` | `sync` (`--days`, provider selectors), `show --period`, and `diff --period`. Provider billing is fetched from the provider APIs on this machine; in cloud-client mode the rows are pushed to the shared API. |
 | `economy config` | Show config, `get <key>`, `set <key> <value>`, or `webhook-test`. See [configuration](configuration.md). |
 | `economy remove <type> <id>` | Top-level alias for removing a `budget`, `project`, `goal`, or `pricing` row. Alias: `rm`. |
 

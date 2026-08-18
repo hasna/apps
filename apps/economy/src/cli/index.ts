@@ -9,12 +9,15 @@ import { registerBriefCommand } from './commands/brief.js'
 import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, queryZeroCostTokenizedModels, getMachineId } from '../db/database.js'
+import { openDatabase, getMachineId } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { execSync } from 'child_process'
 import { getStore, isCloudStore } from '../lib/store/index.js'
+import { syncAllToCloud, billingSyncToCloud } from '../lib/cloud-ingest.js'
+import { economyCloudStorage } from '../lib/cloud-storage.js'
+import { backfillMachineId, recalculateZeroCostRequests } from '../lib/sync-maintenance.js'
 import { billingDeltaPct } from '../lib/billing-diff.js'
 import { HasnaHttpError } from '../lib/contracts-client/transport.js'
 import type { AccountBreakdown, CostSummary, CostCenterKind, ProjectBreakdown, Period } from '../types/index.js'
@@ -29,9 +32,13 @@ program
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
-  // self_hosted/cloud mode: reads come straight from the cloud API, so there is
-  // no local DB to ingest into. Skip the local sync entirely.
-  if (isCloudStore()) return
+  // self_hosted/cloud mode: ingest this machine's on-box provider files into
+  // the shared API first; the reads that follow come straight from the cloud.
+  if (isCloudStore()) {
+    const cloud = economyCloudStorage()
+    if (cloud.active) await syncAllToCloud(cloud, opts)
+    return
+  }
   const db = openDatabase()
   ensurePricingSeeded(db)
   await syncAll(db, opts)
@@ -281,12 +288,39 @@ program
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
   .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
-    // self_hosted/cloud mode: this client reads and writes the shared cloud API,
-    // it has no local DB to ingest into. Local log ingestion is a local-mode
-    // concept only — skip it here exactly like autoSync does before reads, so we
-    // never write to a local SQLite that the cloud transport will never read.
+    // self_hosted/cloud mode: the on-box provider files exist on THIS machine,
+    // so the client reads them and pushes the ingested rows to the shared API
+    // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
     if (isCloudStore()) {
-      console.log(chalk.yellow('cloud mode: ingest is a local-only operation; nothing to sync (reads/writes route to the cloud API)'))
+      const cloud = economyCloudStorage()
+      if (!cloud.active) {
+        console.log(chalk.yellow('cloud mode: sync transport unavailable (set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY)'))
+        return
+      }
+      const result = await syncAllToCloud(cloud, {
+        claude: opts.claude,
+        takumi: opts.takumi,
+        codex: opts.codex,
+        gemini: opts.gemini,
+        opencode: opts.opencode,
+        cursor: opts.cursor,
+        pi: opts.pi,
+        hermes: opts.hermes,
+        loops: opts.loops,
+        verbose: opts.verbose,
+        force: opts.force,
+        backfillMachine: opts.backfillMachine,
+        recalculate: opts.recalculate,
+      })
+      if (result.posted) {
+        const parts = Object.entries(result.ingested ?? {})
+          .filter(([, n]) => n > 0)
+          .map(([table, n]) => `${n} ${table}`)
+        console.log(chalk.green(`✓ pushed ${parts.join(', ')} to the shared API (${result.total} rows)`))
+      } else {
+        console.log(chalk.dim('✓ no new provider data to push (mtime cache current)'))
+      }
+      console.log(chalk.bold.green('\n✓ Sync complete'))
       return
     }
     const db = openDatabase()
@@ -320,36 +354,18 @@ program
       verbose: opts.verbose,
     })
     console.log(chalk.green(`✓ deduped ${result.deduped}`))
-    // Backfill empty machine_id records
+    // Backfill empty machine_id records (shared helper: local and cloud paths)
     if (opts.backfillMachine) {
       const machine = getMachineId()
-      const reqCount = db.prepare(`UPDATE requests SET machine_id = ? WHERE machine_id = '' OR machine_id IS NULL`).run(machine)
-      const sessCount = db.prepare(`UPDATE sessions SET machine_id = ? WHERE machine_id = '' OR machine_id IS NULL`).run(machine)
-      console.log(chalk.cyan(`→ Backfilled machine_id='${machine}': ${reqCount.changes} requests, ${sessCount.changes} sessions`))
+      const r = backfillMachineId(db)
+      console.log(chalk.cyan(`→ Backfilled machine_id='${machine}': ${r.requests} requests, ${r.sessions} sessions`))
     }
-    // Recalculate zero-cost requests
+    // Recalculate zero-cost requests (shared helper: local and cloud paths)
     if (opts.recalculate) {
-      const { computeCostFromDb, getPricingFromDb } = await import('../lib/pricing.js')
-      const zeroRows = db.prepare(`SELECT id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, cache_create_5m_tokens, cache_create_1h_tokens FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)`).all() as Array<{ id: string; model: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_create_tokens: number; cache_create_5m_tokens?: number; cache_create_1h_tokens?: number }>
-      let fixed = 0
-      for (const r of zeroRows) {
-        const cache5m = r.cache_create_5m_tokens ?? r.cache_create_tokens
-        const cost = computeCostFromDb(db, r.model, r.input_tokens, r.output_tokens, r.cache_read_tokens, cache5m, r.cache_create_1h_tokens ?? 0)
-        if (cost > 0) {
-          db.prepare(`UPDATE requests SET cost_usd = ? WHERE id = ?`).run(cost, r.id)
-          fixed++
-        }
-      }
-      if (fixed > 0) {
-        const touchedSessions = new Set(zeroRows.map(r => {
-          const row = db.prepare(`SELECT session_id FROM requests WHERE id = ?`).get(r.id) as { session_id: string } | null
-          return row?.session_id
-        }).filter(Boolean) as string[])
-        const { rollupSession } = await import('../db/database.js')
-        for (const sid of touchedSessions) { rollupSession(db, sid) }
-      }
-      console.log(chalk.cyan(`→ Recalculated: ${fixed}/${zeroRows.length} zero-cost requests now have pricing`))
-      const zeroCostBuckets = queryZeroCostTokenizedModels(db, 8)
+      const { getPricingFromDb } = await import('../lib/pricing.js')
+      const r = await recalculateZeroCostRequests(db)
+      console.log(chalk.cyan(`→ Recalculated: ${r.fixed}/${r.total} zero-cost requests now have pricing`))
+      const zeroCostBuckets = r.buckets
       if (zeroCostBuckets.length > 0) {
         console.log(chalk.yellow('→ Zero-cost token buckets remain:'))
         for (const row of zeroCostBuckets) {
@@ -1446,16 +1462,25 @@ billingCmd
   .option('--openai', 'Only sync OpenAI')
   .option('--gemini', 'Only sync Gemini')
   .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
-    // self_hosted/cloud mode: provider billing is pulled into the local DB by the
-    // machine that owns the provider credentials; there is no ApiStore write path
-    // for billing, so writing here would land in a local SQLite the cloud
-    // transport never reads. Skip+warn exactly like the `sync` command.
-    if (isCloudStore()) {
-      console.log(chalk.yellow('cloud mode: billing ingest is a local-only operation; nothing to sync (reads route to the cloud API)'))
-      return
-    }
     const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
     if (days > 366) fail('--days must be between 1 and 366')
+    // self_hosted/cloud mode: the provider credentials live on this machine, so
+    // the client fetches the billing and pushes the rows to the shared API
+    // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
+    if (isCloudStore()) {
+      const cloud = economyCloudStorage()
+      if (!cloud.active) {
+        console.log(chalk.yellow('cloud mode: billing sync transport unavailable (set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY)'))
+        return
+      }
+      const result = await billingSyncToCloud(cloud, { days, anthropic: opts.anthropic, openai: opts.openai, gemini: opts.gemini })
+      for (const [provider, p] of Object.entries(result.providers)) {
+        if (p.ok) console.log(chalk.green(`✓ ${provider} billing: ${p.days} days, $${p.totalUsd!.toFixed(2)}`))
+        else console.log(chalk.red(`✗ ${provider}: ${p.error}`))
+      }
+      if (result.posted) console.log(chalk.green(`✓ pushed ${result.total} billing rows to the shared API`))
+      return
+    }
     const db = openDatabase()
     const doAll = !opts.anthropic && !opts.openai && !opts.gemini
 

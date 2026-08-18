@@ -3,6 +3,8 @@ import { registerAgentTools } from '@hasna/agent-registry'
 import { z } from 'zod'
 import { openDatabase, getMachineId } from '../db/database.js'
 import { syncAll } from '../lib/sync-all.js'
+import { syncAllToCloud } from '../lib/cloud-ingest.js'
+import { economyCloudStorage } from '../lib/cloud-storage.js'
 import { AGENTS } from '../lib/agents.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
@@ -567,15 +569,36 @@ server.tool(
   `Ingest new cost data. sources: ${SYNC_SOURCES.join('|')}. Set json=true for the full result object.`,
   { sources: z.enum([...SYNC_SOURCES] as [string, ...string[]]).optional(), json: z.boolean().optional() },
   async ({ sources, json }: { sources?: typeof SYNC_SOURCES[number]; json?: boolean }) => {
-    // self_hosted/cloud mode: this client reads and writes the shared cloud API
-    // and has no local DB to ingest into. Local log ingestion is a local-mode
-    // concept only — skip it here exactly like the CLI `sync` command, so we
-    // never write to a local SQLite that the cloud transport will never read.
-    if (isCloudStore()) {
-      return text('cloud mode: ingest is a local-only operation; nothing to sync (reads/writes route to the cloud API)')
-    }
     const selected = sources ?? 'all'
     const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
+    // self_hosted/cloud mode: the on-box provider files exist on THIS machine, so
+    // the client reads them and pushes the ingested rows to the shared API
+    // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
+    if (isCloudStore()) {
+      const cloud = economyCloudStorage()
+      if (!cloud.active) {
+        return text('cloud mode: sync transport unavailable (set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY)')
+      }
+      const result = await syncAllToCloud(cloud, opts)
+      if (json) return text(JSON.stringify(result, null, 2))
+      const lines = [`sync: ${selected}`]
+      if (result.posted) {
+        const parts = Object.entries(result.ingested ?? {})
+          .filter(([, n]) => n > 0)
+          .map(([table, n]) => `${table}:${n}`)
+        lines.push(`pushed: ${parts.join(', ')} (${result.total} rows)`)
+      } else {
+        lines.push('no new provider data to push (mtime cache current)')
+      }
+      lines.push(`deduped: ${result.deduped}`)
+      for (const [source, value] of Object.entries(result)) {
+        if (source === 'deduped' || source === 'posted' || source === 'ingested' || source === 'total') continue
+        if (value == null) continue
+        lines.push(`${source}: ${compactObject(value)}`)
+      }
+      lines.push('Use json=true for the full sync result.')
+      return text(lines.join('\n'))
+    }
     const result = await syncAll(localDb(), opts)
     if (json) return text(JSON.stringify(result, null, 2))
     const lines = [

@@ -37,10 +37,10 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
   const result: SyncAllResult = { deduped: 0 }
 
   if (all || opts.claude) {
-    result.claude = await ingestClaude(db, opts.verbose)
+    result.claude = await ingestClaude(db, opts.verbose, opts.projectsDir)
     result.claudeQuota = await ingestClaudeQuota(db, opts.verbose)
   }
-  if (all || opts.takumi) result.takumi = await ingestTakumi(db, opts.verbose)
+  if (all || opts.takumi) result.takumi = await ingestTakumi(db, opts.verbose, opts.projectsDir)
   if (all || opts.codex) {
     result.codex = await ingestCodex(db, opts.verbose)
     result.codexQuota = await ingestCodexQuota(db, opts.verbose)
