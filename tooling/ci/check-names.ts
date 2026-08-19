@@ -6,6 +6,14 @@
  * A `@hasna-internal/*` name or any other scope is a violation: this repo
  * PRODUCES public packages.
  *
+ * Every DIRECTORY under apps/ must be a member: a member-looking directory
+ * with no package.json is a ghost — invisible to every census and gate while
+ * looking like a member to anyone listing apps/ (measured 2026-08-19:
+ * apps/otp and apps/personalnotes, both 100% gitignored residue with zero
+ * tracked files, hidden from git status while misleading sweeps and agents
+ * working the tree). A ghost is refused with the two remedies: add a
+ * package.json to make it a member, or delete the residue.
+ *
  * Usage:
  *   bun tooling/ci/check-names.ts [--root <dir>]
  *   bun tooling/ci/check-names.ts --self-test
@@ -16,27 +24,30 @@ import * as path from "node:path";
 
 const NAME_RE = /^@hasna\/[a-z0-9-]+$/;
 
-function memberPackages(root: string): string[] {
+function memberPackages(root: string): { members: string[]; ghosts: string[] } {
   const pkgRoot = path.join(root, "package.json");
-  if (!fs.existsSync(pkgRoot)) return [];
+  if (!fs.existsSync(pkgRoot)) return { members: [], ghosts: [] };
   const rootPkg = JSON.parse(fs.readFileSync(pkgRoot, "utf8"));
   const workspaces: string[] = rootPkg.workspaces ?? [];
   const apps = workspaces.includes("apps/*") ? "apps" : null;
-  if (!apps) return [];
+  if (!apps) return { members: [], ghosts: [] };
   const dir = path.join(root, apps);
-  if (!fs.existsSync(dir)) return [];
-  return fs
+  if (!fs.existsSync(dir)) return { members: [], ghosts: [] };
+  const dirs = fs
     .readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
-    .map((e) => e.name)
+    .map((e) => e.name);
+  const members = dirs
     .filter((name) => fs.existsSync(path.join(dir, name, "package.json")))
     .map((name) => path.join(dir, name));
+  const ghosts = dirs.filter((name) => !fs.existsSync(path.join(dir, name, "package.json")));
+  return { members, ghosts };
 }
 
-function checkDir(root: string): { violations: string[]; count: number } {
+function checkDir(root: string): { violations: string[]; count: number; ghosts: string[] } {
   const violations: string[] = [];
-  const pkgs = memberPackages(root);
-  for (const dir of pkgs) {
+  const { members, ghosts } = memberPackages(root);
+  for (const dir of members) {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
     const name: string = pkg.name ?? "";
     const slug = path.basename(dir);
@@ -46,17 +57,24 @@ function checkDir(root: string): { violations: string[]; count: number } {
       violations.push(`${dir}: package name "${name}" does not match directory "${slug}"`);
     }
   }
-  return { violations, count: pkgs.length };
+  const ghostPaths = ghosts.map((name) => path.join(root, "apps", name));
+  return { violations, count: members.length, ghosts: ghostPaths };
 }
 
 function run(root: string): number {
-  const { violations, count } = checkDir(root);
+  const { violations, count, ghosts } = checkDir(root);
   if (violations.length > 0) {
     console.error(`NAME-CONFORMANCE VIOLATIONS (${violations.length}):`);
     for (const v of violations) console.error(`  ${v}`);
     return 1;
   }
-  console.log(`name conformance: ${count} member packages, 0 violations`);
+  if (ghosts.length > 0) {
+    console.error(`GHOST MEMBER DIRECTORIES (${ghosts.length}): a directory under apps/ with no package.json is not a member and is invisible to every gate.`);
+    for (const g of ghosts) console.error(`  ${g}`);
+    console.error(`  remedy: add a package.json to make it a member, or delete the residue directory.`);
+    return 1;
+  }
+  console.log(`name conformance: ${count} member packages, 0 violations, 0 ghost directories`);
   return 0;
 }
 
@@ -83,9 +101,12 @@ function selfTest(): number {
   writeMember("bar", "@hasna-internal/bar"); // wrong scope -> must fail
   writeMember("baz", "@hasna/other"); // name/dir mismatch -> must fail
   writeMember("qux", "qux"); // un-scoped -> must fail
+  // ghost: a member-looking directory with no package.json -> must be flagged
+  fs.mkdirSync(path.join(root, "apps", "ghost"), { recursive: true });
 
   const badRes = checkDir(root);
   check("seeded violations fire (3 violations on 4 members)", badRes.count === 4 && badRes.violations.length === 3);
+  check("ghost directory fires (no package.json -> flagged)", badRes.ghosts.length === 1 && badRes.ghosts[0].endsWith(path.join("apps", "ghost")));
 
   const goodRoot = path.join(tmp, "good");
   fs.mkdirSync(path.join(goodRoot, "apps", "foo"), { recursive: true });
@@ -98,7 +119,7 @@ function selfTest(): number {
     JSON.stringify({ name: "@hasna/foo" }, null, 2),
   );
   const goodRes = checkDir(goodRoot);
-  check("clean tree passes (1 valid member, 0 violations)", goodRes.count === 1 && goodRes.violations.length === 0);
+  check("clean tree passes (1 valid member, 0 violations, 0 ghosts)", goodRes.count === 1 && goodRes.violations.length === 0 && goodRes.ghosts.length === 0);
 
   fs.rmSync(tmp, { recursive: true, force: true });
   if (failed) {
