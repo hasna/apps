@@ -9,7 +9,7 @@ import {
   symlinkSync,
   unlinkSync,
 } from "node:fs";
-import { platform } from "node:os";
+import { homedir, platform } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { AccountsError, type SharedConfigSpec, type ToolDef } from "../types.js";
 import { accountsHome } from "../storage.js";
@@ -318,7 +318,7 @@ function installedStatuslineCommand(result: SharedCapabilitiesResult): string | 
   const bunInstall = process.env.BUN_INSTALL?.trim();
   const directories = [
     ...(process.env.PATH ?? "").split(delimiter),
-    ...(bunInstall ? [join(bunInstall, "bin")] : []),
+    ...(bunInstall ? [join(bunInstall, "bin")] : [join(homedir(), ".bun", "bin")]),
   ];
   for (const directory of [...new Set(directories)]) {
     if (!directory) continue;
