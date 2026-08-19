@@ -299,7 +299,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
 
 /** Four-surface WARN exceptions — members missing the <name>-serve bin. */
 export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "actions", reason: "Library-shaped (action contracts); no server surface." },
   { member: "announce", reason: "CLI-only member; no server surface." },
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
   { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
