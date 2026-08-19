@@ -858,6 +858,18 @@ const QUOTED_UPDATE_SERVICE =
 const NOOP_UPDATE_SERVICE =
   '          true # aws ecs update-service --cluster "${CLUSTER}" --service "${SERVICE}" --task-definition "${deployed_task_definition}"';
 
+/**
+ * The verify step's package-version read in its two historical forms. Main
+ * (PR #590) replaced the HOST-BUN form with the NODE form — the "stop invoking
+ * it" resolution the implication guard explicitly permits. The mutations below
+ * restore the host-bun form as part of the mutated workflow, so the guard
+ * still has an invocation to pin even though the real workflow no longer runs
+ * host bun.
+ */
+const NODE_VERSION_READ = '          expected_version="$(node -p \'require("./package.json").version\')"';
+const HOST_BUN_VERSION_READ =
+  '          expected_version="$(bun -e \'console.log(require("./package.json").version)\')"';
+
 interface Mutation {
   label: string;
   mutate: (source: string) => string;
@@ -977,11 +989,13 @@ const MUTATIONS: Mutation[] = [
   },
   {
     // The exact defect run 32253173775 hit: the host bun invocation with no
-    // step that installs bun. Reproduced by deleting the setup step, which is
-    // byte-for-byte the pre-fix workflow.
+    // step that installs bun. Main has since rewritten that version read to
+    // `node -p` (PR #590), so the mutation restores the host-bun read it
+    // replaced AND deletes the setup step — reproducing the pre-fix workflow
+    // at the point of failure.
     label: "host bun invoked with no bun installed on the runner",
     mutate: (source) =>
-      source.replace(
+      source.replace(NODE_VERSION_READ, HOST_BUN_VERSION_READ).replace(
         "      - name: Set up host Bun for shipped-artefact verification\n" +
           "        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0\n" +
           "        with:\n" +
@@ -1003,7 +1017,10 @@ const MUTATIONS: Mutation[] = [
         "        with:\n" +
         "          bun-version: 1.3.14 # in lockstep with the root package.json \"packageManager\"\n\n";
       const trivy = "      - name: Generate local vulnerability report\n";
-      return source.replace(setup, "").replace(trivy, setup + trivy);
+      return source
+        .replace(NODE_VERSION_READ, HOST_BUN_VERSION_READ)
+        .replace(setup, "")
+        .replace(trivy, setup + trivy);
     },
     survivingText: "oven-sh/setup-bun",
     expect: (errors) => errors.some((error) => error.includes("runs the host command")),
