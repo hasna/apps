@@ -1,3 +1,0 @@
-# Preserve the exact pinned upstream bytes; Unicode's data file intentionally
-# contains trailing horizontal whitespace on mapping lines.
-scripts/unicode/confusables-*.txt -whitespace
