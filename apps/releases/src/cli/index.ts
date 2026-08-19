@@ -9,6 +9,10 @@ import { renderTable, runShipGap } from "../lib/shipgap-run.js";
 import { shouldFailGate } from "../lib/shipgap.js";
 import { runPublishGates } from "../lib/publish-gate-run.js";
 import { readNpmrcToken } from "../lib/npmrc.js";
+import {
+  SelectiveChangesetError,
+  prepareSelectiveChangesets,
+} from "../lib/selective-changesets.js";
 import { VERSION } from "../version.js";
 
 function printJson(value: unknown): void {
@@ -18,6 +22,12 @@ function printJson(value: unknown): void {
 function fail(error: unknown): never {
   if (error instanceof ZodError) {
     printJson({ error: "invalid release document", issues: error.issues });
+  } else if (error instanceof SelectiveChangesetError) {
+    printJson({
+      error: error.message,
+      code: error.code,
+      ...(error.details === undefined ? {} : { details: error.details }),
+    });
   } else {
     printJson({ error: error instanceof Error ? error.message : String(error) });
   }
@@ -35,6 +45,44 @@ program
   .description("Release ledger, publish receipts, downstream fan-out, and npm reconciliation for Hasna-coded apps")
   .version(VERSION)
   .option("--data-dir <path>", "Data directory (default ~/.hasna/releases, env RELEASES_DATA_DIR)");
+
+program
+  .command("changesets-candidate")
+  .description(
+    "Plan or apply an explicit Changesets candidate without consuming unrelated Changesets",
+  )
+  .option(
+    "--changeset <id>",
+    "Changeset ID to include (repeatable and required)",
+    collect,
+    [],
+  )
+  .option(
+    "--package <name>",
+    "Workspace package allowed in the selected dependency closure (repeatable and required)",
+    collect,
+    [],
+  )
+  .option("--cwd <path>", "Workspace root containing .changeset", process.cwd())
+  .option("--apply", "Apply the validated candidate (default: dry-run)")
+  .action(async (opts: {
+    changeset: string[];
+    package: string[];
+    cwd: string;
+    apply?: boolean;
+  }) => {
+    try {
+      const result = await prepareSelectiveChangesets({
+        cwd: opts.cwd,
+        changesetIds: opts.changeset,
+        packageAllowlist: opts.package,
+        mode: opts.apply ? "apply" : "dry-run",
+      });
+      printJson(result);
+    } catch (error) {
+      fail(error);
+    }
+  });
 
 program
   .command("record <spec>")
