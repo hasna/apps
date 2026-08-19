@@ -265,11 +265,6 @@ export const PRIVATE_TRUE_EXCEPTIONS: string[] = [];
 /** license must be Apache-2.0. Recorded exceptions (each with reason): */
 export const LICENSE_EXCEPTIONS: Array<{ member: string; license: string; reason: string }> = [
   {
-    member: "ui",
-    license: "MIT",
-    reason: "Intentional: apps/ui is the ui.sh skill mirror; its LICENSE file is MIT (Copyright (c) 2026 hasna). Revisit only if the org standard is applied retroactively.",
-  },
-  {
     member: "notes",
     license: "MIT",
     reason: "Imported as-is from hasna/notes: the repository LICENSE file is MIT (Copyright (c) 2026 Hasna); the license field follows the repo's own LICENSE file. Revisit only if the org standard is applied retroactively.",
@@ -293,8 +288,7 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
   { member: "terminal", reason: "CLI-only member (terminal tooling); no MCP surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (bash sentinel/bun-wrapper/battery, SC-00062); no MCP surface." },
-  { member: "ui", reason: "Legacy ui.sh mirror; single `ui` bin, no MCP surface." },
+  { member: "test-guard", reason: "Shell-guard member (bash sentinel/bun-wrapper/battery, SC-00062); no MCP surface." }
 ];
 
 /** Four-surface WARN exceptions — members missing the <name>-serve bin. */
@@ -326,8 +320,7 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "tables", reason: "Library-shaped; no server surface." },
   { member: "tai", reason: "Client-shaped; no server surface." },
   { member: "terminal", reason: "CLI-only member (terminal tooling); no server surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (host-local concurrency guard); no server surface." },
-  { member: "ui", reason: "Legacy ui.sh mirror; no server surface." },
+  { member: "test-guard", reason: "Shell-guard member (host-local concurrency guard); no server surface." }
 ];
 
 /** Four-surface WARN exceptions — members missing the ./sdk export. The
@@ -372,8 +365,7 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
   { member: "test-guard", reason: "SDK lane (c7ce8b75); bash-only guard ships no importable Node SDK export (see the member's CONTRACTS_EXCEPTIONS entry)." },
-  { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "ui", reason: "Legacy ui.sh mirror; SDK lane (c7ce8b75)." },
+  { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." }
 ];
 
 /** HARD four-surface exceptions — members missing the `<name>` CLI bin.
@@ -555,7 +547,6 @@ export const NO_VALIDATOR_PIN: string[] = [
   "tables",
   "test-guard",
   "releases",
-  "ui",
 ];
 
 export const CONTRACTS_EXCEPTION_MEMBERS = new Set(CONTRACTS_EXCEPTIONS.map((e) => e.member));
