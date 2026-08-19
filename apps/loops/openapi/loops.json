@@ -4193,6 +4193,9 @@
           },
           "updatedAt": {
             "type": "string"
+          },
+          "machine": {
+            "$ref": "#/components/schemas/LoopMachineRef"
           }
         },
         "required": [
@@ -4231,6 +4234,9 @@
             "minimum": 1,
             "nullable": true,
             "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt."
+          },
+          "machine": {
+            "$ref": "#/components/schemas/LoopMachineRef"
           }
         },
         "required": [
@@ -5765,6 +5771,36 @@
         "required": [
           "ok",
           "count"
+        ]
+      },
+      "LoopMachineRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Canonical OpenMachines machine id the loop is pinned to."
+          },
+          "route": {
+            "type": "string"
+          },
+          "local": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "packageVersion": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id"
         ]
       }
     },

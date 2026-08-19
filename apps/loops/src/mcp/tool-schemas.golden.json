@@ -176,6 +176,11 @@
           "exclusiveMinimum": 0,
           "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
         },
+        "machine": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OpenMachines machine id to pin this loop to. Resolved through the local machines topology; an unresolvable machine fails the create instead of persisting an unbound loop."
+        },
         "command": {
           "type": "string",
           "minLength": 1,
@@ -374,6 +379,11 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
+        },
+        "machine": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OpenMachines machine id to pin this loop to. Resolved through the local machines topology; an unresolvable machine fails the create instead of persisting an unbound loop."
         },
         "workflow": {
           "type": "string",
@@ -774,6 +784,11 @@
           "exclusiveMinimum": 0,
           "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
         },
+        "machine": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OpenMachines machine id to pin this loop to. Resolved through the local machines topology; an unresolvable machine fails the create instead of persisting an unbound loop."
+        },
         "command": {
           "type": "string",
           "minLength": 1,
@@ -972,6 +987,11 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
+        },
+        "machine": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OpenMachines machine id to pin this loop to. Resolved through the local machines topology; an unresolvable machine fails the create instead of persisting an unbound loop."
         },
         "workflow": {
           "type": "string",

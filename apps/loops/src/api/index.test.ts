@@ -5216,3 +5216,182 @@ describe("loops-api foundation", () => {
     }
   }, 60_000);
 });
+
+describe("machine assignment on loop create and claim", () => {
+  const DUE_AT = "2026-01-01T00:00:00Z";
+  const POLL_AT = "2026-01-01T00:00:01Z";
+
+  test("POST /v1/loops persists a well-formed machine ref and echoes it", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          name: "api-pinned-loop",
+          schedule: { type: "once", at: DUE_AT },
+          target: { type: "command", command: "true" },
+          machine: { id: "spark02", requestedId: "station02" },
+        }),
+      });
+      expect(response.status).toBe(201);
+      const created = (await response.json()) as { loop: { id: string; machine: { id: string } } };
+      expect(created.loop.machine).toMatchObject({ id: "spark02" });
+      // The pin must reach the STORE, not just the response: the scheduler
+      // gates claims on the stored machine_json, so a response-only echo is
+      // exactly the silent assignment loss this regression exists to catch.
+      const stored = await storage.getLoop(created.loop.id);
+      expect(stored?.machine).toMatchObject({ id: "spark02", requestedId: "station02" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/loops rejects a machine given as a bare string (fail closed)", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          name: "api-string-machine",
+          schedule: { type: "once", at: DUE_AT },
+          target: { type: "command", command: "true" },
+          machine: "spark02",
+        }),
+      });
+      // A bare string would be stored as machine_json "spark02", whose `id`
+      // is undefined: runnerMatchesLoop then matches NO runner and the loop
+      // is leased by nobody — the never-executes state this fix is for.
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({ ok: false, error: "validation_failed" });
+      const loops = await storage.listLoops({ limit: 10 });
+      expect(loops.map((loop) => loop.name)).not.toContain("api-string-machine");
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/loops rejects an empty machine ref object (fail closed)", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          name: "api-empty-machine",
+          schedule: { type: "once", at: DUE_AT },
+          target: { type: "command", command: "true" },
+          machine: {},
+        }),
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({ ok: false, error: "validation_failed" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("a pinned loop is not claimable by a different runner, and the matching runner claims and executes it", async () => {
+    const mod = await import("./index.js");
+
+    async function storageWithLoops() {
+      const storage = createSqliteLoopStorage(":memory:");
+      const createdAt = new Date("2025-12-31T00:00:00Z");
+      await storage.createLoop({
+        name: "fleet-unbound",
+        schedule: { type: "once", at: DUE_AT },
+        target: { type: "command", command: "true" },
+      }, createdAt);
+      await storage.createLoop({
+        name: "pinned-spark02",
+        schedule: { type: "once", at: DUE_AT },
+        target: { type: "command", command: "true" },
+        machine: { id: "spark02" },
+      }, createdAt);
+      return storage;
+    }
+
+    function claimedLoopNames(payload: Record<string, unknown>): string[] {
+      const claims = payload.claims as Array<{ loop: { name: string } }> | undefined;
+      return (claims ?? []).map((claim) => claim.loop.name).sort();
+    }
+
+    // A runner that is NOT the pin target must not receive the pinned loop.
+    // This is the fleet-claim half of the bug: with machine_json NULL the
+    // loop was claimable by ANY runner; with the pin persisted the gate must
+    // exclude every non-matching runner.
+    {
+      const storage = await storageWithLoops();
+      const server = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => new Date(POLL_AT) },
+        runnerPrincipal("spark01"),
+      );
+      try {
+        const response = await fetch(apiUrl(server, "/v1/runners/claim"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ runnerId: "spark01", maxClaims: 10 }),
+        });
+        expect(response.status).toBe(200);
+        expect(claimedLoopNames(await response.json() as Record<string, unknown>)).toEqual(["fleet-unbound"]);
+      } finally {
+        server.stop(true);
+        await storage.close();
+      }
+    }
+
+    // The matching runner claims the pinned loop and completes it end to end.
+    {
+      const storage = await storageWithLoops();
+      const server = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => new Date(POLL_AT) },
+        runnerPrincipal("spark02"),
+      );
+      try {
+        const claimResponse = await fetch(apiUrl(server, "/v1/runners/claim"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ runnerId: "spark02", maxClaims: 10 }),
+        });
+        expect(claimResponse.status).toBe(200);
+        const claimed = (await claimResponse.json()) as {
+          claims: Array<{ loop: { name: string }; claimToken: string; run: { id: string } }>;
+        };
+        const pinned = claimed.claims.find((claim) => claim.loop.name === "pinned-spark02");
+        expect(pinned).toBeDefined();
+        const finalize = await fetch(apiUrl(server, `/v1/runs/${pinned!.run.id}/finalize`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: pinned!.claimToken,
+            status: "succeeded",
+            finishedAt: POLL_AT,
+            stdout: "",
+            stderr: "",
+          }),
+        });
+        expect(finalize.status).toBe(200);
+        expect((await finalize.json()) as { run: { status: string } }).toMatchObject({ run: { status: "succeeded" } });
+        // A once loop that succeeded advances to stopped (nextRunAt null):
+        // the executed run must move the loop, not leave it leased forever.
+        const stored = await storage.findLoopByName("pinned-spark02");
+        expect(stored?.status).toBe("stopped");
+      } finally {
+        server.stop(true);
+        await storage.close();
+      }
+    }
+  });
+});
