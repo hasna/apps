@@ -236,7 +236,7 @@ describe("CLI P1 safety regressions", () => {
     }
   });
 
-  test("fails loudly when a hosted backend repeats a full page", async () => {
+  test("stops without failing or spinning when a hosted backend repeats a full page", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-list-repeat-hosted-"));
     const page = Array.from({ length: 200 }, (_, index) => loopFixture(index));
     const requestedOffsets: number[] = [];
@@ -256,10 +256,110 @@ describe("CLI P1 safety regressions", () => {
         HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_LOOPS_API_KEY: "test-hosted-key",
       });
-      expect(result.status).toBe(1);
-      expect((JSON.parse(result.stdout) as { error: { code: string } }).error.code).toBe("LOOP_LIST_PAGINATION_FAILED");
-      expect(result.stderr).toContain("backend repeated a page");
+      expect(result.status).toBe(0);
+      const ids = (JSON.parse(result.stdout) as Array<{ id: string }>).map((loop) => loop.id);
+      expect(ids).toHaveLength(200);
+      expect(new Set(ids).size).toBe(200);
+      expect(result.stderr).toContain("repeated a page");
       expect(requestedOffsets).toEqual([0, 200]);
+    } finally {
+      server.stop(true);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns the deduplicated population when a hosted page contains no new loop ids", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-list-no-new-hosted-"));
+    const page = Array.from({ length: 200 }, (_, index) => loopFixture(index));
+    const requestedOffsets: number[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        requestedOffsets.push(offset);
+        // offset 200 returns the same 200 ids REORDERED: every id on the page
+        // was already seen on the valid first page, but the page is not an
+        // exact repeat, so only the no-new-ids detector can catch it.
+        return Response.json({ ok: true, loops: offset === 0 ? page : [...page].reverse() });
+      },
+    });
+
+    try {
+      const result = await runCli(dataDir, ["--json", "list"], {
+        HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_LOOPS_API_KEY: "test-hosted-key",
+      });
+      expect(result.status).toBe(0);
+      const ids = (JSON.parse(result.stdout) as Array<{ id: string }>).map((loop) => loop.id);
+      expect(ids).toHaveLength(200);
+      expect(new Set(ids).size).toBe(200);
+      expect(result.stderr).toContain("no new loop ids");
+      expect(requestedOffsets).toEqual([0, 200]);
+    } finally {
+      server.stop(true);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("stops at a no-progress page after valid prior pages without failing or spinning", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-list-late-dup-hosted-"));
+    const all = Array.from({ length: 400 }, (_, index) => loopFixture(index));
+    const requestedOffsets: number[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        requestedOffsets.push(offset);
+        if (offset === 0) return Response.json({ ok: true, loops: all.slice(0, 200) });
+        if (offset === 200) return Response.json({ ok: true, loops: all.slice(200, 400) });
+        // offset 400: a full page made up only of ids already seen on the two
+        // valid prior pages, reordered so it is not an exact repeat.
+        return Response.json({ ok: true, loops: all.slice(0, 200).reverse() });
+      },
+    });
+
+    try {
+      const result = await runCli(dataDir, ["--json", "list"], {
+        HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_LOOPS_API_KEY: "test-hosted-key",
+      });
+      expect(result.status).toBe(0);
+      const ids = (JSON.parse(result.stdout) as Array<{ id: string }>).map((loop) => loop.id);
+      expect(ids).toHaveLength(400);
+      expect(new Set(ids).size).toBe(400);
+      expect(result.stderr).toContain("no new loop ids");
+      expect(requestedOffsets).toEqual([0, 200, 400]);
+    } finally {
+      server.stop(true);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("hosted list with an empty population exits 0 with an empty result", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-list-empty-hosted-"));
+    const requestedOffsets: number[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requestedOffsets.push(Number(url.searchParams.get("offset") ?? "0"));
+        return Response.json({ ok: true, loops: [] });
+      },
+    });
+
+    try {
+      const result = await runCli(dataDir, ["--json", "list"], {
+        HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_LOOPS_API_KEY: "test-hosted-key",
+      });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([]);
+      expect(requestedOffsets).toEqual([0]);
     } finally {
       server.stop(true);
       rmSync(dataDir, { recursive: true, force: true });

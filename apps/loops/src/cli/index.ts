@@ -226,6 +226,23 @@ function loopListPaginationError(reason: string): CodedError {
   return new CodedError("LOOP_LIST_PAGINATION_FAILED", `loop list pagination failed: ${reason}`);
 }
 
+/**
+ * A page that makes no progress (exact repeat, zero new ids, or a frozen
+ * offset) is a legitimate terminal condition, not a CLI failure: the loops
+ * table is ordered by `next_run_at`, which the daemon mutates as loops run, so
+ * the ordering can shift between page fetches and the offset window can land
+ * entirely on already-seen rows. Treating that as a hard error blocked loop
+ * enumeration entirely; returning the deduplicated population gathered so far
+ * unblocks it while the warning names why the population may be incomplete.
+ */
+function stopListAtNoProgress(loops: Loop[], reason: string): Loop[] {
+  console.error(
+    `warning: loop list pagination stopped after ${loops.length} loop(s): ${reason}; ` +
+      "returning the deduplicated population gathered so far (may be incomplete if the backend reorders pages)",
+  );
+  return loops;
+}
+
 async function listAllLoops(
   store: LoopStore,
   opts: Omit<LoopListOptions, "limit" | "offset"> = {},
@@ -252,7 +269,7 @@ async function listAllLoops(
       previousPageIds?.length === pageIds.length &&
       pageIds.every((id, index) => id === previousPageIds![index])
     ) {
-      throw loopListPaginationError("the backend repeated a page");
+      return stopListAtNoProgress(loops, "the backend repeated a page");
     }
 
     let newIds = 0;
@@ -268,12 +285,12 @@ async function listAllLoops(
         throw loopListPaginationError(`exceeded the ${CLI_LOOP_LIST_MAX_ITEMS}-item safety ceiling`);
       }
     }
-    if (newIds === 0) throw loopListPaginationError("a page contained no new loop ids");
+    if (newIds === 0) return stopListAtNoProgress(loops, "a page contained no new loop ids");
     if (page.length < CLI_LOOP_LIST_PAGE_SIZE) return loops;
 
     const nextOffset = offset + page.length;
     if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
-      throw loopListPaginationError("the backend did not advance the page offset");
+      return stopListAtNoProgress(loops, "the backend did not advance the page offset");
     }
     previousPageIds = pageIds;
     offset = nextOffset;
