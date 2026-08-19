@@ -36,6 +36,10 @@ import { join } from "node:path";
 
 const WORKFLOW = ".github/workflows/deploy-todos.yml";
 const CI_WORKFLOW = ".github/workflows/ci.yml";
+const PACKAGE_JSON = "package.json";
+
+/** The action that must provide host bun; anything else is an unreviewed toolchain. */
+const SETUP_BUN_ACTION = "oven-sh/setup-bun";
 
 const DEPLOY_JOB = "deploy";
 const GATE_JOB = "gate";
@@ -43,6 +47,7 @@ const GATE_JOB = "gate";
 const STEP_GATE_RESOLVE = "Resolve the deployable commit";
 const STEP_CHECKOUT = "Checkout exact source";
 const STEP_VERIFY_SOURCE = "Verify source is the gated ci-passed main commit";
+const STEP_BUN_SETUP = "Set up host Bun for shipped-artefact verification";
 const STEP_TRIVY = "Generate local vulnerability report";
 const STEP_OIDC = "Configure AWS credentials with GitHub OIDC";
 const STEP_MANIFEST = "Resolve manifest and fail closed on production target mismatch";
@@ -438,6 +443,25 @@ export function runsCommand(run: string, expected: string): boolean {
 }
 
 /**
+ * Every effective command that invokes the HOST bun toolchain.
+ *
+ * Command-position analysis is what makes this answerable at all. The verify
+ * step contains the token `bun` three times, and only ONE of them is a host
+ * invocation: `docker run --rm --entrypoint bun <image> --version` runs bun
+ * INSIDE the built image, where it is installed by construction, while
+ * `x="$(bun -e ...)"` runs it on the runner, where it is not. A substring or
+ * even a whole-word search cannot tell those apart and would report the step
+ * satisfied by the container copy — the exact reading under which this lane
+ * shipped and then failed at exit 127.
+ */
+export function hostBunCommands(run: string): string[] {
+  return effectiveCommands(run).filter((command) => {
+    const head = command.split(" ")[0];
+    return head === "bun" || head === "bunx";
+  });
+}
+
+/**
  * The first EFFECTIVE command headed by `expected`, or undefined.
  *
  * Returning the command itself (rather than a boolean) is what lets a caller
@@ -477,7 +501,11 @@ function stepNamed(steps: Step[], name: string): Step | undefined {
   return steps.find((step) => asText(step.name) === name);
 }
 
-export function validateTodosDeploy(workflow: string, ciWorkflowName: string): string[] {
+export function validateTodosDeploy(
+  workflow: string,
+  ciWorkflowName: string,
+  packageManagerBunVersion: string,
+): string[] {
   const errors: string[] = [];
   const push = (message: string): void => {
     errors.push(message);
@@ -651,6 +679,56 @@ export function validateTodosDeploy(workflow: string, ciWorkflowName: string): s
     }
   }
 
+  // --- host toolchain: nothing may call bun before bun is installed --------
+  //
+  // REGRESSION. Run 32253173775 built the image, then read the package version
+  // with the host bun and died at exit 127, "bun: command not found" — the
+  // GitHub-hosted runner ships no bun and the lane never installed one. Every
+  // other control in this gate passed, because none of them looked at whether a
+  // command's interpreter exists.
+  //
+  // Stated as an implication rather than as "the setup step must exist", so it
+  // stays true under either resolution: install bun, or stop invoking it. A
+  // rewrite of the verify step that drops host bun entirely is CORRECT and this
+  // check must not block it — a gate that also fails the other valid fix is a
+  // gate people delete.
+  const bunSetupIndex = deploySteps.findIndex((step) => asText(step.name) === STEP_BUN_SETUP);
+  const bunSetup = bunSetupIndex >= 0 ? deploySteps[bunSetupIndex] : undefined;
+
+  deploySteps.forEach((step, index) => {
+    const invocations = hostBunCommands(asText(step.run));
+    if (invocations.length === 0) return;
+    if (bunSetupIndex >= 0 && bunSetupIndex < index) return;
+    push(
+      `"${asText(step.name)}" runs the host command \`${invocations[0]}\` with no preceding "${STEP_BUN_SETUP}" step — a GitHub-hosted runner ships no bun and the step exits 127`,
+    );
+  });
+
+  if (bunSetup) {
+    const uses = asText(bunSetup.uses);
+    if (!uses.startsWith(`${SETUP_BUN_ACTION}@`)) {
+      push(`"${STEP_BUN_SETUP}" must install bun with ${SETUP_BUN_ACTION}, found ${JSON.stringify(uses)}`);
+    }
+    // A floating `latest` reinstates the non-determinism this step exists to
+    // remove: the host runtime that inspects the artefact would then drift
+    // against the runtime the artefact was built with, silently and per-run.
+    const pinned = asText(asMap(bunSetup.with)["bun-version"]);
+    if (!/^\d+\.\d+\.\d+$/.test(pinned)) {
+      push(`"${STEP_BUN_SETUP}" must pin an exact bun-version (x.y.z), found ${JSON.stringify(pinned)}`);
+    } else if (pinned !== packageManagerBunVersion) {
+      push(
+        `"${STEP_BUN_SETUP}" pins bun-version ${pinned} but the root package.json "packageManager" names ${packageManagerBunVersion} — the host toolchain must stay in lockstep with the repository's`,
+      );
+    }
+    // Third-party actions run before the job holds production credentials.
+    const oidcIndex = deploySteps.findIndex((step) => asText(step.name) === STEP_OIDC);
+    if (oidcIndex >= 0 && bunSetupIndex > oidcIndex) {
+      push(
+        `"${STEP_BUN_SETUP}" must run before "${STEP_OIDC}" — a third-party action must not execute while the job holds the production AWS credentials`,
+      );
+    }
+  }
+
   const trivy = stepNamed(deploySteps, STEP_TRIVY);
   if (trivy) {
     const imageRef = asText(asMap(trivy.with)["image-ref"]);
@@ -746,6 +824,22 @@ function ciWorkflowName(root: string): string {
   return asText(document.name);
 }
 
+/**
+ * The bun version the repository itself standardises on.
+ *
+ * Read rather than duplicated: a second literal in this file would drift from
+ * package.json exactly as the workflow's would, and the check would then be
+ * asserting agreement between two stale copies.
+ */
+function packageManagerBunVersion(root: string): string {
+  const manifest = JSON.parse(readFileSync(join(root, PACKAGE_JSON), "utf8")) as { packageManager?: string };
+  const match = /^bun@(\d+\.\d+\.\d+)$/.exec(manifest.packageManager ?? "");
+  if (!match) {
+    throw new Error(`root ${PACKAGE_JSON} must declare "packageManager": "bun@x.y.z", found ${JSON.stringify(manifest.packageManager ?? null)}`);
+  }
+  return match[1];
+}
+
 // ---------------------------------------------------------------------------
 // Two-sided self-test
 // ---------------------------------------------------------------------------
@@ -763,6 +857,18 @@ const QUOTED_UPDATE_SERVICE =
 
 const NOOP_UPDATE_SERVICE =
   '          true # aws ecs update-service --cluster "${CLUSTER}" --service "${SERVICE}" --task-definition "${deployed_task_definition}"';
+
+/**
+ * The verify step's package-version read in its two historical forms. Main
+ * (PR #590) replaced the HOST-BUN form with the NODE form — the "stop invoking
+ * it" resolution the implication guard explicitly permits. The mutations below
+ * restore the host-bun form as part of the mutated workflow, so the guard
+ * still has an invocation to pin even though the real workflow no longer runs
+ * host bun.
+ */
+const NODE_VERSION_READ = '          expected_version="$(node -p \'require("./package.json").version\')"';
+const HOST_BUN_VERSION_READ =
+  '          expected_version="$(bun -e \'console.log(require("./package.json").version)\')"';
 
 interface Mutation {
   label: string;
@@ -882,6 +988,71 @@ const MUTATIONS: Mutation[] = [
     expect: (errors) => errors.some((error) => error.includes(`"${STEP_CHECKOUT}" must check out needs.gate.outputs.source_sha`)),
   },
   {
+    // The exact defect run 32253173775 hit: the host bun invocation with no
+    // step that installs bun. Main has since rewritten that version read to
+    // `node -p` (PR #590), so the mutation restores the host-bun read it
+    // replaced AND deletes the setup step — reproducing the pre-fix workflow
+    // at the point of failure.
+    label: "host bun invoked with no bun installed on the runner",
+    mutate: (source) =>
+      source.replace(NODE_VERSION_READ, HOST_BUN_VERSION_READ).replace(
+        "      - name: Set up host Bun for shipped-artefact verification\n" +
+          "        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0\n" +
+          "        with:\n" +
+          "          bun-version: 1.3.14 # in lockstep with the root package.json \"packageManager\"\n\n",
+        "",
+      ),
+    // The container-side `--entrypoint bun` invocations survive, so a gate that
+    // merely looked for the token `bun` would still have called it safe.
+    survivingText: '--entrypoint bun',
+    expect: (errors) =>
+      errors.some((error) => error.includes(`runs the host command`) && error.includes("exits 127")),
+  },
+  {
+    label: "host bun installed only after it is used",
+    mutate: (source) => {
+      const setup =
+        "      - name: Set up host Bun for shipped-artefact verification\n" +
+        "        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0\n" +
+        "        with:\n" +
+        "          bun-version: 1.3.14 # in lockstep with the root package.json \"packageManager\"\n\n";
+      const trivy = "      - name: Generate local vulnerability report\n";
+      return source
+        .replace(NODE_VERSION_READ, HOST_BUN_VERSION_READ)
+        .replace(setup, "")
+        .replace(trivy, setup + trivy);
+    },
+    survivingText: "oven-sh/setup-bun",
+    expect: (errors) => errors.some((error) => error.includes("runs the host command")),
+  },
+  {
+    label: "host bun toolchain floated to latest",
+    mutate: (source) => source.replace("          bun-version: 1.3.14", "          bun-version: latest"),
+    survivingText: "oven-sh/setup-bun",
+    expect: (errors) => errors.some((error) => error.includes("must pin an exact bun-version")),
+  },
+  {
+    label: "host bun toolchain drifted from the repository's packageManager",
+    mutate: (source) => source.replace("          bun-version: 1.3.14", "          bun-version: 1.0.0"),
+    survivingText: "oven-sh/setup-bun",
+    expect: (errors) => errors.some((error) => error.includes("must stay in lockstep")),
+  },
+  {
+    label: "third-party bun action moved inside the credentialed window",
+    mutate: (source) => {
+      const setup =
+        "      - name: Set up host Bun for shipped-artefact verification\n" +
+        "        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0\n" +
+        "        with:\n" +
+        "          bun-version: 1.3.14 # in lockstep with the root package.json \"packageManager\"\n\n";
+      const rollback = "      - name: Restore rollback anchor after a failed service rollout\n";
+      return source.replace(setup, "").replace(rollback, setup + rollback);
+    },
+    survivingText: "oven-sh/setup-bun",
+    expect: (errors) =>
+      errors.some((error) => error.includes(`must run before "${STEP_OIDC}"`)),
+  },
+  {
     label: "deploy job released from the gate",
     mutate: (source) => source.replace("    if: ${{ needs.gate.outputs.proceed == 'true' }}\n", ""),
     expect: (errors) => errors.some((error) => error.includes("needs.gate.outputs.proceed == 'true'")),
@@ -891,6 +1062,7 @@ const MUTATIONS: Mutation[] = [
 function selfTest(root: string): boolean {
   const real = readFileSync(join(root, WORKFLOW), "utf8");
   const ciName = ciWorkflowName(root);
+  const bunVersion = packageManagerBunVersion(root);
   let ok = true;
 
   // Instrument controls: the command analyser must both fire and stay silent.
@@ -910,6 +1082,25 @@ function selfTest(root: string): boolean {
     }
   }
 
+  // The host-bun detector must separate the runner's bun from the image's. Both
+  // directions are proved: the container invocation is the one that must stay
+  // silent, and it is the one a token search would have counted.
+  const bunAnalyser: [string, string, boolean][] = [
+    ["host bun -e", `x="$(bun -e 'console.log(1)')"`, true],
+    ["host bunx", "bunx tsc --noEmit", true],
+    ["container bun via docker --entrypoint", 'docker run --rm --entrypoint bun img:tag --version', false],
+    ["echoed bun", 'echo "bun --version"', false],
+    ["commented bun", "true # bun --version", false],
+    ["bun as an argument, not a command", "grep -oP 'oven/bun:' Dockerfile", false],
+  ];
+  for (const [label, snippet, expected] of bunAnalyser) {
+    const actual = hostBunCommands(snippet).length > 0;
+    if (actual !== expected) {
+      console.error(`todos-deploy self-test: FAIL — host-bun analyser on ${label}: expected ${expected}, got ${actual}`);
+      ok = false;
+    }
+  }
+
   for (const mutation of MUTATIONS) {
     const mutated = mutation.mutate(real);
     if (mutated === real) {
@@ -924,7 +1115,7 @@ function selfTest(root: string): boolean {
       ok = false;
       continue;
     }
-    const errors = validateTodosDeploy(mutated, ciName);
+    const errors = validateTodosDeploy(mutated, ciName, bunVersion);
     if (!mutation.expect(errors)) {
       console.error(`todos-deploy self-test: FAIL — mutation "${mutation.label}" was not rejected`);
       console.error(errors.length === 0 ? "  (no errors reported)" : errors.map((e) => `  ${e}`).join("\n"));
@@ -932,7 +1123,7 @@ function selfTest(root: string): boolean {
     }
   }
 
-  const clean = validateTodosDeploy(real, ciName);
+  const clean = validateTodosDeploy(real, ciName, bunVersion);
   if (clean.length > 0) {
     console.error("todos-deploy self-test: FAIL — the real workflow was rejected");
     console.error(clean.map((error) => `  ${error}`).join("\n"));
@@ -941,7 +1132,7 @@ function selfTest(root: string): boolean {
 
   if (ok) {
     console.log(
-      `todos-deploy self-test: PASS (${MUTATIONS.length} mutations rejected, ${analyser.length} analyser controls, real workflow accepted)`,
+      `todos-deploy self-test: PASS (${MUTATIONS.length} mutations rejected, ${analyser.length + bunAnalyser.length} analyser controls, real workflow accepted)`,
     );
   }
   return ok;
@@ -951,7 +1142,11 @@ const root = process.cwd();
 
 if (process.argv.includes("--self-test")) process.exit(selfTest(root) ? 0 : 1);
 
-const errors = validateTodosDeploy(readFileSync(join(root, WORKFLOW), "utf8"), ciWorkflowName(root));
+const errors = validateTodosDeploy(
+  readFileSync(join(root, WORKFLOW), "utf8"),
+  ciWorkflowName(root),
+  packageManagerBunVersion(root),
+);
 if (errors.length > 0) {
   for (const error of errors) console.error(`  ${error}`);
   console.error(`todos-deploy: FAIL — ${errors.length} violation(s)`);

@@ -208,6 +208,28 @@ jobs:
           printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
           printf 'IMAGE_TAG=deploy-%s-%s-%s\n' "${GATED_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_ENV}"
 
+      # The next step reads apps/todos/package.json with the HOST bun, and the
+      # GitHub-hosted image ships no bun — the lane failed here at exit 127
+      # ("bun: command not found") on run 32253173775. Bun is installed rather
+      # than the read rewritten because the host runtime that inspects a bun
+      # artefact should be the same runtime the artefact was built with.
+      #
+      # Pinned twice, and both pins are load-bearing: the action to its full
+      # v2.2.0 commit (a tag is mutable, and this action runs before any of the
+      # target checks), and the toolchain to the exact version the root
+      # package.json "packageManager" names, so a floating `latest` cannot make
+      # the verification non-reproducible. check-todos-deploy.ts asserts that
+      # lockstep rather than trusting this comment.
+      #
+      # Position is deliberate: BEFORE "Configure AWS credentials with GitHub
+      # OIDC", so this third-party action never executes inside the window in
+      # which the job holds production credentials. That ordering is asserted
+      # too.
+      - name: Set up host Bun for shipped-artefact verification
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14 # in lockstep with the root package.json "packageManager"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
