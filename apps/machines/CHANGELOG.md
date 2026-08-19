@@ -6,9 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## 0.2.28
 
-### Patch Changes
+### Added
 
-- 1413b5e: Generated Bun package probes (`machines apps plan`/`apply`) now execute under an explicit `bash -c` wrapper, fixing `zsh:1: parse error near 'printf'` on macOS targets whose remote login shell is zsh — installs ran but verification always failed (bug e406620f, measured station03). The output contract is unchanged and linux targets keep working. Shipped as 0.2.27 with the station-template floor bump.
+- `machines cloud-loader` command: station cloud-env loader probe (e7d360237).
+
+### Changed
+
+- Display name is now "Hasna Machines" (open- prefix retired). Consumer identity
+  literals emit the canonical `machines` values, and the v1 consumer schema
+  accepts the legacy `open-machines` values on read so existing v1 consumers
+  keep validating stored/legacy data (f45d1e4ed).
+- Note machine-context source aliases are normalized on read: legacy
+  `open-notes`/`open-machines` values map to canonical `notes`/`machines`
+  (e63a442e5).
+- Station template Bun install floor bumped to 0.2.28 (d20456352).
+
+### Fixed
+
+- CI publish-guard and standard gates reconciled with current main (ef92791e4).
 
 ## [0.2.27] - 2026-08-15
 
@@ -616,11 +631,11 @@ Fixes OPE69-00017 via PR #70.
 
 ### Security
 
-- Removed the shipped internal-infra hostname default (`*.hasna.xyz`) from the
-  fleet-flip / cloud-transport code, the `distribute-cloud-keys` script, docs,
-  and the JSON Schema `$id`. The per-app self-hosted API URL default is now
-  built from `HASNA_FLEET_API_DOMAIN` (REQUIRED for a real deployment) and
-  otherwise falls back to a neutral, non-resolving placeholder domain
+- Removed the shipped internal-infra hostname default from the fleet-flip /
+  cloud-transport code, the `distribute-cloud-keys` script, docs, and the JSON
+  Schema `$id`. The per-app self-hosted API URL default is now built from
+  `HASNA_FLEET_API_DOMAIN` (REQUIRED for a real deployment) and otherwise
+  falls back to a neutral, non-resolving placeholder domain
   (`your-deployment.example`) instead of a real internal hostname.
   `MACHINES_CONSUMER_SCHEMA_URI` now uses the neutral `schemas.example.com`
   placeholder (identifier string only; never fetched). Also redacted a real AWS

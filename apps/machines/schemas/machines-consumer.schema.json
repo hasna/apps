@@ -1205,7 +1205,10 @@
               "const": "open-chrome"
             },
             "route_owner": {
-              "const": "machines"
+              "enum": [
+                "machines",
+                "open-machines"
+              ]
             },
             "default_timeout_ms": {
               "type": "number"
@@ -1796,7 +1799,10 @@
           ],
           "properties": {
             "authority": {
-              "const": "machines"
+              "enum": [
+                "machines",
+                "open-machines"
+              ]
             },
             "metadata_source": {
               "enum": [

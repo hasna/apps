@@ -221,4 +221,107 @@ describe("machines consumer SDK", () => {
     expect(validateMachinesConsumerEnvelope("resolver_snapshot", snapshot)).toMatchObject({ ok: true, errors: [] });
     expect(validateMachinesConsumerEnvelope("browserplan_fleet", browserPlanFleet)).toMatchObject({ ok: true, errors: [] });
   });
+
+  test("v1 identity literals accept legacy open-machines values on read (release-review P1#1)", () => {
+    const now = new Date("2026-06-09T00:00:00.000Z");
+    const topology: MachineTopology = {
+      schema_version: 1,
+      package: { name: "@hasna/machines", version: "0.0.0-test" },
+      capabilities: getMachinesConsumerCapabilities(),
+      generated_at: now.toISOString(),
+      local_machine_id: "demo-node-02",
+      local_hostname: "demo-node-02",
+      current_platform: "linux",
+      manifest_path_known: true,
+      pagination: {
+        limit: 10,
+        offset: 0,
+        total: 1,
+        count: 1,
+        hasMore: false,
+        nextOffset: null,
+        has_more: false,
+        next_offset: null,
+        order: "updated_at_desc",
+      },
+      warnings: [],
+      machines: [{
+        machine_id: "demo-node-01",
+        friendly_name: "Studio Linux",
+        display_name: "Studio Linux",
+        updated_at: "2026-06-09T00:00:00.000Z",
+        hostname: "demo-node-01",
+        platform: "linux",
+        os: "linux",
+        user: "operator",
+        workspace_path: "/home/operator/workspace",
+        manifest_declared: true,
+        heartbeat_status: "unknown",
+        last_heartbeat_at: null,
+        tailscale: {
+          dns_name: "demo-node-01.tailnet.ts.net",
+          ips: ["203.0.113.34"],
+          online: true,
+          active: true,
+          last_seen: null,
+        },
+        ssh: {
+          address: "operator@demo-node-01",
+          route: "tailscale",
+          command_target: "operator@demo-node-01.tailnet.ts.net",
+        },
+        route_hints: [{ kind: "tailscale", target: "demo-node-01.tailnet.ts.net", reachable: true }],
+        tags: ["trusted"],
+        metadata: {
+          auth_status: "authenticated",
+          workspace_paths: {
+            "knowledge": "/srv/knowledge",
+          },
+          open_files_roots: {
+            "knowledge": "/srv/open-files",
+          },
+        },
+        agent: {
+          pid: null,
+          daemon_version: null,
+          mode: null,
+          private_metadata: false,
+          platform: null,
+          os_version: null,
+          os_build: null,
+          arch: null,
+          uptime_seconds: null,
+          tool_versions: null,
+          tailscale: null,
+          storage_sync_status: null,
+          storage_sync_last_error: null,
+          doctor_summary: null,
+        },
+      }],
+    };
+
+    const details = getMachineDetails("demo-node-01", { topology, now });
+    const browserPlanFleet = getBrowserPlanFleet({ topology, now });
+
+    // Canonical v1 literals validate.
+    expect(validateMachinesConsumerEnvelope("machine_details", details)).toMatchObject({ ok: true, errors: [] });
+    expect(validateMachinesConsumerEnvelope("browserplan_fleet", browserPlanFleet)).toMatchObject({ ok: true, errors: [] });
+
+    // Legacy v1 literals ("open-machines") must still validate on read: the
+    // open- prefix was retired 2026-08-18 but stored/legacy values stay valid
+    // under contract v1 (schema enum and validator accept both).
+    const legacyDetails = structuredClone(details);
+    legacyDetails.source.authority = "open-machines";
+    expect(validateMachinesConsumerEnvelope("machine_details", legacyDetails)).toMatchObject({ ok: true, errors: [] });
+
+    const legacyFleet = structuredClone(browserPlanFleet);
+    legacyFleet.operation_contract.route_owner = "open-machines";
+    expect(validateMachinesConsumerEnvelope("browserplan_fleet", legacyFleet)).toMatchObject({ ok: true, errors: [] });
+
+    // The shipped schema artifact mirrors the accept-both enums.
+    const schema = MACHINES_CONSUMER_SCHEMA_BUNDLE;
+    const sourceSchema = JSON.stringify(schema);
+    expect(sourceSchema).toContain('"authority":{"enum":["machines","open-machines"]}');
+    expect(sourceSchema).toContain('"route_owner":{"enum":["machines","open-machines"]}');
+  });
 });
