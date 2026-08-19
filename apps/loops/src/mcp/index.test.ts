@@ -766,6 +766,95 @@ describe("Loops MCP server", () => {
     }
   });
 
+  test("loops_create_workflow carries a machine pin and fails loudly when the machine is unresolvable", async () => {
+    // Twin of the loops_create_command machine-pin regression: the workflow
+    // create shares commonCreateInput (and therefore resolveLoopMachine), so
+    // the same fail-closed contract must hold — a resolvable pin persists,
+    // an unresolvable one fails the create loudly and stores nothing.
+    const root = mkdtempSync(join(tmpdir(), "loops-mcp-workflow-machine-"));
+    roots.push(root);
+    const machinesDir = mkdtempSync(join(tmpdir(), "loops-mcp-workflow-machines-"));
+    const PIN_ID = "mcp-pin-workflow-machine";
+    writeFileSync(
+      join(machinesDir, "machines.json"),
+      JSON.stringify({
+        version: 1,
+        machines: [
+          { id: PIN_ID, platform: "linux", workspacePath: "/workspace/pin", connection: "local" },
+        ],
+      }),
+    );
+    // Seed the workflow the create resolves, in the same store the MCP process
+    // opens (requireWorkflow runs before the machine resolution, so an absent
+    // workflow would error as WORKFLOW_NOT_FOUND and never reach the pin path).
+    const workflowId = withLoopDataDir(root, () => {
+      const store = new Store();
+      try {
+        return store.createWorkflow({
+          name: "mcp-pin-workflow",
+          steps: [{ id: "check", target: { type: "command", command: "true" } }],
+        }).id;
+      } finally {
+        store.close();
+      }
+    });
+    try {
+      const { client, transport } = await connectMcp(
+        root,
+        {
+          LOOPS_MCP_ALLOW_MUTATIONS: "true",
+          HASNA_MACHINES_DIR: machinesDir,
+          HASNA_MACHINES_MACHINE_ID: PIN_ID,
+        },
+      );
+      try {
+        const created = textPayload(
+          await client.callTool({
+            name: "loops_create_workflow",
+            arguments: {
+              name: "mcp-pinned-workflow-loop",
+              workflow: workflowId,
+              schedule: { type: "once", at: "2026-01-02T00:00:00Z" },
+              machine: PIN_ID,
+            },
+          }),
+        ) as { loop: { name: string; machine?: { id: string } } };
+        expect(created.loop.name).toBe("mcp-pinned-workflow-loop");
+        expect(created.loop.machine).toMatchObject({ id: PIN_ID });
+
+        const stored = withLoopDataDir(root, () => {
+          const store = new Store();
+          try {
+            return store.findLoopByName("mcp-pinned-workflow-loop");
+          } finally {
+            store.close();
+          }
+        });
+        expect(stored?.machine).toMatchObject({ id: PIN_ID });
+
+        // An unresolvable machine must fail loudly rather than persist a NULL
+        // pin that leaves the loop claimable by any fleet runner.
+        const bad = await client.callTool({
+          name: "loops_create_workflow",
+          arguments: {
+            name: "mcp-workflow-never-stored",
+            workflow: workflowId,
+            schedule: { type: "once", at: "2026-01-02T00:00:00Z" },
+            machine: "mcp-no-such-machine-zz9",
+          },
+        });
+        expect(bad.isError).toBe(true);
+        expect(JSON.stringify(bad.content)).toContain("OpenMachines route not found for machine");
+        expect(withLoopDataDir(root, () => new Store().findLoopByName("mcp-workflow-never-stored"))).toBeUndefined();
+      } finally {
+        await client.close();
+        await transport.close();
+      }
+    } finally {
+      rmSync(machinesDir, { recursive: true, force: true });
+    }
+  });
+
   // Regression: on a cloud-flipped MCP server (HASNA_LOOPS_API_URL/API_KEY set),
   // EVERY store-backed tool must route to the hosted /v1 API — never silently to
   // the on-box sqlite island — and the local-runtime tools (diagnose/health) must
