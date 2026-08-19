@@ -87,32 +87,6 @@
         "typescript": "^5.7.3",
       },
     },
-    "apps/announce": {
-      "name": "@hasna/announce",
-      "version": "0.1.0",
-      "bin": {
-        "announce": "dist/cli/index.js",
-        "announce-mcp": "dist/mcp/index.js",
-      },
-      "dependencies": {
-        "@hasna/events": "^0.1.13",
-        "@modelcontextprotocol/sdk": "^1.26.0",
-        "commander": "^13.1.0",
-        "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@hasna/contracts": "0.10.6",
-        "@hasna/shortlinks": ">=0.1.0",
-        "@types/bun": "^1.2.4",
-        "typescript": "^5.7.3",
-      },
-      "peerDependencies": {
-        "@hasna/shortlinks": ">=0.1.0",
-      },
-      "optionalPeers": [
-        "@hasna/shortlinks",
-      ],
-    },
     "apps/attachments": {
       "name": "@hasna/attachments",
       "version": "1.1.5",
@@ -2494,8 +2468,6 @@
 
     "@hasna/agent-registry": ["@hasna/agent-registry@0.1.0", "", { "dependencies": { "pg": "^8.13.3" }, "peerDependencies": { "@hasna/events": "^0.1.13", "@modelcontextprotocol/sdk": "^1.12.1", "zod": "^3.24.2" }, "optionalPeers": ["@hasna/events"], "bin": { "agent-registry": "dist/cli/index.js" } }, "sha512-BIcb2f3ufChZQQLBF7QOP8+EIWCcLkBdVJd8X9SocyLAnrNcPDCzrxicu3ld+e99rSPMv8W38hEQqGPpHvGHFg=="],
 
-    "@hasna/announce": ["@hasna/announce@workspace:apps/announce"],
-
     "@hasna/attachments": ["@hasna/attachments@workspace:apps/attachments"],
 
     "@hasna/automations": ["@hasna/automations@workspace:apps/automations"],
@@ -4675,10 +4647,6 @@
     "@hasna/actions/bun-types": ["bun-types@1.3.9", "", { "dependencies": { "@types/node": "*" } }, "sha512-+UBWWOakIP4Tswh0Bt0QD0alpTY8cb5hvgiYeWCMet9YukHbzuruIEeXC2D7nMJPB12kbh8C7XJykSexEqGKJg=="],
 
     "@hasna/actions/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
-    "@hasna/announce/@hasna/contracts": ["@hasna/contracts@0.10.6", "", { "dependencies": { "@hasna/secrets": "^0.2.22", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-lHGwSjCAJof2868o3xAHbWbq8WR675MNQMnRVaRPHvX0LeSLsEWfV5nqE4KjhDJfDRhXhiSo4pmvI03AW4cMnQ=="],
-
-    "@hasna/announce/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/attachments/@hasna/contracts": ["@hasna/contracts@0.8.7", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-wLSmzL8vjx+tREowbQ0LJqj9i0wuQRKvzLT3cCD+897HikIu+6UFg7oBrYBmkSOvCTWM0Xs/+9hsl78hWZizUw=="],
 
