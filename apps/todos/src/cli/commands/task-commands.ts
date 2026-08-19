@@ -22,6 +22,7 @@ import { decodeCommentCursor, pageComments } from "../../lib/comment-cursor.js";
 import {
   getTodosCloudClient,
   cloudListTasks,
+  cloudCountTasks,
   cloudGetTask,
   cloudListComments,
   cloudGetTaskRelations,
@@ -1580,11 +1581,29 @@ export function registerTaskCommands(program: Command) {
       const projectId = cloud
         ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
         : autoProject(globalOpts);
-      const all = cloud
-        ? await cloudListTasks(cloud, projectId ? { project_id: projectId } : {})
-        : listTasks({ project_id: projectId });
-      const counts: Record<string, number> = { total: all.length };
-      for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
+      const taskFilter = projectId ? { project_id: projectId } : {};
+      let counts: Record<string, number>;
+      if (cloud) {
+        // Count against the authority's SQL-side `total` via BOUNDED reads, never
+        // an O(all-tasks) download (task 5e5ed4d1): the unbounded /v1/tasks shape
+        // carried the whole population (~64k rows / ~154 MB) and timed the client
+        // out, while a `limit=1` page returns fast and still reports the full
+        // match count. cloudCountTasks falls back to the unbounded list only when
+        // a legacy authority omits `total`, preserving pre-fix behaviour there.
+        const [total, pending, in_progress, completed, failed, cancelled] = await Promise.all([
+          cloudCountTasks(cloud, taskFilter),
+          cloudCountTasks(cloud, { ...taskFilter, status: "pending" } as never),
+          cloudCountTasks(cloud, { ...taskFilter, status: "in_progress" } as never),
+          cloudCountTasks(cloud, { ...taskFilter, status: "completed" } as never),
+          cloudCountTasks(cloud, { ...taskFilter, status: "failed" } as never),
+          cloudCountTasks(cloud, { ...taskFilter, status: "cancelled" } as never),
+        ]);
+        counts = { total, pending, in_progress, completed, failed, cancelled };
+      } else {
+        const all = listTasks(taskFilter);
+        counts = { total: all.length };
+        for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
+      }
 
       if (globalOpts.json) {
         output(counts, true);
