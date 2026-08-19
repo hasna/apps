@@ -9,9 +9,11 @@ describe("HTTP adapter — response shape edge cases", () => {
   let port: number;
 
   beforeAll(() => {
-    port = 19470 + Math.floor(Math.random() * 30);
+    // Sol-guided: kernel-assigned ephemeral port. The previous fixed random
+    // range collided with adapters.test.ts when bun test ran the two files in
+    // parallel — measured 2026-08-19.
     server = Bun.serve({
-      port,
+      port: 0,
       async fetch(req) {
         const url = new URL(req.url);
         switch (url.pathname) {
@@ -52,6 +54,7 @@ describe("HTTP adapter — response shape edge cases", () => {
         }
       },
     });
+    port = server.port ?? 0;
   });
 
   afterAll(() => server.stop());

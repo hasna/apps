@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { dirname } from "path";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -37,7 +38,10 @@ export function mcpCommand(): Command {
   return cmd;
 }
 
-const ENTRY = { command: "/home/hasna/.bun/bin/evals-mcp", args: [] };
+// Portable executable resolution: the bare bin name, resolved by the agent's
+// MCP client through PATH. A machine-specific absolute path (previously
+// /home/hasna/.bun/bin/evals-mcp) breaks registration on every other install.
+const ENTRY = { command: "evals-mcp", args: [] };
 
 function registerClaude() {
   // Claude Code uses ~/.claude/mcp.json (not settings.json)
@@ -47,6 +51,7 @@ function registerClaude() {
     config = JSON.parse(readFileSync(mcpPath, "utf8")) as typeof config;
   }
   config.mcpServers = { ...(config.mcpServers ?? {}), evals: ENTRY };
+  mkdirSync(dirname(mcpPath), { recursive: true });
   writeFileSync(mcpPath, JSON.stringify(config, null, 2) + "\n");
   console.log("\x1b[32m✓ Registered evals-mcp in ~/.claude/mcp.json\x1b[0m");
   console.log("  Restart Claude Code to load the new MCP server.");
@@ -59,6 +64,7 @@ function registerCodex() {
     config = JSON.parse(readFileSync(cfgPath, "utf8")) as typeof config;
   }
   config.mcpServers = { ...(config.mcpServers ?? {}), evals: { type: "stdio", ...ENTRY, env: {} } };
+  mkdirSync(dirname(cfgPath), { recursive: true });
   writeFileSync(cfgPath, JSON.stringify(config, null, 2) + "\n");
   console.log("\x1b[32m✓ Registered evals-mcp in ~/.codex/config.json\x1b[0m");
 }
@@ -70,6 +76,7 @@ function registerGemini() {
     config = JSON.parse(readFileSync(cfgPath, "utf8")) as typeof config;
   }
   config.mcpServers = { ...(config.mcpServers ?? {}), evals: ENTRY };
+  mkdirSync(dirname(cfgPath), { recursive: true });
   writeFileSync(cfgPath, JSON.stringify(config, null, 2) + "\n");
   console.log("\x1b[32m✓ Registered evals-mcp in ~/.gemini/settings.json\x1b[0m");
 }

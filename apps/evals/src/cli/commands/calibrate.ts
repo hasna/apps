@@ -61,7 +61,7 @@ export function calibrateCommand(): Command {
     });
 }
 
-function cohenKappa(gold: Verdict[], predicted: Verdict[]): number {
+export function cohenKappa(gold: Verdict[], predicted: Verdict[]): number {
   const n = gold.length;
   if (n === 0) return 0;
   const observed = gold.filter((g, i) => g === predicted[i]).length / n;
@@ -75,7 +75,7 @@ function cohenKappa(gold: Verdict[], predicted: Verdict[]): number {
   return expected === 1 ? 1 : (observed - expected) / (1 - expected);
 }
 
-function kappaLabel(k: number): string {
+export function kappaLabel(k: number): string {
   if (k >= 0.8) return "\x1b[32m(almost perfect)\x1b[0m";
   if (k >= 0.6) return "\x1b[32m(substantial)\x1b[0m";
   if (k >= 0.4) return "\x1b[33m(moderate)\x1b[0m";

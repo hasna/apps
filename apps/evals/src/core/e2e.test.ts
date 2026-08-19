@@ -42,9 +42,11 @@ beforeAll(() => {
   mkdirSync(tmpDir, { recursive: true });
 
   // Start a mock HTTP server as the "app under test"
-  port = 19560 + Math.floor(Math.random() * 100);
+  // Sol-guided: kernel-assigned ephemeral port. The previous fixed random
+  // range collided with the adapter fixtures under parallel test files —
+  // measured 2026-08-19.
   server = Bun.serve({
-    port,
+    port: 0,
     fetch(req) {
       return req.json().then((body: unknown) => {
         const messages = (body as { messages?: Array<{ content: string }> }).messages ?? [];
@@ -57,6 +59,7 @@ beforeAll(() => {
       });
     },
   });
+  port = server.port ?? 0;
 
   // Write a realistic eval dataset
   datasetPath = join(tmpDir, "e2e.jsonl");

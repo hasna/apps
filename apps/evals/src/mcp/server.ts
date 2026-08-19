@@ -23,6 +23,18 @@ const pkg = await Bun.file(new URL("../../package.json", import.meta.url)).json(
 export const MCP_NAME = "evals";
 export const DEFAULT_MCP_HTTP_PORT = 8862;
 
+// Module-level pure helpers (moved out of buildServer so the seam is testable;
+// bodies unchanged — no behavior difference).
+export function parseCursor(value: unknown): number {
+  if (value === undefined || value === null || value === "") return 0;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+export function boolArg(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
 export function buildServer(): Server {
 const server = new Server(
   { name: MCP_NAME, version: pkg.version },
@@ -41,15 +53,6 @@ const AdapterSchema = z.object({
   modulePath: z.string().optional(),
 }).passthrough();
 
-function parseCursor(value: unknown): number {
-  if (value === undefined || value === null || value === "") return 0;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
-}
-
-function boolArg(value: unknown): boolean {
-  return value === true || value === "true";
-}
 
 const tools = [
   {
