@@ -120,4 +120,85 @@ describe("validateCard", () => {
     const card = validateCard({ kind: "note", labels: ["ok", 3, null] });
     expect(card.labels).toEqual(["ok"]);
   });
+
+  test("defaults order from the supplied index (Sol-guided)", () => {
+    expect(validateCard({ kind: "note" }, 0).order).toBe(0);
+    expect(validateCard({ kind: "note" }, 3).order).toBe(3);
+    // an explicit finite order wins over the index
+    expect(validateCard({ kind: "note", order: 7 }, 3).order).toBe(7);
+  });
+
+  test("archived is strict true (Sol-guided)", () => {
+    expect(validateCard({ kind: "note", archived: true }).archived).toBe(true);
+    expect(validateCard({ kind: "note", archived: "yes" }).archived).toBe(false);
+    expect(validateCard({ kind: "note", archived: 1 }).archived).toBe(false);
+    expect(validateCard({ kind: "note" }).archived).toBe(false);
+  });
+
+  test("invalid or absent drawing scene becomes an empty scene (Sol-guided)", () => {
+    expect(validateCard({ kind: "drawing" }).scene!.elements).toHaveLength(0);
+    expect(validateCard({ kind: "drawing", scene: null }).scene!.elements).toHaveLength(0);
+    expect(validateCard({ kind: "drawing", scene: 42 }).scene!.elements).toHaveLength(0);
+    expect(validateCard({ kind: "drawing", scene: { elements: "nope" } }).scene!.elements).toHaveLength(0);
+  });
+
+  test("malformed element points are filtered and coerced as documented (Sol-guided)", () => {
+    const card = validateCard({
+      kind: "drawing",
+      scene: {
+        elements: [
+          {
+            type: "freedraw",
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            points: [
+              [0, 0],
+              [1], // too short: dropped
+              null, // not an array: dropped
+              ["3", "4"], // numeric strings: coerced to numbers
+              [5, "6"],
+            ],
+          },
+        ],
+      },
+    });
+    expect(card.scene!.elements[0]!.points).toEqual([
+      [0, 0],
+      [3, 4],
+      [5, 6],
+    ]);
+  });
+
+  test("non-string titles are dropped (Sol-guided)", () => {
+    expect(validateCard({ kind: "note", title: 42 }).title).toBeUndefined();
+    expect(validateCard({ kind: "note", title: null }).title).toBeUndefined();
+  });
+
+  test("validateCard preserves angle, strokeColor, fillStyle, and seed (Sol-guided)", () => {
+    const card = validateCard({
+      kind: "drawing",
+      scene: {
+        elements: [
+          {
+            type: "rectangle",
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+            angle: 0.5,
+            strokeColor: "#ff0000",
+            fillStyle: "hachure",
+            seed: 12345,
+          },
+        ],
+      },
+    });
+    const el = card.scene!.elements[0]!;
+    expect(el.angle).toBe(0.5);
+    expect(el.strokeColor).toBe("#ff0000");
+    expect(el.fillStyle).toBe("hachure");
+    expect(el.seed).toBe(12345);
+  });
 });

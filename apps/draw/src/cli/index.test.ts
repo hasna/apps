@@ -239,3 +239,189 @@ describe("draw --version", () => {
     expect(r.stdout.trim()).toBe("0.1.0");
   });
 });
+
+describe("draw list filters (Sol-guided)", () => {
+  let fboard: string;
+
+  beforeAll(() => {
+    fboard = join(dir, "filters.json");
+    run("create", fboard);
+    run("add", fboard, "--note", "alpha", "--color", "red", "--label", "work", "--pin");
+    run("add", fboard, "--note", "beta", "--color", "blue", "--label", "home");
+  });
+
+  test("filters by label", () => {
+    const r = run("list", fboard, "--label", "work");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("alpha");
+    expect(r.stdout).not.toContain("beta");
+  });
+
+  test("filters by color", () => {
+    const r = run("list", fboard, "--color", "blue");
+    expect(r.stdout).toContain("beta");
+    expect(r.stdout).not.toContain("alpha");
+  });
+
+  test("filters pinned to only pinned cards", () => {
+    const r = run("list", fboard, "--pinned");
+    expect(r.stdout).toContain("alpha");
+    expect(r.stdout).not.toContain("beta");
+  });
+
+  test("archived filter shows nothing when nothing is archived", () => {
+    const r = run("list", fboard, "--archived");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("(no cards)");
+  });
+});
+
+describe("draw sort (Sol-guided)", () => {
+  let sboard: string;
+
+  beforeAll(() => {
+    sboard = join(dir, "sort.json");
+    run("create", sboard);
+    run("add", sboard, "--note", "first");
+    run("add", sboard, "--note", "second");
+    run("add", sboard, "--note", "third");
+  });
+
+  test("created sort lists the newest card first", () => {
+    const r = run("list", sboard, "--sort", "created");
+    const lines = r.stdout.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines[0]).toContain("third");
+    expect(lines[2]).toContain("first");
+  });
+
+  test("updated sort lists the most recently updated card first", () => {
+    // Without an update verb the CLI can only bump updatedAt via add, so the
+    // expected updated order is the add order (third, second, first).
+    const r = run("list", sboard, "--sort", "updated");
+    const lines = r.stdout.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines[0]).toContain("third");
+    expect(lines[2]).toContain("first");
+  });
+
+  test("rejects an unknown sort", () => {
+    const r = run("list", sboard, "--sort", "priority");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("invalid sort");
+  });
+});
+
+describe("draw export edges (Sol-guided)", () => {
+  test("exports a single card as JSON by exact id", () => {
+    const id = readDoc().board.cards[0]!.id as string;
+    const r = run("export", board, "--to", "json", "--card", id);
+    expect(r.code).toBe(0);
+    const card = JSON.parse(r.stdout);
+    expect(card.id).toBe(id);
+    expect(card.kind).toBe("note");
+  });
+
+  test("missing card id errors with card not found", () => {
+    const r = run("export", board, "--to", "json", "--card", "does-not-exist");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("card not found");
+  });
+
+  test("ambiguous id prefix errors (Sol-guided)", () => {
+    const crafted = join(dir, "ambiguous.json");
+    writeFileSync(
+      crafted,
+      JSON.stringify({
+        schema: "hasna.draw.board",
+        version: 1,
+        board: {
+          id: "b1",
+          cards: [
+            {
+              id: "abc123def",
+              kind: "note",
+              text: "one",
+              color: "default",
+              labels: [],
+              pinned: false,
+              archived: false,
+              order: 0,
+              createdAt: "2020-01-01T00:00:00.000Z",
+              updatedAt: "2020-01-01T00:00:00.000Z",
+            },
+            {
+              id: "abc456ghi",
+              kind: "note",
+              text: "two",
+              color: "default",
+              labels: [],
+              pinned: false,
+              archived: false,
+              order: 1,
+              createdAt: "2020-01-01T00:00:00.000Z",
+              updatedAt: "2020-01-01T00:00:00.000Z",
+            },
+          ],
+          createdAt: "2020-01-01T00:00:00.000Z",
+          updatedAt: "2020-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    const r = run("export", crafted, "--to", "json", "--card", "abc");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("ambiguous card id prefix");
+  });
+
+  test("invalid output format errors (Sol-guided)", () => {
+    const r = run("export", board, "--to", "yaml");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("invalid format");
+  });
+
+  test("a notes-only board refuses excalidraw export (Sol-guided)", () => {
+    const notes = join(dir, "notes-only.json");
+    run("create", notes);
+    run("add", notes, "--note", "only a note");
+    const r = run("export", notes, "--to", "excalidraw");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("no drawing card");
+  });
+});
+
+describe("draw add --drawing without --scene (Sol-guided)", () => {
+  test("adds an empty drawing card", () => {
+    const d = join(dir, "drawing-only.json");
+    run("create", d);
+    const r = run("add", d, "--drawing");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("Added drawing card");
+    const doc = JSON.parse(readFileSync(d, "utf8"));
+    expect(doc.board.cards[0]!.kind).toBe("drawing");
+    expect(doc.board.cards[0]!.scene.elements).toEqual([]);
+  });
+});
+
+describe("draw missing board and empty board (Sol-guided)", () => {
+  test("a missing board file exits 1 with the ENOENT error", () => {
+    const r = run("list", join(dir, "does-not-exist.json"));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("ENOENT");
+  });
+
+  test("an empty board lists (no cards)", () => {
+    const e = join(dir, "empty-list.json");
+    run("create", e);
+    const r = run("list", e);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("(no cards)");
+  });
+
+  test("an empty board stats prints zeros", () => {
+    const e = join(dir, "empty-stats.json");
+    run("create", e);
+    const r = run("stats", e);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/Total\s+0/);
+    expect(r.stdout).toMatch(/Notes\s+0/);
+    expect(r.stdout).toMatch(/Drawings\s+0/);
+  });
+});

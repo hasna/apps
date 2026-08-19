@@ -83,6 +83,30 @@ describe("addStroke", () => {
     const scene = addStroke(createScene(), []);
     expect(scene.elements).toHaveLength(0);
   });
+
+  test("crosses the negative origin with relative points (Sol-guided)", () => {
+    const scene = addStroke(createScene(), [
+      [-10, -20],
+      [10, 20],
+    ]);
+    const el = scene.elements[0]!;
+    expect(el.x).toBe(-10);
+    expect(el.y).toBe(-20);
+    expect(el.width).toBe(20);
+    expect(el.height).toBe(40);
+    expect(el.points).toEqual([
+      [0, 0],
+      [20, 40],
+    ]);
+  });
+
+  test("a single-point stroke is a zero-size element (Sol-guided)", () => {
+    const scene = addStroke(createScene(), [[5, 5]]);
+    const el = scene.elements[0]!;
+    expect(el.width).toBe(0);
+    expect(el.height).toBe(0);
+    expect(el.points).toEqual([[0, 0]]);
+  });
 });
 
 describe("addElement / removeElement / clearScene", () => {
