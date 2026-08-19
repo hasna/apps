@@ -243,15 +243,22 @@ jobs:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 
   # ---------------------------------------------------------------------------------
-  # verify-generated: the committed byte-reproducibility gate. apps/knowledge commits
-  # its build output (bin/, dist/ — GENERATED_PATHS in
+  # verify-generated: the committed byte-reproducibility gate, one step per
+  # member that commits build output. apps/knowledge commits its build output
+  # (bin/, dist/ — GENERATED_PATHS in
   # apps/knowledge/scripts/verify-generated-artifacts.mjs) and the gate rebuilds it,
-  # then requires `git diff --exit-code -- bin dist` to be empty. A PR whose committed
-  # bundles drift from what the current source builds is refused here. That is the
-  # dirty-tree class that broke the merge train and was fixed by #110 (regenerated
-  # bundles under bun 1.3.14); it regresses silently whenever someone regenerates
-  # artifacts and forgets to commit them, or rebuilds under a different bun — so it
-  # must be a gate, not a convention.
+  # then requires `git diff --exit-code -- bin dist` to be empty. apps/events commits
+  # dist/ (13 files, plus types/) and ships `generated-artifacts:check`, which rebuilds
+  # and requires a clean `git status --porcelain` over dist/ and types/. A PR whose
+  # committed bundles drift from what the current source builds is refused here. That
+  # is the dirty-tree class that broke the merge train and was fixed by #110
+  # (regenerated bundles under bun 1.3.14); it regresses silently whenever someone
+  # regenerates artifacts and forgets to commit them, or rebuilds under a different
+  # bun — so it must be a gate, not a convention.
+  #
+  # A member that commits generated bundles MUST add its own step here, sharing this
+  # job's bun-version pin — a committed bundle no job regenerates is drift by
+  # construction.
   #
   # Deliberately NOT routed through turbo: the turbo task cache is keyed on inputs and
   # would replay a cached success instead of running the rebuild, making the byte
@@ -275,9 +282,13 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      - name: Verify generated artifacts (rebuild + byte-compare bin/ dist/)
+      - name: Verify generated artifacts (knowledge — rebuild + byte-compare bin/ dist/)
         run: bun run verify:generated
         working-directory: apps/knowledge
+
+      - name: Verify generated artifacts (events — rebuild + byte-compare dist/ types/)
+        run: bun run generated-artifacts:check
+        working-directory: apps/events
 
   # ---------------------------------------------------------------------------------
   publish-guard:
