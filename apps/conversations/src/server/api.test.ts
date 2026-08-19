@@ -18,6 +18,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const messageAttachments: any[] = [];
   const messageMentions: any[] = [];
   const channelSubscriptions: any[] = [];
+  const channelNotificationReads: any[] = [];
   const tasks: any[] = [];
   const graphEdges: any[] = [];
   const resourceLocks: any[] = [];
@@ -176,6 +177,22 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
           .sort((a, b) => String(a.last_seen_at).localeCompare(String(b.last_seen_at)))
           .map((row) => ({ id: row.id, agent: row.agent }));
       }
+      if (/SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE agent = \$1/i.test(sql)) {
+        return channelSubscriptions
+          .filter((subscription) => subscription.agent === _p[0])
+          .slice()
+          .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.channel).localeCompare(String(b.channel)));
+      }
+      if (/SELECT channel FROM channel_subscriptions WHERE agent = \$1/i.test(sql)) {
+        return channelSubscriptions
+          .filter((subscription) => subscription.agent === _p[0])
+          .map((subscription) => ({ channel: subscription.channel }));
+      }
+      if (/FROM channel_subscriptions ORDER BY agent ASC, channel ASC/i.test(sql)) {
+        return channelSubscriptions.slice().sort(
+          (a, b) => String(a.agent).localeCompare(String(b.agent)) || String(a.channel).localeCompare(String(b.channel)),
+        );
+      }
       return [];
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
@@ -305,11 +322,83 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         channelMembers.add(`${channel}:${agent}`);
         return { rows: [], rowCount: 1 };
       }
+      if (/INSERT INTO channel_subscriptions/i.test(sql)) {
+        const [channel, agent, previewChars, sinceMessageId] = p as any[];
+        const existing = channelSubscriptions.find((row) => row.channel === channel && row.agent === agent);
+        if (existing) {
+          existing.preview_chars = previewChars;
+        } else {
+          channelSubscriptions.push({
+            channel,
+            agent,
+            preview_chars: previewChars,
+            since_message_id: sinceMessageId,
+            created_at: new Date().toISOString(),
+          });
+        }
+        return { rows: [], rowCount: 1 };
+      }
+      if (/DELETE FROM channel_subscriptions WHERE channel = \$1 AND agent = \$2/i.test(sql)) {
+        const [channel, agent] = p as any[];
+        const before = channelSubscriptions.length;
+        for (let index = channelSubscriptions.length - 1; index >= 0; index--) {
+          const row = channelSubscriptions[index];
+          if (row.channel === channel && row.agent === agent) channelSubscriptions.splice(index, 1);
+        }
+        return { rows: [], rowCount: before - channelSubscriptions.length };
+      }
+      if (/INSERT INTO channel_notification_reads/i.test(sql)) {
+        const [agent, messageIds] = p as any[];
+        const ids = Array.isArray(messageIds) ? (messageIds as any[]).map(Number) : [];
+        let added = 0;
+        for (const messageId of ids) {
+          const key = `${agent}:${messageId}`;
+          if (!channelNotificationReads.some((row) => `${row.agent}:${row.message_id}` === key)) {
+            channelNotificationReads.push({ agent, message_id: messageId });
+            added++;
+          }
+        }
+        return { rows: [], rowCount: added };
+      }
+      if (/UPDATE message_mentions SET notified_at/i.test(sql)) {
+        const notifiedAt = new Date().toISOString();
+        let changed = 0;
+        if (/id = ANY\(\$2::bigint\[\]\)/i.test(sql)) {
+          const [mentionedAgent, ids] = p as any[];
+          const idSet = new Set((ids as any[]).map(Number));
+          for (const mention of messageMentions) {
+            if (mention.mentioned_agent === mentionedAgent && idSet.has(Number(mention.id)) && !mention.notified_at) {
+              mention.notified_at = notifiedAt;
+              changed++;
+            }
+          }
+        } else if (/AND channel = \$2/i.test(sql)) {
+          const [mentionedAgent, channel] = p as any[];
+          for (const mention of messageMentions) {
+            if (mention.mentioned_agent === mentionedAgent && mention.channel === channel && !mention.notified_at) {
+              mention.notified_at = notifiedAt;
+              changed++;
+            }
+          }
+        } else {
+          const [mentionedAgent] = p as any[];
+          for (const mention of messageMentions) {
+            if (mention.mentioned_agent === mentionedAgent && !mention.notified_at) {
+              mention.notified_at = notifiedAt;
+              changed++;
+            }
+          }
+        }
+        return { rows: [], rowCount: changed };
+      }
       return { rows: [], rowCount: 0 };
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
       if (/set_config\('hasna\.conversations\.channel_scope_rewrite'/i.test(sql)) {
         scopeRewriteCalls.push({ sql, params: [...p] });
+      }
+      if (/SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE channel = \$1 AND agent = \$2/i.test(sql)) {
+        return channelSubscriptions.find((row) => row.channel === p[0] && row.agent === p[1]) ?? null;
       }
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
       if (/SELECT \* FROM resource_locks/i.test(sql)) {
@@ -464,7 +553,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         const found = messages.find((row) => row.id === (p as any[])[0]);
         return found ? { id: found.id } : null;
       }
-      if (/FROM channels c WHERE c\.name/i.test(sql) || /SELECT \* FROM channels WHERE name/i.test(sql) || /SELECT name, description/i.test(sql)) {
+      if (/FROM channels c WHERE c\.name/i.test(sql) || /SELECT \* FROM channels WHERE name/i.test(sql) || /SELECT name, description/i.test(sql) || /SELECT name FROM channels WHERE name = \$1/i.test(sql)) {
         const row = channels[(p as any[])[0]];
         return row
           ? {
@@ -859,6 +948,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         };
       },
       channelSubscriptions,
+      channelNotificationReads,
       tasks,
       graphEdges,
       resourceLocks,
@@ -3639,5 +3729,413 @@ describe("POST /v1/messages work-status lifecycle guards (hosted path)", () => {
     const recentIndex = calls.findIndex((call) => call.sql.includes("FROM messages"));
     expect(lockIndex).toBeGreaterThanOrEqual(0);
     expect(recentIndex).toBeGreaterThan(lockIndex);
+  });
+});
+
+/**
+ * H3 — /v1/messages/read: the mention-acknowledgement discriminator and the
+ * reader binding.
+ *
+ * Agent-authored (SOL consult refused before delivering a final spec; its
+ * preliminary findings named this transport seam. Spec from independent
+ * analysis of the server read handler).
+ *
+ * The local store marks mentions through markMentionsReadByIds (specific ids)
+ * and markMentionsRead (all, optionally channel-scoped). The hosted router
+ * must expose the SAME semantics through one discriminator: `mentions_only`
+ * selects the mentions branch, `mention_ids` selects the exact rows inside it.
+ * A request carrying `mention_ids` WITHOUT `mentions_only` is refused with 400
+ * — the fail-closed contract a weak happy-path test never sees. The ApiStore
+ * wire shape (markMentionsReadByIds) is exactly that shape, so the
+ * discriminator is a load-bearing contract, not an option.
+ */
+describe("H3 /v1/messages/read mention acknowledgements", () => {
+  function mentionRow(id: number) {
+    return activeFakeClient!.__debug.messageMentions.find((row) => row.id === id);
+  }
+
+  async function seedTestMentions(uuids: string[]): Promise<number[]> {
+    const r = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: uuids.map((uuid, index) => ({
+          uuid,
+          from: "seed",
+          to: "alerts",
+          channel: "alerts",
+          content: `payload @test #${index}`,
+        })),
+      }),
+    });
+    expect(r.status).toBe(200);
+    const body = await r.json() as { inserted: number };
+    expect(body.inserted).toBe(uuids.length);
+    return uuids.map((uuid) => {
+      const source = activeFakeClient!.__debug.messages.find((m) => m.uuid === uuid);
+      const mention = activeFakeClient!.__debug.messageMentions.find((m) => m.message_id === source?.id);
+      expect(mention).toBeDefined();
+      return mention!.id;
+    });
+  }
+
+  test("mentions_only + mention_ids stamps exactly the named un-notified mention rows", async () => {
+    const [firstId, secondId] = await seedTestMentions(["h3-exact-a", "h3-exact-b"]);
+    const res = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ reader: "test", mentions_only: true, mention_ids: [firstId] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ marked: 1 });
+    expect(mentionRow(firstId).notified_at).toBeDefined();
+    expect(mentionRow(secondId).notified_at).toBeUndefined();
+  });
+
+  test("mentions_only without ids stamps every un-notified mention of the reader", async () => {
+    const [firstId, secondId] = await seedTestMentions(["h3-all-a", "h3-all-b"]);
+    const res = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ reader: "test", mentions_only: true }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { marked: number };
+    expect(body.marked).toBeGreaterThanOrEqual(2);
+    expect(mentionRow(firstId).notified_at).toBeDefined();
+    expect(mentionRow(secondId).notified_at).toBeDefined();
+  });
+
+  test("mentions_only with a channel scopes the stamp to that channel", async () => {
+    const channelA = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{
+        uuid: "h3-scope-a", from: "seed", to: "cha", channel: "cha", content: "scope @test A",
+      }] }),
+    });
+    const channelB = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{
+        uuid: "h3-scope-b", from: "seed", to: "chb", channel: "chb", content: "scope @test B",
+      }] }),
+    });
+    expect(channelA.status).toBe(200);
+    expect(channelB.status).toBe(200);
+    const inA = activeFakeClient!.__debug.messageMentions.find((m) => m.channel === "cha" && m.mentioned_agent === "test")!;
+    const inB = activeFakeClient!.__debug.messageMentions.find((m) => m.channel === "chb" && m.mentioned_agent === "test")!;
+
+    const res = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ reader: "test", mentions_only: true, channel: "cha" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ marked: 1 });
+    expect(inA.notified_at).toBeDefined();
+    expect(inB.notified_at).toBeUndefined();
+  });
+
+  test("mention_ids WITHOUT mentions_only is refused 400 — the discriminator is required", async () => {
+    const [firstId] = await seedTestMentions(["h3-nodisc-a"]);
+    // The ApiStore markMentionsReadByIds wire shape is exactly this request.
+    // The server fail-closes: without mentions_only the body matches no
+    // branch, and the mention row stays untouched instead of being
+    // acknowledged by a guessed interpretation.
+    const res = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ reader: "test", mention_ids: [firstId] }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "provide ids, or all/channel/session with reader" });
+    expect(mentionRow(firstId).notified_at).toBeUndefined();
+  });
+
+  test("reader must match the authenticated agent", async () => {
+    const res = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ reader: "someone-else", mentions_only: true }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "reader must match the authenticated agent" });
+  });
+});
+
+/**
+ * H4 — channel-notifications lifecycle and the authenticated-agent binding.
+ *
+ * Agent-authored (SOL consult refused before delivering a final spec; its
+ * preliminary findings named this authorization seam. Spec from independent
+ * analysis of the channel-notifications router).
+ *
+ * The inbox route binds the queried `agent` to the API principal (403 on
+ * mismatch) and does so BEFORE any SQL runs. The sibling routes take an
+ * `agent` from body/path/query; their contract is pinned here at the
+ * execution level: subscribe upsert, listing, unsubscribe 404 semantics,
+ * read/read-all marking, and the pre-query 403 on the one route that binds.
+ */
+describe("H4 channel-notifications lifecycle and binding", () => {
+  function seedNotifChannel(name: string) {
+    activeFakeClient!.__debug.seedChannel({
+      id: `chn_${name}`,
+      name,
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "seed",
+      created_at: "2026-08-09T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, [], []);
+  }
+
+  test("POST requires a channel", async () => {
+    const res = await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ agent: "watcher" }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "channel and agent are required" });
+  });
+
+  test("POST subscribes and upserts preview_chars on re-subscribe", async () => {
+    seedNotifChannel("h4-sub");
+    const first = await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-sub", agent: "h4-sub-watcher", preview_chars: 200 }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json() as any;
+    expect(firstBody.subscription).toMatchObject({ channel: "h4-sub", agent: "h4-sub-watcher", preview_chars: 200 });
+    expect(firstBody.subscription.since_message_id).toBe(0);
+
+    const second = await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-sub", agent: "h4-sub-watcher", preview_chars: 80 }),
+    });
+    expect(second.status).toBe(200);
+    const secondBody = await second.json() as any;
+    expect(secondBody.subscription.preview_chars).toBe(80);
+    expect(activeFakeClient!.__debug.channelSubscriptions.filter((s) => s.channel === "h4-sub")).toHaveLength(1);
+  });
+
+  test("POST subscribes a missing channel with 404 and GET lists by agent", async () => {
+    const missing = await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-absent", agent: "h4-list-watcher" }),
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: "Channel not found: h4-absent" });
+
+    seedNotifChannel("h4-list");
+    await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-list", agent: "h4-list-watcher" }),
+    });
+
+    const filtered = await fetch(`${base}/v1/channel-notifications?agent=h4-list-watcher`, { headers: { "x-api-key": rwKey } });
+    expect(filtered.status).toBe(200);
+    const filteredBody = await filtered.json() as any;
+    expect(filteredBody.subscriptions.map((s: any) => s.channel)).toEqual(["h4-list"]);
+
+    const unfiltered = await fetch(`${base}/v1/channel-notifications`, { headers: { "x-api-key": rwKey } });
+    expect(unfiltered.status).toBe(200);
+    const unfilteredBody = await unfiltered.json() as any;
+    expect(unfilteredBody.subscriptions.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("GET /subscribed requires an agent and returns the subscribed channels", async () => {
+    seedNotifChannel("h4-subscribed");
+    await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-subscribed", agent: "h4-subscribed-watcher" }),
+    });
+
+    const missing = await fetch(`${base}/v1/channel-notifications/subscribed`, { headers: { "x-api-key": rwKey } });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({ error: "agent is required" });
+
+    const ok = await fetch(`${base}/v1/channel-notifications/subscribed?agent=h4-subscribed-watcher`, { headers: { "x-api-key": rwKey } });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ channels: ["h4-subscribed"] });
+  });
+
+  test("DELETE unsubscribes and 404s on a missing subscription", async () => {
+    seedNotifChannel("h4-del");
+    await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-del", agent: "h4-del-watcher" }),
+    });
+
+    const del = await fetch(`${base}/v1/channel-notifications/h4-del/h4-del-watcher`, {
+      method: "DELETE",
+      headers: { "x-api-key": rwKey },
+    });
+    expect(del.status).toBe(200);
+    expect(await del.json()).toEqual({ unsubscribed: true });
+    expect(activeFakeClient!.__debug.channelSubscriptions.filter((s) => s.channel === "h4-del")).toHaveLength(0);
+
+    const again = await fetch(`${base}/v1/channel-notifications/h4-del/h4-del-watcher`, {
+      method: "DELETE",
+      headers: { "x-api-key": rwKey },
+    });
+    expect(again.status).toBe(404);
+    expect(await again.json()).toEqual({ error: "Subscription not found" });
+  });
+
+  test("inbox binds the queried agent to the API principal before any query runs", async () => {
+    const intruderKey = mintApiKey({
+      app: "conversations",
+      agent: "intruder",
+      scopes: ["conversations:read"],
+      signingSecret: SIGNING,
+    }).token;
+    const mark = activeFakeClient!.__debug.manyCalls.length;
+    const res = await fetch(`${base}/v1/channel-notifications/inbox?agent=watcher`, {
+      headers: { "x-api-key": intruderKey },
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "notification agent must match the authenticated agent" });
+    expect(activeFakeClient!.__debug.manyCalls.slice(mark)).toHaveLength(0);
+  });
+
+  test("POST /read marks the named message ids as notified reads", async () => {
+    seedNotifChannel("h4-read");
+    await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-read", agent: "h4-read-watcher" }),
+    });
+
+    const res = await fetch(`${base}/v1/channel-notifications/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ agent: "h4-read-watcher", message_ids: [41, 42] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ marked: 2 });
+
+    const rerun = await fetch(`${base}/v1/channel-notifications/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ agent: "h4-read-watcher", message_ids: [41, 42, 43] }),
+    });
+    expect(await rerun.json()).toEqual({ marked: 1 });
+  });
+
+  test("POST /read-all with a channel scopes the snapshot to that channel", async () => {
+    seedNotifChannel("h4-readall");
+    await fetch(`${base}/v1/channel-notifications`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "h4-readall", agent: "h4-readall-watcher" }),
+    });
+
+    const mark = activeFakeClient!.__debug.queryCalls.length;
+    const res = await fetch(`${base}/v1/channel-notifications/read-all`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ agent: "h4-readall-watcher", channel: "h4-readall" }),
+    });
+    expect(res.status).toBe(200);
+    const calls = activeFakeClient!.__debug.queryCalls.slice(mark);
+    const snapshot = calls.find((call) => /INSERT INTO channel_notification_reads/i.test(call.sql));
+    expect(snapshot).toBeDefined();
+    expect(snapshot!.sql).toContain("AND m.channel = $");
+  });
+});
+
+/**
+ * H5 — attachment download: the encoding guard, the response-integrity
+ * contract, and the read-scope authorization boundary.
+ *
+ * Agent-authored (SOL consult refused; spec from independent analysis of
+ * src/server/api.ts download handler). The existing tests cover the byte
+ * round-trip and the 404/401 paths; the edges below are the ones a weak test
+ * misses: an unsupported `encoding` value must be refused with the typed code
+ * BEFORE any storage read, the Content-Disposition filename must be sanitized
+ * (header injection), Content-Length must agree with the stored size, and a
+ * read-scoped key must be able to download (GET is a read, never a write).
+ */
+describe("H5 attachment download boundary", () => {
+  async function seedAttachment(name: string, bytes: Buffer): Promise<{ id: number; base: string }> {
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "alice",
+        to: "threads",
+        channel: "threads",
+        content: `attachment boundary ${name}`,
+        attachments: [{ name, content_base64: bytes.toString("base64") }],
+      }),
+    });
+    expect(sent.status).toBe(201);
+    const message = (await sent.json()).message as { id: number };
+    return { id: message.id, base };
+  }
+
+  test("unsupported encoding is refused with the typed code before any storage read", async () => {
+    const { id } = await seedAttachment("h5-enc.txt", Buffer.from("encoding probe\n"));
+    const mark = activeFakeClient!.__debug.manyCalls.length + activeFakeClient!.__debug.queryCalls.length;
+    const res = await fetch(`${base}/v1/messages/${id}/attachments/h5-enc.txt?encoding=raw`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      code: "ATTACHMENT_ENCODING_UNSUPPORTED",
+      hint: "Omit encoding for raw bytes or use encoding=base64 for a JSON response.",
+    });
+    expect(activeFakeClient!.__debug.manyCalls.length + activeFakeClient!.__debug.queryCalls.length).toBe(mark);
+  });
+
+  test("Content-Disposition sanitizes quotes and backslashes in the attachment name", async () => {
+    const { id } = await seedAttachment('h5-"evil".txt', Buffer.from("sanitize me\n"));
+    const res = await fetch(`${base}/v1/messages/${id}/attachments/${encodeURIComponent('h5-"evil".txt')}`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(res.status).toBe(200);
+    // Quotes and backslashes become underscores; the rest of the name survives.
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="h5-_evil_.txt"');
+  });
+
+  test("Content-Disposition sanitizes a backslash in the attachment name", async () => {
+    const { id } = await seedAttachment("h5\\path.txt", Buffer.from("backslash\n"));
+    const res = await fetch(`${base}/v1/messages/${id}/attachments/${encodeURIComponent("h5\\path.txt")}`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="h5_path.txt"');
+  });
+
+  test("Content-Length agrees with the stored byte size", async () => {
+    const bytes = Buffer.from("exact length probe\n");
+    const { id } = await seedAttachment("h5-len.txt", bytes);
+    const res = await fetch(`${base}/v1/messages/${id}/attachments/h5-len.txt`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(res.status).toBe(200);
+    expect(Number(res.headers.get("content-length"))).toBe(bytes.length);
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
+  });
+
+  test("a read-scoped key may download attachments (GET is a read, never a write)", async () => {
+    const { id } = await seedAttachment("h5-ro.txt", Buffer.from("read scope\n"));
+    const res = await fetch(`${base}/v1/messages/${id}/attachments/h5-ro.txt`, {
+      headers: { "x-api-key": roKey },
+    });
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(Buffer.from("read scope\n"));
   });
 });
