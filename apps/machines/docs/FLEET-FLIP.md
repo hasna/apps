@@ -100,6 +100,20 @@ fleet env file carries the URL plus the non-secret Vault path — **no literal A
 key is ever written to disk**. Its status reports the runtime mode at
 `mode.current`, which the verifier reads via `verifyModePath`.
 
+**The Vault entry is authoritative, not the flip-written env.** Whenever
+`EMAILS_CLIENT_ENV_SECRET` resolves, `loadEmailsClientEnvSecret` overwrites
+`EMAILS_SELF_HOSTED_URL` (and `EMAILS_MODE`) with the values inside the Vault
+entry — the flip-written URL is effectively inert, and the entry's contract
+(`CLIENT_ENV_REQUIRED_KEYS`) mandates `EMAILS_SELF_HOSTED_URL` inside it.
+The Vault entry must therefore carry the fleet-hosted URL; the flip verify only
+checks hosted mode via `mode.current`, never host identity, so a correct entry
+is what pins the routing host.
+
+**Fail-closed prerequisite.** `emails` flip verify fails closed on any target
+missing the Vault entry at `EMAILS_CLIENT_ENV_SECRET` or a working `secrets`
+CLI — that failure is the expected behavior when the prerequisite is absent,
+not a defect of the flip.
+
 Add a new app by adding its id to `ALL_APPS` in `src/commands/flip.ts` (and, when
 the app's consumer contract deviates from the generic `HASNA_<APP>_API_URL` /
 `HASNA_<APP>_API_KEY` convention, an entry in `APP_SPEC_OVERRIDES`).
