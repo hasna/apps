@@ -23,7 +23,7 @@ Uploads paths, or one stdin file with `--stdin --filename <name>`.
 | `--copy`, `--brief` | Copies the link or prints compact output |
 | `--stdin`, `--filename <name>` | Uploads stdin with the supplied filename |
 | `--client-mode <mode>` | Uses `local` or `cloud` for this upload |
-| `--internal` | Generates a local-network/Tailscale server link |
+| `--internal` | Mints the server-hosted share link against the internal (Tailscale/LAN) base URL instead of the public one — works in both local and cloud client mode; the server must be reachable at that base URL |
 
 Invalid modes/formats, non-positive download limits, and `--encrypt` without a
 password fail before upload.

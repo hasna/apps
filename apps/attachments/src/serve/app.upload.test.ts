@@ -343,3 +343,73 @@ describe("encryption at rest (--encrypt) on the hosted /v1 path", () => {
     expect(await res.text()).toBe("hello");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Custom base URL server links (CLI `--internal` / `base_url`) on the hosted
+// path. The local backend has honored a custom share-link base URL since
+// before the two-backend split (core/upload.ts); the hosted /v1 server used to
+// ignore `base_url` and mint every server link against its configured public
+// base URL, while the client rejected the option outright. These tests lock
+// the ported behavior: the hosted path honors it identically.
+// ---------------------------------------------------------------------------
+describe("custom base URL (--internal) server links", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    uploads.length = 0;
+    presignCalls.length = 0;
+    app = makeApp();
+  });
+
+  const INTERNAL_BASE = "http://attachments.internal.tailnet.local:3459";
+  const CONTENT = "%PDF-1.4 fake pdf body\nline two\n";
+
+  test("upload with base_url mints the server link against the custom base URL", async () => {
+    const { status, body } = await jsonUpload(app, { expiry: "30d", base_url: INTERNAL_BASE });
+    expect(status).toBe(201);
+    expect(String(body.link).startsWith(`${INTERNAL_BASE}/a/`)).toBe(true);
+    expect(presignCalls).toEqual([]);
+    expect(store.shareLinks).toHaveLength(1);
+  });
+
+  test("regenerate with base_url mints the server link against the custom base URL", async () => {
+    const created = await jsonUpload(app, { expiry: "30d" });
+    const res = await app.request(`/v1/attachments/${created.body.id}/link`, {
+      method: "POST",
+      headers: { "x-api-key": key(), "content-type": "application/json" },
+      body: JSON.stringify({ expiry: "30d", base_url: INTERNAL_BASE }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.link_type).toBe("server");
+    expect(String(body.link).startsWith(`${INTERNAL_BASE}/a/`)).toBe(true);
+  });
+
+  test("honours base_url as a multipart form field", async () => {
+    const fd = new FormData();
+    fd.append("file", new File([CONTENT], "raport.pdf", { type: "application/pdf" }));
+    fd.append("expiry", "30d");
+    fd.append("base_url", INTERNAL_BASE);
+    const res = await app.request("/v1/attachments", {
+      method: "POST",
+      headers: { "x-api-key": key() },
+      body: fd,
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(String(body.link).startsWith(`${INTERNAL_BASE}/a/`)).toBe(true);
+  });
+
+  test("an invalid base_url is a 400 with the reason, never silently ignored", async () => {
+    const { status, body } = await jsonUpload(app, { expiry: "30d", base_url: "not-a-url" });
+    expect(status).toBe(400);
+    expect(String(body.error)).toContain("base_url");
+  });
+
+  test("base_url is inert when the request is expressible as a presigned link (same rule as local mode)", async () => {
+    const { status, body } = await jsonUpload(app, { expiry: "7d", base_url: INTERNAL_BASE });
+    expect(status).toBe(201);
+    expect(String(body.link)).toContain("X-Amz-Expires=604800");
+    expect(presignCalls).toEqual([AWS_LIMIT]);
+    expect(store.shareLinks).toHaveLength(0);
+  });
+});
