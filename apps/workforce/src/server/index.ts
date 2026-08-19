@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
-import { resolveDatabaseUrl, resolveStorageMode, scrubDatabaseUrlFromEnv } from "../config.js";
+import { resolveDatabaseUrl, serverBackend, scrubDatabaseUrlFromEnv } from "../config.js";
 import { assertServeSafety, authRequired, buildApp, getBindHost, getPort } from "./app.js";
 
 // Boot the Hono serve tier. Fail-closed on unsafe config; scrub the DSN after
 // the store connects so child processes cannot read it via /proc or docker inspect.
 
 function main(): void {
-  const mode = resolveStorageMode();
+  const backend = serverBackend();
   assertServeSafety();
 
-  if (mode === "cloud") {
+  if (backend === "postgresql") {
     // Cloud-ready seam: resolve the DSN (file mount preferred), then scrub it.
     const dsn = resolveDatabaseUrl();
     if (dsn) scrubDatabaseUrlFromEnv();
@@ -21,8 +21,8 @@ function main(): void {
 
   Bun.serve({ port, hostname, fetch: app.fetch });
 
-  console.log(`@hasna/workforce serve on http://${hostname}:${port} (mode=${mode})`);
-  console.log(`API auth ${authRequired() ? "enabled" : "disabled (loopback + local, no credentials)"}`);
+  console.log(`@hasna/workforce serve on http://${hostname}:${port} (backend=${backend})`);
+  console.log(`API auth ${authRequired() ? "enabled" : "disabled (loopback + sqlite, no credentials)"}`);
 }
 
 if (import.meta.main) {

@@ -10,7 +10,7 @@ import {
 } from "../services/index.js";
 import type { CapabilityLevel, MemberKind, MemberStatus } from "../types/index.js";
 import { toErrorEnvelope } from "../types/index.js";
-import { resolveDbPath, resolveStorageMode, databaseUrlPresent } from "../config.js";
+import { resolveDbPath, serverBackend, databaseUrlPresent } from "../config.js";
 import { getDatabase } from "../db/database.js";
 import { SYSTEM_AUTHORIZATION_CONTEXT, type AuthorizationContext } from "../services/authorization.js";
 import { emit } from "./context.js";
@@ -272,14 +272,14 @@ export function registerNamespaces(program: Command, authCtx: AuthorizationConte
     .description("Redacted storage status")
     .action((_opts, cmd: Command) =>
       handle(isJson(cmd), () => {
-        let mode = "local";
+        let backend = "sqlite";
         try {
-          mode = resolveStorageMode();
+          backend = serverBackend();
         } catch {
-          mode = "local";
+          backend = "sqlite";
         }
         const migrations = getDatabase().query("SELECT COUNT(*) AS n FROM schema_migrations").get() as { n: number };
-        return { mode, dsn_present: databaseUrlPresent(), sqlite_path: resolveDbPath(), migrations_applied: migrations.n, remote_reachable: false };
+        return { backend, dsn_present: databaseUrlPresent(), sqlite_path: resolveDbPath(), migrations_applied: migrations.n, remote_reachable: false };
       }),
     );
   db.command("verify-audit")

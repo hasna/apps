@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { openCloudPool } from "../src/db/database.js";
-import { resolveStorageMode } from "../src/config.js";
+import { serverBackend } from "../src/config.js";
 
 // §4.8 + §2.3 config assertions (no live DB required).
 
@@ -15,15 +15,15 @@ describe("cloud storage config", () => {
 
   it("resolves the postgres backend when a DATABASE_URL is present", () => {
     process.env["HASNA_WORKFORCE_DATABASE_URL"] = "postgres://db.internal:5432/workforce?sslmode=verify-full";
-    expect(resolveStorageMode()).toBe("cloud");
+    expect(serverBackend()).toBe("postgresql");
   });
 
   it("defaults to SQLite and ignores the retired STORAGE_MODE variable", () => {
     process.env["HASNA_WORKFORCE_STORAGE_MODE"] = "cloud";
     process.env["HASNA_WORKFORCE_DATABASE_URL"] = "postgres://db.internal:5432/workforce?sslmode=verify-full";
-    expect(resolveStorageMode()).toBe("cloud");
+    expect(serverBackend()).toBe("postgresql");
     delete process.env["HASNA_WORKFORCE_DATABASE_URL"];
     process.env["HASNA_WORKFORCE_STORAGE_MODE"] = "cloud";
-    expect(resolveStorageMode()).toBe("local");
+    expect(serverBackend()).toBe("sqlite");
   });
 });

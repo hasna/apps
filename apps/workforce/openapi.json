@@ -29,7 +29,7 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Service health { status, version, mode }"
+            "description": "Service health { status, version, backend }"
           }
         }
       }

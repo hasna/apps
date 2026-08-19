@@ -1,5 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { resolveStorageMode } from "../config.js";
+import { serverBackend } from "../config.js";
 import { SYSTEM_AUTHORIZATION_CONTEXT } from "../services/authorization.js";
 import { authenticateApiRequest, isApiAuthConfigured, toAuthorizationContext } from "../server/auth.js";
 import { buildServer } from "./index.js";
@@ -54,16 +54,16 @@ export function assertMcpServeSafety(hostname: string): void {
   const loopback = hostname === "127.0.0.1" || hostname === "localhost";
   const cloud = (() => {
     try {
-      return resolveStorageMode() === "cloud";
+      return serverBackend() === "postgresql";
     } catch {
       return false;
     }
   })();
   if ((!loopback || cloud) && !isApiAuthConfigured()) {
     throw new Error(
-      `Refusing to start workforce-mcp: bind=${hostname} mode=${cloud ? "cloud" : "local"} requires API credentials. ` +
+      `Refusing to start workforce-mcp: bind=${hostname} backend=${cloud ? "postgresql" : "sqlite"} requires API credentials. ` +
         "Set HASNA_WORKFORCE_API_CREDENTIALS (or HASNA_WORKFORCE_API_KEY). " +
-        "Unauthenticated MCP is only allowed on 127.0.0.1 in local mode.",
+        "Unauthenticated MCP is only allowed on 127.0.0.1 with the sqlite backend.",
     );
   }
 }
@@ -100,13 +100,13 @@ export function resetMcpRateLimit(): void {
 /**
  * MCP auth is decoupled from convenience: it may only be disabled with
  * HASNA_WORKFORCE_MCP_AUTH=off AND a loopback bind AND local mode. Any
- * non-loopback bind or cloud mode forces auth on (fail-closed).
+ * non-loopback bind or PostgreSQL backend forces auth on (fail-closed).
  */
 export function mcpAuthRequired(host: string): boolean {
   const off = (process.env["HASNA_WORKFORCE_MCP_AUTH"] || "").toLowerCase() === "off";
   let cloud = false;
   try {
-    cloud = resolveStorageMode() === "cloud";
+    cloud = serverBackend() === "postgresql";
   } catch {
     cloud = false;
   }

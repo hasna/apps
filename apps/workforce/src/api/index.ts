@@ -51,7 +51,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         summary: "Health check",
         tags: ["system"],
         security: [],
-        responses: { "200": { description: "Service health { status, version, mode }" } },
+        responses: { "200": { description: "Service health { status, version, backend }" } },
       },
     },
   };

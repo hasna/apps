@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { resolveDbPath, resolveStorageMode } from "../config.js";
+import { resolveDbPath, serverBackend } from "../config.js";
 import { ensureWorkforceAppHome, getDefaultWorkforceDbPath } from "../core/app-home.js";
 import { applySchema } from "./schema.js";
 import { backupDatabaseBeforeMigration, shouldBackupBeforeMigration } from "./backup.js";
@@ -38,11 +38,11 @@ let _db: Database | null = null;
  * Pass ":memory:" for tests.
  */
 export function openDatabase(path?: string): Database {
-  const mode = resolveStorageMode();
-  if (mode === "cloud" && path === undefined) {
+  const backend = serverBackend();
+  if (backend === "postgresql" && path === undefined) {
     throw new Error(
-      "cloud storage mode uses PURE REMOTE Postgres via the vendored storage-kit; " +
-        "openDatabase() returns a local SQLite handle only. Use the cloud query client for cloud mode.",
+      "the PostgreSQL backend uses the vendored storage-kit pool; " +
+        "openDatabase() returns a local SQLite handle only. Use the cloud query client for the PostgreSQL backend.",
     );
   }
   const dbPath = path ?? getDbPath();
