@@ -88,6 +88,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
@@ -98,6 +99,55 @@ export const APPS_DIR = path.join(REPO_ROOT, "apps");
  * kitVersion is tried; kit versions missing from npm (0.8.3) or too old for
  * the subcommand (0.1.0) fall back to `latest`. */
 export const MIN_VALIDATOR_VERSION = "0.4.1";
+
+/** Numeric segment compare — "0.10.4" >= "0.4.1" must be TRUE (string
+ * compare gets this wrong: "1" < "4"). */
+export function versionAtLeast(v: string, min: string): boolean {
+  const a = v.split(".").map(Number);
+  const b = min.split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (av !== bv) return av > bv;
+  }
+  return true;
+}
+
+/** Effective validator version for a member: the pinned @hasna/contracts
+ * dependency when it exposes `repo-conformance` (>= MIN_VALIDATOR_VERSION);
+ * else the manifest's kitVersion when that version exists on npm; else
+ * `latest`. Shared by the standard-adherence suite and the
+ * check-manifests CI gate, so both validate at the same effective version. */
+export function resolveValidatorVersion(pinned: string | undefined, kitVersion: string | undefined, known: Set<string>): string {
+  if (pinned && versionAtLeast(pinned, MIN_VALIDATOR_VERSION)) return pinned;
+  if (kitVersion && known.has(kitVersion)) return kitVersion;
+  return "latest";
+}
+
+/** Run the canonical manifest validator (`contracts repo-conformance` from
+ * @hasna/contracts) against one member directory. Returns a verdict and the
+ * raw output. Shared by the standard-adherence suite and the check-manifests
+ * CI gate, so a member is validated by exactly the same invocation in both. */
+export function runConformance(dir: string, version: string): { verdict: "ok" | "fail" | "cannot-run"; fails: string[]; raw: string } {
+  const res = spawnSync("bunx", ["--bun", `@hasna/contracts@${version}`, "repo-conformance", dir], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    timeout: 180_000,
+    maxBuffer: 32 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stdout = String(res.stdout ?? "");
+  const stderr = String(res.stderr ?? "");
+  const raw = `${stdout}\n${stderr}`;
+  const lines = raw.split("\n");
+  const verdictLine = lines.find((l) => /^(ok|fail) hasna\.service_contract\.v1/.test(l.trim()));
+  const fails = lines.filter((l) => l.trimStart().startsWith("fail ")).slice(1); // drop the verdict line itself
+  if (!verdictLine) {
+    const errLine = lines.find((l) => l.trim().startsWith("error:"));
+    return { verdict: "cannot-run", fails: fails.length ? fails : [errLine?.trim() ?? `no verdict line; rc=${res.status}`], raw };
+  }
+  return { verdict: verdictLine.trim().startsWith("ok ") ? "ok" : "fail", fails: fails.map((f) => f.trim()), raw };
+}
 
 export interface Member {
   name: string;

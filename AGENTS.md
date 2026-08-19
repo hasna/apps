@@ -54,7 +54,7 @@ moves it); the remaining public-estate imports are tracked by the import wave
 ```bash
 bun install                 # bun 1.3.14 (packageManager pin)
 bunx turbo run build --affected
-bun run check               # names + secrets + manifests + publish-guard
+bun run check               # names + secrets + manifests + publish-guard + standard-adherence suite
 ```
 
 ## Tooling
@@ -62,7 +62,7 @@ bun run check               # names + secrets + manifests + publish-guard
 - `bun` workspaces (`apps/*`), `turbo` for build/test/lint (strict env lists),
   `changesets` with independent per-package versions and public access.
 - CI: one workflow, five jobs — `gates` (secrets scan with self-test,
-  name-conformance gate, contract-manifest placeholder), `test-suites`
+  name-conformance gate, contract-manifest gate), `test-suites`
   (versioning + standard-adherence, hard gate), `build-test` (`turbo --affected`
   with `TURBO_SCM_BASE`), `verify-generated` (byte-reproducible bin/dist),
   `publish-guard` (npm pack --dry-run per member).
