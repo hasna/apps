@@ -74,3 +74,73 @@ describe("project dashboard action capabilities", () => {
     expect(capability.safety.blockers.length).toBeGreaterThan(0);
   });
 });
+
+// agent-authored test-gap additions (SOL consult unavailable: codewith exec with
+// gpt-5.6-sol max reasoning timed out at the 570s window on two distinct accounts
+// before producing a final answer; this spec was written from direct source analysis).
+describe("project dashboard boundary blockers", () => {
+  test("critical actions without a fail-closed guardrail are blocked", () => {
+    expect(projectActionBoundaryBlockers(manifest({
+      riskLevel: "critical",
+      guardrail: undefined,
+    }))).toContain("critical actions require a fail-closed guardrail");
+
+    expect(projectActionBoundaryBlockers(manifest({
+      riskLevel: "critical",
+      guardrail: { hook: "critical-policy", failClosed: true },
+    }))).not.toContain("critical actions require a fail-closed guardrail");
+  });
+
+  test("empty confirmation titles are blocked", () => {
+    expect(projectActionBoundaryBlockers(manifest({ confirmation: { title: "  " } })))
+      .toContain("confirmation title is required");
+  });
+
+  test("low-risk actions with no approval policy stay available", () => {
+    const blockers = projectActionBoundaryBlockers(manifest({
+      riskLevel: "low",
+      requiredApprovals: [],
+    }));
+    expect(blockers).not.toContain("medium/high/critical actions require explicit approval policy");
+    expect(projectActionCapability(manifest({ riskLevel: "low", requiredApprovals: [] })).presentation.executionPolicy)
+      .toBe("server-issued-run");
+  });
+
+  test("action refs use the configured base path and URL-encode identifiers", () => {
+    const capability = projectActionCapability(manifest({ id: "project one/refresh" }), {
+      actionBasePath: "/custom/api/v2",
+    });
+    expect(capability.links.actionRef).toBe(
+      "/custom/api/v2/project%20one%2Frefresh/runs?version=1.0.0",
+    );
+  });
+
+  test("manifestRef override is honored", () => {
+    const capability = projectActionCapability(manifest(), { manifestRef: "custom://authority/manifest" });
+    expect(capability.links.manifestRef).toBe("custom://authority/manifest");
+  });
+
+  test("read-only is the default presentation mode when dry-run is not the default", () => {
+    expect(projectActionCapability(manifest({ dryRun: { supported: true, default: false } })).presentation.defaultMode)
+      .toBe("read-only");
+  });
+
+  test("preflight explains that execution is unavailable without dry-run support", () => {
+    const capability = projectActionCapability(manifest({ dryRun: { supported: false, default: false } }));
+    expect(capability.preflight.supported).toBe(false);
+    expect(capability.preflight.summary).toContain("execution is unavailable until a dry-run is added");
+  });
+
+  test("high and critical risk manifests gain explicit confirmation warnings", () => {
+    const high = projectActionCapability(manifest({ riskLevel: "high" }));
+    expect(high.preflight.warnings[0]).toBe("high risk action requires explicit confirmation before execution.");
+
+    const critical = projectActionCapability(manifest({ riskLevel: "critical", guardrail: { hook: "g", failClosed: true } }));
+    expect(critical.preflight.warnings[0]).toBe("critical risk action requires explicit confirmation before execution.");
+  });
+
+  test("actions that do not advertise idempotency are warned", () => {
+    const capability = projectActionCapability(manifest({ idempotency: { supported: false } }));
+    expect(capability.preflight.warnings).toContain("Action does not advertise idempotency support.");
+  });
+});

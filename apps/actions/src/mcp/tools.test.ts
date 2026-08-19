@@ -137,3 +137,41 @@ describe("MCP tool compact output", () => {
     }
   });
 });
+
+// agent-authored test-gap additions (SOL consult unavailable: codewith exec with
+// gpt-5.6-sol max reasoning timed out at the 570s window on two distinct accounts
+// before producing a final answer; this spec was written from direct source analysis).
+describe("MCP tool registration and not-found contracts", () => {
+  test("registers non-shell manifests but refuses to execute them in process", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-mcp-nonshell-"));
+    try {
+      const client = new ActionsClient({ store: new JsonActionsStore(dir) });
+      const deps = { client };
+      const httpManifest = {
+        ...manifest(),
+        id: "examples.http-only.fetch",
+        executorBindings: [{ kind: "http" as const, method: "POST" as const, url: "https://example.test" }],
+      };
+
+      const registered = await tool("actions_register_manifest").handler(deps, { manifest: httpManifest });
+      expect((registered as Record<string, unknown>).id).toBe("examples.http-only.fetch");
+
+      const run = await tool("actions_run").handler(deps, { actionId: "examples.http-only.fetch", approve: true, dryRun: false, detail: "full" });
+      expect((run as Record<string, unknown>).status).toBe("failed");
+      expect(JSON.stringify(run)).toContain("no executable in-process binding");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("show run reports a structured not-found instead of throwing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-mcp-missing-"));
+    try {
+      const client = await seedClient(dir, 0);
+      const result = await tool("actions_show_run").handler({ client }, { runId: "run-does-not-exist" });
+      expect(result).toEqual({ error: "not found", id: "run-does-not-exist" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

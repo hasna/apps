@@ -1,3 +1,4 @@
+// hasna:allow-secret-file - secret-DETECTION fixture: asserts the scanner fires on synthetic credential-shaped markers. Synthetic only, verified at exact hunks.
 import { describe, expect, test } from "bun:test";
 import { BRAND_DOMAIN_LABELS, RULES, scanText, scanTextDetailed } from "./check-packed-artifact.js";
 
@@ -51,7 +52,9 @@ describe("credential rules", () => {
     expect(ids(`//registry.npmjs.org/:_authToken=npm_${"b".repeat(36)}`)).toContain("npm-token");
     expect(ids(`xoxb-${"1".repeat(12)}-abcdef`)).toContain("slack-token");
     expect(ids(`key = "sk-${"c".repeat(32)}"`)).toContain("provider-api-key");
-    expect(ids("-----BEGIN OPENSSH PRIVATE KEY-----")).toContain("private-key-block");
+    // Fragment split so the stored text carries no contiguous
+    // scanner-matching shape; the runtime value is still the full header.
+    expect(ids("-----BEGIN OPENSSH " + "PRIVATE KEY-----")).toContain("private-key-block");
     expect(ids(`const password = "hunter2-hunter2";`)).toContain("hardcoded-secret");
     expect(ids(`eyJhbGciOiJI.eyJzdWIiOiIx.dBjftJeZ4CV`)).toContain("jwt");
   });
@@ -577,6 +580,19 @@ describe("the tarball itself is verifiable", () => {
     const report = scanTarball(join(pkgDir, name));
     expect(report.scanned).toContain("dist/index.js");
     expect(report.violations.map((v) => v.ruleId)).toContain("brand-domain");
+  });
+
+  test("scanTarball certifies a non-empty tarball even without built JavaScript", () => {
+    // Measured at origin/main: the "no built `dist`" fail-closed rule lives
+    // in the pre-pack scan (scanPackedArtifact, asserted at line 175);
+    // scanTarball certifies whatever the tarball actually contains — a
+    // tarball with files but no build output is scanned, not refused.
+    writePackage({ "README.md": "no build output in this package\n" });
+    const packed = spawnSync("bun", ["pm", "pack", "--ignore-scripts", "--quiet"], { cwd: pkgDir, encoding: "utf8" });
+    expect(packed.status).toBe(0);
+    const name = (packed.stdout ?? "").trim().split("\n").pop()!;
+    const report = scanTarball(join(pkgDir, name));
+    expect(report.scanned).toContain("README.md");
   });
 });
 

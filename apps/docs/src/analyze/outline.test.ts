@@ -42,6 +42,18 @@ describe("slugify", () => {
     expect(slugify("  Învățare — étape 2  ")).toBe("învățare-étape-2");
     expect(slugify("!!!")).toBe("");
   });
+
+  test("collapses runs of hyphens and trims leading/trailing hyphens", () => {
+    expect(slugify("a -- b")).toBe("a-b");
+    expect(slugify("-leading-")).toBe("leading");
+    expect(slugify("trailing-")).toBe("trailing");
+  });
+
+  test("keeps digits and CJK, drops punctuation and emoji", () => {
+    expect(slugify("Version 2.0!")).toBe("version-20");
+    expect(slugify("中文标题")).toBe("中文标题");
+    expect(slugify("emoji 🎉 here")).toBe("emoji-here");
+  });
 });
 
 describe("getOutline", () => {
@@ -56,6 +68,27 @@ describe("getOutline", () => {
     const outline = getOutline(doc);
     expect(outline[0]?.id).toBe("getting-started");
     expect(outline[1]?.id).toBe("getting-started-1");
+  });
+
+  test("empty heading text falls back to a heading-N id and dedupes", () => {
+    const outline = getOutline({
+      type: "doc",
+      content: [heading(1, []), heading(2, [text("   ")]), heading(3, [text("x")])],
+    });
+    expect(outline.map((e) => e.id)).toEqual(["heading-0", "heading-1", "x"]);
+  });
+
+  test("reports the top-level block index even when non-heading blocks sit between", () => {
+    const outline = getOutline({
+      type: "doc",
+      content: [paragraph([text("p")]), heading(2, [text("A")]), horizontalRule(), heading(3, [text("B")])],
+    });
+    expect(outline.map((e) => e.index)).toEqual([1, 3]);
+  });
+
+  test("a heading without attrs defaults to level 1", () => {
+    const outline = getOutline({ type: "doc", content: [{ type: "heading", content: [text("x")] }] });
+    expect(outline[0]?.level).toBe(1);
   });
 });
 
@@ -112,5 +145,63 @@ describe("countWords", () => {
       readingTimeMinutes: 0,
     });
     expect(getOutline({ type: "doc" })).toEqual([]);
+  });
+
+  test("nodeText joins nested inline content and maps hard breaks", () => {
+    const node = paragraph([text("a"), hardBreak(), text("b")]);
+    expect(nodeText(node)).toBe("a\nb");
+  });
+
+  test("toText collapses runs of three or more newlines to one blank line", () => {
+    const doc: DocJSON = {
+      type: "doc",
+      content: [
+        paragraph([text("a"), hardBreak(), hardBreak(), hardBreak(), text("b")]),
+        paragraph([text("c")]),
+      ],
+    };
+    expect(toText(doc)).toBe("a\n\nb\nc");
+  });
+
+  test("toText omits horizontal rules, leaving a blank line between neighbors", () => {
+    const doc: DocJSON = {
+      type: "doc",
+      content: [paragraph([text("a")]), horizontalRule(), paragraph([text("end")])],
+    };
+    expect(toText(doc)).toBe("a\n\nend");
+  });
+
+  test("words are counted across separate text nodes inside one paragraph", () => {
+    const doc: DocJSON = { type: "doc", content: [paragraph([text("one "), text("two three")])] };
+    expect(countWords(doc).words).toBe(3);
+  });
+
+  test("astral-pair characters count as single characters", () => {
+    const doc: DocJSON = { type: "doc", content: [paragraph([text("a😀b")])] };
+    expect(countWords(doc).characters).toBe(3);
+    expect(countWords(doc).charactersNoSpaces).toBe(3);
+  });
+
+  test("list and code-block content is walked for words but not counted as paragraphs", () => {
+    const doc: DocJSON = {
+      type: "doc",
+      content: [
+        {
+          type: "bulletList",
+          content: [{ type: "listItem", content: [paragraph([text("list words")])] }],
+        },
+        { type: "codeBlock", attrs: { language: null }, content: [text("code words")] },
+      ],
+    };
+    const stats = countWords(doc);
+    expect(stats.words).toBe(4);
+    expect(stats.paragraphs).toBe(0);
+  });
+
+  test("sentences split on . ! ? followed by whitespace or end", () => {
+    const doc: DocJSON = { type: "doc", content: [paragraph([text("One. Two! Three?")])] };
+    expect(countWords(doc).sentences).toBe(3);
+    const noTrail: DocJSON = { type: "doc", content: [paragraph([text("No punctuation")])] };
+    expect(countWords(noTrail).sentences).toBe(1);
   });
 });

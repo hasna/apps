@@ -10,6 +10,8 @@ chunks=(
   "src/lib/actions.test.ts src/lib/actions-ref.test.ts src/lib/extractor.test.ts src/lib/snapshot.test.ts src/lib/screenshot.test.ts src/lib/screenshot-v4.test.ts src/lib/annotate.test.ts"
   "src/lib/qol.test.ts src/lib/recorder.test.ts src/lib/session-v3.test.ts src/lib/network.test.ts src/lib/semantic-actions.test.ts src/lib/security.test.ts src/lib/video-presets.test.ts src/lib/video-recording.test.ts src/lib/workflow-manifests.test.ts"
   "src/lib/agents.test.ts src/lib/downloads.test.ts src/lib/integrations.test.ts src/lib/snapshot-diff.test.ts src/lib/stealth.test.ts src/lib/policy.test.ts src/lib/session-policy.test.ts src/lib/extension-bridge.test.ts extension/src/executor.test.ts src/lib/coordination.test.ts"
+  "src/lib/sanitize.test.ts src/lib/ref-cache.test.ts src/lib/ref-cache-l2.test.ts src/lib/tabs.test.ts src/lib/self-heal.test.ts src/lib/auth-flow.test.ts src/lib/datasets.test.ts src/lib/vision-fallback.test.ts"
+  "src/db/timeline.test.ts src/db/console-log.test.ts src/db/heartbeats.test.ts src/db/crawl-results.test.ts"
   "test/publish-guard.test.ts test/registry-versions.test.ts"
 )
 
