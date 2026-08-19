@@ -20,6 +20,7 @@ import {
   addBackend,
   EXAMPLE_DEEPSEEK_BACKEND,
   listBackends,
+  redactBackendRouteForOutput,
   removeBackend,
   resolveBackend,
   resolveBackendModel,
@@ -39,6 +40,7 @@ import {
   type LaunchPlan,
 } from "./lib/launch-plan.js";
 import { addProfile, updateProfile } from "./lib/profiles.js";
+import { switchProfile } from "./lib/switch.js";
 import { getTool } from "./lib/tools.js";
 
 let home: string;
@@ -118,6 +120,54 @@ test("registry validation: baseUrl must be https or localhost http", () => {
     /baseUrl must be https:\/\/ or http:\/\/localhost/,
   );
   expect(validateBackendRoute(deepseekRoute({ baseUrl: "http://localhost:8080/anthropic" }))).toBeTruthy();
+});
+
+test("registry validation: baseUrl with userinfo (credential-bearing URL) is refused", () => {
+  // A token pasted into the URL authority would be echoed into terminal
+  // output by backend list/add and launch-plan env rendering.
+  expect(() =>
+    validateBackendRoute(deepseekRoute({ baseUrl: "https://user:token@api.deepseek.com/anthropic" })),
+  ).toThrow(/baseUrl must be https:\/\/ or http:\/\/localhost/);
+  expect(() => validateBackendRoute(deepseekRoute({ baseUrl: "https://token@api.deepseek.com/anthropic" }))).toThrow(
+    /baseUrl must be https:\/\/ or http:\/\/localhost/,
+  );
+});
+
+test("registry validation: baseUrl carrying a credential-shaped query value is refused", () => {
+  // Assembled at runtime so the SOURCE contains no credential-shaped literal.
+  const tokenLike = `sk-${"ant-" + "synthetic".repeat(3)}`;
+  expect(() =>
+    validateBackendRoute(deepseekRoute({ baseUrl: `https://api.example.com/anthropic?api_key=${tokenLike}` })),
+  ).toThrow(/looks like it carries a credential VALUE in the URL/);
+});
+
+test("registry output: redactBackendRouteForOutput masks a credential-bearing baseUrl for JSON surfaces", () => {
+  const tokenLike = `sk-${"ant-" + "synthetic".repeat(3)}`;
+  const route = deepseekRoute({ baseUrl: `https://api.example.com/anthropic?api_key=${tokenLike}` });
+  const out = redactBackendRouteForOutput(route);
+  expect(JSON.stringify(out)).not.toContain(tokenLike);
+  // Other route fields survive unredacted.
+  expect(out.id).toBe("deepseek");
+  expect(out.vaultKey).toBe("deepseek/api_key");
+});
+
+test("switch --launch on a backend-bound profile builds ONE executable in the secrets-exec wrapper", async () => {
+  addBackend(deepseekRoute());
+  addProfile({ name: "bound-switch", dir: tmpDir("bound-switch"), backendRef: "deepseek" });
+  const result = await switchProfile("bound-switch", { tool: "claude", mode: "active" });
+  // The structural wrapper must not duplicate the tool bin (claude claude).
+  const dashDash = result.command.indexOf("--");
+  expect(result.command[dashDash + 1]).toBe("claude");
+  expect(result.command.filter((part) => part === "claude")).toHaveLength(1);
+  expect(result.command).toEqual([
+    "secrets",
+    "exec",
+    "deepseek/api_key",
+    "--as",
+    "ANTHROPIC_AUTH_TOKEN",
+    "--",
+    "claude",
+  ]);
 });
 
 test("registry validation: vaultKey is a locator, not a credential value", () => {

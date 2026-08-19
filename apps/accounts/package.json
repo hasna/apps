@@ -32,7 +32,6 @@
   "files": [
     "dist",
     "migrations",
-    "docs",
     "hasna.contract.json",
     "docker-compose.yml",
     "examples",

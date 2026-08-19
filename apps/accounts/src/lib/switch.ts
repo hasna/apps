@@ -141,9 +141,13 @@ export function publicSwitchResult(result: SwitchResult | SwitchAccountResult): 
   };
 }
 
-function commandFor(profile: Profile, tool: ToolDef, opts: SwitchOptions): string[] {
+function argsFor(profile: Profile, tool: ToolDef, opts: SwitchOptions): string[] {
   const args = [...(opts.resume ? (tool.resumeArgs ?? []) : []), ...(opts.args ?? [])];
-  return [tool.bin, ...mergeToolArgs(tool, args, { permissions: opts.permissions, profile })];
+  return mergeToolArgs(tool, args, { permissions: opts.permissions, profile });
+}
+
+function commandFor(profile: Profile, tool: ToolDef, opts: SwitchOptions): string[] {
+  return [tool.bin, ...argsFor(profile, tool, opts)];
 }
 
 export async function switchProfile(
@@ -174,7 +178,10 @@ export async function switchProfile(
       );
     }
     await store.useProfile(profile.name, tool.id);
-    const boundPlan = await planLaunch(profile, tool, commandFor(profile, tool, opts), {
+    // planLaunch treats its argv input as the args AFTER the tool bin (its
+    // backend branch sets `command: tool.bin`), so pass the merged args
+    // WITHOUT the bin — commandFor would duplicate it into `claude claude`.
+    const boundPlan = await planLaunch(profile, tool, argsFor(profile, tool, opts), {
       backend: boundBackend,
     });
     const env = boundPlan.publicEnv;

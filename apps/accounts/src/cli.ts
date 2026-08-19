@@ -81,6 +81,7 @@ import {
   backendForProfile,
   EXAMPLE_DEEPSEEK_BACKEND,
   listBackends,
+  redactBackendRouteForOutput,
   removeBackend,
   resolveBackend,
 } from "./lib/backend-routes.js";
@@ -1909,7 +1910,10 @@ backend
     action((opts: { json?: boolean }) => {
       const routes = listBackends();
       if (opts.json) {
-        console.log(JSON.stringify(routes, null, 2));
+        // Structured output redacts the baseUrl exactly like the human
+        // surface — a credential-shaped value in a stored URL must never be
+        // echoed into JSON.
+        console.log(JSON.stringify(routes.map(redactBackendRouteForOutput), null, 2));
         return;
       }
       if (routes.length === 0) {
@@ -1918,7 +1922,7 @@ backend
       }
       for (const route of routes) {
         console.log(
-          `${chalk.cyan(route.id.padEnd(12))} ${route.name.padEnd(16)} ${chalk.dim(route.protocol)} ${chalk.dim(route.baseUrl)} → vault ${route.vaultKey}`,
+          `${chalk.cyan(route.id.padEnd(12))} ${route.name.padEnd(16)} ${chalk.dim(route.protocol)} ${chalk.dim(redactText(route.baseUrl))} → vault ${route.vaultKey}`,
         );
         const models = route.models.map((model) => `${model.id}(${model.contextWindowTokens})`).join(", ");
         console.log(`  ${chalk.dim("models:")} ${models}`);
@@ -1981,7 +1985,7 @@ backend
               }),
             );
         console.log(chalk.green(`✓ registered backend ${chalk.bold(route.id)} (${route.protocol})`));
-        console.log(`  base URL: ${route.baseUrl}`);
+        console.log(`  base URL: ${redactText(route.baseUrl)}`);
         console.log(`  vault:    ${route.vaultKey}`);
         console.log(chalk.dim(`  bind a profile:  accounts set <profile> --backend ${route.id}`));
       },

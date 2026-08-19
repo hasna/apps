@@ -16,10 +16,14 @@
 
 import type { BackendModel, BackendRoute, Profile } from "../types.js";
 import { AccountsError } from "../types.js";
+import { redactText } from "./redaction.js";
 import { loadStore, saveStore } from "../storage.js";
 
 /** Public transport only: https, or plain http bound to localhost. */
-const HTTPS_BASE_URL = /^https:\/\/[^\s/]+(?::\d+)?(?:\/.*)?$/;
+// The authority class excludes `@` so userinfo (`https://user:token@host`)
+// is refused: a token pasted into the URL would be echoed into terminal
+// output by backend list/add and by launch-plan env rendering.
+const HTTPS_BASE_URL = /^https:\/\/[^\s/@]+(?::\d+)?(?:\/.*)?$/;
 const LOCALHOST_BASE_URL = /^http:\/\/localhost(?::\d+)?(?:\/.*)?$/;
 
 /**
@@ -51,7 +55,7 @@ export const EXAMPLE_DEEPSEEK_BACKEND: BackendRoute = {
 export function validateBackendRoute(route: BackendRoute): BackendRoute {
   if (!HTTPS_BASE_URL.test(route.baseUrl) && !LOCALHOST_BASE_URL.test(route.baseUrl)) {
     throw new AccountsError(
-      `backend "${route.id}" baseUrl must be https:// or http://localhost: got "${route.baseUrl}"`,
+      `backend "${route.id}" baseUrl must be https:// or http://localhost: got "${redactText(route.baseUrl)}"`,
     );
   }
   if (!VAULT_KEY_PATTERN.test(route.vaultKey)) {
@@ -62,6 +66,11 @@ export function validateBackendRoute(route: BackendRoute): BackendRoute {
   if (CREDENTIAL_VALUE_PATTERN.test(route.vaultKey)) {
     throw new AccountsError(
       `backend "${route.id}" vaultKey looks like a credential VALUE, not a vault locator; store the value in the vault and reference it by key`,
+    );
+  }
+  if (CREDENTIAL_VALUE_PATTERN.test(route.baseUrl)) {
+    throw new AccountsError(
+      `backend "${route.id}" baseUrl looks like it carries a credential VALUE in the URL; store the value in the vault and reference it by key`,
     );
   }
   if (route.defaults && !route.models.some((model) => model.id === route.defaults!.model)) {
@@ -107,6 +116,16 @@ export function removeBackend(id: string): void {
   }
   store.backends = store.backends.filter((backend) => backend.id !== id);
   saveStore(store);
+}
+
+/**
+ * Output-safe copy of a route for STRUCTURED (JSON) surfaces: the baseUrl is
+ * run through the same URL redaction the human list/add surfaces use, so a
+ * credential-shaped value that predates validation (a hand-edited store row)
+ * can never be echoed into JSON output. Other fields are untouched.
+ */
+export function redactBackendRouteForOutput(route: BackendRoute): BackendRoute {
+  return { ...route, baseUrl: redactText(route.baseUrl) };
 }
 
 /** Resolve a backend route by id, failing closed on unknown or invalid records. */
