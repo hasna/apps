@@ -494,11 +494,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
   },
   {
-    member: "tenants",
-    cause: "manifest_valid at pinned 0.4.2 (mode-era validator vs backend-era manifest, kitVersion 0.10.6): storage.mode Required; storage Unrecognized key(s) in object: 'backend','engines'; <root> Unrecognized key(s) in object: 'hosting','serviceSurfaces'. Manifest imported with the org delta (e74cb94) from hasna/tenants.",
-    task: "todos 03671218-84ac-4859-9b8d-ff6cedeef82a (contracts task — tenants)",
-  },
-  {
     member: "todos",
     cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
@@ -519,7 +514,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
-  { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
