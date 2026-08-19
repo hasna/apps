@@ -91,7 +91,7 @@ describe("readProjectInfo", () => {
 });
 
 describe("readProjectInfo malformed repository values", () => {
-  test("returns undefined repositoryUrl for an object without a url and drops the appId for a name with no slash", async () => {
+  test("returns undefined repositoryUrl for a repository object without a url", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "changelog-project-nourl-"));
     await writeFile(
       join(cwd, "package.json"),
