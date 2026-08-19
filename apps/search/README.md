@@ -183,6 +183,12 @@ Set `HASNA_SEARCH_DATABASE_URL` or `SEARCH_DATABASE_URL` to run in hybrid/remote
 Data is stored in `~/.hasna/search/` by default. Set `HASNA_SEARCH_DIR` (or
 `SEARCH_DATA_DIR`) to isolate a local install or run machine-specific copies.
 
+## Capture-to-markdown (design)
+
+The auto-save-to-md capture pipeline (capture points, default-on recording
+policy, redaction, S3 md corpus placement) is designed in
+[`docs/design/auto-save-to-md-capture.md`](docs/design/auto-save-to-md-capture.md).
+
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
