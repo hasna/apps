@@ -77,7 +77,36 @@ const REQUIRED_ENV: Record<string, string> = {
   EXPECTED_ECR_REPOSITORY: "todos",
   EXPECTED_MIGRATION_FAMILY: "todos-prod-migrate",
   DEPLOY_PATH_SCOPE: "apps/todos/**",
+  CI_WORKFLOW_FILE: "ci.yml",
 };
+
+/**
+ * The exact Actions-API read the MANUAL route must perform before it may open
+ * the lane, and the predicates its response filter must carry.
+ *
+ * workflow_dispatch inherits no verified head_sha the way workflow_run does, so
+ * resolving to the current origin/main tip proves only WHICH commit would ship,
+ * never that the commit passed anything. Without this read a hand dispatch
+ * during or after red ci deploys an unverified SHA. Every fragment below is
+ * required at a COMMAND position (or inside the command that runs it), so an
+ * echoed or commented-out copy cannot satisfy the gate.
+ */
+const MANUAL_CI_QUERY =
+  'gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?branch=main&event=push&status=completed&head_sha=${source_sha}&per_page=100"';
+
+const MANUAL_CI_COUNT_PREFIX =
+  'jq --arg sha "${source_sha}" --arg name "${REQUIRED_CI_WORKFLOW}"';
+
+/** Predicates the count filter must bind, checked inside the real jq command. */
+const MANUAL_CI_PREDICATES = [
+  '.name == $name',
+  '.path == $path',
+  '.head_sha == $sha',
+  '.head_branch == "main"',
+  '.event == "push"',
+  '.status == "completed"',
+  '.conclusion == "success"',
+];
 
 const REQUIRED_DOCUMENTATION = ["repo:hasna/apps:environment:production"];
 
@@ -405,8 +434,19 @@ export function effectiveCommands(run: string): string[] {
 
 /** True when `expected` heads an effective command (exact token-boundary prefix). */
 export function runsCommand(run: string, expected: string): boolean {
+  return commandStartingWith(run, expected) !== undefined;
+}
+
+/**
+ * The first EFFECTIVE command headed by `expected`, or undefined.
+ *
+ * Returning the command itself (rather than a boolean) is what lets a caller
+ * inspect the arguments of the command that really runs — a jq filter, say —
+ * instead of grepping the whole file, where an echoed copy would match.
+ */
+export function commandStartingWith(run: string, expected: string): string | undefined {
   const wanted = expected.replace(/\s+/g, " ").trim();
-  return effectiveCommands(run).some(
+  return effectiveCommands(run).find(
     (command) => command === wanted || command.startsWith(`${wanted} `),
   );
 }
@@ -508,6 +548,18 @@ export function validateTodosDeploy(workflow: string, ciWorkflowName: string): s
     if (!gateIf.includes(required)) push(`the ${GATE_JOB} job condition must require ${required}`);
   }
 
+  // The gate reads history and run metadata. It needs `actions: read` to ask
+  // whether ci passed, and must NEVER hold `id-token` — a job that can mint an
+  // OIDC assertion is a job that can reach production before any gate resolved.
+  const gatePermissions = asMap(gate.permissions);
+  if (asText(gatePermissions.contents) !== "read") push(`the ${GATE_JOB} job must narrow permissions.contents to read`);
+  if (asText(gatePermissions.actions) !== "read") {
+    push(`the ${GATE_JOB} job must hold permissions.actions: read so it can verify the ci run for the manual route`);
+  }
+  if ("id-token" in gatePermissions) {
+    push(`the ${GATE_JOB} job must not hold permissions.id-token — the gate must never be able to assume the deployment role`);
+  }
+
   const gateSteps = stepsOf(gate);
   const resolve = stepNamed(gateSteps, STEP_GATE_RESOLVE);
   if (!resolve) {
@@ -523,9 +575,28 @@ export function validateTodosDeploy(workflow: string, ciWorkflowName: string): s
       '[[ "${GITHUB_REF}" == "refs/heads/main" ]]',
       'source_sha="${main_tip}"',
       'git merge-base --is-ancestor "${source_sha}^{commit}" refs/remotes/origin/main',
+      // The manual route's own ci binding. Resolving the tip is not proving it
+      // passed; these three are what refuse a dispatch during or after red ci.
+      MANUAL_CI_QUERY,
+      MANUAL_CI_COUNT_PREFIX,
+      '[[ "${ci_success_count}" -ge 1 ]]',
     ];
     for (const command of requiredResolveCommands) {
       if (!runsCommand(run, command)) push(`"${STEP_GATE_RESOLVE}" does not run the control: ${command}`);
+    }
+    // Read the predicates out of the jq command that ACTUALLY runs, so a
+    // weakened filter is caught while an echoed correct copy is not credited.
+    const countCommand = commandStartingWith(run, MANUAL_CI_COUNT_PREFIX);
+    if (countCommand) {
+      for (const predicate of MANUAL_CI_PREDICATES) {
+        if (!countCommand.includes(predicate)) {
+          push(`the manual-route ci count must bind ${predicate} — without it a non-ci-passed commit satisfies the gate`);
+        }
+      }
+    }
+    const resolveEnv = asMap(resolve.env);
+    if (!asText(resolveEnv.GH_TOKEN).includes("github.token")) {
+      push(`"${STEP_GATE_RESOLVE}" must read the Actions API through the workflow's own github.token (env.GH_TOKEN)`);
     }
     if (!run.includes("${DEPLOY_PATH_SCOPE}")) {
       push(`"${STEP_GATE_RESOLVE}" must scope the lane with DEPLOY_PATH_SCOPE — workflow_run carries no paths: filter`);
@@ -759,6 +830,51 @@ const MUTATIONS: Mutation[] = [
         "",
       ),
     expect: (errors) => errors.some((error) => error.includes(`"${STEP_VERIFY_SOURCE}" does not run the control`)),
+  },
+  {
+    // The exact P1 this cycle closes: the manual route resolved the tip and
+    // opened the lane without ever proving ci had passed for it.
+    label: "manual dispatch released from the ci-success binding",
+    mutate: (source) =>
+      source.replace(
+        '              [[ "${ci_success_count}" -ge 1 ]] || { echo "manual deploy refused: no completed successful ${REQUIRED_CI_WORKFLOW} push run on main for the exact origin/main tip ${source_sha}" >&2; exit 1; }\n',
+        "",
+      ),
+    survivingText: "ci_success_count",
+    expect: (errors) =>
+      errors.some((error) => error.includes('does not run the control: [[ "${ci_success_count}" -ge 1 ]]')),
+  },
+  {
+    label: "manual dispatch ci binding weakened to any concluded run",
+    mutate: (source) => source.replace('.conclusion == "success"', ".conclusion != null"),
+    survivingText: "ci_success_count",
+    expect: (errors) => errors.some((error) => error.includes('must bind .conclusion == "success"')),
+  },
+  {
+    label: "manual dispatch ci binding released from the exact commit",
+    mutate: (source) => source.replace("&head_sha=${source_sha}", ""),
+    survivingText: "gh api",
+    expect: (errors) => errors.some((error) => error.includes("does not run the control: gh api")),
+  },
+  {
+    label: "manual dispatch ci read stripped of its token surface",
+    mutate: (source) => source.replace("          GH_TOKEN: ${{ github.token }}\n", ""),
+    survivingText: "gh api",
+    expect: (errors) => errors.some((error) => error.includes("env.GH_TOKEN")),
+  },
+  {
+    label: "gate granted the deployment OIDC token",
+    mutate: (source) =>
+      source.replace(
+        "    permissions:\n      contents: read\n      actions: read\n",
+        "    permissions:\n      contents: read\n      actions: read\n      id-token: write\n",
+      ),
+    expect: (errors) => errors.some((error) => error.includes("must not hold permissions.id-token")),
+  },
+  {
+    label: "gate stripped of the actions read it needs to verify ci",
+    mutate: (source) => source.replace("      contents: read\n      actions: read\n", "      contents: read\n"),
+    expect: (errors) => errors.some((error) => error.includes("permissions.actions: read")),
   },
   {
     label: "checkout released from the gated commit",
