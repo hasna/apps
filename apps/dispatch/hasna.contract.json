@@ -4,8 +4,8 @@
   "name": "dispatch",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
-  "description": "Local tmux prompt dispatch for coding agents. CLI + MCP + SDK + daemon with SQLite-backed dispatch and schedule records. Clients use the on-box SQLite store or the hosted HTTP API selected by HASNA_DISPATCH_API_URL + HASNA_DISPATCH_API_KEY. The data backend is the only runtime switch.",
+  "kitVersion": "0.11.1",
+  "description": "Local tmux prompt dispatch for coding agents. CLI + MCP + SDK + daemon with SQLite-backed dispatch and schedule records.",
   "bins": [
     "dispatch",
     "dispatch-mcp",
@@ -57,7 +57,7 @@
       "waivedStorageEngines": [
         {
           "engine": "postgresql",
-          "reason": "Local tmux dispatch package without a serve binary or server runtime placement; PostgreSQL support belongs to a future service-capable storage task.",
+          "reason": "Local tmux dispatch package without a serve binary or cloud runtime placement; PostgreSQL support belongs to a future service-capable storage task.",
           "reviewedBy": "platform-storage",
           "expiresAt": "2027-01-01T00:00:00.000Z"
         }
