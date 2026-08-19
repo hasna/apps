@@ -13,9 +13,11 @@ describe("HTTP adapter", () => {
   let port: number;
 
   beforeAll(() => {
-    port = 19450 + Math.floor(Math.random() * 100);
+    // Sol-guided: kernel-assigned ephemeral port. The previous fixed random
+    // range collided with http-cli-coverage.test.ts when bun test ran the two
+    // files in parallel — 6 flaky failures measured on 2026-08-19.
     server = Bun.serve({
-      port,
+      port: 0,
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/chat") {
@@ -53,6 +55,7 @@ describe("HTTP adapter", () => {
         return new Response("Not found", { status: 404 });
       },
     });
+    port = server.port ?? 0;
   });
 
   afterAll(() => server.stop());

@@ -9,7 +9,7 @@ import {
 } from "../../core/reporter.js";
 import { countRuns, getRun, listRuns } from "../../db/store.js";
 
-function parseCursor(value: unknown): number {
+export function parseCursor(value: unknown): number {
   if (value === undefined || value === null || value === "") return 0;
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
