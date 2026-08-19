@@ -1,0 +1,86 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/src/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "__MEMBER__",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "__MEMBER_DESC__",
+  "bins": [
+    "__MEMBER__",
+    "__MEMBER__-mcp",
+    "__MEMBER__-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "__MEMBER__-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": ".",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "__MEMBER__-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "__MEMBER__",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA___MEMBER_UPPER___",
+    "aliasEnvPrefix": "__MEMBER_UPPER___",
+    "sqlitePath": "~/.hasna/__MEMBER__/__MEMBER__.db",
+    "pgTestGate": {
+      "envVar": "__MEMBER_UPPER___TEST_DATABASE_URL",
+      "command": "bun scripts/pg-test-gate.mjs"
+    }
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
+  }
+}
