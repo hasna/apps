@@ -61,6 +61,34 @@ function resolveSecretsBin(): string | null {
   return null;
 }
 
+/**
+ * CI fallback for the installed-host install: the runner has no global
+ * `secrets` binary, so install-host.sh's `command -v secrets` precondition
+ * would exit 1 before anything is installed. Build a bin dir whose `secrets`
+ * entry is the repo build (dist/index.js — what CI's turbo build produces
+ * before the test phase) with `bun` co-located, mirroring a real ~/.bun/bin
+ * install. That co-location is exactly what host.cjs relies on: it prepends
+ * the CLI's own directory to the child PATH, so the CLI's `#!/usr/bin/env bun`
+ * shebang must resolve `bun` in that same directory — with NO inherited PATH
+ * (the cold-launch child env is only HOME).
+ */
+function coldLaunchCliBinDir(): string {
+  const cli = existsSync(REPO_DIST) ? REPO_DIST : which("secrets");
+  if (!cli) {
+    throw new Error(
+      "no secrets CLI for the installed-host test: build apps/secrets/dist or install the global binary",
+    );
+  }
+  const bun = which("bun");
+  if (!bun) {
+    throw new Error("no bun on PATH to co-locate with the secrets launcher");
+  }
+  const binDir = mkdtempSync(join(tmpdir(), "secrets-ext-cli-"));
+  symlinkSync(cli, join(binDir, "secrets"));
+  symlinkSync(bun, join(binDir, "bun"));
+  return binDir;
+}
+
 let secretsBinDir: string | null;
 let secretsSource = "";
 
@@ -315,10 +343,17 @@ describe("installed host cold launch (Chrome path resolution)", () => {
     // Simulated install: a temp Chrome profile dir (the manifest's home) and a
     // temp install dir, so nothing under the real $HOME is touched. The
     // installer itself runs under the user's FULL shell env — the measured
-    // condition under which install works (its shell PATH carries node and
-    // secrets).
+    // condition under which install works (its shell PATH carries node.
+    // `secrets` on the other hand may be absent (CI), so it is resolved here:
+    // HASNA_SECRETS_CLI is honored by install-host.sh (embedded into
+    // host-config.json as the absolute CLI path) and by host.cjs (spawned
+    // with its own dir prepended to the child PATH). When unset, the repo
+    // build plus co-located bun is embedded — see coldLaunchCliBinDir.
     chromeDir = mkdtempSync(join(tmpdir(), "secrets-ext-chrome-"));
     installDir = mkdtempSync(join(tmpdir(), "secrets-ext-install-"));
+    if (!process.env.HASNA_SECRETS_CLI) {
+      process.env.HASNA_SECRETS_CLI = join(coldLaunchCliBinDir(), "secrets");
+    }
     const r = spawnSync("bash", [INSTALL_HOST, "--chrome-user-data-dir", chromeDir], {
       env: { ...process.env, HASNA_SECRETS_NATIVE_HOST_DIR: installDir },
       encoding: "utf8",
