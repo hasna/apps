@@ -44,6 +44,16 @@ afterEach(() => {
 });
 
 describe("shared events CLI integration", () => {
+  test("bridges legacy webhooks to the shared Events channel commands", async () => {
+    const result = await runTodos(["webhooks", "--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: todos webhooks");
+    expect(result.stdout).toContain("add [options] <target>");
+    expect(result.stdout).not.toContain("Universal task management");
+  });
+
   test("prints JSON for event and webhook list commands", async () => {
     const events = await runTodos(["events", "list", "--json"]);
     expect(events.exitCode).toBe(0);

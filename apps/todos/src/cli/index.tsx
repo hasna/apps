@@ -18,7 +18,10 @@ const program = new Command();
 
 type RegisterEventsCommands = (
   program: Command,
-  options: { source: string },
+  options: {
+    source: string;
+    channelsCommandName?: string;
+  },
 ) => void;
 
 function fallbackJsonRequested(): boolean {
@@ -92,7 +95,10 @@ async function registerOptionalEventsCommands(program: Command): Promise<void> {
       registerEventsCommands?: RegisterEventsCommands;
     };
     if (module.registerEventsCommands) {
-      module.registerEventsCommands(program, { source: "todos" });
+      module.registerEventsCommands(program, {
+        source: "todos",
+        channelsCommandName: "webhooks",
+      });
       return;
     }
   } catch (error) {
