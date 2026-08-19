@@ -170,6 +170,7 @@ export const invoiceOps: ServiceOp[] = [
       const row = requireInvoice(ctx, input.id);
       assertEntity(ctx, "write", row.entity_id, "invoices");
       if (row.status === "void") throw new InvalidTransitionError("Cannot pay a voided invoice.");
+      if (row.status === "paid") throw new InvalidTransitionError("Cannot pay an already paid invoice.");
       const paid = input.amount_paid ?? row.amount_due;
       ctx.db.run("UPDATE invoices SET status = 'paid', amount_paid = ?, updated_at = ? WHERE id = ?", [paid, nowIso(), input.id]);
       appendAudit(ctx.db, {
