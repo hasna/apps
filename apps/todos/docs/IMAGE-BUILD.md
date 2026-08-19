@@ -186,3 +186,23 @@ rather than discovered later:
 - GitHub repository environment `ecr-candidate` on `hasna/todos` with
   variables <code>AWS&#95;REGION</code>, <code>AWS&#95;ROLE_ARN</code>,
   `ECR_REPOSITORY` (see the editor's note above on the `&#95;` spelling).
+
+## Production deployment from the monorepo
+
+The deployable production lane now lives at the monorepo-discoverable root as
+`.github/workflows/deploy-todos.yml`. It builds `apps/todos` natively for ARM64,
+rejects HIGH or CRITICAL findings both before and after the immutable ECR push,
+runs the SSM-selected one-shot migration family, deploys the resulting digest,
+and restores the exact prior ECS task definition if rollout or public health
+verification fails. The workflow resolves configuration from
+`/hasna/deploy/todos` and independently refuses an AWS account, cluster,
+service, ECR repository, or migration-family mismatch before any push or ECS
+mutation.
+
+This source change does not modify IAM. Before the workflow can authenticate,
+the existing `todos-prod-gha-deploy` role's GitHub OIDC trust must admit the
+monorepo subject `repo:hasna/apps:environment:production` (audience
+`sts.amazonaws.com`) instead of relying on the retired standalone repository
+subject. That external trust update is reviewed and applied in the owning
+infrastructure repository; this repository must not work around it with stored
+AWS credentials.
