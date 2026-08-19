@@ -315,7 +315,12 @@ function installedStatuslineCommand(result: SharedCapabilitiesResult): string | 
     platform() === "win32"
       ? ["statusline.exe", "statusline.cmd", "statusline.bat", "statusline"]
       : ["statusline"];
-  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+  const bunInstall = process.env.BUN_INSTALL?.trim();
+  const directories = [
+    ...(process.env.PATH ?? "").split(delimiter),
+    ...(bunInstall ? [join(bunInstall, "bin")] : []),
+  ];
+  for (const directory of [...new Set(directories)]) {
     if (!directory) continue;
     for (const name of names) {
       const candidate = join(directory, name);

@@ -56,20 +56,25 @@ function readJson(path: string): Record<string, unknown> {
 }
 
 /**
- * Run `fn` with PATH pinned to `pathValue`, restoring the caller's PATH
- * afterwards. The installed-statusline provisioner resolves from PATH, so every
- * test that mints a fresh profile and asserts something about settings.json
- * must pin PATH or the runner's ambient statusline binary makes the test
- * environment-dependent (measured on station01, where statusline is installed).
+ * Run `fn` with PATH and Bun's install root isolated, restoring both caller
+ * values afterwards. The installed-statusline provisioner resolves from both
+ * sources, so every test that mints a fresh profile and asserts something about
+ * settings.json must pin them or the runner's ambient installation makes the
+ * test environment-dependent (measured on station01, where statusline is installed).
  */
-function withPath<T>(pathValue: string, fn: () => T): T {
+function withPath<T>(pathValue: string, fn: () => T, bunInstall?: string): T {
   const previousPath = process.env.PATH;
+  const previousBunInstall = process.env.BUN_INSTALL;
   process.env.PATH = pathValue;
+  if (bunInstall === undefined) delete process.env.BUN_INSTALL;
+  else process.env.BUN_INSTALL = bunInstall;
   try {
     return fn();
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
+    if (previousBunInstall === undefined) delete process.env.BUN_INSTALL;
+    else process.env.BUN_INSTALL = previousBunInstall;
   }
 }
 
@@ -946,6 +951,23 @@ test("a fresh Claude profile gets the installed statusline when shared settings 
       command: `${statuslineBin} render`,
       padding: 0,
     });
+  });
+});
+
+test("a fresh Claude profile finds the Bun-installed statusline when PATH omits Bun's bin", () => {
+  const bunInstall = join(home, "bun");
+  const statuslineBin = installStatuslineFixture(join(bunInstall, "bin"));
+
+  const p = withPath(
+    join(home, "path-without-statusline"),
+    () => addProfile({ name: "bun-statusline-at-birth" }),
+    bunInstall,
+  );
+
+  expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+    type: "command",
+    command: `${statuslineBin} render`,
+    padding: 0,
   });
 });
 
