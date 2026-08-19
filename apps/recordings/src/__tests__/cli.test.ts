@@ -916,7 +916,7 @@ describe("recordings CLI", () => {
     ]);
     expect(compactExit).toBe(0);
     expect(compactStderr).toBe("");
-    expect(compactStdout).toContain("HasnaRecordings.app");
+    expect(compactStdout).toContain("Hasna Recordings.app");
     expect(compactStdout).toContain("Use --verbose");
     expect(compactStdout).not.toContain(`Package: ${process.cwd()}`);
 

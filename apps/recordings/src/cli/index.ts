@@ -1075,7 +1075,7 @@ appCommand
       return;
     }
 
-    console.log(chalk.bold("HasnaRecordings.app"));
+    console.log(chalk.bold("Hasna Recordings.app"));
     console.log(`Installed: ${status.installed ? "yes" : "no"}`);
     console.log(`Executable: ${status.executable ? "available" : "missing"}`);
     console.log(`Installer: ${status.installer_available ? "available" : "missing"}`);
