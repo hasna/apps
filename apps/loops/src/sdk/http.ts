@@ -121,7 +121,7 @@ export interface WorkflowEventListResponse { "ok": boolean; "events": Array<Work
 
 export interface CountResponse { "ok": boolean; "count": number }
 
-export interface LoopMachineRef { "id": string; "route"?: string; "local"?: boolean; "confidence"?: number; "packageVersion"?: string; "warnings"?: Array<string> }
+export interface LoopMachineRef { "id": string; "route"?: string; "local"?: boolean; "confidence"?: "exact" | "high" | "medium" | "low" | "none"; "packageVersion"?: string; "warnings"?: Array<string> }
 
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
