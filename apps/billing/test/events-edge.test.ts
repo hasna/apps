@@ -13,6 +13,7 @@ import { freshDb, systemContext, TEST_ENTITY_A } from "./helpers.js";
 import { closeDatabase } from "../src/db/database.js";
 import { getOp } from "../src/services/registry.js";
 import { runOp, type ServiceContext } from "../src/services/context.js";
+import { insertInvoice } from "../src/services/invoices.js";
 import { MockStripeAdapter, setStripeAdapter } from "../src/adapters/stripe.js";
 import { eventSignedPayload } from "../src/services/events.js";
 import type { AccountingReconciliationRow, CustomerRow, EventRow, InvoiceRow } from "../src/types/index.js";
@@ -35,11 +36,14 @@ function signEvent(input: { stripe_event_id: string; type: string; payload?: Rec
 
 async function seedCustomerAndInvoice(): Promise<{ customer: CustomerRow; invoice: InvoiceRow }> {
   const customer = (await call(ctx, "create_customer", { entity_id: TEST_ENTITY_A, email: "a@b.com" })) as CustomerRow;
-  const invoice = (await call(ctx, "create_invoice", {
-    customer_id: customer.id,
+  // create_invoice's public input schema does not carry stripe_invoice_id on
+  // origin/main (the field lands via the unmerged billing source edits); seed
+  // it through the exported insertInvoice so the webhook join-back under test
+  // (applyEventEffect's `WHERE stripe_invoice_id = ? OR id = ?`) is exercised.
+  const invoice = insertInvoice(ctx.db, TEST_ENTITY_A, customer.id, {
     amount_due: 2500,
     stripe_invoice_id: "in_stripe_1",
-  })) as InvoiceRow;
+  });
   return { customer, invoice };
 }
 

@@ -31,7 +31,7 @@ describe("redactAdapterConfig", () => {
     const redacted = redactAdapterConfig(config);
     expect(redacted).toBeDefined();
     expect(redacted).not.toBe(config);
-    expect("apiKey" in (redacted as Record<string, unknown>)).toBe(false);
+    expect("apiKey" in (redacted as unknown as Record<string, unknown>)).toBe(false);
     expect(redacted).toMatchObject({
       type: "anthropic",
       model: "claude-sonnet-4-6",
@@ -49,7 +49,7 @@ describe("redactAdapterConfig", () => {
     };
 
     const redacted = redactAdapterConfig(config);
-    expect("apiKey" in (redacted as Record<string, unknown>)).toBe(false);
+    expect("apiKey" in (redacted as unknown as Record<string, unknown>)).toBe(false);
     expect(redacted).toMatchObject({
       type: "openai",
       model: "gpt-4o",
@@ -94,7 +94,7 @@ describe("redactAdapterConfig", () => {
     };
 
     redactAdapterConfig(config);
-    expect((config as Record<string, unknown>)["apiKey"]).toBe("sk-" + "ant-should-survive-on-original");
+    expect((config as unknown as Record<string, unknown>)["apiKey"]).toBe("sk-" + "ant-should-survive-on-original");
   });
 
   test("an empty-string apiKey is still stripped", () => {
@@ -104,7 +104,7 @@ describe("redactAdapterConfig", () => {
       apiKey: "",
     };
     const redacted = redactAdapterConfig(config);
-    expect("apiKey" in (redacted as Record<string, unknown>)).toBe(false);
+    expect("apiKey" in (redacted as unknown as Record<string, unknown>)).toBe(false);
   });
 });
 
@@ -147,7 +147,7 @@ describe("redactRunSecrets", () => {
     });
 
     const safe = redactRunSecrets(run);
-    expect("apiKey" in (safe.adapterConfig as Record<string, unknown>)).toBe(false);
+    expect("apiKey" in (safe.adapterConfig as unknown as Record<string, unknown>)).toBe(false);
     expect(safe.adapterConfig).toMatchObject({ type: "anthropic", model: "claude-sonnet-4-6" });
   });
 
@@ -186,7 +186,7 @@ describe("redactRunSecrets", () => {
     });
 
     redactRunSecrets(run);
-    expect((run.adapterConfig as Record<string, unknown>)["apiKey"]).toBe("sk-" + "ant-keep-on-original");
+    expect((run.adapterConfig as unknown as Record<string, unknown>)["apiKey"]).toBe("sk-" + "ant-keep-on-original");
   });
 
   test("handles a run with no adapterConfig", () => {

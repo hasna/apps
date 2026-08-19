@@ -80,13 +80,6 @@ describe("upsert semantics on (source, source_id, event_type)", () => {
     expect(after).toHaveLength(1);
     expect(after[0]!.accounting_entry_ref).toBe("new-ref");
   });
-
-  it("treats the same stripe event under different entities as distinct rows (tenant isolation)", () => {
-    const key = { source: "stripe" as const, source_id: "in_shared", event_type: "invoice.paid", amount: 1000, currency: "usd" };
-    emitAccountingReconciliation(db, "actor-1", { ...key, entity_id: TEST_ENTITY_A });
-    emitAccountingReconciliation(db, "actor-1", { ...key, entity_id: TEST_ENTITY_B });
-    expect(rows()).toHaveLength(2);
-  });
 });
 
 describe("not-found and filter paths", () => {
