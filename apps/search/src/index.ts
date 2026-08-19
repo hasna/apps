@@ -130,3 +130,34 @@ export {
   type LocalBenchmarkReport,
   type LocalBenchmarkRow,
 } from "./lib/local/benchmark.js";
+// Capture-to-markdown (auto-save-to-md corpus, I38-00187/00188)
+export {
+  CAPTURE_KIND,
+  CAPTURE_SCHEMA_VERSION,
+  CapturePointSchema,
+  CaptureFrontmatterSchema,
+  assertValidCaptureId,
+  assertValidCorpusDate,
+  parseCaptureDocument,
+  parseFrontmatter,
+  renderFrontmatter,
+  renderFrontmatterBlock,
+  type CaptureFrontmatter,
+  type CapturePoint,
+} from "./lib/capture/frontmatter.js";
+export {
+  DEFAULT_CAPTURE_PREFIX,
+  captureObjectKey,
+  parseCaptureObjectKey,
+  type CaptureLayout,
+} from "./lib/capture/layout.js";
+export {
+  MAX_CAPTURE_BYTES,
+  SearchCaptureWriter,
+  captureConfigFromEnv,
+  isCaptureConfigured,
+  type CaptureWriteResult,
+  type CaptureWriterConfig,
+  type S3ClientLike,
+  type SearchCaptureInput,
+} from "./lib/capture/writer.js";
