@@ -109,6 +109,29 @@ export class SearchCaptureWriter {
   }
 
   /**
+   * Redact one result's free-text fields for the capture body. The package's
+   * redactContentSearchResult only touches `content`-source results, so web
+   * results would pass their snippet/title through unchanged — a bypass the
+   * write-time scanner alone cannot close for low-entropy credential-shaped
+   * values. Every result field that reaches the markdown body goes through
+   * redactCredentialBearingText here.
+   */
+  private redactResult(result: SearchResult): SearchResult {
+    const contentRedacted = redactContentSearchResult(result);
+    const title = redactCredentialBearingText(contentRedacted.title);
+    const url = redactCredentialBearingText(contentRedacted.url);
+    const snippet = redactCredentialBearingText(contentRedacted.snippet);
+    if (
+      title === contentRedacted.title &&
+      url === contentRedacted.url &&
+      snippet === contentRedacted.snippet
+    ) {
+      return contentRedacted;
+    }
+    return { ...contentRedacted, title, url, snippet };
+  }
+
+  /**
    * Render a capture to markdown without touching S3. Redaction happens
    * here: query and result text go through the package's redaction module,
    * and the frontmatter's `redacted` flag records whether any field was
@@ -116,7 +139,7 @@ export class SearchCaptureWriter {
    */
   renderCapture(input: SearchCaptureInput): { markdown: string; redacted: boolean } {
     const query = redactCredentialBearingText(input.search.query);
-    const results = input.results.map(redactContentSearchResult);
+    const results = input.results.map((r) => this.redactResult(r));
     const redacted = query !== input.search.query || results.some((r, i) => r !== input.results[i]);
 
     const frontmatter: CaptureFrontmatter = {
@@ -210,12 +233,19 @@ export class SearchCaptureWriter {
     }
 
     // Verify what landed: HEAD must report the exact byte size we PUT. On
-    // any verification failure the object we just wrote is removed again
-    // (we exclusively own the key via create-exclusive PUT) so a partial
+    // ANY verification failure — a thrown HEAD (404/network/service) or a
+    // mismatched length — the object we just wrote is removed again (we
+    // exclusively own the key via create-exclusive PUT) so a partial
     // failure cannot leave a permanently unverified object in the bucket.
-    const head = (await this.client.send(
-      new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
-    )) as { ContentLength?: number };
+    let head: { ContentLength?: number };
+    try {
+      head = (await this.client.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      )) as { ContentLength?: number };
+    } catch (err) {
+      await this.deleteObject(key).catch(() => {});
+      throw err;
+    }
     if (head.ContentLength !== bytes) {
       await this.deleteObject(key).catch(() => {});
       throw new Error(

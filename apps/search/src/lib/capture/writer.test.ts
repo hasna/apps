@@ -102,6 +102,7 @@ function sampleInput(overrides: Partial<SearchCaptureInput> = {}): SearchCapture
 class FakeS3 {
   objects = new Map<string, { body: string }>();
   failNextPut: Error | null = null;
+  failNextHead: Error | null = null;
   wrongHeadLengthOnce = false;
   deletes: string[] = [];
   sent: Array<{ cmd: string; input: Record<string, unknown> }> = [];
@@ -135,6 +136,11 @@ class FakeS3 {
       return {};
     }
     if (name === "HeadObjectCommand") {
+      if (this.failNextHead) {
+        const err = this.failNextHead;
+        this.failNextHead = null;
+        throw err;
+      }
       const obj = this.objects.get(input.Key);
       if (!obj) throw new Error("Not Found");
       if (this.wrongHeadLengthOnce) {
@@ -184,6 +190,24 @@ describe("renderCapture", () => {
     expect(markdown).not.toContain(sentinel());
     expect(markdown).toContain(REDACTION_PLACEHOLDER);
     expect(markdown).toContain("redacted: true");
+  });
+
+  test("redacts credential-shaped text in NON-content results (no bypass)", () => {
+    // redactContentSearchResult leaves non-content results unchanged; the
+    // capture writer must still redact their free-text fields, or a
+    // credential-shaped value in a web result's snippet reaches the corpus.
+    const input = sampleInput({
+      results: [
+        {
+          ...sampleResults()[0]!,
+          snippet: `password=${sentinel()}`,
+        },
+      ],
+    });
+    const { markdown, redacted } = writer.renderCapture(input);
+    expect(redacted).toBe(true);
+    expect(markdown).not.toContain(sentinel());
+    expect(markdown).toContain(REDACTION_PLACEHOLDER);
   });
 
   test("marks redacted false when nothing changed", () => {
@@ -256,6 +280,12 @@ describe("writeCapture", () => {
   test("removes the object again when HEAD verification fails", async () => {
     client.wrongHeadLengthOnce = true;
     await expect(writer.writeCapture(sampleInput())).rejects.toThrow(/landed with/);
+    expect(client.deletes).toContain("search/2026-08-19/capture-abc123.md");
+  });
+
+  test("removes the object again when HEAD throws", async () => {
+    client.failNextHead = new Error("Network timeout");
+    await expect(writer.writeCapture(sampleInput())).rejects.toThrow(/Network timeout/);
     expect(client.deletes).toContain("search/2026-08-19/capture-abc123.md");
   });
 });
