@@ -27,8 +27,8 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
-    "build:no-dashboard": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @hasna/secrets/scanner && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/secrets/scanner && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/secrets/scanner && bun build src/index.ts src/storage.ts --outdir dist --target bun --external @hasna/secrets/scanner && tsc --emitDeclarationOnly --outDir dist",
+    "build:no-dashboard": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @hasna/secrets/scanner && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/secrets/scanner && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/secrets/scanner && bun build src/index.ts src/storage.ts --outdir dist --target bun --external @hasna/secrets/scanner && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",

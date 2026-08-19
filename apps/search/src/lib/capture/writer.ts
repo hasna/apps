@@ -5,7 +5,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { scanInputExposures } from "@hasna/secrets/scanner";
+import type { ExposureScanResult } from "@hasna/secrets/scanner";
 import type { Search, SearchResult } from "../../types/index.js";
 import {
   redactCredentialBearingText,
@@ -37,6 +37,26 @@ import { type CaptureLayout, captureObjectKey } from "./layout.js";
  */
 
 export const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Run the write-time secret scan. @hasna/secrets is a workspace member whose
+ * dist/ is not built in every CI job that packs this package (publish-guard
+ * runs npm pack --dry-run without a turbo build first), so a static import
+ * of its scanner subpath fails type resolution there. The dynamic import is
+ * typed by the ambient declaration in src/types/secrets-scanner.d.ts — tsc
+ * consults it only when the real module cannot be resolved — and bun build
+ * leaves the specifier external (`--external @hasna/secrets/scanner` in
+ * package.json), so the bundle loads the real scanner at runtime. The
+ * runtime surface is validated here so a missing or broken scanner fails
+ * fast instead of misbehaving.
+ */
+async function scanCapture(text: string): Promise<ExposureScanResult> {
+  const mod = await import("@hasna/secrets/scanner");
+  if (typeof mod?.scanInputExposures !== "function") {
+    throw new Error("@hasna/secrets/scanner does not export scanInputExposures");
+  }
+  return mod.scanInputExposures({ text });
+}
 
 /**
  * Minimal send surface so tests can inject a fake client. The commands are
@@ -203,7 +223,7 @@ export class SearchCaptureWriter {
       );
     }
 
-    const scan = scanInputExposures({ text: markdown });
+    const scan = await scanCapture(markdown);
     if (scan.findings.length > 0) {
       const detectors = [...new Set(scan.findings.map((f) => f.detector))].join(", ");
       throw new Error(
