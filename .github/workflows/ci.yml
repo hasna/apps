@@ -168,7 +168,29 @@ jobs:
       # backend drives over CDP — without it, WebView-route tests hang on a
       # runner that has no other chrome. No-op for members that do not use it.
       - name: Install playwright chromium (member browser tests)
+        # Bounded install (task 552e18cc, apps CI hang): the runner's primary
+        # apt mirror (azure.archive.ubuntu.com) intermittently stalls apt-get
+        # update forever with zero output and no timeout — the measured hang
+        # ran ~6h until the job limit. The step bound converts that infinite
+        # stall into a bounded visible failure; the apt-native timeouts and
+        # retries below make the transient stall retry and COMPLETE instead of
+        # hanging. This is a bound + retry, never a skip: the browser and its
+        # system deps are still installed every run, and a real install
+        # failure still fails the step.
+        timeout-minutes: 10
         run: |
+          # Apt timeouts/retries for EVERY apt invocation in this step —
+          # including the `apt-get update` that `playwright install
+          # --with-deps` runs internally first (the measured hang point).
+          # Acquire::http(s)::Timeout aborts a fetch that stops answering;
+          # Acquire::Retries re-queues the item for the transient mirror
+          # outage. Healthy baseline for this step is 21-77s.
+          printf '%s\n' \
+            'Acquire::Retries "5";' \
+            'Acquire::http::Timeout "30";' \
+            'Acquire::https::Timeout "30";' \
+            'Acquire::ftp::Timeout "30";' \
+            | sudo tee /etc/apt/apt.conf.d/99-apt-bounded-retry >/dev/null
           bunx playwright install chromium --with-deps
           if ! command -v google-chrome >/dev/null 2>&1; then
             sudo apt-get update -qq && sudo apt-get install -y -qq google-chrome-stable
