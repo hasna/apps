@@ -1,3 +1,4 @@
+// Agent-authored (TEST-GAP protocol): the gpt-5.6-sol consult terminated twice without delivering a spec (session died mid-audit; resume timed out), so the additions to this file carry no SOL attribution.
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import { deliverCampaign } from "./deliver.js";
 import { DeliveryLedger } from "./ledger.js";
 import { MockShortlinkAdapter } from "./shortlinks.js";
 import type { AnnouncementSentData } from "../events.js";
-import type { DeliveryAdapter, ReleaseRecord } from "../types.js";
+import type { AnnouncementCampaign, DeliveryAdapter, ReleaseRecord } from "../types.js";
 
 const release: ReleaseRecord = {
   appId: "open-todos",
@@ -252,5 +253,144 @@ describe("deliverCampaign real sends (mock adapters)", () => {
     expect(email.slugs?.length).toBeGreaterThan(0);
     const rendered = result.rendered.find((message) => message.channel === "email")!;
     expect(email.slugs).toEqual(rendered.links.map((link) => link.slug));
+  });
+
+  it("records an adapter ok:false verdict as failed with its detail", async () => {
+    const ledger = tempLedger();
+    const adapter: DeliveryAdapter = {
+      channel: "email",
+      deliver: async () => ({ ok: false, detail: "recipient rejected" }),
+    };
+    const result = await deliverCampaign(makeCampaign(), {
+      ledger,
+      adapters: { email: adapter },
+      shortlinks: new MockShortlinkAdapter(),
+      eventSink: async () => {},
+    });
+    const email = result.entries.find((entry) => entry.channel === "email")!;
+    expect(email.status).toBe("failed");
+    expect(email.detail).toBe("recipient rejected");
+    expect(result.event).toBeUndefined();
+  });
+
+  it("emits no announcement.sent event when every channel failed", async () => {
+    const ledger = tempLedger();
+    let sinkCalls = 0;
+    const adapter: DeliveryAdapter = {
+      channel: "email",
+      deliver: async () => ({ ok: false, detail: "down" }),
+    };
+    const result = await deliverCampaign(makeCampaign(), {
+      ledger,
+      adapters: { email: adapter, telegram: adapter, sms: adapter },
+      shortlinks: new MockShortlinkAdapter(),
+      eventSink: async () => {
+        sinkCalls += 1;
+      },
+    });
+    expect(result.event).toBeUndefined();
+    expect(sinkCalls).toBe(0);
+    expect(result.entries.every((entry) => entry.status === "failed")).toBe(true);
+  });
+
+  it("leaves slugs undefined on ledger entries when the campaign has no links", async () => {
+    // composeAnnouncementCampaign always derives at least the Package link, so
+    // a link-less campaign is constructed directly to exercise the real
+    // no-links path through the delivery pipeline.
+    const ledger = tempLedger();
+    const noLinksCampaign: AnnouncementCampaign = {
+      campaignId: "camp-no-links",
+      appId: "open-todos",
+      release: {
+        appId: "open-todos",
+        package: "@hasna/todos",
+        version: "1.2.3",
+        gitSha: "abc1234",
+        publishedAt: "2026-07-06T09:00:00.000Z",
+        publishPath: "backfilled",
+      },
+      audience: { audienceId: "developers" },
+      channels: ["email"],
+      title: "open-todos 1.2.3 released",
+      links: [],
+      createdAt: "2026-07-06T09:00:00.000Z",
+    };
+    const adapter: DeliveryAdapter = {
+      channel: "email",
+      deliver: async () => ({ ok: true }),
+    };
+    const result = await deliverCampaign(noLinksCampaign, {
+      ledger,
+      adapters: { email: adapter },
+      shortlinks: new MockShortlinkAdapter(),
+      eventSink: async () => {},
+    });
+    const email = result.entries.find((entry) => entry.channel === "email")!;
+    expect(email.slugs).toBeUndefined();
+    // Engagement reporting falls back to the pseudo-slug convention here.
+    expect(email.status).toBe("sent");
+  });
+
+  it("records the scheduling detail on queued entries", async () => {
+    const ledger = tempLedger();
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const result = await deliverCampaign(makeCampaign({ scheduledAt: future }), {
+      ledger,
+      shortlinks: new MockShortlinkAdapter(),
+    });
+    expect(result.entries.every((entry) => entry.detail === `scheduled for ${future}`)).toBe(true);
+    expect(result.entries.every((entry) => entry.simulated === false)).toBe(true);
+  });
+});
+
+describe("deliverCampaign event emission failure modes", () => {
+  it("PINNED BEHAVIOR: a throwing custom event sink propagates after the ledger is already written", async () => {
+    // The default sink swallows its own failures; a caller-supplied sink is
+    // awaited bare, so its rejection fails the whole run. The ledger entries
+    // for the sent channels are already persisted by then. This pins the
+    // current semantics so a future "fix" (swallow sink errors) is a visible
+    // behavior change rather than a silent one.
+    const ledger = tempLedger();
+    const emailAdapter: DeliveryAdapter = {
+      channel: "email",
+      deliver: async () => ({ ok: true, externalId: "mail-1" }),
+    };
+    await expect(
+      deliverCampaign(makeCampaign(), {
+        ledger,
+        adapters: { email: emailAdapter },
+        shortlinks: new MockShortlinkAdapter(),
+        eventSink: async () => {
+          throw new Error("event backend down");
+        },
+      }),
+    ).rejects.toThrow("event backend down");
+    const stored = await ledger.list("camp-test-1");
+    expect(stored.some((entry) => entry.channel === "email" && entry.status === "sent")).toBe(true);
+  });
+
+  it("PINNED BEHAVIOR: real-send deliveredAt comes from the wall clock, not the injected now", async () => {
+    // deliverCampaign uses `options.now` for `at` but stamps real-send
+    // `deliveredAt` with a fresh `new Date()` — the injected clock does not
+    // flow through to the delivery timestamp (dry-runs do use the injected
+    // now). Pinned here because a deterministic delivery ledger is only
+    // possible once this is consistent.
+    const ledger = tempLedger();
+    const injected = new Date("2026-07-06T09:00:00.000Z");
+    const emailAdapter: DeliveryAdapter = {
+      channel: "email",
+      deliver: async () => ({ ok: true }),
+    };
+    const result = await deliverCampaign(makeCampaign(), {
+      ledger,
+      adapters: { email: emailAdapter },
+      shortlinks: new MockShortlinkAdapter(),
+      eventSink: async () => {},
+      now: injected,
+    });
+    const email = result.entries.find((entry) => entry.channel === "email")!;
+    expect(email.at).toBe("2026-07-06T09:00:00.000Z");
+    expect(email.deliveredAt).toBeDefined();
+    expect(email.deliveredAt).not.toBe("2026-07-06T09:00:00.000Z");
   });
 });

@@ -63,4 +63,56 @@ describe("createDatasetsProjectPanel", () => {
     expect(panel.state).toBe("empty");
     expect(panel.summary).toContain("No project datasets");
   });
+
+  test("warns about sensitive datasets and marks their items high priority", () => {
+    ingestDataset({
+      name: "Sensitive Records",
+      projectId: "swiss-bank-account",
+      classification: "sensitive",
+      rows: [{ id: "s1" }],
+    });
+
+    const panel = createDatasetsProjectPanel("Swiss Bank Account");
+
+    expect(panel.warnings).toEqual([
+      "One or more datasets are marked sensitive; previews must stay redacted and bounded.",
+    ]);
+    expect(panel.items[0]?.priority).toBe("high");
+  });
+
+  test("clamps a zero item limit up to one", () => {
+    ingestDataset({
+      name: "One",
+      projectId: "swiss-bank-account",
+      rows: [{ id: "1" }],
+    });
+
+    const panel = createDatasetsProjectPanel("Swiss Bank Account", { limit: 0 });
+
+    expect(panel.items).toHaveLength(1);
+  });
+
+  test("reports freshness unknown without versions and fresh once a dataset has one", () => {
+    expect(createDatasetsProjectPanel("No Data").freshness).toBe("unknown");
+
+    ingestDataset({
+      name: "One",
+      projectId: "swiss-bank-account",
+      rows: [{ id: "1" }],
+    });
+
+    expect(createDatasetsProjectPanel("Swiss Bank Account").freshness).toBe("fresh");
+  });
+
+  test("uses singular wording for exactly one dataset with one row", () => {
+    ingestDataset({
+      name: "One",
+      projectId: "swiss-bank-account",
+      rows: [{ id: "1" }],
+    });
+
+    const panel = createDatasetsProjectPanel("Swiss Bank Account");
+
+    expect(panel.summary).toBe("1 dataset with 1 row.");
+  });
 });

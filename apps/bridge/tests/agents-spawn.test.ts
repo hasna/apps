@@ -58,7 +58,22 @@ test("a timed-out run kills the agent's whole process tree, not just the direct 
 
     const grandchild = Number.parseInt((await readFile(pidFile, "utf-8")).trim(), 10);
     expect(Number.isInteger(grandchild)).toBe(true);
-    expect(pidAlive(grandchild)).toBe(false);
+    // SIGKILL lands as a signal; the kernel then has to reap the corpse, and
+    // `kill(pid, 0)` reports true for an unreaped zombie. Probing exactly once
+    // right after the call therefore flakes under parallel-suite load (measured:
+    // the suite failed here once with the grandchild still "alive"). Poll for a
+    // bounded window: a genuinely surviving grandchild still fails the test,
+    // only the zombie-reap race is absorbed.
+    let dead = false;
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      if (!pidAlive(grandchild)) {
+        dead = true;
+        break;
+      }
+      await Bun.sleep(50);
+    }
+    expect(dead).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

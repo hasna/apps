@@ -22,4 +22,19 @@ describe("dataset query contracts", () => {
     expect(JsonValueSchema.parse(value)).toEqual(value);
     expect(() => JsonValueSchema.parse({ bad: undefined })).toThrow();
   });
+
+  test("defaults sort direction to ascending and rejects invalid directions", () => {
+    expect(DatasetQuerySchema.parse({ sort: [{ column: "name" }] }).sort).toEqual([
+      { column: "name", direction: "asc" },
+    ]);
+    expect(DatasetQuerySchema.parse({ sort: [{ column: "name", direction: "desc" }] }).sort).toEqual([
+      { column: "name", direction: "desc" },
+    ]);
+    expect(() => DatasetQuerySchema.parse({ sort: [{ column: "name", direction: "sideways" }] })).toThrow();
+  });
+
+  test("rejects negative offsets", () => {
+    expect(() => DatasetQuerySchema.parse({ offset: -1 })).toThrow();
+    expect(DatasetQuerySchema.parse({ offset: 0 }).offset).toBe(0);
+  });
 });

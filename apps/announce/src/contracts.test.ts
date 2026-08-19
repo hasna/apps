@@ -1,5 +1,12 @@
+// Agent-authored (TEST-GAP protocol): the gpt-5.6-sol consult terminated twice without delivering a spec (session died mid-audit; resume timed out), so the additions to this file carry no SOL attribution.
 import { describe, expect, it } from "bun:test";
-import { AnnouncementSchema, ResourcePointerSchema, parseAnnouncement, parseReleaseRecord } from "./contracts.js";
+import {
+  AnnouncementSchema,
+  ResourcePointerSchema,
+  contractErrorMessage,
+  parseAnnouncement,
+  parseReleaseRecord,
+} from "./contracts.js";
 
 const validAnnouncement = {
   schema: "hasna.announcement.v1",
@@ -166,5 +173,73 @@ describe("ReleaseRecordSchema (hasna.release.v1 mirror)", () => {
     expect(
       parseReleaseRecord({ ...validRelease, publishPath: "backfilled", evidenceRefs: [] }).publishPath,
     ).toBe("backfilled");
+  });
+
+  it("rejects a non-hex gitSha and a non-hex evidence sha256", () => {
+    expect(() => parseReleaseRecord({ ...validRelease, gitSha: "not-a-sha!" })).toThrow(/git sha/);
+    expect(() =>
+      parseReleaseRecord({
+        ...validRelease,
+        evidenceRefs: [{ id: "ev-1", sha256: "zz".repeat(32) }],
+      }),
+    ).toThrow(/sha256/);
+  });
+
+  it("rejects an unknown publishPath and a non-UTC publishedAt", () => {
+    expect(() => parseReleaseRecord({ ...validRelease, publishPath: "manual" })).toThrow();
+    expect(() =>
+      parseReleaseRecord({ ...validRelease, publishedAt: "2026-07-06T12:00:00.000+03:00" }),
+    ).toThrow();
+  });
+
+  it("accepts a null updatedAt and rejects an invalid appId slug on the announcement", () => {
+    expect(
+      parseAnnouncement({ ...validAnnouncement, updatedAt: null }).updatedAt,
+    ).toBeNull();
+    expect(() => parseAnnouncement({ ...validAnnouncement, appId: "Open Todos" })).toThrow();
+    expect(() =>
+      parseAnnouncement({ ...validAnnouncement, channels: [{ channel: "email", status: "mailed" }] }),
+    ).toThrow();
+  });
+
+  it("allows a resource pointer with a uri to carry a single-sided package locator", () => {
+    // The sourcePackage/externalId coupling only applies to pointers WITHOUT a
+    // uri; a uri-bearing pointer may legitimately carry one side alone.
+    const withUri = ResourcePointerSchema.safeParse({
+      kind: "release",
+      id: "open-todos@1.2.3",
+      uri: "https://example.com/releases/tag/v1.2.3",
+      sourcePackage: "@hasna/todos",
+    });
+    expect(withUri.success).toBe(true);
+  });
+
+  it("accepts the canonical allowlisted uri schemes", () => {
+    for (const uri of [
+      "artifact://proofs/ev-1",
+      "repo://hasna/todos",
+      "file://docs/guide.md",
+      "conversation://channel/123",
+      "git+https://github.com/hasna/todos.git",
+    ]) {
+      expect(
+        ResourcePointerSchema.safeParse({ kind: "document", id: "x", uri }).success,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("contractErrorMessage", () => {
+  it("joins zod issues as path: message pairs", () => {
+    const message = contractErrorMessage(
+      AnnouncementSchema.safeParse({ ...validAnnouncement, channels: [] }).error!,
+    );
+    expect(message).toContain("channels:");
+  });
+
+  it("passes through plain Error messages and stringifies other values", () => {
+    expect(contractErrorMessage(new Error("boom"))).toBe("boom");
+    expect(contractErrorMessage("raw string")).toBe("raw string");
+    expect(contractErrorMessage(42)).toBe("42");
   });
 });

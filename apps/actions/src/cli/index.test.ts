@@ -296,3 +296,71 @@ describe("actions CLI compact output", () => {
     }
   });
 });
+
+// agent-authored test-gap additions (SOL consult unavailable: codewith exec with
+// gpt-5.6-sol max reasoning timed out at the 570s window on two distinct accounts
+// before producing a final answer; this spec was written from direct source analysis).
+describe("actions CLI rejection and panel-limit contracts", () => {
+  test("rejects ambiguous id prefixes instead of guessing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-cli-ambiguous-"));
+    try {
+      const store = new JsonActionsStore(dir);
+      await store.saveManifest(manifest("examples.prefix.one"));
+      await store.saveManifest(manifest("examples.prefix.two"));
+      await store.createRun(runRecord(0));
+      await store.createRun(runRecord(1));
+
+      await expect(captureCli(dir, ["manifests", "show", "examples.prefix"])).rejects.toThrow(
+        "Manifest not found or prefix is ambiguous",
+      );
+      await expect(captureCli(dir, ["runs", "show", "run-0"])).rejects.toThrow(
+        "Run not found or prefix is ambiguous",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("manifests validate rejects a manifest missing authority fields", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-cli-invalid-"));
+    const manifestPath = join(dir, "invalid.json");
+    try {
+      const invalid = { ...manifest() } as Partial<ReturnType<typeof manifest>>;
+      delete invalid.id;
+      writeFileSync(manifestPath, JSON.stringify(invalid));
+      await expect(captureCli(dir, ["manifests", "validate", manifestPath, "--json"])).rejects.toThrow(
+        "Invalid action manifest",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("project-panel --limit caps action items and fills the remainder with runs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-cli-panel-limit-"));
+    try {
+      const store = new JsonActionsStore(dir);
+      const projectManifest = {
+        ...manifest("examples.project.refresh"),
+        metadata: { projectId: "limit-project" },
+        scope: { level: "project" as const, permissions: ["dashboard:write"], boundaries: ["limit-project"] },
+      };
+      await store.saveManifest(projectManifest);
+      await store.saveManifest({ ...manifest("examples.project.second"), metadata: { projectId: "limit-project" } });
+      await store.createRun({ ...runRecord(0), actionId: projectManifest.id, metadata: { projectId: "limit-project" } });
+      await store.createRun({ ...runRecord(1), actionId: projectManifest.id, metadata: { projectId: "limit-project" } });
+
+      const json = await captureCli(dir, ["project-panel", "--project", "limit-project", "--limit", "3", "--json"]);
+      const panel = JSON.parse(json) as { items: Array<{ id: string }>; metrics: Array<{ id: string; value: number }> };
+      expect(panel.items.map((item) => item.id)).toEqual([
+        "action:examples.project.refresh",
+        "action:examples.project.second",
+        "run:run-01",
+      ]);
+      expect(panel.metrics.find((metric) => metric.id === "actions")?.value).toBe(2);
+      expect(panel.metrics.find((metric) => metric.id === "recent_runs")?.value).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

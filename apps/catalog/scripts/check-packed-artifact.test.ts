@@ -1,3 +1,4 @@
+// hasna:allow-secret-file - secret-DETECTION fixture: asserts the scanner fires on synthetic credential-shaped markers. Synthetic only, verified at exact hunks.
 import { describe, expect, test } from "bun:test";
 import { BRAND_DOMAIN_LABELS, RULES, scanText, scanTextDetailed } from "./check-packed-artifact.js";
 
@@ -577,6 +578,18 @@ describe("the tarball itself is verifiable", () => {
     const report = scanTarball(join(pkgDir, name));
     expect(report.scanned).toContain("dist/index.js");
     expect(report.violations.map((v) => v.ruleId)).toContain("brand-domain");
+  });
+
+  test("scanTarball fails closed on a tarball with files but no built JavaScript", () => {
+    // The pre-pack scan refuses to certify an artifact with no build output;
+    // the tarball path previously certified any non-empty tarball, so a
+    // clean-but-unbuilt release could pass postpack. Both scans must share
+    // the same fail-closed rule.
+    writePackage({ "README.md": "no build output in this package\n" });
+    const packed = spawnSync("bun", ["pm", "pack", "--ignore-scripts", "--quiet"], { cwd: pkgDir, encoding: "utf8" });
+    expect(packed.status).toBe(0);
+    const name = (packed.stdout ?? "").trim().split("\n").pop()!;
+    expect(() => scanTarball(join(pkgDir, name))).toThrow(/no built `dist/);
   });
 });
 

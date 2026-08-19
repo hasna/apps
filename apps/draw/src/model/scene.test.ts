@@ -83,6 +83,48 @@ describe("addStroke", () => {
     const scene = addStroke(createScene(), []);
     expect(scene.elements).toHaveLength(0);
   });
+
+  test("a single point becomes a zero sized element at that point", () => {
+    const scene = addStroke(createScene(), [[5, 7]]);
+    expect(scene.elements).toHaveLength(1);
+    const el = scene.elements[0]!;
+    expect(el.x).toBe(5);
+    expect(el.y).toBe(7);
+    expect(el.width).toBe(0);
+    expect(el.height).toBe(0);
+    expect(el.points).toEqual([[0, 0]]);
+  });
+
+  test("honors a caller supplied id", () => {
+    const scene = addStroke(createScene(), [[0, 0], [1, 1]], { id: "stroke-1" });
+    expect(scene.elements[0]!.id).toBe("stroke-1");
+  });
+
+  test("normalizes negative coordinates to the point-cloud top left", () => {
+    const scene = addStroke(createScene(), [
+      [-10, -20],
+      [5, -5],
+    ]);
+    const el = scene.elements[0]!;
+    expect(el.x).toBe(-10);
+    expect(el.y).toBe(-20);
+    expect(el.width).toBe(15);
+    expect(el.height).toBe(15);
+    expect(el.points).toEqual([
+      [0, 0],
+      [15, 15],
+    ]);
+  });
+
+  test("is pure with respect to the caller's point arrays", () => {
+    const points: [number, number][] = [[0, 0], [2, 2]];
+    const scene = addStroke(createScene(), points);
+    points[0] = [99, 99];
+    expect(scene.elements[0]!.points).toEqual([
+      [0, 0],
+      [2, 2],
+    ]);
+  });
 });
 
 describe("addElement / removeElement / clearScene", () => {
@@ -122,6 +164,25 @@ describe("addElement / removeElement / clearScene", () => {
     expect(removeElement(withEl, "nope").elements).toHaveLength(1);
   });
 
+  test("keeps a caller supplied id", () => {
+    const scene = addElement(createScene(), {
+      id: "el-custom",
+      type: "line",
+      x: 0,
+      y: 0,
+      width: 5,
+      height: 5,
+    });
+    expect(scene.elements[0]!.id).toBe("el-custom");
+  });
+
+  test("addElement is pure: the input scene is untouched", () => {
+    const scene = createScene();
+    const next = addElement(scene, { type: "rectangle", x: 0, y: 0, width: 1, height: 1 });
+    expect(scene.elements).toHaveLength(0);
+    expect(next.elements).toHaveLength(1);
+  });
+
   test("clearScene keeps background and size", () => {
     const scene = addStroke(createScene({ background: "#fff", width: 400, height: 300 }), [
       [0, 0],
@@ -152,5 +213,16 @@ describe("sceneBounds", () => {
     scene = addElement(scene, { type: "ellipse", x: 5, y: -4, width: 10, height: 20 });
 
     expect(sceneBounds(scene)).toEqual({ x: -20, y: -10, width: 35, height: 26 });
+  });
+
+  test("a zero sized element contributes a point box, not nothing", () => {
+    const scene = addElement(createScene(), { type: "text", x: 40, y: 30, width: 0, height: 0 });
+    expect(sceneBounds(scene)).toEqual({ x: 40, y: 30, width: 0, height: 0 });
+  });
+
+  test("bounds include an element with a negative width contribution", () => {
+    // width may be negative on malformed input; the box must still span x..x+width.
+    const scene = addElement(createScene(), { type: "rectangle", x: 10, y: 10, width: -4, height: 2 });
+    expect(sceneBounds(scene)).toEqual({ x: 10, y: 10, width: -4, height: 2 });
   });
 });
