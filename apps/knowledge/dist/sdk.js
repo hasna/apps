@@ -4734,30 +4734,11 @@ function recordStorageObjects(db, objects, now = new Date) {
 // src/knowledge-db.ts
 import { Database } from "bun:sqlite";
 
-// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/client/storage.js
+// ../contracts/dist/client/storage.js
 var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 var INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
 var CREDENTIAL_SEAL = Symbol.for("hasna:contracts:sealedCredential");
 var DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
-class HasnaHttpError extends Error {
-  status;
-  method;
-  path;
-  body;
-  credentialSource;
-  credentialTier;
-  constructor(method, path, status, body, credential) {
-    const guidance = credential ? `. ${credential.guidance}` : "";
-    super(`Hasna cloud request failed: ${method} ${path} -> ${status}${guidance}`);
-    this.name = "HasnaHttpError";
-    this.status = status;
-    this.method = method;
-    this.path = path;
-    this.body = body;
-    this.credentialSource = credential?.source ?? null;
-    this.credentialTier = credential?.tier ?? null;
-  }
-}
 var IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
 var AUTHORITY_OVERRIDE_HEADERS = new Set([
   "host",
@@ -4816,6 +4797,9 @@ function extractCursor(raw) {
   }
   return null;
 }
+function isNotFoundHttpError(error) {
+  return typeof error === "object" && error !== null && error.name === "HasnaHttpError" && error.status === 404;
+}
 function createHasnaStorageClient(name, transport) {
   return {
     name,
@@ -4834,7 +4818,7 @@ function createHasnaStorageClient(name, transport) {
       try {
         return await transport.get(entityPath(resource, id), options);
       } catch (error) {
-        if (error instanceof HasnaHttpError && error.status === 404)
+        if (isNotFoundHttpError(error))
           return null;
         throw error;
       }
@@ -4855,7 +4839,7 @@ function createHasnaStorageClient(name, transport) {
       try {
         await transport.del(entityPath(resource, id), undefined, options);
       } catch (error) {
-        if (error instanceof HasnaHttpError && error.status === 404)
+        if (isNotFoundHttpError(error))
           return;
         throw error;
       }
@@ -4863,7 +4847,7 @@ function createHasnaStorageClient(name, transport) {
   };
 }
 
-// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/client/transport.js
+// ../contracts/dist/client/transport.js
 import { isIP } from "net";
 function envToken(name) {
   return name.toUpperCase().replace(/-/g, "_");
@@ -5074,7 +5058,7 @@ function toV1BaseUrl(apiUrl) {
   url.pathname = `${path}/v1`;
   return url.toString().replace(/\/+$/, "");
 }
-class HasnaHttpError2 extends Error {
+class HasnaHttpError extends Error {
   status;
   method;
   path;
@@ -5227,14 +5211,14 @@ function createHasnaHttpTransport(options) {
         return {
           ok: false,
           retryable: false,
-          error: new HasnaHttpError2(method, rel, response.status, parsed)
+          error: new HasnaHttpError(method, rel, response.status, parsed)
         };
       }
       if (response.status === 401 || response.status === 403) {
         return {
           ok: false,
           retryable: false,
-          error: new HasnaHttpError2(method, rel, response.status, parsed, {
+          error: new HasnaHttpError(method, rel, response.status, parsed, {
             source: credential.source,
             tier: credential.tier,
             guidance: authFailureGuidance(credential)
@@ -5243,7 +5227,7 @@ function createHasnaHttpTransport(options) {
       }
       const retry = resolveRetry(opts.retry);
       const retryable = retry ? retry.retryStatuses.includes(response.status) : false;
-      return { ok: false, retryable, error: new HasnaHttpError2(method, rel, response.status, parsed) };
+      return { ok: false, retryable, error: new HasnaHttpError(method, rel, response.status, parsed) };
     }
     return { ok: true, value: parsed };
   }
@@ -19864,7 +19848,7 @@ function createKnowledgeProjectLinksHttpClient(options) {
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.106",
+  version: "0.2.107",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -19962,7 +19946,7 @@ var package_default = {
     "@ai-sdk/openai": "^3.0.68",
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
-    "@hasna/events": "0.1.14",
+    "@hasna/events": "0.1.16",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
     ai: "^6.0.197",
@@ -19972,7 +19956,7 @@ var package_default = {
   },
   devDependencies: {
     "@electric-sql/pglite": "^0.5.4",
-    "@hasna/contracts": "0.10.6",
+    "@hasna/contracts": "0.11.2",
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.15.6",
     typescript: "5.9.3"
