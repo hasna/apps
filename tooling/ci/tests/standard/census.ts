@@ -341,7 +341,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "banking", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "brains", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "catalog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -393,7 +392,6 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
  * when #102 added its manifest on 2026-08-14) — each recorded with the
  * manifest lane pointer (aggregate task; see README). */
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
