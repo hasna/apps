@@ -65,7 +65,7 @@ describe("dispatch self-heal diagnosis", () => {
     });
 
     expect(diagnosis.category).toBe("machine");
-    expect(diagnosis.repairRoute).toMatch(/@hasna\/machines/);
+    expect(diagnosis.repairRoute).toMatch(/@hasna\/stations/);
     expect(diagnosis.nextActions.join("\n")).toMatch(/spark01, spark02, and apple03/);
   });
 

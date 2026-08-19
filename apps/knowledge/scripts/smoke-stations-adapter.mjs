@@ -254,9 +254,9 @@ function runCase(input) {
       NODE_PATH: '',
       KNOWLEDGE_ADAPTER_MODE: input.adapterMode,
       KNOWLEDGE_SMOKE_MACHINE: input.peer,
-      HASNA_MACHINES_DB_PATH: join(temp.appDir, 'machines.db'),
-      HASNA_MACHINES_MANIFEST_PATH: join(temp.appDir, 'machines.json'),
-      HASNA_MACHINES_MACHINE_ID: 'adapter-smoke-local',
+      HASNA_STATIONS_DB_PATH: join(temp.appDir, 'stations.db'),
+      HASNA_STATIONS_MANIFEST_PATH: join(temp.appDir, 'stations.json'),
+      HASNA_STATIONS_MACHINE_ID: 'adapter-smoke-local',
     };
     const result = run(process.execPath, [temp.child], {
       cwd: temp.appDir,

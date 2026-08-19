@@ -76,7 +76,7 @@ function machineFromRoute(route: MachineRouteResolution, topology: MachineTopolo
   if (!route.ok || !route.machine_id) {
     throw new Error(`OpenMachines route not found for machine: ${route.requested_machine_id}`);
   }
-  const entry = topology.machines.find((machine) => machine.machine_id === route.machine_id);
+  const entry = topology.stations.find((machine) => machine.machine_id === route.machine_id);
   return {
     id: route.machine_id,
     requestedId: route.requested_machine_id !== route.machine_id ? route.requested_machine_id : undefined,
@@ -91,13 +91,13 @@ function machineFromRoute(route: MachineRouteResolution, topology: MachineTopolo
 }
 
 export function listOpenMachines(): OpenMachineSummary[] {
-  const topology = machinesConsumer().discoverMachineTopology();
-  return topology.machines.map((entry) => entryToSummary(entry, topology));
+  const topology = machinesConsumer().discoverMachineTopology({ limit: null, offset: 0 });
+  return topology.stations.map((entry) => entryToSummary(entry, topology));
 }
 
 export function resolveLoopMachine(machineId: string): LoopMachineRef {
   const consumer = machinesConsumer();
-  const topology = consumer.discoverMachineTopology();
+  const topology = consumer.discoverMachineTopology({ limit: null, offset: 0 });
   const route = consumer.resolveMachineRoute(machineId, { topology });
   return machineFromRoute(route, topology);
 }
