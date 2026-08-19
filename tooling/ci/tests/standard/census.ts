@@ -352,7 +352,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "docs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "evals", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "holdings", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -398,7 +397,6 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
