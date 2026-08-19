@@ -105,6 +105,18 @@ export {
 } from "./lib/publish-gate-run.js";
 export { readNpmrcToken } from "./lib/npmrc.js";
 export {
+  SelectiveChangesetError,
+  applySelectiveChangesets,
+  planSelectiveChangesets,
+  prepareSelectiveChangesets,
+  type PrepareSelectiveChangesetsOptions,
+  type SelectiveChangesetErrorCode,
+  type SelectiveChangesetMode,
+  type SelectiveChangesetOptions,
+  type SelectiveChangesetResult,
+  type SelectiveChangesetSummary,
+} from "./lib/selective-changesets.js";
+export {
   AppIdSchema,
   EvidencePointerSchema,
   GitShaSchema,

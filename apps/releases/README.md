@@ -35,6 +35,53 @@ releases reconcile @hasna/todos @hasna/events
 
 All commands print JSON. Data lives in `~/.hasna/releases` (override with `RELEASES_DATA_DIR`).
 
+## Selective Changesets candidates
+
+`releases changesets-candidate` prepares a release candidate from explicit
+Changeset IDs and an explicit workspace-package allowlist. It computes the
+Changesets dependency closure before any write. A selected Changeset or
+required dependent package outside the allowlist is an error, and no file is
+changed.
+
+The command is a dry-run unless `--apply` is present:
+
+```bash
+releases changesets-candidate \
+  --cwd /path/to/hasna-apps \
+  --changeset conversations-monorepo-first-release \
+  --changeset projects-monorepo-first-release \
+  --changeset projects-conversations-prebound-adoption \
+  --changeset projects-serve-help-before-dburl \
+  --changeset todos-9b050845-bounded-remote-timeout \
+  --changeset todos-0-15-34-storage-mode-removal \
+  --changeset plan-comment-surface-04ee08fd \
+  --package @hasna/conversations \
+  --package @hasna/todos \
+  --package @hasna/projects
+
+# Apply only after inspecting plannedPaths and releases in the JSON result.
+releases changesets-candidate \
+  --cwd /path/to/hasna-apps \
+  --changeset <id> \
+  --package @hasna/package \
+  --apply
+```
+
+Dry-run returns `plannedPaths` with an empty `touchedPaths`. Apply requires the
+same explicit inputs and verifies that Changesets touched exactly the computed
+candidate. Unselected Changesets, manifests for packages outside the release
+plan, the root manifest, and `bun.lock` are checked byte-for-byte; an invariant
+failure restores the pre-apply bytes and exits non-zero.
+
+The SDK exposes the same contract:
+
+```ts
+import {
+  applySelectiveChangesets,
+  planSelectiveChangesets,
+} from "@hasna/releases";
+```
+
 ## Ship-gap detection — `releases shipgap`
 
 `reconcile` answers "does the ledger agree with npm?". It cannot see the two gaps
