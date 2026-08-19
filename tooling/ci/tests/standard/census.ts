@@ -347,7 +347,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
   { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "ui", reason: "Legacy ui.sh mirror; SDK lane (c7ce8b75)." },
-  { member: "workforce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
 ];
 
 /** HARD four-surface exceptions — members missing the `<name>` CLI bin.
