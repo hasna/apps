@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { resolveContractsCli } from "../scripts/contracts-cli.mjs"
 
 const repoRoot = join(import.meta.dir, "..")
-const contractsBin = join(repoRoot, "node_modules", ".bin", "contracts")
+const contractsBin = resolveContractsCli()
 
 type PackageManifest = {
   scripts?: Record<string, string>
@@ -41,9 +42,10 @@ function unpinnedRunnerInvocations(body: string): string[] {
 
 describe("Hasna service contract conformance", () => {
   it("hasna.contract.json passes repo conformance with no failing check", () => {
-    const result = Bun.spawnSync([contractsBin, "repo-conformance", "--json", "."], {
-      cwd: repoRoot,
-    })
+    const result = Bun.spawnSync(
+      [process.execPath, contractsBin, "repo-conformance", "--json", "."],
+      { cwd: repoRoot },
+    )
     const stdout = result.stdout.toString()
 
     expect(result.exitCode, `contracts repo-conformance errored: ${result.stderr.toString()}`).toBe(
