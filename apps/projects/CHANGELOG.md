@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.133
+
+### Patch Changes
+
+- c7256ff: Preserve a scalar integration projection when exactly one remaining resource link matches its value, and delete zero-match or ambiguous projections safely.
+
 All notable changes to `@hasna/projects` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
