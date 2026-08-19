@@ -4,6 +4,12 @@ All notable changes to `@hasna/machines` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.28
+
+### Patch Changes
+
+- 1413b5e: Generated Bun package probes (`machines apps plan`/`apply`) now execute under an explicit `bash -c` wrapper, fixing `zsh:1: parse error near 'printf'` on macOS targets whose remote login shell is zsh — installs ran but verification always failed (bug e406620f, measured station03). The output contract is unchanged and linux targets keep working. Shipped as 0.2.27 with the station-template floor bump.
+
 ## [0.2.27] - 2026-08-15
 
 ### Fixed
