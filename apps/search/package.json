@@ -1,7 +1,7 @@
 {
   "name": "@hasna/search",
-  "version": "0.0.16",
-  "description": "Unified search \u2014 local file index (find files by name/path/content/regex in ms, trigram FTS) + 12 web providers (Google, SerpAPI, Exa, Perplexity, Twitter, Reddit, YouTube, Brave, Bing, Hacker News, GitHub, arXiv) + YouTube transcription. CLI + MCP + REST API + Dashboard.",
+  "version": "0.0.17",
+  "description": "Unified search — local file index (find files by name/path/content/regex in ms, trigram FTS) + 12 web providers (Google, SerpAPI, Exa, Perplexity, Twitter, Reddit, YouTube, Brave, Bing, Hacker News, GitHub, arXiv) + YouTube transcription. CLI + MCP + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -86,7 +86,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/events": "^0.1.7",
+    "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

@@ -1,7 +1,7 @@
 {
   "name": "@hasna/consolidations",
-  "version": "0.1.1",
-  "description": "Group financial consolidation: ingest entity GL data, normalize charts of accounts, translate multi-currency, run intercompany eliminations, produce consolidated P&L/BS/CF \u2014 CLI + MCP + serve over a Hasna-contract store.",
+  "version": "0.1.2",
+  "description": "Group financial consolidation: ingest entity GL data, normalize charts of accounts, translate multi-currency, run intercompany eliminations, produce consolidated P&L/BS/CF — CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -69,7 +69,7 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.10.6",
+    "@hasna/contracts": "0.11.2",
     "bun-types": "1.3.14",
     "@types/bun": "^1.2.4",
     "@types/react": "^18.3.18",

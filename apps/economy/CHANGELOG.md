@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.11
+
+### Patch Changes
+
+- 0df46e0: First release from the hasna/apps monorepo. The package was imported from hasna/economy with history preserved (import capsule 18b2aaf7d, import merge 7a3018a4f); there are no functional changes since 0.3.9 — the delta is the import itself plus the monorepo workspace wiring. This patch establishes version ownership under the monorepo.
+- Updated dependencies [b630c48]
+- Updated dependencies [139894d]
+- Updated dependencies [0efd36e]
+- Updated dependencies [5506f54]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+  - @hasna/projects@0.1.134
+
 All notable changes to this repository are tracked here. This project follows semantic versioning for published npm packages when practical.
 
 ## @hasna/economy 0.3.10 - 2026-08-15
@@ -23,14 +36,14 @@ metadata correction.
 
 **Breaking for server operators.** `HASNA_ECONOMY_STORAGE_MODE` (and the
 `ECONOMY_STORAGE_MODE` alias) are retired for server backend selection. They are
-now *rejected at startup with a migration hint* rather than normalized, so a
+now _rejected at startup with a migration hint_ rather than normalized, so a
 half-migrated deployment fails loudly instead of quietly serving the wrong store.
 The server data backend is `sqlite | postgresql`, selected by the presence of
 `HASNA_ECONOMY_DATABASE_URL` alone. If you set `HASNA_ECONOMY_STORAGE_MODE=cloud`
 to reach Postgres, unset it and rely on the database URL.
 
 - **#27** `fix(client)` — hard-fail a half-applied cloud flip instead of silently
-  serving local data. An `API_URL` set *without* an `API_KEY` previously resolved
+  serving local data. An `API_URL` set _without_ an `API_KEY` previously resolved
   to `local` with no warning, byte-identical to an unconfigured host: the CLI
   served the local SQLite store while the operator had pointed it at the cloud
   API — a different dataset rendered as plausible spend numbers. It now reports

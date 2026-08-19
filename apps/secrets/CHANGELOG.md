@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- 8de5bb5: Release-line reconciliation: main is bumped to the registry-latest 0.3.0 (published by the release lane 2026-08-14 ahead of main). No functional changes — this patch establishes main/registry parity and clears the KNOWN_NPM_DRIFT and changelog-mismatch records (reconcile task 3ab02291).
+- Updated dependencies [b630c48]
+  - @hasna/events@0.1.16
+
 ## 0.3.0 — 2026-08-14
 
 - Release-line reconciliation: main is bumped to the registry-latest 0.3.0 (published by the release lane 2026-08-14T14:23:49Z ahead of main; the release commit did not land on main). No functional changes to the tree; this entry records the version parity and clears the KNOWN_NPM_DRIFT and changelog-mismatch records (reconcile task 3ab02291).
