@@ -28,25 +28,16 @@
 // add a violation and the set grows and this fails; fix one and the set shrinks
 // and this also fails, forcing the baseline down in the same commit as the fix.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveContractsCli } from "./contracts-cli.mjs";
 
 const repoRoot = join(import.meta.dir, "..");
 const baselinePath = join(import.meta.dir, "contract-gap-baseline.json");
 const update = process.argv.includes("--update");
 
-// Resolve the `contracts` CLI across bun workspace layouts. When @hasna/contracts
-// resolves to a registry copy (version-conflicted, non-hoisted), the bin link
-// lives at <app>/node_modules/.bin/contracts; when it resolves to the workspace
-// member apps/contracts, the link is not created and the member's own built CLI
-// is reachable through <app>/node_modules/@hasna/contracts/dist/cli/index.js.
-const scannerCandidates = [
-  join(repoRoot, "node_modules", ".bin", "contracts"),
-  join(repoRoot, "node_modules", "@hasna", "contracts", "dist", "cli", "index.js"),
-];
-const scannerEntry = scannerCandidates.find((candidate) => existsSync(candidate)) ?? "contracts";
-const scanner = scannerEntry.endsWith(".js") ? ["bun", scannerEntry] : [scannerEntry];
+const scanner = [process.execPath, resolveContractsCli()];
 
 // The probe block is the smallest value that satisfies the contract schema for a
 // cli-with-store repo under the current contracts kit: backend sqlite plus the

@@ -2,6 +2,7 @@
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runContracts } from "./contracts-cli.mjs";
 
 const tempDir = mkdtempSync(join(tmpdir(), "automations-artifact-scan-"));
 
@@ -40,8 +41,11 @@ try {
     throw new Error("bun pm pack did not create a packed artifact");
   }
 
-  const output = run(["contracts", "artifact-scan", join(tempDir, artifact)], "contracts artifact-scan");
-  process.stdout.write(output);
+  const scanStatus = runContracts(["artifact-scan", join(tempDir, artifact)], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+  });
+  if (scanStatus !== 0) process.exit(scanStatus);
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
 }

@@ -18,6 +18,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { runContracts } from "./contracts-cli.mjs";
 
 function run(command: string[], cwd: string): string {
   const result = Bun.spawnSync(command, { cwd, stdout: "pipe", stderr: "pipe" });
@@ -36,15 +37,13 @@ try {
   const packed = run(["bun", "pm", "pack", "--destination", workspace, "--ignore-scripts", "--quiet"], repoRoot);
   const archive = isAbsolute(packed) ? packed : join(workspace, packed);
 
-  const scanner = join(repoRoot, "node_modules", ".bin", "contracts");
-  const result = Bun.spawnSync([scanner, "artifact-scan", archive], {
+  const status = runContracts(["artifact-scan", archive], {
     cwd: repoRoot,
-    stdout: "inherit",
-    stderr: "inherit",
+    stdio: "inherit",
   });
-  if (result.exitCode !== 0) {
+  if (status !== 0) {
     console.error("\nA published artifact must not carry a bulk asset inventory. See @hasna/contracts CONTRACT.md clause B.");
-    process.exit(result.exitCode ?? 1);
+    process.exit(status);
   }
 } finally {
   rmSync(workspace, { recursive: true, force: true });
