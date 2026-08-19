@@ -89,6 +89,20 @@ describe("projects-serve migrations", () => {
     expect(ids).toContain("projects:0009_contacts_resource_links");
     expect(ids).toContain("projects:0009_todos_task_resource_links");
     expect(ids).toContain("projects:0010_project_resource_link_contract_v1");
+    expect(ids).toContain("projects:0011_machine_ownership_runtime_grants");
+  });
+
+  test("machine ownership runtime grant follows the hosted workspaces DML role", () => {
+    const migration = loadMigrations().find(
+      (item) => item.id === "projects:0011_machine_ownership_runtime_grants",
+    );
+    expect(migration).toBeDefined();
+    expect(migration!.sql).toContain("relation.relname = 'workspaces'");
+    expect(migration!.sql).toContain("COUNT(DISTINCT privilege.privilege_type) = 4");
+    expect(migration!.sql.match(/'GRANT [^']+'/g)).toEqual([
+      "'GRANT SELECT ON TABLE %I.%I TO %I'",
+    ]);
+    expect(migration!.sql).not.toContain("projects_app");
   });
 
   test("guarded receipt grant migration derives existing DML roles and grants only receipt reads and inserts", () => {

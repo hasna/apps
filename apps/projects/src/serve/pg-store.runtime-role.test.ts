@@ -67,6 +67,9 @@ describePostgres("pg-store guarded mutation runtime role", () => {
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${quoteIdentifier(schema)} TO ${quoteIdentifier(runtimeRole)}`,
     );
     await owner.execute(
+      `REVOKE ALL ON TABLE machines FROM ${quoteIdentifier(runtimeRole)}`,
+    );
+    await owner.execute(
       `GRANT SELECT ON TABLE workspaces TO ${quoteIdentifier(readOnlyRole)}`,
     );
     await owner.execute(
@@ -109,11 +112,17 @@ describePostgres("pg-store guarded mutation runtime role", () => {
     }
   });
 
-  test("repairs the measured receipt ACL without widening runtime privileges", async () => {
+  test("repairs the measured machine and receipt ACLs without widening runtime privileges", async () => {
     if (!owner || !runtime) throw new Error("Postgres test clients were not initialized");
     const store = new ProjectsPgStore(runtime);
-    const before = await store.getWorkspace(workspaceId);
-    expect(before).not.toBeNull();
+    const initial = await store.getWorkspace(workspaceId);
+    expect(initial).not.toBeNull();
+
+    await expect(store.updateWorkspace(workspaceId, { canonical_machine: "spark02" }))
+      .rejects.toMatchObject({ code: "42501" });
+    expect(await store.getWorkspace(workspaceId)).toEqual(initial);
+
+    const before = initial;
 
     const request = {
       project_id: workspaceId,
@@ -135,6 +144,9 @@ describePostgres("pg-store guarded mutation runtime role", () => {
     const migrated = await runProjectsMigrations(owner);
     expect(migrated.plan.find((item) =>
       item.migration.id === "projects:0004_guarded_project_mutation_runtime_grants"
+    )?.state).toBe("pending");
+    expect(migrated.plan.find((item) =>
+      item.migration.id === "projects:0011_machine_ownership_runtime_grants"
     )?.state).toBe("pending");
     const rerun = await runProjectsMigrations(owner);
     expect(rerun.plan.every((item) => item.state === "already_applied")).toBe(true);
@@ -224,5 +236,37 @@ describePostgres("pg-store guarded mutation runtime role", () => {
     expect(await runtime.one<{ count: number }>(
       "SELECT COUNT(*)::int AS count FROM guarded_project_mutation_receipts",
     )).toEqual(receiptCountBeforeBudgetFailure);
+
+    expect(await owner.one<{
+      can_select: boolean;
+      can_insert: boolean;
+      can_update: boolean;
+      can_delete: boolean;
+      can_truncate: boolean;
+    }>(
+      `SELECT
+         has_table_privilege($1, $2, 'SELECT') AS can_select,
+         has_table_privilege($1, $2, 'INSERT') AS can_insert,
+         has_table_privilege($1, $2, 'UPDATE') AS can_update,
+         has_table_privilege($1, $2, 'DELETE') AS can_delete,
+         has_table_privilege($1, $2, 'TRUNCATE') AS can_truncate`,
+      [runtimeRole, `${schema}.machines`],
+    )).toEqual({
+      can_select: true,
+      can_insert: false,
+      can_update: false,
+      can_delete: false,
+      can_truncate: false,
+    });
+
+    const assigned = await store.updateWorkspace(workspaceId, { canonical_machine: "spark02" });
+    expect(assigned.canonical_machine).toBe("spark02");
+    const repeated = await store.updateWorkspace(workspaceId, { canonical_machine: "spark02" });
+    expect(repeated.canonical_machine).toBe("spark02");
+
+    const beforeInvalid = await store.getWorkspace(workspaceId);
+    await expect(store.updateWorkspace(workspaceId, { canonical_machine: "not-a-machine" }))
+      .rejects.toThrow("Machine not found: not-a-machine");
+    expect(await store.getWorkspace(workspaceId)).toEqual(beforeInvalid);
   }, 30_000);
 });
