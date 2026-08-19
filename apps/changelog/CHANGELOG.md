@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- @hasna/contracts@0.11.2
+
 All notable changes to Hasna Changelog are documented in this file.
 
 ## [0.2.0] - 2026-07-06

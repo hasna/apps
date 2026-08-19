@@ -1,6 +1,6 @@
 {
   "name": "@hasna/automations",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Deterministic automation control plane and daemon for Hasna open-source apps",
   "type": "module",
   "main": "./dist/index.js",
@@ -101,14 +101,14 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.11.1",
+    "@hasna/contracts": "^0.11.2",
     "postgres": "^3.4.7"
   },
   "peerDependencies": {
-    "@hasna/actions": "^0.1.4"
+    "@hasna/actions": "^0.2.1"
   },
   "devDependencies": {
-    "@hasna/actions": "^0.1.4",
+    "@hasna/actions": "^0.2.1",
     "@types/bun": "latest",
     "typescript": "^5.7.3"
   },

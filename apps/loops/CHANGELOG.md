@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2
+
+### Patch Changes
+
+- 2eb72da: Fix `loops list` pagination failing on a duplicate/no-progress page (BUG 3d3521a4). The loops table is ordered by `next_run_at`, which the daemon mutates as loops run, so the ordering can shift between page fetches and the offset window can land entirely on already-seen rows; the CLI then failed the whole read with LOOP_LIST_PAGINATION_FAILED ("a page contained no new loop ids"), blocking loop enumeration. A no-progress page (exact repeat, zero new ids, or frozen offset) now terminates pagination and returns the deduplicated population gathered so far, with a stderr warning naming the reason; the page/items safety ceilings and unusable-id checks remain hard errors.
+- 7a5bc3f: Agent-loop preflight (and execution) machine routing now fails closed through the package-owned Machines canonical route instead of degrading an unresolvable machine id to a raw `ssh <machine-id>` invocation (task 48a92f1b). `@hasna/machines`' `resolveMachineCommand` falls back to raw ssh when the id is missing from the topology; loops' preflight previously inherited that fallback, so a canonical machine name such as the apple03 -> station03 alias produced a DNS failure rather than a route error. Loops' `resolveMachineCommand` wrapper now resolves the canonical route once and throws `OpenMachines route not found for machine: <id>` when the id cannot be resolved; command plans are built from the route's canonical command target, preserving exact machine identity. All preflight paths (CLI create, workflow preflight, MCP validation, doctor, runtime before-run) funnel through the same wrapper.
+- af55d54: A machine-pinned loop created on the hosted control plane with no `loops-runner` serving its machine stayed active and due forever with zero runs recorded and no error anywhere — the scheduler-only control plane executes only when a runner claims a loop, and no surface reported the absence (BUG 96c837b0). `loops show <id>` now computes an execution-staleness classifier (active, not archived, scheduled slot passed, zero run rows ever, past the same 10-minute overdue grace the health report already uses) and prints `UNSERVED` with the machine id and remediation hint; the same classifier is exposed as an `execution` field on `GET /v1/loops/{id}` for API consumers. The classifier only reports — it never changes who may claim what, and a loop that has ever been claimed (a run row exists) always reads `ok`. Sibling rows 94a957aa (hosted loop overdue with no run) and 67c95be4 are the same mechanism family; their resolution is tracked on the bug task.
+- 9072a3b: `loops show` (CLI, API, and MCP) no longer reports the placeholder literal `'shell'` as a shell command loop's target. Command targets now expose the real resolved command line (secret-scrubbed and bounded for shell targets), a `commandDigest` (`cmd:sha256:<hex>`) binding the exact stored command + shell-quoted args the executor will run, and `commandResolvedFrom: "stored-target"` provenance. An operator can prove the stored target matches an intended candidate by comparing digests; a one-byte mutation changes the digest; credential-shaped values remain scrubbed; non-shell command targets keep their command name and gain the same digest. The executor's shell path now shares the same resolved-command-line function, so the digest binds exactly what runs.
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+
 All notable changes to Loops (npm `@hasna/loops`, repo `hasna/loops`) are
 documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
@@ -78,6 +90,7 @@ clients connect via the local file or the control-plane HTTP API.
   case cannot be constructed.
 
 ## 0.4.41 (2026-08-09)
+
 ## 0.4.41 (2026-08-09)
 
 ### Fixed
@@ -304,9 +317,9 @@ documented below.
   unconditionally in todos-task drains, so multi-repo routers that pass it as a
   concurrency group root (a non-repository directory such as the operator's
   home) sent every task to the group root and skipped it (`worktreeMode=required
-  but projectPath is not an existing git repository`), zeroing merge dispatch
+but projectPath is not an existing git repository`), zeroing merge dispatch
   fleet-wide. A drain
-  now routes each task to its own first *usable* repository path (explicit
+  now routes each task to its own first _usable_ repository path (explicit
   `project_path`, metadata, the description's `Repository:` line, then
   `working_dir` — first that is a real git repo, probed once per path per tick);
   the router-level `--project-path` remains the rescue fallback for tasks whose
@@ -823,9 +836,9 @@ CLI/MCP/SDK surface with deprecation aliases.
 
 - CLI: new `loops gc`; `routes` is the canonical event-routing surface.
   Deprecated aliases retained for one release cycle: `loops events
-  handle|drain ...` (use `loops routes create|drain`), `loops templates
-  create` (use `loops workflows create --template <id>`), and `loops goal
-  status` (merged into `loops goal show`). Internal debloat consolidated
+handle|drain ...` (use `loops routes create|drain`), `loops templates
+create` (use `loops workflows create --template <id>`), and `loops goal
+status` (merged into `loops goal show`). Internal debloat consolidated
   ~1,900 lines of template code and moved route/template plumbing into
   `src/lib/route/` and `src/lib/template-kit.ts` without removing any
   non-deprecated command.
@@ -880,9 +893,9 @@ CLI/MCP/SDK surface with deprecation aliases.
   `loop_pause`, `workflow_read`, ...) still work as deprecated aliases but
   will be removed in a future minor. Re-list tools and migrate callers.
 - **CLI deprecations** (aliases still work, removal planned): `loops events
-  handle|drain` → `loops routes create|drain`; `loops templates create` →
+handle|drain` → `loops routes create|drain`; `loops templates create` →
   `loops workflows create --template <id>`; `loops goal status` → `loops
-  goal show`.
+goal show`.
 - **Agent loops can now time out by default.** Previously an agent target
   with no `timeoutMs` could hang forever; it now idle-times-out after 30
   minutes without progress (4h for buffered agents). Long-running agents

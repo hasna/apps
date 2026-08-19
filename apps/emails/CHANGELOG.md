@@ -1,13 +1,22 @@
 # Changelog
 
+## 1.3.17
+
+### Patch Changes
+
+- 8de5bb5: Release-line reconciliation: main is bumped to the registry-latest 1.3.15 (published by the release lane 2026-08-14 ahead of main). No functional changes — this patch establishes main/registry parity and clears the KNOWN_NPM_DRIFT record (reconcile task 78c66e3c).
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+
 All notable changes to `@hasna/emails` are documented here.
 
 ## [Unreleased]
 
 - **fix(ui): the OTHER half of the idle spin — scoped folder counts crawled the mailbox on every 30s tick, and the sidebar's inbox picker threw while still committing its state.** The previous entry closed `listLabelSummaries` and said plainly that `mailboxCounts` -> `scanScopeRows` was still uncached and un-coalesced on the same tick; this closes it. That walk followed the cursor chain **twice** for an address (the `{to}`/`{from}` union) with no bound that could fire: its only limit, `seen.size > MAX_SCAN_ROWS`, counts rows MATCHED, which a serve ignoring `?to=`/`?from=` barely grows. It is now bounded on rows **scanned, per filter set** against that same `MAX_SCAN_ROWS`, TTL-cached (`SCOPED_COUNT_TTL_MS = 60_000`, above the 30s refresh) keyed PER SCOPE, and coalesced behind a generation fence. The budget deliberately does NOT live in `scanScopeRows`, which is also the destructive `clear()` preflight — a cap or TTL there would make `clear()` delete a partial or stale subset while reporting a plausible count, and that is a regression test. **A first attempt capped REQUESTS at 200 on the argument that `200 x PAGE_LIMIT == MAX_SCAN_ROWS`; adversarial review measured two stores that resolve today and threw under it** (300 pages x 2 rows = 600 rows / 600 requests; 120 pages x 500 rows = 60,000 rows / 240 requests), which is why the bound counts rows. Also fixed: `setAddress` committed `selectedAddressId` BEFORE `persistSetting`, which throws in self-hosted mode, so a user was pinned to one inbox by an action that visibly failed and the reload never ran; and the 30s refresh guarded on `busyPull`, a field never set true anywhere, now `loading`. **USER-VISIBLE BEHAVIOUR CHANGE — FRESHNESS: the sidebar folder counts are cached for up to 60s, so mail arriving from OUTSIDE this client is now invisible to them for up to a minute, where before it appeared within one 30s tick.** `invalidate()` covers only this client's own writes, so your own read/star/archive/delete still update the counts immediately. The counts themselves are still EXACT and are never a sample — unlike the label tally above, which is. Measured on the real pty path with a 50,000-message store, an idle `sleep` negative control at `delta_ticks=0`, and the ONLY difference between the two builds being this fix: mean idle CPU **42.9% -> 19.0%** over a single 181s window, requests **7.25/s -> 2.83/s**, and the shape goes from flat to periodic. **What that delta is NOT: it is not the crawl-stacking the previous entry describes.** The BEFORE windows are flat (40.8-46.2%), one walk measures 8.75s wall, and an 8.75s walk cannot stack on a 30s tick — 1312 requests over 181s is ~6 ticks x 200, one walk per tick in steady state. The measured delta is the 60s-vs-30s **cache** alone (predicted 2.0x, observed 2.26x); coalescing contributed nothing here and is there for a walk that outlives the tick. **Two limits on that number, both against it:** the bench serve does not implement `?to=`/`?from=` filtering, so against a serve that HONOURS them an ordinary inbox's walk is one or two requests and the absolute saving collapses toward zero; and the bench store sat at exactly 200 requests (50,000 / 500 x 2 filter sets), one page under the original `> 200` guard, so the benchmark was structurally blind to the bound defect review found. Real CLI, same path: maxrss 486,672 kB -> 236,952 kB with byte-identical counts.
-- **fix(ui): `emails ui` burned ~92% of a core while idle — a sidebar label list was crawling the entire mailbox, repeatedly, with the crawls stacking up.** Measured on station01 against 1.3.6 under a pty with zero interaction: 40.9% -> 66.0% -> 91.7% -> 92.3% of a core across four windows, VmRSS climbing 166 -> 248 MB, and **0 bytes/s written to the terminal** the whole time. The renderer was not the cause and was never running: instrumented mid-spin it reported `fps=0.0 raf/s=0.0 isRunning=false controlState=idle liveReq=0`. Per-thread CPU put 33.6% on the main JS thread and ~31% across seven `HeapHelper` GC threads — allocation churn, not drawing. The source was `SelfHostedMailDataSource.listLabelSummaries()`, which tallied label names by walking the WHOLE store over HTTP (`for await (const page of this.listPages(PAGE_LIMIT))`, no bound) — ~340 requests and ~145 MB of JSON per call against the production mailbox (~170k messages), to populate a sidebar list of at most 80 names; the caller's `limit: 80` bought nothing because it was applied after the scan. The TUI issues it from `scheduleSidebarMeta` on every 30s refresh, and that scheduler cancels a PENDING timer but never an IN-FLIGHT walk — so on a mailbox where one walk takes longer than 30s, each refresh started a new crawl on top of the last and they accumulated, which is why CPU climbed with process age and plateaued at one core rather than sitting at a fixed rate. The walk is now bounded (`MAX_LABEL_SCAN_REQUESTS = 10`, i.e. 5,000 rows — the same budget `src/cli/tui/data.remote.ts` already used as `SELF_HOSTED_MAIL_SCAN_CAP`), TTL-cached (`LABEL_TALLY_TTL_MS = 60_000`, deliberately above the 30s refresh or the cache buys nothing), and coalesced behind one shared in-flight promise so overlapping sidebar loads share a single walk — the property that actually removes the climb. `invalidate()` drops the tally, since labelling changes it. Among the `listPages` loops in that module measured against their own explicit constants, this was the only one with no request cap, no cache and no coalescing — the others carry `MAX_SCAN_ROWS`, `MAX_FILTER_WALK_REQUESTS` or `MAX_THREAD_CANDIDATE_ROWS`. **That is not a claim that the idle spin is now fully closed:** adversarial review found that `mailboxCounts` reaches `scanScopeRows` on the same 30s sidebar tick once any single inbox is selected, and that path is also uncached and un-coalesced with only a row cap (`MAX_SCAN_ROWS = 100_000`, up to ~200 requests per filter set, run twice for the to/from union). It is pre-existing, out of scope here, and tracked separately. **Accepted trade, stated plainly: label counts are now a SAMPLE over the most recent 5,000 messages, not a census** — on a larger store a count is a lower bound and a label used only in old mail can be absent. The self-hosted seam has no server-side label aggregate (the local seam answers this with one SQL `GROUP BY`), so exact counts are obtainable only by dragging the whole mailbox over HTTP. Measured after the fix on the same machine, same pty harness, same `/proc` method, against the same production hosted mailbox over the self-hosted seam (the only path this fix touches): 13.1% / 5.2% / 14.2% / 4.7% across the identical four windows, with no climb and flat RSS. **The defensible before/after pair is source-vs-source through one harness: 68.8% -> 4.4%.** The 92.3% figure was taken against the *installed 1.3.6 dist bundle* rather than this branch's source, so 92.3% -> 4.7% spans two build artefacts and is quoted here as an order-of-magnitude indication only, not as a controlled comparison. The controlled measurement of the mechanism itself is the request count against a 340-page store: **340 requests / 118.2 MB before, 10 requests / 3.4 MB after.**
+- **fix(ui): `emails ui` burned ~92% of a core while idle — a sidebar label list was crawling the entire mailbox, repeatedly, with the crawls stacking up.** Measured on station01 against 1.3.6 under a pty with zero interaction: 40.9% -> 66.0% -> 91.7% -> 92.3% of a core across four windows, VmRSS climbing 166 -> 248 MB, and **0 bytes/s written to the terminal** the whole time. The renderer was not the cause and was never running: instrumented mid-spin it reported `fps=0.0 raf/s=0.0 isRunning=false controlState=idle liveReq=0`. Per-thread CPU put 33.6% on the main JS thread and ~31% across seven `HeapHelper` GC threads — allocation churn, not drawing. The source was `SelfHostedMailDataSource.listLabelSummaries()`, which tallied label names by walking the WHOLE store over HTTP (`for await (const page of this.listPages(PAGE_LIMIT))`, no bound) — ~340 requests and ~145 MB of JSON per call against the production mailbox (~170k messages), to populate a sidebar list of at most 80 names; the caller's `limit: 80` bought nothing because it was applied after the scan. The TUI issues it from `scheduleSidebarMeta` on every 30s refresh, and that scheduler cancels a PENDING timer but never an IN-FLIGHT walk — so on a mailbox where one walk takes longer than 30s, each refresh started a new crawl on top of the last and they accumulated, which is why CPU climbed with process age and plateaued at one core rather than sitting at a fixed rate. The walk is now bounded (`MAX_LABEL_SCAN_REQUESTS = 10`, i.e. 5,000 rows — the same budget `src/cli/tui/data.remote.ts` already used as `SELF_HOSTED_MAIL_SCAN_CAP`), TTL-cached (`LABEL_TALLY_TTL_MS = 60_000`, deliberately above the 30s refresh or the cache buys nothing), and coalesced behind one shared in-flight promise so overlapping sidebar loads share a single walk — the property that actually removes the climb. `invalidate()` drops the tally, since labelling changes it. Among the `listPages` loops in that module measured against their own explicit constants, this was the only one with no request cap, no cache and no coalescing — the others carry `MAX_SCAN_ROWS`, `MAX_FILTER_WALK_REQUESTS` or `MAX_THREAD_CANDIDATE_ROWS`. **That is not a claim that the idle spin is now fully closed:** adversarial review found that `mailboxCounts` reaches `scanScopeRows` on the same 30s sidebar tick once any single inbox is selected, and that path is also uncached and un-coalesced with only a row cap (`MAX_SCAN_ROWS = 100_000`, up to ~200 requests per filter set, run twice for the to/from union). It is pre-existing, out of scope here, and tracked separately. **Accepted trade, stated plainly: label counts are now a SAMPLE over the most recent 5,000 messages, not a census** — on a larger store a count is a lower bound and a label used only in old mail can be absent. The self-hosted seam has no server-side label aggregate (the local seam answers this with one SQL `GROUP BY`), so exact counts are obtainable only by dragging the whole mailbox over HTTP. Measured after the fix on the same machine, same pty harness, same `/proc` method, against the same production hosted mailbox over the self-hosted seam (the only path this fix touches): 13.1% / 5.2% / 14.2% / 4.7% across the identical four windows, with no climb and flat RSS. **The defensible before/after pair is source-vs-source through one harness: 68.8% -> 4.4%.** The 92.3% figure was taken against the _installed 1.3.6 dist bundle_ rather than this branch's source, so 92.3% -> 4.7% spans two build artefacts and is quoted here as an order-of-magnitude indication only, not as a controlled comparison. The controlled measurement of the mechanism itself is the request count against a 340-page store: **340 requests / 118.2 MB before, 10 requests / 3.4 MB after.**
 - **test(ui): seven hermetic regression tests pin the budget, the coalescing and the cache lifecycle.** THREE of them measure the pathology directly, and fail against the pre-fix implementation with its own numbers: a single `listLabelSummaries()` call issues **200** requests over a 200-page store, three concurrent calls issue **600**, and a repeat call issues **400** instead of reusing 10. A fourth **passes before and after by design** — it holds the normal path (a store inside the budget still returns exact counts with `search`/`limit` applied) so the budget cannot be satisfied by returning nothing; it is an anti-vacuity guard, not a regression test, and is described that way rather than counted among the failing three. Adversarial review then proved those four pinned the cache only as "a cache exists" — an implementation with an infinite TTL and no invalidation passed all of them, which would freeze the sidebar counts forever — so three more pin the cache's lifecycle: that it expires, that a write drops it, and that a write landing MID-WALK is fenced. Each was mutation-tested: the infinite-TTL/no-invalidation implementation fails two of them, and removing the generation fence fails the third.
-- **fix(ui): `emails ui` could not start in any real terminal — the packaged runtime loaded a foreign OpenTUI native library.** 1.3.4 exited immediately with `Failed to initialize OpenTUI render library: Symbol "createEventSink" not found in .../@opentui/core-linux-arm64/libopentui.so`. `@opentui/core` loads its prebuilt renderer with a bare `import("@opentui/core-<platform>")` from inside its own module, so the version-matched prebuilt in `@opentui/core/node_modules/` is what answers. `scripts/build-tui-runtime.ts` inlined core into `dist/cli/ui-runtime-bundle.js` while listing the eight platform packages as **external**, which moved that import to `dist/cli/` — it then resolved against the installed package's *parents*, never saw core's own prebuilt, and bound to whatever copy the install had hoisted (here `0.1.105`, an ABI predating the symbol core calls). The install was version-correct throughout; only the loaded `.so` was wrong. `@opentui/core` is now external — it is already a declared runtime dependency, and keeping it in `node_modules` keeps the JS and the library it `dlopen`s in one dependency tree. `web-tree-sitter` and `bun-ffi-structs` were dropped from the same list for the same reason: both are core's dependencies, neither is declared by `@hasna/emails`, so externalising them pointed at unowned copies too. Declaring the eight platform packages as our own `optionalDependencies` was rejected — it copies upstream's platform matrix into this manifest and rots on every core bump, while leaving the resolution anchor wrong. `patchBundledNativeAssetPath()` is gone with the bundling it patched around, and the runtime bundle drops from 3.4 MB to 2.1 MB.
+- **fix(ui): `emails ui` could not start in any real terminal — the packaged runtime loaded a foreign OpenTUI native library.** 1.3.4 exited immediately with `Failed to initialize OpenTUI render library: Symbol "createEventSink" not found in .../@opentui/core-linux-arm64/libopentui.so`. `@opentui/core` loads its prebuilt renderer with a bare `import("@opentui/core-<platform>")` from inside its own module, so the version-matched prebuilt in `@opentui/core/node_modules/` is what answers. `scripts/build-tui-runtime.ts` inlined core into `dist/cli/ui-runtime-bundle.js` while listing the eight platform packages as **external**, which moved that import to `dist/cli/` — it then resolved against the installed package's _parents_, never saw core's own prebuilt, and bound to whatever copy the install had hoisted (here `0.1.105`, an ABI predating the symbol core calls). The install was version-correct throughout; only the loaded `.so` was wrong. `@opentui/core` is now external — it is already a declared runtime dependency, and keeping it in `node_modules` keeps the JS and the library it `dlopen`s in one dependency tree. `web-tree-sitter` and `bun-ffi-structs` were dropped from the same list for the same reason: both are core's dependencies, neither is declared by `@hasna/emails`, so externalising them pointed at unowned copies too. Declaring the eight platform packages as our own `optionalDependencies` was rejected — it copies upstream's platform matrix into this manifest and rots on every core bump, while leaving the resolution anchor wrong. `patchBundledNativeAssetPath()` is gone with the bundling it patched around, and the runtime bundle drops from 3.4 MB to 2.1 MB.
 - **test(ui): the build contract asserted the broken configuration, so the suite stayed green through a UI that could not start.** It required `scripts/build-tui-runtime.ts` to contain `"@opentui/core-linux-arm64"` and `...nativePackages` — the exact lines that caused the crash — because every assertion was a text match on the build script rather than a check of the artifact it produces. New `src/cli/tui/ui-runtime-contract.test.ts` rebuilds the bundle (never trusting a stale one), parses its imports with `Bun.Transpiler.scanImports` rather than a regex over 3 MB of bundled output, and fails if any bare import is not a declared runtime dependency of this package — the general form of the defect, not just the OpenTUI instance. It carries a positive control proving the check reports an undeclared external and passes a declared one, and a behavioural guard that a non-interactive `emails ui` exits non-zero, so a refusal can never be read as a UI that ran.
 - feat(cli): every inbox and sync command now accepts `-j, --json`, emits one structured result document, and reports machine-readable failures without changing the existing human output.
 
@@ -38,11 +47,11 @@ All notable changes to `@hasna/emails` are documented here.
 - **fix(events): an event listing that could not be enumerated to the end is refused, not windowed and returned.** `listFilteredEvents` computed `enumerateSelfHostedRows(...).complete` and discarded it, so once `events` — one row per delivery, open and click, the fastest-growing table in the system — crossed the pager's 20_000-row budget, or the server's paging window shifted, `export events` (MCP) and the dashboard events route handed back a JSON/CSV file that looked complete and was not. It now throws, naming the cause and the way to narrow the read. The filters `/v1/events` declares (`email_id`, `provider_id`, single `type`) are sent SERVER-side so a narrow read stays inside the budget, and are still applied client-side so the result is unchanged against a server that ignores unknown query params.
 - fix(domains): `emails domain list` enumerates instead of single-calling. The server clamps every page to 500 and defaults to 100, so `--limit 1000` returned 500 rows as if that were the page and an unlimited `listDomains()` returned 100. A table that fits in one page still costs exactly one request. The remaining `.list({ limit: 1000 })` call sites are tracked as follow-up.
 - test: the `/v1` stub records the query string of every generic list request (`GET /v1/__list_queries?resource=`), so a test can prove a client pushed its filters server-side instead of dragging the whole table over and filtering in memory.
-- **fix(status): a per-domain count derived from an incomplete read is no longer published as if it were measured.** Review found the third version of the same defect inside this PR's own new code: `domains.usable[].ready_addresses` aggregates the WHOLE address inventory but is published inside the `domains` block, and it was gated only on the address read being *available* — which stays true for a partial enumeration. So a shifted `/v1/addresses` paging window produced an exact-looking `1186` against a true `1200`, with `domains.availability.complete: true`, no `≥` (renderers key that off the domain block, and a domain row carries no availability record of its own) and no `gaps` entry; a domain whose address rows all fell in the skipped window rendered a confident `0`, indistinguishable from a domain that genuinely has none. The field is now gated on the address enumeration being **complete**, not merely available, and the resulting `null` is registered under `gaps["domains.usable[].ready_addresses"]` carrying the address block's own `enumeration_unstable`/`enumeration_cap_exceeded` code.
+- **fix(status): a per-domain count derived from an incomplete read is no longer published as if it were measured.** Review found the third version of the same defect inside this PR's own new code: `domains.usable[].ready_addresses` aggregates the WHOLE address inventory but is published inside the `domains` block, and it was gated only on the address read being _available_ — which stays true for a partial enumeration. So a shifted `/v1/addresses` paging window produced an exact-looking `1186` against a true `1200`, with `domains.availability.complete: true`, no `≥` (renderers key that off the domain block, and a domain row carries no availability record of its own) and no `gaps` entry; a domain whose address rows all fell in the skipped window rendered a confident `0`, indistinguishable from a domain that genuinely has none. The field is now gated on the address enumeration being **complete**, not merely available, and the resulting `null` is registered under `gaps["domains.usable[].ready_addresses"]` carrying the address block's own `enumeration_unstable`/`enumeration_cap_exceeded` code.
 - **BREAKING (self-hosted auth): `EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS` and `EMAILS_AUTH_FROM` are now required and the service refuses to boot without them.** Both previously defaulted to the publisher's own infrastructure, and the allowlist default shipped in the published bundles as a `DEFAULT_ALLOWED_DOMAINS` literal in both `dist/server/serve-*.js` and `dist/cli/serve-*.js`. `isAllowedSignupEmail` gates eight auth paths — signup, login, forgot-password, reset, verify-email resend, email identities, tenant creation, invites — and a non-match answers a deliberately opaque 403 that never says why. The net effect for any third-party self-hoster was that their own staff could not sign up or log in at all, with no diagnostic. The fix fails **closed** with an error naming the missing variable: not permit-all (which would silently widen every existing deployment's signup surface on upgrade) and not a vendor default. `buildSelfHostedService` asserts the allowlist at boot, so the failure is a named startup error rather than a per-request 403. Set both variables before upgrading; see `docs/SELF_HOSTED_RUNTIME.md`, `docker-compose.yml`, and `deploy/aws` (`auth_allowed_email_domains`).
 - fix(oss boundary): the publisher's infrastructure no longer ships in the artifact. `tsc --emitDeclarationOnly` preserves JSDoc, so `dist/server/self-hosted/auth/mailer.d.ts` shipped the name of a private SES account; those comments are now operator-neutral. The AWS account id, private account/environment names, and vendor hostnames are gone from tracked sources (design doc, CLI error text, test fixtures), replaced by AWS's documented `111122223333` placeholder and RFC 2606 documentation domains.
 - test(oss boundary): `src/no-cloud-boundary.test.ts` and the packed-artifact scanner now ban bare vendor hostnames, including the wildcard-glob form — the existing rule only matched URL form, which is how these two defaults slipped through, private account/environment names, and any 12-digit AWS account id other than the documented placeholders. The account-id rule deliberately avoids `\b[0-9]{12}\b`, which false-positives on UUID fixtures because `-` is a word boundary.
-- **fix(cli): domain warming is reachable again.** All six warming commands — `emails domain warm`, `warm-status`, `warm-list`, `warm-pause`, `warm-resume`, `warm-complete` — were unconditional `throw`s claiming warming "is not available in the self-hosted client; it runs on the self-hosted server". The claim was false in both directions: the throws were unconditional so the commands also failed in local mode, and the warming repository (`src/db/warming.ts` over local SQLite or `/v1/warming`), the `warming_schedules` table in SQLite *and* Postgres, the ramp math, and the server-side `warming_limit_exceeded` enforcement all already existed — the MCP twins were calling them successfully. The commands now call that repository, so an operator can start, inspect, pause, resume, and complete a ramp from the CLI in every configuration.
+- **fix(cli): domain warming is reachable again.** All six warming commands — `emails domain warm`, `warm-status`, `warm-list`, `warm-pause`, `warm-resume`, `warm-complete` — were unconditional `throw`s claiming warming "is not available in the self-hosted client; it runs on the self-hosted server". The claim was false in both directions: the throws were unconditional so the commands also failed in local mode, and the warming repository (`src/db/warming.ts` over local SQLite or `/v1/warming`), the `warming_schedules` table in SQLite _and_ Postgres, the ramp math, and the server-side `warming_limit_exceeded` enforcement all already existed — the MCP twins were calling them successfully. The commands now call that repository, so an operator can start, inspect, pause, resume, and complete a ramp from the CLI in every configuration.
 - **fix(warming): the reported daily limit now matches the limit the server enforces.** `getTodayLimit` anchored the ramp on **local** midnight while `warmingLimit()` in the self-hosted store anchors on the **UTC** calendar date (as does the sent-mail count it is compared against). At any non-zero UTC offset the client was a day ahead, reporting up to twice the allowed volume on roughly half the days of a ramp — an operator reading "today's limit: 400" would be refused with `warming_limit_exceeded` at 200. Anchoring is now UTC everywhere, via one exported `warmingDayIndex`. An unusable `start_date` (reachable: the Postgres schema relaxed it to nullable and the `/v1` client coerces null to `""`) reports day 1 with a limit of **0** instead of emitting `NaN` into JSON and rendered tables and silently granting the full target.
 - **feat(cli): `emails domain warm-delete <domain>`** exposes `deleteWarmingSchedule`, the fifth warming repository operation and previously the only one with no CLI surface. It is the only way to retarget a domain, because `warm` refuses to shadow an existing schedule and pause/resume/complete only move status. Confirmation-guarded like `domain remove`.
 - fix(cli): a warming command aimed at a domain with no schedule now exits 1 with code `not_found` and the exact `emails domain warm <domain> --target <n>` fix command, instead of printing a warning and exiting 0. `warm` refuses to shadow an existing schedule for the same domain (the `/v1` store has no client-side uniqueness check, so a second create would leave two rows for one domain and reads would pick arbitrarily), and `--target`/`--start-date`/`--status` are validated before anything is written.
@@ -105,9 +114,9 @@ All notable changes to `@hasna/emails` are documented here.
 - **fix(self-hosted): a message that provably left is no longer parked without the proof.** On the provider-accepted-then-ledger-write-failed path the row was written `send_state = 'uncertain'` with `provider_message_id = NULL`, even though the provider had just returned an id. `emails log` then rendered a delivered message in the not-delivered style, and because `reconcile --outcome sent` requires the provider message id, the only outcome an operator could actually record was `not_sent` — filing a delivered message as failed, the exact inversion this release exists to prevent. `markSendUncertain` now persists the provider message id and a `send_uncertain_reason` note on the row. Both tests that covered this path asserted the HTTP response only; they now assert the row and the reconcile round-trip.
 - fix(providers): an access-key-only SES provider row whose access key id matches a COMPLETE ambient pair resolves to that ambient identity instead of throwing. Rows in that shape predate the both-or-neither rule (`provider add --access-key` with no secret relied on the environment) and the identity is the same one named twice, not a mixed one. Every other partial pair — a different ambient identity, or no ambient secret at all — is still refused, and the error now names the exact remediation command.
 - **fix(self-hosted): SES credentials are actually used (2026-07-25 incident, cause 2).** `buildSelfHostedSender` hardcoded `access_key: null, secret_key: null`, so the SES client ALWAYS fell through to the AWS default chain — the deployment IAM role — no matter what credentials had been configured. The sender now signs with `EMAILS_SES_ACCESS_KEY_ID` + `EMAILS_SES_SECRET_ACCESS_KEY` when both are present in the server environment, and with the deployment IAM role otherwise (unchanged default for existing self-hosters). Half a pair is a hard startup error rather than a silent completion from the ambient chain. The names are scoped on purpose: the generic `AWS_*` names would re-point every AWS client in the process (S3 inbound, SQS ingest), not just SES. Optional `EMAILS_SES_CONFIGURATION_SET` is now threaded into `SendEmailCommand` so SES metrics are attributable in a shared account.
-- **fix(providers): credentials are never silently dropped again.** `SESAdapter` used to pair `provider.access_key` with the *ambient* `AWS_SECRET_ACCESS_KEY` when only one half was present — signing with an identity belonging to neither source. Credential resolution is now a single exported rule (`resolveSesCredentials`): a provider row's pair is used exclusively, a partial pair is rejected, and only a complete ambient pair (with session token) is used as a fallback.
-- **fix(cli): `emails provider add/update` no longer lies about credentials.** In self_hosted mode the credential flags were accepted, stripped by the client before the request, and the command then reported `Provider credentials are invalid: Could not load credentials from any providers` — the credentials were never transmitted and were never invalid. The command now (a) refuses `--api-key/--access-key/--secret-key` against a self-hosted server with an error naming the server-side variables to set instead, and (b) validates with the credentials the operator actually supplied, *before* persisting, instead of validating the stored (credential-free) row against this machine's ambient AWS chain. When there is nothing to validate it says so rather than implying a check happened.
-- **feat(self-hosted): reconcile sends with an unknown outcome (2026-07-25, criterion 6).** New `GET /v1/messages/send-intents/uncertain` and `POST /v1/messages/send-intents/reconcile`, plus `emails send-intent uncertain` and `emails send-intent reconcile <id> --outcome sent|not-sent --evidence …`. Reconciliation is one row at a time, guarded on `send_state = 'uncertain'` (a proven outcome is never overwritten), requires the provider message id to assert `sent`, requires a non-empty evidence note, and persists the outcome, the evidence and the resolving principal on the row. Previously there was no way to even *list* the messages whose delivery was unknown.
+- **fix(providers): credentials are never silently dropped again.** `SESAdapter` used to pair `provider.access_key` with the _ambient_ `AWS_SECRET_ACCESS_KEY` when only one half was present — signing with an identity belonging to neither source. Credential resolution is now a single exported rule (`resolveSesCredentials`): a provider row's pair is used exclusively, a partial pair is rejected, and only a complete ambient pair (with session token) is used as a fallback.
+- **fix(cli): `emails provider add/update` no longer lies about credentials.** In self_hosted mode the credential flags were accepted, stripped by the client before the request, and the command then reported `Provider credentials are invalid: Could not load credentials from any providers` — the credentials were never transmitted and were never invalid. The command now (a) refuses `--api-key/--access-key/--secret-key` against a self-hosted server with an error naming the server-side variables to set instead, and (b) validates with the credentials the operator actually supplied, _before_ persisting, instead of validating the stored (credential-free) row against this machine's ambient AWS chain. When there is nothing to validate it says so rather than implying a check happened.
+- **feat(self-hosted): reconcile sends with an unknown outcome (2026-07-25, criterion 6).** New `GET /v1/messages/send-intents/uncertain` and `POST /v1/messages/send-intents/reconcile`, plus `emails send-intent uncertain` and `emails send-intent reconcile <id> --outcome sent|not-sent --evidence …`. Reconciliation is one row at a time, guarded on `send_state = 'uncertain'` (a proven outcome is never overwritten), requires the provider message id to assert `sent`, requires a non-empty evidence note, and persists the outcome, the evidence and the resolving principal on the row. Previously there was no way to even _list_ the messages whose delivery was unknown.
 - fix(cli): `emails send --provider <id>` was parsed and then discarded in both modes. It is now honoured in local mode and rejected with an explicit error in self_hosted mode (the server selects the outbound provider), so it can never be silently ignored.
 - fix(self-hosted): corrected the comment in `auth/mailer.ts` that asserted the sender "already targets" a specific SES account via the deployment role. It does not, and there is no cross-account assume-role anywhere in the codebase; operators trusted the claim.
 - fix(build): `scripts/generate-selfhost-sdk.ts` anchored its nullable-`message` patches on whole interface literals, so adding a sibling field to a response schema broke SDK generation and the `verify` CI job. The patches are now anchored on the interface name and the property.
@@ -134,7 +143,7 @@ All notable changes to `@hasna/emails` are documented here.
 - add durable idempotent self-hosted sends, authenticated attachment retrieval, mailbox mutations, signed replay-safe webhooks, and explicit compatibility for previously issued API keys.
 - harden deployment with separate migration/runtime database roles, readiness health checks, immutable container/action pins, and explicit local/self-hosted mode validation.
 - fix: `inbox read` no longer claims self-hosted attachments cannot be downloaded. Each metadata entry now shows its authenticated download index and the exact `inbox attachment … --download` command. Messages ingested with their payload download immediately; metadata-only imports still answer with an explicit "no stored content" error, so the hint is an instruction, not a guarantee that the bytes exist.
-- fix: attachment download indexes are carried through `mergeAttachmentDetails` instead of being inferred from the rendered position. A metadata entry with an empty filename is skipped for display, so any renderer counting its own rows advertised an index that downloads a *different* attachment.
+- fix: attachment download indexes are carried through `mergeAttachmentDetails` instead of being inferred from the rendered position. A metadata entry with an empty filename is skipped for display, so any renderer counting its own rows advertised an index that downloads a _different_ attachment.
 - fix: keep nameless inbound attachment parts addressable in the self-hosted client (`filename: ""` now falls back to `attachment-N`, matching `db/inbound.remote.ts`) instead of dropping them and shifting every later download index.
 - fix: `listReplies` / `listReplyPromptParts` re-read the selected replies by id. They matched on list rows, which no longer carry `body_text`, so reply bodies and reply prompts came back empty against a current serve.
 - fix: self-hosted attachment metadata now states whether the payload bytes actually exist (`content_available`), on the per-message detail read, `GET /v1/attachments` and `POST /v1/attachments/batch`. Historical/legacy imports carry filename/content_type/size for bytes that were never stored, so every metadata surface — and the CLI on top of it — presented 56k unrecoverable attachments as one `--download` away; the fetch then failed. `inbox read` and `inbox attachment` now say "metadata only; payload not stored — not downloadable" for those entries and suppress the download hint, while attachments with stored bytes are advertised exactly as before. A serve that does not report availability still renders as before (unknown ≠ unavailable). Fixes #36.
@@ -143,12 +152,15 @@ All notable changes to `@hasna/emails` are documented here.
 - test: the shared `/v1` stub now returns real lean list rows (no bodies, no headers, no attachments array; `snippet` + `attachment_count` instead). Modelling the pre-slimming row is what let published `1.2.6` report `attachments: 0` against a live serve while every test passed.
 
 ## [0.6.117] - 2026-07-09
+
 - chore: rename package back to `@hasna/emails` and free the `mailery`/`mailery-mcp`/`mailery-serve` bins for the separate cloud CLI (`@hasnatools/mailery`). Remaining bins: `emails`, `emails-mcp`, `emails-serve`. The Mailery product/brand name, `mailery.co`, and cloud API-key app id are unchanged.
 
 ## [0.6.69] - 2026-06-29
+
 - fix: block raw S3 bucket sync when configured child prefixes could bypass retired source lifecycle rules.
 
 ## [0.6.68] - 2026-06-29
+
 - fix: repair inbound-derived mailbox/source canonical state for orphaned provider history.
 - fix: keep canonical message/state rows aligned when local inbound mail is deleted or cleared.
 - fix: block inactive or ambiguous Gmail live-source resolution and retired S3 source bypasses.
@@ -157,27 +169,33 @@ All notable changes to `@hasna/emails` are documented here.
 - docs: document the Bun runtime requirement for global installs.
 
 ## [0.6.67] - 2026-06-29
+
 - fix: backfill legacy SES/S3 object-key rows to exact `raw_s3_url` provenance.
 - fix: preserve configured S3 source counts after exact S3 source filtering.
 
 ## [0.4.21] - 2026-03-14
+
 - feat: auto-unenroll from active sequences when contact replies to an email
 - chore: update CHANGELOG for v0.4.18-0.4.20
 
 ## [0.4.20] - 2026-03-14
+
 - feat: webhook signature verification — Resend (svix HMAC-SHA256 + replay protection), SES/SNS structure check
 - feat: `emails serve --webhook-secret whsec_...` for verified webhook endpoint
 - feat: `emails send --dry-run` — preview what would be sent without sending
 - fix: export `verifyResendSignature`, `verifySnsStructure` from library
 
 ## [0.4.19] - 2026-03-14
+
 - docs: add `AGENTS.md` — 202-line AI agent guide covering 59 MCP tools and all workflows
 
 ## [0.4.18] - 2026-03-14
+
 - feat: `emails conversation <id>` — full thread view (sent email + replies)
 - chore: update CHANGELOG for v0.4.14-v0.4.17
 
 ## [0.4.17] - 2026-03-14
+
 - feat: reply tracking — inbound emails auto-linked to sent emails via `In-Reply-To`/`References` headers
 - feat: `emails replies <id>` — show conversation thread for a sent email
 - feat: `emails show` now displays reply count
@@ -185,13 +203,16 @@ All notable changes to `@hasna/emails` are documented here.
 - fix: `in_reply_to_email_id` added to `InboundEmail` interface (migration 14)
 
 ## [0.4.16] - 2026-03-14
+
 - fix: MCP `send_email` now enforces domain warming limits (CLI parity)
 
 ## [0.4.15] - 2026-03-14
+
 - feat: domain warming limits enforced on `emails send` — blocks at daily limit, warns at 80%
 - feat: `--force` flag bypasses warming check
 
 ## [0.4.14] - 2026-03-14
+
 - feat: domain warming schedules — exponential ramp-up for new sending domains
 - feat: `emails domain warm/warm-status/warm-list/warm-pause/warm-resume`
 - feat: MCP `create_warming_schedule`, `get_warming_status`, `list_warming_schedules`, `update_warming_status`
@@ -200,54 +221,65 @@ All notable changes to `@hasna/emails` are documented here.
 - DB: migration 13 (warming_schedules table)
 
 ## [0.4.13] - 2026-03-14
+
 - feat: `verify_email_address` MCP tool (format + MX + SMTP probe)
 - feat: `batch_send` MCP tool (send template to list of recipients)
 - docs: added `CHANGELOG.md`
 - chore: 54 MCP tools total
 
 ## [0.4.12] - 2026-03-14
+
 - fix: MCP `send_email` now uses `sendWithFailover` wrapper (was bypassing failover)
 - feat: export sequences, inbound, tracking, send modules from package root
 - feat: added `getFailoverProviderIds` export
 
 ## [0.4.11] - 2026-03-14
+
 - test: add `config.ts` tests (8 tests covering all config functions)
 
 ## [0.4.10] - 2026-03-14
+
 - fix: `emails serve` now binds to `127.0.0.1` by default (use `--host 0.0.0.0` for all interfaces)
 - feat: `emails serve --all` starts HTTP + webhook + SMTP listeners in one command
 
 ## [0.4.9] - 2026-03-14
+
 - refactor: split CLI `index.tsx` (2416 lines) into 14 modular command files
 - fix: open redirect vulnerability in tracking `/track/click` endpoint
 - fix: `require("net")` → ESM `import` in `email-verify.ts`
 
 ## [0.4.8] - 2026-03-14
+
 - feat: local open/click tracking (`--track-opens --track-clicks` on send)
 - feat: `emails sequence enroll-bulk --csv` for bulk CSV enrollment
 - feat: Chart.js analytics charts in dashboard (daily volume, delivery doughnut, hourly bar)
 - feat: Inbound + Sequences pages in dashboard
 
 ## [0.4.7] - 2026-03-14
+
 - feat: email sequences / drip campaigns (`emails sequence create/step/enroll`)
 - feat: `emails verify-email` — format + MX + optional SMTP probe
 - docs: README updated for all v0.4.x features
 
 ## [0.4.6] - 2026-03-14
+
 - feat: inbound email processing (SMTP server port 2525, webhook endpoint)
 - feat: `emails inbound listen/list/show/open/clear`
 - feat: multi-provider failover (`emails config set failover-providers id1,id2`)
 
 ## [0.4.5] - 2026-03-14
+
 - feat: bounce/complaint rate alerts with configurable thresholds
 - feat: idempotency keys on send (`--idempotency-key`)
 - DB: migration 10 (idempotency_key column on emails)
 
 ## [0.4.4] - 2026-03-14
+
 - feat: `List-Unsubscribe` header injection (RFC 8058) via `--unsubscribe-url`
 - feat: custom `headers` on `SendEmailOptions`
 
 ## [0.4.3] - 2026-03-14
+
 - feat: sandbox provider (`emails provider add --type sandbox`)
 - feat: dashboard improvements (search, sync, auto-refresh, DNS modal, Contacts/Templates pages)
 - feat: 20+ missing REST endpoints (contacts, templates, groups, sequences, analytics, sandbox, email-content)
@@ -256,15 +288,18 @@ All notable changes to `@hasna/emails` are documented here.
 - DB: migration 9 (expanded provider type CHECK to include gmail/sandbox)
 
 ## [0.4.2] - 2026-03-14
+
 - fix: 25MB attachment size limit, max 10 attachments per send
 - feat: rate limiting on server endpoints (pull: 5/min, verify: 10/min)
 
 ## [0.4.1] - 2026-03-14
+
 - test: comprehensive Resend adapter tests (72 tests)
 - test: comprehensive SES adapter tests (42 tests)
 - docs: README.md created
 
 ## [0.4.0] - 2026-03-14
+
 - feat: 15 QoL features (scheduling, batch send, groups, analytics, webhook, doctor, shell completion)
 - feat: email templates with variable substitution
 - feat: contacts tracking with auto-suppress on 3+ bounces
@@ -272,14 +307,17 @@ All notable changes to `@hasna/emails` are documented here.
 - 293 tests
 
 ## [0.3.0] - 2026-03-14
+
 - feat: 13 QoL features (config, log, test, templates, contacts, export, health, colored output)
 - 175 tests
 
 ## [0.2.0] - 2026-03-14
+
 - feat: Gmail provider via OAuth2
 - feat: `connect-aws` SES support added to open-connectors
 
 ## [0.1.0] - 2026-03-14
+
 - feat: initial release — Resend + AWS SES providers
 - feat: CLI + MCP server + HTTP dashboard
 - feat: domains, addresses, emails, events, sync

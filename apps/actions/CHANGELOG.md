@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- @hasna/contracts@0.11.2
+
 All notable changes to `@hasna/actions` are documented here.
 
 ## 0.2.0

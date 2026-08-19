@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- cef7421: Align the daemon/queue status vocabulary to the fleet daemon/queue taxonomy (admitted/leased/terminal; lease generation, fencing token, attempt identity, terminal receipts).
+
+  - Queue-entry statuses: `queued`/`retrying` -> `admitted` (bounded retries re-admit with a distinguishable attempt number), `claimed` -> `leased`. `QueuedAction` surfaces `leasedBy`/`leasedAt`, a monotonic `leaseGeneration` (was `claim_version`), and `fencingToken` on leased entries.
+  - Store verbs renamed: `admitAction` (was `enqueueAction`), `leaseNextAction` (was `claimNextAction`), `readmitDeadAction`/`readmitPartialAction` (were `requeue*`), `requireQueueEntry`/`listQueueEntries` (were `requireQueuedAction`/`listQueuedActions`).
+  - Daemon observation surface: `automations-daemon status` reports `queueDepth`, `admitted`, `leased`, `terminal`, and `deadLetter` counts (was `queuedActions`/`deadActions`); per-entry lease health (`leasedBy`, `leaseExpiresAt`, `leaseGeneration`) is exposed on every queue listing.
+  - CLI: `automations queue claim` -> `automations queue lease`. Worker run receipts use `admitted` (was `enqueued`).
+  - Persisted schema migrated in place, no data deleted: SQLite schema 6 -> 7 renames the claim-family columns and remaps stored status values; PostgreSQL gains migration `0004_taxonomy_queue_vocabulary` (columns, status CHECK, and the partial indexes that encoded the old vocabulary). Existing migration checksums are unchanged.
+  - @hasna/contracts@0.11.2
+  - @hasna/actions@0.2.1
+
 All notable changes to `@hasna/automations` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -8,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Removed (BREAKING)
+
 - The `hasna-automations` bin alias is removed from the published package; use
   `automations` instead. `@hasna/contracts` repo-conformance (`bins_allowlisted`)
   only permits `automations` and `automations-daemon`. Anything resolving
@@ -16,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bump (0.3.0)**, not a patch (#10).
 
 ### Added
+
 - `hasna.contract.json` manifest, `contracts repo-conformance` wired into
   `contracts:conformance`, and a published-artifact scan (`scan:artifact`)
   wired into `prepack`/`prepublishOnly` (#10).
@@ -25,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release cutting the work merged to `main` after `0.1.3` (PR-drain).
 
 ### Added
+
 - Launch follow-up recipe pack: T+1/3/7 engagement, Mailery enrollment, and
   uptime watch-window automations, exposed via `automations recipes list` and
   `automations recipes render launch-followup` (#1).
@@ -33,9 +50,11 @@ Release cutting the work merged to `main` after `0.1.3` (PR-drain).
 - Release webhook smoke checklist and `smoke:webhook-release` script (#7).
 
 ### Fixed
+
 - Removed a duplicate CLI entry from the packaged bundle (#6).
 
 ### Docs
+
 - Reconciled the automations package plan and canonical repository metadata (#2, #8).
 
 ## [0.1.3] - 2026-06-29

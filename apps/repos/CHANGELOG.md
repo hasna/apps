@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.50
+
+### Patch Changes
+
+- abd8e28: Worktree reconciliation handles dead gitdir pointers: `repos worktree list` names them with a `dead-gitdir` issue class (shape-valid `.git` pointers whose target gitdir is gone after a parent-checkout move — measured at ~1,600 of ~2,000 entries under the live root after the 2026-08-14 monorepo move); `repos worktree remove` refuses them with `WORKTREE_DEAD_GITDIR` instead of reading every git guard as clean, classifying the worktree as landed-detached and failing at `git worktree remove` with an opaque `GIT_FAILED`; the new `--allow-dead-gitdir` flag archives the whole working tree (with a manifest and the dead pointer) before removing the directory, bypassing git because git cannot open it; `repos worktree adopt` refuses a dead-gitdir path and reports dead candidates as `skipped` in `--all` mode instead of leasing a worktree git can never verify.
+- ac211dd: repos pr-monitor verb: 8-class PR state monitor (migration v15 pr_monitor_state + base_ref_oid capture, verdict parser, classification engine with precedence, delta emitter with fingerprint dedupe, CLI verb `repos pr-monitor`, SDK export, pr_monitor MCP tool) powering the 5-minute fleet PR loop.
+- 831177e: fix(db): scope migration v15's post-migration verification to its own table instead of a whole-DB `PRAGMA foreign_key_check`, which could never pass on a registry carrying pre-existing orphan drift and bricked every repos verb on station01 (0.1.49). v15 adds no foreign keys, so the verify now asserts the pr_monitor_state shape it created and checks only that table's own FK constraints; the two pr_monitor_state index statements become `IF NOT EXISTS` so a re-run with the v15 DDL already applied (marker absent) is idempotent. The pre-existing 1560 orphans remain observable and are a separately tracked repair lane.
+- Updated dependencies [b630c48]
+  - @hasna/events@0.1.16
+
 ## 0.1.49
 
 Adds the `repos pr-monitor` PR-state monitor verb and its SDK/MCP surfaces (PR
@@ -287,7 +297,7 @@ Makes `repos prs` usable as a source of truth for pull requests (#26).
 - **The scanner no longer erases remote identities.** A failed `git remote get-url origin`
   read used to overwrite a known-good `remote_url` with NULL; supplying a remote that fails
   sanitization still clears it. `git -C` also searches upward, so a directory with a gutted
-  `.git` answered with its *ancestor's* remote — that read is now rejected unless git
+  `.git` answered with its _ancestor's_ remote — that read is now rejected unless git
   considers the path the top of its working tree.
 - **`open-repos.pr-queue.v1`** shares the de-duplicated listing, so the queue no longer
   spends its `limit` on duplicate copies, and task fingerprints name the repository that

