@@ -17,6 +17,13 @@ import { executeLoop } from "../lib/executor.js";
 import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { loopControlPlaneConfig, type RuntimeConfig } from "../lib/runtime-config.js";
+import { applyRunnerEnvFile } from "./env-file.js";
+import {
+  installRunnerStartup,
+  runnerServiceStatus,
+  startRunnerService,
+  stopRunnerService,
+} from "./install.js";
 import {
   buildStorageConnectionReport,
   storageConnectionReportLine,
@@ -71,6 +78,14 @@ export interface RunnerStatus {
   machineId?: string;
   state: RunnerState;
   storageConnection: StorageConnectionReport;
+  /** Claim scope from the runner env file or environment, when configured. */
+  claimScope?: RunnerClaimScope;
+  /** Service-unit state when `loops-runner install` has run. */
+  serviceState: {
+    installed: boolean;
+    active: boolean | null;
+    unitPath?: string;
+  };
 }
 
 export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID): RunnerStatus {
@@ -91,12 +106,17 @@ export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || 
     apiKeyPresent: controlPlane.apiKeyPresent,
     databaseUrlPresent: controlPlane.databaseUrlPresent,
   };
+  const claimScopeValue = process.env.LOOPS_RUNNER_CLAIM_SCOPE?.trim();
   return {
     ok: state === "file_authoritative" || state === "api_ready",
     service: "loops-runner",
     machineId,
     state,
     storageConnection: buildStorageConnectionReport(config),
+    ...(claimScopeValue === undefined || !RUNNER_CLAIM_SCOPES.includes(claimScopeValue as RunnerClaimScope)
+      ? {}
+      : { claimScope: claimScopeValue as RunnerClaimScope }),
+    serviceState: runnerServiceStatus(),
   };
 }
 
@@ -652,12 +672,44 @@ function printStatus(opts?: { json?: boolean }): void {
 }
 
 export async function main(argv = process.argv): Promise<void> {
+  // The per-station mode-600 runner env file is the deployment config surface:
+  // the control-plane URL and key plus the machine id and claim scope. Apply it
+  // before parsing so every verb (run, status, ...) sees the deployed config
+  // without the variables needing to exist in the caller's environment.
+  applyRunnerEnvFile();
   await program.parseAsync(argv);
 }
 
 program.action(() => printStatus());
 
 program.command("status").option("-j, --json", "print JSON").action((opts) => printStatus(opts));
+
+program
+  .command("install")
+  .description(
+    "install the package-owned runner service (systemd-user unit on Linux, launchd plist on macOS) "
+      + "plus the mode-600 per-station env file; the credential lives in the env file, never in the unit",
+  )
+  .option("--claim-scope <scope>", "fleet (default) or bound; written into the env file and the service unit")
+  .option("--machine-id <id>", "machine id used as the runner id (default: hostname)")
+  .action((opts) => {
+    const claimScope =
+      opts.claimScope === undefined || opts.claimScope === "" ? undefined : resolveClaimScope(opts.claimScope, "claimScope");
+    const result = installRunnerStartup({
+      cliEntry: process.argv[1] ?? "loops-runner",
+      claimScope,
+      machineId: opts.machineId,
+    });
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+program.command("start").description("enable and start the runner service").action(async () => {
+  console.log(JSON.stringify(startRunnerService(), null, 2));
+});
+
+program.command("stop").description("stop the runner service (the update path is version bump + restart)").action(async () => {
+  console.log(JSON.stringify(stopRunnerService(), null, 2));
+});
 
 program
   .command("run-once")

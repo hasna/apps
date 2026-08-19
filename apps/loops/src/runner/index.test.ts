@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
+import { applyRunnerEnvFile } from "./env-file.js";
 import { logRunnerCommandFailure, runRunnerLoop, runRunnerOnce, runnerStatus } from "./index.js";
 
 function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>, principalId: string, now?: () => Date) {
@@ -624,5 +625,72 @@ describe("loops-runner", () => {
       })).rejects.toThrow("requires a control plane advertising runner.claimScope");
       expect(paths.some((path) => path.endsWith("/version"))).toBe(true);
     });
+  });
+});
+
+describe("runner env-file integration", () => {
+  const RUNNER_ENV_KEYS = ["HASNA_LOOPS_API_URL", "HASNA_LOOPS_API_KEY", "LOOPS_RUNNER_MACHINE_ID", "LOOPS_RUNNER_CLAIM_SCOPE"] as const;
+
+  function withRunnerEnv(dataDir: string, contents: string): () => void {
+    const previousDataDir = process.env.LOOPS_DATA_DIR;
+    const previousKeys: Record<string, string | undefined> = {};
+    for (const key of RUNNER_ENV_KEYS) previousKeys[key] = process.env[key];
+    process.env.LOOPS_DATA_DIR = dataDir;
+    for (const key of RUNNER_ENV_KEYS) delete process.env[key];
+    mkdirSync(dataDir, { recursive: true });
+    const path = join(dataDir, "runner.env");
+    writeFileSync(path, contents, { mode: 0o600 });
+    chmodSync(path, 0o600);
+    return () => {
+      if (previousDataDir === undefined) delete process.env.LOOPS_DATA_DIR;
+      else process.env.LOOPS_DATA_DIR = previousDataDir;
+      for (const key of RUNNER_ENV_KEYS) {
+        if (previousKeys[key] === undefined) delete process.env[key];
+        else process.env[key] = previousKeys[key] as string;
+      }
+      rmSync(dataDir, { recursive: true, force: true });
+    };
+  }
+
+  test("runnerStatus reflects the mode-600 runner env file when the shell env is unset", () => {
+    const dataDir = `${tmpdir()}/loops-runner-status-${process.pid}-${Date.now()}`;
+    const restore = withRunnerEnv(
+      dataDir,
+      [
+        "HASNA_LOOPS_API_URL=https://loops.example.test",
+        `${RUNNER_ENV_KEYS[1]}=fixture-key-value`,
+        "LOOPS_RUNNER_MACHINE_ID=station01",
+        "LOOPS_RUNNER_CLAIM_SCOPE=fleet",
+      ].join("\n") + "\n",
+    );
+    try {
+      applyRunnerEnvFile();
+      const status = runnerStatus();
+      expect(status.ok).toBe(true);
+      expect(status.state).toBe("api_ready");
+      expect(status.machineId).toBe("station01");
+      expect(status.claimScope).toBe("fleet");
+    } finally {
+      restore();
+    }
+  });
+
+  test("runRunnerLoop stops promptly when the shutdown signal aborts", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const sleeps: number[] = [];
+    const result = await runRunnerLoop({
+      apiUrl: "https://loops.example.test",
+      apiKey: "test-key",
+      runnerId: "runner-loop",
+      maxIterations: 5,
+      signal: controller.signal,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+    expect(result.stopped).toBe(true);
+    expect(result.iterations).toBe(0);
+    expect(sleeps).toEqual([]);
   });
 });

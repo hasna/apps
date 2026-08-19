@@ -5,6 +5,28 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.5.2 (2026-08-19)
+
+The `loops-runner` binary gains the deployment verbs the daemon already had:
+`install`, `start`, `stop` and an extended `status`.
+
+- `loops-runner install` writes the package-owned runner service unit
+  (systemd-user on Linux, launchd plist on macOS) plus a mode-600 per-station
+  env file at `~/.hasna/loops/runner.env` (honoring `LOOPS_DATA_DIR`). The
+  control-plane URL and API key live only in that file — never in the unit —
+  via a systemd `EnvironmentFile` reference on Linux and the runner's own
+  env-file loader on macOS, so a package update (version bump + service
+  restart) never touches the credential. `--claim-scope fleet|bound` and
+  `--machine-id` are baked into the unit and the env file.
+- `loops-runner start` / `stop` manage the service unit
+  (`systemctl --user enable --now` / `stop`, or `launchctl bootstrap` /
+  `bootout`).
+- `loops-runner status` reports the runner connection state plus the service
+  unit state and the configured claim scope.
+- The runner CLI loads the mode-600 env file when the corresponding
+  environment variables are unset, and fails closed if that file is
+  group/other-readable.
+
 ## 0.5.1 (2026-08-15)
 
 ## 0.5.0 (unreleased)
