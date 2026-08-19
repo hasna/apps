@@ -59,6 +59,11 @@ const server = Bun.serve({
   },
 });
 
+// Exported so tests can bind the server on an ephemeral port (UI_LOCAL_PORT=0)
+// and stop it; the `ui serve` CLI path is unchanged — the module still starts
+// the server on import.
+export { server };
+
 console.log(`[ui-local] serving on http://0.0.0.0:${server.port}`);
 console.log(`  demo (our picker):       http://localhost:${server.port}/?picker=local`);
 console.log(`  demo (reference picker): http://localhost:${server.port}/?picker=reference`);

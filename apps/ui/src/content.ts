@@ -39,8 +39,8 @@ export function contentSetupMessage(contentDir = resolveContentDir()): string {
 }
 
 export class MissingContentMirrorError extends Error {
-  constructor(readonly contentDir: string) {
-    super(contentSetupMessage(contentDir));
+  constructor(readonly contentDir: string, detail?: string) {
+    super(detail ? `${detail}\n\n${contentSetupMessage(contentDir)}` : contentSetupMessage(contentDir));
     this.name = "MissingContentMirrorError";
   }
 }
@@ -51,4 +51,26 @@ export async function hasContentMirror(contentDir = resolveContentDir()): Promis
 
 export async function assertContentMirror(contentDir = resolveContentDir()): Promise<void> {
   if (!(await hasContentMirror(contentDir))) throw new MissingContentMirrorError(contentDir);
+  // A present-but-corrupt index must fail rather than silently passing: the
+  // index is the mirror's resource map, and a mirror whose map cannot be read
+  // is not a mirror. (Covered by a red-run regression test: fetchOne used to
+  // serve content while index.json was corrupt.)
+  const raw = await Bun.file(join(contentDir, "index.json")).text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new MissingContentMirrorError(contentDir, `Malformed ui.sh content mirror at ${contentDir}: index.json is not valid JSON.`);
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    Object.values(parsed as Record<string, unknown>).some((value) => typeof value !== "string")
+  ) {
+    throw new MissingContentMirrorError(
+      contentDir,
+      `Malformed ui.sh content mirror at ${contentDir}: index.json must map uidotsh URIs to relative file paths.`,
+    );
+  }
 }
