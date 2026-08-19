@@ -69,12 +69,16 @@ transported, or written.
 registered:
 
 ```
-accounts attachments calendar contacts conversations domains economy files
-identities instructions knowledge logs loops machines mailery mementos projects
+accounts attachments calendar contacts conversations domains economy emails
+files identities instructions knowledge logs loops machines mementos projects
 recordings sandboxes secrets sessions shortlinks telephony testers todos
 ```
 
-Every app follows the shared conventions:
+(`mailery` was retired from the registry 2026-08-19 — it is a separate, unrelated
+SaaS product and never exposed a hosted API on the client flips route — and
+replaced by `emails`, the hosted mailbox app.)
+
+Most apps follow the shared conventions:
 
 | field | value |
 |-------|-------|
@@ -85,7 +89,20 @@ Every app follows the shared conventions:
 | service unit | `hasna-<app>-mcp` |
 | verify | `<app> storage status --json` |
 
-Add a new app by adding its id to `ALL_APPS` in `src/commands/flip.ts`.
+### Email exception
+
+`emails` does not read `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`. Its
+client routes to the hosted API via `EMAILS_SELF_HOSTED_URL` plus
+`EMAILS_CLIENT_ENV_SECRET` — a Vault **pointer** the `emails` CLI resolves itself
+(`secrets get <path>`) at runtime. Its flip profile therefore pins
+`apiUrlEnv=EMAILS_SELF_HOSTED_URL` and uses the `keyViaSecretPointer` mode: the
+fleet env file carries the URL plus the non-secret Vault path — **no literal API
+key is ever written to disk**. Its status reports the runtime mode at
+`mode.current`, which the verifier reads via `verifyModePath`.
+
+Add a new app by adding its id to `ALL_APPS` in `src/commands/flip.ts` (and, when
+the app's consumer contract deviates from the generic `HASNA_<APP>_API_URL` /
+`HASNA_<APP>_API_KEY` convention, an entry in `APP_SPEC_OVERRIDES`).
 
 **Freeze-required (coordination hot stores):** `todos`, `loops`, `mementos`,
 `conversations`. These dual-write to a shadow and must pass a freeze check

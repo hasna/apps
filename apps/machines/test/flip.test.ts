@@ -46,20 +46,24 @@ function runWithFixturePath(script: string, binDir: string, env: NodeJS.ProcessE
 }
 
 describe("flip registry", () => {
-  test("registers all 25 @hasna OSS apps", () => {
+  test("registers all 25 @hasna OSS apps (emails in, retired mailery out)", () => {
     expect(Object.keys(FLIP_APPS).length).toBe(25);
     for (const app of [
       "accounts", "attachments", "calendar", "contacts", "conversations", "domains",
-      "economy", "files", "identities", "instructions", "knowledge", "logs", "loops",
-      "machines", "mailery", "mementos", "projects", "recordings", "sandboxes", "secrets",
+      "economy", "emails", "files", "identities", "instructions", "knowledge", "logs",
+      "loops", "machines", "mementos", "projects", "recordings", "sandboxes", "secrets",
       "sessions", "shortlinks", "telephony", "testers", "todos",
     ]) {
       expect(FLIP_APPS[app]).toBeDefined();
     }
+    // Mailery is a separate, unrelated SaaS product (retired from the client
+    // flips route 2026-08-19); it must not be flip-registered.
+    expect(FLIP_APPS["mailery"]).toBeUndefined();
   });
 
   test("every app uses API-URL + API-KEY env + hasna/oss/<app>/api-key secret (never a DSN)", () => {
     for (const spec of listFlipApps()) {
+      if (spec.keyViaSecretPointer) continue; // emails deviates by contract (checked below).
       const UP = spec.app.toUpperCase();
       expect(spec.apiUrlEnv).toBe(`HASNA_${UP}_API_URL`);
       expect(spec.apiKeyEnv).toBe(`HASNA_${UP}_API_KEY`);
@@ -71,6 +75,21 @@ describe("flip registry", () => {
       expect((spec as Record<string, unknown>).databaseUrlEnv).toBeUndefined();
       expect((spec as Record<string, unknown>).modeEnv).toBeUndefined();
     }
+  });
+
+  test("emails has the fleet-hosted contract: SELF_HOSTED_URL + Vault pointer, never a literal key", () => {
+    const spec = getFlipApp("emails");
+    expect(spec.apiUrlEnv).toBe("EMAILS_SELF_HOSTED_URL");
+    expect(spec.apiUrl).toBe("https://emails.your-deployment.example");
+    expect(spec.apiKeyEnv).toBe("EMAILS_CLIENT_ENV_SECRET");
+    expect(spec.apiKeySecretPath).toBe("hasna/xyz/opensource/emails/live/client-env");
+    expect(spec.keyViaSecretPointer).toBe(true);
+    expect(spec.verifyModePath).toBe("mode.current");
+    expect(spec.serviceUnit).toContain("emails");
+    expect(spec.cliBin).toBe("emails");
+    expect(spec.statusArgs).toContain("--json");
+    expect((spec as Record<string, unknown>).databaseUrlEnv).toBeUndefined();
+    expect((spec as Record<string, unknown>).modeEnv).toBeUndefined();
   });
 
   test("coordination hot stores require a freeze before flip", () => {
@@ -268,6 +287,33 @@ describe("script generation", () => {
     const script = buildFlipScript(spec, "api", { skipRestart: true });
     expect(script).not.toContain("systemctl --user restart");
   });
+
+  test("emails api script writes the URL + Vault pointer and never fetches a literal key", () => {
+    const script = buildFlipScript(getFlipApp("emails"), "api");
+    expect(script).toContain("EMAILS_SELF_HOSTED_URL=https://emails.your-deployment.example");
+    expect(script).toContain("EMAILS_CLIENT_ENV_SECRET=hasna/xyz/opensource/emails/live/client-env");
+    // No on-target secret fetch and no generic HASNA_* emails keys.
+    expect(script).not.toContain("secrets exec");
+    expect(script).not.toContain("secrets get");
+    expect(script).not.toContain("HASNA_EMAILS_API_URL");
+    expect(script).not.toContain("HASNA_EMAILS_API_KEY");
+    expect(script).not.toContain("STORAGE_MODE");
+    // The only EMAILS_CLIENT_ENV_SECRET assignment is the Vault pointer (path),
+    // never a resolved key value.
+    expect(script.split("EMAILS_CLIENT_ENV_SECRET=").length - 1).toBe(1);
+    expect(script).toContain("EMAILS_CLIENT_ENV_SECRET=hasna/xyz/opensource/emails/live/client-env");
+    expect(script).toContain('chmod 600');
+    expect(script).toContain("FLIP_STATUS_BEGIN");
+    expect(script).toContain("emails status --json");
+    // Revert simply removes the env file; both emails vars are covered by the
+    // generic wiring (API_URL_ENV / API_KEY_ENV carry the EMAILS_* names).
+    const revertScript = buildFlipScript(getFlipApp("emails"), "local");
+    expect(revertScript).toContain('rm -f "$ENV_FILE"');
+    expect(revertScript).toContain("EMAILS_SELF_HOSTED_URL");
+    expect(revertScript).toContain("EMAILS_CLIENT_ENV_SECRET");
+    expect(revertScript).toContain('launchctl unsetenv "$API_URL_ENV"');
+    expect(revertScript).toContain('launchctl unsetenv "$API_KEY_ENV"');
+  });
 });
 
 describe("verification", () => {
@@ -297,6 +343,28 @@ describe("verification", () => {
   });
   test("fails cleanly on unparseable output", () => {
     expect(verifyStorageMode("boom", "api").ok).toBe(false);
+  });
+
+  test("emails verification reads mode.current (Server API == self_hosted)", () => {
+    const emailsSpec = getFlipApp("emails");
+    const hosted = `{"mode":{"current":"self_hosted","label":"Server API"}}`;
+    const v = verifyStorageMode(hosted, "api", emailsSpec);
+    expect(v.ok).toBe(true);
+    expect(v.observedMode).toBe("self_hosted");
+    // An unparseable payload still fails even for emails.
+    expect(verifyStorageMode("boom", "api", emailsSpec).ok).toBe(false);
+  });
+
+  test("emails verification rejects local mode when api expected", () => {
+    const emailsSpec = getFlipApp("emails");
+    const local = `{"mode":{"current":"local"},"database":{"database_file":"/x/local.db"}}`;
+    expect(verifyStorageMode(local, "api", emailsSpec).ok).toBe(false);
+    expect(verifyStorageMode(local, "local", emailsSpec).ok).toBe(true);
+  });
+
+  test("verifyStorageMode keeps default root-level mode parsing when no spec is passed", () => {
+    expect(verifyStorageMode(`{"mode":"cloud","api_enabled":true}`, "api").ok).toBe(true);
+    expect(verifyStorageMode(`{"mode":"local","api_enabled":false}`, "local").ok).toBe(true);
   });
 });
 
