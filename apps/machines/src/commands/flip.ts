@@ -88,6 +88,21 @@ export interface FlipAppSpec {
    * the atomic cutover). See runFreezeCheck.
    */
   freezeRequired?: boolean;
+  /**
+   * When true the credential is a Vault POINTER consumed by the app's own CLI:
+   * the generated script writes `${apiKeyEnv}=${apiKeySecretPath}` (the
+   * pointer — a non-secret path) into the fleet env file instead of fetching
+   * the secret value on-target and materialising a literal key. Use for apps
+   * whose consumer contract resolves a stored secret pointer itself (emails
+   * resolves EMAILS_CLIENT_ENV_SECRET through `secrets` at runtime).
+   */
+  keyViaSecretPointer?: boolean;
+  /**
+   * Dotted JSON path to the reported mode string inside the app's
+   * `<cliBin> <statusArgs>` payload. Default "mode" (all generic apps).
+   * Emails reports its mode at `mode.current`.
+   */
+  verifyModePath?: string;
   /** Human note surfaced in plans/docs. */
   note?: string;
 }
@@ -95,6 +110,13 @@ export interface FlipAppSpec {
 /**
  * All 25 @hasna OSS apps that expose a hosted API at <app>.<fleet-domain>.
  * Coordination hot stores are freeze-gated (drain shadow before atomic flip).
+ *
+ * "mailery" was retired from this list 2026-08-19: Mailery is a separate,
+ * unrelated SaaS product and never exposed a hosted API on the client flips
+ * route, so keeping it registered would let `machines flip mailery` attempt to
+ * route a dead host. It is replaced by "emails" (the hosted mailbox app), whose
+ * consumer contract and deployment profile are covered by an explicit per-app
+ * override below.
  */
 const ALL_APPS = [
   "accounts",
@@ -104,6 +126,7 @@ const ALL_APPS = [
   "conversations",
   "domains",
   "economy",
+  "emails",
   "files",
   "identities",
   "instructions",
@@ -111,7 +134,6 @@ const ALL_APPS = [
   "logs",
   "loops",
   "machines",
-  "mailery",
   "mementos",
   "projects",
   "recordings",
@@ -130,6 +152,35 @@ const ALL_APPS = [
  * divergence==0) so machines never split-brain.
  */
 const FREEZE_REQUIRED_APPS = new Set(["todos", "loops", "mementos", "conversations"]);
+
+/**
+ * Per-app profile overrides for apps whose consumer contracts deviate from the
+ * generic HASNA_<APP>_API_URL / HASNA_<APP>_API_KEY conventions.
+ *
+ * Emails is the one real case. The `emails` CLI does NOT read
+ * HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY: it routes to the hosted API via
+ * EMAILS_SELF_HOSTED_URL plus EMAILS_CLIENT_ENV_SECRET — a Vault POINTER the
+ * CLI resolves itself (`secrets get <path>`) at runtime — or a literal
+ * EMAILS_SELF_HOSTED_API_KEY. We therefore pin the URL env to
+ * EMAILS_SELF_HOSTED_URL and treat the credential as a Vault pointer
+ * (keyViaSecretPointer), so no literal key is ever materialised into the fleet
+ * env file; the apiUrl keeps the generic https://emails.<fleet-domain> shape.
+ * The service unit on the fleet is hasna-emails-mcp and its status reports the
+ * runtime mode at `mode.current` (e.g. "self_hosted"), not `mode`/api_enabled.
+ */
+const APP_SPEC_OVERRIDES: Record<string, Partial<FlipAppSpec>> = {
+  emails: {
+    apiUrlEnv: "EMAILS_SELF_HOSTED_URL",
+    apiKeyEnv: "EMAILS_CLIENT_ENV_SECRET",
+    apiKeySecretPath: "hasna/xyz/opensource/emails/live/client-env",
+    serviceUnit: "hasna-emails-mcp",
+    cliBin: "emails",
+    statusArgs: "status --json",
+    verifyModePath: "mode.current",
+    keyViaSecretPointer: true,
+    note: "Emails routes via EMAILS_SELF_HOSTED_URL + EMAILS_CLIENT_ENV_SECRET (Vault pointer resolved by the emails CLI; no literal key is written).",
+  },
+};
 
 /** Per-app non-secret env overlays applied only in api mode. */
 const EXTRA_API_ENV: Record<string, Record<string, string>> = {};
@@ -159,6 +210,8 @@ function defineFlipApp(app: string): FlipAppSpec {
     spec.freezeRequired = true;
     spec.note = "Coordination store: drain dual-write shadow to divergence==0, then atomic --all-machines cutover.";
   }
+  const override = APP_SPEC_OVERRIDES[app];
+  if (override) Object.assign(spec, override);
   const extra = EXTRA_API_ENV[app];
   if (extra) spec.extraApiEnv = extra;
   return spec;
@@ -311,27 +364,45 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
   ];
 
   if (mode === "api") {
-    // Fetch the API key on-target into the child environment; abort if the
-    // secret is missing or empty before writing any fleet env file.
-    const writeEnvLines = [
-      "set -eu",
-      'if [ -z "${API_KEY:-}" ]; then echo "FLIP_ERROR: could not resolve API key secret" >&2; exit 3; fi',
-      'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
-      'trap \'rm -f "$TMP_ENV"\' EXIT',
-      `printf '%s\\n' ${sq(`${spec.apiUrlEnv}=${spec.apiUrl}`)} >> "$TMP_ENV"`,
-      `printf '%s=%s\\n' ${sq(spec.apiKeyEnv)} "$API_KEY" >> "$TMP_ENV"`,
-    ];
-    for (const [key, value] of Object.entries(spec.extraApiEnv ?? {})) {
-      writeEnvLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
+    if (spec.keyViaSecretPointer) {
+      // The app resolves the credential itself from a Vault pointer, so the
+      // env file carries the URL plus the non-secret pointer — no secret is
+      // fetched on-target and no literal key is ever materialised.
+      const pointerLines = [
+        "set -eu",
+        'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
+        'trap \'rm -f "$TMP_ENV"\' EXIT',
+        `printf '%s\\n' ${sq(`${spec.apiUrlEnv}=${spec.apiUrl}`)} >> "$TMP_ENV"`,
+        `printf '%s\\n' ${sq(`${spec.apiKeyEnv}=${spec.apiKeySecretPath}`)} >> "$TMP_ENV"`,
+      ];
+      for (const [key, value] of Object.entries(spec.extraApiEnv ?? {})) {
+        pointerLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
+      }
+      pointerLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
+      lines.push("export APP ENV_DIR ENV_FILE", pointerLines.join("\n"));
+    } else {
+      // Fetch the API key on-target into the child environment; abort if the
+      // secret is missing or empty before writing any fleet env file.
+      const writeEnvLines = [
+        "set -eu",
+        'if [ -z "${API_KEY:-}" ]; then echo "FLIP_ERROR: could not resolve API key secret" >&2; exit 3; fi',
+        'TMP_ENV="$(mktemp "${ENV_DIR}/.${APP}.env.XXXXXX")"',
+        'trap \'rm -f "$TMP_ENV"\' EXIT',
+        `printf '%s\\n' ${sq(`${spec.apiUrlEnv}=${spec.apiUrl}`)} >> "$TMP_ENV"`,
+        `printf '%s=%s\\n' ${sq(spec.apiKeyEnv)} "$API_KEY" >> "$TMP_ENV"`,
+      ];
+      for (const [key, value] of Object.entries(spec.extraApiEnv ?? {})) {
+        writeEnvLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
+      }
+      writeEnvLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
+      lines.push(
+        "export APP ENV_DIR ENV_FILE",
+        buildSecretsExecShell(spec.apiKeySecretPath, "API_KEY", writeEnvLines.join("\n")),
+      );
     }
-    writeEnvLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
-    lines.push(
-      "export APP ENV_DIR ENV_FILE",
-      buildSecretsExecShell(spec.apiKeySecretPath, "API_KEY", writeEnvLines.join("\n")),
-    );
   } else {
-    // Revert: remove the fleet env file entirely so HASNA_<APP>_API_URL and
-    // HASNA_<APP>_API_KEY are unset and the app returns to its local original.
+    // Revert: remove the fleet env file entirely so ${apiUrlEnv} and
+    // ${apiKeyEnv} are unset and the app returns to its local original.
     lines.push('rm -f "$ENV_FILE"');
   }
 
@@ -424,24 +495,39 @@ export interface StorageStatusVerification {
  * Any non-local reported mode counts as api-backed; this code never emits the
  * retired words itself.
  */
-export function verifyStorageMode(rawOutput: string, expected: FlipMode): StorageStatusVerification {
+export function verifyStorageMode(rawOutput: string, expected: FlipMode, spec?: FlipAppSpec): StorageStatusVerification {
   const json = extractStatusJson(rawOutput);
   if (!json) {
     return { ok: false, observedMode: null, apiEnabled: null, reason: "no parseable storage status JSON" };
   }
-  const observedMode = typeof json.mode === "string" ? json.mode : null;
-  const apiEnabled =
+  const rawMode = readJsonPath(json, spec?.verifyModePath ?? "mode");
+  const observedMode = typeof rawMode === "string" ? rawMode : null;
+  let apiEnabled =
     typeof json.api_enabled === "boolean"
       ? json.api_enabled
       : typeof json.remote_enabled === "boolean"
         ? json.remote_enabled
         : null;
+  if (apiEnabled === null && spec?.verifyModePath && observedMode !== null) {
+    // Apps without an api_enabled boolean (emails reports mode.current only)
+    // treat any non-local reported mode as api-backed.
+    apiEnabled = observedMode !== "local";
+  }
   if (expected === "api") {
     const ok = observedMode !== null && observedMode !== "local" && apiEnabled !== false;
     return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected an api-backed mode & api_enabled!=false" };
   }
   const ok = observedMode === "local" && apiEnabled !== true;
   return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected mode=local" };
+}
+
+/** Read a dotted JSON path (e.g. "mode.current"); undefined when absent. */
+function readJsonPath(obj: unknown, path: string): unknown {
+  if (!path) return undefined;
+  return path.split(".").reduce<unknown>((acc, key) => {
+    if (acc === null || acc === undefined || typeof acc !== "object") return undefined;
+    return (acc as Record<string, unknown>)[key];
+  }, obj);
 }
 
 interface StorageStatusJson {
@@ -590,7 +676,7 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
       }
 
       const res = runner(target.id, script, { timeoutMs: options.timeoutMs ?? 120_000 });
-      const verification = verifyStorageMode(res.stdout, expected);
+      const verification = verifyStorageMode(res.stdout, expected, spec);
       const ok = res.exitCode === 0 && verification.ok;
       report.results.push({
         machineId: target.id,
