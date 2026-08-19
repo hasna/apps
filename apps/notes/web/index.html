@@ -13,6 +13,10 @@
   <div class="window" id="window">
 
     <!-- ============ APP SHELL (sidebar + notes editor) ============ -->
+    <!-- Boot error banner: the native host injects a boot.error payload when the
+         hosted notes store is unreachable or unconfigured (fail closed — the app
+         never falls back to local note files). Hidden unless populated. -->
+    <div class="boot-error" id="boot-error" hidden></div>
     <div class="app-shell" data-shell="app">
       <aside class="sidebar">
         <div class="sidebar-top"></div>
@@ -287,14 +291,14 @@
             </div>
             <div class="set-card">
               <div class="set-row">
-                <div class="set-row-text"><div class="srt-name">Notes folder</div><div class="srt-desc" id="about-folder">~/.hasna/apps/notes/notes/</div></div>
+                <div class="set-row-text"><div class="srt-name">Notes storage</div><div class="srt-desc">Hosted API (personalnotes/v1) — notes live in the cloud</div></div>
               </div>
               <div class="set-row">
-                <div class="set-row-text"><div class="srt-name">Notes on this machine</div><div class="srt-desc">Markdown files with YAML frontmatter, one per note</div></div>
+                <div class="set-row-text"><div class="srt-name">Notes</div><div class="srt-desc">Cloud-hosted notes, one per record</div></div>
                 <span class="set-version" id="about-count">0</span>
               </div>
             </div>
-            <div class="about-foot">Plain-text Markdown notes. The files on disk are the source of truth.</div>
+            <div class="about-foot">Plain-text Markdown notes. The hosted notes API is the source of truth — nothing is stored in local note files.</div>
           </div>
         </section>
       </main>

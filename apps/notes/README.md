@@ -22,8 +22,12 @@ forward-compatible with the installable `@hasna/notes` CLI/MCP package.
 
 ## Data format — the contract
 
-The Markdown files are the **source of truth**. Hasna Notes reads and writes them so any
-other tool, including the `@hasna/notes` CLI/MCP package, can index the same directory.
+The Markdown files are the **source of truth** for the CLI/MCP tooling and the
+on-box store. The **macOS app is cloud-only** (owner brief 2026-08-19): its host reads
+and writes notes exclusively through the hosted notes API selected by
+`HASNA_NOTES_API_URL` + `HASNA_NOTES_API_KEY` (personalnotes/v1 dialect), and never
+touches local note files — an API URL without its key fails closed, and an unconfigured
+app shows a configuration banner instead of falling back to the on-disk store.
 
 - Data root: `~/.hasna/notes/` (the pre-rename `~/.hasna/apps/notes/` root is copied forward once on first use)
 - Preferred override: `HASNA_NOTES_ROOT`

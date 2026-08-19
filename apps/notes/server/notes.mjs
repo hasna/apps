@@ -158,11 +158,18 @@ export async function createNote(db, tenantId, input, actor) {
 
 export async function updateNote(db, tenantId, id, input, actor) {
   const current = await getRow(db, tenantId, id);
-  if (!current || current.deleted_at) throw new ApiError('not_found', 'note not found', 404);
+  if (!current) throw new ApiError('not_found', 'note not found', 404);
   // Dialect §4: PATCH has no optimistic-concurrency check — last write wins
   // in server arrival order. baseRevision guards exist only on /sync items.
-  const updated = await updateRow(db, tenantId, current, input);
-  await logEvent(db, { tenantId, noteId: id, actor, action: 'note.updated' });
+  //
+  // REST restore (closes PLATFORM-GAP GAP-2): a PATCH to a soft-deleted note
+  // clears the delete tombstone and brings the note back (the `restore` path
+  // of updateRow, which `emitTransitionEvents` already logs as note.restored).
+  // Cloud-only clients (the macOS app) trash and restore through this one
+  // last-write-wins surface; without it, a trashed note can never come back.
+  const restoring = Boolean(current.deleted_at);
+  const updated = await updateRow(db, tenantId, current, input, { restore: restoring });
+  await logEvent(db, { tenantId, noteId: id, actor, action: restoring ? 'note.restored' : 'note.updated' });
   await emitTransitionEvents(db, tenantId, current, updated, actor);
   return serializeNote(updated);
 }
