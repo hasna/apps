@@ -9,8 +9,8 @@
 // TDD: written before ../native-host/host.js existed; must fail.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const EXT_DIR = join(import.meta.dir, "..");
@@ -61,6 +61,34 @@ function resolveSecretsBin(): string | null {
   return null;
 }
 
+/**
+ * CI fallback for the installed-host install: the runner has no global
+ * `secrets` binary, so install-host.sh's `command -v secrets` precondition
+ * would exit 1 before anything is installed. Build a bin dir whose `secrets`
+ * entry is the repo build (dist/index.js — what CI's turbo build produces
+ * before the test phase) with `bun` co-located, mirroring a real ~/.bun/bin
+ * install. That co-location is exactly what host.cjs relies on: it prepends
+ * the CLI's own directory to the child PATH, so the CLI's `#!/usr/bin/env bun`
+ * shebang must resolve `bun` in that same directory — with NO inherited PATH
+ * (the cold-launch child env is only HOME).
+ */
+function coldLaunchCliBinDir(): string {
+  const cli = existsSync(REPO_DIST) ? REPO_DIST : which("secrets");
+  if (!cli) {
+    throw new Error(
+      "no secrets CLI for the installed-host test: build apps/secrets/dist or install the global binary",
+    );
+  }
+  const bun = which("bun");
+  if (!bun) {
+    throw new Error("no bun on PATH to co-locate with the secrets launcher");
+  }
+  const binDir = mkdtempSync(join(tmpdir(), "secrets-ext-cli-"));
+  symlinkSync(cli, join(binDir, "secrets"));
+  symlinkSync(bun, join(binDir, "bun"));
+  return binDir;
+}
+
 let secretsBinDir: string | null;
 let secretsSource = "";
 
@@ -94,8 +122,14 @@ class HostClient {
   private buffer = Buffer.alloc(0);
   private closed = false;
 
-  constructor(env: Record<string, string>) {
-    this.proc = spawn(NODE!, [HOST_JS], { env, stdio: ["pipe", "pipe", "pipe"] });
+  constructor(env: Record<string, string>, cmd?: string, args?: string[]) {
+    // Default: `node host.cjs`. `HostClient.direct` spawns the host file
+    // itself (no node wrapper) — the shape of a Chrome-launched native host,
+    // where the kernel resolves the shebang.
+    this.proc = spawn(cmd ?? NODE!, args ?? [HOST_JS], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     this.proc.stderr.on("data", () => {
       /* stderr is diagnostic; errors surface through the protocol */
     });
@@ -105,6 +139,11 @@ class HostClient {
     this.proc.on("exit", () => {
       this.closed = true;
     });
+  }
+
+  /** Spawn the host binary directly with the given environment. */
+  static direct(cmd: string, env: Record<string, string>): HostClient {
+    return new HostClient(env, cmd, []);
   }
 
   async send(msg: unknown, timeoutMs = 20_000): Promise<unknown> {
@@ -280,5 +319,83 @@ describe("host protocol against a temp vault", () => {
     } finally {
       host.close();
     }
+  });
+});
+
+// REGRESSION (station03 investigation, 2026-08-19): Chrome launches the host
+// through the manifest path with the environment it inherits from launchd,
+// whose PATH is EMPTY (measured: launchctl getenv PATH returns nothing;
+// node/secrets live only under /Users/hasna/.bun/bin). The old host shebang
+// `#!/usr/bin/env node` then fails rc=127 'env: node: No such file or
+// directory' and the extension gets no answer. The installed host must start
+// cold and answer the wire protocol with ONLY the user's HOME set.
+describe("installed host cold launch (Chrome path resolution)", () => {
+  let chromeDir: string;
+  let installDir: string;
+  let installedHost: string;
+  let manifest: { name: string; path: string; type: string; allowed_origins: string[] };
+  let config: { secretsCli?: string } | null = null;
+  let installedFirstLine = "";
+
+  const INSTALL_HOST = join(EXT_DIR, "native-host", "install-host.sh");
+
+  beforeAll(() => {
+    // Simulated install: a temp Chrome profile dir (the manifest's home) and a
+    // temp install dir, so nothing under the real $HOME is touched. The
+    // installer itself runs under the user's FULL shell env — the measured
+    // condition under which install works (its shell PATH carries node.
+    // `secrets` on the other hand may be absent (CI), so it is resolved here:
+    // HASNA_SECRETS_CLI is honored by install-host.sh (embedded into
+    // host-config.json as the absolute CLI path) and by host.cjs (spawned
+    // with its own dir prepended to the child PATH). When unset, the repo
+    // build plus co-located bun is embedded — see coldLaunchCliBinDir.
+    chromeDir = mkdtempSync(join(tmpdir(), "secrets-ext-chrome-"));
+    installDir = mkdtempSync(join(tmpdir(), "secrets-ext-install-"));
+    if (!process.env.HASNA_SECRETS_CLI) {
+      process.env.HASNA_SECRETS_CLI = join(coldLaunchCliBinDir(), "secrets");
+    }
+    const r = spawnSync("bash", [INSTALL_HOST, "--chrome-user-data-dir", chromeDir], {
+      env: { ...process.env, HASNA_SECRETS_NATIVE_HOST_DIR: installDir },
+      encoding: "utf8",
+    });
+    expect(r.status).toBe(0);
+    const manifestPath = join(chromeDir, "NativeMessagingHosts", "com.hasna.secrets.json");
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    installedHost = manifest.path;
+    if (existsSync(join(installDir, "host-config.json"))) {
+      config = JSON.parse(readFileSync(join(installDir, "host-config.json"), "utf8"));
+    }
+    installedFirstLine = readFileSync(installedHost, "utf8").split("\n")[0];
+  });
+
+  test("regression: installed host under an EMPTY environment starts and answers auth-status ok", async () => {
+    // The exact cold-launch shape: only HOME is set — no PATH, no SHELL.
+    // The kernel resolves the materialized absolute node shebang; the host
+    // shells the config-embedded absolute secrets CLI with its own bin dir
+    // prepended to PATH so the CLI's `#!/usr/bin/env bun` interpreter resolves.
+    const host = HostClient.direct(installedHost, { HOME: homedir() });
+    try {
+      const res = (await host.send({ verb: "auth-status" })) as any;
+      expect(res.ok).toBe(true);
+      expect(res.data.authenticated).toBe(true);
+      expect(res.data.mode).toBe("local");
+    } finally {
+      host.close();
+    }
+  });
+
+  test("install materializes an absolute node shebang and embeds the absolute secrets path", () => {
+    expect(manifest.type).toBe("stdio");
+    // The manifest must point at the materialized installed copy, not the
+    // checkout host.cjs (whose `#!/usr/bin/env node` fails with no PATH).
+    expect(manifest.path).toBe(join(installDir, "host.cjs"));
+    // The shebang must be the absolute node binary, never '/usr/bin/env node'.
+    expect(installedFirstLine).toBe(`#!${NODE}`);
+    expect(config).not.toBeNull();
+    // install-host.sh resolves HASNA_SECRETS_CLI first (the suite's CI
+    // convention for version-pinned binaries), else `command -v secrets`.
+    expect(config!.secretsCli).toBe(process.env.HASNA_SECRETS_CLI ?? which("secrets"));
+    // The installed copy must be executable (Chrome runs it directly).
+    expect(statSync(installedHost).mode & 0o111).not.toBe(0);
   });
 });

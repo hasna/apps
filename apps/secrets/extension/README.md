@@ -46,12 +46,23 @@ Chrome popup ──► background service worker ──► native host (host.cjs
    ./install-host.sh
    ```
 
-   This writes the host manifest to
-   `~/.config/google-chrome/NativeMessagingHosts/com.hasna.secrets.json`
-   (Linux) or
-   `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.hasna.secrets.json`
-   (macOS), pointing at the absolute path of `native-host/host.cjs` in this
-   checkout.
+   This installs three things (all idempotent; re-run after updating the
+   extension to refresh):
+   - the host manifest at
+     `~/.config/google-chrome/NativeMessagingHosts/com.hasna.secrets.json`
+     (Linux) or
+     `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.hasna.secrets.json`
+     (macOS);
+   - a **materialized host copy** at
+     `~/.hasna/secrets/native-host/host.cjs` whose first line is the absolute
+     node binary resolved from your shell. Chrome launches the host with
+     launchd's environment, whose PATH is empty — a `#!/usr/bin/env node`
+     shebang fails there with `env: node: No such file or directory`
+     (measured on station03). The absolute shebang needs no PATH; and
+   - `host-config.json` next to it embedding the absolute path of your
+     `secrets` CLI, so the host never does a PATH lookup either (it prepends
+     the CLI's own directory to the child PATH so the CLI's interpreter, bun,
+     resolves).
 
 2. **Load the extension unpacked**:
    - Open Chrome → `chrome://extensions`
