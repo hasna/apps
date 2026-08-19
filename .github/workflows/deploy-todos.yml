@@ -230,7 +230,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           expected_bun="$(grep -oP '(?<=oven/bun:)[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | head -1)"
-          expected_version="$(bun -e 'console.log(require("./package.json").version)')"
+          expected_version="$(node -p 'require("./package.json").version')"
           test -n "${expected_bun}"
           test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" --version)" = "${expected_bun}"
           test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js --version)" = "${expected_version}"
