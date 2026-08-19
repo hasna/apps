@@ -188,7 +188,7 @@ Call the computer_action tool to interact. Use action "done" when the task is co
 Be precise with coordinates — look at the screenshot carefully.`;
 }
 
-function convertActionToOpenAIAction(action: DriverAction): Record<string, any> {
+export function convertActionToOpenAIAction(action: DriverAction): Record<string, any> {
   switch (action.type) {
     case "click":
       return {
@@ -218,7 +218,7 @@ function convertActionToOpenAIAction(action: DriverAction): Record<string, any> 
   }
 }
 
-function parseOpenAIResponse(response: any): ModelResponse {
+export function parseOpenAIResponse(response: any): ModelResponse {
   let action: DriverAction | null = null;
   let reasoning = "";
   let done = false;
@@ -251,7 +251,7 @@ function parseOpenAIResponse(response: any): ModelResponse {
   };
 }
 
-function convertOpenAICallToAction(action: Record<string, any>): DriverAction {
+export function convertOpenAICallToAction(action: Record<string, any>): DriverAction {
   switch (action.type) {
     case "click":
       return { type: "click", point: { x: action.x, y: action.y }, button: "left" };
@@ -276,7 +276,7 @@ function convertOpenAICallToAction(action: Record<string, any>): DriverAction {
   }
 }
 
-function convertFallbackAction(args: any): { action: DriverAction | null; done: boolean } {
+export function convertFallbackAction(args: any): { action: DriverAction | null; done: boolean } {
   switch (args.action) {
     case "click":
       return { action: { type: "click", point: { x: args.x, y: args.y }, button: args.button ?? "left" }, done: false };

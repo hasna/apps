@@ -30,6 +30,9 @@ const createInput = z.object({
   amount_due: z.number().int().nonnegative(),
   currency: z.string().length(3).optional(),
   due_date: z.string().optional(),
+  // Stripe's own invoice id, so webhook events keyed on the provider id
+  // (invoice.paid / invoice.payment_failed) can join back to the local row.
+  stripe_invoice_id: z.string().min(1).optional(),
 });
 const getInput = z.object({ id: z.string().min(1) });
 const listInput = z.object({
@@ -91,6 +94,7 @@ export const invoiceOps: ServiceOp[] = [
         amount_due: input.amount_due,
         currency: input.currency ?? customer.currency,
         due_date: input.due_date ?? null,
+        stripe_invoice_id: input.stripe_invoice_id ?? null,
         status: "open",
       });
       appendAudit(ctx.db, {

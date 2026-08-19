@@ -166,7 +166,12 @@ function decodeEntities(value: string): string {
         body[1] === "x" || body[1] === "X"
           ? parseInt(body.slice(2), 16)
           : parseInt(body.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+      // String.fromCodePoint throws for anything above U+10FFFF; preserve the
+      // literal entity instead of crashing the import.
+      if (Number.isFinite(code) && code >= 0 && code <= 0x10ffff) {
+        return String.fromCodePoint(code);
+      }
+      return match;
     }
     return NAMED_ENTITIES[body.toLowerCase()] ?? match;
   });

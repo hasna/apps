@@ -14,6 +14,9 @@ export const MONEY_MOVING_APPS = [
 export type MoneyMovingApp = (typeof MONEY_MOVING_APPS)[number] | (string & {});
 export type MoneyMovementMode = "sandbox" | "read_only" | "live";
 
+/** Runtime-validated mode set: a malformed mode must never pass the live gate as a non-live mode. */
+const KNOWN_EXECUTION_MODES: readonly string[] = ["sandbox", "read_only", "live"];
+
 export interface MoneyMovementControlsInput {
   app_id: MoneyMovingApp;
   entity_id: string;
@@ -107,8 +110,11 @@ export function evaluateMoneyMovementControls(
     ),
     decision(
       "live_mode_gate",
-      input.execution_mode !== "live" || (hasValue(input.operator_approval_ref) && hasValue(input.sandbox_evidence_ref)),
-      "live mode requires explicit operator approval and sandbox evidence references",
+      KNOWN_EXECUTION_MODES.includes(input.execution_mode) &&
+        (input.execution_mode !== "live" || (hasValue(input.operator_approval_ref) && hasValue(input.sandbox_evidence_ref))),
+      KNOWN_EXECUTION_MODES.includes(input.execution_mode)
+        ? "live mode requires explicit operator approval and sandbox evidence references"
+        : "execution_mode must be one of: sandbox, read_only, live",
     ),
     decision("reconciliation", hasValue(input.reconciliation_ref), "movement must provide a reconciliation record reference"),
   ];

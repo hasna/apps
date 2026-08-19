@@ -150,7 +150,7 @@ Rules:
 - If something goes wrong, try an alternative approach`;
 }
 
-function convertActionToAnthropicInput(action: DriverAction): Record<string, any> {
+export function convertActionToAnthropicInput(action: DriverAction): Record<string, any> {
   switch (action.type) {
     case "click":
       const clickType = action.button === "right" ? "right_click" :
@@ -171,7 +171,7 @@ function convertActionToAnthropicInput(action: DriverAction): Record<string, any
   }
 }
 
-function parseAnthropicResponse(response: Anthropic.Message): ModelResponse {
+export function parseAnthropicResponse(response: Anthropic.Message): ModelResponse {
   let action: DriverAction | null = null;
   let reasoning = "";
   let done = false;
@@ -198,7 +198,7 @@ function parseAnthropicResponse(response: Anthropic.Message): ModelResponse {
   };
 }
 
-function convertAnthropicInputToAction(input: Record<string, any>): DriverAction {
+export function convertAnthropicInputToAction(input: Record<string, any>): DriverAction {
   const actionType = input.action as string;
   const coord = input.coordinate as [number, number] | undefined;
   const point: Point | undefined = coord ? { x: coord[0], y: coord[1] } : undefined;

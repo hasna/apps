@@ -865,6 +865,16 @@ export function scanTarball(tarballPath: string): ScanReport {
     }
     report.inventories = findOrgAssetInventories(sightings);
     if (report.scanned.length === 0) throw new Error(`\`${tarballPath}\` unpacked to nothing`);
+    // Same fail-closed rule as the pre-pack scan: a tarball with files but no
+    // built JavaScript must not pass the release gate. `scanned` paths are
+    // relative to the package root, exactly like the pre-pack scan's.
+    const builtJs = report.scanned.filter((p) => p.startsWith("dist/") && p.endsWith(".js"));
+    if (builtJs.length === 0) {
+      throw new Error(
+        "no built `dist/**/*.js` files in the packed set — run `bun run build` before packing " +
+          "(refusing to report a clean artifact that contains no build output)",
+      );
+    }
     return report;
   } finally {
     rmSync(dir, { recursive: true, force: true });

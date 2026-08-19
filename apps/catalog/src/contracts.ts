@@ -250,13 +250,20 @@ export const DISTRIBUTION_EVENT_TYPES = {
 } as const;
 export type DistributionEventType = (typeof DISTRIBUTION_EVENT_TYPES)[keyof typeof DISTRIBUTION_EVENT_TYPES];
 
-/** Event types whose payloads mirror hasna.rollout_record.v1. */
-export const ROLLOUT_EVENT_TYPES: readonly DistributionEventType[] = [
+/**
+ * Event types whose payloads mirror hasna.rollout_record.v1.
+ *
+ * Frozen: every `createRolloutIngestionHook()` exposes this array as its
+ * `eventTypes`, so an unfrozen shared array would let one caller widen the
+ * allowlist for every later hook. `readonly` is a compile-time hint only;
+ * the freeze is the runtime guard.
+ */
+export const ROLLOUT_EVENT_TYPES: readonly DistributionEventType[] = Object.freeze([
   DISTRIBUTION_EVENT_TYPES.rolloutStarted,
   DISTRIBUTION_EVENT_TYPES.rolloutCompleted,
   DISTRIBUTION_EVENT_TYPES.rolloutFailed,
   DISTRIBUTION_EVENT_TYPES.appInstalled,
-];
+]);
 
 /** Structural mirror of the @hasna/events RolloutData payload (open keys allowed). */
 export interface RolloutEventData {

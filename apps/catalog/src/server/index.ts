@@ -26,42 +26,53 @@ function json(value: unknown, status = 200): Response {
 export function createCatalogHandler(options: CatalogApiOptions = {}): (request: Request) => Response {
   const store = options.store ?? new CatalogStore();
   return (request: Request): Response => {
-    const url = new URL(request.url);
-    if (request.method !== "GET") {
-      return json({ error: "catalog is a read model; only GET is supported" }, 405);
+    try {
+      return routeRequest(request, store);
+    } catch {
+      // A store or parsing failure must become a JSON 500, never an unhandled
+      // exception escaping into Bun.serve (which would tear the connection
+      // down without a response).
+      return json({ error: "internal error" }, 500);
     }
-    if (url.pathname === "/health") {
-      return json({ status: "ok", service: "catalog", version: VERSION, apps: store.countApps() });
-    }
-    if (url.pathname === "/v1/apps") {
-      const lifecycle = AppLifecycleSchema.safeParse(url.searchParams.get("lifecycle") ?? undefined);
-      const channel = ReleaseChannelSchema.safeParse(url.searchParams.get("channel") ?? undefined);
-      const limitRaw = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
-      const offsetRaw = Number.parseInt(url.searchParams.get("offset") ?? "", 10);
-      const apps = store.listApps({
-        lifecycle: lifecycle.success ? lifecycle.data : undefined,
-        channel: channel.success ? channel.data : undefined,
-        limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
-        offset: Number.isFinite(offsetRaw) ? offsetRaw : undefined,
-      });
-      return json({ apps, count: apps.length });
-    }
-    const appMatch = url.pathname.match(/^\/v1\/apps\/([a-z0-9-]+)$/);
-    if (appMatch) {
-      const [, appId] = appMatch;
-      if (!appId) throw new Error("matched app route without an app id");
-      const app = store.getApp(appId);
-      if (!app) return json({ error: `app not found: ${appId}` }, 404);
-      return json({ app });
-    }
-    if (url.pathname === "/v1/search") {
-      const query = url.searchParams.get("q")?.trim() ?? "";
-      if (!query) return json({ error: "missing query parameter: q" }, 400);
-      const apps = store.searchApps(query);
-      return json({ apps, count: apps.length, query });
-    }
-    return json({ error: "not found" }, 404);
   };
+}
+
+function routeRequest(request: Request, store: CatalogStoreLike): Response {
+  const url = new URL(request.url);
+  if (request.method !== "GET") {
+    return json({ error: "catalog is a read model; only GET is supported" }, 405);
+  }
+  if (url.pathname === "/health") {
+    return json({ status: "ok", service: "catalog", version: VERSION, apps: store.countApps() });
+  }
+  if (url.pathname === "/v1/apps") {
+    const lifecycle = AppLifecycleSchema.safeParse(url.searchParams.get("lifecycle") ?? undefined);
+    const channel = ReleaseChannelSchema.safeParse(url.searchParams.get("channel") ?? undefined);
+    const limitRaw = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
+    const offsetRaw = Number.parseInt(url.searchParams.get("offset") ?? "", 10);
+    const apps = store.listApps({
+      lifecycle: lifecycle.success ? lifecycle.data : undefined,
+      channel: channel.success ? channel.data : undefined,
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+      offset: Number.isFinite(offsetRaw) ? offsetRaw : undefined,
+    });
+    return json({ apps, count: apps.length });
+  }
+  const appMatch = url.pathname.match(/^\/v1\/apps\/([a-z0-9-]+)$/);
+  if (appMatch) {
+    const [, appId] = appMatch;
+    if (!appId) throw new Error("matched app route without an app id");
+    const app = store.getApp(appId);
+    if (!app) return json({ error: `app not found: ${appId}` }, 404);
+    return json({ app });
+  }
+  if (url.pathname === "/v1/search") {
+    const query = url.searchParams.get("q")?.trim() ?? "";
+    if (!query) return json({ error: "missing query parameter: q" }, 400);
+    const apps = store.searchApps(query);
+    return json({ apps, count: apps.length, query });
+  }
+  return json({ error: "not found" }, 404);
 }
 
 export interface StartCatalogServerOptions extends CatalogApiOptions {

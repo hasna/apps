@@ -128,6 +128,19 @@ export const POSTGRESQL_MIGRATIONS: readonly Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_accounting_reconciliation_entity ON accounting_reconciliation_events(entity_id);
     `,
   ),
+  defineMigration(
+    "0004-reconciliation-entity-scoped-unique",
+    `
+    -- 0003 created UNIQUE (source, source_id, event_type) WITHOUT entity_id, so
+    -- the same provider event under two different tenants collapsed into one
+    -- row (the second tenant's accounting event was silently lost). Replace the
+    -- constraint with an entity-scoped unique index; the app upsert targets
+    -- ON CONFLICT (entity_id, source, source_id, event_type).
+    ALTER TABLE accounting_reconciliation_events DROP CONSTRAINT IF EXISTS accounting_reconciliation_events_source_source_id_event_type_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_accounting_reconciliation_entity_source
+      ON accounting_reconciliation_events(entity_id, source, source_id, event_type);
+    `,
+  ),
 ];
 
 export function migrationIds(): string[] {

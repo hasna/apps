@@ -162,7 +162,7 @@ async function runOsascript(script: string): Promise<string> {
 }
 
 /** Map key names to cliclick format */
-function mapKeys(keys: string): string {
+export function mapKeys(keys: string): string {
   const keyMap: Record<string, string> = {
     enter: "return",
     return: "return",

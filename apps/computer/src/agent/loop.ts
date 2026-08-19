@@ -248,7 +248,7 @@ export async function runTask(options: RunOptions): Promise<Session> {
  * returns coordinates in 1280x800 space. We need to convert them back to
  * 2560x1600 before executing the action on the real screen.
  */
-function remapCoordinates(
+export function remapCoordinates(
   action: import("../types/index.js").DriverAction,
   from: import("../types/index.js").ScreenSize,
   to: import("../types/index.js").ScreenSize

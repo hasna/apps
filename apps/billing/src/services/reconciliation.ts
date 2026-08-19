@@ -37,7 +37,7 @@ export function emitAccountingReconciliation(
     `INSERT INTO accounting_reconciliation_events
       (id, entity_id, source, source_id, event_type, accounting_entry_ref, amount, currency, state, payload_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source, source_id, event_type) DO UPDATE SET
+     ON CONFLICT(entity_id, source, source_id, event_type) DO UPDATE SET
       accounting_entry_ref = COALESCE(excluded.accounting_entry_ref, accounting_reconciliation_events.accounting_entry_ref),
       state = excluded.state,
       payload_json = excluded.payload_json,

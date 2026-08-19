@@ -209,11 +209,11 @@ function parseInline(input: string, marks: Mark[] = []): DocNode[] {
         continue;
       }
     }
-    // Emphasis: strong (**/__), strike (~~), em (*/_)
+    // Emphasis: strong (**/__), strike (~~), em (*/_), combined (***/___)
     const emph = matchEmphasis(rest);
     if (emph) {
       flush();
-      out.push(...parseInline(emph.inner, [...marks, { type: emph.mark }]));
+      out.push(...parseInline(emph.inner, [...marks, ...emph.marks]));
       i += emph.length;
       continue;
     }
@@ -226,16 +226,34 @@ function parseInline(input: string, marks: Mark[] = []): DocNode[] {
 
 function matchEmphasis(
   rest: string,
-): { mark: Mark["type"]; inner: string; length: number } | null {
+): { marks: Mark[]; inner: string; length: number } | null {
   const tryDelim = (delim: string, mark: Mark["type"]) => {
     if (!rest.startsWith(delim)) return null;
     const close = rest.indexOf(delim, delim.length);
     if (close === -1) return null;
     const inner = rest.slice(delim.length, close);
     if (inner.length === 0) return null;
-    return { mark, inner, length: close + delim.length };
+    return { marks: [{ type: mark }], inner, length: close + delim.length };
+  };
+  // Triple delimiters express combined bold+italic (e.g. `***both***`), which
+  // the serializer emits for a text node carrying both marks. Without this
+  // branch the exported form re-parsed with the marks lost and literal
+  // asterisks introduced.
+  const tryTriple = (delim: string) => {
+    if (!rest.startsWith(delim)) return null;
+    const close = rest.indexOf(delim, delim.length);
+    if (close === -1) return null;
+    const inner = rest.slice(delim.length, close);
+    if (inner.length === 0) return null;
+    return {
+      marks: [{ type: "bold" as const }, { type: "italic" as const }],
+      inner,
+      length: close + delim.length,
+    };
   };
   return (
+    tryTriple("***") ||
+    tryTriple("___") ||
     tryDelim("**", "bold") ||
     tryDelim("__", "bold") ||
     tryDelim("~~", "strike") ||
