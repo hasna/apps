@@ -259,6 +259,7 @@ class ApiStore implements AccountsStore {
         metadata: opts.metadata,
         dir,
         description: opts.description,
+        authStatus: opts.authStatus,
       });
     } catch (error) {
       if (created) rmSync(dir, { recursive: true, force: true });
@@ -281,6 +282,7 @@ class ApiStore implements AccountsStore {
         description: opts.description,
         nativeName: opts.nativeName,
         aliases: opts.aliases,
+        authStatus: opts.authStatus,
       });
     } catch (error) {
       if (dir && created) rmSync(dir, { recursive: true, force: true });

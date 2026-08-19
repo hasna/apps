@@ -56,6 +56,25 @@ const profileDirSchema = z.string().min(1).superRefine((value, ctx) => {
   }
 });
 
+/** A machine id key in a profile's `authStatus` map. */
+const authStatusMachineIdSchema = z.string().min(1).max(128);
+
+/** One machine's recorded authentication state for a profile. */
+export const authStatusEntrySchema = z.object({
+  authenticated: z.boolean(),
+  checkedAt: z.string(),
+  detail: z.string().optional(),
+});
+
+/**
+ * Per-machine authentication status map: machineId -> entry.
+ *
+ * b27cc4a0: first-class field, deliberately NOT inside `metadata` — metadata
+ * is flat scalars only, and per-machine auth state is a structured record of
+ * facts (same reasoning the 0007 migration used for `aliases`).
+ */
+const authStatusSchema = z.record(authStatusMachineIdSchema, authStatusEntrySchema).optional();
+
 export const createAccountSchema = z.object({
   name: profileNameSchema,
   tool: toolIdSchema,
@@ -66,6 +85,7 @@ export const createAccountSchema = z.object({
   metadata: metadataSchema.optional(),
   dir: profileDirSchema.optional(),
   description: z.string().optional(),
+  authStatus: authStatusSchema,
 });
 export type CreateAccountInput = z.infer<typeof createAccountSchema>;
 
@@ -90,6 +110,13 @@ export const updateAccountSchema = z
      * being recorded, not a replacement of the full history.
      */
     aliases: z.array(profileNameSchema).max(64).optional(),
+    /**
+     * b27cc4a0: per-machine auth-status entries. MERGED per machine by
+     * `AccountsRepo.update` — never a replace of the whole map (same
+     * append/dedup discipline as aliases: a caller that only knows the one
+     * machine it just probed must not erase other machines' entries).
+     */
+    authStatus: authStatusSchema,
   })
   .refine((v) => Object.keys(v).length > 0, "update requires at least one field");
 export type UpdateAccountInput = z.infer<typeof updateAccountSchema>;

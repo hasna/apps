@@ -23,7 +23,7 @@
 // SAFETY: the API key never appears in logs or return values; it lives only
 // inside the contracts transport.
 
-import type { Profile, ToolDef } from "../types.js";
+import type { Profile, ProfileAuthStatus, ToolDef } from "../types.js";
 import { AccountsError, toolDefSchema } from "../types.js";
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts";
 import { scrubLegacyStorageMode } from "./retired-storage-mode.js";
@@ -47,6 +47,8 @@ export interface CloudAccount {
   nativeName?: string;
   /** R-P1-4: former registry name(s) this profile has answered to. */
   aliases?: string[];
+  /** b27cc4a0: per-machine authentication status, keyed by machine id. */
+  authStatus?: ProfileAuthStatus;
 }
 
 export interface CloudCurrentSelection {
@@ -65,6 +67,7 @@ export interface CloudCreateInput {
   metadata?: Record<string, string | number | boolean | null>;
   dir?: string;
   description?: string;
+  authStatus?: ProfileAuthStatus;
 }
 
 /** Fields updatable through `PATCH /v1/accounts/:tool/:name`. */
@@ -81,6 +84,11 @@ export interface CloudUpdateInput {
   nativeName?: string;
   /** R-P1-4: APPENDED (deduped) to the record's existing aliases server-side — never a replace. */
   aliases?: string[];
+  /**
+   * b27cc4a0: per-machine auth-status entries. MERGED per machine server-side —
+   * never a replace of the whole map (same append/dedup discipline as aliases).
+   */
+  authStatus?: ProfileAuthStatus;
 }
 
 /**
@@ -125,6 +133,7 @@ function toProfile(account: CloudAccount): Profile {
     ...(account.lastUsedAt ? { lastUsedAt: account.lastUsedAt } : {}),
     ...(account.nativeName ? { nativeName: account.nativeName } : {}),
     ...(account.aliases && account.aliases.length > 0 ? { aliases: account.aliases } : {}),
+    ...(account.authStatus && Object.keys(account.authStatus).length > 0 ? { authStatus: account.authStatus } : {}),
   };
 }
 
@@ -216,6 +225,7 @@ function makeApi(client: HasnaStorageClient): AccountsCloudApi {
       // boundary; its 400 carries the same message this client would have shown.
       if (input.dir) body.dir = input.dir;
       if (input.description) body.description = input.description;
+      if (input.authStatus && Object.keys(input.authStatus).length > 0) body.authStatus = input.authStatus;
       const created = await client.create<CloudAccount>("accounts", body);
       return toProfile(created);
     },
@@ -232,6 +242,7 @@ function makeApi(client: HasnaStorageClient): AccountsCloudApi {
       if (input.lastUsedAt !== undefined) body.lastUsedAt = input.lastUsedAt;
       if (input.nativeName !== undefined) body.nativeName = input.nativeName;
       if (input.aliases !== undefined) body.aliases = input.aliases;
+      if (input.authStatus !== undefined) body.authStatus = input.authStatus;
       const updated = await t.patch<CloudAccount>(
         `/accounts/${encodeURIComponent(tool)}/${encodeURIComponent(name)}`,
         body,

@@ -55,3 +55,16 @@ test("migration 0007 adds the aliases/native_name columns", () => {
   expect(migration.sql).toMatch(/aliases/i);
   expect(migration.sql).toMatch(/native_name/i);
 });
+
+// b27cc4a0: per-machine auth status is a first-class JSONB column, mirroring
+// the metadata (0001) and aliases (0007) precedents — NOT a metadata key.
+test("migration 0008 adds the auth_status JSONB column", () => {
+  const migrations = accountsMigrations();
+  const ids = migrations.map((m) => m.id);
+  expect(ids).toContain("accounts_0008_auth_status");
+  const migration = migrations.find((m) => m.id === "accounts_0008_auth_status")!;
+  expect(migration.sql).toMatch(/ALTER TABLE\s+accounts/i);
+  expect(migration.sql).toMatch(/auth_status/i);
+  expect(migration.sql).toMatch(/JSONB/i);
+  expect(migration.sql).toMatch(/DEFAULT '{}'/i);
+});

@@ -6,7 +6,7 @@
 // (tool,name) rejected, delete clears the current selection, set-current
 // requires the account to exist and stamps last_used_at.
 
-import { AccountsError, type ToolDef, toolDefSchema } from "../types.js";
+import { AccountsError, type ProfileAuthStatus, type ToolDef, toolDefSchema } from "../types.js";
 import { evaluateNameFree, type NameInvariantVerdict } from "../lib/name-invariant.js";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/index.js";
 import type { CreateAccountInput, UpdateAccountInput } from "./schema.js";
@@ -27,6 +27,8 @@ export interface Account {
   nativeName?: string;
   /** R-P1-4: former registry name(s) this profile has answered to. */
   aliases?: string[];
+  /** b27cc4a0: per-machine authentication status, keyed by machine id. */
+  authStatus?: ProfileAuthStatus;
 }
 
 export interface CurrentSelection {
@@ -81,6 +83,11 @@ interface AccountRow {
    */
   native_name?: string | null;
   aliases?: unknown;
+  /**
+   * b27cc4a0. Optional on the TYPE for the same reason as `aliases`: fixtures
+   * and tests written before migration 0008 don't carry the column.
+   */
+  auth_status?: unknown;
 }
 
 /**
@@ -168,6 +175,44 @@ function parseMetadata(value: unknown): Record<string, string | number | boolean
   return {};
 }
 
+/**
+ * Parse the `auth_status` JSONB column back into the per-machine map.
+ * Tolerant of `undefined`/`null` (no column yet, or genuinely unset) and of
+ * the driver returning JSONB as an already-parsed object or a raw JSON
+ * string, mirroring `parseAliases`' tolerance. Returns `undefined` for
+ * "nothing recorded" so `Account.authStatus` matches the client `Profile`
+ * schema's `.optional()` rather than always-present-but-empty.
+ */
+function parseAuthStatus(value: unknown): ProfileAuthStatus | undefined {
+  if (value === null || value === undefined) return undefined;
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const map = parsed as Record<string, unknown>;
+  const out: ProfileAuthStatus = {};
+  for (const [machineId, entry] of Object.entries(map)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const { authenticated, checkedAt, detail } = entry as {
+      authenticated?: unknown;
+      checkedAt?: unknown;
+      detail?: unknown;
+    };
+    if (typeof authenticated !== "boolean" || typeof checkedAt !== "string") continue;
+    out[machineId] = {
+      authenticated,
+      checkedAt,
+      ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function rowToAccount(row: AccountRow): Account {
   const account: Account = {
     tool: row.tool,
@@ -186,6 +231,8 @@ function rowToAccount(row: AccountRow): Account {
   if (row.native_name !== null && row.native_name !== undefined) account.nativeName = row.native_name;
   const aliases = parseAliases(row.aliases);
   if (aliases) account.aliases = aliases;
+  const authStatus = parseAuthStatus(row.auth_status);
+  if (authStatus) account.authStatus = authStatus;
   return account;
 }
 
@@ -316,8 +363,8 @@ export class AccountsRepo implements AccountsStore {
         throw this.nameConflict(input.name, existing, input.tool);
       }
       const row = await client.one<AccountRow>(
-        `INSERT INTO accounts (tool, name, email, display_name, identity, card_last4, metadata, dir, description)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+        `INSERT INTO accounts (tool, name, email, display_name, identity, card_last4, metadata, dir, description, auth_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb)
          RETURNING *`,
         [
           input.tool,
@@ -329,6 +376,7 @@ export class AccountsRepo implements AccountsStore {
           JSON.stringify(input.metadata ?? {}),
           input.dir ?? null,
           input.description ?? null,
+          JSON.stringify(input.authStatus ?? {}),
         ],
       );
       return rowToAccount(row);
@@ -353,6 +401,15 @@ export class AccountsRepo implements AccountsStore {
         ? [...new Set([...(current.aliases ?? []), ...input.aliases])]
         : undefined;
 
+    // b27cc4a0: auth status MERGES per machine, never replaces the whole map —
+    // a caller that only knows the one machine it just probed must not erase
+    // other machines' recorded entries. Same append/dedup discipline as
+    // aliases and metadata above.
+    const mergedAuthStatus =
+      input.authStatus !== undefined
+        ? { ...(current.authStatus ?? {}), ...input.authStatus }
+        : undefined;
+
     const sets: string[] = [];
     const params: unknown[] = [];
     let i = 1;
@@ -371,6 +428,7 @@ export class AccountsRepo implements AccountsStore {
     if (input.lastUsedAt !== undefined) put("last_used_at", input.lastUsedAt);
     if (input.nativeName !== undefined) put("native_name", input.nativeName);
     if (mergedAliases !== undefined) put("aliases", JSON.stringify(mergedAliases), "::jsonb");
+    if (mergedAuthStatus !== undefined) put("auth_status", JSON.stringify(mergedAuthStatus), "::jsonb");
 
     if (sets.length === 0) return current;
 
