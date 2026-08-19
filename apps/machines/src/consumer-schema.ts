@@ -411,7 +411,9 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
           required: ["command_owner", "route_owner", "default_timeout_ms", "private_route_policy", "supported_operations", "stable_surfaces"],
           properties: {
             command_owner: { const: BROWSERPLAN_APP_ID },
-            route_owner: { const: BROWSERPLAN_ROUTE_OWNER },
+            // v1 wire literals: "machines" is the canonical value, "open-machines"
+            // the legacy stored value — both accepted on read (open- prefix retired 2026-08-18).
+            route_owner: { enum: [BROWSERPLAN_ROUTE_OWNER, "open-machines"] },
             default_timeout_ms: { type: "number" },
             private_route_policy: { const: BROWSERPLAN_PRIVATE_ROUTE_POLICY },
             supported_operations: { const: [...BROWSERPLAN_OPERATION_IDS] },
@@ -577,7 +579,9 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
           type: "object",
           required: ["authority", "metadata_source", "manifest_declared", "heartbeat_present", "topology_entry", "local"],
           properties: {
-            authority: { const: "machines" },
+            // v1 wire literals: "machines" is the canonical value, "open-machines"
+            // the legacy stored value — both accepted on read (open- prefix retired 2026-08-18).
+            authority: { enum: ["machines", "open-machines"] },
             metadata_source: { enum: ["manifest_metadata", "heartbeat", "topology", "registry", "fallback"] },
             manifest_declared: { type: "boolean" },
             heartbeat_present: { type: "boolean" },
@@ -1412,7 +1416,8 @@ export function validateMachinesConsumerEnvelope(
       const contract = value.operation_contract as Record<string, unknown>;
       requireFields(contract, ["command_owner", "route_owner", "default_timeout_ms", "private_route_policy", "supported_operations", "stable_surfaces"], errors);
       if (contract.command_owner !== BROWSERPLAN_APP_ID) errors.push("operation_contract.command_owner");
-      if (contract.route_owner !== BROWSERPLAN_ROUTE_OWNER) errors.push("operation_contract.route_owner");
+      // Legacy "open-machines" accepted on read alongside the canonical value (v1 wire compat).
+      if (contract.route_owner !== BROWSERPLAN_ROUTE_OWNER && contract.route_owner !== "open-machines") errors.push("operation_contract.route_owner");
       if (typeof contract.default_timeout_ms !== "number") errors.push("operation_contract.default_timeout_ms");
       if (contract.private_route_policy !== BROWSERPLAN_PRIVATE_ROUTE_POLICY) errors.push("operation_contract.private_route_policy");
       if (!arrayEquals(contract.supported_operations, BROWSERPLAN_OPERATION_IDS)) errors.push("operation_contract.supported_operations");
