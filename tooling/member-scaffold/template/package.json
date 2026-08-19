@@ -46,6 +46,8 @@
     "prepack": "bun run verify && bun run scan:artifact"
   },
   "devDependencies": {
-    "@hasna/contracts": "^0.11.1"
+    "@hasna/contracts": "^0.11.1",
+    "@types/bun": "^1.2.4",
+    "typescript": "5.6.3"
   }
 }

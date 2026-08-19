@@ -9,9 +9,9 @@
  *   - hasna.contract.json at contracts kit 0.11.1 (schema
  *     hasna.service_contract.v1) with api/mcp/cli/sdk serviceSurfaces and a
  *     sqlite-only storage block;
- *   - tsconfig.json extending ../../tsconfig.base.json (the base's stated
- *     purpose: NEW members adopt it — see the inheritance census note in
- *     tsconfig.base.json);
+ *   - self-contained tsconfig.json mirroring the repo-root
+ *     tsconfig.base.json options, so the generated member builds standalone
+ *     (its Dockerfile build sees only package.json + tsconfig.json + src);
  *   - changeset wiring: writes `.changeset/<name>-bootstrap.md` with a
  *     `minor` bump so the versioning suite accepts the new package;
  *   - gates wiring: `contract:check` (contracts repo-conformance), `verify`

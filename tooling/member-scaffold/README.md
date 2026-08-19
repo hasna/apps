@@ -19,9 +19,11 @@ mcp bin, 27/82 the serve bin, 53/82 the `./sdk` export).
   Dockerfile), and `metadata.release.artifactScan` wired into prepack.
   `contracts repo-conformance` passes on the generated member (measured:
   all 15 checks at kit 0.11.1).
-- **tsconfig.json extending `../../tsconfig.base.json`** — the base's stated
-  purpose is new members; imported members keep their legacy standalone
-  configs until the deliberate normalization task.
+- **Self-contained `tsconfig.json`** mirroring the repo-root
+  `tsconfig.base.json` options — the Dockerfile build copies only
+  `package.json` + `tsconfig.json` + `src` into the image, where the repo-root
+  base does not exist, so a generated member cannot depend on it. Matches the
+  fleet member shape: imported members keep their standalone configs.
 - **Changeset wiring** — the generator writes
   `.changeset/<name>-bootstrap.md` with a `minor` bump, satisfying the
   versioning suite's version-without-changeset gate.
