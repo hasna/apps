@@ -19,7 +19,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 TARGET_NAME="HasnaNotesApp"
-APP_NAME="HasnaNotes"
+APP_NAME="HasnaNotes"        # functional bundle FILE name (install paths, process matching)
+DISPLAY_NAME="Hasna Notes"   # display title per the 'Hasna <Name>' convention (NAMING row 6d824d44)
 EXEC_NAME="HasnaNotes"
 BUNDLE_ID="com.hasna.notes"
 DIST="$REPO_ROOT/dist"
@@ -136,8 +137,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key><string>Hasna Notes</string>
+    <key>CFBundleName</key><string>$DISPLAY_NAME</string>
+    <key>CFBundleDisplayName</key><string>$DISPLAY_NAME</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>$EXEC_NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
@@ -183,5 +184,5 @@ fi
 codesign --verify --deep --strict "$APP" && echo "   verification OK"
 
 echo "BUILT: $APP"
-echo "       (CFBundleName=\"$APP_NAME\", display=\"Hasna Notes\", bundle id=$BUNDLE_ID, exec=$EXEC_NAME, version=$APP_VERSION, build=$BUILD_STAMP)"
+echo "       (CFBundleName=\"$DISPLAY_NAME\", display=\"$DISPLAY_NAME\", bundle id=$BUNDLE_ID, exec=$EXEC_NAME, version=$APP_VERSION, build=$BUILD_STAMP)"
 codesign -dv "$APP" 2>&1 | grep -E "Identifier|TeamIdentifier" | sed 's/^/       /'
