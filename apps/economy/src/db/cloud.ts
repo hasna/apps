@@ -8,7 +8,6 @@
 // SQLite-flavored SQL to Postgres and executes it synchronously against a pooled
 // connection.
 import type { AuthQueryClient } from '@hasna/contracts/auth'
-import { assertNoLegacyStorageMode } from '@hasna/contracts/server-backend'
 import type { ServerDataBackend } from '@hasna/contracts/schemas'
 import pg from 'pg'
 import type { DbAdapter, SqliteAdapter as Database } from './sqlite-adapter.js'
@@ -18,6 +17,25 @@ import { PG_MIGRATIONS } from './pg-migrations.js'
 
 /** The environment shape the backend resolver reads. */
 type Env = Record<string, string | undefined>
+
+const RETIRED_BACKEND_KEYS = [
+  'HASNA_ECONOMY_STORAGE_MODE',
+  'HASNA_ECONOMY_MODE',
+  'ECONOMY_STORAGE_MODE',
+  'ECONOMY_MODE',
+] as const
+
+function assertNoRetiredBackendKey(env: Env): void {
+  const legacyKey = RETIRED_BACKEND_KEYS.find(
+    (key) => Object.hasOwn(env, key) && env[key] !== undefined,
+  )
+  if (!legacyKey) return
+  throw new Error(
+    `${legacyKey} was removed. Delete the retired variable; ` +
+      'set HASNA_ECONOMY_DATABASE_URL to select the postgresql server backend, ' +
+      'or leave it unset for sqlite.',
+  )
+}
 
 /** Resolve the Postgres DSN from the standard env aliases. */
 export function getCloudDatabaseUrl(env: Env = process.env): string | undefined {
@@ -39,14 +57,12 @@ export function getCloudDatabaseUrl(env: Env = process.env): string | undefined 
  * (CONTRACT.md section 2), so a half-migrated deployment fails loudly at startup
  * instead of quietly serving the wrong store.
  *
- * The rejection is delegated to the contract package so the migration hint stays
- * identical to the one the `server_backend_configuration` conformance gate emits.
- * DSN resolution stays local because economy also honours the bare `DATABASE_URL`
+ * The rejection stays local because economy also honours the bare `DATABASE_URL`
  * alias, which the contract's own resolver does not read — deferring to it
  * wholesale would silently downgrade such a deployment to sqlite.
  */
 export function resolveEconomyServerBackend(env: Env = process.env): ServerDataBackend {
-  assertNoLegacyStorageMode('economy', env)
+  assertNoRetiredBackendKey(env)
   return getCloudDatabaseUrl(env) ? 'postgresql' : 'sqlite'
 }
 

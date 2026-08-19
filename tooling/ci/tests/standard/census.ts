@@ -53,6 +53,28 @@
  * stale-entry failure under the two-sided contract; and the loops
  * credential_seam_compliance violation (unrecorded at the 0.10.6
  * validator) auto-files its reconcile task rather than failing the suite.
+ * 2026-08-18 (this change): treasury's SDK exception entry DELETED — the
+ * member now ships ./sdk, so the recorded exception that passes was a
+ * stale-entry failure under the two-sided contract (main-gate repair,
+ * todos b66b3f04).
+ * 2026-08-18 (rebase repair, todos b66b3f04): the context and crawl
+ * manifest-missing exception entries DELETED — both members gained
+ * hasna.contract.json in the contracts-align wave 2 merges, so the
+ * recorded exceptions that passed were stale-entry failures under the
+ * two-sided contract. They are recorded in NO_VALIDATOR_PIN pending a
+ * validator pin. The datasets CONTRACTS_EXCEPTIONS entry DELETED — the
+ * member's manifest now wires artifactScan (contracts task 226bfc01
+ * completed). Its kit/pin mismatch (kit 0.11.1, pinned 0.10.6) is
+ * RECORDED in KIT_VERSION_EXCEPTIONS: the code imports parseContract,
+ * which contracts 0.11.1 does not export, so the pin stays 0.10.6 until
+ * the API migration lands (measured: pin bump to ^0.11.1 breaks the
+ * datasets prepare build).
+ * 2026-08-19 (current-main rebase, todos b66b3f04): the validator at
+ * @hasna/contracts 0.11.1 now passes the previously recorded docs, draw,
+ * hooks, loops, mementos, orgs, releases, router, search and ui entries;
+ * those stale conformance entries were deleted. Current kit/pin drift for
+ * hooks (0.8.4/0.11.1), mementos (0.11.1/0.10.6) and orgs (0.10.6/0.11.1)
+ * is recorded in KIT_VERSION_EXCEPTIONS pending their pin migrations.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -183,7 +205,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "sheets", reason: "Library-shaped (spreadsheet format); no MCP surface." },
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
-  { member: "tenants", reason: "Registry-shaped; no MCP surface." },
   { member: "terminal", reason: "CLI-only member (terminal tooling); no MCP surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
   { member: "ui", reason: "Legacy ui.sh mirror; single `ui` bin, no MCP surface." },
 ];
@@ -299,8 +320,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "computer", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "context", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "crawl", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -339,21 +358,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos reconcile task 'Reconcile @hasna/controls contracts conformance: manifest_valid' (auto-filed by the standard suite; resolves when the contracts lane publishes the two-backend validator and controls re-pins)",
   },
   {
-    member: "datasets",
-    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported via delta (hasna/contracts 0.10.6 pin) from org repo; org repo has no artifact-scan script.",
-    task: "todos 226bfc01-093a-469a-bc94-57491c08fe1b (contracts task — datasets)",
-  },
-  {
-    member: "docs",
-    cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
-    task: "todos 6818348f (contracts task — docs)",
-  },
-  {
-    member: "draw",
-    cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
-    task: "todos 5698b7d3 (contracts task — draw)",
-  },
-  {
     member: "economy",
     cause: "manifest_valid: manifest (imported by #147) declares bin economy-otel, which is not in ALLOWED_BIN_SUFFIXES; npm @hasna/economy 0.3.9 ships the bin (faithful import), so the exception is recorded until the allowlist or the bin is reconciled.",
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
@@ -379,11 +383,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 9dc0ee28 (contracts task — gateway)",
   },
   {
-    member: "hooks",
-    cause: "manifest_valid: manifest added by #102 (2026-08-14) is pre-backend-schema era — storage.mode Required, storage.engines.1 'postgresql' invalid (expected sqlite|postgres), storage.backend unrecognized. Validated at pinned 0.8.4.",
-    task: "todos 03d497e8-adff-4226-9f78-903f1c17645b (contracts task — hooks)",
-  },
-  {
     member: "instructions",
     cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); surface_matrix: missing sdk surface (no ./sdk export; SDK lane c7ce8b75); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
     task: "todos c15cca18 (contracts task — instructions)",
@@ -399,24 +398,9 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos d166125e (contracts task — logs)",
   },
   {
-    member: "loops",
-    cause: "credential_seam_compliance: src/lib/cloud/storage.ts:218 resolveStorageClient and src/lib/cloud/transport.ts:89/241/358 are vendored copies of the @hasna/contracts client seam, not uses of it — a fork does not receive credential-resolution fixes. Import from @hasna/contracts/client instead. Pre-existing on origin/main (7bb103c4), carried by the #68 base-sync.",
-    task: "todos 19a40a26-94d1-4c13-aa8f-acb25dd24ae5 (suite-record reconcile — PR #68 landing lane)",
-  },
-  {
-    member: "mementos",
-    cause: "surface_bindings: serviceSurfaces[1].generatedFrom is required for a supported service SDK.",
-    task: "todos 5695459d (contracts task — mementos)",
-  },
-  {
     member: "monitor",
     cause: "bins_match_package: package.json ships bins monitor-server and monitor-web that the manifest does not declare (manifest declares monitor, monitor-mcp only). Imported by #97 after the original census; validated at kitVersion 0.8.5 (no pinned dep).",
     task: "todos d2c6d20f-7c80-4b84-ae35-a92ce866bc14 (contracts task — monitor)",
-  },
-  {
-    member: "orgs",
-    cause: "surface_matrix: missing supported surface declarations or eligible waivers: api, sdk, mcp; published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Imported by the delta lane from the org-side manifest (kitVersion 0.10.6, no pinned dep); alignment owned by the manifest lane.",
-    task: "todos 41208cbe (manifest lane — align imported orgs manifest)",
   },
   {
     member: "pixels",
@@ -427,21 +411,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "prompts",
     cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required). (The earlier self_host_artifact and storage_capabilities causes no longer fire at main.)",
     task: "todos eb3f331d (contracts task — prompts)",
-  },
-  {
-    member: "search",
-    cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required); self_host_artifact (service-class repos require a self-host deployment artifact); storage_capabilities (storage.pgTestGate is required to prove live PostgreSQL support); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
-    task: "todos 405a8c38-d59a-4a96-948f-943e9a17241c (reconcile @hasna/search contracts conformance — auto-filed)",
-  },
-  {
-    member: "router",
-    cause: "bins_match_package (package.json ships bin open-router that the manifest does not declare) and surface_matrix (api/sdk/mcp/cli missing or unwaived); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
-    task: "todos 93a8e6ac-b447-4605-9af5-bf73ff0a9bb1 (reconcile @hasna/router contracts conformance — auto-filed)",
-  },
-  {
-    member: "releases",
-    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported by the hasna-org delta lane (2026-08-17).",
-    task: "todos a2f6ab06-43ae-4cbd-847a-4b3fa4082d71 (reconcile @hasna/releases contracts conformance — auto-filed)",
   },
   {
     member: "sheets",
@@ -478,11 +447,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
   },
-  {
-    member: "ui",
-    cause: "surface_matrix: manifest (imported with the org delta c594c9a from hasna/ui) declares only the cli surface — api/sdk/mcp missing without waivers; published_artifact_gate: metadata.release.artifactScan.script is required for a published package. Validated at kitVersion 0.10.6 (no pinned dep).",
-    task: "todos 3f3cc597-74d5-4eeb-ae17-c56cd8069a3a (contracts task — ui)",
-  },
 ];
 
 /** kitVersion must match the member's pinned @hasna/contracts version
@@ -490,11 +454,15 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
   { member: "accounts", kitVersion: "0.10.6", pinned: "0.5.2" },
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
+  { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
   { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
+  { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
+  { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
+  { member: "hooks", kitVersion: "0.8.4", pinned: "0.11.1" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —
@@ -506,7 +474,9 @@ export const NO_VALIDATOR_PIN: string[] = [
   "catalog",
   "changelog",
   "computers",
+  "context",
   "contracts",
+  "crawl",
   "docs",
   "draw",
   "guardrails",

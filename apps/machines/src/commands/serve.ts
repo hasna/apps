@@ -6,7 +6,7 @@ import { diffClaudeCli, getClaudeCliStatus } from "./install-claude.js";
 import { getAgentStatus } from "../agent/runtime.js";
 import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redaction.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute } from "../topology.js";
-import { listMachineTrashPolicies, resolveNoteMachineContext, type NoteActorType, type NoteMachineContextSource } from "../notes.js";
+import { listMachineTrashPolicies, resolveNoteMachineContext, type NoteActorType, type NoteMachineContextSource, type NoteMachineContextSourceInput } from "../notes.js";
 import { resolveMachineDetails } from "../details.js";
 import { getBrowserPlanFleet } from "../browserplan.js";
 import { createTrustedNotificationApproval, listNotificationChannels, testNotificationChannel } from "./notifications.js";
@@ -555,7 +555,7 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
             actor_name: firstQueryString(url, ["actor_name", "actorName"]),
             agent_id: firstQueryString(url, ["agent_id", "agentId"]),
             agent_name: firstQueryString(url, ["agent_name", "agentName"]),
-            source: firstQueryString(url, ["provenance_source", "provenanceSource", "actor_source", "actorSource", "source"]) as NoteMachineContextSource | undefined,
+            source: firstQueryString(url, ["provenance_source", "provenanceSource", "actor_source", "actorSource", "source"]) as NoteMachineContextSourceInput | undefined,
           },
         }));
       }

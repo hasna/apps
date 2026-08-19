@@ -1373,9 +1373,10 @@ describe("command runner", () => {
 
   it("classifies build and test output into queryable lifecycle metadata", async () => {
     const db = createTestDb();
+    const bunExecutable = Bun.which("bun") ?? "bun";
     const result = await runCommand(new LocalRunSink(db),
       [
-        process.execPath,
+        bunExecutable,
         "-e",
         "console.log('PASS unit suite'); console.log('Local: http://localhost:5173/'); console.error('src/app.ts(1,2): error TS2322: not assignable'); process.exit(1)",
         "test",

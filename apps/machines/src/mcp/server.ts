@@ -430,6 +430,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
             actor_name,
             agent_id,
             agent_name,
+            // The tool schema admits legacy open-* provenance values on read;
+            // the resolver normalizes them to their canonical renamed form, so
+            // the output stays canonical-only.
             source,
           },
         }), null, 2),

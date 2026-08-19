@@ -251,8 +251,8 @@ const packedProduct = deploymentFixtureBundle.fixtures.productProjections[0];
 if (!deployment.ProductProjectionSchema.safeParse(packedProduct).success) {
   throw new Error("packed deployment fixture did not parse through the public schema");
 }
-if (todos.TodosModeSchema.parse("local") !== "local") throw new Error("Todos subpath did not load");
-if (todos.TodosModeSchema.safeParse("remote").success) throw new Error("Todos mode validation drifted");
+if ("TodosModeSchema" in todos) throw new Error("Todos subpath leaked the retired mode schema");
+if (!("TODOS_OPERATION_MANIFEST" in todos)) throw new Error("Todos subpath did not expose the operation manifest");
 if ("createTodosTransferBundleWithDigests" in todos) throw new Error("structural transfer builder leaked publicly");
 for (const internalName of [
   "TODOS_SCHEMA_FOUNDATION_REGISTRY",
@@ -395,7 +395,6 @@ const canonicalMapBundle = todos.createTodosTransferBundle({
   createdAt: "2026-07-24T02:00:00.000Z",
   source: {
     authorityId: "tenant-a",
-    mode: "local",
   },
   records: Object.fromEntries(
     todos.TODOS_TRANSFER_SECTION_NAMES.map((name) => [name, []]),
