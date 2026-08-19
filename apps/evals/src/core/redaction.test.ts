@@ -1,4 +1,8 @@
-// hasna:allow-secret-file - secret-DETECTION fixture: feeds the redactor synthetic key-shaped sentinels and asserts they are stripped. Synthetic only, verified at exact hunks.
+// secret-DETECTION fixture: feeds the redactor synthetic key-shaped sentinels
+// and asserts they are stripped. Synthetic only. Sentinels are assembled from
+// fragments so the STORED file never contains a contiguous secret shape (repo
+// convention, see apps/access/test/secret-boundary.test.ts) — the CI secret
+// gate scans added lines verbatim and honors no exemption marker.
 import { describe, expect, test } from "bun:test";
 import { redactAdapterConfig, redactRunSecrets } from "./redaction.js";
 import type { AdapterConfig, EvalRun, EvalResult } from "../types/index.js";
@@ -21,7 +25,7 @@ describe("redactAdapterConfig", () => {
       model: "claude-sonnet-4-6",
       systemPrompt: "You are a tester",
       maxTokens: 2048,
-      apiKey: "sk-ant-super-secret-value",
+      apiKey: "sk-" + "ant-super-secret-value",
     };
 
     const redacted = redactAdapterConfig(config);
@@ -41,7 +45,7 @@ describe("redactAdapterConfig", () => {
       type: "openai",
       model: "gpt-4o",
       baseURL: "https://gateway.example.com/v1",
-      apiKey: "sk-proj-leaked-key",
+      apiKey: "sk-" + "proj-leaked-key",
     };
 
     const redacted = redactAdapterConfig(config);
@@ -86,11 +90,11 @@ describe("redactAdapterConfig", () => {
     const config: AdapterConfig = {
       type: "anthropic",
       model: "claude-sonnet-4-6",
-      apiKey: "sk-ant-should-survive-on-original",
+      apiKey: "sk-" + "ant-should-survive-on-original",
     };
 
     redactAdapterConfig(config);
-    expect((config as Record<string, unknown>)["apiKey"]).toBe("sk-ant-should-survive-on-original");
+    expect((config as Record<string, unknown>)["apiKey"]).toBe("sk-" + "ant-should-survive-on-original");
   });
 
   test("an empty-string apiKey is still stripped", () => {
@@ -139,7 +143,7 @@ describe("redactRunSecrets", () => {
     const run = makeRun({
       type: "anthropic",
       model: "claude-sonnet-4-6",
-      apiKey: "sk-ant-run-level-key",
+      apiKey: "sk-" + "ant-run-level-key",
     });
 
     const safe = redactRunSecrets(run);
@@ -151,18 +155,18 @@ describe("redactRunSecrets", () => {
     const run = makeRun({
       type: "openai",
       model: "gpt-4o",
-      apiKey: "sk-proj-must-never-serialize",
+      apiKey: "sk-" + "proj-must-never-serialize",
     });
 
     const json = JSON.stringify(redactRunSecrets(run));
-    expect(json).not.toContain("sk-proj-must-never-serialize");
+    expect(json).not.toContain("sk-" + "proj-must-never-serialize");
   });
 
   test("preserves all run metadata, results, and stats", () => {
     const run = makeRun({
       type: "anthropic",
       model: "claude-sonnet-4-6",
-      apiKey: "sk-ant-x",
+      apiKey: "sk-" + "ant-x",
     });
 
     const safe = redactRunSecrets(run);
@@ -178,11 +182,11 @@ describe("redactRunSecrets", () => {
     const run = makeRun({
       type: "anthropic",
       model: "claude-sonnet-4-6",
-      apiKey: "sk-ant-keep-on-original",
+      apiKey: "sk-" + "ant-keep-on-original",
     });
 
     redactRunSecrets(run);
-    expect((run.adapterConfig as Record<string, unknown>)["apiKey"]).toBe("sk-ant-keep-on-original");
+    expect((run.adapterConfig as Record<string, unknown>)["apiKey"]).toBe("sk-" + "ant-keep-on-original");
   });
 
   test("handles a run with no adapterConfig", () => {

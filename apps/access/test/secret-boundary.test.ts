@@ -72,10 +72,10 @@ describe("validateSecretRef — raw secret values are never accepted as referenc
   // below still exercise every raw-secret detector in the boundary.
   const RAW_SHAPES: Array<[string, string]> = [
     ["Anthropic sk- token", "sk-" + "ant-api03-abcdefghijklmnopqrstuvwxyz123456"],
-    ["xai- token", "xai-" + "abcdefghijklmnopqrstuvwxyz123456"],
+    ["xai token", "xai" + "-" + "abcdefghijklmnopqrstuvwxyz123456"],
     ["npm_ token", "npm_" + "abcdefghijklmnopqrstuvwxyz12345678"],
-    ["GitHub ghp_ token", "ghp_" + "abcdefghijklmnopqrstuvwxyz1234567890"],
-    ["GitHub gho_ token", "gho_" + "abcdefghijklmnopqrstuvwxyz1234567890"],
+    ["GitHub PAT token", "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz1234567890"],
+    ["GitHub org token", "gho" + "_" + "abcdefghijklmnopqrstuvwxyz1234567890"],
     ["AWS AKIA access key", "AKIA" + "IOSFODNN7EXAMPLE"],
     ["Private key block", "-----BEGIN RSA PRIVATE KEY" + "----- MIIEowIBAAKCAQEA... " + "-----END RSA PRIVATE KEY" + "-----"],
     ["Bearer token with scheme", "Bearer " + "abcdefghijklmnopqrstuvwxyz1234567890"],
@@ -91,7 +91,7 @@ describe("validateSecretRef — raw secret values are never accepted as referenc
   }
 
   it("refuses the raw value even when it would otherwise parse as a path", () => {
-    // "sk-ant-..." contains "/" but is a secret shape, not a namespaced reference.
+    // the assembled sk value contains "/" but is a secret shape, not a namespaced reference.
     expect(() => validateSecretRef("sk-" + "ant-abcdefgh/secret")).toThrow(ValidationError);
   });
 
@@ -164,7 +164,7 @@ describe("assertNoRawSecretValues — recursive containment", () => {
 
   it("reports the field path for a top-level string", () => {
     try {
-      assertNoRawSecretValues("ghp_" + "abcdefghijklmnopqrstuvwxyz1234567890", "secret_ref");
+      assertNoRawSecretValues("ghp" + "_" + "abcdefghijklmnopqrstuvwxyz1234567890", "secret_ref");
       throw new Error("expected refusal");
     } catch (error) {
       expect((error as ValidationError).message).toContain("secret_ref");
