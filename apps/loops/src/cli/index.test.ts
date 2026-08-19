@@ -304,6 +304,35 @@ describe("loops CLI", () => {
     expect(JSON.parse(runCli(dataDir, ["--json", "labels", "clear", "browser"]).stdout).labels).toEqual([]);
   });
 
+  test("show surfaces unserved execution state for a machine-pinned loop no runner serves (BUG 96c837b0)", () => {
+    const dataDir = freshDataDir("loops-cli-unserved-");
+    const past = new Date(Date.now() - 20 * 60_000).toISOString();
+    const store = new Store(join(dataDir, "loops.db"));
+    const created = store.createLoop(
+      {
+        name: "pinned-cli",
+        machine: { id: "station02", route: "local", local: true, confidence: "exact" },
+        schedule: { type: "once", at: past },
+        target: { type: "command", command: "true" },
+      },
+      new Date(Date.now() - 20 * 60_000),
+    );
+    store.close();
+    // The store stamps createdAt with wall-clock now regardless of `from`, so
+    // backdate the row to put the loop past the overdue grace at show time.
+    new Database(join(dataDir, "loops.db")).run(
+      "UPDATE loops SET created_at = ? WHERE id = ?",
+      [past, created.id],
+    );
+
+    const show = runCli(dataDir, ["--json", "show", "pinned-cli"]);
+    expect(show.status).toBe(0);
+    const parsed = JSON.parse(show.stdout) as { execution?: { state?: string; reason?: string } };
+    expect(parsed.execution).toMatchObject({ state: "unserved" });
+    expect(parsed.execution?.reason).toContain("station02");
+    expect(show.stderr).toContain("UNSERVED");
+  });
+
   test("reports the package version", () => {
     const dataDir = freshDataDir("loops-cli-version-");
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
