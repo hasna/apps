@@ -7,11 +7,19 @@
 // --input produces a ValidationError; an unknown operation returns the
 // {ok:false,error} envelope; and the dashboard's data source (cliNamespaces)
 // covers every registry op.
+//
+// The openapi check exit codes (1 stale / 0 current) are asserted through a
+// spawned CLI process: mutating process.exitCode inside the suite's own
+// process makes bun test's runner exit non-zero even when every test passes
+// (measured at head 1c61c64d: 164 pass / 1 skip / 0 fail, rc=1), so the exit
+// contract is asserted on the child process instead.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildProgram } from "../src/cli/index.jsx";
 import { cliNamespaces } from "../src/cli/namespaces.js";
 import { cliInvoke, parseInputJson } from "../src/cli/dispatch.js";
@@ -23,7 +31,6 @@ import type { Command } from "commander";
 
 let captured: string[];
 let originalWrite: (chunk: unknown) => boolean;
-let originalExitCode: number;
 
 function captureStdout(): void {
   captured = [];
@@ -40,11 +47,9 @@ function restoreStdout(): void {
 
 beforeEach(() => {
   captureStdout();
-  originalExitCode = process.exitCode;
 });
 afterEach(() => {
   restoreStdout();
-  process.exitCode = originalExitCode;
   closeDatabase();
 });
 
@@ -54,6 +59,14 @@ function cliArgs(command: string[]): string[] {
 
 async function runCli(program: Command, command: string[]): Promise<void> {
   await program.parseAsync(cliArgs(command));
+}
+
+/** The real CLI entry, run as its own process; the exit code is the assertion subject. */
+function runCliProcess(command: string[]): { stdout: string; exitCode: number } {
+  const cliEntry = fileURLToPath(new URL("../src/cli/index.tsx", import.meta.url));
+  const result = spawnSync(process.execPath, [cliEntry, ...command], { encoding: "utf8" });
+  if (result.error) throw result.error;
+  return { stdout: result.stdout, exitCode: result.status ?? -1 };
 }
 
 describe("openapi generate/check with temporary paths", () => {
@@ -67,26 +80,23 @@ describe("openapi generate/check with temporary paths", () => {
     expect(printed).toEqual({ ok: true, wrote: outPath });
   });
 
-  it("flags a stale document with {ok:false} and exit code 1", async () => {
+  it("flags a stale document with {ok:false} and exit code 1", () => {
     const dir = mkdtempSync(join(tmpdir(), "billing-cli-"));
     const stalePath = join(dir, "stale.json");
     // A byte-different document (extra whitespace) is stale.
     writeFileSync(stalePath, `${openApiJson()}\n`);
-    const program = buildProgram();
-    await runCli(program, ["openapi", "check", "--path", stalePath]);
-    expect(JSON.parse(captured.join(""))).toEqual({ ok: false, error: "openapi.json is stale; run `billing openapi generate`." });
-    expect(process.exitCode).toBe(1);
+    const { stdout, exitCode } = runCliProcess(["openapi", "check", "--path", stalePath]);
+    expect(JSON.parse(stdout)).toEqual({ ok: false, error: "openapi.json is stale; run `billing openapi generate`." });
+    expect(exitCode).toBe(1);
   });
 
-  it("accepts a current document with {ok:true} and leaves the exit code untouched", async () => {
+  it("accepts a current document with {ok:true} and exit code 0", () => {
     const dir = mkdtempSync(join(tmpdir(), "billing-cli-"));
     const currentPath = join(dir, "current.json");
     writeFileSync(currentPath, openApiJson());
-    const program = buildProgram();
-    process.exitCode = 0;
-    await runCli(program, ["openapi", "check", "--path", currentPath]);
-    expect(JSON.parse(captured.join(""))).toEqual({ ok: true, path: currentPath });
-    expect(process.exitCode).toBe(0);
+    const { stdout, exitCode } = runCliProcess(["openapi", "check", "--path", currentPath]);
+    expect(JSON.parse(stdout)).toEqual({ ok: true, path: currentPath });
+    expect(exitCode).toBe(0);
   });
 });
 
