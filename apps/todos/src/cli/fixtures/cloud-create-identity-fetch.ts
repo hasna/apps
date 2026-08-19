@@ -3,7 +3,7 @@ import { appendFileSync } from "node:fs";
 const CANONICAL_CREATE_ID = "2c4b7a7f-658e-424c-bcaf-475c3206f76e";
 const CREATE_SHORT_ID = "IAP9-00378";
 
-// NOTE: the create response returns the CANONICAL task row. The old open-todos
+// NOTE: the create response returns the CANONICAL task row. The legacy
 // contract returned a transient id from POST and relied on the CLI to resolve
 // the canonical row afterwards; apps/todos fails closed instead
 // (TASK_CREATE_PERSISTENCE_UNVERIFIED) when a GET readback of the returned id
