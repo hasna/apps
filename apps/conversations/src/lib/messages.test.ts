@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markMentionsReadByIds, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
 import { createChannel, joinChannel } from "./channels";
 import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
 import { closeDb, getDb } from "./db";
@@ -1429,6 +1429,72 @@ describe("markMentionsRead", () => {
     await new Promise((r) => setTimeout(r, 100));
     const changed = markMentionsRead("grace", "sp");
     expect(changed).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/**
+ * Agent-authored (SOL consult refused; spec from independent analysis of
+ * markMentionsReadByIds in messages.ts). The by-ids acknowledgement path was
+ * untested: exact-row semantics, ownership isolation, id validation, and the
+ * case handling that differs from markMentionsRead.
+ */
+describe("markMentionsReadByIds", () => {
+  function mentionRow(mentionId: number) {
+    return getDb().prepare("SELECT * FROM message_mentions WHERE id = ?").get(mentionId) as any;
+  }
+
+  function mentionsFor(agent: string) {
+    return getDb().prepare(
+      "SELECT * FROM message_mentions WHERE mentioned_agent = ? ORDER BY id ASC",
+    ).all(agent.toLowerCase()) as any[];
+  }
+
+  test("marks exactly the named un-notified mention rows for the agent", async () => {
+    createChannel("mmx", "admin");
+    sendMessage({ from: "a", to: "mmx", channel: "mmx", content: "@dave one" });
+    sendMessage({ from: "a", to: "mmx", channel: "mmx", content: "@dave two" });
+    await new Promise((r) => setTimeout(r, 100));
+    const rows = mentionsFor("dave");
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    const first = rows[0];
+
+    const changed = markMentionsReadByIds("dave", [first.id]);
+    expect(changed).toBe(1);
+    expect(mentionRow(first.id).notified_at).toBeDefined();
+    expect(mentionRow(rows[1].id).notified_at).toBeNull();
+  });
+
+  test("does not stamp another agent's mention rows", async () => {
+    createChannel("mmx2", "admin");
+    sendMessage({ from: "a", to: "mmx2", channel: "mmx2", content: "@dave and @erin" });
+    await new Promise((r) => setTimeout(r, 100));
+    const dave = mentionsFor("dave")[0];
+    const erin = mentionsFor("erin")[0];
+
+    markMentionsReadByIds("dave", [dave.id, erin.id]);
+    expect(mentionRow(dave.id).notified_at).toBeDefined();
+    expect(mentionRow(erin.id).notified_at).toBeNull();
+  });
+
+  test("empty ids is a no-op returning 0", () => {
+    expect(markMentionsReadByIds("dave", [])).toBe(0);
+  });
+
+  test("rejects non-positive and non-integer ids instead of silently matching nothing", () => {
+    for (const ids of [[0], [-3], [1.5], [Number.NaN]]) {
+      expect(() => markMentionsReadByIds("dave", ids as number[])).toThrow("mention_ids must contain only positive integers");
+    }
+  });
+
+  test("matches the agent case-insensitively (the by-ids path lowercases)", async () => {
+    createChannel("mmx3", "admin");
+    sendMessage({ from: "a", to: "mmx3", channel: "mmx3", content: "@dave mixed case" });
+    await new Promise((r) => setTimeout(r, 100));
+    const row = mentionsFor("dave")[0];
+
+    const changed = markMentionsReadByIds("DAVE", [row.id]);
+    expect(changed).toBe(1);
+    expect(mentionRow(row.id).notified_at).toBeDefined();
   });
 });
 
