@@ -7,8 +7,15 @@ const CREATE_SHORT_ID = "IAP9-00378";
 // contract returned a transient id from POST and relied on the CLI to resolve
 // the canonical row afterwards; apps/todos fails closed instead
 // (TASK_CREATE_PERSISTENCE_UNVERIFIED) when a GET readback of the returned id
-// does not reproduce the same stored row, so the transient-id shape is no
-// longer expressible by this fixture.
+// does not reproduce the same stored row.
+//
+// With TODOS_CREATE_IDENTITY_TRANSIENT=1 the POST handler returns a transient
+// id that no GET resolves, so the regression test can assert the fail-closed
+// readback path directly.
+
+const transientCreateId = process.env["TODOS_CREATE_IDENTITY_TRANSIENT"] === "1"
+  ? "0f1e2d3c-4b5a-6978-8a7b-6c5d4e3f2a1b"
+  : null;
 
 const requestLog = process.env["TODOS_CREATE_IDENTITY_REQUEST_LOG"];
 
@@ -91,10 +98,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/v1/tasks" && request.method === "POST") {
     const body = await request.json() as { title?: string };
     return Response.json({
-      task: {
-        ...canonicalTask,
-        title: body.title ?? canonicalTask.title,
-      },
+      task: transientCreateId
+        ? { ...canonicalTask, id: transientCreateId }
+        : { ...canonicalTask, title: body.title ?? canonicalTask.title },
     }, { status: 201 });
   }
 

@@ -14,7 +14,7 @@ afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-async function runCli(args: string[], root: string, requestLog: string) {
+async function runCli(args: string[], root: string, requestLog: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn([
     "bun", "run", "--preload", FETCH_FIXTURE, "src/cli/index.tsx", ...args,
   ], {
@@ -30,6 +30,7 @@ async function runCli(args: string[], root: string, requestLog: string) {
       HASNA_TODOS_API_URL: "https://identity.fixture.invalid",
       HASNA_TODOS_API_KEY: "fixture-key-not-a-secret",
       TODOS_CREATE_IDENTITY_REQUEST_LOG: requestLog,
+      ...extraEnv,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -75,6 +76,25 @@ describe("cloud create response identity", () => {
     expect(tasks.filter((task) => task.short_id === CREATE_SHORT_ID)).toEqual([
       expect.objectContaining({ id: CANONICAL_CREATE_ID }),
     ]);
+
+    const requests = readFileSync(requestLog, "utf8").trim().split("\n").filter(Boolean);
+    expect(requests.filter((request) => request === "POST /v1/tasks")).toHaveLength(1);
+  }, 30_000);
+
+  test("add fails closed when the POST id cannot be read back (TASK_CREATE_PERSISTENCE_UNVERIFIED)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "todos-create-identity-transient-"));
+    tempRoots.push(root);
+    const requestLog = join(root, "requests-transient.log");
+    writeFileSync(requestLog, "");
+
+    const added = await runCli([
+      "--json", "add", "Transient create identity", "--no-project",
+    ], root, requestLog, { TODOS_CREATE_IDENTITY_TRANSIENT: "1" });
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect((JSON.parse(added.stdout) as { error?: string }).error ?? "").toContain(
+      "TASK_CREATE_PERSISTENCE_UNVERIFIED",
+    );
 
     const requests = readFileSync(requestLog, "utf8").trim().split("\n").filter(Boolean);
     expect(requests.filter((request) => request === "POST /v1/tasks")).toHaveLength(1);
