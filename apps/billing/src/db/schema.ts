@@ -107,7 +107,9 @@ CREATE TABLE IF NOT EXISTS accounting_reconciliation_events (
   payload_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (source, source_id, event_type)
+  -- Entity-scoped uniqueness: the same provider event under two different
+  -- tenants is two rows, never one (cross-tenant collapse = lost accounting).
+  UNIQUE (entity_id, source, source_id, event_type)
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (

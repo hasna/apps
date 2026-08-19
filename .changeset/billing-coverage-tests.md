@@ -1,0 +1,11 @@
+---
+"@hasna/billing": patch
+---
+
+Coverage-lane hardening from the tests-coverage-sol workflow (2026-08-19): Sol-guided regression tests pinned four defect classes, and the repairs they demand landed with them.
+
+- Reconciliation: a row already marked `written` to accounting now stays `written` across a webhook redelivery of the same logical event (was: `state = excluded.state` reset it to `pending`, risking double writeback); the upsert conflict target is now entity-scoped `(entity_id, source, source_id, event_type)`, matching the SQLite unique constraint and PostgreSQL migration 0004, so the same provider event under two tenants no longer collapses into one row.
+- Invoices: `mark_invoice_paid` rejects paying an already-paid invoice (`INVALID_TRANSITION`) instead of silently overwriting the recorded `amount_paid`.
+- Customers: `list_customers` honors the declared `status` filter (validated against subscription statuses; the customer's status is its most recent subscription's status) and rejects unknown statuses with `VALIDATION_ERROR` (was: status silently ignored).
+- Migrations: new PostgreSQL migration `0005-core-entity-indexes` adds the six per-table `entity_id` indexes the SQLite schema declares but the plan was missing (entity-scoped reads full-scanned without them).
+- Tests: 11 Sol-guided test files covering reconciliation re-emit semantics, invoice double-pay guards, customer filters/updates, subscription cancel/audit state machines, dunning attempt accounting and fallback schedules, backup/app-home contracts, SQLite/PostgreSQL schema parity, live-adapter verb serialization, CLI openapi generate/check, and support-snapshot limits and entity isolation.

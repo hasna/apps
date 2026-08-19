@@ -128,6 +128,33 @@ export const POSTGRESQL_MIGRATIONS: readonly Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_accounting_reconciliation_entity ON accounting_reconciliation_events(entity_id);
     `,
   ),
+  defineMigration(
+    "0004-reconciliation-entity-scoped-unique",
+    `
+    -- 0003 created UNIQUE (source, source_id, event_type) WITHOUT entity_id, so
+    -- the same provider event under two different tenants collapsed into one
+    -- row (the second tenant's accounting event was silently lost). Replace the
+    -- constraint with an entity-scoped unique index; the app upsert targets
+    -- ON CONFLICT (entity_id, source, source_id, event_type).
+    ALTER TABLE accounting_reconciliation_events DROP CONSTRAINT IF EXISTS accounting_reconciliation_events_source_source_id_event_type_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_accounting_reconciliation_entity_source
+      ON accounting_reconciliation_events(entity_id, source, source_id, event_type);
+    `,
+  ),
+  defineMigration(
+    "0005-core-entity-indexes",
+    `
+    -- Parity with the SQLite schema: every domain table is queried by
+    -- entity_id, and the PostgreSQL plan was missing these six indexes
+    -- (entity-scoped reads full-scanned without them).
+    CREATE INDEX IF NOT EXISTS idx_customers_entity ON customers(entity_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_entity ON subscriptions(entity_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_entity ON invoices(entity_id);
+    CREATE INDEX IF NOT EXISTS idx_dunning_policies_entity ON dunning_policies(entity_id);
+    CREATE INDEX IF NOT EXISTS idx_dunning_runs_entity ON dunning_runs(entity_id);
+    CREATE INDEX IF NOT EXISTS idx_events_entity ON events(entity_id);
+    `,
+  ),
 ];
 
 export function migrationIds(): string[] {

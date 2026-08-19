@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Database } from "bun:sqlite";
-import type { CustomerRow } from "../types/index.js";
-import { CustomerNotFoundError } from "../types/index.js";
+import { SUBSCRIPTION_STATUSES, type CustomerRow } from "../types/index.js";
+import { CustomerNotFoundError, ValidationError } from "../types/index.js";
 import { appendAudit } from "../db/audit.js";
 import { scopeToEntities } from "./authorization.js";
 import {
@@ -119,9 +119,27 @@ export const customerOps: ServiceOp[] = [
     profiles: ["minimal", "standard", "full"],
     handler: (ctx, raw) => {
       const input = raw as z.infer<typeof listInput>;
-      const rows = input.entity_id
-        ? (ctx.db.query("SELECT * FROM customers WHERE entity_id = ? ORDER BY created_at").all(input.entity_id) as CustomerRow[])
-        : (ctx.db.query("SELECT * FROM customers ORDER BY created_at").all() as CustomerRow[]);
+      if (input.status && !(SUBSCRIPTION_STATUSES as readonly string[]).includes(input.status)) {
+        throw new ValidationError(`Unknown customer status: ${input.status}.`);
+      }
+      const clauses: string[] = [];
+      const params: string[] = [];
+      if (input.entity_id) {
+        clauses.push("c.entity_id = ?");
+        params.push(input.entity_id);
+      }
+      if (input.status) {
+        // A customer's lifecycle status is its most recent subscription's
+        // status (customers carry no status column of their own).
+        clauses.push(
+          "c.id IN (SELECT s.customer_id FROM subscriptions s WHERE s.customer_id = c.id AND s.id = " +
+            "(SELECT s2.id FROM subscriptions s2 WHERE s2.customer_id = c.id ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) " +
+            "AND s.status = ?)",
+        );
+        params.push(input.status);
+      }
+      const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+      const rows = ctx.db.query(`SELECT c.* FROM customers c ${where} ORDER BY c.created_at`).all(...params) as CustomerRow[];
       return scopeToEntities(rows, ctx.principal);
     },
   },

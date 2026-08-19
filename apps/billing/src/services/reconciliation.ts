@@ -37,9 +37,12 @@ export function emitAccountingReconciliation(
     `INSERT INTO accounting_reconciliation_events
       (id, entity_id, source, source_id, event_type, accounting_entry_ref, amount, currency, state, payload_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source, source_id, event_type) DO UPDATE SET
+     ON CONFLICT(entity_id, source, source_id, event_type) DO UPDATE SET
       accounting_entry_ref = COALESCE(excluded.accounting_entry_ref, accounting_reconciliation_events.accounting_entry_ref),
-      state = excluded.state,
+      -- A row already written back to accounting stays 'written' across a
+      -- webhook redelivery of the same logical event; only never-written rows
+      -- take the new event's state.
+      state = CASE WHEN accounting_reconciliation_events.state = 'written' THEN 'written' ELSE excluded.state END,
       payload_json = excluded.payload_json,
       updated_at = excluded.updated_at`,
     [
@@ -58,8 +61,8 @@ export function emitAccountingReconciliation(
     ],
   );
   const row = db
-    .query("SELECT * FROM accounting_reconciliation_events WHERE source = ? AND source_id = ? AND event_type = ?")
-    .get(input.source, input.source_id, input.event_type) as AccountingReconciliationRow;
+    .query("SELECT * FROM accounting_reconciliation_events WHERE entity_id = ? AND source = ? AND source_id = ? AND event_type = ?")
+    .get(input.entity_id, input.source, input.source_id, input.event_type) as AccountingReconciliationRow;
   appendAudit(db, {
     entity_id: input.entity_id,
     actor_id: actorId,
