@@ -327,7 +327,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "markdown", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "mcps", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
@@ -437,11 +436,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "logs",
     cause: "surface_matrix: missing supported sdk surface (no ./sdk export; SDK deferred truthfully); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1.",
     task: "todos d166125e (contracts task — logs)",
-  },
-  {
-    member: "markdown",
-    cause: "surface_matrix (api/sdk missing or unwaived; cli-with-store shipping markdown-serve requires all four surfaces) and service_api_topology (a supported API surface is required — markdown-serve implements GET /health and POST /validate,/compile,/inspect,/lint,/run but no GET /ready or GET /version); self_host_artifact (no Dockerfile/compose at the app root); storage_capabilities (storage.pgTestGate is required to prove live PostgreSQL support — the optional Postgres feedback mirror has no PG test command). Manifest created by the contracts-alignment-r2 missing-manifest lane; server-topology and self-host work is the follow-up.",
-    task: "todos 1bfb26b7-05eb-4cf5-9762-e554afd02de6 (contracts-alignment-r2 missing-manifest lane)",
   },
   {
     member: "monitor",
