@@ -15,11 +15,10 @@ re-derived for a producer tree, never copied from a consumer tree.
 
 Membership of a project in THIS monorepo is decided by role, not by popularity:
 a project that publishes a public `@hasna/*` package and is not a fork or an
-archived artifact belongs here. Member census: 81 members are imported under
-`apps/` (2026-08-17; the LIVE count is what `bun tooling/ci/check-names.ts`
-prints — trust the gate's number over this sentence, because the import wave
-moves it); the remaining public-estate imports are tracked by the import wave
-(todos `28ac4516`).
+archived artifact belongs here. Member census: the LIVE count is what
+`bun tooling/ci/check-names.ts` prints — no snapshot number is kept in this
+file, because a snapshot rots while the gate's output does not; the remaining
+public-estate imports are tracked by the import wave (todos `28ac4516`).
 
 ## Repo laws (binding)
 

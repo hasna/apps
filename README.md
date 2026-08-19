@@ -22,16 +22,18 @@ tooling/ci/            CI gate scripts (secret scan, name conformance, publish g
 .github/workflows/     one CI workflow: gates, test-suites, build-test, verify-generated, publish-guard
 ```
 
-## Member status (2026-08-15)
+## Member status
 
-77 member packages are imported under `apps/` (measured by the
-standard-adherence census, 2026-08-15), each a public `@hasna/<name>`
+Member packages live under `apps/` — one directory per public `@hasna/<name>`
 package with the four surfaces (CLI, MCP server bin, `-serve` server bin,
-`./sdk` import). The initial `main` commit was the owner-approved bootstrap;
-everything after is PR-first. The remaining public-estate repos are tracked by
-the import wave (todos `28ac4516`) and land PR-first; per-member gaps against
-the four-surface standard are tracked by the manifest lane (todos `41208cbe`)
-and the SDK lane (todos `c7ce8b75`).
+`./sdk` import). The LIVE member count is what the census gate prints —
+`bun tooling/ci/check-names.ts` — and this README deliberately carries no
+snapshot number, because a snapshot rots while the gate's output does not.
+The initial `main` commit was the owner-approved bootstrap; everything after
+is PR-first. The remaining public-estate repos are tracked by the import wave
+(todos `28ac4516`) and land PR-first; per-member gaps against the four-surface
+standard are tracked by the manifest lane (todos `41208cbe`) and the SDK lane
+(todos `c7ce8b75`).
 
 ## License / Security / Contributing
 
