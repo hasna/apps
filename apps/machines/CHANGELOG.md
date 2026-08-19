@@ -4,6 +4,19 @@ All notable changes to `@hasna/machines` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.29
+
+### Added
+
+- `machines flip` registers `emails` so the hosted-mailbox route rolls fleet-wide
+  with every other app; `mailery` is removed from the registry (retired upstream,
+  never a client flips host). Emails is the first app with a per-app profile
+  override: it writes `EMAILS_SELF_HOSTED_URL` + `EMAILS_CLIENT_ENV_SECRET` (a
+  Vault pointer the emails CLI resolves itself) instead of the generic
+  `HASNA_EMAILS_API_URL`/`HASNA_EMAILS_API_KEY`, so no literal key is materialised
+  on disk, and its status verifier reads `mode.current` from
+  `emails status --json` (PR #645).
+
 ## 0.2.28
 
 ### Added
