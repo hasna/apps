@@ -86,10 +86,15 @@ Vision 05007066 ("very simple, like Google Keep") defines the shell:
 
 - Sidebar: NO app name. Home, New Note, the collapsible
   Notes section (`#sec-notes` + `#notes-list`), the collapsible Labels filter
-  section (`#labels-section` + `#labels-list`), an Archive entry
-  (`#nav-archive`), a Trash entry (`#nav-trash`), and Settings at the bottom.
+  section (`#labels-section` + `#labels-list`). The bottom of the sidebar is an
+  ICON-ONLY row (owner brief 2026-08-19): Settings (`#open-settings`), Archive
+  (`#nav-archive`) and Trash (`#nav-trash`) — no label text. Archive and trash
+  are BLENDED into just Trash: both icons open the single Trash view, and
+  archiving sends the note to Trash (status `trash`). Trash is never deleted —
+  soft delete / hidden state only.
   Label MANAGEMENT (create/rename/delete) lives in Settings → Labels
-  (`#labels-page-main`); sidebar label rows only filter.
+  (`#labels-page-main`); sidebar label rows only filter. Double-click (or the
+  pencil icon) renames a label INLINE (req 7).
 - Header (content area, right side): the copy-note-as-Markdown action
   (`#note-copy`) and the editor delete action (`#note-delete`) — both visible
   only while the editor shows — then the Chat button (`#open-chat`) and
@@ -152,10 +157,12 @@ window.HasnaNotes.notes.trash(noteId)
 window.HasnaNotes.notes.purge(noteId)
 ```
 
-Normal Delete should call the Trash path unless `note.status === "trash"`, in
-which case Delete is a permanent purge. Trash stays attributed to the note's
-own `machine` field (there is no separate trash-machine key in schema v2), and
-retention is controlled by `settings.trashRetentionDays` (default `30`).
+Normal Delete ALWAYS calls the Trash path. There is NO permanent purge
+(owner brief 2026-08-19 req 8): a note already in Trash stays hidden forever,
+and delete()/purge() on the native bridge refuse to delete. Trash stays
+attributed to the note's own `machine` field (there is no separate trash-machine
+key in schema v2); `settings.trashRetentionDays` (default `30`) remains in the
+data model but no longer triggers deletion.
 
 ## Markdown And Editor API
 
@@ -406,13 +413,12 @@ plus hover Restore and permanent-Delete actions
 Archived rows get hover Restore; every list row gets hover copy with the
 checkmark-icon-only feedback.
 
-Retention is ENFORCED on boot and hydrate: when expired Trash items exist, the
-app runs the `cleanupExpiredTrash()` path — including its strong confirmation —
-at most once per session, so declining does not re-prompt on the hydrate that
-follows every save. Settings → Appearance exposes the retention picker
-(`#retention-row`, options 7/30/90 days, default 30);
-`notes.setTrashRetentionDays(days)` clamps to a minimum of 1 day (0 or negative
-input becomes 1, matching the Swift store) and keeps 30 for non-numeric input.
+Retention enforcement is DISABLED (owner brief 2026-08-19 req 8): trash is
+never deleted, so `cleanupExpiredTrash()` is inert, no confirmation is ever
+asked, and the Settings → Appearance retention picker has been removed.
+`notes.setTrashRetentionDays(days)` still exists for the host contract (clamps
+to a minimum of 1 day, keeps 30 for non-numeric input) but never triggers
+deletion.
 
 The web layer dispatches:
 

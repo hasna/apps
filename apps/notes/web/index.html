@@ -37,14 +37,17 @@
             <div class="labels-list" id="labels-list"><!-- populated by app.js --></div>
           </div>
 
-          <!-- Archive (archived notes; restore via row action or context menu) -->
-          <a class="nav-item" id="nav-archive" href="#"><svg class="ico" viewBox="0 0 20 20" fill="none"><rect x="3.5" y="4" width="13" height="3.6" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M4.8 7.6V15a1 1 0 001 1h8.4a1 1 0 001-1V7.6M8.2 10.4h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>Archive</a>
-
-          <!-- Trash -->
-          <a class="nav-item" id="nav-trash" href="#"><svg class="ico" viewBox="0 0 20 20" fill="none"><path d="M4.5 6h11M8.3 6V4.8a1 1 0 011-1h1.4a1 1 0 011 1V6M6 6l.7 9a1 1 0 001 .93h4.6a1 1 0 001-.93L14 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash</a>
         </nav>
 
-        <button class="sidebar-settings" id="open-settings" type="button"><svg class="ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.3"/><path d="M10 2.6l1 .2.4 1.7a6 6 0 011.6.9l1.7-.6.9 1.5-1.3 1.2a6 6 0 010 1.8l1.3 1.2-.9 1.5-1.7-.6a6 6 0 01-1.6.9L11 17.2l-1 .2-1-.2-.4-1.7a6 6 0 01-1.6-.9l-1.7.6-.9-1.5 1.3-1.2a6 6 0 010-1.8L3.7 9.5l.9-1.5 1.7.6a6 6 0 011.6-.9L8.3 6l1-.2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>Settings</button>
+        <!-- Bottom icon row (owner brief 2026-08-19 req 8): settings + trash + archive
+             as ICONS only, no label text. Archive and trash are BLENDED into just
+             Trash — both icons open the single Trash view, and trash is never deleted
+             (soft delete / hidden state only). -->
+        <div class="sidebar-foot">
+          <button class="sf-btn" id="open-settings" type="button" title="Settings"><svg class="ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.3"/><path d="M10 2.6l1 .2.4 1.7a6 6 0 011.6.9l1.7-.6.9 1.5-1.3 1.2a6 6 0 010 1.8l1.3 1.2-.9 1.5-1.7-.6a6 6 0 01-1.6.9L11 17.2l-1 .2-1-.2-.4-1.7a6 6 0 01-1.6-.9l-1.7.6-.9-1.5 1.3-1.2a6 6 0 010-1.8L3.7 9.5l.9-1.5 1.7.6a6 6 0 011.6-.9L8.3 6l1-.2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>
+          <button class="sf-btn" id="nav-archive" type="button" title="Archive"><svg class="ico" viewBox="0 0 20 20" fill="none"><rect x="3.5" y="4" width="13" height="3.6" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M4.8 7.6V15a1 1 0 001 1h8.4a1 1 0 001-1V7.6M8.2 10.4h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="sf-btn" id="nav-trash" type="button" title="Trash"><svg class="ico" viewBox="0 0 20 20" fill="none"><path d="M4.5 6h11M8.3 6V4.8a1 1 0 011-1h1.4a1 1 0 011 1V6M6 6l.7 9a1 1 0 001 .93h4.6a1 1 0 001-.93L14 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
       </aside>
 
       <!-- Content region: the note editor -->
@@ -54,6 +57,10 @@
              The editor delete action aligns on this row too (visible on the editor only). -->
         <header class="content-header" id="content-header">
           <span class="ch-spacer"></span>
+          <!-- 'Updated just now' — lives ON the top header line, horizontally aligned with
+               the copy/trash/comments/minimize buttons (owner brief 2026-08-19 req 5).
+               data-no-drag so the native drag strip passes clicks through. -->
+          <span class="ch-updated" id="ch-updated" data-no-drag hidden></span>
           <!-- Copy the entire note as Markdown (visible on the editor only); feedback is
                a checkmark icon swap — no "Copied" text. -->
           <button class="win-copy" id="note-copy" data-no-drag title="Copy note as Markdown" hidden><svg viewBox="0 0 18 18" fill="none"><rect x="6.2" y="6.2" width="8.6" height="8.6" rx="1.8" stroke="currentColor" stroke-width="1.3"/><path d="M4 11.5h-.6a1.1 1.1 0 01-1.1-1.1V4.3a1.1 1.1 0 011.1-1.1h6.1a1.1 1.1 0 011.1 1.1V5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
@@ -184,7 +191,6 @@
         <!-- ============ EDITOR ============ -->
         <section class="editor" id="editor" hidden>
           <div class="editor-meta" id="editor-meta">
-            <span class="em-updated" id="em-updated"></span>
             <span class="em-tags" id="em-tags"></span>
           </div>
           <div class="editor-scroll">
@@ -250,13 +256,8 @@
               </div>
             </div>
 
-            <div class="set-sec-label set-gap">Trash</div>
-            <div class="set-sec-sub">Notes in Trash are deleted permanently after this many days.</div>
-            <div class="retention-row" id="retention-row">
-              <button class="retention-opt" data-days="7" type="button">7 days</button>
-              <button class="retention-opt" data-days="30" type="button">30 days</button>
-              <button class="retention-opt" data-days="90" type="button">90 days</button>
-            </div>
+            <!-- Trash retention picker removed (owner brief 2026-08-19 req 8): trash is
+                 never deleted — soft delete / hidden state only, so nothing expires. -->
 
           </div>
         </section>
@@ -353,8 +354,10 @@
     </div>
 
     <!-- ============ MINIMAL RECORDING INDICATOR ============ -->
-    <!-- Shown top-right while recording on every screen EXCEPT Home (there the composer
-         itself is the single recording surface). Follows the system theme. -->
+    <!-- Shown bottom-center of the window while recording on EVERY screen (Home
+         included — owner brief 2026-08-19 req 6: the timer popover sits at bottom
+         center, not the middle vertical line) and while the note is being added.
+         Follows the system theme. -->
     <div class="rec-pill" id="rec-pill" hidden>
       <span class="rec-pill-dot" id="rec-pill-dot"></span>
       <span class="rec-pill-timer" id="rec-pill-timer">0:00</span>

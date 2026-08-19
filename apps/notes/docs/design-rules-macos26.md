@@ -122,7 +122,15 @@ Liquid Glass instead of a painted gradient.
   bar). The canvas is the content layer: `Theme.canvas(_:)` white / window
   background only (Rule 1).
 
-### 2.2 The purple Liquid-Glass sidebar
+### 2.2 The Liquid-Glass sidebar
+
+> **AMENDED 2026-08-19 (owner brief req 3):** the sidebar is no longer a purple
+> gradient fill. It is a TRANSLUCENT MATERIAL over the canvas — the original
+> glass design: `--sb-bg` (rgba white ≈ .58 light / ≈ .55 dark) + the glass
+> backdrop-filter recipe, a hairline `--sb-edge` seam, dark-canvas text tokens,
+> and accent-based active/focus/scroll tokens (see styles.css). The purple
+> gradient rules below are superseded as the sidebar *identity*; the glass
+> recipes they describe still govern chrome floating over it.
 
 - **DO** render the infinity-purple gradient as the *background layer* and put
   actual glass on the *chrome floating above it*:
