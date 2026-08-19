@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.5.2
+All notable changes to Loops (npm `@hasna/loops`, repo `hasna/loops`) are
+documented in this file. Version entries are generated from the
+conventional-commit git history; one commit maps to one released patch version
+unless noted.
+
+## 0.5.3
 
 ### Patch Changes
 
@@ -11,11 +16,6 @@
 - Updated dependencies [b630c48]
   - @hasna/contracts@0.11.2
   - @hasna/events@0.1.16
-
-All notable changes to Loops (npm `@hasna/loops`, repo `hasna/loops`) are
-documented in this file. Version entries are generated from the
-conventional-commit git history; one commit maps to one released patch version
-unless noted.
 
 ## 0.5.2 (2026-08-19)
 

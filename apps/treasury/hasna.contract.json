@@ -3,7 +3,7 @@
   "name": "treasury",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "0.11.2",
   "description": "Multi-entity cash/treasury cockpit CLI + MCP + serve. SQLite at ~/.hasna/treasury/treasury.db is the default server data backend; a HASNA_TREASURY_DATABASE_URL selects PostgreSQL via the vendored storage kit. Legacy storage-mode variables are rejected.",
   "bins": [
     "treasury",

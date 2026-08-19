@@ -3,7 +3,7 @@
   "name": "actions",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "0.11.2",
   "description": "Local-first action manifests, runs, and audit events exposed through CLI, MCP, and SDK surfaces.",
   "bins": [
     "actions",

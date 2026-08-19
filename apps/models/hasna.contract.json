@@ -3,7 +3,7 @@
   "name": "models",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "0.11.2",
   "description": "Local model catalog and install manager: searches provider catalogs, records capabilities, and installs models into a user-scoped store.",
   "bins": [
     "models"

@@ -4,7 +4,7 @@
   "name": "signatures",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "0.11.2",
   "description": "Open-source agreement and e-signature workflows for Markdown and PDFs: local signing, provider evidence, CLI, MCP, and an HTTP surface over a local SQLite store.",
   "bins": [
     "signatures",

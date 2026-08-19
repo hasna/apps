@@ -4,7 +4,7 @@
   "name": "dispatch",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "0.11.2",
   "description": "Local tmux prompt dispatch for coding agents. CLI + MCP + SDK + daemon with SQLite-backed dispatch and schedule records.",
   "bins": [
     "dispatch",
