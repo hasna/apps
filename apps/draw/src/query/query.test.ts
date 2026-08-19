@@ -56,6 +56,40 @@ describe("listCards", () => {
     cards[0]!.title = "mutated";
     expect(board.cards.some((c) => c.title === "mutated")).toBe(false);
   });
+
+  test("filters pinned:false to unpinned cards only (Sol-guided)", () => {
+    const cards = listCards(seed(), { pinned: false });
+    expect(cards).toHaveLength(2);
+    expect(cards.every((c) => !c.pinned)).toBe(true);
+  });
+
+  test("empty search term matches everything; whitespace is applied literally (Sol-guided)", () => {
+    const all = listCards(seed());
+    // An empty term is a no-op filter: everything matches.
+    expect(listCards(seed(), { search: "" })).toHaveLength(all.length);
+    // A whitespace term is a real term (length > 0): only cards whose
+    // haystack literally contains the spaces match — the seeded cards do not.
+    expect(listCards(seed(), { search: "   " })).toHaveLength(0);
+    // Two-sided: a card whose text contains the spaces does match.
+    let board = createBoard({ title: "T" }).toJSON();
+    board = addCard(board, note({ text: "a   b" }));
+    expect(listCards(board, { search: "   " })).toHaveLength(1);
+  });
+
+  test("sorts by created most recent first (Sol-guided)", () => {
+    let board = createBoard({ title: "T" }).toJSON();
+    board = addCard(board, {
+      ...note({ title: "Old", text: "x" }),
+      createdAt: "2020-01-01T00:00:00.000Z",
+      updatedAt: "2020-01-01T00:00:00.000Z",
+    });
+    board = addCard(board, {
+      ...note({ title: "New", text: "y" }),
+      createdAt: "2023-01-01T00:00:00.000Z",
+      updatedAt: "2023-01-01T00:00:00.000Z",
+    });
+    expect(listCards(board, {}, "created").map((c) => c.title)).toEqual(["New", "Old"]);
+  });
 });
 
 describe("searchBoard", () => {

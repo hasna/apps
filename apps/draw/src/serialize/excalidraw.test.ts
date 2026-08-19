@@ -81,4 +81,48 @@ describe("fromExcalidraw", () => {
     expect(fromExcalidraw(null).elements).toHaveLength(0);
     expect(fromExcalidraw(42).elements).toHaveLength(0);
   });
+
+  test("round-trips text, fontSize, and fontFamily (Sol-guided)", () => {
+    let scene = createScene();
+    scene = addElement(scene, {
+      type: "text",
+      x: 10,
+      y: 20,
+      width: 0,
+      height: 0,
+      text: "hello",
+      fontSize: 24,
+      fontFamily: 2,
+    });
+    const back = fromExcalidraw(toExcalidraw(scene));
+    const el = back.elements[0]!;
+    expect(el.type).toBe("text");
+    expect(el.text).toBe("hello");
+    expect(el.fontSize).toBe(24);
+    expect(el.fontFamily).toBe(2);
+  });
+
+  test("malformed JSON propagates the documented SyntaxError (Sol-guided)", () => {
+    // The interchange contract documents JSON.parse semantics: a broken
+    // document must throw, never be silently pinned to an empty scene.
+    expect(() => fromExcalidraw("{not json")).toThrow(SyntaxError);
+    // Positive arm: valid JSON still parses.
+    expect(fromExcalidraw('{"elements":[]}').elements).toHaveLength(0);
+  });
+
+  test("scene width/height drop contract: not carried into the file (Sol-guided)", () => {
+    // The current implementation intentionally drops scene width/height on
+    // the excalidraw bridge (only background survives via appState). This
+    // pins that drop explicitly so a future round-trip change is a visible
+    // contract change, not a silent one.
+    const scene = createScene({ width: 400, height: 300 });
+    const file = toExcalidraw(scene);
+    expect(file.appState).not.toHaveProperty("width");
+    expect(file.appState).not.toHaveProperty("height");
+    expect("width" in file).toBe(false);
+    expect("height" in file).toBe(false);
+    // The negative arm: elements still carry their own geometry.
+    const withEl = addElement(scene, { type: "rectangle", x: 0, y: 0, width: 10, height: 5 });
+    expect(toExcalidraw(withEl).elements[0]!.width).toBe(10);
+  });
 });

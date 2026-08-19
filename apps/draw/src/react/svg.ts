@@ -64,7 +64,10 @@ export function strokeWidthOf(el: DrawElement, fallback = 2): number {
 /** Element opacity as a 0..1 fraction (scene opacity is stored 0..100). */
 export function opacityOf(el: DrawElement): number {
   if (el.opacity === undefined) return 1;
-  return el.opacity > 1 ? el.opacity / 100 : el.opacity;
+  // Values >= 1 are on the stored 0..100 scale: 1 means 1%, 50 means 0.5,
+  // 100 means 1. A bare `> 1` percent branch treated stored 1 as an already
+  // normalized fraction and rendered 1% opacity as fully opaque.
+  return el.opacity >= 1 ? el.opacity / 100 : el.opacity;
 }
 
 /** A serializable description of how to draw a single element as an SVG shape. */

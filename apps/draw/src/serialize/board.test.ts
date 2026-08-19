@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CardValidationError } from "../model/card.js";
 import {
   BOARD_SCHEMA,
   BOARD_VERSION,
@@ -66,6 +67,29 @@ describe("serializeBoard / parseBoard", () => {
 
   test("throws on non-object input", () => {
     expect(() => parseBoard(42)).toThrow(BoardValidationError);
+  });
+
+  test("rejects an invalid card kind with the card index in the error (Sol-guided)", () => {
+    try {
+      parseBoard({ cards: [{ kind: "note" }, { kind: "sticker" }] });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CardValidationError);
+      expect((error as Error).message).toContain("card 1");
+    }
+  });
+
+  test("parses a bare board JSON string (Sol-guided)", () => {
+    const back = parseBoard('{"cards":[{"kind":"note","text":"hi"}]}');
+    expect(back.cards).toHaveLength(1);
+    expect(back.cards[0]!.text).toBe("hi");
+  });
+
+  test("non-string titles are dropped on validation (Sol-guided)", () => {
+    const back = parseBoard({ title: 42, cards: [] });
+    expect(back.title).toBeUndefined();
+    const keep = parseBoard({ title: "ok", cards: [] });
+    expect(keep.title).toBe("ok");
   });
 
   test("preserves full element fidelity on a drawing card round-trip", () => {
