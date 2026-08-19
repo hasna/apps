@@ -123,3 +123,48 @@ describe("changelog CLI", () => {
     expect(result.files).toContain("index.html");
   });
 });
+
+const ALL_COMMANDS = [
+  "init",
+  "add",
+  "list",
+  "show",
+  "update",
+  "generate",
+  "release",
+  "publish",
+  "web",
+  "stats",
+  "export",
+];
+
+function runCliCapture(args: string[]): { stdout: string; exitCode: number } {
+  const proc = Bun.spawnSync(["bun", "src/cli/index.ts", ...args], {
+    cwd: process.cwd(),
+    env: { ...process.env, CHANGELOG_DATA_DIR: "/tmp/changelog-cli-help-unused" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { stdout: proc.stdout.toString(), exitCode: proc.exitCode ?? -1 };
+}
+
+describe("changelog CLI help surface", () => {
+  test("--help lists every command and returns without hanging", () => {
+    const { stdout, exitCode } = runCliCapture(["--help"]);
+    expect(exitCode).toBe(0);
+    for (const command of ALL_COMMANDS) {
+      // Line-anchored: the command must appear as its own entry in the
+      // Commands block, so a description that merely mentions the name
+      // cannot satisfy the assertion.
+      expect(stdout, `--help must list the ${command} command`).toMatch(new RegExp(`^\\s{2}${command}(\\s|$)`, "m"));
+    }
+  });
+
+  test("-h lists every command and returns without hanging", () => {
+    const { stdout, exitCode } = runCliCapture(["-h"]);
+    expect(exitCode).toBe(0);
+    for (const command of ALL_COMMANDS) {
+      expect(stdout, `-h must list the ${command} command`).toMatch(new RegExp(`^\\s{2}${command}(\\s|$)`, "m"));
+    }
+  });
+});

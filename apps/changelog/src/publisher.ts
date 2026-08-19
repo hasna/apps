@@ -54,7 +54,9 @@ export async function publishChangelog(options: PublishChangelogOptions = {}): P
     if (changed && existing && (options.backup ?? true)) {
       backupPath = await writeBackup(targetPath, existing);
     }
-    await writeFile(targetPath, markdown, "utf8");
+    if (changed) {
+      await writeFile(targetPath, markdown, "utf8");
+    }
   }
 
   return {
