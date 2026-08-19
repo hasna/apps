@@ -40,9 +40,9 @@ describe("tool primitives", () => {
   test("validates primitive coverage for the bundled catalog", () => {
     const result = validateToolPrimitiveCoverage("all");
     expect(result.valid).toBe(true);
-    // OSS catalog: 85 shipped skills (19 instruction + 66 executable), every one
+    // OSS catalog: 86 shipped skills (20 instruction + 66 executable), every one
     // mapped to a primitive by category/keyword inference.
-    expect(result.skillCount).toBe(85);
+    expect(result.skillCount).toBe(86);
     expect(result.mappedSkillCount).toBe(result.skillCount);
     expect(result.gatewayBackedSkillCount).toBe(41);
     expect(result.issues).toEqual([]);

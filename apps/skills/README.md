@@ -309,8 +309,8 @@ identical either way.
 
 ```bash
 skills-server                                            # SQLite at ~/.hasna/skills/server.db
-HASNA_SKILLS_DATABASE_URL=/srv/skills/server.db skills-server
-HASNA_SKILLS_DATABASE_URL=postgres://user:pw@host/skills skills-server
+HASNA_SKILLS_DATABASE_URL=<path>/server.db skills-server
+HASNA_SKILLS_DATABASE_URL=postgres://user:CHANGEME@host/skills skills-server
 ```
 
 | `HASNA_SKILLS_DATABASE_URL` | Backend | Survives restart |
@@ -344,7 +344,7 @@ explicitly, because several replicas racing to migrate one shared database is no
 something to do implicitly:
 
 ```bash
-HASNA_SKILLS_DATABASE_URL=postgres://… skills-migrate
+HASNA_SKILLS_DATABASE_URL=postgres://user:CHANGEME@host/skills skills-migrate
 ```
 
 `skills-migrate` fails if no database is configured rather than migrating a default
@@ -434,7 +434,7 @@ skills/                      # Public skill contracts and local OSS skills
 
 | Count | Value | Derived from |
 |---|---|---|
-| Catalog skills | 85 | `SKILLS.length` (`src/lib/registry-data/`) |
+| Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
 | MCP tools | 37 | `tools/list` against a live `buildServer()` |
 
