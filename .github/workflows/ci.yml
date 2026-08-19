@@ -5,7 +5,8 @@
 #   gates         — no network beyond checkout. The checks that can refuse a
 #                   pull request in seconds: secret scan (with its own
 #                   two-sided self-test), name-conformance, and the
-#                   contract-manifest placeholder.
+#                   contract-manifest gate (contracts repo-conformance per
+#                   member).
 #   test-suites   — versioning + standard-adherence suites (hard gate).
 #   build-test    — the affected build + test graph via turbo --affected.
 #   verify-generated — byte-reproducibility of committed generated bundles.
@@ -90,10 +91,16 @@ jobs:
       - name: Name-conformance gate (@hasna/* only, name == directory)
         run: bun tooling/ci/check-names.ts
 
-      # PLACEHOLDER by design until the contracts lane defines the member
-      # manifest schema (tier-0, founder-owned). Read tooling/ci/check-manifests.ts
-      # before trusting anything from this job.
-      - name: Contract-manifest gate (placeholder)
+      # Contract-manifest gate: runs `contracts repo-conformance` per
+      # publishable member (same validator, resolution and exception registry
+      # as the standard-adherence suite) and refuses unrecorded violations.
+      # Its own two-sided self-test runs first and separately: a gate whose
+      # validator cannot fire reports a clean tree, and a clean tree is what
+      # success looks like.
+      - name: Contract-manifest gate self-test
+        run: bun tooling/ci/check-manifests.ts --self-test
+
+      - name: Contract-manifest gate (repo-conformance per member)
         run: bun tooling/ci/check-manifests.ts
 
       # Deploy-lane gate: member deploy workflows must live at the DISCOVERABLE
