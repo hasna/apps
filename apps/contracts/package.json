@@ -150,7 +150,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@hasna/secrets": "0.3.1",
+    "@hasna/secrets": "0.3.0",
     "commander": "^13.1.0",
     "zod": "^3.25.76",
     "zod-to-json-schema": "^3.24.6"
