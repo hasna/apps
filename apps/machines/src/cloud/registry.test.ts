@@ -39,10 +39,7 @@ describe("resolveCloudStorage (machines)", () => {
     const cases: Array<[string, string]> = [
       ["HASNA_MACHINES_STORAGE_MODE", "cloud"],
       ["HASNA_MACHINES_STORAGE_MODE", "local"],
-      ["HASNA_MACHINES_STORAGE_MODE", "self_hosted"],
-      ["HASNA_MACHINES_STORAGE_MODE", "self-hosted"],
-      ["HASNA_MACHINES_STORAGE_MODE", "remote"],
-      ["HASNA_MACHINES_STORAGE_MODE", "hybrid"],
+      ["HASNA_MACHINES_STORAGE_MODE", "junk"],
       ["HASNA_MACHINES_MODE", "cloud"],
       ["MACHINES_STORAGE_MODE", "cloud"],
       ["MACHINES_MODE", "cloud"],

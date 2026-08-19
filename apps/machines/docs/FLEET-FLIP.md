@@ -1,7 +1,7 @@
 # Fleet env-flip mechanism
 
-Coordinated push that flips an `@hasna` OSS app's runtime storage mode across the
-fleet from **local** (on-box sqlite/json) to **self_hosted** (the app's cloud API
+Coordinated push that flips an `@hasna` OSS app's client backend across the
+fleet from **local** (on-box sqlite/json) to **api** (the app's hosted API
 at `https://<app>.<fleet-domain>`) — and back — with a canary → batch → all rollout (or
 one atomic `--all-machines` wave), per-machine verification, and one-command
 revert.
@@ -20,10 +20,11 @@ app's HTTPS API:
 client -> https://<app>.<fleet-domain>/v1   (bearer HASNA_<APP>_API_KEY)
 ```
 
-This is the **self_hosted** mode. The raw RDS DSN is **NEVER** distributed to a
-machine. `STORAGE_MODE=remote` + `DATABASE_URL` on a client is **FORBIDDEN** — the
-shared prod Postgres instance is reachable only by the in-VPC ECS services and the
-admin tunnel (operator-specific account/region — not published here).
+This is the **api** state: the client is routed to the hosted API. The raw RDS
+DSN is **NEVER** distributed to a machine. `STORAGE_MODE=remote` + `DATABASE_URL`
+on a client is **FORBIDDEN** — the shared prod Postgres instance is reachable
+only by the in-VPC ECS services and the admin tunnel (operator-specific
+account/region — not published here).
 The flip therefore writes exactly **two vars** per app:
 
 ```
@@ -39,7 +40,7 @@ back to a neutral, non-resolving placeholder.
 ## What it does per machine
 
 1. Writes a per-app fleet env file `~/.hasna/cloud/<app>.env` (mode `0600`).
-   - **self_hosted**: `HASNA_<APP>_API_URL=https://<app>.<fleet-domain>` +
+   - **api**: `HASNA_<APP>_API_URL=https://<app>.<fleet-domain>` +
      `HASNA_<APP>_API_KEY=<key>` (+ any non-secret extras).
    - **local** (revert): the env file is **removed entirely** so both vars are
      unset and the app falls back to its untouched local original.
@@ -49,15 +50,14 @@ back to a neutral, non-resolving placeholder.
      drop-in.
    - **launchd** (macOS): `setenv`s each var from the env file into the user
      launchd domain and `kickstart -k`s the label. Revert `unsetenv`s both vars.
-3. Verifies with `<app> storage status --json` — requires `mode=self_hosted` and
-   `api_enabled!=false` (for revert: `mode=local`). Legacy `remote_enabled` is
-   still accepted for back-compat.
+3. Verifies with `<app> storage status --json` — requires `api_enabled=true`
+   (for revert: `api_enabled!=true`).
 4. Halts before the next wave if any machine in the current wave fails.
 
 ### Secret safety
 
 The API key is **never** transported in cleartext. The generated remote script
-fetches it on the target machine via `secrets get hasna/oss/<app>/api-key` and
+fetches it on the target machine via `secrets exec hasna/oss/<app>/api-key` and
 writes it into the `0600` env file. The orchestrator only ever handles the secret
 *path* — nothing logs a value. If the secret cannot be resolved the script aborts
 (`exit 3`) before writing a half-configured env file. No RDS DSN is ever fetched,
@@ -97,7 +97,7 @@ machines never split-brain. See below.
 ```
 machines flip apps [--json]                         # list registered apps
 machines flip plan <app> [opts]                     # waves + generated script, no execution
-machines flip script <app> --mode self_hosted       # print the remote script only
+machines flip script <app> --mode api               # print the remote script only
 machines flip apply <app> [opts] --execute          # roll out (dry-run without --execute)
 machines flip revert <app> [opts] --execute         # revert to local
 ```
@@ -116,8 +116,8 @@ Selection / rollout options (apply, plan, revert):
 - `--execute` actually run (default is dry-run).
 - `--json` machine-readable output.
 
-`--mode` accepts `self_hosted` (default; aliases `remote`/`cloud`/`api`/`on`) or
-`local` (aliases `revert`/`off`).
+`--mode` accepts `api` (default; route the client to the hosted API) or `local`
+(revert to the on-box store). Any other value is rejected.
 
 Machine list comes from the fleet manifest (`machines manifest list`), which is
 kept in sync with `tailscale status`.
@@ -133,7 +133,7 @@ machines flip plan knowledge --json
 # 1. CANARY — one machine. Dry-run, then execute.
 machines flip apply knowledge --machines <canary-id>
 machines flip apply knowledge --machines <canary-id> --execute
-#    -> verifies `knowledge storage status --json` reports mode=self_hosted on that box.
+#    -> verifies `knowledge storage status --json` reports api_enabled=true on that box.
 
 # 2. BATCH — a handful. Halts automatically if any machine fails verification.
 machines flip apply knowledge --exclude <canary-id> --batch 4 --execute
@@ -155,8 +155,8 @@ touched, so the app returns to exactly its pre-flip behaviour.
 
 ## Coordination-store cutover (freeze-gated, atomic)
 
-`todos`, `loops`, `mementos`, and `conversations` refuse to flip to `self_hosted`
-without a passing freeze check. Supply a freeze command that pauses writers /
+`todos`, `loops`, `mementos`, and `conversations` refuse to flip to the hosted
+API without a passing freeze check. Supply a freeze command that pauses writers /
 drains the dual-write shadow to `divergence==0` and exits `0` only when it is safe
 to cut over. Use `--all-machines` so the whole fleet flips in one atomic wave (no
 split-brain):

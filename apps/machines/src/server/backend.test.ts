@@ -39,9 +39,8 @@ describe("resolveServerDataBackend (machines)", () => {
     ];
     for (const key of legacyKeys) {
       // The kit's own assert fires inside resolveServerDataBackend and names
-      // the variable, whatever its value — including the retired deployment
-      // words and the values that used to be silently remapped.
-      for (const value of ["cloud", "local", "self_hosted", "remote", "hybrid"]) {
+      // the variable, whatever its value.
+      for (const value of ["cloud", "local", "junk"]) {
         expect(() => resolveServerDataBackend("machines", { [key]: value })).toThrow(
           new RegExp(`${key} was removed`),
         );

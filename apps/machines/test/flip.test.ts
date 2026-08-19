@@ -86,22 +86,20 @@ describe("flip registry", () => {
 });
 
 describe("mode normalization", () => {
-  test("maps api/cloud/on (and the default) to api", () => {
-    for (const v of ["api", "cloud", "on", undefined]) {
+  test("maps api (and the default) to api", () => {
+    for (const v of ["api", undefined]) {
       expect(normalizeFlipMode(v)).toBe("api");
     }
   });
-  test("maps local/revert/off to local", () => {
-    for (const v of ["local", "revert", "off"]) {
-      expect(normalizeFlipMode(v)).toBe("local");
-    }
+  test("maps local to local", () => {
+    expect(normalizeFlipMode("local")).toBe("local");
   });
-  test("rejects the retired deployment-mode words loudly", () => {
-    // Deployment modes were removed (owner directive 2026-07-29); a flip
-    // invoked with the old vocabulary must fail with the replacement named,
-    // never be silently remapped.
-    for (const v of ["self_hosted", "self-hosted", "remote", "hybrid"]) {
-      expect(() => normalizeFlipMode(v)).toThrow(/retired/);
+  test("rejects every other value, including the retired alias words", () => {
+    // Deployment modes were removed (owner directive 2026-07-29): no alias
+    // survives — each retired alias word and any unknown value must fail with
+    // the supported values named, never be silently remapped.
+    for (const v of ["cloud", "on", "revert", "off", "bogus", ""]) {
+      expect(() => normalizeFlipMode(v)).toThrow(/Unknown flip mode/);
     }
   });
 });
@@ -172,7 +170,7 @@ describe("script generation", () => {
           'exec "$@"',
         ].join("\n"),
       );
-      writeExecutable(binDir, "todos", "printf '%s\\n' '{\"mode\":\"cloud\",\"api_enabled\":true}'");
+      writeExecutable(binDir, "todos", "printf '%s\\n' '{\"api_enabled\":true}'");
 
       const env = { ...process.env, CALL_LOG: callLog, PATH: `${binDir}:/usr/bin:/bin` };
       const rejectedCapture = spawnSync(
@@ -271,28 +269,24 @@ describe("script generation", () => {
 });
 
 describe("verification", () => {
-  test("accepts an api-backed status (mode=cloud + api_enabled)", () => {
-    const out = `noise\nFLIP_STATUS_BEGIN\n{"mode":"cloud","api_enabled":true}\nFLIP_STATUS_END`;
+  test("accepts an api-backed status (api_enabled=true)", () => {
+    const out = `noise\nFLIP_STATUS_BEGIN\n{"api_enabled":true}\nFLIP_STATUS_END`;
     const v = verifyStorageMode(out, "api");
     expect(v.ok).toBe(true);
-    expect(v.observedMode).toBe("cloud");
+    expect(v.apiEnabled).toBe(true);
   });
-  test("accepts a status from an older installed CLI that still reports a retired mode word", () => {
-    // Read-side compat only: the fleet updates in waves, so a not-yet-updated
-    // app may still SAY self_hosted in its status JSON. We accept the report
-    // as api-backed; we never emit the word ourselves.
-    expect(verifyStorageMode(`{"mode":"self_hosted","api_enabled":true}`, "api").ok).toBe(true);
-  });
-  test("accepts legacy remote_enabled boolean too", () => {
-    const out = `{"mode":"cloud","remote_enabled":true}`;
-    expect(verifyStorageMode(out, "api").ok).toBe(true);
+  test("rejects a status that does not report api_enabled", () => {
+    // Fail closed: a status without the api_enabled boolean is no evidence
+    // the client is api-routed.
+    const out = `{"configured":true}`;
+    expect(verifyStorageMode(out, "api").ok).toBe(false);
   });
   test("rejects local status when api expected", () => {
-    const out = `{"mode":"local","api_enabled":false}`;
+    const out = `{"api_enabled":false}`;
     expect(verifyStorageMode(out, "api").ok).toBe(false);
   });
   test("accepts local status on revert", () => {
-    const out = `{"mode":"local","api_enabled":false}`;
+    const out = `{"api_enabled":false}`;
     expect(verifyStorageMode(out, "local").ok).toBe(true);
   });
   test("fails cleanly on unparseable output", () => {
@@ -340,7 +334,7 @@ describe("orchestration", () => {
 
   test("execute verifies each machine and completes when all pass", () => {
     const runner: RunnerFn = () => ({
-      stdout: `FLIP_STATUS_BEGIN{"mode":"cloud","api_enabled":true}FLIP_STATUS_END`,
+      stdout: `FLIP_STATUS_BEGIN{"api_enabled":true}FLIP_STATUS_END`,
       stderr: "",
       exitCode: 0,
     });
@@ -354,7 +348,7 @@ describe("orchestration", () => {
     const seen: string[] = [];
     const runner: RunnerFn = (id) => {
       seen.push(id);
-      return { stdout: `{"mode":"cloud","api_enabled":true}`, stderr: "", exitCode: 0 };
+      return { stdout: `{"api_enabled":true}`, stderr: "", exitCode: 0 };
     };
     const report = runFlip({ spec: knowledge, mode: "api", waves: atomicWaves, runner, execute: true });
     expect(report.aborted).toBe(false);
@@ -367,7 +361,7 @@ describe("orchestration", () => {
     const runner: RunnerFn = () => {
       seen += 1;
       // canary machine reports still-local -> verification fails
-      return { stdout: `{"mode":"local","api_enabled":false}`, stderr: "not flipped", exitCode: 0 };
+      return { stdout: `{"api_enabled":false}`, stderr: "not flipped", exitCode: 0 };
     };
     const report = runFlip({ spec: knowledge, mode: "api", waves, runner, execute: true });
     expect(report.aborted).toBe(true);

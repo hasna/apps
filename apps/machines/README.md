@@ -841,8 +841,8 @@ MACHINES_S3_BUCKET=fleet-backups machines backup --json
 `--bucket` and `--prefix` always win. Without `--bucket`, the backup command
 uses `HASNA_MACHINES_S3_BUCKET` or fallback `MACHINES_S3_BUCKET`; prefix uses
 `HASNA_MACHINES_S3_PREFIX`, fallback `MACHINES_S3_PREFIX`, or `machines`.
-This keeps the open-source CLI local/self-hosted by default while allowing
-deployments to route app-owned backups through explicit storage metadata.
+The open-source CLI uses its local store by default; deployments can route
+app-owned backups through explicit storage metadata.
 
 ## Applications and tooling
 
