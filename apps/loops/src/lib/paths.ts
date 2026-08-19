@@ -37,6 +37,30 @@ export function daemonLogPath(): string {
   return join(dataDir(), "daemon.log");
 }
 
+/**
+ * Per-station runner configuration surface: the control-plane API URL and key
+ * plus the runner machine id and claim scope, in a single mode-600 file
+ * outside the package. The runner CLI loads it when the corresponding
+ * environment variables are unset, and the systemd unit references it via
+ * `EnvironmentFile`, so a package update (version bump + service restart)
+ * never touches the credential.
+ */
+export function runnerEnvPath(): string {
+  return join(dataDir(), "runner.env");
+}
+
+export function runnerLogPath(): string {
+  return join(dataDir(), "runner.log");
+}
+
+export function runnerSystemdServicePath(): string {
+  return join(homeDir(), ".config", "systemd", "user", "loops-runner.service");
+}
+
+export function runnerLaunchdPlistPath(): string {
+  return join(homeDir(), "Library", "LaunchAgents", "com.hasna.loops.runner.plist");
+}
+
 export function systemdServicePath(): string {
   return join(homeDir(), ".config", "systemd", "user", "loops-daemon.service");
 }
