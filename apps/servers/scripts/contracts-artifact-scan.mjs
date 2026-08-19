@@ -9,8 +9,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
-
-const CONTRACTS_BIN = join("node_modules", ".bin", "contracts")
+import { runContracts } from "./contracts-cli.mjs"
 
 function writeFailure(prefix, result) {
   const stderr = result.stderr?.toString?.() ?? ""
@@ -70,18 +69,11 @@ try {
     process.exit(1)
   }
 
-  const scan = spawnSync(CONTRACTS_BIN, ["artifact-scan", join(destination, tarballs[0])], {
+  const scanStatus = runContracts(["artifact-scan", join(destination, tarballs[0])], {
     stdio: "inherit",
   })
 
-  if (scan.error?.code === "ENOENT") {
-    console.error(
-      `${CONTRACTS_BIN} not found — run "bun install" so the pinned @hasna/contracts kit is available.`,
-    )
-    process.exit(1)
-  }
-
-  if (scan.status !== 0) process.exit(scan.status ?? 1)
+  if (scanStatus !== 0) process.exit(scanStatus)
 } finally {
   rmSync(destination, { recursive: true, force: true })
 }
