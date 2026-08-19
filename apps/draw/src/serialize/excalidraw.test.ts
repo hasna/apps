@@ -36,6 +36,24 @@ describe("toExcalidraw", () => {
     const file = toExcalidraw(createScene());
     expect(file.appState.viewBackgroundColor).toBe("#ffffff");
   });
+
+  test("does not share mutable point or pressure arrays with the scene", () => {
+    const scene = addStroke(createScene(), [[0, 0], [10, 20]], { pressures: [0.1, 0.9] });
+    const file = toExcalidraw(scene);
+    scene.elements[0]!.points![0] = [99, 99];
+    scene.elements[0]!.pressures![0] = 0.99;
+    expect(file.elements[0]!.points).toEqual([
+      [0, 0],
+      [10, 20],
+    ]);
+    expect(file.elements[0]!.pressures).toEqual([0.1, 0.9]);
+  });
+
+  test("omits the points key when the element has no points", () => {
+    const scene = addElement(createScene(), { type: "rectangle", x: 0, y: 0, width: 5, height: 5 });
+    const file = toExcalidraw(scene);
+    expect(file.elements[0]!.points).toBeUndefined();
+  });
 });
 
 describe("fromExcalidraw", () => {
@@ -124,5 +142,53 @@ describe("fromExcalidraw", () => {
     // The negative arm: elements still carry their own geometry.
     const withEl = addElement(scene, { type: "rectangle", x: 0, y: 0, width: 10, height: 5 });
     expect(toExcalidraw(withEl).elements[0]!.width).toBe(10);
+  });
+
+  // Edge cases preserved from the shared-checkout hygiene corpus, merged
+  // alongside the Sol-guided suite that landed on main.
+  test("assigns el-<index> ids to elements missing an id", () => {
+    const scene = fromExcalidraw({
+      elements: [
+        { type: "rectangle", x: 0, y: 0, width: 1, height: 1 },
+        { id: "", type: "ellipse", x: 0, y: 0, width: 1, height: 1 },
+      ],
+    });
+    expect(scene.elements[0]!.id).toBe("el-0");
+    expect(scene.elements[1]!.id).toBe("el-1");
+  });
+
+  test("coerces malformed points to zero-based coordinates", () => {
+    const scene = fromExcalidraw({
+      elements: [
+        {
+          type: "freedraw",
+          points: [
+            [1, 2],
+            ["a", null],
+            [3, 4, 5],
+          ],
+        },
+      ],
+    });
+    expect(scene.elements[0]!.points).toEqual([
+      [1, 2],
+      [0, 0],
+      [3, 4],
+    ]);
+  });
+
+  test("drops a non array points field", () => {
+    const scene = fromExcalidraw({ elements: [{ type: "freedraw", points: "junk" }] });
+    expect(scene.elements[0]!.points).toBeUndefined();
+  });
+
+  test("an object with a non-array elements field yields an empty scene", () => {
+    const scene = fromExcalidraw({ elements: "junk" });
+    expect(scene.elements).toHaveLength(0);
+  });
+
+  test("ignores a non string viewBackgroundColor", () => {
+    const scene = fromExcalidraw({ appState: { viewBackgroundColor: 42 } });
+    expect(scene.background).toBeUndefined();
   });
 });
