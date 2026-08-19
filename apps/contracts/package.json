@@ -22,87 +22,88 @@
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./types/index.d.ts",
       "import": "./dist/index.js"
     },
     "./schemas": {
-      "types": "./dist/schemas.d.ts",
+      "types": "./types/schemas.d.ts",
       "import": "./dist/schemas.js"
     },
     "./deployment": {
-      "types": "./dist/deployment/index.d.ts",
+      "types": "./types/deployment/index.d.ts",
       "import": "./dist/deployment/index.js"
     },
     "./deployment/artifacts": {
-      "types": "./dist/deployment-artifacts.d.ts",
+      "types": "./types/deployment-artifacts.d.ts",
       "import": "./dist/deployment-artifacts.js"
     },
     "./deployment/artifacts/*": "./generated/deployment/v1/*",
     "./validators": {
-      "types": "./dist/validators.d.ts",
+      "types": "./types/validators.d.ts",
       "import": "./dist/validators.js"
     },
     "./safe-read": {
-      "types": "./dist/safe-read.d.ts",
+      "types": "./types/safe-read.d.ts",
       "import": "./dist/safe-read.js"
     },
     "./safe-read/exec": {
-      "types": "./dist/safe-read-exec.d.ts",
+      "types": "./types/safe-read-exec.d.ts",
       "import": "./dist/safe-read-exec.js"
     },
     "./no-cloud": {
-      "types": "./dist/no-cloud.d.ts",
+      "types": "./types/no-cloud.d.ts",
       "import": "./dist/no-cloud.js"
     },
     "./server-backend": {
-      "types": "./dist/server-backend.d.ts",
+      "types": "./types/server-backend.d.ts",
       "import": "./dist/server-backend.js"
     },
     "./service-contract": {
-      "types": "./dist/service-contract.d.ts",
+      "types": "./types/service-contract.d.ts",
       "import": "./dist/service-contract.js"
     },
     "./secure-local-store": {
-      "types": "./dist/secure-local-store.d.ts",
+      "types": "./types/secure-local-store.d.ts",
       "import": "./dist/secure-local-store.js"
     },
     "./conformance": {
-      "types": "./dist/conformance.d.ts",
+      "types": "./types/conformance.d.ts",
       "import": "./dist/conformance.js"
     },
     "./vendor-kit": {
-      "types": "./dist/kit/generate.d.ts",
+      "types": "./types/kit/generate.d.ts",
       "import": "./dist/kit/generate.js"
     },
     "./auth": {
-      "types": "./dist/auth/index.d.ts",
+      "types": "./types/auth/index.d.ts",
       "import": "./dist/auth/index.js"
     },
     "./sdk": {
-      "types": "./dist/sdk/generate.d.ts",
+      "types": "./types/sdk/generate.d.ts",
       "import": "./dist/sdk/generate.js"
     },
     "./client": {
-      "types": "./dist/client/transport.d.ts",
+      "types": "./types/client/transport.d.ts",
       "import": "./dist/client/transport.js"
     },
     "./client/storage": {
-      "types": "./dist/client/storage.d.ts",
+      "types": "./types/client/storage.d.ts",
       "import": "./dist/client/storage.js"
     },
     "./todos": {
-      "types": "./dist/todos/index.d.ts",
+      "types": "./types/todos/index.d.ts",
       "import": "./dist/todos/index.js"
     },
     "./todos/artifacts/*": "./generated/todos/v1/*",
     "./hasna.contract.schema.json": "./dist/hasna.contract.schema.json",
     "./artifact-scan": {
-      "types": "./dist/artifact-scan.d.ts",
+      "types": "./types/artifact-scan.d.ts",
       "import": "./dist/artifact-scan.js"
     }
   },
   "files": [
     "dist",
+    "types",
     "src/kit",
     "src/hasna.contract.schema.json",
     "docs",
@@ -117,7 +118,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun run deployment:check && bun run todos:check && rm -rf dist && bun build src/index.ts src/schemas.ts src/validators.ts src/safe-read.ts src/safe-read-exec.ts src/deployment.ts src/deployment/index.ts src/deployment-artifacts.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run deployment:check && bun run todos:check && bun build src/index.ts src/schemas.ts src/validators.ts src/safe-read.ts src/safe-read-exec.ts src/deployment.ts src/deployment/index.ts src/deployment-artifacts.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir types",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 120000",
     "lint": "tsc --noEmit",

@@ -33,9 +33,13 @@ describe("resolveCloudStorage (machines)", () => {
       resolveCloudStorage("machines", { HASNA_MACHINES_API_KEY: "k" });
     expect(missingUrl).toThrow(/HASNA_MACHINES_API_URL/);
   });
-  test("any set storage-mode variable throws naming the variable", () => {
-    // Deployment modes were removed (owner directive 2026-07-29): a stale
-    // storage-mode variable is an error, never a hint — whatever its value.
+  test("a retired storage-mode variable is inert, never an error", () => {
+    // Deployment modes were removed (owner directive 2026-07-29). The shared
+    // seam (@hasna/contracts client transport, the dependency this package
+    // resolves at this version) makes any stale storage-mode variable INERT:
+    // selection is the env contract only — HASNA_<NAME>_API_URL plus a
+    // resolved credential for HTTP. A stale mode key never throws and never
+    // hints: with the API pair it selects HTTP, alone it stays local.
     const cases: Array<[string, string]> = [
       ["HASNA_MACHINES_STORAGE_MODE", "cloud"],
       ["HASNA_MACHINES_STORAGE_MODE", "local"],
@@ -48,13 +52,14 @@ describe("resolveCloudStorage (machines)", () => {
       ["MACHINES_MODE", "cloud"],
     ];
     for (const [key, value] of cases) {
-      expect(() =>
-        resolveCloudStorage("machines", {
-          [key]: value,
-          HASNA_MACHINES_API_URL: "https://machines.example.test",
-          HASNA_MACHINES_API_KEY: "k",
-        }),
-      ).toThrow(new RegExp(key));
+      const withPair = resolveCloudStorage("machines", {
+        [key]: value,
+        HASNA_MACHINES_API_URL: "https://machines.example.test",
+        HASNA_MACHINES_API_KEY: "k",
+      });
+      expect(withPair.transport).toBe("cloud-http");
+      const alone = resolveCloudStorage("machines", { [key]: value });
+      expect(alone.transport).toBe("local");
     }
   });
 });
