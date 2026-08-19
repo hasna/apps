@@ -5787,7 +5787,14 @@
             "type": "boolean"
           },
           "confidence": {
-            "type": "number"
+            "type": "string",
+            "enum": [
+              "exact",
+              "high",
+              "medium",
+              "low",
+              "none"
+            ]
           },
           "packageVersion": {
             "type": "string"
