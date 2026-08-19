@@ -686,6 +686,58 @@ describe("self-hosted Postgres integration", () => {
     expect(emptyApplied.page.items).toEqual([]);
   });
 
+  it.skipIf(!client)("priority folder lists only messages whose sender matches a priority rule (two-sided)", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+    const priorityRulesSpec = resourceSpecForPath("priority-sender-rules")!;
+
+    // Two-sided: the address rule admits Alice, the domain rule admits Bob's
+    // domain; Carol matches nothing and therefore must not appear. Archived
+    // mail never counts toward priority even when its sender matches a rule
+    // (the folder mirrors messageCounts() exactly).
+    const alice = await store.createMessage({
+      direction: "inbound", from_addr: "alice@example.test", to_addrs: ["owner@example.test"], subject: "alice",
+    });
+    const bob = await store.createMessage({
+      direction: "inbound", from_addr: "bob@other.example.test", to_addrs: ["owner@example.test"], subject: "bob",
+    });
+    await store.createMessage({
+      direction: "inbound", from_addr: "carol@example.net", to_addrs: ["owner@example.test"], subject: "carol",
+    });
+    await store.createMessage({
+      direction: "inbound", from_addr: "alice@example.test", to_addrs: ["owner@example.test"], subject: "archived-alice", labels: ["archived"],
+    });
+    await store.createMessage({
+      direction: "outbound", from_addr: "owner@example.test", to_addrs: ["alice@example.test"], subject: "sent-to-alice",
+    });
+
+    // Zero rules: the folder is EMPTY and the list completes promptly — never
+    // a full-store walk.
+    const empty = await store.listMessages({ folder: "priority" });
+    expect(empty.items).toEqual([]);
+
+    await store.createResource(priorityRulesSpec, {
+      id: prioritySenderRuleId("address", "alice@example.test"), kind: "address", value: "alice@example.test",
+    });
+    await store.createResource(priorityRulesSpec, {
+      id: prioritySenderRuleId("domain", "other.example.test"), kind: "domain", value: "other.example.test",
+    });
+
+    const page = await store.listMessages({ folder: "priority" });
+    expect(page.items.map((m) => m.id).sort()).toEqual([alice.id, bob.id].sort());
+
+    // The counts surface mirrors the list: same rules, same membership.
+    expect((await store.messageCounts()).priority).toBe(2);
+
+    // Display-name senders match the extracted angle-bracket address.
+    const displayed = await store.createMessage({
+      direction: "inbound", from_addr: "Alice <alice@example.test>", to_addrs: ["owner@example.test"], subject: "displayed",
+    });
+    const again = await store.listMessages({ folder: "priority" });
+    expect(again.items.map((m) => m.id).sort()).toEqual([alice.id, bob.id, displayed.id].sort());
+  });
+
   it.skipIf(!client)("round-2 parity: send-key mint/verify/revoke + address ownership authorization", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();

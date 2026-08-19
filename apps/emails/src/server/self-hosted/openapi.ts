@@ -3395,7 +3395,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
           ...listParams,
           { name: "cursor", in: "query", required: false, schema: { type: "string" }, description: "Opaque keyset cursor from a previous page's next_cursor. Takes precedence over offset; pages are ordered by (received_at || created_at, id) descending." },
           { name: "direction", in: "query", required: false, schema: { type: "string", enum: ["inbound", "outbound"] } },
-          { name: "folder", in: "query", required: false, schema: { type: "string", enum: ["inbox", "starred", "sent", "archived", "spam", "trash"] }, description: "Server-side folder filter; same semantics as /v1/messages/groups counts." },
+          { name: "folder", in: "query", required: false, schema: { type: "string", enum: ["inbox", "starred", "sent", "archived", "spam", "trash", "priority"] }, description: "Server-side folder filter; same semantics as /v1/messages/groups counts." },
           { name: "domain", in: "query", required: false, explode: true, schema: { type: "array", items: { type: "string" } }, description: "Repeatable. Only messages whose sender or a to/cc recipient is at one of these domains." },
           { name: "to", in: "query", required: false, schema: { type: "string" } },
           { name: "from", in: "query", required: false, schema: { type: "string" } },

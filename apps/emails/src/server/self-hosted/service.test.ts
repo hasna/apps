@@ -1582,6 +1582,19 @@ describe("Emails self-hosted service", () => {
     expect(badFolder?.status).toBe(400);
   });
 
+  test("message list accepts and forwards the priority folder to the store", async () => {
+    const d = deps();
+    let filters: Record<string, unknown> | undefined;
+    d.store.listMessages = async (opts) => {
+      filters = opts as Record<string, unknown>;
+      return { items: [], next_cursor: null };
+    };
+    const token = mintApiKey({ app: "emails", scopes: ["emails:read"], signingSecret: SIGNING_SECRET }).token;
+    const res = await handleSelfHostedRequest(d, req("GET", "/v1/messages?folder=priority", { token }));
+    expect(res?.status).toBe(200);
+    expect(filters).toMatchObject({ folder: "priority" });
+  });
+
   test("message groups and counts forward the domain scope to the store", async () => {
     const d = deps();
     const seen: unknown[] = [];

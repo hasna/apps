@@ -597,6 +597,22 @@ const TRASH_SQL = `labels @> '["trash"]'::jsonb`;
 // SQLite/TUI matcher, which extracts the angle-bracket address before matching.
 const SENDER_EMAIL_SQL = "lower(COALESCE(substring(from_addr FROM '<([^<>]+)>'), btrim(from_addr)))";
 
+// Priority folder membership: the message's sender matches a persisted
+// priority-sender rule (exact-address or sender-domain match), within the same
+// inbox-like scope as the other inbound folders. The rules table is
+// tenant-scoped and small, so the correlated EXISTS stays a bounded probe.
+// Shared with messageCounts() so the folder list and the priority count mirror
+// each other by construction — `table` is the messages FROM-target name
+// (`m` there, `messages` in the list query).
+const PRIORITY_RULES_EXISTS_SQL = (table: string): string =>
+  `EXISTS (
+    SELECT 1
+      FROM priority_sender_rules r
+     WHERE r.tenant_id = ${table}.tenant_id
+       AND ((r.kind = 'address' AND rtrim(${SENDER_EMAIL_SQL.replaceAll("from_addr", `${table}.from_addr`)}, '.') = r.value)
+         OR (r.kind = 'domain' AND rtrim(split_part(${SENDER_EMAIL_SQL.replaceAll("from_addr", `${table}.from_addr`)}, '@', 2), '.') = r.value))
+  )`;
+
 const FOLDER_PREDICATES: Record<MessageFolder, readonly string[]> = {
   inbox: [NOT_OUTBOUND_SQL, `NOT (${ARCHIVED_SQL})`, `NOT ${SPAM_SQL}`, `NOT (${TRASH_SQL})`],
   starred: [
@@ -610,6 +626,13 @@ const FOLDER_PREDICATES: Record<MessageFolder, readonly string[]> = {
   archived: [ARCHIVED_SQL, NOT_OUTBOUND_SQL, `NOT ${SPAM_SQL}`, `NOT (${TRASH_SQL})`],
   spam: [SPAM_SQL, NOT_OUTBOUND_SQL],
   trash: [TRASH_SQL, NOT_OUTBOUND_SQL],
+  priority: [
+    NOT_OUTBOUND_SQL,
+    `NOT (${ARCHIVED_SQL})`,
+    `NOT ${SPAM_SQL}`,
+    `NOT (${TRASH_SQL})`,
+    PRIORITY_RULES_EXISTS_SQL("messages"),
+  ],
 };
 
 export class IdempotencyKeyConflictError extends Error {
@@ -670,7 +693,7 @@ export interface ListOptions {
 }
 
 /** Server-side folder names; predicates mirror messageCounts() exactly. */
-export type MessageFolder = "inbox" | "starred" | "sent" | "archived" | "spam" | "trash";
+export type MessageFolder = "inbox" | "starred" | "sent" | "archived" | "spam" | "trash" | "priority";
 
 export const MESSAGE_FOLDERS: readonly MessageFolder[] = [
   "inbox",
@@ -679,6 +702,7 @@ export const MESSAGE_FOLDERS: readonly MessageFolder[] = [
   "archived",
   "spam",
   "trash",
+  "priority",
 ];
 
 export interface ListMessagesOptions extends ListOptions {
@@ -3902,13 +3926,7 @@ export class TenantScopedStore {
           AND NOT (${ARCHIVED_SQL.replaceAll("labels", "m.labels")})
           AND NOT ${SPAM_SQL.replaceAll("labels", "m.labels").replaceAll("status", "m.status")}
           AND NOT (${TRASH_SQL.replaceAll("labels", "m.labels")})
-          AND EXISTS (
-            SELECT 1
-              FROM priority_sender_rules r
-             WHERE r.tenant_id = m.tenant_id
-               AND ((r.kind = 'address' AND rtrim(${SENDER_EMAIL_SQL.replaceAll("from_addr", "m.from_addr")}, '.') = r.value)
-                 OR (r.kind = 'domain' AND rtrim(split_part(${SENDER_EMAIL_SQL.replaceAll("from_addr", "m.from_addr")}, '@', 2), '.') = r.value))
-          )
+          AND ${PRIORITY_RULES_EXISTS_SQL("m")}
           ${domains.length > 0 ? "AND EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.tenant_id = m.tenant_id AND mr.message_id = m.id AND mr.domain = ANY($2))" : ""}`,
       domains.length > 0 ? [this.tenantId, domains] : [this.tenantId],
     );
