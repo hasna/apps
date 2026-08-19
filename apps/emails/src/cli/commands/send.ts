@@ -123,7 +123,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
     .option("--provider <id>", "Provider ID (uses first active if not specified)")
     .option("--template <name>", "Use a template by name")
     .option("--vars <json>", "Template variables as JSON string")
-    .option("--force", "Send even if recipients are suppressed (local mode only; the self-hosted server refuses regardless)")
+    .option("--force", "Send to recipients marked suppressed (self-hosted mode: honored only with tenant-level send authority — the same authority that can unsuppress a contact)")
     .option("--dry-run", "Preview what would be sent without actually sending")
     .option("--schedule <datetime>", "Schedule email for later (ISO 8601 datetime)")
     .option("--unsubscribe-url <url>", "Inject List-Unsubscribe headers (RFC 8058 one-click)")
@@ -210,24 +210,19 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           console.log(chalk.yellow(`Warning: Suppressed recipients: ${list}`));
           if (opts.dryRun) {
             // A dry run sends nothing, so it reports instead of refusing.
-            console.log(chalk.dim("  A real send would be refused; --force overrides in local mode only."));
+            console.log(chalk.dim("  A real send would be refused; --force overrides on both backends."));
           } else if (!opts.force) {
             handleError(new Error(
               `Refusing to send to suppressed recipient(s): ${list}. `
               + "Pass --force to send anyway, or clear the suppression with `emails contact unsuppress <email>`.",
             ));
-          } else if (ds.mode === "self_hosted") {
-            // --force has always been dead on this path: it is never transmitted,
-            // and the server refuses a suppressed recipient unconditionally with
-            // 409 recipient_suppressed and offers no override. Say so here instead
-            // of spending a round-trip to arrive at a confusing 409.
-            handleError(new Error(
-              `--force cannot override suppression in self-hosted mode: the server refuses a send to a `
-              + `suppressed recipient (409 recipient_suppressed) and accepts no override. `
-              + "Clear the suppression first with `emails contact unsuppress <email>`. "
-              + `Suppressed recipient(s): ${list}.`,
-            ));
           } else {
+            // --force is honored on both backends. Locally it overrides the
+            // check here; against the self-hosted server it is transmitted as
+            // `allow_suppressed_recipients`, which the server honors only for
+            // tenant-level send authority (the same set that can unsuppress a
+            // contact) and refuses otherwise with 403
+            // suppression_override_forbidden — surfaced verbatim below.
             console.log(chalk.yellow("  --force: sending to the suppressed recipient(s) anyway."));
           }
         }
@@ -381,6 +376,10 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           attachments: attachments.length > 0 ? attachments : undefined,
           scheduledAt: opts.schedule,
           idempotencyKey: (opts as Record<string, unknown>).idempotencyKey as string | undefined,
+          // The suppression override: transmitted to the server, where it is
+          // honored only for tenant-level send authority; the local send path
+          // checks suppression above and ignores this field.
+          allowSuppressedRecipients: opts.force,
         });
         if (result.inProgress) {
           console.log(chalk.yellow(`Send already in progress for ${toAddresses.join(", ")}; do not retry.`));

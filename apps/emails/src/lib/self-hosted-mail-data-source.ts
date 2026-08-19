@@ -2279,6 +2279,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (input.cc) body["cc"] = input.cc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.bcc) body["bcc"] = input.bcc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.replyTo) body["reply_to"] = input.replyTo;
+    // The `--force` suppression override: the server honors it only for
+    // tenant-wide send authority and refuses it otherwise (403
+    // suppression_override_forbidden), so the CLI never needs to know its own
+    // principal class — the server decides, and the refusal below carries the
+    // reason.
+    if (input.allowSuppressedRecipients) body["allow_suppressed_recipients"] = true;
     this.invalidate();
     const { status, json } = await this.request("POST", "/messages/send", body);
     const payload = (json ?? {}) as {
@@ -2290,10 +2296,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
       provider_message_id?: unknown;
     };
     if (status < 200 || status >= 300) {
-      const reason = typeof (json as Record<string, unknown> | null)?.["reason"] === "string"
-        ? ` (${String((json as Record<string, unknown>)["reason"])})`
+      const response = (json ?? {}) as Record<string, unknown>;
+      const reason = typeof response["reason"] === "string" ? ` (${String(response["reason"])})` : "";
+      const detail = typeof response["error"] === "string" && response["error"]
+        ? ` — ${String(response["error"])}`
         : "";
-      throw new Error(`self-hosted Emails: POST /messages/send failed (HTTP ${status})${reason}`);
+      throw new Error(`self-hosted Emails: POST /messages/send failed (HTTP ${status})${reason}${detail}`);
     }
     const rec = payload.message;
     const id = rec?.id ?? "";

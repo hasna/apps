@@ -196,6 +196,7 @@ export type OutboundPolicyCode =
   | "send_key_invalid"
   | "send_key_forbidden"
   | "recipient_suppressed"
+  | "suppression_override_forbidden"
   | "address_quota_exceeded"
   | "warming_limit_exceeded";
 
@@ -4439,6 +4440,15 @@ export class TenantScopedStore {
     sendKeyToken?: string | null;
     /** API keys and tenant owner/admin sessions carry explicit tenant-wide send authority. */
     allowTenantWideSend?: boolean;
+    /**
+     * Explicit per-send override of the tenant suppression ledger for the
+     * recipients of this ONE message. Honored only together with tenant-wide
+     * send authority (the same set that can unsuppress a contact); a
+     * sender-scoped send key requesting it is refused with
+     * `suppression_override_forbidden`. Absent or false, a suppressed
+     * recipient is refused with 409 recipient_suppressed, unconditionally.
+     */
+    allow_suppressed_recipients?: boolean;
   }): Promise<OutboundPolicyDecision> {
     const from = canonicalAddress(input.from);
     const address = await this.client.get<{
@@ -4514,7 +4524,22 @@ export class TenantScopedStore {
       )
       : null;
     if (suppressed) {
-      return { allowed: false, code: "recipient_suppressed", message: "one or more recipients are suppressed", status: 409 };
+      if (input.allow_suppressed_recipients === true) {
+        // The override is the same authority as unsuppressing the contact,
+        // exercised per-send and without a state mutation. A send key is a
+        // delegated sender, not the tenant operator: it cannot write the
+        // contacts ledger, so it cannot request the override either.
+        if (!input.allowTenantWideSend) {
+          return {
+            allowed: false,
+            code: "suppression_override_forbidden",
+            message: "the suppression override requires tenant-wide send authority; a sender-scoped send key cannot request it — unsuppress the contact with the tenant credentials instead",
+            status: 403,
+          };
+        }
+      } else {
+        return { allowed: false, code: "recipient_suppressed", message: "one or more recipients are suppressed", status: 409 };
+      }
     }
 
     const usage = await this.client.one<{ address_count: number; domain_count: number }>(

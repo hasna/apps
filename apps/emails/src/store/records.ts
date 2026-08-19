@@ -441,6 +441,7 @@ export type OutboundPolicyCode =
   | "send_key_invalid"
   | "send_key_forbidden"
   | "recipient_suppressed"
+  | "suppression_override_forbidden"
   | "address_quota_exceeded"
   | "warming_limit_exceeded";
 

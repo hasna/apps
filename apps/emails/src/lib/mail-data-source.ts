@@ -180,6 +180,13 @@ export interface MailSendInput {
    * without the headers.
    */
   unsubscribeUrl?: string;
+  /**
+   * Explicit per-send suppression override (the CLI's `--force`). The local
+   * backend checks suppression in the caller; the self-hosted client transmits
+   * it as `allow_suppressed_recipients`, which the server honors only for
+   * tenant-wide send authority.
+   */
+  allowSuppressedRecipients?: boolean;
 }
 
 export interface MailSendResult {

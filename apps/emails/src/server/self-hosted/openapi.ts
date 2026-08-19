@@ -3640,6 +3640,10 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                     type: "string",
                     description: "Sender-scoped key required for member sessions; optional for tenant API keys and owner/admin sessions.",
                   },
+                  allow_suppressed_recipients: {
+                    type: "boolean",
+                    description: "Explicit per-send override of the tenant suppression ledger for the recipients of this one message. Honored only for principals with tenant-wide send authority (API keys, owner/admin sessions, IdP principals with emails:write) — the same set that can unsuppress a contact. A sender-scoped send key requesting it is refused with 403 suppression_override_forbidden. Without this flag the server refuses a suppressed recipient with 409 recipient_suppressed, unconditionally.",
+                  },
                   idempotency_key: { type: "string", maxLength: 200 },
                 },
                 required: ["from", "to", "subject", "idempotency_key"],

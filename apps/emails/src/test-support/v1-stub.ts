@@ -191,7 +191,7 @@ export interface V1Stub {
   stop(): Promise<void>;
 }
 
-const DEFAULT_API_KEY = "hasna_emails_stub_key_0123456789";
+const DEFAULT_API_KEY = "hasna-emails-stub-auth-fixture";
 const NOW_DEFAULT = "__v1_stub_now__";
 
 const V1_STUB_RESOURCE_SPECS = Object.fromEntries(
@@ -1220,6 +1220,32 @@ const server = Bun.serve({
           message: detailRow(existing),
           retry_safe: false,
           reconciliation_required: true,
+        }, 409);
+      }
+      // Suppression gate, mirroring the real server (evaluateOutboundPolicy):
+      // any suppressed recipient is refused with 409 recipient_suppressed
+      // UNLESS the request carries the explicit allow_suppressed_recipients
+      // override. The stub enforces this so a client test proves the flag
+      // reached the wire rather than merely skipping its own pre-flight check.
+      const recipientsForSuppression = [
+        ...(Array.isArray(body.to) ? body.to : []),
+        ...(Array.isArray(body.cc) ? body.cc : []),
+        ...(Array.isArray(body.bcc) ? body.bcc : []),
+      ].map(function (value: unknown) {
+        const address = String(value).trim();
+        const angle = address.match(/<([^<>]+)>/);
+        return (angle ? angle[1]! : address).toLowerCase();
+      });
+      const suppressedRecipient = rowsFor("contacts").find(function (row) {
+        return row.suppressed === true
+          && recipientsForSuppression.includes(String(row.email).toLowerCase());
+      });
+      if (suppressedRecipient && body.allow_suppressed_recipients !== true) {
+        return json({
+          error: "one or more recipients are suppressed",
+          reason: "recipient_suppressed",
+          message: null,
+          retry_safe: false,
         }, 409);
       }
       providerSendCalls += 1;

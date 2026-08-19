@@ -494,6 +494,22 @@ describe.skipIf(!pgClient)("central outbound enforcement", () => {
     expect(suppressed).toMatchObject({ status: 409, body: { reason: "recipient_suppressed", retry_safe: false } });
     expect(sent).toHaveLength(1);
 
+    // The explicit per-send suppression override is honored for a tenant-wide
+    // principal: the API key is the same authority that can unsuppress the
+    // contact, so the override proceeds without a state mutation.
+    const overridden = await call(deps, "POST", "/v1/messages/send", {
+      token: tenant.token,
+      body: {
+        from: "ready@policy.example",
+        to: ["Blocked User <blocked@example.net>"],
+        subject: "blocked override",
+        idempotency_key: crypto.randomUUID(),
+        allow_suppressed_recipients: true,
+      },
+    });
+    expect(overridden.status).toBe(202);
+    expect(sent).toHaveLength(2);
+
     await register("quota@policy.example", { daily_quota: 0 });
     const quota = await call(deps, "POST", "/v1/messages/send", {
       token: tenant.token,
