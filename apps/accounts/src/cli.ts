@@ -1918,7 +1918,7 @@ backend
       }
       for (const route of routes) {
         console.log(
-          `${chalk.cyan(route.id.padEnd(12))} ${route.name.padEnd(16)} ${chalk.dim(route.protocol)} ${chalk.dim(route.baseUrl)} → vault ${route.vaultKey}`,
+          `${chalk.cyan(route.id.padEnd(12))} ${route.name.padEnd(16)} ${chalk.dim(route.protocol)} ${chalk.dim(redactText(route.baseUrl))} → vault ${route.vaultKey}`,
         );
         const models = route.models.map((model) => `${model.id}(${model.contextWindowTokens})`).join(", ");
         console.log(`  ${chalk.dim("models:")} ${models}`);
@@ -1981,7 +1981,7 @@ backend
               }),
             );
         console.log(chalk.green(`✓ registered backend ${chalk.bold(route.id)} (${route.protocol})`));
-        console.log(`  base URL: ${route.baseUrl}`);
+        console.log(`  base URL: ${redactText(route.baseUrl)}`);
         console.log(`  vault:    ${route.vaultKey}`);
         console.log(chalk.dim(`  bind a profile:  accounts set <profile> --backend ${route.id}`));
       },

@@ -16,10 +16,14 @@
 
 import type { BackendModel, BackendRoute, Profile } from "../types.js";
 import { AccountsError } from "../types.js";
+import { redactText } from "./redaction.js";
 import { loadStore, saveStore } from "../storage.js";
 
 /** Public transport only: https, or plain http bound to localhost. */
-const HTTPS_BASE_URL = /^https:\/\/[^\s/]+(?::\d+)?(?:\/.*)?$/;
+// The authority class excludes `@` so userinfo (`https://user:token@host`)
+// is refused: a token pasted into the URL would be echoed into terminal
+// output by backend list/add and by launch-plan env rendering.
+const HTTPS_BASE_URL = /^https:\/\/[^\s/@]+(?::\d+)?(?:\/.*)?$/;
 const LOCALHOST_BASE_URL = /^http:\/\/localhost(?::\d+)?(?:\/.*)?$/;
 
 /**
@@ -51,7 +55,7 @@ export const EXAMPLE_DEEPSEEK_BACKEND: BackendRoute = {
 export function validateBackendRoute(route: BackendRoute): BackendRoute {
   if (!HTTPS_BASE_URL.test(route.baseUrl) && !LOCALHOST_BASE_URL.test(route.baseUrl)) {
     throw new AccountsError(
-      `backend "${route.id}" baseUrl must be https:// or http://localhost: got "${route.baseUrl}"`,
+      `backend "${route.id}" baseUrl must be https:// or http://localhost: got "${redactText(route.baseUrl)}"`,
     );
   }
   if (!VAULT_KEY_PATTERN.test(route.vaultKey)) {
