@@ -9,7 +9,8 @@
 FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS builder
 # Assert the base image really is the pinned bun; a digest or tag drift then
 # fails the build instead of producing an image built by a different bun.
-RUN test "$(bun --version)" = "1.3.14"
+RUN apk upgrade --no-cache \
+ && test "$(bun --version)" = "1.3.14"
 WORKDIR /app
 COPY package.json bun.lock ./
 # Production-only install: devDependencies are types/tsc only — typescript
@@ -38,7 +39,8 @@ WORKDIR /app
 # Amazon RDS global CA bundle so TLS to the shared RDS validates (no
 # SELF_SIGNED_CERT_IN_CHAIN). Node + pg trust it via NODE_EXTRA_CA_CERTS /
 # PGSSLROOTCERT (the kit's fleet-standard TLS path).
-RUN apk add --no-cache ca-certificates wget \
+RUN apk upgrade --no-cache \
+ && apk add --no-cache ca-certificates wget \
  && wget -qO /app/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 ENV NODE_EXTRA_CA_CERTS=/app/rds-global-bundle.pem \
     PGSSLROOTCERT=/app/rds-global-bundle.pem
