@@ -1967,22 +1967,6 @@
         "typescript": "^5.7.3",
       },
     },
-    "apps/ui": {
-      "name": "@hasna/ui",
-      "version": "0.0.6",
-      "bin": {
-        "ui": "src/cli.ts",
-      },
-      "dependencies": {
-        "@hasna/events": "0.1.6",
-        "commander": "^13.1.0",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-        "happy-dom": "20.10.2",
-        "typescript": "5.6.3",
-      },
-    },
   },
   "trustedDependencies": [
     "@hasna/projects",
@@ -2492,8 +2476,6 @@
     "@hasna/todos": ["@hasna/todos@workspace:apps/todos"],
 
     "@hasna/treasury": ["@hasna/treasury@workspace:apps/treasury"],
-
-    "@hasna/ui": ["@hasna/ui@workspace:apps/ui"],
 
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
@@ -4824,8 +4806,6 @@
     "@hasna/treasury/@hasna/contracts": ["@hasna/contracts@0.11.1", "", { "dependencies": { "@hasna/secrets": "0.3.0", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-W3q07I6zdrN/MKVf4roldq0W9+UVeZCaqi4WsS76Mby8dNobbbgbR6foBm9rZ2gVe219SPmUIp5e0cx+42C/Dw=="],
 
     "@hasna/treasury/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
-    "@hasna/ui/@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
 
     "@img/sharp-wasm32/@emnapi/runtime": ["@emnapi/runtime@1.11.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA=="],
 
