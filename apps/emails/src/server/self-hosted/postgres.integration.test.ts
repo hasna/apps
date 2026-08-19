@@ -631,19 +631,23 @@ describe("self-hosted Postgres integration", () => {
     await store.createMessage({
       direction: "outbound", from_addr: "first@example.test", to_addrs: ["third@example.test"], subject: "sent",
     });
-    // cc does not count: the local inbound_recipients trigger tracks to_addresses
-    // only, so kind = 'to' is the parity contract.
+    // cc recipients do not count: the local inbound_recipients trigger tracks
+    // to_addresses only, so kind = 'to' is the parity contract. The message's
+    // TO recipient (first@example.test) still counts — a message that carries
+    // cc is not excluded; only the cc addresses are.
     await store.createMessage({
       direction: "inbound", from_addr: "sender@example.test", to_addrs: ["first@example.test"], cc_addrs: ["cc@example.test"], subject: "cc",
     });
 
+    // first = msg1 + msg2 + cc-message(to) = 3; the is_read:true message is NOT
+    // counted (without that exclusion first would be 4). second = msg1.
     const rows = await store.unreadByAddress();
     expect(rows).toEqual([
-      { address: "first@example.test", unread: 2 },
+      { address: "first@example.test", unread: 3 },
       { address: "second@example.test", unread: 1 },
     ]);
 
-    // unread DESC, address ASC -> first(2), second(1); window [1,2) -> second.
+    // unread DESC, address ASC -> first(3), second(1); window [1,2) -> second.
     const limited = await store.unreadByAddress({ limit: 1, offset: 1 });
     expect(limited).toEqual([{ address: "second@example.test", unread: 1 }]);
   });
