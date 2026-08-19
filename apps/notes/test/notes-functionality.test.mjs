@@ -1416,6 +1416,100 @@ test('web recording pause excludes paused time from elapsed', async () => {
   windowTarget.HasnaNotes.destroy(); // clear the 500ms tick interval
 });
 
+test('minimized (compact) window offers the recording affordance and records (task 9ec010a2)', async () => {
+  // Owner acceptance (2026-08-19): "when I minimize the Notes app I should also be able
+  // to record stuff. Right now it's only asking me to add notes." The compact quick-note
+  // shell must carry a record START control — the bottom-center rec-pill already hosts
+  // timer + pause + stop in the compact window, so the missing affordance is the mic.
+  const html = await readFile(join(repoRoot, 'web', 'index.html'), 'utf8');
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  assert.match(html, /id="compact-rec"/, 'compact shell markup carries the record control');
+  const formRegion = html.slice(html.indexOf('id="compact-form"'), html.indexOf('</form>', html.indexOf('id="compact-form"')));
+  assert.ok(formRegion.indexOf('id="compact-rec') < formRegion.indexOf('id="compact-add"'),
+    'record affordance precedes Add inside the compact composer row');
+  assert.match(formRegion, /data-no-drag/, 'record affordance is click-through-safe in the native drag strip');
+  assert.match(app, /compact-rec/, 'app.js wires the compact record control');
+  assert.match(app, /compact-form/, 'app.js toggles recording states on the compact form');
+
+  let now = Date.parse('2026-08-19T10:00:00Z');
+  class TestDate extends Date {
+    constructor(...args) { args.length ? super(...args) : super(now); }
+    static now() { return now; }
+  }
+  class FakeMediaRecorder {
+    static isTypeSupported() { return true; }
+    constructor() {
+      this.state = 'inactive';
+      this.mimeType = 'audio/webm';
+    }
+    start() {
+      this.state = 'recording';
+      setTimeout(() => this.ondataavailable?.({ data: new Blob(['audio'], { type: 'audio/webm' }) }), 0);
+    }
+    stop() {
+      this.state = 'inactive';
+      setTimeout(() => this.onstop?.(), 0);
+    }
+    pause() { this.state = 'paused'; }
+    resume() { this.state = 'recording'; }
+  }
+  class FakeFileReader {
+    readAsDataURL() {
+      setTimeout(() => {
+        this.result = 'data:audio/webm;base64,YXVkaW8=';
+        this.onloadend?.();
+      }, 0);
+    }
+  }
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
+    __AI__: { available: true, realtime: false, port: 12345 },
+    // /transcribe succeeds (the voice note saves); everything else (auto-title) is inert.
+    fetch: async (url) => {
+      if (String(url).includes('/transcribe')) return { ok: true, status: 200, json: async () => ({ text: 'Recorded from the minimized window' }) };
+      return { ok: false, status: 502, json: async () => ({}) };
+    },
+  }, {
+    Date: TestDate,
+    MediaRecorder: FakeMediaRecorder,
+    FileReader: FakeFileReader,
+    Blob,
+    btoa: value => Buffer.from(value, 'binary').toString('base64'),
+    navigator: {
+      clipboard: { writeText: async () => undefined },
+      mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) },
+    },
+  });
+
+  // Minimize: the window enters the compact quick-note shell.
+  document.getElementById('win-min').click();
+  const win = document.getElementById('window');
+  assert.equal(win.getAttribute('data-active-shell'), 'compact', 'minimize switches to the compact shell');
+
+  const cRec = document.getElementById('compact-rec');
+  assert.ok(cRec, 'compact record control exists in the live DOM');
+  const pill = document.getElementById('rec-pill');
+  assert.equal(pill.hidden, true, 'rec-pill hidden before recording starts');
+
+  // Start a recording FROM the minimized window.
+  cRec.click();
+  await delay(20); // getUserMedia microtask
+  assert.equal(windowTarget.HasnaNotes.recording.state().status, 'recording', 'recording starts from the minimized window');
+  assert.equal(pill.hidden, false, 'rec-pill (timer + pause + stop) visible in the minimized window');
+  const cForm = document.getElementById('compact-form');
+  assert.ok(cForm.classList.contains('recording'), 'compact form carries the recording state class');
+  assert.equal(document.getElementById('compact-input').hidden, true, 'composer input hidden while recording');
+  assert.equal(document.getElementById('compact-add').hidden, true, 'Add hidden while recording');
+  assert.equal(document.getElementById('compact-rec').hidden, false, 'record control stays as the stop surface');
+
+  // Stop through the pill: quick-capture saves the voice note.
+  const before = windowTarget.HasnaNotes.view.state().visibleNoteIds.length;
+  document.getElementById('rec-pill-stop').click();
+  await delay(80); // recorder stop + file-read + transcription microtasks
+  const after = windowTarget.HasnaNotes.view.state().visibleNoteIds.length;
+  assert.equal(after, before + 1, 'voice note saved through the quick-capture path');
+  windowTarget.HasnaNotes.destroy(); // clear the 500ms tick interval
+});
+
 test('web sidebar defaults to the latest 10 notes and keeps pagination across hydrates', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const { windowTarget, document } = loadWebAppWithFakeDOM(app);

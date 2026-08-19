@@ -312,6 +312,18 @@
         </div>
         <form class="compact-form" id="compact-form">
           <input class="compact-input" id="compact-input" data-no-drag type="text" placeholder="Jot a note…" autocomplete="off" spellcheck="false">
+          <!-- Record a voice note from the minimized window (task 9ec010a2: minimized
+               surface offers recording, not only "add notes"). While recording, the
+               composer row IS the record surface: input + Add hide, the button turns
+               red and hover reveals the stop square; timer + pause + stop live in the
+               bottom-center rec-pill (same as Home). -->
+          <button class="compact-rec" id="compact-rec" data-no-drag type="button" title="Record a voice note">
+            <svg class="compact-rec-mic" viewBox="0 0 18 18" fill="none"><rect x="6.6" y="2.4" width="4.8" height="8.2" rx="2.4" fill="currentColor"/><path d="M4.4 8.2a4.6 4.6 0 009.2 0M9 12.8v2.6M6.6 15.4h4.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <span class="compact-rec-label" id="compact-rec-label">Record</span>
+            <span class="compact-rec-stop"></span>
+            <span class="compact-rec-timer" id="compact-rec-timer">0:00</span>
+            <svg class="compact-rec-busy" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="26" stroke-dashoffset="17"/></svg>
+          </button>
           <button class="compact-add" id="compact-add" data-no-drag type="submit">Add</button>
         </form>
       </div>

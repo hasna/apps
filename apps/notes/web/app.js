@@ -1974,6 +1974,25 @@
       recBtn.setAttribute('aria-label',
 	        active ? (stateName === 'transcribing' ? 'Transcribing recording' : 'Stop recording') : ((cfg.available || cfg.realtime) ? 'Record a voice note' : 'Voice notes need an OpenAI key'));
 	    }
+    // Compact quick-note shell (task 9ec010a2): the minimized window mirrors the
+    // Home composer's single-surface pattern — while a recording is active the
+    // compact form carries the same state classes (input + Add hidden, mic pulsing).
+    const cForm = $('compact-form');
+    if (cForm) {
+      cForm.classList.remove('recording', 'transcribing', 'paused', 'stopping', 'complete', 'error');
+      if (stateName === 'recording') cForm.classList.add('recording');
+      else if (stateName === 'paused') cForm.classList.add('recording', 'paused');
+      else if (stateName === 'stopping') cForm.classList.add('stopping');
+      else if (stateName === 'transcribing') cForm.classList.add('transcribing');
+      else if (stateName === 'complete') cForm.classList.add('complete');
+      else if (stateName === 'error') cForm.classList.add('error');
+    }
+    const cRec = $('compact-rec');
+    if (cRec) {
+      const cfg = ai();
+      cRec.setAttribute('aria-label',
+        active ? (stateName === 'transcribing' ? 'Transcribing recording' : 'Stop recording') : ((cfg.available || cfg.realtime) ? 'Record a voice note' : 'Voice notes need an OpenAI key'));
+    }
     updateComposerControls();
     renderRecPill();
     renderTranscript();
@@ -2369,16 +2388,20 @@
   function initRecButton() {
     const btn = $('rec-btn');
     const wrap = $('qn-form');
-    if (!btn || !wrap) return;
+    const cRec = $('compact-rec');
+    const cForm = $('compact-form');
+    if (!btn && !cRec) return;
     const cfg = ai();
     if (!cfg.available && !cfg.realtime) {
-      wrap.classList.add('rec-disabled');
-      btn.setAttribute('title', 'Add an OpenAI or ElevenLabs key to enable voice notes');
-      btn.setAttribute('aria-disabled', 'true');
+      if (wrap) wrap.classList.add('rec-disabled');
+      if (btn) { btn.setAttribute('title', 'Add an OpenAI or ElevenLabs key to enable voice notes'); btn.setAttribute('aria-disabled', 'true'); }
+      if (cForm) cForm.classList.add('rec-disabled');
+      if (cRec) { cRec.setAttribute('title', 'Add an OpenAI or ElevenLabs key to enable voice notes'); cRec.setAttribute('aria-disabled', 'true'); }
     } else {
-      wrap.classList.remove('rec-disabled');
-      btn.setAttribute('title', 'Record a voice note');
-      btn.removeAttribute('aria-disabled');
+      if (wrap) wrap.classList.remove('rec-disabled');
+      if (btn) { btn.setAttribute('title', 'Record a voice note'); btn.removeAttribute('aria-disabled'); }
+      if (cForm) cForm.classList.remove('rec-disabled');
+      if (cRec) { cRec.setAttribute('title', 'Record a voice note'); cRec.removeAttribute('aria-disabled'); }
     }
     setRecUI(rec.status);
   }
@@ -2741,14 +2764,19 @@
   }
   function updateComposerControls() {
     const inp = $('qn-input'); const add = $('qn-add'); const recBtn = $('rec-btn');
-    if (!inp) return;
-    const hasText = !!inp.value.trim();
+    const hasText = !!inp?.value?.trim();
     const recActive = (rec.status === 'recording' || rec.status === 'paused' ||
       rec.status === 'stopping' || rec.status === 'transcribing');
     // While recording, the Record control stays put (it doubles as Stop); otherwise the
     // control reflects whether the user is typing (Add) or not (Record).
     if (add) add.hidden = recActive || !hasText;
     if (recBtn) recBtn.hidden = !recActive && hasText;
+    // Compact quick-note shell: while a recording is active the minimized window shows
+    // ONE recording surface — the composer input + Add hide behind the mic control
+    // (timer + pause + stop live in the bottom-center rec-pill).
+    const cInput = $('compact-input'); const cAdd = $('compact-add');
+    if (cInput) cInput.hidden = recActive;
+    if (cAdd) cAdd.hidden = recActive;
   }
   // ---------- Search popover (Cmd+K) ----------
   function searchPopOpen() {
@@ -2965,6 +2993,7 @@
       qnInput.addEventListener('keydown', onQnKeydown);
     }
     const cForm = $('compact-form'); if (cForm) cForm.addEventListener('submit', onCompactNote);
+    const cRec = $('compact-rec'); if (cRec) cRec.addEventListener('click', onRecordClick);
     const chatForm = $('chat-form'); if (chatForm) chatForm.addEventListener('submit', onChatSubmit);
     const chatInput = $('chat-input');
     if (chatInput) {
@@ -3048,6 +3077,7 @@
       qnInput.removeEventListener('keydown', onQnKeydown);
     }
     const cForm = $('compact-form'); if (cForm) cForm.removeEventListener('submit', onCompactNote);
+    const cRec = $('compact-rec'); if (cRec) cRec.removeEventListener('click', onRecordClick);
     const chatForm = $('chat-form'); if (chatForm) chatForm.removeEventListener('submit', onChatSubmit);
     const chatInput = $('chat-input');
     if (chatInput) {
