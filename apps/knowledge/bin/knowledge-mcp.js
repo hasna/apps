@@ -4242,7 +4242,7 @@ var package_default = {
     "scripts/live-private-query.mjs",
     "scripts/lib/remote-temp-dir.mjs",
     "scripts/smoke-machine-sync-release.mjs",
-    "scripts/smoke-machines-adapter.mjs",
+    "scripts/smoke-stations-adapter.mjs",
     "scripts/smoke-files-installed-boundary.mjs",
     "scripts/strip-generated-trailing-whitespace.mjs",
     "scripts/verify-generated-artifacts.mjs",
@@ -4258,11 +4258,11 @@ var package_default = {
     "README.md"
   ],
   scripts: {
-    test: "bun test --timeout 20000",
+    test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
     "test:package": "bun test tests/package-release.test.ts",
     "release:pack:check": "node scripts/validate-public-package.mjs",
-    "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
+    "smoke:stations-adapter": "bun scripts/smoke-stations-adapter.mjs",
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
     "smoke:files-installed-boundary": "bun scripts/smoke-files-installed-boundary.mjs",
     "migrate:postgres": "bun scripts/apply-postgres-migrations.mjs",
@@ -4270,7 +4270,7 @@ var package_default = {
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun scripts/verify-generated-artifacts.mjs",
     "contracts:conformance": "contracts conformance fixtures",
-    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json",
+    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/stations --external @hasna/stations/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/stations --external @hasna/stations/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/stations --external @hasna/stations/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --target bun --external pg --external @hasna/stations --external @hasna/stations/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json",
     prepublishOnly: "bun run contracts:conformance && contracts no-cloud-scan . && bun run build && node scripts/validate-public-package.mjs",
     prepack: "bun run build"
   },
@@ -4320,7 +4320,9 @@ var package_default = {
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.15.6",
     typescript: "5.9.3"
-  }
+  },
+  test: "bun test --timeout 20000",
+  prepack: "bun run build"
 };
 
 // src/knowledge-db.ts
@@ -14002,8 +14004,8 @@ async function consumeOpenFilesOutbox(options) {
 import { spawnSync } from "child_process";
 import { hostname as hostname2, platform, userInfo } from "os";
 var KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
-var KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = "@hasna/machines";
-var KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = "@hasna/machines/consumer";
+var KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = "@hasna/stations";
+var KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = "@hasna/stations/consumer";
 function asString3(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -14184,7 +14186,7 @@ function topologyMessage(source, count3) {
 }
 function optionalModuleError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("Cannot find module '@hasna/machines'") || message.includes("Cannot find module '@hasna/machines/consumer'") ? "module_not_found" : message;
+  return message.includes("Cannot find module '@hasna/stations'") || message.includes("Cannot find module '@hasna/stations/consumer'") ? "module_not_found" : message;
 }
 function adapterMode(options) {
   return options.adapterMode ?? "auto";
@@ -14292,7 +14294,7 @@ function preflightId(value) {
 function packageCommand(name) {
   if (name === "@hasna/knowledge")
     return "knowledge";
-  if (name === "@hasna/machines")
+  if (name === "@hasna/stations")
     return "machines";
   return name.split("/").pop() ?? name;
 }
@@ -14484,12 +14486,12 @@ function withKnowledgeContext(topology, options) {
 }
 async function loadOpenMachinesModule() {
   try {
-    const specifier = "@hasna/machines/consumer";
+    const specifier = "@hasna/stations/consumer";
     return await import(specifier);
   } catch (error) {
     if (optionalModuleError(error) !== "module_not_found")
       throw error;
-    const specifier = "@hasna/machines";
+    const specifier = "@hasna/stations";
     return await import(specifier);
   }
 }
@@ -15066,10 +15068,10 @@ async function fallbackPreflight(options, adapter) {
     checks.push(...await fallbackWorkspaceChecks(machineId, spec, runner));
   if (adapter.error) {
     checks.push(makePreflightCheck({
-      id: "adapter:@hasna/machines",
+      id: "adapter:@hasna/stations",
       kind: "package",
       status: "warn",
-      target: "@hasna/machines",
+      target: "@hasna/stations",
       expected: "optional",
       actual: adapter.error,
       detail: "Using knowledge local/ssh compatibility fallback",
@@ -23183,7 +23185,7 @@ function buildServer() {
         ],
         packages: [
           { name: package_default.name, command: "knowledge", expectedVersion: package_default.version, required: true },
-          { name: "@hasna/machines", command: "machines", required: false }
+          { name: "@hasna/stations", command: "machines", required: false }
         ],
         workspaces: [
           {

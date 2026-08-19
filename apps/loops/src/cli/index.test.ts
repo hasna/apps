@@ -2240,13 +2240,13 @@ describe("loops CLI", () => {
 
   test("machines commands expose OpenMachines topology", () => {
     const dataDir = freshDataDir("loops-cli-machines-");
-    const list = runCli(dataDir, ["--json", "machines", "list"]);
+    const list = runCli(dataDir, ["--json", "stations", "list"]);
     expect(list.status).toBe(0);
     const machines = JSON.parse(list.stdout);
     expect(Array.isArray(machines)).toBe(true);
     expect(machines.length).toBeGreaterThan(0);
 
-    const show = runCli(dataDir, ["--json", "machines", "show", "local"]);
+    const show = runCli(dataDir, ["--json", "stations", "show", "local"]);
     expect(show.status).toBe(0);
     const local = JSON.parse(show.stdout);
     expect(local.id).toBeTruthy();

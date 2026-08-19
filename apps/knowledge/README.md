@@ -844,9 +844,9 @@ knowledge machines preflight [machine] [--workspace <repo>] [--scope project] [-
 Inspect the read-only machine topology that future knowledge sync will use.
 Machine integration goes through the optional `KnowledgeMachinesAdapter`
 boundary. In default `auto` mode, `knowledge` tries the lightweight
-`@hasna/machines/consumer` SDK, then the installed `machines --json` CLI, then
+`@hasna/stations/consumer` SDK, then the installed `machines --json` CLI, then
 local machine identity and optional Tailscale status probing. The explicit
-adapter modes are `sdk`, `cli`, and `disabled`; `@hasna/machines` is never a
+adapter modes are `sdk`, `cli`, and `disabled`; `@hasna/stations` is never a
 hard runtime dependency. This command does not sync data; it only exposes
 machine ids, hostnames, route hints, workspace context, and adapter status.
 If the optional consumer SDK declares a newer contract than `knowledge`
@@ -854,9 +854,9 @@ understands, `knowledge` refuses the SDK result and reports
 `unsupported_contract_version:<n>` while falling back to raw/local behavior.
 
 `machines preflight` checks command availability, `@hasna/knowledge` CLI
-version parity, optional `@hasna/machines` availability, and the target repo
+version parity, optional `@hasna/stations` availability, and the target repo
 workspace/package metadata before any machine sync is attempted. When
-`@hasna/machines` is installed, `knowledge` delegates to its compatibility SDK
+`@hasna/stations` is installed, `knowledge` delegates to its compatibility SDK
 or CLI contract; otherwise it uses a local/SSH fallback. Remote sync JSON
 includes adapter diagnostics for route and workspace resolution so CLI, SDK,
 and MCP callers can see whether the result came from SDK, CLI, argument
@@ -866,7 +866,7 @@ The installed adapter smoke harness verifies the same boundary outside unit
 test fakes:
 
 ```bash
-bun run smoke:machines-adapter -- --json
+bun run smoke:stations-adapter -- --json
 ```
 
 It builds isolated temp apps for project-local SDK resolution, global
@@ -887,7 +887,7 @@ push, generated artifact manifest checks, forced conflicts in both directions,
 fake AI conflict proposals, approval-gated resolutions, and a final
 bidirectional dry-run that must converge with zero conflicts. It also repeats
 the sync/conflict path from an isolated installed-package runner where
-`@hasna/machines` and the `machines` CLI are hidden locally, proving knowledge
+`@hasna/stations` and the `machines` CLI are hidden locally, proving knowledge
 can still operate through raw SSH plus `--peer-workspace`. A second hidden
 runner scenario first learns a knowledge-owned registry fallback, then omits
 `--peer-workspace` and requires `source=registry` for route and workspace
@@ -921,7 +921,7 @@ Non-dry remote sync also persists route/workspace resolver evidence into
 row when the optional open-machines SDK/CLI is unavailable. Read-only commands
 such as `sync status`, `sync doctor`, and `sync dry-run` do not write registry
 evidence.
-When newer `@hasna/machines` consumers provide resolver cacheability metadata,
+When newer `@hasna/stations` consumers provide resolver cacheability metadata,
 knowledge preserves `observed_at`, `expires_at`, cacheable/stale status,
 source authority, and reasons in sync JSON and registry fallback evidence.
 

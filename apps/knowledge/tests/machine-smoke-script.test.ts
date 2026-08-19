@@ -42,7 +42,7 @@ describe('machine sync release smoke script', () => {
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('smoke-machine-sync-release.mjs');
     expect(result.stdout).toContain('sync doctor');
-    expect(result.stdout).toContain('@hasna/machines hidden locally');
+    expect(result.stdout).toContain('@hasna/stations hidden locally');
     expect(result.stdout).toContain('--peer-workspace omitted');
   });
 
@@ -80,7 +80,7 @@ describe('machine sync release smoke script', () => {
     expect(output.checks).toContain('run knowledge machines adapter smoke locally and remotely');
     expect(output.checks).toContain('assert artifact manifest modified_at/provenance/raw-source boundary');
     expect(output.checks).toContain('assert final bidirectional dry-run has zero conflicts');
-    expect(output.checks).toContain('run isolated installed-package sync with @hasna/machines and machines CLI hidden');
+    expect(output.checks).toContain('run isolated installed-package sync with @hasna/stations and machines CLI hidden');
     expect(output.checks).toContain('learn registry fallback then run isolated hidden-machines sync with --peer-workspace omitted');
   });
 

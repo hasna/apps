@@ -212,7 +212,7 @@ describe('knowledge machine topology', () => {
     expect(result.adapter.error).toBe('missing_checkMachineCompatibility');
     expect(result.summary.fail).toBe(0);
     expect(result.summary.warn).toBe(1);
-    expect(result.checks.some((check) => check.id === 'adapter:@hasna/machines')).toBe(true);
+    expect(result.checks.some((check) => check.id === 'adapter:@hasna/stations')).toBe(true);
   });
 
   test('uses machines CLI compatibility when SDK import is unavailable', async () => {
@@ -756,7 +756,7 @@ describe('knowledge machine topology', () => {
     expect(preflight.source).toBe('local');
     expect(preflight.adapter.error).toBe(`unsupported_contract_version:${futureVersion}`);
     expect(preflight.checks.some((check) => (
-      check.id === 'adapter:@hasna/machines'
+      check.id === 'adapter:@hasna/stations'
       && check.actual === `unsupported_contract_version:${futureVersion}`
     ))).toBe(true);
   });

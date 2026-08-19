@@ -182,8 +182,8 @@ function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
     ],
     warnings: [],
     adapter: {
-      package: '@hasna/machines',
-      entrypoint: '@hasna/machines/consumer',
+      package: '@hasna/stations',
+      entrypoint: '@hasna/stations/consumer',
       mode: 'sdk',
       implementation: 'sdk',
       contract_version: 1,

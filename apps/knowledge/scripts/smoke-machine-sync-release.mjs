@@ -24,7 +24,7 @@ function parseArgs(argv) {
     knowledgeVersion: process.env.KNOWLEDGE_VERSION || packageJson.version,
     machinesVersion: process.env.MACHINES_VERSION || 'latest',
     packageDir: process.env.KNOWLEDGE_PACKAGE_DIR || null,
-    machinesPackageDir: process.env.MACHINES_PACKAGE_DIR || null,
+    machinesPackageDir: process.env.STATIONS_PACKAGE_DIR || null,
     evidenceJson: process.env.KNOWLEDGE_SMOKE_EVIDENCE_JSON || null,
     evidenceMd: process.env.KNOWLEDGE_SMOKE_EVIDENCE_MD || null,
   };
@@ -70,13 +70,13 @@ function parseArgs(argv) {
         '       [--skip-no-machines-sync] [--skip-no-machines-registry-sync]',
         '',
         'Runs the published-package linux-node-b/linux-node-a release smoke:',
-        '  1. install @hasna/knowledge and @hasna/machines on both machines',
+        '  1. install @hasna/knowledge and @hasna/stations on both machines',
         '  2. verify knowledge/machines adapter and machines consumer contracts',
         '  3. run sync doctor, dry-run, push, artifact manifest, and source-boundary checks',
         '  4. force conflicts in both directions, run fake AI proposals, approve resolutions',
         '  5. verify final bidirectional dry-run converges with zero conflicts',
-        '  6. repeat the sync/conflict path with @hasna/machines hidden locally and raw --peer-workspace',
-        '  7. learn a registry fallback, hide @hasna/machines again, and repeat with --peer-workspace omitted',
+        '  6. repeat the sync/conflict path with @hasna/stations hidden locally and raw --peer-workspace',
+        '  7. learn a registry fallback, hide @hasna/stations again, and repeat with --peer-workspace omitted',
       ].join('\n'));
       process.exit(0);
     } else {
@@ -234,10 +234,10 @@ function linkPackageDependencies(packageDir, globalRoot, nodeModules, exclude = 
 }
 
 function shadowMissingMachinesPackage(nodeModules) {
-  const target = packagePath(nodeModules, '@hasna/machines');
+  const target = packagePath(nodeModules, '@hasna/stations');
   mkdirSync(target, { recursive: true });
   writeFileSync(join(target, 'package.json'), JSON.stringify({
-    name: '@hasna/machines',
+    name: '@hasna/stations',
     version: '0.0.0-hidden-for-knowledge-smoke',
     type: 'module',
     exports: {
@@ -246,7 +246,7 @@ function shadowMissingMachinesPackage(nodeModules) {
     },
   }, null, 2));
   writeFileSync(join(target, 'missing.mjs'), [
-    "throw new Error(\"Cannot find module '@hasna/machines/consumer'\");",
+    "throw new Error(\"Cannot find module '@hasna/stations/consumer'\");",
     '',
   ].join('\n'));
 }
@@ -267,8 +267,8 @@ function installPackages(options) {
   runShell(`bun install -g ${shellQuote(`@hasna/knowledge@${options.knowledgeVersion}`)}`);
   runRemote(options.remote, `bun install -g ${shellQuote(`@hasna/knowledge@${options.knowledgeVersion}`)}`);
   if (options.installMachines) {
-    runShell(`bun install -g ${shellQuote(`@hasna/machines@${options.machinesVersion}`)}`);
-    runRemote(options.remote, `bun install -g ${shellQuote(`@hasna/machines@${options.machinesVersion}`)}`);
+    runShell(`bun install -g ${shellQuote(`@hasna/stations@${options.machinesVersion}`)}`);
+    runRemote(options.remote, `bun install -g ${shellQuote(`@hasna/stations@${options.machinesVersion}`)}`);
   }
   return {
     installed: true,
@@ -283,11 +283,11 @@ function packageDirs(options) {
   return {
     local: {
       knowledge: resolve(options.packageDir || packagePath(localRoot, '@hasna/knowledge')),
-      machines: resolve(options.machinesPackageDir || packagePath(localRoot, '@hasna/machines')),
+      machines: resolve(options.machinesPackageDir || packagePath(localRoot, '@hasna/stations')),
     },
     remote: {
       knowledge: packagePath(remoteRoot, '@hasna/knowledge'),
-      machines: packagePath(remoteRoot, '@hasna/machines'),
+      machines: packagePath(remoteRoot, '@hasna/stations'),
     },
   };
 }
@@ -299,7 +299,7 @@ function createNoMachinesKnowledgeRunner(dirs) {
   mkdirSync(dirname(knowledgeTarget), { recursive: true });
   copyPackage(dirs.local.knowledge, knowledgeTarget);
   const globalRoot = dirname(dirname(dirs.local.knowledge));
-  linkPackageDependencies(dirs.local.knowledge, globalRoot, nodeModules, new Set(['@hasna/machines']));
+  linkPackageDependencies(dirs.local.knowledge, globalRoot, nodeModules, new Set(['@hasna/stations']));
   shadowMissingMachinesPackage(nodeModules);
 
   const binDir = join(appDir, 'bin');
@@ -316,7 +316,7 @@ function createNoMachinesKnowledgeRunner(dirs) {
       PATH: `${binDir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
       NODE_PATH: nodeModules,
     },
-    shadowed_machines_package: packagePath(nodeModules, '@hasna/machines'),
+    shadowed_machines_package: packagePath(nodeModules, '@hasna/stations'),
   };
 }
 
@@ -340,7 +340,7 @@ function commandEnvPrefix(options = {}) {
 }
 
 function runAdapterSmoke({ remote, peer, dirs }) {
-  const script = join(repoRoot, 'scripts', 'smoke-machines-adapter.mjs');
+  const script = join(repoRoot, 'scripts', 'smoke-stations-adapter.mjs');
   const local = localJson(
     'local machines adapter smoke',
     `${shellQuote(process.execPath)} ${shellQuote(script)} --json --package-dir ${shellQuote(dirs.local.knowledge)} --machines-package-dir ${shellQuote(dirs.local.machines)} --peer ${shellQuote('local')}`,
@@ -348,7 +348,7 @@ function runAdapterSmoke({ remote, peer, dirs }) {
   const remoteSmoke = remoteJson(
     remote,
     'remote machines adapter smoke',
-    `cd ${shellQuote(dirs.remote.knowledge)} && bun scripts/smoke-machines-adapter.mjs --json --package-dir ${shellQuote(dirs.remote.knowledge)} --machines-package-dir ${shellQuote(dirs.remote.machines)} --peer ${shellQuote('local')}`,
+    `cd ${shellQuote(dirs.remote.knowledge)} && bun scripts/smoke-stations-adapter.mjs --json --package-dir ${shellQuote(dirs.remote.knowledge)} --machines-package-dir ${shellQuote(dirs.remote.machines)} --peer ${shellQuote('local')}`,
   );
   return { peer, local, remote: remoteSmoke };
 }
@@ -760,7 +760,7 @@ function dryRunSummary(options) {
     machines_version: options.installMachines ? options.machinesVersion : null,
     checks: [
       'install @hasna/knowledge on local and remote',
-      'install @hasna/machines on local and remote when enabled',
+      'install @hasna/stations on local and remote when enabled',
       'verify local and remote knowledge --version',
       'run knowledge machines adapter smoke locally and remotely',
       'run machines consumer conformance locally and remotely when available',
@@ -770,7 +770,7 @@ function dryRunSummary(options) {
       'force conflicts in both directions',
       'run fake AI conflict proposals and approval-gated resolutions',
       'assert final bidirectional dry-run has zero conflicts',
-      'run isolated installed-package sync with @hasna/machines and machines CLI hidden',
+      'run isolated installed-package sync with @hasna/stations and machines CLI hidden',
       'learn registry fallback then run isolated hidden-machines sync with --peer-workspace omitted',
     ],
   };

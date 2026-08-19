@@ -52,7 +52,7 @@ the hosted web UI.
 
 Multi-machine sync is specified in
 [`machine-sync-schema.md`](./machine-sync-schema.md). The sync contract keeps
-machine discovery optional through `@hasna/machines`, stores scalable sync state
+machine discovery optional through `@hasna/stations`, stores scalable sync state
 in SQLite/Postgres/object storage, and keeps raw source bytes in `files`.
 
 The client uses the on-box store by default. `HASNA_KNOWLEDGE_API_URL` plus

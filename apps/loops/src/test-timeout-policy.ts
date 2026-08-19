@@ -16,8 +16,8 @@
  * Measured on station01 (20 cores) at loadavg 8-12:
  *
  *   ordinary `bun src/cli/index.ts --json list`   0.31 - 1.18s   (4x spread)
- *   `machines list`                               1.54 - 2.03s
- *   `machines show local`                         2.26 - 3.01s
+ *   `stations list`                               1.54 - 2.03s
+ *   `stations show local`                         2.26 - 3.01s
  *
  * So a 9-spawn functional test ranges from ~2.8s to ~10.6s purely as a
  * function of how busy the machine is. A full-suite run duly failed 5-6 tests
@@ -80,7 +80,7 @@ export const SUITE_TIMEOUT_MS = 120_000;
  *
  * The deterministic, load-insensitive control that replaces the per-test
  * wall-clock kill. Worst legitimate single invocation measured was
- * `machines show local` at 3.01s, so 60s is ~20x headroom: a loops CLI
+ * `stations show local` at 3.01s, so 60s is ~20x headroom: a loops CLI
  * invocation that has not returned in a minute is hung, not slow.
  *
  * It lives in this module rather than in a *.test.ts file so tests can import

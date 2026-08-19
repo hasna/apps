@@ -16,7 +16,7 @@ machines. `@hasna/dispatch` makes this a first-class, reliable tool.
 - Study sibling apps for structure/conventions (Bun+TS, CLI + MCP + daemon/server + SDK, tests,
   docs, packaging): **`@hasna/todos`** (CLI+MCP+SDK+dashboard layout,
   AGENTS.md/CLAUDE.md, scripts, publishing) and other `@hasna/*` apps in the monorepo.
-- Integrate cross-machine via the **`@hasna/machines` SDK** — read its README/SDK to learn how to
+- Integrate cross-machine via the **`@hasna/stations` SDK** — read its README/SDK to learn how to
   enumerate/reach machines (LAN/Tailscale/MagicDNS) so a dispatch can target a tmux window on another
   host.
 - Follow `~/.claude/rules/` (TDD, secrets scan before every commit/push, conventional commits, NO
@@ -35,9 +35,9 @@ machines. `@hasna/dispatch` makes this a first-class, reliable tool.
    — capture the target pane before/after, detect that the agent started processing (e.g. the TUI
    footer changed to a "working/esc-to-interrupt" state and the composer cleared), and return a clear
    delivered/not-delivered status (with a reason). Expose `dispatch status <id>`.
-5. **Cross-machine.** Using `@hasna/machines`, dispatch to a tmux window on **another machine**
+5. **Cross-machine.** Using `@hasna/stations`, dispatch to a tmux window on **another machine**
    (`dispatch send --machine spark01 --to <session:window> ...`) over SSH/Tailscale; sync machine
-   inventory via the @hasna/machines SDK. Works for the 5 machines (spark01/02, apple01/03/06).
+   inventory via the @hasna/stations SDK. Works for the 5 machines (spark01/02, apple01/03/06).
 6. **Scheduled dispatches.** `dispatch schedule --at <time>|--cron <expr> --to ... --prompt ...` —
    queue a dispatch to fire later; list/cancel scheduled dispatches.
 7. **Live daemon.** A background daemon that owns the dispatch queue, scheduled dispatches,
@@ -70,7 +70,7 @@ machines. `@hasna/dispatch` makes this a first-class, reliable tool.
 - [x] Scheduled dispatch fires at the scheduled time; daemon runs and survives restart. —
       `src/daemon/daemon.integration.test.ts` (fires + delivers; schedule survives a full daemon restart).
 - [x] Cross-machine dispatch works. — `src/cross-machine.integration.test.ts` dispatches to a tmux pane
-      on **spark01** over Tailscale via `@hasna/machines`; delivered + confirmed.
+      on **spark01** over Tailscale via `@hasna/stations`; delivered + confirmed.
 - [x] Published: `npm view @hasna/dispatch` shows `0.0.1`; installs + runs (verified on spark02 + apple03).
       GitHub **hasna/dispatch** is public (default branch `main`).
 - [x] todos plan complete; final summary posted to the conversations space.

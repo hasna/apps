@@ -24,7 +24,7 @@ function parseArgs(argv) {
     json: false,
     keepTemp: false,
     packageDir: process.env.KNOWLEDGE_PACKAGE_DIR || repoRoot,
-    machinesPackageDir: process.env.MACHINES_PACKAGE_DIR || null,
+    machinesPackageDir: process.env.STATIONS_PACKAGE_DIR || null,
     peer: process.env.KNOWLEDGE_SMOKE_MACHINE || 'local',
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -42,13 +42,13 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === '--help' || arg === '-h') {
       console.log([
-        'Usage: bun scripts/smoke-machines-adapter.mjs [--json] [--package-dir <path>] [--machines-package-dir <path>] [--peer <machine>]',
+        'Usage: bun scripts/smoke-stations-adapter.mjs [--json] [--package-dir <path>] [--machines-package-dir <path>] [--peer <machine>]',
         '',
         'Verifies installed-package machines adapter modes:',
-        '  sdk-local: @hasna/knowledge and @hasna/machines available in temp app node_modules',
-        '  future-contract-sdk: @hasna/machines/consumer declares a future contract and knowledge refuses it',
-        '  global-cli-only: @hasna/knowledge local, @hasna/machines absent, global machines CLI on PATH',
-        '  no-sdk-no-cli: @hasna/knowledge local, @hasna/machines absent, machines CLI absent from PATH',
+        '  sdk-local: @hasna/knowledge and @hasna/stations available in temp app node_modules',
+        '  future-contract-sdk: @hasna/stations/consumer declares a future contract and knowledge refuses it',
+        '  global-cli-only: @hasna/knowledge local, @hasna/stations absent, global machines CLI on PATH',
+        '  no-sdk-no-cli: @hasna/knowledge local, @hasna/stations absent, machines CLI absent from PATH',
       ].join('\n'));
       process.exit(0);
     } else {
@@ -159,10 +159,10 @@ function createTempApp(input) {
   const knowledgeTarget = packagePath(nodeModules, '@hasna/knowledge');
   mkdirSync(dirname(knowledgeTarget), { recursive: true });
   copyPackage(input.knowledgePackageDir, knowledgeTarget);
-  linkPackageDependencies(input.knowledgePackageDir, input.globalRoot, nodeModules, new Set(['@hasna/machines']));
+  linkPackageDependencies(input.knowledgePackageDir, input.globalRoot, nodeModules, new Set(['@hasna/stations']));
 
   if (input.includeMachinesPackage) {
-    const machinesTarget = packagePath(nodeModules, '@hasna/machines');
+    const machinesTarget = packagePath(nodeModules, '@hasna/stations');
     mkdirSync(dirname(machinesTarget), { recursive: true });
     copyPackage(input.machinesPackageDir, machinesTarget);
     linkPackageDependencies(input.machinesPackageDir, input.globalRoot, nodeModules);
@@ -184,7 +184,7 @@ function writeMachinesWrapper(appDir, machinesBin) {
 function writeFutureContractMachinesPackage(version = 2) {
   const packageDir = mkdtempSync(join(tmpdir(), 'knowledge-machines-future-contract-'));
   writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
-    name: '@hasna/machines',
+    name: '@hasna/stations',
     version: `999.0.0-contract-v${version}`,
     type: 'module',
     exports: {
@@ -196,8 +196,8 @@ function writeFutureContractMachinesPackage(version = 2) {
     export const MACHINES_CONSUMER_CONTRACT_VERSION = ${version};
     export const MACHINES_CONSUMER_CONTRACT = {
       schema_version: ${version},
-      package_name: '@hasna/machines',
-      entrypoint: '@hasna/machines/consumer',
+      package_name: '@hasna/stations',
+      entrypoint: '@hasna/stations/consumer',
       capabilities: {
         topology: true,
         compatibility: true,
@@ -284,7 +284,7 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   const globalRoot = globalNodeModules();
   const knowledgePackageDir = resolve(options.packageDir);
-  const machinesPackageDir = resolve(options.machinesPackageDir || packagePath(globalRoot, '@hasna/machines'));
+  const machinesPackageDir = resolve(options.machinesPackageDir || packagePath(globalRoot, '@hasna/stations'));
   const machinesBin = commandPath('machines');
   if (!machinesBin) throw new Error('Global machines CLI is required for the global-cli-only smoke case.');
   const futureContractVersion = 2;

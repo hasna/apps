@@ -13,8 +13,8 @@ export type KnowledgeMachineCommandRunner = (command: string) => KnowledgeMachin
 export type KnowledgeMachinePreflightSource = 'open-machines' | 'local' | 'ssh';
 export type KnowledgeMachinePreflightStatus = 'ok' | 'warn' | 'fail';
 export const KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
-export const KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = '@hasna/machines';
-export const KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = '@hasna/machines/consumer';
+export const KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = '@hasna/stations';
+export const KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = '@hasna/stations/consumer';
 export type KnowledgeMachinesAdapterMode = 'auto' | 'sdk' | 'cli' | 'disabled';
 export type KnowledgeMachinesAdapterImplementation = 'sdk' | 'cli' | 'disabled';
 
@@ -242,7 +242,7 @@ export interface KnowledgeMachineTopology {
   machines: KnowledgeMachineEntry[];
   warnings: string[];
   adapter: {
-    package: '@hasna/machines';
+    package: '@hasna/stations';
     available: boolean;
     error: string | null;
   } & KnowledgeMachinesAdapterStatus;
@@ -277,7 +277,7 @@ export interface KnowledgeMachinePreflightReport {
     fail: number;
   };
   adapter: {
-    package: '@hasna/machines';
+    package: '@hasna/stations';
     available: boolean;
     error: string | null;
   } & KnowledgeMachinesAdapterStatus;
@@ -569,7 +569,7 @@ function topologyMessage(source: KnowledgeMachineTopology['source'], count: numb
 
 function optionalModuleError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("Cannot find module '@hasna/machines'") || message.includes("Cannot find module '@hasna/machines/consumer'")
+  return message.includes("Cannot find module '@hasna/stations'") || message.includes("Cannot find module '@hasna/stations/consumer'")
     ? 'module_not_found'
     : message;
 }
@@ -708,7 +708,7 @@ function preflightId(value: string): string {
 
 function packageCommand(name: string): string {
   if (name === '@hasna/knowledge') return 'knowledge';
-  if (name === '@hasna/machines') return 'machines';
+  if (name === '@hasna/stations') return 'machines';
   return name.split('/').pop() ?? name;
 }
 
@@ -944,11 +944,11 @@ function withKnowledgeContext(
 
 async function loadOpenMachinesModule(): Promise<OpenMachinesModule | null> {
   try {
-    const specifier = '@hasna/machines/consumer';
+    const specifier = '@hasna/stations/consumer';
     return await import(specifier) as OpenMachinesModule;
   } catch (error) {
     if (optionalModuleError(error) !== 'module_not_found') throw error;
-    const specifier = '@hasna/machines';
+    const specifier = '@hasna/stations';
     return await import(specifier) as OpenMachinesModule;
   }
 }
@@ -1544,10 +1544,10 @@ async function fallbackPreflight(options: KnowledgeMachinePreflightOptions, adap
   for (const spec of workspaces) checks.push(...await fallbackWorkspaceChecks(machineId, spec, runner));
   if (adapter.error) {
     checks.push(makePreflightCheck({
-      id: 'adapter:@hasna/machines',
+      id: 'adapter:@hasna/stations',
       kind: 'package',
       status: 'warn',
-      target: '@hasna/machines',
+      target: '@hasna/stations',
       expected: 'optional',
       actual: adapter.error,
       detail: 'Using knowledge local/ssh compatibility fallback',

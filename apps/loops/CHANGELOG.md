@@ -937,7 +937,7 @@ status` (merged into `loops goal show`). Internal debloat consolidated
 - Root export (`@hasna/loops`) is now a curated, documented API surface
   (SDK client, MCP factory, coded errors, domain types, doctor/health
   helpers) instead of `export *` of internals.
-- Packaging: `@hasna/machines` moved to `optionalDependencies`; `prepare`
+- Packaging: `@hasna/stations` moved to `optionalDependencies`; `prepare`
   only builds when `dist/` is missing; `CHANGELOG.md` ships in the npm
   package; full Apache-2.0 license text restored in `LICENSE`; CI workflow
   added (`.github/workflows/ci.yml`).
@@ -991,7 +991,7 @@ goal show`.
   fix the cause and `loops resume` the loop. Monitoring that expects
   endless retries should watch for these markers.
 - **Bun is the only supported runtime** (`bun >= 1.0` on PATH even under
-  npm installs), and `@hasna/machines` is now an optional dependency —
+  npm installs), and `@hasna/stations` is now an optional dependency —
   installs without it simply disable remote-machine assignment.
 
 ## 0.3.60 (2026-07-01)
