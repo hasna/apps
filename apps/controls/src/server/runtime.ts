@@ -2,8 +2,11 @@ import { serverBackend } from "../config.js";
 
 export function getPort(): number {
   const raw = process.env["HASNA_CONTROLS_PORT"] || process.env["CONTROLS_PORT"];
-  const n = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : 3482;
+  // Whole numbers only: a fractional or trailing-garbage value ("8080.5",
+  // "8080abc") must fall back to the default, never silently truncate to a
+  // different port than the operator intended.
+  const n = raw ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : 3482;
 }
 
 export function getBindHost(): string {
@@ -21,8 +24,10 @@ export function corsOrigins(): string[] {
 
 export function rateLimitMax(): number {
   const raw = process.env["HASNA_CONTROLS_RATE_LIMIT"] || process.env["CONTROLS_RATE_LIMIT"];
-  const n = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : 120;
+  // Whole numbers only (see getPort): a fractional value falls back to the
+  // default rather than silently truncating the configured limit.
+  const n = raw ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : 120;
 }
 
 /**

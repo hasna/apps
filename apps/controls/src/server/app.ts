@@ -124,7 +124,11 @@ export function createApp(): Hono {
     applyCors(c);
     const ip = clientKey(c);
     const rl = checkRateLimit(ip);
-    if (!rl.allowed) return c.json({ code: "RATE_LIMITED", message: "Too many requests", suggestion: "Slow down and retry." }, 429);
+    if (!rl.allowed) {
+      // A rate-limited client must still get the remaining/retry signal.
+      c.header("X-RateLimit-Remaining", String(rl.remaining));
+      return c.json({ code: "RATE_LIMITED", message: "Too many requests", suggestion: "Slow down and retry." }, 429);
+    }
     await next();
     c.header("X-RateLimit-Remaining", String(rl.remaining));
   });
