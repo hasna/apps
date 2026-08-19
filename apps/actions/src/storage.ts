@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -372,6 +372,50 @@ export class SQLiteActionsStore implements ActionsStore {
   }
 }
 
+/** Lock directory serializing read-modify-write cycles across processes. */
+export const JSON_STORE_LOCK_DIRNAME = ".actions-write.lock";
+const JSON_STORE_LOCK_TIMEOUT_MS = 15_000;
+const JSON_STORE_LOCK_STALE_MS = 30_000;
+
+/**
+ * Serializes a read-modify-write cycle with an atomic `mkdir` lock. The JSON store
+ * writes whole files, so two processes appending disjoint records without a lock
+ * both read the old file and the later rename silently drops the earlier writer's
+ * records. A stale lock (holder died mid-cycle) is broken on age rather than
+ * blocking the next writer forever.
+ */
+async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
+  await mkdir(dataDir, { recursive: true });
+  const lockPath = join(dataDir, JSON_STORE_LOCK_DIRNAME);
+  const deadline = Date.now() + JSON_STORE_LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      await mkdir(lockPath);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        const info = await stat(lockPath);
+        if (Date.now() - info.mtimeMs > JSON_STORE_LOCK_STALE_MS) {
+          await rm(lockPath, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // The holder released between stat and now; retry the acquire.
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`Timed out waiting for the actions JSON store write lock at ${lockPath}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10 + Math.floor(Math.random() * 20)));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export class JsonActionsStore implements ActionsStore {
   dataDir: string;
   private manifestsPath: string;
@@ -394,13 +438,15 @@ export class JsonActionsStore implements ActionsStore {
   }
 
   async saveManifest(manifest: ActionManifest): Promise<ActionManifest> {
-    await this.init();
-    const manifests = await this.readJson<ActionManifest[]>(this.manifestsPath, []);
-    const index = manifests.findIndex((item) => item.id === manifest.id);
-    if (index >= 0) manifests[index] = manifest;
-    else manifests.push(manifest);
-    await this.writeJson(this.manifestsPath, manifests);
-    return manifest;
+    return withJsonStoreLock(this.dataDir, async () => {
+      await this.init();
+      const manifests = await this.readJson<ActionManifest[]>(this.manifestsPath, []);
+      const index = manifests.findIndex((item) => item.id === manifest.id);
+      if (index >= 0) manifests[index] = manifest;
+      else manifests.push(manifest);
+      await this.writeJson(this.manifestsPath, manifests);
+      return manifest;
+    });
   }
 
   async listManifests(): Promise<ActionManifest[]> {
@@ -414,21 +460,25 @@ export class JsonActionsStore implements ActionsStore {
   }
 
   async createRun(run: ActionRun): Promise<ActionRun> {
-    await this.init();
-    const runs = await this.readJson<ActionRun[]>(this.runsPath, []);
-    runs.push(run);
-    await this.writeJson(this.runsPath, runs);
-    return run;
+    return withJsonStoreLock(this.dataDir, async () => {
+      await this.init();
+      const runs = await this.readJson<ActionRun[]>(this.runsPath, []);
+      runs.push(run);
+      await this.writeJson(this.runsPath, runs);
+      return run;
+    });
   }
 
   async updateRun(run: ActionRun): Promise<ActionRun> {
-    await this.init();
-    const runs = await this.readJson<ActionRun[]>(this.runsPath, []);
-    const index = runs.findIndex((item) => item.id === run.id);
-    if (index >= 0) runs[index] = run;
-    else runs.push(run);
-    await this.writeJson(this.runsPath, runs);
-    return run;
+    return withJsonStoreLock(this.dataDir, async () => {
+      await this.init();
+      const runs = await this.readJson<ActionRun[]>(this.runsPath, []);
+      const index = runs.findIndex((item) => item.id === run.id);
+      if (index >= 0) runs[index] = run;
+      else runs.push(run);
+      await this.writeJson(this.runsPath, runs);
+      return run;
+    });
   }
 
   async getRun(id: string): Promise<ActionRun | undefined> {
@@ -451,11 +501,13 @@ export class JsonActionsStore implements ActionsStore {
   }
 
   async appendAuditEvent(event: ActionAuditEvent): Promise<ActionAuditEvent> {
-    await this.init();
-    const events = await this.readJson<ActionAuditEvent[]>(this.eventsPath, []);
-    events.push(event);
-    await this.writeJson(this.eventsPath, events);
-    return event;
+    return withJsonStoreLock(this.dataDir, async () => {
+      await this.init();
+      const events = await this.readJson<ActionAuditEvent[]>(this.eventsPath, []);
+      events.push(event);
+      await this.writeJson(this.eventsPath, events);
+      return event;
+    });
   }
 
   async listAuditEvents(options: { runId?: string; actionId?: string; limit?: number } = {}): Promise<ActionAuditEvent[]> {
