@@ -12,7 +12,8 @@ import {
   type SafeAttachmentInventoryPage,
 } from "../../lib/attachment-inventory.js";
 import { resolveMailDataSource, type MailDataSource } from "../../lib/mail-data-source.js";
-import { readableMessageText } from "../tui/format.js";
+import { openLocalTarget } from "../../lib/local-actions.js";
+import { readableMessageText, renderReadableEmailDocument } from "../tui/format.js";
 import { registerMailboxFilterCommands } from "./mailbox-filter-commands.js";
 import type {
   Mailbox,
@@ -1119,11 +1120,33 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   // ─── OPEN HTML ────────────────────────────────────────────────────────────
   inboxCmd
     .command("open <id>")
-    .description("Open a readable local HTML view of a synced email in the browser")
+    .description("Open a readable HTML view of an email in the browser")
     .option("-j, --json", "Print JSON output", false)
-    .action(() => {
+    .action(async (id: string) => {
       try {
-        throw new Error("emails inbox open is not available in the self-hosted client because it writes a rendered HTML file locally; it runs on the self-hosted server. Use `emails inbox read <id>` for API-backed terminal output.");
+        const ds = resolveMailDataSource();
+        const resolvedId = await resolveMailId(ds, id);
+        const msg = await ds.getMessage(resolvedId);
+        if (!msg) handleError(new Error(`Email not found: ${id}`));
+        const body = await ds.getMessageBody(msg);
+        const { writeFileSync } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const { join: pathJoin } = await import("node:path");
+        const tmpFile = pathJoin(tmpdir(), `emails-inbox-${resolvedId.slice(0, 8)}.html`);
+        writeFileSync(tmpFile, renderReadableEmailDocument({
+          subject: body?.subject ?? msg.subject,
+          from: body?.from ?? msg.from,
+          to: splitAddresses(body?.to ?? msg.to),
+          date: body?.date ?? msg.date,
+          text: body?.text ?? null,
+          html: body?.html ?? null,
+        }), "utf8");
+        const opened = openLocalTarget(tmpFile);
+        const result = { path: tmpFile, file_url: opened.target?.file_url, opened: opened.ok, method: opened.method, error: opened.error };
+        const formatted = opened.ok
+          ? chalk.green(`Opened readable email view: ${tmpFile}`)
+          : `${chalk.yellow(`Saved readable email view: ${tmpFile}`)}\n${chalk.dim(opened.error ?? "Open command unavailable.")}`;
+        output(result, formatted);
       } catch (e) { handleError(e); }
     });
 }
