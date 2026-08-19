@@ -1,0 +1,51 @@
+{
+  "name": "@hasna/__MEMBER__",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "__MEMBER_DESC__",
+  "license": "Apache-2.0",
+  "bin": {
+    "__MEMBER__": "dist/cli/index.js",
+    "__MEMBER__-mcp": "dist/mcp/index.js",
+    "__MEMBER__-serve": "dist/serve/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
+    }
+  },
+  "files": [
+    "dist",
+    "hasna.contract.json",
+    "openapi.json",
+    "docker-compose.yml",
+    "Dockerfile",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "engines": {
+    "bun": ">=1.0"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts src/sdk.ts --outdir dist --target bun && bun build src/cli.ts --outdir dist/cli --target bun && bun build src/mcp.ts --outdir dist/mcp --target bun && bun build src/serve.ts --outdir dist/serve --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "contract:check": "bunx --bun @hasna/contracts@0.11.1 repo-conformance .",
+    "verify": "bun run typecheck && bun run test && bun run build && bun run contract:check",
+    "test:postgres": "bun scripts/pg-test-gate.mjs",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/__MEMBER__-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan __MEMBER__-artifact-scan.tgz; rc=$?; rm -f \"$PWD/__MEMBER__-artifact-scan.tgz\"; exit $rc",
+    "prepack": "bun run verify && bun run scan:artifact"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "^0.11.1"
+  }
+}

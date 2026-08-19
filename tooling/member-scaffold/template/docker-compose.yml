@@ -1,0 +1,10 @@
+services:
+  __MEMBER__:
+    build: .
+    command: ["bun", "run", "dist/serve/index.js"]
+    environment:
+      - HASNA___MEMBER_UPPER___API_KEY=${HASNA___MEMBER_UPPER___API_KEY:-}
+    volumes:
+      - ~/.hasna/__MEMBER__:/data
+    ports:
+      - "8080:8080"

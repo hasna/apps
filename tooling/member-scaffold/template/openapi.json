@@ -1,0 +1,15 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "__MEMBER_DESC__",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health probe",
+        "responses": { "200": { "description": "ok" } }
+      }
+    }
+  }
+}
