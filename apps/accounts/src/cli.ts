@@ -81,6 +81,7 @@ import {
   backendForProfile,
   EXAMPLE_DEEPSEEK_BACKEND,
   listBackends,
+  redactBackendRouteForOutput,
   removeBackend,
   resolveBackend,
 } from "./lib/backend-routes.js";
@@ -1909,7 +1910,10 @@ backend
     action((opts: { json?: boolean }) => {
       const routes = listBackends();
       if (opts.json) {
-        console.log(JSON.stringify(routes, null, 2));
+        // Structured output redacts the baseUrl exactly like the human
+        // surface — a credential-shaped value in a stored URL must never be
+        // echoed into JSON.
+        console.log(JSON.stringify(routes.map(redactBackendRouteForOutput), null, 2));
         return;
       }
       if (routes.length === 0) {

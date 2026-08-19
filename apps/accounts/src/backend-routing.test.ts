@@ -20,6 +20,7 @@ import {
   addBackend,
   EXAMPLE_DEEPSEEK_BACKEND,
   listBackends,
+  redactBackendRouteForOutput,
   removeBackend,
   resolveBackend,
   resolveBackendModel,
@@ -130,6 +131,24 @@ test("registry validation: baseUrl with userinfo (credential-bearing URL) is ref
   expect(() => validateBackendRoute(deepseekRoute({ baseUrl: "https://token@api.deepseek.com/anthropic" }))).toThrow(
     /baseUrl must be https:\/\/ or http:\/\/localhost/,
   );
+});
+
+test("registry validation: baseUrl carrying a credential-shaped query value is refused", () => {
+  // Assembled at runtime so the SOURCE contains no credential-shaped literal.
+  const tokenLike = `sk-ant-${"synthetic".repeat(3)}`;
+  expect(() =>
+    validateBackendRoute(deepseekRoute({ baseUrl: `https://api.example.com/anthropic?api_key=${tokenLike}` })),
+  ).toThrow(/looks like it carries a credential VALUE in the URL/);
+});
+
+test("registry output: redactBackendRouteForOutput masks a credential-bearing baseUrl for JSON surfaces", () => {
+  const tokenLike = `sk-ant-${"synthetic".repeat(3)}`;
+  const route = deepseekRoute({ baseUrl: `https://api.example.com/anthropic?api_key=${tokenLike}` });
+  const out = redactBackendRouteForOutput(route);
+  expect(JSON.stringify(out)).not.toContain(tokenLike);
+  // Other route fields survive unredacted.
+  expect(out.id).toBe("deepseek");
+  expect(out.vaultKey).toBe("deepseek/api_key");
 });
 
 test("switch --launch on a backend-bound profile builds ONE executable in the secrets-exec wrapper", async () => {

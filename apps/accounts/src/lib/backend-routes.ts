@@ -68,6 +68,11 @@ export function validateBackendRoute(route: BackendRoute): BackendRoute {
       `backend "${route.id}" vaultKey looks like a credential VALUE, not a vault locator; store the value in the vault and reference it by key`,
     );
   }
+  if (CREDENTIAL_VALUE_PATTERN.test(route.baseUrl)) {
+    throw new AccountsError(
+      `backend "${route.id}" baseUrl looks like it carries a credential VALUE in the URL; store the value in the vault and reference it by key`,
+    );
+  }
   if (route.defaults && !route.models.some((model) => model.id === route.defaults!.model)) {
     throw new AccountsError(
       `backend "${route.id}" default model "${route.defaults.model}" is not among its registered models`,
@@ -111,6 +116,16 @@ export function removeBackend(id: string): void {
   }
   store.backends = store.backends.filter((backend) => backend.id !== id);
   saveStore(store);
+}
+
+/**
+ * Output-safe copy of a route for STRUCTURED (JSON) surfaces: the baseUrl is
+ * run through the same URL redaction the human list/add surfaces use, so a
+ * credential-shaped value that predates validation (a hand-edited store row)
+ * can never be echoed into JSON output. Other fields are untouched.
+ */
+export function redactBackendRouteForOutput(route: BackendRoute): BackendRoute {
+  return { ...route, baseUrl: redactText(route.baseUrl) };
 }
 
 /** Resolve a backend route by id, failing closed on unknown or invalid records. */
