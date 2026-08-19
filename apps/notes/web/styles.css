@@ -13,7 +13,9 @@
      purple gradient where the accent ring would vanish. Increase Contrast solidifies
      both (see the prefers-contrast block at the end of the file). */
   --focus-ring:color-mix(in srgb,var(--accent) 50%,transparent);
-  --focus-ring-sb:rgba(255,255,255,.60);
+  /* Over the LIGHT glass sidebar the accent halo is visible again (it only vanished on
+     the old purple gradient) — sidebar focus rings now use the accent. */
+  --focus-ring-sb:var(--accent);
   --danger:#C0392B;
   --danger-bg:#FBECEA;
   --green:#1A7F37;
@@ -41,18 +43,17 @@
   --grey2:#6E7178;
   --hair:#ECECEC;
   --hair2:#E5E5E5;
-  /* sidebar purple identity (spec §3.2, mirrors Theme.sidebarGradient) — defined here
-     as the single source of truth; the Liquid-Glass chrome lane applies them. */
-  --sb-grad-0:#5729A3;
-  --sb-grad-1:#4D2EB8;
-  --sb-grad-2:#85299E;
-  --sb-text:rgba(255,255,255,.92);
-  /* .75 (not the spec draft's .62): the light gradient's lower stops (#4D2EB8→#85299E)
-     dropped .62 white to 3.8–4.3:1 — .75 holds ≥4.5:1 on every stop (Rules 12/20).
-     The spec §3.2 table is updated in lockstep. */
-  --sb-text-dim:rgba(255,255,255,.75);
-  --sb-row-active:rgba(255,255,255,.22);
-  --sb-row-hover:rgba(255,255,255,.10);
+  /* sidebar glass identity (owner brief 2026-08-19 req 3): the sidebar is a
+     TRANSLUCENT MATERIAL over the canvas — original glass design, not a purple fill.
+     Dark-canvas text sits on a light glass; the dark theme flips the tokens below. */
+  --sb-bg:rgba(255,255,255,.58);      /* the material itself */
+  --sb-edge:rgba(0,0,0,.08);          /* hairline seam against the canvas */
+  --sb-text:rgba(24,26,30,.92);
+  --sb-text-dim:rgba(24,26,30,.62);
+  --sb-row-active:rgba(0,0,0,.07);
+  --sb-row-hover:rgba(0,0,0,.045);
+  --sb-scroll:rgba(0,0,0,.28);        /* overlay scrollbar thumb over the glass */
+  --sb-scroll-hover:rgba(0,0,0,.45);
   /* concentric radii (spec §3.1: inner = outer − inset) */
   --r-window:26px;       /* window card in browser mode; 0 in body.native */
   --r-panel:14px;        /* popovers, menus, cards ≥12px inset from window edge */
@@ -63,8 +64,8 @@
   --glass-blur:24px;
   --glass-sat:170%;
   --glass-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
-  --glass-sb-bg:rgba(255,255,255,.14);           /* chrome floating over the purple gradient */
-  --glass-sb-ring:inset 0 0 0 0.5px rgba(255,255,255,.22);
+  --glass-sb-bg:color-mix(in srgb,var(--bg) 86%,transparent); /* chrome floating over the light glass */
+  --glass-sb-ring:inset 0 0 0 0.5px rgba(0,0,0,.10);
   --glass-canvas-bg:color-mix(in srgb,var(--bg) 62%,transparent); /* menus/popovers/pills over the canvas */
   --glass-canvas-ring:inset 0 0 0 0.5px rgba(255,255,255,.18);
   /* Rule 20 — glass that floats over the VIVID PURPLE gradient (menus/popovers
@@ -111,7 +112,9 @@
 @media (prefers-reduced-transparency: reduce){
   :root{
     --glass-filter:none;
-    --glass-sb-bg:rgba(255,255,255,.24);
+    --glass-sb-bg:var(--bg-elev);
+    /* Near-opaque material (theme-adaptive via --bg) instead of translucent glass. */
+    --sb-bg:color-mix(in srgb,var(--bg) 88%,transparent);
     /* Opaque ELEVATED surface (--bg-elev): identical to the canvas in light, a step
        above it in dark, so opaque menus still read as floating chrome. */
     --glass-canvas-bg:var(--bg-elev);
@@ -125,7 +128,9 @@
 @media (prefers-contrast: more){
   :root{
     --glass-canvas-ring:inset 0 0 0 1px var(--fg);
-    --glass-sb-ring:inset 0 0 0 1px rgba(255,255,255,.65);
+    /* Over the light glass a white ring is invisible — follow the canvas text color
+       (dark ring on light glass, light ring on dark glass). */
+    --glass-sb-ring:inset 0 0 0 1px var(--fg);
   }
 }
 /* Rules 12/19 — Reduce Motion: every animation/transition collapses to an instant
@@ -208,8 +213,10 @@ body.native .window{
 :root{--native-inset:0px;--traffic-w:78px;--traffic-h:40px;}
 body.native{--native-inset:38px;}
 /* The sidebar top sits under the 78x40 logical px traffic-light keep-out
-   (docs/design-rules-macos26.md §3.4) — keep it clear of the native chrome. */
-body.native .sidebar-top{padding-top:calc(10px + var(--native-inset));}
+   (docs/design-rules-macos26.md §3.4) — keep it clear of the native chrome.
+   Owner brief 2026-08-19 req 4: tightened from 10px to 4px — the sidebar had too
+   much top margin/header space. 4px + 38px inset still clears the 40px keep-out. */
+body.native .sidebar-top{padding-top:calc(4px + var(--native-inset));}
 body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 /* The content header alone owns the native top inset (the traffic-light band). Do NOT
    also pad .content / .set-content — that double-counted the inset and pushed the whole
@@ -222,13 +229,16 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 .window[data-active-shell="compact"] .compact-shell[data-shell="compact"]{display:flex;}
 
 /* ====================== SIDEBAR (app shell) ====================== */
-/* README identity: the narrow infinity-purple Liquid-Glass sidebar (spec §3.2).
-   The gradient is the BACKGROUND layer; glass lives only on the chrome floating
-   above it (selected rows, popovers). The gradient IS the edge — no border-right;
-   the white canvas provides the seam. */
+/* README identity: the narrow Liquid-Glass sidebar — a TRANSLUCENT MATERIAL over
+   the canvas (owner brief 2026-08-19 req 3: original glass design, not a purple
+   fill). One glass plane for the whole sidebar; the hairline seam (--sb-edge) is
+   the boundary against the white canvas. */
 .sidebar{
   width:248px;min-width:248px;height:100%;
-  background:linear-gradient(180deg,var(--sb-grad-0),var(--sb-grad-1),var(--sb-grad-2));
+  background:var(--sb-bg);
+  -webkit-backdrop-filter:var(--glass-filter);
+  backdrop-filter:var(--glass-filter);
+  border-right:0.5px solid var(--sb-edge);
   color:var(--sb-text);
   display:flex;flex-direction:column;
   padding:10px 8px 8px;
@@ -238,11 +248,10 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
    beneath the sidebar-top chrome they fade out under a soft gradient lip instead of
    hard-clipping mid-glyph. app.js toggles .nav-scrolled on .sidebar from the
    .sidebar-nav scrollTop (same pattern as .content.scrolled). The fade color is the
-   top gradient stop — at the nav's boundary (~10% down) the gradient has barely left
-   --sb-grad-0, so the seam is imperceptible. */
+   sidebar material itself. */
 .sidebar-top::after{
   content:"";position:absolute;inset:auto 0 -14px 0;height:14px;
-  background:linear-gradient(to bottom,var(--sb-grad-0),transparent);
+  background:linear-gradient(to bottom,var(--sb-bg),transparent);
   opacity:0;transition:opacity .15s;
   pointer-events:none;
 }
@@ -269,19 +278,20 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 :hover::-webkit-scrollbar-thumb,
 .scrolling::-webkit-scrollbar-thumb{background:rgba(120,124,132,.35);}
 ::-webkit-scrollbar-thumb:hover{background:rgba(120,124,132,.55);}
-/* Sidebar variant over the purple gradient: a white translucent thumb (spec §3.6). */
+/* Sidebar variant over the glass: a dark translucent thumb on the light material
+   (spec §3.6; the dark theme flips --sb-scroll tokens). */
 .sidebar-nav:hover::-webkit-scrollbar-thumb,
 .sidebar-nav.scrolling::-webkit-scrollbar-thumb,
 .set-sidebar:hover::-webkit-scrollbar-thumb,
-.set-sidebar.scrolling::-webkit-scrollbar-thumb{background:rgba(255,255,255,.35);}
+.set-sidebar.scrolling::-webkit-scrollbar-thumb{background:var(--sb-scroll);}
 .sidebar-nav::-webkit-scrollbar-thumb:hover,
-.set-sidebar::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.55);}
+.set-sidebar::-webkit-scrollbar-thumb:hover{background:var(--sb-scroll-hover);}
 /* Firefox has no ::-webkit-scrollbar and no overlay affordance: give it thin native
    scrollbars with a rest-visible thumb. The @supports guard matches Firefox only, so
    `scrollbar-width` never reaches (and never disables) the WebKit recipe above. */
 @supports (-moz-appearance:none){
   *{scrollbar-width:thin;scrollbar-color:rgba(120,124,132,.30) transparent;}
-  .sidebar-nav,.set-sidebar{scrollbar-color:rgba(255,255,255,.35) transparent;}
+  .sidebar-nav,.set-sidebar{scrollbar-color:var(--sb-scroll) transparent;}
 }
 .nav-item{
   display:flex;align-items:center;gap:10px;
@@ -327,10 +337,10 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
   -webkit-backdrop-filter:var(--glass-filter);
   backdrop-filter:var(--glass-filter);
   box-shadow:var(--glass-sb-ring);
-  color:#fff;font-weight:500;
+  color:var(--accent);font-weight:500;
 }
-/* Rule 20 — dim text inside the brighter glass-selected row loses the 4.5:1 floor the
-   plain gradient provides: promote it to full sidebar text there. */
+/* Dim text inside the glass-selected row: promote it to full sidebar text (the
+   accent active state already carries full contrast). */
 .note-row.active .note-age,.note-row.active .note-title.untitled,
 .label-row.active .lr-count{color:var(--sb-text);}
 .note-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
@@ -349,15 +359,21 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 .sidebar .view-more{color:var(--sb-text-dim);}
 .sidebar .view-more:hover{color:var(--sb-text);}
 
-.sidebar-settings{
-  display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:var(--r-control);
-  font-size:13px;color:var(--sb-text);cursor:pointer;margin-top:auto;
+/* Bottom icon row (owner brief 2026-08-19 req 8): settings + trash + archive as
+   ICONS only — no label text. Archive and trash are blended into just Trash. */
+.sidebar-foot{
+  display:flex;align-items:center;gap:2px;padding:6px 4px 2px;margin-top:auto;
 }
-.sidebar-settings:hover{background:var(--sb-row-hover);}
-/* Match the nav-item icon footprint exactly (#4): same 17px box as Home/New Note. The
-   gear's strokes reach the SVG edges, so its 20x20 viewBox reads larger at the same px —
-   clamp it to the same visual size as the other nav icons. */
-.sidebar-settings .ico{width:17px;height:17px;color:var(--sb-text-dim);flex:none;}
+.sf-btn{
+  width:30px;height:30px;border-radius:var(--r-control);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--sb-text);cursor:pointer;
+}
+.sf-btn:hover{background:var(--sb-row-hover);}
+.sf-btn .ico{width:17px;height:17px;color:var(--sb-text-dim);flex:none;}
+.sf-btn:hover .ico{color:var(--sb-text);}
+.sf-btn.active{background:var(--sb-row-active);color:var(--accent);}
+.sf-btn.active .ico{color:var(--accent);}
 
 /* ====================== CONTENT (app) ====================== */
 .content{flex:1;height:100%;overflow:hidden;background:var(--bg);position:relative;display:flex;flex-direction:column;}
@@ -378,6 +394,9 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 }
 .content.scrolled .content-header::after{opacity:1;}
 .ch-spacer{flex:1;}
+/* 'Updated just now' — on the top header row, aligned with the copy/trash/comments/
+   minimize buttons (owner brief 2026-08-19 req 5). Muted, never wraps. */
+.ch-updated{font-size:12px;color:var(--grey);white-space:nowrap;font-variant-numeric:tabular-nums;}
 /* Native: the header controls sit ON the traffic-light row itself (the same
    --native-inset band the macOS close/min/zoom buttons occupy — every control here is
    data-no-drag so the shell drag strip passes clicks through). The 30px margin below
@@ -429,11 +448,15 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .es-btn svg{width:15px;height:15px;}
 
 /* ====================== SETTINGS SHELL ====================== */
-/* Settings keeps the same purple sidebar identity as the app shell; the selected
-   .set-item shares the glass-on-sidebar rule with .note-row.active above. */
+/* Settings keeps the same glass sidebar identity as the app shell (owner brief
+   2026-08-19 req 3); the selected .set-item shares the glass-on-sidebar rule
+   with .note-row.active above. */
 .set-sidebar{
   width:248px;min-width:248px;height:100%;
-  background:linear-gradient(180deg,var(--sb-grad-0),var(--sb-grad-1),var(--sb-grad-2));
+  background:var(--sb-bg);
+  -webkit-backdrop-filter:var(--glass-filter);
+  backdrop-filter:var(--glass-filter);
+  border-right:0.5px solid var(--sb-edge);
   color:var(--sb-text);
   padding:10px 8px;display:flex;flex-direction:column;overflow-y:auto;
 }
@@ -466,14 +489,8 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 
 /* appearance — plain theme swatches (no window mockups) */
 .theme-row{display:flex;gap:14px;margin-bottom:18px;}
-/* Trash retention picker: three small pills (7/30/90 days). */
-.retention-row{display:flex;gap:8px;}
-.retention-opt{
-  font-size:12.5px;color:var(--grey2);padding:6px 13px;border-radius:var(--r-control);
-  border:1px solid var(--hair2);background:transparent;
-}
-.retention-opt:hover{background:var(--bg-hover);}
-.retention-opt.active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);font-weight:550;}
+/* Trash retention picker CSS removed with the picker (owner brief 2026-08-19 req 8:
+   trash is never deleted, so nothing expires). */
 .theme-card{flex:1;cursor:pointer;}
 .theme-prev{height:104px;border-radius:var(--r-panel);overflow:hidden;position:relative;}
 .theme-selected .theme-prev{box-shadow:0 0 0 2px var(--accent);}
@@ -495,15 +512,17 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .about-foot{font-size:12.5px;color:var(--grey);line-height:1.6;margin-top:20px;text-align:center;}
 
 /* ====================== HOME ====================== */
-/* The quick-note composer is the hero, vertically centered in the content area
-   (auto margins center when content fits and degrade to normal scroll when not). */
+/* The quick-note composer is the hero; owner brief 2026-08-19 req 4: the home page
+   sits a bit higher than dead-center (6vh top margin instead of auto-centering). */
 .home{flex:1;min-height:0;overflow-y:auto;display:flex;justify-content:center;}
-.home-inner{width:100%;max-width:560px;padding:24px 32px;display:flex;flex-direction:column;align-items:center;margin:auto;}
+.home-inner{width:100%;max-width:560px;padding:24px 32px;display:flex;flex-direction:column;align-items:center;margin:6vh auto auto;}
 
 /* Quick-note composer — a single rounded pill: growing textarea + embedded controls.
-   While recording it contracts into the ONE recording surface (input hidden). */
+   Not full-width (owner brief 2026-08-19 req 1): capped at 360px so the pill reads
+   as the hero control, not a bar. While recording it contracts into the ONE
+   recording surface (input hidden). */
 .qn-composer{
-  position:relative;display:flex;align-items:flex-end;width:100%;max-width:460px;
+  position:relative;display:flex;align-items:flex-end;width:100%;max-width:360px;
   border:1px solid var(--hair2);border-radius:22px;background:var(--bg);
   transition:border-color .12s,box-shadow .12s;
 }
@@ -563,13 +582,14 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .qn-rec-busy{display:none;width:14px;height:14px;flex:none;}
 @keyframes qnBusySpin{to{transform:rotate(360deg);}}
 
-/* Recording: red, gentle contract/expand pulse. The timer replaces the stop square;
-   hovering the circle reveals stop. */
+/* Recording: red, gentle contract/expand pulse. The in-circle timer is suppressed —
+   the timer lives in the bottom-center rec-pill (owner brief 2026-08-19 req 6: the
+   timer popover sits at bottom center, not the middle vertical line). The circle
+   stays the recording surface: hovering it reveals the stop square. */
 .qn-composer.recording .qn-rec{background:var(--rec);animation:qnRecPulse 1.7s ease-in-out infinite;}
 .qn-composer.recording .qn-rec-mic,
-.qn-composer.recording .qn-rec-label{display:none;}
-.qn-composer.recording .qn-rec-timer{display:block;}
-.qn-composer.recording .qn-rec:hover .qn-rec-timer{display:none;}
+.qn-composer.recording .qn-rec-label,
+.qn-composer.recording .qn-rec-timer{display:none;}
 .qn-composer.recording .qn-rec:hover .qn-rec-stop{display:block;}
 @keyframes qnRecPulse{0%,100%{transform:scale(1);}50%{transform:scale(1.045);}}
 
@@ -598,7 +618,7 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 /* ====================== TRANSCRIPT SURFACE ====================== */
 /* Flat, heading-free: the transcript just streams below the composer. Internally
    scrolling — partial replaces the trailing line, never janks the page. */
-.transcript{width:100%;max-width:460px;margin:14px 0 4px;padding:0 6px;}
+.transcript{width:100%;max-width:360px;margin:14px 0 4px;padding:0 6px;}
 .transcript-body{
   max-height:120px;overflow-y:auto;font-size:13px;line-height:1.6;color:var(--fg-editor);
   white-space:pre-wrap;word-break:break-word;
@@ -608,7 +628,11 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 
 /* Recent notes — a FLAT list: no card borders, backgrounds, or shadows. Hover shows a
    subtle row highlight + the copy control (checkmark-only feedback, no text). */
-.home-recent{width:100%;max-width:460px;margin-top:34px;display:flex;flex-direction:column;}
+.home-recent{width:100%;max-width:360px;margin-top:34px;display:flex;flex-direction:column;}
+/* Owner brief 2026-08-19 req 1: while recording on Home, the recent files vanish —
+   only the pause control, the record circle and the bottom-center timer pill stay.
+   app.js toggles .rec-active on #home-state from setRecUI(). */
+.home.rec-active .home-recent{display:none;}
 .home-recent-head{display:flex;align-items:center;margin-bottom:4px;padding-left:12px;}
 .home-recent-label{font-size:11px;font-weight:600;color:var(--grey);}
 .home-cards{display:flex;flex-direction:column;}
@@ -661,8 +685,8 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .np-act svg{width:14px;height:14px;}
 .np-act.copied{opacity:1;color:var(--green);}
 .np-act-danger:hover{background:var(--danger-bg);color:var(--danger);}
-.np-row-expiry{color:var(--orange);}
-.np-row-age + .np-row-expiry::before{content:"·";margin-right:8px;color:var(--placeholder);}
+/* "Deleted forever" countdown CSS removed (owner brief 2026-08-19 req 8: trash is
+   never deleted, so there is no expiry to count down). */
 .np-row-title{font-size:13px;font-weight:550;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .np-row-sub{font-size:12.5px;color:var(--grey2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .np-row-meta{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--fg-3);}
@@ -859,10 +883,12 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .win-del:hover{background:var(--bg-hover);color:var(--danger);}
 
 /* ====================== MINIMAL RECORDING INDICATOR ====================== */
-/* Tiny top-right popover shown while recording on every screen EXCEPT Home (there the
-   composer is the single surface). Follows the system theme — never hardcoded dark. */
+/* The recording popover lives at the BOTTOM CENTER of the window (owner brief
+   2026-08-19 req 6 — not the middle vertical line, not top-right) and stays
+   visible on every screen, Home included. Follows the system theme. */
 .rec-pill{
-  position:absolute;top:44px;right:14px;z-index:85;
+  position:absolute;left:50%;bottom:26px;top:auto;right:auto;
+  transform:translateX(-50%);z-index:85;
   display:flex;align-items:center;gap:8px;
   color:var(--fg);border:0.5px solid rgba(0,0,0,.10);
   border-radius:var(--r-pill);padding:4px 6px 4px 12px;
@@ -871,10 +897,11 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
   backdrop-filter:var(--glass-filter);
   box-shadow:var(--glass-canvas-ring),0 6px 18px rgba(0,0,0,.10);
 }
-/* Native: sit just below the 68px shell drag band so the buttons stay clickable. */
-body.native .rec-pill{top:74px;}
-/* Compact window: bottom-center (the top row belongs to the Expand control). */
-.window[data-active-shell="compact"] .rec-pill{top:auto;bottom:14px;left:50%;right:auto;transform:translateX(-50%);}
+/* Offset for the sidebar width in the app + settings shells (matches .toast). */
+.window[data-active-shell="app"] .rec-pill,
+.window[data-active-shell="settings"] .rec-pill{left:calc(50% + 124px);}
+/* Compact window: true window center (no sidebar offset), slightly lower. */
+.window[data-active-shell="compact"] .rec-pill{left:50%;bottom:14px;right:auto;transform:translateX(-50%);}
 .rec-pill-dot{
   width:9px;height:9px;border-radius:50%;background:var(--rec);flex:none;
   animation:recDot 1.3s ease-in-out infinite;
@@ -979,12 +1006,22 @@ body.native .compact-inner{padding-top:calc(14px + var(--native-inset));}
 .slash-label{white-space:nowrap;}
 .slash-hint{font-family:var(--mono);font-size:11px;color:var(--grey);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px;}
 
-/* Inline rename field inside a note row (lives on the purple sidebar: the ring is
-   white-based — the purple accent would vanish against the gradient). */
+/* Inline rename field inside a note row (lives on the glass sidebar: accent ring —
+   the white ring was for the old purple gradient). */
 .note-row .note-rename{
-  flex:1;min-width:0;border:1px solid rgba(255,255,255,.70);border-radius:5px;
+  flex:1;min-width:0;border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
+  border-radius:5px;
   background:var(--bg);font-family:var(--font);font-size:13px;color:var(--fg);
-  padding:1px 5px;box-shadow:0 0 0 2px rgba(255,255,255,.25);
+  padding:1px 5px;box-shadow:0 0 0 2px var(--accent-ring);
+}
+
+/* Inline label rename (owner brief 2026-08-19 req 7): same pattern on the sidebar
+   label filter rows (.label-row) and the Settings → Labels rows (.lp-row). */
+.label-row .label-rename,.lp-row .label-rename{
+  flex:1;min-width:0;border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
+  border-radius:5px;
+  background:var(--bg);font-family:var(--font);font-size:13px;color:var(--fg);
+  padding:1px 5px;box-shadow:0 0 0 2px var(--accent-ring);
 }
 
 /* ====================== SEARCH POPOVER (Cmd+K) ====================== */
@@ -1070,13 +1107,16 @@ html[data-theme="dark"]{
   --placeholder:#5A5E66;
   --hair:#2C2F35;
   --hair2:#34373E;
-  /* sidebar purple identity — deepened stops (spec §3.2) */
-  --sb-grad-0:#2E1257;
-  --sb-grad-1:#381A6B;
-  --sb-grad-2:#571A66;
-  --sb-text:rgba(255,255,255,.90);
-  --sb-text-dim:rgba(255,255,255,.60);
-  --sb-row-active:rgba(255,255,255,.18);
+  /* sidebar glass identity — dark material, light canvas text (owner brief req 3) */
+  --sb-bg:rgba(27,29,33,.55);
+  --sb-edge:rgba(255,255,255,.08);
+  --sb-text:rgba(231,232,234,.92);
+  --sb-text-dim:rgba(231,232,234,.62);
+  --sb-row-active:rgba(255,255,255,.10);
+  --sb-row-hover:rgba(255,255,255,.05);
+  --sb-scroll:rgba(255,255,255,.30);
+  --sb-scroll-hover:rgba(255,255,255,.50);
+  --glass-sb-ring:inset 0 0 0 0.5px rgba(255,255,255,.18);
 }
 
 /* ===== Rule 12 — Increase Contrast: theme-token strengthening. This block MUST stay

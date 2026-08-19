@@ -1028,10 +1028,11 @@ test('web navigation: chat is a header button, labels manage in Settings', async
   assert.match(html, /id="search-pop"/);
   assert.doesNotMatch(html, /id="search-input"/);
   assert.match(app, /metaKey \|\| e\.ctrlKey/);
-  // Recording has exactly ONE surface per screen: the persistent pill exists and is
-  // suppressed on Home, where the composer itself is the recording surface.
+  // Recording indicator (owner brief 2026-08-19 req 6): the persistent bottom-center
+  // pill carries the timer on EVERY screen — Home included; it hides only when no
+  // recording is active (the in-circle composer timer is suppressed in its favor).
   assert.match(html, /id="rec-pill"/);
-  assert.match(app, /pill\.hidden = !active \|\| onHomeComposer/);
+  assert.match(app, /pill\.hidden = !active;/);
 
   const { windowTarget } = loadWebAppWithFakeDOM(app);
   windowTarget.HasnaNotes.hydrate({
@@ -1093,31 +1094,25 @@ test('web note action bridge confirms trash and permanent purge', async () => {
   windowTarget.HasnaNotes.notes.setStatusFilter('trash');
   assert.ok(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('bridge-delete'));
 
-  confirmResult = false;
-  const cancelledPurge = windowTarget.HasnaNotes.notes.purge('bridge-delete');
-  assert.equal(cancelledPurge, null);
-  assert.match(prompts.at(-1), /^Delete permanently\?/);
-  assert.match(prompts.at(-1), /cannot be undone/);
-  assert.ok(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('bridge-delete'));
-
-  confirmResult = true;
+  // Owner brief 2026-08-19 req 8: trash is NEVER deleted — purge is inert. It never
+  // prompts, never fires a purge event, and the note stays hidden in Trash forever.
+  const promptsBefore = prompts.length;
   const purged = windowTarget.HasnaNotes.notes.purge('bridge-delete');
-  assert.equal(purged.id, 'bridge-delete');
-  assert.equal(purged.permanent, true);
-  assert.equal(events.at(-1).name, 'purge');
-  assert.equal(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('bridge-delete'), false);
+  assert.equal(purged, null);
+  assert.equal(prompts.length, promptsBefore, 'purge must not prompt');
+  assert.ok(!events.some(event => event.name === 'purge'), 'purge event must not fire');
+  assert.ok(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('bridge-delete'));
 });
 
-test('web expired Trash cleanup is observable and confirmation-gated', async () => {
+test('web expired Trash cleanup is DISABLED — trash is never deleted', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const { windowTarget } = loadWebAppWithFakeDOM(app);
   const cleanupReady = [];
   const purges = [];
   const prompts = [];
-  let confirmResult = false;
   windowTarget.confirm = message => {
     prompts.push(message);
-    return confirmResult;
+    return true;
   };
   windowTarget.addEventListener('hasna:trash-cleanup-ready', event => cleanupReady.push(event.detail));
   windowTarget.addEventListener('hasna:note-purge', event => purges.push(event.detail));
@@ -1145,19 +1140,15 @@ test('web expired Trash cleanup is observable and confirmation-gated', async () 
   windowTarget.HasnaNotes.notes.setStatusFilter('trash');
   assert.ok(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('expired-trash'));
 
+  // Owner brief 2026-08-19 req 8: cleanup is disabled — no prompt, no purge, the
+  // expired-looking note stays hidden in Trash forever.
   assert.deepEqual(Array.from(windowTarget.HasnaNotes.notes.cleanupExpiredTrash()), []);
-  assert.match(prompts.at(-1), /^Delete expired Trash notes permanently\?/);
-  assert.match(prompts.at(-1), /cannot be undone/);
+  assert.equal(prompts.length, 0, 'cleanup must not prompt');
+  assert.equal(purges.length, 0, 'cleanup must never purge');
   assert.ok(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('expired-trash'));
-  assert.equal(purges.length, 0);
-
-  confirmResult = true;
-  assert.deepEqual(Array.from(windowTarget.HasnaNotes.notes.cleanupExpiredTrash()), ['expired-trash']);
-  assert.equal(purges.at(-1).reason, 'retention-cleanup');
-  assert.equal(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('expired-trash'), false);
 });
 
-test('web trash and archive views: restore, permanent delete, retention countdown', async () => {
+test('web trash and archive views: blended trash, restore, no permanent delete', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const { windowTarget, document } = loadWebAppWithFakeDOM(app);
   const prompts = [];
@@ -1173,24 +1164,25 @@ test('web trash and archive views: restore, permanent delete, retention countdow
     machines: [{ id: 'studio-mac' }],
   });
 
-  // Archive view: sidebar entry filters to archived notes; hover Restore works.
+  // Owner brief 2026-08-19 req 8: archive is blended into just Trash — the archive
+  // icon opens the same Trash view, which shows BOTH trashed and archived notes.
   document.getElementById('nav-archive').click();
   let view = windowTarget.HasnaNotes.view.state();
   assert.equal(view.screen, 'noteslist');
-  assert.equal(view.statusFilter, 'archived');
-  assert.deepEqual(view.visibleNoteIds, ['arch-1']);
-  assert.equal(document.getElementById('np-title').textContent, 'Archived');
+  assert.equal(view.statusFilter, 'trash');
+  assert.deepEqual(view.visibleNoteIds, ['arch-1', 'trash-1']); // newest first
+  assert.equal(document.getElementById('np-title').textContent, 'Trash');
   const npList = document.getElementById('np-list');
   const archActions = npList.children[0].children.find(c => c.className.includes('np-row-actions'));
-  assert.ok(archActions, 'archived rows expose hover actions');
+  assert.ok(archActions, 'rows expose hover actions');
   assert.ok(archActions.children.some(b => b.title === 'Copy note'), 'hover copy on list rows');
   const restoreBtn = archActions.children.find(b => b.title === 'Restore');
-  assert.ok(restoreBtn, 'archived rows expose Restore');
-  assert.ok(!archActions.children.some(b => b.title === 'Delete permanently'), 'permanent delete is Trash-only');
+  assert.ok(restoreBtn, 'rows expose Restore');
+  assert.ok(!archActions.children.some(b => b.title === 'Delete permanently'), 'no permanent delete anywhere');
   restoreBtn.click();
-  assert.deepEqual(windowTarget.HasnaNotes.view.state().visibleNoteIds, [], 'restored note leaves the Archive view');
+  assert.deepEqual(windowTarget.HasnaNotes.view.state().visibleNoteIds, ['trash-1'], 'restored note leaves the Trash view');
 
-  // Trash view: retention countdown + Restore + confirmation-gated permanent Delete.
+  // Trash view: no retention countdown (trash is never deleted), Restore only.
   document.getElementById('nav-trash').click();
   view = windowTarget.HasnaNotes.view.state();
   assert.equal(view.statusFilter, 'trash');
@@ -1198,28 +1190,19 @@ test('web trash and archive views: restore, permanent delete, retention countdow
   assert.equal(document.getElementById('np-title').textContent, 'Trash');
   const trashRow = document.getElementById('np-list').children[0];
   const meta = trashRow.children.find(c => c.className.includes('np-row-meta'));
-  const expiry = meta.children.find(c => c.className.includes('np-row-expiry'));
-  assert.ok(expiry, 'trash rows show the retention countdown');
-  assert.match(expiry.textContent, /^Deleted forever in 5 days$/);
+  assert.ok(meta && !meta.children.some(c => c.className.includes('np-row-expiry')),
+    'no "Deleted forever" countdown on trash rows');
   const trashActions = trashRow.children.find(c => c.className.includes('np-row-actions'));
   assert.ok(trashActions.children.some(b => b.title === 'Restore'));
-  const deleteBtn = trashActions.children.find(b => b.title === 'Delete permanently');
-  assert.ok(deleteBtn, 'trash rows expose permanent delete');
-  deleteBtn.click();
-  assert.match(prompts.at(-1), /^Delete permanently\?/);
-  assert.match(prompts.at(-1), /cannot be undone/);
-  assert.deepEqual(windowTarget.HasnaNotes.view.state().visibleNoteIds, []);
-  assert.equal(document.getElementById('np-empty').hidden, false);
-  assert.equal(document.getElementById('np-empty').textContent, 'Trash is empty');
+  assert.ok(!trashActions.children.some(b => b.title === 'Delete permanently'), 'no permanent delete button');
 
-  // Retention setting: 0 clamps to 1 (never silently disables retention), 90 sticks,
-  // and junk input keeps the 30-day default.
+  // Retention setting plumbing still exists (host contract) but never triggers deletion.
   assert.equal(windowTarget.HasnaNotes.notes.setTrashRetentionDays(0).trashRetentionDays, 1);
   assert.equal(windowTarget.HasnaNotes.notes.setTrashRetentionDays(90).trashRetentionDays, 90);
   assert.equal(windowTarget.HasnaNotes.notes.setTrashRetentionDays('junk').trashRetentionDays, 30);
 });
 
-test('web enforces trash retention on boot and hydrate, once per session', async () => {
+test('web trash retention enforcement is DISABLED — expired notes stay in Trash', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const expiredBoot = {
     thisMachine: 'studio-mac',
@@ -1231,29 +1214,20 @@ test('web enforces trash retention on boot and hydrate, once per session', async
     machines: [{ id: 'studio-mac' }],
   };
 
-  // Declining the boot prompt keeps the note and must NOT re-prompt on later hydrates.
-  const declinedPrompts = [];
+  // Owner brief 2026-08-19 req 8: trash is never deleted — no boot prompt, no purge,
+  // on boot or on any later hydrate. The expired note stays hidden in Trash forever.
+  const prompts = [];
   const declined = loadWebAppWithFakeDOM(app, {
     __BOOT__: expiredBoot,
-    confirm(message) { declinedPrompts.push(message); return false; },
+    confirm(message) { prompts.push(message); return true; },
   });
-  assert.equal(declinedPrompts.length, 1, 'boot cleanup asks exactly once');
-  assert.match(declinedPrompts[0], /^Delete expired Trash notes permanently\?/);
+  assert.equal(prompts.length, 0, 'boot must never ask about expired Trash');
   declined.windowTarget.HasnaNotes.notes.setStatusFilter('trash');
   assert.deepEqual(declined.windowTarget.HasnaNotes.view.state().visibleNoteIds, ['expired-1']);
   declined.windowTarget.HasnaNotes.hydrate(expiredBoot);
   declined.windowTarget.HasnaNotes.hydrate(expiredBoot);
-  assert.equal(declinedPrompts.length, 1, 'declining must not re-prompt every hydrate');
-
-  // Accepting the boot prompt purges the expired note (confirmation-gated enforcement).
-  const acceptedPrompts = [];
-  const accepted = loadWebAppWithFakeDOM(app, {
-    __BOOT__: expiredBoot,
-    confirm(message) { acceptedPrompts.push(message); return true; },
-  });
-  assert.equal(acceptedPrompts.length, 1);
-  accepted.windowTarget.HasnaNotes.notes.setStatusFilter('trash');
-  assert.deepEqual(accepted.windowTarget.HasnaNotes.view.state().visibleNoteIds, []);
+  assert.equal(prompts.length, 0, 'hydrate must never purge');
+  assert.deepEqual(declined.windowTarget.HasnaNotes.view.state().visibleNoteIds, ['expired-1']);
 });
 
 test('web about screen renders the injected real version (Version Bridge contract)', async () => {
@@ -2310,15 +2284,20 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
   assert.equal(await getNote(expiredId, root), null);
 });
 
-test('native destructive bridge actions require confirmed payloads', async () => {
+test('native destructive bridge actions require confirmed payloads; purge is disabled', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const swift = await readFile(join(repoRoot, 'Sources', 'HasnaNotesApp', 'main.swift'), 'utf8');
   assert.match(app, /postNative\('trash', serializeNote\(note\), \{ confirmed:/);
-  assert.match(app, /postNative\('purge', serializeNote\(note\), \{ confirmed:/);
+  // Owner brief 2026-08-19 req 8: the web layer NEVER posts 'purge' — permanent
+  // deletion does not exist; the Swift-side guards remain as defense in depth and
+  // the bridge purge/delete verbs refuse outright.
+  assert.doesNotMatch(app, /postNative\('purge'/);
   assert.match(swift, /destructiveConfirmed/);
   assert.match(swift, /case "trash":\s+guard allowDestructive\(action\) else \{ return \}/);
   assert.match(swift, /case "purge":\s+guard allowDestructive\(action\) else \{ return \}/);
   assert.match(swift, /case "delete":\s+guard allowDestructive\(action\) else \{ return \}/);
+  assert.match(swift, /func delete\(_ dict: \[String: Any\]\) -> Bool \{/);
+  assert.match(swift, /func purge\(_ dict: \[String: Any\]\) -> Bool \{\s+return false/s);
 });
 
 test('web duplicate routes through the native create boundary before its follow-up save', async () => {
@@ -2418,7 +2397,9 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(sidecar, /scribe_v2_realtime/);
   assert.match(app, /finalizeTimer/);
   assert.match(app, /startToken/);
-  assert.match(app, /hasna:note-archive/);
+  // Owner brief 2026-08-19 req 8: archive is blended into trash — the archive event
+  // no longer exists; the note-trash event covers both paths.
+  assert.doesNotMatch(app, /hasna:note-archive/);
   assert.match(app, /hasna:note-trash/);
   assert.match(app, /setTrashRetentionDays/);
   assert.match(app, /postNative\('settings'/);

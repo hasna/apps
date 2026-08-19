@@ -445,12 +445,14 @@
   }
 
 	  // Notes after machine-filter + label-filter + status-filter, newest first. The list the user sees.
+	  // Owner brief 2026-08-19 req 8: archive is blended into trash — the Trash view
+	  // shows both trashed AND archived notes (existing archived notes stay visible).
 	  function visibleNotes() {
 	    return sortNotes(state.notes.filter(n => {
 	      if (state.labelFilter !== ALL && noteLabels(n).indexOf(state.labelFilter) < 0) return false;
       if (state.statusFilter === 'active' && (n.status === 'archived' || n.status === 'trash')) return false;
       if (state.statusFilter === 'archived' && n.status !== 'archived') return false;
-      if (state.statusFilter === 'trash' && n.status !== 'trash') return false;
+      if (state.statusFilter === 'trash' && n.status !== 'trash' && n.status !== 'archived') return false;
       return true;
     }));
   }
@@ -539,7 +541,7 @@
     renderHome();
     renderNavActive();
     renderLabelsPage(); // Settings → Labels management list stays in sync
-    renderRecPill();    // recording indicator follows the active screen (hidden on Home)
+    renderRecPill();    // recording indicator: bottom-center, visible on every screen
     syncHeaderScrollEdge(); // header scroll-edge fade tracks the now-visible scroller
   }
 
@@ -585,7 +587,11 @@
     left.appendChild(el('span', 'lr-name', label));
     row.appendChild(left);
     row.appendChild(el('span', 'lr-count', String(count)));
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (ev) => {
+      // The second click of a double-click (ev.detail 2) must not re-render — the
+      // row it targets gets replaced, and the dblclick rename below would land on a
+      // detached node (owner brief 2026-08-19 req 7: double-click edits inline).
+      if (ev.detail > 1) return;
       state.labelFilter = id;
       state.noteListLimit = 10;
       // If the open note is filtered out, drop selection to newest visible.
@@ -596,17 +602,26 @@
       }
       render();
     });
+    // Double-click a sidebar label → inline rename (req 7). "All" is not renameable.
+    row.addEventListener('dblclick', (ev) => {
+      if (id === ALL) return;
+      ev.preventDefault();
+      startLabelInlineRename(label, row);
+    });
     return row;
   }
 
-  // Reflect the active nav item (Home / Archive / Trash in the sidebar, Chat in the header).
+  // Reflect the active nav item (Home / Trash icons in the sidebar foot, Chat in the
+  // header). Owner brief 2026-08-19 req 8: archive is blended into trash — both icons
+  // light up for the single Trash view.
   function renderNavActive() {
     const home = $('nav-home');
     if (home) home.classList.toggle('active', state.screen === 'home');
+    const inTrash = state.screen === 'noteslist' && state.statusFilter === 'trash';
     const archive = $('nav-archive');
-    if (archive) archive.classList.toggle('active', state.screen === 'noteslist' && state.statusFilter === 'archived');
+    if (archive) archive.classList.toggle('active', inTrash);
     const trash = $('nav-trash');
-    if (trash) trash.classList.toggle('active', state.screen === 'noteslist' && state.statusFilter === 'trash');
+    if (trash) trash.classList.toggle('active', inTrash);
     const chat = $('open-chat');
     if (chat) chat.classList.toggle('active', state.screen === 'chat');
   }
@@ -623,6 +638,10 @@
     if (del) del.hidden = true;
     const copy = $('note-copy');
     if (copy) copy.hidden = true;
+    // 'Updated just now' tracks the editor like the copy/delete actions (owner brief
+    // 2026-08-19 req 5: it sits on the header row, aligned with those buttons).
+    const chUp = $('ch-updated');
+    if (chUp) chUp.hidden = true;
     // The markdown popover/slash menu belong to the editor surface only.
     if (state.screen !== 'notes') { closeMdPop(); closeSlashMenu(); }
     const hideEditorStates = () => {
@@ -630,6 +649,16 @@
       if (empty) empty.hidden = true;
       if (nomatch) nomatch.hidden = true;
     };
+    // Settings and compact have their own shells — never fall through to renderEditor
+    // (which would mutate the selection / editor state for a hidden editor). This was
+    // the settings fallthrough defect (owner brief 2026-08-19 req 9).
+    if (state.screen === 'settings' || state.screen === 'compact') {
+      if (home) home.hidden = true;
+      if (np) np.hidden = true;
+      if (chat) chat.hidden = true;
+      hideEditorStates();
+      return;
+    }
     if (state.screen === 'home') {
       if (home) home.hidden = false;
       if (np) np.hidden = true;
@@ -751,7 +780,9 @@
     render();
   }
   function showTrash() { showStatusList('trash'); }
-  function showArchive() { showStatusList('archived'); }
+  // Owner brief 2026-08-19 req 8: archive is BLENDED into just Trash — the archive
+  // icon opens the same single Trash view (which shows trashed + archived notes).
+  function showArchive() { showStatusList('trash'); }
 
   function renderNotesPage() {
     const host = $('np-list');
@@ -784,15 +815,11 @@
       const body = (n.body || n.content || '').replace(/\s+/g, ' ').trim();
       row.appendChild(el('div', 'np-row-title', (n.title && n.title.trim()) || 'Untitled Note'));
       row.appendChild(el('div', 'np-row-sub', body.slice(0, 120) || 'No content'));
-      // Third row: friendly relative time, kept compact and muted. Trash rows
-      // add the retention countdown from trashExpiresAt.
+      // Third row: friendly relative time, kept compact and muted. No "Deleted
+      // forever" countdown — trash is never deleted (owner brief 2026-08-19 req 8).
       const meta = el('div', 'np-row-meta');
       const age = relTime(n.updatedAt);
       if (age) meta.appendChild(el('span', 'np-row-age', age));
-      if (n.status === 'trash') {
-        const countdown = trashCountdown(n);
-        if (countdown) meta.appendChild(el('span', 'np-row-expiry', countdown));
-      }
       row.appendChild(meta);
       row.appendChild(noteRowActions(n));
       row.addEventListener('click', () => selectNote(n.id));
@@ -811,17 +838,9 @@
     return trashed + Math.max(1, Number(state.settings.trashRetentionDays) || 30) * 86400000;
   }
 
-  // "Deleted forever in Nd" countdown for a trashed note (empty when no expiry is set).
-  function trashCountdown(note) {
-    const expires = trashExpiryMs(note);
-    if (Number.isNaN(expires)) return '';
-    const days = Math.ceil((expires - Date.now()) / 86400000);
-    if (days <= 0) return 'Deleted forever today';
-    return 'Deleted forever in ' + days + (days === 1 ? ' day' : ' days');
-  }
-
   // Hover actions on a Notes-page row: copy everywhere; Restore on archived/trashed
-  // rows; permanent Delete on trashed rows (confirmation-gated via deleteNote).
+  // rows. NO permanent-delete button — trash is never deleted, soft delete only
+  // (owner brief 2026-08-19 req 8).
   function noteRowActions(n) {
     const actions = el('div', 'np-row-actions');
     const copyBtn = el('button', 'np-act');
@@ -841,14 +860,6 @@
       restoreBtn.innerHTML = RESTORE_ICON_SVG;
       restoreBtn.addEventListener('click', (ev) => { ev.stopPropagation(); restoreNote(n.id); });
       actions.appendChild(restoreBtn);
-    }
-    if (n.status === 'trash') {
-      const delBtn = el('button', 'np-act np-act-danger');
-      delBtn.type = 'button';
-      delBtn.title = 'Delete permanently';
-      delBtn.innerHTML = TRASH_ICON_SVG;
-      delBtn.addEventListener('click', (ev) => { ev.stopPropagation(); deleteNote(n); });
-      actions.appendChild(delBtn);
     }
     return actions;
   }
@@ -926,9 +937,17 @@
       left.innerHTML = '<span class="lp-tag-ico"><svg viewBox="0 0 16 16" fill="none"><path d="M6.8 2.4h4.4a1.4 1.4 0 011.4 1.4v4.4L8 13 3 8l3.8-5.6z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="10.1" cy="5.5" r=".8" fill="currentColor"/></svg></span>';
       left.appendChild(el('span', 'lp-name', item.name));
       left.appendChild(el('span', 'lp-count', item.count === 1 ? '1 note' : item.count + ' notes'));
-      left.addEventListener('click', () => {
+      left.addEventListener('click', (ev) => {
+        // Same detail guard as the sidebar rows: the second click of a double-click
+        // must not navigate away before the inline rename can start (req 7).
+        if (ev.detail > 1) return;
         state.labelFilter = item.name;
         showNotesPage();
+      });
+      // Double-click a Settings label name → inline edit (owner brief 2026-08-19 req 7).
+      left.addEventListener('dblclick', (ev) => {
+        ev.preventDefault();
+        startLabelInlineRename(item.name, row);
       });
       row.appendChild(left);
       const actions = el('div', 'lp-actions');
@@ -936,9 +955,9 @@
       edit.type = 'button';
       edit.title = 'Rename label';
       edit.innerHTML = '<svg viewBox="0 0 18 18" fill="none"><path d="M4 13.5V15h1.5l7.8-7.8-1.5-1.5L4 13.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M12.4 4.8l1.8 1.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+      // The pencil now opens the same INLINE editor — no more window.prompt (req 7).
       edit.addEventListener('click', () => {
-        const next = window.prompt('Rename label', item.name);
-        if (next && next.trim() && next.trim() !== item.name) renameLabelLocal(item.name, next.trim());
+        startLabelInlineRename(item.name, row);
       });
       const del = el('button', 'lp-icon lp-danger');
       del.type = 'button';
@@ -950,6 +969,39 @@
       row.appendChild(actions);
       host.appendChild(row);
     });
+  }
+
+  // Inline label rename (owner brief 2026-08-19 req 7): swap the label name span for
+  // an input, commit on Enter/blur, cancel on Esc. Works on BOTH the sidebar filter
+  // rows (.label-row) and the Settings → Labels rows (.lp-row).
+  function startLabelInlineRename(name, row) {
+    if (name === ALL) return;
+    const span = row.querySelector('.lr-name, .lp-name');
+    if (!span) return;
+    const input = el('input', 'label-rename');
+    input.type = 'text';
+    input.value = name;
+    input.placeholder = 'Label';
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const commit = (save) => {
+      if (done) return; done = true;
+      if (save) {
+        const next = input.value.trim();
+        if (next && next !== name) renameLabelLocal(name, next);
+      }
+      render();
+    };
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); commit(true); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur', () => commit(true));
+    // Clicks inside the input must not bubble to the row's filter/navigate handler.
+    input.addEventListener('click', (ev) => ev.stopPropagation());
   }
 
   // The one clipboard helper: async clipboard with a textarea fallback (file:// /
@@ -1024,9 +1076,12 @@
     const note = noteById(state.selectedId);
     const selVisible = note && list.some(n => n.id === note.id);
 
-    // Decide which panel shows. The header delete + copy controls track the editor.
+    // Decide which panel shows. The header delete + copy + 'updated' controls track
+    // the editor (owner brief 2026-08-19 req 5: updated-time on the header row).
     if (del) del.hidden = !selVisible;
     if (copy) copy.hidden = !selVisible;
+    const chUpd = $('ch-updated');
+    if (chUpd) chUpd.hidden = !selVisible;
     if (selVisible) {
       editor.hidden = false; empty.hidden = true; nomatch.hidden = true;
       fillEditor(note);
@@ -1081,7 +1136,11 @@
       if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
     }
 
-    $('em-updated').textContent = 'updated ' + relTime(note.updatedAt);
+    // 'Updated just now' lives on the top header row (owner brief 2026-08-19 req 5),
+    // aligned with copy/trash/comments/minimize — set the header span, not the
+    // removed .editor-meta span.
+    const chUpd = $('ch-updated');
+    if (chUpd) chUpd.textContent = 'updated ' + relTime(note.updatedAt);
 
     const tags = $('em-tags');
     tags.innerHTML = '';
@@ -1236,7 +1295,8 @@
     postNative('save', serializeNote(note));
     // Re-render the sidebar (title/order may have changed) but keep editor fields intact.
     renderNotesList();
-    $('em-updated').textContent = 'updated ' + relTime(note.updatedAt);
+    const chUpd = $('ch-updated');
+    if (chUpd) chUpd.textContent = 'updated ' + relTime(note.updatedAt);
   }
 
   // The shape we hand to the native host (and store in-memory).
@@ -1479,14 +1539,15 @@
     if (!menu) return;
     ctxNoteId = noteId;
     // Status-aware items: Archive only on active notes, Restore only on archived/trashed
-    // ones, and Delete reads "Delete permanently" inside Trash.
+    // ones. Delete is ALWAYS "Move to Trash" — there is no permanent delete; a note
+    // already in Trash hides the item (owner brief 2026-08-19 req 8).
     const note = noteById(noteId);
     const status = (note && note.status) || 'active';
     menu.querySelectorAll('.ctx-item[data-act]').forEach(item => {
       const act = item.getAttribute('data-act');
       if (act === 'archive') item.hidden = status !== 'active';
       if (act === 'restore') item.hidden = status === 'active';
-      if (act === 'delete') item.textContent = status === 'trash' ? 'Delete permanently' : 'Delete';
+      if (act === 'delete') { item.hidden = status === 'trash'; item.textContent = 'Move to Trash'; }
     });
     menu.hidden = false;
     // Position at the cursor, clamped to the viewport.
@@ -1588,14 +1649,19 @@
 
   function archiveNote(id) {
     const note = noteById(id);
-    if (!note) return;
-    note.status = 'archived';
-    note.archivedAt = new Date().toISOString();
-    note.trashedAt = '';
-    note.trashExpiresAt = '';
-    note.updatedAt = new Date().toISOString();
-    postNative('archive', serializeNote(note));
-    dispatchNoteEvent('hasna:note-archive', note);
+    if (!note || note.status === 'trash') return;
+    // Owner brief 2026-08-19 req 8: archive is BLENDED into just Trash — archiving
+    // sends the note to the single Trash view (status 'trash'), never to a separate
+    // archived state. The host 'trash' verb is used with confirmation so the write
+    // is not dropped by the destructive gate.
+    const now = new Date().toISOString();
+    note.status = 'trash';
+    note.archivedAt = '';
+    note.trashedAt = now;
+    note.trashExpiresAt = addDaysISO(now, state.settings.trashRetentionDays);
+    note.updatedAt = now;
+    postNative('trash', serializeNote(note), { confirmed: true });
+    dispatchNoteEvent('hasna:note-trash', note);
     render();
   }
 
@@ -1625,17 +1691,11 @@
     return note;
   }
 
-  function purgeNote(id, options) {
-    const note = noteById(id);
-    if (!note) return;
-    postNative('purge', serializeNote(note), { confirmed: !!(options && options.confirmed) });
-    state.notes = state.notes.filter(n => n.id !== id);
-    if (state.selectedId === id) {
-      const v = visibleNotes();
-      state.selectedId = v.length ? v[0].id : null;
-    }
-    dispatchNoteEvent('hasna:note-purge', note);
-    render();
+  function purgeNote(id) {
+    // Owner brief 2026-08-19 req 8: trash is NEVER deleted — soft delete / hidden
+    // state only. Permanent purge is disabled app-wide: the note stays in Trash
+    // forever (the host 'purge' verb is never invoked).
+    return null;
   }
   function dispatchNoteEvent(name, note, extra) {
     window.dispatchEvent(new CustomEvent(name, {
@@ -1659,19 +1719,9 @@
   }
 
   function cleanupExpiredTrash() {
-    const expired = expiredTrashNotes();
-    if (!expired.length) return [];
-    if (!confirmExpiredTrashCleanup(expired)) return [];
-    expired.forEach(n => {
-      postNative('purge', serializeNote(n), { confirmed: true });
-      dispatchNoteEvent('hasna:note-purge', n, { reason: 'retention-cleanup' });
-    });
-    if (expired.length) {
-      const ids = new Set(expired.map(n => n.id));
-      state.notes = state.notes.filter(n => !ids.has(n.id));
-      render();
-    }
-    return expired.map(n => n.id);
+    // Owner brief 2026-08-19 req 8: trash is NEVER deleted — retention-based purge
+    // is disabled app-wide. Expired-looking trashed notes stay hidden in Trash.
+    return [];
   }
 
   function expiredTrashNotes() {
@@ -1683,22 +1733,10 @@
     });
   }
 
-  // Retention enforcement: on boot and hydrate, purge expired Trash through the same
-  // strong-confirmation gate as the manual API (contract: cleanup MUST keep confirmation
-  // gating). Ask at most once per session — declining must not re-prompt on the hydrate
-  // that follows every save.
-  let trashCleanupPrompted = false;
+  // Retention enforcement is DISABLED (owner brief 2026-08-19 req 8): trash is never
+  // deleted, so nothing is ever purged on boot/hydrate.
   function maybeCleanupExpiredTrash() {
-    if (trashCleanupPrompted) return;
-    if (!expiredTrashNotes().length) return;
-    trashCleanupPrompted = true;
-    cleanupExpiredTrash();
-  }
-
-  function confirmExpiredTrashCleanup(expired) {
-    if (typeof window.confirm !== 'function') return false;
-    return window.confirm('Delete expired Trash notes permanently?\n\n' +
-      expired.length + ' note(s) will be permanently deleted. This cannot be undone.');
+    return;
   }
 
   function notifyExpiredTrashReady() {
@@ -1743,12 +1781,10 @@
     return (note && note.title && note.title.trim()) || 'Untitled Note';
   }
 
-  function deleteConfirmationMessage(note, options) {
-    const permanent = !!(options && options.permanent) || (note && note.status === 'trash');
+  function deleteConfirmationMessage(note) {
+    // Owner brief 2026-08-19 req 8: there is NO permanent delete — the only delete
+    // is move-to-Trash, and Trash is never emptied.
     const title = noteTitleForConfirm(note);
-    if (permanent) {
-      return 'Delete permanently?\n\n"' + title + '" will be permanently deleted. This cannot be undone.';
-    }
     return 'Move note to Trash?\n\n"' + title + '" can be restored from Trash.';
   }
 
@@ -1757,13 +1793,10 @@
     return window.confirm(deleteConfirmationMessage(note, options));
   }
 
-  // Delete a specific note (by reference). Normal delete moves to Trash first; a note
-  // already in Trash is permanently purged.
+  // Delete a specific note (by reference). Delete is ALWAYS move-to-Trash — a note
+  // already in Trash stays hidden (owner brief 2026-08-19 req 8: never deleted).
   function deleteNote(note) {
-    const permanent = note.status === 'trash';
-    if (!confirmNoteDelete(note, { permanent })) return null;
-    // Both paths return the serialized note (consistent API result either way).
-    if (permanent) { purgeNote(note.id, { confirmed: true }); return serializeNote(note); }
+    if (!confirmNoteDelete(note)) return null;
     trashNote(note, { confirmed: true });
     render();
     return serializeNote(note);
@@ -1780,11 +1813,9 @@
   }
 
   function purgeNoteWithConfirmation(id) {
-    const note = noteById(id);
-    if (!note) return null;
-    if (!confirmNoteDelete(note, { permanent: true })) return null;
-    purgeNote(id, { confirmed: true });
-    return { id, permanent: true };
+    // Inert under the soft-delete policy (owner brief 2026-08-19 req 8): permanent
+    // deletion does not exist; the note stays in Trash.
+    return null;
   }
 
 	  // ------------------------------------------------------------------ app-level voice notes
@@ -1933,6 +1964,10 @@
 	      else if (stateName === 'complete') wrap.classList.add('complete');
 	      else if (stateName === 'error') wrap.classList.add('error');
 	    }
+	    // Owner brief 2026-08-19 req 1: while recording on Home, the recent files
+	    // disappear (CSS .home.rec-active .home-recent) — only pause + timer stay.
+	    const homeState = $('home-state');
+	    if (homeState) homeState.classList.toggle('rec-active', active);
 	    if (timerIn && active) timerIn.textContent = stateName === 'transcribing' ? '' : recElapsed();
     if (recBtn) {
       const cfg = ai();
@@ -1944,16 +1979,16 @@
     renderTranscript();
   }
 
-  // Minimal recording indicator (top-right): recording survives in-app navigation, so
-  // while any OTHER screen is showing this small pill carries the timer + pause/stop.
-  // On Home the composer itself is the single recording surface — no duplicate there.
+  // Minimal recording indicator (bottom-center, owner brief 2026-08-19 req 6):
+  // recording survives in-app navigation, so the pill carries the timer + pause/stop
+  // on EVERY screen — Home included — and stays visible while the note is being
+  // added (status 'complete', immediately after stop).
 	  function renderRecPill() {
 	    const pill = $('rec-pill');
 	    if (!pill) return;
-	    const active = (rec.status === 'recording' || rec.status === 'paused' || rec.status === 'stopping' || rec.status === 'transcribing');
-	    const onHomeComposer = state.screen === 'home' &&
-	      (!win || win.getAttribute('data-active-shell') === 'app');
-	    pill.hidden = !active || onHomeComposer;
+	    const active = (rec.status === 'recording' || rec.status === 'paused' ||
+	      rec.status === 'stopping' || rec.status === 'transcribing' || rec.status === 'complete');
+	    pill.hidden = !active;
 	    if (!active) return;
 	    pill.classList.toggle('paused', rec.status === 'paused');
 	    pill.classList.toggle('transcribing', rec.status === 'transcribing');
@@ -2861,6 +2896,20 @@
     e.preventDefault();
     showSettings(tab);
   }
+  // Settings deep-link contract (header comment): only Settings uses a hash
+  // (#settings[/tab]) so a screenshot harness can deep-link to it. The listener was
+  // documented but never implemented — clicking a tab leaves the hash stale and a
+  // load with #settings opened nothing (owner brief 2026-08-19 req 9).
+  function settingsHashTab() {
+    // Guarded: window.location may be absent in the headless test harness.
+    const hash = (window.location && window.location.hash) || '';
+    const m = /^#\/?settings(?:\/(appearance|labels|about))?/.exec(String(hash));
+    return m ? (m[1] || 'appearance') : null;
+  }
+  function onHashChange() {
+    const tab = settingsHashTab();
+    if (tab) showSettings(tab);
+  }
   function onThemeCard(e) {
     const card = e.currentTarget;
     setTheme(card.getAttribute('data-theme'));
@@ -2953,6 +3002,8 @@
 
     const openSet = $('open-settings'); if (openSet) openSet.addEventListener('click', onOpenSettings);
     const back = $('settings-back'); if (back) back.addEventListener('click', onSettingsBack);
+    // Settings deep-link hash (#settings[/tab]) — the documented contract (req 9).
+    window.addEventListener('hashchange', onHashChange);
     document.querySelectorAll('.set-item[data-tab]').forEach(s => s.addEventListener('click', onSettingsTab));
     document.querySelectorAll('.theme-card[data-theme]').forEach(c => {
       c.addEventListener('click', onThemeCard);
@@ -3027,6 +3078,7 @@
     window.removeEventListener('scroll', onWindowScroll, true);
     const openSet = $('open-settings'); if (openSet) openSet.removeEventListener('click', onOpenSettings);
     const back = $('settings-back'); if (back) back.removeEventListener('click', onSettingsBack);
+    window.removeEventListener('hashchange', onHashChange);
     document.querySelectorAll('.set-item[data-tab]').forEach(s => s.removeEventListener('click', onSettingsTab));
     document.querySelectorAll('.theme-card[data-theme]').forEach(c => {
       c.removeEventListener('click', onThemeCard);
@@ -3110,6 +3162,10 @@
     render();
     queueAutoTitlesForStaleNotes();
     maybeCleanupExpiredTrash();
+    // Deep-linked into settings via #settings[/tab]? Open the settings shell (req 9 —
+    // the documented hash contract, applied on load like the hashchange listener).
+    const deepTab = settingsHashTab();
+    if (deepTab) showSettings(deepTab);
   }
 
   function destroy() {

@@ -12,7 +12,10 @@
 //          document-start user script (available before the page's JS runs),
 //        - receives `{action, note}` messages on the `notes` message handler
 //          (save / create / delete), writes them to disk, then pushes fresh
-//          data back into the page via `window.Hasna Notes.hydrate(...)`.
+//          data back into the page via `window.HasnaNotes.hydrate(...)`.
+//          (The rename 7c0cc889f4 had inserted a space — "window.Hasna Notes" —
+//          which is a JS SyntaxError and silently killed every host->web call:
+//          hydrate after mutations, destroy, and the menu-bar recording controls.)
 import AppKit
 import WebKit
 import HasnaNotesCore
@@ -509,23 +512,24 @@ final class NotesBridge: @unchecked Sendable {
         catch { NSLog("Hasna Notes: restore failed: \(error.localizedDescription)"); return false }
     }
 
-    /// Delete the note identified by the payload's id.
+    /// Delete the note identified by the payload's id — SOFT DELETE ONLY (owner brief
+    /// 2026-08-19 req 8): trash is never deleted, so delete() moves to Trash at most
+    /// and NEVER purges. A note already in Trash stays hidden forever.
     @discardableResult
     func delete(_ dict: [String: Any]) -> Bool {
         guard let idStr = dict["id"] as? String, let id = UUID(uuidString: idStr) else { return false }
-        if let existing = loadNotes().first(where: { $0.id == id }), existing.status != .trash {
-            return trash(dict)
+        if let existing = loadNotes().first(where: { $0.id == id }), existing.status == .trash {
+            return false
         }
-        return purge(dict)
+        return trash(dict)
     }
 
+    /// Permanent deletion is DISABLED app-wide (owner brief 2026-08-19 req 8: trash is
+    /// never deleted — soft delete / hidden state only). Nothing is ever purged from
+    /// disk; the note stays hidden in Trash.
     @discardableResult
     func purge(_ dict: [String: Any]) -> Bool {
-        guard let idStr = dict["id"] as? String, let id = UUID(uuidString: idStr) else { return false }
-        // delete only needs the id; build a minimal Note for the path.
-        let n = Note(id: id)
-        do { try store.delete(n); return true }
-        catch { NSLog("Hasna Notes: delete failed: \(error.localizedDescription)"); return false }
+        return false
     }
 
     @discardableResult
@@ -949,7 +953,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             DispatchQueue.main.async { [weak self] in
                 guard let self, let web = self.web else { return }
                 self.installUserScripts(into: web.configuration.userContentController, boot: fresh)
-                web.evaluateJavaScript("window.Hasna Notes && window.Hasna Notes.hydrate(\(fresh))", completionHandler: nil)
+                web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
             }
         }
     }
@@ -1150,7 +1154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web?.configuration.userContentController.removeScriptMessageHandler(forName: notesHandlerName)
         web?.configuration.userContentController.removeScriptMessageHandler(forName: windowHandlerName)
         web?.configuration.userContentController.removeScriptMessageHandler(forName: recordingHandlerName)
-        web?.evaluateJavaScript("window.Hasna Notes && window.Hasna Notes.destroy()", completionHandler: nil)
+        web?.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.destroy()", completionHandler: nil)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
@@ -1233,7 +1237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     private func callRecordingJS(_ action: String) {
-        let js = "window.Hasna Notes && window.Hasna Notes.recording && window.Hasna Notes.recording.\(action) && window.Hasna Notes.recording.\(action)()"
+        let js = "window.HasnaNotes && window.HasnaNotes.recording && window.HasnaNotes.recording.\(action) && window.HasnaNotes.recording.\(action)()"
         web?.evaluateJavaScript(js, completionHandler: nil)
     }
 
