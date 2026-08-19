@@ -1,281 +1,202 @@
-const $ = id => document.getElementById(id);
+// Secrets Vault — popup controller.
+//
+// Flow: detect the active tab's site -> ask the native host (through the
+// background worker) whether the local vault is usable -> search matches by
+// hostname -> Fill injects the content script and sends the credentials for
+// THIS tab only, on THIS click. Add stores a login with the site as the
+// per-site label. Nothing is written to chrome.storage.
+(() => {
+  const site = window.SecretsSite;
 
-let allItems = [];
-let allLegacySecrets = [];
-let pageMatches = [];
-let currentTab = null;
-let activeTab = "page";
-let activeKind = "";
+  const $ = (id) => document.getElementById(id);
 
-function send(type, payload = {}) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type, ...payload }, resp => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (!resp?.ok) {
-        reject(new Error(resp?.error || "Request failed"));
-        return;
-      }
-      resolve(resp);
-    });
-  });
-}
-
-function setStatus(msg, type = "ok") {
-  const bar = $("status-bar");
-  bar.textContent = msg;
-  bar.className = type;
-}
-
-async function copyText(text) {
-  await navigator.clipboard.writeText(String(text ?? ""));
-}
-
-function currentQuery() {
-  return $("search").value.toLowerCase().trim();
-}
-
-function kindLabel(kind) {
-  return String(kind || "item").replace(/_/g, " ");
-}
-
-function titleFor(entry) {
-  return entry.title || entry.label || entry.key || entry.key_prefix || "Untitled";
-}
-
-function metaFor(entry) {
-  if (entry.source === "legacy" || entry.key) return entry.label || entry.type || entry.key_prefix || "legacy secret";
-  const bits = [];
-  if (entry.subtitle) bits.push(entry.subtitle);
-  if (entry.domains?.length) bits.push(entry.domains.join(", "));
-  if (entry.tags?.length) bits.push(entry.tags.join(", "));
-  return bits.join(" - ") || kindLabel(entry.kind);
-}
-
-function entryMatchesQuery(entry, q) {
-  if (!q) return true;
-  return [
-    entry.id,
-    entry.kind,
-    entry.title,
-    entry.subtitle,
-    entry.key,
-    entry.key_prefix,
-    entry.label,
-    entry.type,
-    ...(entry.domains || []),
-    ...(entry.tags || []),
-  ].filter(Boolean).join(" ").toLowerCase().includes(q);
-}
-
-function canFill(entry) {
-  if (!currentTab?.id) return false;
-  if (entry.source === "legacy") return Boolean(entry.username || entry.password);
-  return ["login", "address", "identity", "payment_card"].includes(entry.kind);
-}
-
-async function loadItem(id) {
-  const resp = await send("ITEM_GET", { id });
-  return resp.item;
-}
-
-function copyValueFromItem(item) {
-  const data = item.data || {};
-  return data.password
-    ?? data.apiKey
-    ?? data.token
-    ?? data.cardNumber
-    ?? data.body
-    ?? data.email
-    ?? data.username
-    ?? JSON.stringify(data, null, 2);
-}
-
-async function fillEntry(entry) {
-  if (!currentTab?.id) return;
-
-  let message;
-  if (entry.source === "legacy") {
-    message = { type: "AUTOFILL", match: entry };
-  } else {
-    const item = entry.data ? entry : await loadItem(entry.id);
-    message = {
-      type: "AUTOFILL",
-      match: { source: "vault_item", id: item.id, kind: item.kind, title: item.title },
-      item,
-    };
-  }
-
-  await chrome.tabs.sendMessage(currentTab.id, message);
-  window.close();
-}
-
-function empty(container, message) {
-  container.innerHTML = "";
-  const el = document.createElement("div");
-  el.className = "empty";
-  el.textContent = message;
-  container.appendChild(el);
-}
-
-function renderEntry(entry, container) {
-  const row = document.createElement("div");
-  row.className = "item";
-
-  const main = document.createElement("div");
-  main.className = "item-main";
-
-  const titleRow = document.createElement("div");
-  titleRow.className = "item-title-row";
-
-  const badge = document.createElement("span");
-  badge.className = "badge";
-  badge.textContent = entry.source === "legacy" || entry.key ? (entry.type || "legacy") : kindLabel(entry.kind);
-
-  const title = document.createElement("div");
-  title.className = "item-title";
-  title.textContent = titleFor(entry);
-  title.title = title.textContent;
-
-  titleRow.append(badge, title);
-
-  const meta = document.createElement("div");
-  meta.className = "item-meta";
-  meta.textContent = metaFor(entry);
-  meta.title = meta.textContent;
-
-  main.append(titleRow, meta);
-
-  const actions = document.createElement("div");
-  actions.className = "actions";
-
-  if (canFill(entry)) {
-    const fill = document.createElement("button");
-    fill.className = "primary";
-    fill.type = "button";
-    fill.textContent = "Fill";
-    fill.onclick = async () => {
-      try {
-        await fillEntry(entry);
-      } catch (e) {
-        setStatus(e.message, "err");
-      }
-    };
-    actions.appendChild(fill);
-  }
-
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.textContent = "Copy";
-  copy.onclick = async () => {
-    try {
-      if (entry.key) {
-        const resp = await send("GET", { key: entry.key });
-        await copyText(resp.secret.value);
-      } else if (entry.source === "legacy") {
-        await copyText(entry.password || entry.username || "");
-      } else {
-        const item = entry.data ? entry : await loadItem(entry.id);
-        await copyText(copyValueFromItem(item));
-      }
-      copy.textContent = "Done";
-      setTimeout(() => { copy.textContent = "Copy"; }, 1200);
-    } catch (e) {
-      setStatus(e.message, "err");
-    }
+  const els = {
+    site: $("site"),
+    status: $("status"),
+    authPending: $("auth-pending"),
+    authFail: $("auth-fail"),
+    authFailReason: $("auth-fail-reason"),
+    authOk: $("auth-ok"),
+    query: $("query"),
+    results: $("results"),
+    fTitle: $("f-title"),
+    fUrl: $("f-url"),
+    fUsername: $("f-username"),
+    fPassword: $("f-password"),
+    addBtn: $("add-btn"),
+    addMsg: $("add-msg"),
   };
-  actions.appendChild(copy);
 
-  row.append(main, actions);
-  container.appendChild(row);
-}
-
-function renderList(entries, container, emptyMessage) {
-  container.innerHTML = "";
-  if (!entries.length) {
-    empty(container, emptyMessage);
-    return;
+  function showStatus(kind, text) {
+    els.status.className = `status ${kind}`;
+    els.status.textContent = text;
+    els.status.classList.remove("hidden");
   }
-  for (const entry of entries.slice(0, 100)) renderEntry(entry, container);
-}
 
-function render() {
-  const q = currentQuery();
-  renderList(
-    pageMatches.filter(entry => entryMatchesQuery(entry, q)),
-    $("matches-list"),
-    "No matching vault items for this page."
-  );
+  function clearStatus() {
+    els.status.classList.add("hidden");
+  }
 
-  const items = allItems
-    .filter(item => !activeKind || item.kind === activeKind)
-    .filter(item => entryMatchesQuery(item, q));
-  renderList(items, $("items-list"), "No structured vault items found.");
+  async function currentTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab || null;
+  }
 
-  renderList(
-    allLegacySecrets.filter(entry => entryMatchesQuery(entry, q)),
-    $("legacy-list"),
-    "No legacy secrets found."
-  );
-}
+  function ask(verb, payload = {}) {
+    return chrome.runtime.sendMessage({ verb, ...payload });
+  }
 
-function setActiveTab(tab) {
-  activeTab = tab;
-  document.querySelectorAll(".tab").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
-  document.querySelectorAll(".panel").forEach(panel => panel.classList.remove("active"));
-  $(`${tab}-panel`).classList.add("active");
-}
+  function renderItems(items) {
+    els.results.textContent = "";
+    if (!items || items.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No logins for this site yet. Add one below.";
+      els.results.appendChild(empty);
+      return;
+    }
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.className = "item";
 
-function setActiveKind(kind) {
-  activeKind = kind;
-  document.querySelectorAll(".filter").forEach(btn => btn.classList.toggle("active", btn.dataset.kind === kind));
-  render();
-}
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const title = document.createElement("div");
+      title.className = "title";
+      title.textContent = item.title || "(untitled)";
+      const sub = document.createElement("div");
+      sub.className = "sub";
+      sub.textContent = item.subtitle || item.kind || "";
+      meta.append(title, sub);
 
-async function init() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  currentTab = tab;
-  if (tab?.url) {
-    try {
-      $("page-host").textContent = new URL(tab.url).hostname;
-    } catch {
-      $("page-host").textContent = "Current tab";
+      const btn = document.createElement("button");
+      btn.className = "fill-btn";
+      btn.textContent = "Fill";
+      btn.addEventListener("click", () => fillIntoPage(item.id));
+
+      row.append(meta, btn);
+      els.results.appendChild(row);
     }
   }
 
-  try {
-    await send("HEALTH");
-    setStatus("Connected to local vault", "ok");
-  } catch {
-    setStatus("Server not running. Run: secrets serve", "err");
+  async function refreshMatches() {
+    const tab = await currentTab();
+    if (!tab || !tab.url) return;
+    const host = site.normalizeHost(tab.url);
+    if (!host) {
+      renderItems([]);
+      return;
+    }
+    const res = await ask("search", { query: host });
+    if (!res || !res.ok) {
+      renderItems([]);
+      showStatus("error", (res && res.error) || "Search failed");
+      return;
+    }
+    renderItems(res.data.items);
   }
 
-  const loads = [];
-  loads.push(send("ITEMS").then(resp => { allItems = resp.items || []; }));
-  loads.push(send("LIST").then(resp => { allLegacySecrets = resp.secrets || []; }));
-  if (tab?.url) {
-    loads.push(send("MATCH", { url: tab.url }).then(resp => { pageMatches = resp.matches || []; }));
+  async function fillIntoPage(itemId) {
+    const tab = await currentTab();
+    if (!tab || !tab.id || !tab.url) return;
+    const host = site.normalizeHost(tab.url);
+    if (!host) {
+      showStatus("error", "This page is not a web site — nothing to fill.");
+      return;
+    }
+    const got = await ask("get", { id: itemId });
+    if (!got || !got.ok) {
+      showStatus("error", (got && got.error) || "Could not read the login");
+      return;
+    }
+    const creds = got.data.item.data || {};
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["fill.js", "content.js"],
+      });
+    } catch (err) {
+      showStatus("error", `Cannot reach this page: ${String((err && err.message) || err)}`);
+      return;
+    }
+    const filled = await chrome.tabs.sendMessage(tab.id, {
+      type: "FILL",
+      credentials: { username: creds.username, password: creds.password },
+    });
+    if (!filled || !filled.ok) {
+      showStatus("error", (filled && filled.error) || "Fill failed");
+      return;
+    }
+    showStatus(
+      "ok",
+      filled.filled === 0
+        ? "No fillable fields found on this page"
+        : `Filled ${filled.filled} field${filled.filled === 1 ? "" : "s"} on this page`,
+    );
+    window.close();
   }
 
-  await Promise.allSettled(loads);
-  if (pageMatches.length === 0 && allItems.length > 0) setActiveTab("items");
-  render();
-}
+  async function addLogin() {
+    const tab = await currentTab();
+    const title = els.fTitle.value.trim();
+    const url = els.fUrl.value.trim();
+    const username = els.fUsername.value.trim();
+    const password = els.fPassword.value;
 
-document.querySelectorAll(".tab").forEach(btn => {
-  btn.addEventListener("click", () => setActiveTab(btn.dataset.tab));
-});
+    if (!title || !username || !password) {
+      els.addMsg.className = "add-msg error";
+      els.addMsg.textContent = "Title, username and password are required.";
+      return;
+    }
+    const res = await ask("add-login", { title, url, username, password });
+    if (!res || !res.ok) {
+      els.addMsg.className = "add-msg error";
+      els.addMsg.textContent = (res && res.error) || "Could not save the login";
+      return;
+    }
+    els.fPassword.value = "";
+    els.addMsg.className = "add-msg ok";
+    els.addMsg.textContent = `Saved ${title} to your vault.`;
+    els.addMsg.dataset.savedId = res.data.id;
+    await refreshMatches();
+  }
 
-document.querySelectorAll(".filter").forEach(btn => {
-  btn.addEventListener("click", () => setActiveKind(btn.dataset.kind));
-});
+  async function init() {
+    const tab = await currentTab();
+    const origin = tab && tab.url ? site.fullOrigin(tab.url) : null;
+    const host = tab && tab.url ? site.normalizeHost(tab.url) : null;
+    els.site.textContent = origin || "No web page detected";
+    if (host) els.fUrl.value = origin;
 
-$("search").addEventListener("input", render);
+    const res = await ask("auth-status");
+    els.authPending.classList.add("hidden");
 
-$("options-btn").addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
-});
+    if (!res || !res.ok) {
+      els.authFail.classList.remove("hidden");
+      const reason = res && res.error ? res.error : "E_AUTH: vault unavailable";
+      els.authFailReason.textContent = reason;
+      return;
+    }
+    els.authOk.classList.remove("hidden");
+    clearStatus();
+    await refreshMatches();
 
-init().catch((e) => setStatus(e.message, "err"));
+    els.query.addEventListener("input", async () => {
+      const q = els.query.value.trim();
+      if (!q) {
+        await refreshMatches();
+        return;
+      }
+      const res = await ask("search", { query: q });
+      if (res && res.ok) renderItems(res.data.items);
+    });
+
+    els.addBtn.addEventListener("click", addLogin);
+  }
+
+  init().catch((err) => {
+    els.authPending.classList.add("hidden");
+    els.authFail.classList.remove("hidden");
+    els.authFailReason.textContent = `E_INTERNAL: ${String((err && err.message) || err)}`;
+  });
+})();
