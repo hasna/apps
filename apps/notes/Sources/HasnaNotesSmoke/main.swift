@@ -767,6 +767,215 @@ do {
         check(FileManager.default.fileExists(atPath: failingTemp.path), "link failure leaves stale temp for retry")
     }
 
+    print("== hosted transport resolution fails closed ==")
+    do {
+        let both = NotesTransportResolver.resolve(env: [
+            NotesTransportResolver.apiUrlEnv: "https://notes.example.test/v1",
+            NotesTransportResolver.apiKeyEnv: "key-123",
+        ])
+        check(both == .http, "URL + key resolve to the http transport")
+
+        let missingKey = NotesTransportResolver.resolve(env: [
+            NotesTransportResolver.apiUrlEnv: "https://notes.example.test/v1",
+        ])
+        check(missingKey != .http, "URL without key does NOT resolve to http")
+        check(missingKey != .local, "URL without key does NOT fall back to local")
+        if case .failClosed(let message) = missingKey {
+            check(!message.isEmpty, "fail-closed resolution carries a reason")
+        } else {
+            check(false, "URL without key resolves to failClosed")
+        }
+
+        let neither = NotesTransportResolver.resolve(env: [:])
+        check(neither == .local, "no URL resolves to the local transport (CLI/MCP semantics)")
+
+        let retiredBlank = NotesTransportResolver.resolve(env: ["PERSONALNOTES_MODE": ""])
+        check(retiredBlank != .local && retiredBlank != .http, "retired selector fails loud even when blank")
+    }
+
+    print("== hosted store verbs against a stub transport ==")
+    do {
+        final class StubBox: @unchecked Sendable {
+            var lastRequest: URLRequest?
+            var responseStatus: Int = 200
+            var responseJSON: [String: Any] = [:]
+        }
+        let box = StubBox()
+        let store = NotesHttpStore(
+            apiUrl: "https://notes.example.test/",
+            apiKey: "secret-key-abc",
+            transport: { request in
+                box.lastRequest = request
+                let data = try JSONSerialization.data(withJSONObject: box.responseJSON)
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: box.responseStatus,
+                    httpVersion: nil, headerFields: nil
+                )!
+                return (data, response)
+            }
+        )
+
+        // listNotes parses the dialect list envelope and sends the Bearer key.
+        box.responseJSON = [
+            "data": [
+                [
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "title": "Hosted note",
+                    "bodyMarkdown": "body",
+                    "labels": ["cloud"],
+                    "folder": "",
+                    "archived": false,
+                    "revision": 3,
+                    "deletedAt": NSNull(),
+                    "createdAt": "2026-08-19T10:00:00Z",
+                    "updatedAt": "2026-08-19T10:01:00Z",
+                    "frontmatterJson": ["swift": ["updatedAt": "2026-08-19T10:02:00Z"]],
+                    "agentProvenanceJson": ["machine": "studio-mac", "author": "hasna"],
+                ]
+            ],
+            "nextCursor": NSNull(),
+        ]
+        let notes = try await store.listNotes(includeDeleted: true)
+        check(notes.count == 1, "listNotes parses one wire note")
+        check(notes[0].title == "Hosted note" && notes[0].revision == 3, "listNotes reads wire fields")
+        check(box.lastRequest?.url?.path == "/api/v1/notes", "listNotes hits /api/v1/notes")
+        check(box.lastRequest?.value(forHTTPHeaderField: "authorization") == "Bearer secret-key-abc",
+              "store sends the API key as a Bearer header")
+        check(box.lastRequest?.url?.query?.contains("include_deleted=1") == true,
+              "includeDeleted maps to include_deleted=1")
+
+        // Non-2xx carries the dialect error envelope.
+        box.responseStatus = 401
+        box.responseJSON = ["error": ["code": "unauthorized", "message": "valid session or Hasna Notes API key required"]]
+        do {
+            _ = try await store.listNotes()
+            check(false, "non-2xx list throws")
+        } catch let error as NotesHttpError {
+            if case .request(let status, let code, _) = error {
+                check(status == 401 && code == "unauthorized", "non-2xx surfaces status + dialect code")
+            } else {
+                check(false, "non-2xx surfaces a request error")
+            }
+        }
+
+        // createNote POSTs the payload.
+        box.responseStatus = 201
+        let createdWire: [String: Any] = [
+            "id": "22222222-2222-4222-8222-222222222222",
+            "title": "New",
+            "bodyMarkdown": "hello",
+            "labels": [],
+            "folder": "",
+            "archived": false,
+            "revision": 1,
+            "deletedAt": NSNull(),
+            "createdAt": "2026-08-19T10:03:00Z",
+            "updatedAt": "2026-08-19T10:03:00Z",
+            "frontmatterJson": [:],
+            "agentProvenanceJson": [:],
+        ]
+        box.responseJSON = createdWire
+        let created = try await store.createNote(["title": "New", "bodyMarkdown": "hello"])
+        check(created.title == "New" && created.revision == 1, "createNote parses the created wire note")
+        check(box.lastRequest?.httpMethod == "POST" && box.lastRequest?.url?.path == "/api/v1/notes",
+              "createNote POSTs /api/v1/notes")
+    }
+
+    print("== wire mapping preserves the Swift model and trashes/archives ==")
+    do {
+        struct SmokeFailure: Error {}
+        let wireJSON: [String: Any] = [
+            "id": "33333333-3333-4333-8333-333333333333",
+            "title": "Trashed",
+            "bodyMarkdown": "trash body",
+            "labels": ["a", "b"],
+            "folder": "Work",
+            "archived": false,
+            "revision": 7,
+            "deletedAt": "2026-08-19T10:00:00Z",
+            "createdAt": "2026-08-19T09:00:00Z",
+            "updatedAt": "2026-08-19T09:30:00Z",
+            "frontmatterJson": [
+                "swift": [
+                    "updatedAt": "2026-08-19T09:31:00Z",
+                    "titleSource": "manual",
+                    "titleLocked": true,
+                    "archivedAt": "2026-08-19T09:10:00Z",
+                ]
+            ],
+            "agentProvenanceJson": ["agent": "notes-app", "machine": "studio-mac", "machineFriendlyName": "Studio", "author": "hasna"],
+        ]
+        guard let wire = NotesWireNote(json: wireJSON) else {
+            check(false, "wire note decodes")
+            throw SmokeFailure()
+        }
+        check(wire.isDeleted, "deletedAt marks the wire note as deleted")
+
+        let note = NotesWireMapping.note(from: wire, retentionDays: 30)
+        check(note.status == .trash, "deleted wire note maps to the trash status")
+        check(note.labels == ["a", "b"] && note.folder == "Work", "wire labels/folder map to the Swift model")
+        check(note.rev == 7, "wire revision maps to rev")
+        check(note.titleSource == .manual && note.titleLocked, "frontmatter.swift title metadata survives the round trip")
+        check(note.machine == "studio-mac" && note.machineFriendlyName == "Studio", "agentProvenanceJson attribution survives")
+        check(note.updatedAt == MarkdownStore.parseDate("2026-08-19T09:31:00Z"), "frontmatter.swift updatedAt wins over the wire stamp")
+        check(note.trashedAt == MarkdownStore.parseDate("2026-08-19T10:00:00Z"), "trashedAt derives from deletedAt")
+        check(note.trashExpiresAt == MarkdownStore.parseDate("2026-09-18T10:00:00Z"), "trashExpiresAt derives from deletedAt + retention")
+        check(note.archivedAt == MarkdownStore.parseDate("2026-08-19T09:10:00Z"), "archivedAt survives in frontmatter.swift")
+
+        // Archive wire mapping.
+        var archivedJSON = wireJSON
+        archivedJSON["deletedAt"] = nil
+        archivedJSON["archived"] = true
+        let archivedWire = NotesWireNote(json: archivedJSON)!
+        let archived = NotesWireMapping.note(from: archivedWire, retentionDays: 30)
+        check(archived.status == .archived, "archived wire note maps to the archived status")
+        check(archived.trashedAt == nil && archived.trashExpiresAt == nil, "an archived (non-deleted) note carries no trash timestamps")
+
+        // Round trip: create payload -> wire -> Swift note preserves everything.
+        let original = Note(
+            id: UUID(uuidString: "44444444-4444-4444-8444-444444444444")!,
+            title: "Round trip",
+            labels: ["cloud"],
+            status: .active,
+            folder: "Inbox",
+            titleLocked: true,
+            titleSource: .generated,
+            titleContentFingerprint: "fp-1",
+            createdAt: MarkdownStore.parseDate("2026-08-19T08:00:00Z")!,
+            updatedAt: MarkdownStore.parseDate("2026-08-19T08:05:00Z")!,
+            author: "hasna",
+            agent: "notes-app",
+            machine: "studio-mac",
+            machineFriendlyName: "Studio",
+            createdByActorType: "human",
+            createdByName: "Andrei",
+            body: "body text"
+        )
+        let payload = NotesWireMapping.wireCreatePayload(for: original)
+        check(payload["source"] as? String == "notes-app", "create payload carries the notes-app source")
+        // The server mints the id at create time and echoes the note back with it.
+        var echoedJSON = payload
+        echoedJSON["id"] = original.id.uuidString.lowercased()
+        let echoed = NotesWireNote(json: echoedJSON)!
+        let roundTripped = NotesWireMapping.note(from: echoed, retentionDays: 30)
+        check(roundTripped.title == original.title && roundTripped.body == original.body, "create payload round-trips title + body")
+        check(roundTripped.updatedAt == original.updatedAt, "create payload round-trips the web layer's updatedAt stamp")
+        check(roundTripped.machine == "studio-mac" && roundTripped.createdByName == "Andrei", "create payload round-trips provenance")
+        check(roundTripped.titleSource == .generated && roundTripped.titleContentFingerprint == "fp-1", "create payload round-trips title metadata")
+        check(roundTripped.status == .active, "an unarchived, undeleted note maps back to active")
+
+        // Restore payload: a trashed note PATCHed back clears trash + stamps restoredAt.
+        var trashed = original
+        trashed.status = .trash
+        trashed.trashedAt = MarkdownStore.parseDate("2026-08-19T10:00:00Z")
+        trashed.restoredAt = MarkdownStore.parseDate("2026-08-19T11:00:00Z")
+        let restorePayload = NotesWireMapping.wireUpdatePayload(for: trashed)
+        check(restorePayload["archived"] as? Bool == false, "restore payload clears the archived flag")
+        let fm = restorePayload["frontmatterJson"] as? [String: Any]
+        let swift = fm?["swift"] as? [String: Any]
+        check((swift?["restoredAt"] as? String) == "2026-08-19T11:00:00Z", "restore payload stamps restoredAt in frontmatter.swift")
+    }
+
 } catch {
     print("  FAIL: threw error: \(error)")
     counter.failures += 1

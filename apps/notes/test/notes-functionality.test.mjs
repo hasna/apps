@@ -2390,8 +2390,12 @@ test('native destructive bridge actions require confirmed payloads; purge is dis
   assert.match(swift, /case "trash":\s+guard allowDestructive\(action\) else \{ return \}/);
   assert.match(swift, /case "purge":\s+guard allowDestructive\(action\) else \{ return \}/);
   assert.match(swift, /case "delete":\s+guard allowDestructive\(action\) else \{ return \}/);
-  assert.match(swift, /func delete\(_ dict: \[String: Any\]\) -> Bool \{/);
-  assert.match(swift, /func purge\(_ dict: \[String: Any\]\) -> Bool \{\s+return false/s);
+  // The hosted bridge verbs are async (HTTP store round-trips).
+  assert.match(swift, /func delete\(_ dict: \[String: Any\]\) async -> Bool \{/);
+  assert.match(swift, /func purge\(_ dict: \[String: Any\]\) async -> Bool \{\s+return false/s);
+  // The create path posts through the hosted store (the local create-intent
+  // spool was retired with the on-disk store).
+  assert.match(swift, /await store\.createNote\(NotesWireMapping\.wireCreatePayload\(for: note\)\)/);
 });
 
 test('web duplicate routes through the native create boundary before its follow-up save', async () => {
@@ -2402,9 +2406,13 @@ test('web duplicate routes through the native create boundary before its follow-
   assert.match(duplicate, /quickCreate\(/);
   assert.match(quickCreate, /postNative\('create', serializeNote\(note\)\)/);
   assert.match(duplicate, /postNative\('save', serializeNote\(dup\)\)/);
-  assert.match(swift, /case "create": changed = bridge\.save\(note\.dict, isCreate: true\)/);
-  assert.match(swift, /case "save":\s+changed = bridge\.save\(note\.dict, isCreate: false\)/);
-  assert.match(swift, /let shouldEmitCreate = isCreate && !FileManager\.default\.fileExists/);
+  // The hosted bridge routes creates and saves through the store with the
+  // same isCreate distinction; the verbs are async (HTTP round-trip).
+  assert.match(swift, /case "create": changed = await bridge\.save\(note\.dict, isCreate: true\)/);
+  assert.match(swift, /case "save":\s+changed = await bridge\.save\(note\.dict, isCreate: false\)/);
+  assert.match(swift, /func save\(_ dict: \[String: Any\], isCreate: Bool\) async -> Bool \{/);
+  assert.match(swift, /NotesWireMapping\.wireCreatePayload\(for: note\)/);
+  assert.match(swift, /NotesWireMapping\.wireUpdatePayload\(for: note\)/);
 });
 
 test('native window drag strip spans full header band and honors web-reported control rects', async () => {

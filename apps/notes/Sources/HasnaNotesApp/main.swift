@@ -5,8 +5,8 @@
 //   1. opens a hidden-titlebar window and loads index.html offline (file://),
 //   2. tags the document with the `native` body class so the web UI drops its
 //      desktop-frame chrome and fills the OS window edge-to-edge, and
-//   3. bridges REAL notes data between the on-disk Markdown store
-//      (`HasnaNotesCore.MarkdownStore`) and the web UI:
+//   3. bridges REAL notes data between the HOSTED notes API (cloud-only
+//      storage, `HasnaNotesCore.NotesHttpStore`) and the web UI:
 //        - reads the store at launch and injects
 //          `window.__BOOT__ = { notes, labels, settings }` as a
 //          document-start user script (available before the page's JS runs),
@@ -315,53 +315,134 @@ private func noteJSON(_ note: Note) -> [String: Any] {
 
 // MARK: - Notes bridge
 
-/// Owns the on-disk store and the boot/hydrate/save/delete round-trip. Kept separate
-/// from the message-handler object so the WKWebView retain graph (see WeakScriptProxy)
-/// stays clean.
-/// `@unchecked Sendable`: every stored property is an immutable value (the stores are
-/// stateless wrappers over the on-disk files); mutations are serialized by the app
-/// delegate's `notesQueue`.
+/// Owns the HOSTED note store (personalnotes/v1 HTTP API) and the
+/// boot/hydrate/save/delete round-trip. Kept separate from the message-handler
+/// object so the WKWebView retain graph (see WeakScriptProxy) stays clean.
+///
+/// CLOUD-ONLY (owner brief 2026-08-19, row eca5b6da): the macOS app reads and
+/// writes notes ONLY through the hosted HTTP store selected by
+/// HASNA_NOTES_API_URL + HASNA_NOTES_API_KEY. The on-disk MarkdownStore is not
+/// used by the app at all — an unset URL or a URL without its key leaves the
+/// bridge UNAVAILABLE (fail closed, no local fallback) and the UI boots with a
+/// visible configuration error instead of silently touching local files.
+/// `@unchecked Sendable`: the backing store is an immutable value; mutations
+/// are serialized by the app delegate's `notesQueue` + `mutationSerializer`.
 final class NotesBridge: @unchecked Sendable {
-    let store = MarkdownStore()
-    let labelStore: LabelStore
-    let settingsStore: SettingsStore
-    let noteCreatedEvents: NoteCreatedEventSpool
+    enum Backing {
+        case http(NotesHttpStore)
+        case unavailable(reason: String)
+    }
+
+    let backing: Backing
     let thisMachine: String
 
-    init() {
-        self.labelStore = LabelStore(root: store.rootURL)
-        self.settingsStore = SettingsStore(root: store.rootURL)
-        self.noteCreatedEvents = NoteCreatedEventSpool(root: store.rootURL)
-        // Every new note's `machine:` field uses ONE stable identity —
-        // `Note.currentMachine` ($HASNA_NOTES_MACHINE → configured identity
-        // → short hostname). Informational attribution only.
+    init(env: [String: String] = ProcessInfo.processInfo.environment) {
         self.thisMachine = Note.currentMachine
+        switch NotesTransportResolver.resolve(env: env) {
+        case .http:
+            let url = (env[NotesTransportResolver.apiUrlEnv] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = (env[NotesTransportResolver.apiKeyEnv] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !url.isEmpty, !key.isEmpty else {
+                self.backing = .unavailable(
+                    reason: "\(NotesTransportResolver.apiUrlEnv) and \(NotesTransportResolver.apiKeyEnv) must both be set for the hosted notes store."
+                )
+                return
+            }
+            self.backing = .http(NotesHttpStore(apiUrl: url, apiKey: key))
+        case .local:
+            self.backing = .unavailable(
+                reason: "\(NotesTransportResolver.apiUrlEnv) is not set. This app is cloud-only: notes live in the hosted API and are never read from or written to local files on this Mac."
+            )
+        case .failClosed(let message):
+            self.backing = .unavailable(reason: message)
+        }
     }
 
-    /// Load all notes from disk (newest first). Never throws to the caller — a broken
-    /// store yields an empty list and the UI falls back gracefully.
-    func loadNotes() -> [Note] {
-        (try? store.loadAll()) ?? []
+    var unavailableReason: String? {
+        if case .unavailable(let reason) = backing { return reason }
+        return nil
     }
 
-    /// The `{notes, labels, settings}` boot payload as a JSON string.
-    func bootJSON() -> String {
-        let notes = loadNotes()
-        let payload: [String: Any] = [
+    private var httpStore: NotesHttpStore? {
+        if case .http(let store) = backing { return store }
+        return nil
+    }
+
+    /// The user's trash-retention preference. A UI preference only (the hosted
+    /// API has no settings surface, and trash is never purged — owner brief
+    /// req 8), persisted in UserDefaults rather than in a note file.
+    private static let retentionPrefKey = "notes.trashRetentionDays"
+    var trashRetentionDays: Int {
+        get {
+            let stored = UserDefaults.standard.integer(forKey: Self.retentionPrefKey)
+            return stored > 0 ? stored : NotesSettings.defaultTrashRetentionDays
+        }
+        set { UserDefaults.standard.set(max(1, newValue), forKey: Self.retentionPrefKey) }
+    }
+
+    /// Load all notes from the hosted store (newest first, paged to
+    /// exhaustion, trashed notes included). Never throws to the caller — an
+    /// unreachable store yields an empty list and the UI falls back gracefully.
+    func loadNotes() async -> [Note] {
+        guard let store = httpStore else { return [] }
+        do {
+            var all: [NotesWireNote] = []
+            var cursor: String? = nil
+            repeat {
+                let (notes, next) = try await store.listPage(includeDeleted: true, cursor: cursor)
+                all.append(contentsOf: notes)
+                cursor = next
+            } while cursor != nil
+            let retention = trashRetentionDays
+            return all.map { NotesWireMapping.note(from: $0, retentionDays: retention) }
+        } catch {
+            NSLog("Hasna Notes: loadNotes failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// The `{notes, labels, settings, error?}` boot payload as a JSON string.
+    func bootJSON() async -> String {
+        let notes = await loadNotes()
+        var payload: [String: Any] = [
             "notes": notes.map(noteJSON),
-            "labels": labelStore.load(),
-            "settings": ["trashRetentionDays": settingsStore.load().trashRetentionDays],
+            // In hosted mode the label list is derived from the notes the
+            // server stores — there is no separate local labels file.
+            "labels": NotesBridge.labelUnion(notes),
+            "settings": ["trashRetentionDays": trashRetentionDays],
             "listDefaults": ["limit": 10],
         ]
+        if let reason = unavailableReason {
+            payload["error"] = ["message": reason]
+        }
         return jsonString(payload)
+    }
+
+    /// Union of every note's labels, order-preserving, deduplicated
+    /// case-insensitively (same normalization as LabelStore).
+    static func labelUnion(_ notes: [Note]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for note in notes {
+            for label in note.labels {
+                let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = trimmed.lowercased()
+                guard !trimmed.isEmpty, !seen.contains(key) else { continue }
+                seen.insert(key)
+                out.append(trimmed)
+            }
+        }
+        return out
     }
 
     // MARK: mutations
 
     /// Build a `Note` from a JS message payload. New notes (create) get a fresh UUID,
     /// `machine = thisMachine`, and `agent = Note.appAgent`. Saves preserve the id and
-    /// (for existing notes) the original createdAt/machine on disk.
-    private func note(from dict: [String: Any], isCreate: Bool) -> Note {
+    /// (for existing notes) the original createdAt/machine from the hosted store.
+    private func note(from dict: [String: Any], isCreate: Bool, existing: Note?) -> Note {
         let id = (dict["id"] as? String).flatMap { UUID(uuidString: $0) } ?? UUID()
         let title = (dict["title"] as? String) ?? ""
         let body = (dict["body"] as? String) ?? ""
@@ -374,8 +455,6 @@ final class NotesBridge: @unchecked Sendable {
             ?? (titleSource == .manual && !Note.isDefaultTitle(title))
         let titleContentFingerprint = (dict["titleContentFingerprint"] as? String) ?? ""
 
-        // Preserve the existing on-disk createdAt + machine when saving an existing note.
-        let existing: Note? = isCreate ? nil : loadNotes().first(where: { $0.id == id })
         let createdAt = existing?.createdAt
             ?? (dict["createdAt"] as? String).flatMap(MarkdownStore.parseDate)
             ?? Date()
@@ -391,10 +470,10 @@ final class NotesBridge: @unchecked Sendable {
         let machine = existing?.machine
             ?? (dict["machine"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ?? thisMachine
-        let machineFriendlyName = existing?.machineFriendlyName ?? (dict["machineFriendlyName"] as? String) ?? "" 
+        let machineFriendlyName = existing?.machineFriendlyName ?? (dict["machineFriendlyName"] as? String) ?? ""
         let author = (dict["author"] as? String) ?? existing?.author ?? Note.currentAuthor
         let agent = (dict["agent"] as? String) ?? existing?.agent ?? Note.appAgent
-        // `rev` is advisory here: MarkdownStore.save bumps past the on-disk value.
+        // `rev` is advisory here: the server bumps its own revision per update.
         let rev = (dict["rev"] as? Int) ?? existing?.rev ?? 1
         let createdByActorType = (dict["createdByActorType"] as? String) ?? existing?.createdByActorType ?? "human"
         let createdByName = (dict["createdByName"] as? String) ?? existing?.createdByName ?? author
@@ -430,106 +509,106 @@ final class NotesBridge: @unchecked Sendable {
         )
     }
 
-    /// Persist a create/save. Returns true on success.
+    private func noteFromPayload(_ dict: [String: Any]) async -> Note? {
+        guard let idStr = dict["id"] as? String, let id = UUID(uuidString: idStr) else { return nil }
+        return await loadNotes().first(where: { $0.id == id })
+    }
+
+    /// Persist a create/save through the hosted store. Returns true on success.
+    /// The server logs the note.created/note.updated audit event itself — the
+    /// old local create-intent spool is retired with the on-disk store.
     @discardableResult
-    func save(_ dict: [String: Any], isCreate: Bool) -> Bool {
-        let n = note(from: dict, isCreate: isCreate)
-        let shouldEmitCreate = isCreate && !FileManager.default.fileExists(atPath: store.fileURL(for: n.id).path)
-        var hasIntent = false
-        if shouldEmitCreate {
-            do {
-                try noteCreatedEvents.beginCreate(n)
-                hasIntent = true
-            } catch {
-                // A create must not commit without a durable metadata-only
-                // intent in either the canonical or fallback location.
-                NSLog("Hasna Notes: create intent unavailable")
-                return false
-            }
+    func save(_ dict: [String: Any], isCreate: Bool) async -> Bool {
+        guard let store = httpStore else {
+            NSLog("Hasna Notes: save refused — hosted store unavailable: \(unavailableReason ?? "unknown")")
+            return false
         }
+        let payloadID = (dict["id"] as? String).flatMap { UUID(uuidString: $0) }
+        let existing = isCreate ? nil : await loadNotes().first(where: { $0.id == payloadID })
+        let note = note(from: dict, isCreate: isCreate, existing: existing)
         do {
-            try store.save(n)
+            if isCreate {
+                _ = try await store.createNote(NotesWireMapping.wireCreatePayload(for: note))
+            } else {
+                _ = try await store.updateNote(id: note.id.uuidString.lowercased(), NotesWireMapping.wireUpdatePayload(for: note))
+            }
+            return true
         } catch {
-            if hasIntent { noteCreatedEvents.cancelCreate(n.id) }
             NSLog("Hasna Notes: save failed: \(error.localizedDescription)")
             return false
         }
-        if shouldEmitCreate && !noteCreatedEvents.commitCreate(n) {
-            NSLog("Hasna Notes: note.created pending reconciliation")
-        }
-        return true
     }
 
-    func reconcileNoteCreatedEvents() {
+    private func patch(_ note: Note) async -> Bool {
+        guard let store = httpStore else { return false }
         do {
-            _ = try noteCreatedEvents.reconcile(store: store)
+            _ = try await store.updateNote(id: note.id.uuidString.lowercased(), NotesWireMapping.wireUpdatePayload(for: note))
+            return true
         } catch {
-            NSLog("Hasna Notes: note.created reconciliation pending")
+            NSLog("Hasna Notes: update failed: \(error.localizedDescription)")
+            return false
         }
     }
 
     @discardableResult
-    func archive(_ dict: [String: Any]) -> Bool {
-        guard let idStr = dict["id"] as? String,
-              let id = UUID(uuidString: idStr),
-              var existing = loadNotes().first(where: { $0.id == id }) else { return false }
+    func archive(_ dict: [String: Any]) async -> Bool {
+        guard var existing = await noteFromPayload(dict) else { return false }
         existing.status = .archived
         existing.archivedAt = Date()
         existing.trashedAt = nil
         existing.trashExpiresAt = nil
         existing.updatedAt = Date()
-        do { try store.save(existing); return true }
-        catch { NSLog("Hasna Notes: archive failed: \(error.localizedDescription)"); return false }
+        return await patch(existing)
     }
 
     @discardableResult
-    func trash(_ dict: [String: Any]) -> Bool {
-        guard let idStr = dict["id"] as? String,
-              let id = UUID(uuidString: idStr),
-              var existing = loadNotes().first(where: { $0.id == id }) else { return false }
-        let now = Date()
-        let retention = settingsStore.load().trashRetentionDays
-        existing.status = .trash
-        existing.trashedAt = now
-        existing.trashExpiresAt = Calendar.current.date(byAdding: .day, value: retention, to: now)
-        existing.updatedAt = now
-        do { try store.save(existing); return true }
-        catch { NSLog("Hasna Notes: trash failed: \(error.localizedDescription)"); return false }
+    func trash(_ dict: [String: Any]) async -> Bool {
+        guard let existing = await noteFromPayload(dict) else { return false }
+        return await deleteNote(existing)
     }
 
     @discardableResult
-    func restore(_ dict: [String: Any]) -> Bool {
-        guard let idStr = dict["id"] as? String,
-              let id = UUID(uuidString: idStr),
-              var existing = loadNotes().first(where: { $0.id == id }) else { return false }
+    func restore(_ dict: [String: Any]) async -> Bool {
+        guard var existing = await noteFromPayload(dict) else { return false }
         existing.status = .active
         existing.archivedAt = nil
         existing.trashedAt = nil
         existing.trashExpiresAt = nil
         existing.restoredAt = Date()
         existing.updatedAt = Date()
-        do { try store.save(existing); return true }
-        catch { NSLog("Hasna Notes: restore failed: \(error.localizedDescription)"); return false }
+        return await patch(existing)
     }
 
-    /// Delete the note identified by the payload's id — SOFT DELETE ONLY (owner brief
-    /// 2026-08-19 req 8): trash is never deleted, so delete() moves to Trash at most
-    /// and NEVER purges. A note already in Trash stays hidden forever.
+    /// Soft-delete the note identified by the payload's id — SOFT DELETE ONLY
+    /// (owner brief 2026-08-19 req 8): trash is never deleted, so delete()
+    /// moves to Trash at most and NEVER purges. A note already in Trash stays
+    /// hidden forever. The server stamps the delete tombstone; the wire note
+    /// then reads back as `.trash`.
     @discardableResult
-    func delete(_ dict: [String: Any]) -> Bool {
+    func delete(_ dict: [String: Any]) async -> Bool {
         guard let idStr = dict["id"] as? String, let id = UUID(uuidString: idStr) else { return false }
-        if let existing = loadNotes().first(where: { $0.id == id }), existing.status == .trash {
+        if let existing = await loadNotes().first(where: { $0.id == id }), existing.status == .trash {
             return false
         }
-        return trash(dict)
+        return await trash(dict)
     }
 
     /// Permanent deletion is DISABLED app-wide (owner brief 2026-08-19 req 8: trash is
-    /// never deleted — soft delete / hidden state only). Nothing is ever purged from
-    /// disk; the note stays hidden in Trash.
+    /// never deleted — soft delete / hidden state only). Nothing is ever purged.
     @discardableResult
-    func purge(_ dict: [String: Any]) -> Bool {
+    func purge(_ dict: [String: Any]) async -> Bool {
         return false
+    }
+
+    private func deleteNote(_ note: Note) async -> Bool {
+        guard let store = httpStore else { return false }
+        do {
+            try await store.deleteNote(id: note.id.uuidString.lowercased())
+            return true
+        } catch {
+            NSLog("Hasna Notes: delete failed: \(error.localizedDescription)")
+            return false
+        }
     }
 
     @discardableResult
@@ -537,18 +616,18 @@ final class NotesBridge: @unchecked Sendable {
         let days = (dict["trashRetentionDays"] as? Int)
             ?? (dict["trashRetentionDays"] as? NSNumber)?.intValue
             ?? NotesSettings.defaultTrashRetentionDays
-        do { try settingsStore.save(NotesSettings(trashRetentionDays: days)); return true }
-        catch { NSLog("Hasna Notes: settings save failed: \(error.localizedDescription)"); return false }
+        trashRetentionDays = days
+        return true
     }
 
+    /// In hosted mode the label list is derived from the notes the server
+    /// stores; a standalone labels action has no server surface and is
+    /// accepted as a no-op (label membership persists through note saves).
     @discardableResult
     func updateLabels(_ dict: [String: Any]) -> Bool {
-        let labels = (dict["labels"] as? [String]) ?? (dict["tags"] as? [String]) ?? []
-        do { try labelStore.save(labels); return true }
-        catch { NSLog("Hasna Notes: labels save failed: \(error.localizedDescription)"); return false }
+        return true
     }
 }
-
 // MARK: - Brand palette (design tokens)
 
 /// The native side of the shared design tokens (docs/design-rules-macos26.md §3.2).
@@ -640,6 +719,25 @@ private struct NotesMutationPayload: @unchecked Sendable {
     let dict: [String: Any]
 }
 
+/// Chains async bridge mutations so the next starts only after the previous
+/// completes. Replaces the ordering the old synchronous disk store got from
+/// the serial `notesQueue` alone: HTTP awaits would otherwise let rapid
+/// autosaves interleave and land out of order on the server.
+private final class SerialMutations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tail: Task<Void, Never> = Task {}
+
+    func enqueue(_ operation: @Sendable @escaping () async -> Void) {
+        lock.lock()
+        let previous = tail
+        tail = Task {
+            await previous.value
+            await operation()
+        }
+        lock.unlock()
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate {
     var window: NSWindow!
     var web: WKWebView!
@@ -649,10 +747,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     let bridge = NotesBridge()
     let sidecar = AISidecar()
     /// Serial queue for note mutations + the follow-up bootJSON rebuild. Script messages
-    /// arrive on the main thread; running the disk-heavy save/boot work there froze
-    /// typing (2 full store scans + manifest per autosave). The queue keeps saves ordered
-    /// while the UI thread only hops back in to evaluate the hydrate JavaScript.
+    /// arrive on the main thread; running the hosted-store save/boot work there would
+    /// freeze typing. The queue plus `mutationSerializer` keeps saves ordered while the
+    /// UI thread only hops back in to evaluate the hydrate JavaScript.
     private let notesQueue = DispatchQueue(label: "Hasna Notes.notes-bridge", qos: .userInitiated)
+    /// Orders async hosted-store mutations (see SerialMutations).
+    private let mutationSerializer = SerialMutations()
     private let notesHandlerName = "notes"
     private let windowHandlerName = "window"
     private let recordingHandlerName = "recording"
@@ -696,13 +796,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // the `__AI__` boot flag below. Never blocks UI; failure just disables AI features.
         sidecar.start()
 
-        // One startup reconciliation, serialized ahead of all later note
-        // mutations. This replaces the retired continuous polling watcher.
-        let startupBridge = bridge
-        notesQueue.async {
-            startupBridge.reconcileNoteCreatedEvents()
-        }
-
         let frame = NSRect(x: 0, y: 0, width: 1280, height: 820)
         window = NSWindow(
             contentRect: frame,
@@ -725,12 +818,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.minSize = NSSize(width: 920, height: 640)
         window.center()
 
+        // Boot is now asynchronous (the hosted HTTP store must be read before
+        // `window.__BOOT__` can be injected): fetch the initial payload off the
+        // main thread, then build the web view with the fresh boot JSON. The
+        // window itself already exists (canvas-colored) so the UI never shows a
+        // blank white frame while the store loads.
+        let startupBridge = bridge
+        notesQueue.async {
+            Task {
+                let boot = await startupBridge.bootJSON()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.completeLaunch(frame: frame, boot: boot)
+                }
+            }
+        }
+    }
+
+    /// Builds the WKWebView with the (already-fetched) boot payload and shows
+    /// the window. Split out of `applicationDidFinishLaunching` because the
+    /// boot payload now comes from the hosted store asynchronously.
+    private func completeLaunch(frame: NSRect, boot: String) {
         let cfg = WKWebViewConfiguration()
 
         // 1.+2. Install the document-start user scripts (native class, `window.__BOOT__`
         //    real notes data, `window.__AI__` sidecar flag). Reinstalled with fresh boot
         //    data after every mutation — see installUserScripts.
-        let boot = bridge.bootJSON()
         installUserScripts(into: cfg.userContentController, boot: boot)
 
         // 3. Register the `notes` + `window` + `recording` message handlers via a WEAK proxy (see
@@ -910,50 +1023,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let noteDict = (payload["note"] as? [String: Any]) ?? [:]
         let destructiveConfirmed = (payload["confirmed"] as? Bool) == true || (noteDict["confirmed"] as? Bool) == true
 
-        // Mutations are disk-heavy: `note(from:)` re-loads the whole store, and the
-        // follow-up `bootJSON()` loads it again plus the fleet manifest. Script messages
-        // arrive on the main thread, so doing that work here froze typing (every 600 ms
-        // autosave). Hop to the serial notes queue — order-preserving, so rapid saves
-        // land in sequence — and touch the main thread again only for the hydrate push.
+        // Mutations now round-trip through the hosted HTTP store: `note(from:)`
+        // re-loads the whole store, and the follow-up `bootJSON()` loads it again.
+        // Script messages arrive on the main thread, so that work runs off it; the
+        // task-chain serializer keeps rapid saves landing in sequence (the web
+        // layer compares hydrate echoes against its own edit base), and the main
+        // thread is touched again only for the hydrate push.
         let note = NotesMutationPayload(dict: noteDict)
         let bridge = self.bridge
-        notesQueue.async { [weak self] in
-            func allowDestructive(_ action: String) -> Bool {
-                if destructiveConfirmed { return true }
-                NSLog("Hasna Notes: ignored unconfirmed destructive notes action '\(action)'")
-                return false
-            }
+        let serializer = self.mutationSerializer
+        notesQueue.async {
+            Task {
+                serializer.enqueue {
+                    func allowDestructive(_ action: String) -> Bool {
+                        if destructiveConfirmed { return true }
+                        NSLog("Hasna Notes: ignored unconfirmed destructive notes action '\(action)'")
+                        return false
+                    }
 
-            var changed = false
-            switch action {
-            case "create": changed = bridge.save(note.dict, isCreate: true)
-            case "save":   changed = bridge.save(note.dict, isCreate: false)
-            case "archive": changed = bridge.archive(note.dict)
-            case "trash":
-                guard allowDestructive(action) else { return }
-                changed = bridge.trash(note.dict)
-            case "restore": changed = bridge.restore(note.dict)
-            case "purge":
-                guard allowDestructive(action) else { return }
-                changed = bridge.purge(note.dict)
-            case "settings": changed = bridge.updateSettings(note.dict)
-            case "labels": changed = bridge.updateLabels(note.dict)
-            case "delete":
-                guard allowDestructive(action) else { return }
-                changed = bridge.delete(note.dict)
-            default:
-                NSLog("Hasna Notes: unknown notes action '\(action)'")
-            }
+                    var changed = false
+                    switch action {
+                    case "create": changed = await bridge.save(note.dict, isCreate: true)
+                    case "save":   changed = await bridge.save(note.dict, isCreate: false)
+                    case "archive": changed = await bridge.archive(note.dict)
+                    case "trash":
+                        guard allowDestructive(action) else { return }
+                        changed = await bridge.trash(note.dict)
+                    case "restore": changed = await bridge.restore(note.dict)
+                    case "purge":
+                        guard allowDestructive(action) else { return }
+                        changed = await bridge.purge(note.dict)
+                    case "settings": changed = bridge.updateSettings(note.dict)
+                    case "labels": changed = bridge.updateLabels(note.dict)
+                    case "delete":
+                        guard allowDestructive(action) else { return }
+                        changed = await bridge.delete(note.dict)
+                    default:
+                        NSLog("Hasna Notes: unknown notes action '\(action)'")
+                    }
 
-            guard changed else { return }
-            // After any mutation, reload from disk and push fresh data back into the page.
-            // Also reinstall the document-start user scripts so a page reload re-injects
-            // the CURRENT notes, not the launch-time `__BOOT__` snapshot.
-            let fresh = bridge.bootJSON()
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let web = self.web else { return }
-                self.installUserScripts(into: web.configuration.userContentController, boot: fresh)
-                web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
+                    guard changed else { return }
+                    // After any mutation, reload from the hosted store and push
+                    // fresh data back into the page. Also reinstall the
+                    // document-start user scripts so a page reload re-injects the
+                    // CURRENT notes, not the launch-time `__BOOT__` snapshot.
+                    let fresh = await bridge.bootJSON()
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, let web = self.web else { return }
+                        self.installUserScripts(into: web.configuration.userContentController, boot: fresh)
+                        web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
+                    }
+                }
             }
         }
     }

@@ -4,8 +4,9 @@
 // style. Data arrives one of two ways:
 //
 //   1. Native macOS host (WKWebView): the Swift shell injects `window.__BOOT__` at
-//      document-start (notes + labels + settings) read from the on-disk
-//      Markdown store, and later calls `window.HasnaNotes.hydrate(boot)` after any
+//      document-start (notes + labels + settings) fetched from the HOSTED
+//      notes API (cloud-only storage — no local note files), and later calls
+//      `window.HasnaNotes.hydrate(boot)` after any
 //      save/create/delete so the UI re-renders from fresh data. Writes are sent back
 //      to Swift via `window.webkit.messageHandlers.notes.postMessage({action,note})`.
 //
@@ -3126,6 +3127,15 @@
     state.labels = normalizeLabelList([].concat(Array.isArray(b.labels) ? b.labels : [], state.notes.flatMap(note => note.labels || [])));
     if (b.settings && Number(b.settings.trashRetentionDays) > 0) {
       state.settings.trashRetentionDays = Number(b.settings.trashRetentionDays);
+    }
+    // Fail-closed configuration error from the native host: the hosted notes
+    // store is unreachable or unconfigured, and the app never falls back to
+    // local note files — surface the reason instead of pretending notes exist.
+    const bootError = $('boot-error');
+    if (bootError) {
+      const message = (b.error && b.error.message) || '';
+      bootError.textContent = message;
+      bootError.hidden = !message;
     }
     // List defaults apply on the initial boot only (contract: latest 10). The host
     // hydrates after EVERY write — re-applying here would reset the user's pagination.

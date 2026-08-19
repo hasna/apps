@@ -198,6 +198,33 @@ describe('notes CRUD', () => {
     expect(withoutDeleted.data).toHaveLength(0);
   });
 
+  test('PATCH on a soft-deleted note restores it (deleted_at cleared, note.restored event)', async () => {
+    // Cloud-only clients (macOS app NotesBridge) restore a trashed note by
+    // PATCHing it back — the REST surface has no dedicated restore verb, and
+    // GAP-2's 404 on deleted rows made REST restore impossible. Last-write-wins
+    // PATCH therefore clears the soft-delete tombstone (the updateRow `restore`
+    // path and emitTransitionEvents' note.restored already anticipate this).
+    const { app } = await makeApp();
+    const { apiKey } = await login(app);
+    const created = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'restore-1', title: 'Trash me' } })).json();
+
+    await call(app, 'DELETE', `/api/v1/notes/${created.id}`, { token: apiKey });
+
+    const restored = await (await call(app, 'PATCH', `/api/v1/notes/${created.id}`, { token: apiKey, body: { archived: false, title: 'Trash me' } })).json();
+    expect(restored.deletedAt).toBeNull();
+    expect(restored.archived).toBe(false);
+    expect(restored.title).toBe('Trash me');
+
+    // The note is visible again in the default (non-deleted) list.
+    const list = await (await call(app, 'GET', '/api/v1/notes', { token: apiKey })).json();
+    expect(list.data.map((n) => n.id)).toContain(created.id);
+
+    // A second PATCH on the restored note is an ordinary update (no error).
+    const again = await (await call(app, 'PATCH', `/api/v1/notes/${created.id}`, { token: apiKey, body: { title: 'Restored again' } })).json();
+    expect(again.title).toBe('Restored again');
+    expect(again.deletedAt).toBeNull();
+  });
+
   test('duplicate clientId maps to 409 conflict', async () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);

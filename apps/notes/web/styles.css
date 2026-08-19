@@ -200,6 +200,18 @@ body.native .window{
   width:100vw;height:100vh;border-radius:0;box-shadow:none;
 }
 
+/* Fail-closed configuration banner (cloud-only storage): shown when the native
+   host reports the hosted notes API is unconfigured or unreachable. Uses the
+   danger tokens so it reads as a stop, not as decoration. */
+.boot-error{
+  position:relative;z-index:40;margin:0;padding:10px 16px;
+  background:var(--danger-bg);color:var(--danger);
+  font-size:13px;line-height:1.45;
+  border-bottom:1px solid color-mix(in srgb,var(--danger) 25%,transparent);
+  white-space:pre-wrap;
+}
+body.native .boot-error{position:absolute;top:38px;left:0;right:0;}
+
 /* Native top inset (spec §3.4): the macOS traffic-light close/min/max buttons sit at
    the very top-left of the window. Reserve a 38px band at the top in native mode —
    Tahoe's buttons are larger than Sequoia's, so 30px under-cleared them — and keep

@@ -26,6 +26,28 @@ Retired selectors (`PERSONALNOTES_MODE`, `HASNA_NOTES_STORAGE_MODE`,
 blank. The old sync-era default (API URL absent -> `http://127.0.0.1:8788`)
 is gone: absent means local.
 
+### macOS app: cloud-only (no local note files)
+
+The macOS app (`Sources/HasnaNotesApp` NotesBridge) is **cloud-only**: it never
+uses the on-disk Markdown store. Its bridge resolves the same
+`HASNA_NOTES_API_URL`/`HASNA_NOTES_API_KEY` pair through a Swift mirror of
+`resolveNotesClientTransport` (`NotesTransportResolver`) and:
+
+- **http** (URL + key) — all load/save/archive/trash/restore/delete verbs go
+  over the personalnotes/v1 API. Trash maps to the dialect's soft delete
+  (`deletedAt` tombstone), restore is a PATCH on the tombstoned row (clears
+  `deleted_at`), archive maps to `archived`, and the label list is derived
+  from the stored notes (no local labels file).
+- **fail closed** (URL without key) — the bridge is unavailable; the UI boots
+  with a visible configuration error and writes nothing locally.
+- **unconfigured** (no URL) — also unavailable: the app does not fall back to
+  local files (cloud-only requirement).
+
+`trashRetentionDays` is a UI preference kept in UserDefaults (the API has no
+settings surface; trash is never purged), and `trashExpiresAt` is derived
+client-side from the server's `deletedAt` stamp.
+
+
 ## Server: the data backend is the only switch
 
 `HASNA_NOTES_DATABASE_URL` present selects the **PostgreSQL** backend;
