@@ -11,7 +11,7 @@
  */
 
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
-import type { Attachment, ShareLink } from "../core/db.js";
+import type { AccessGrant, Attachment, ShareLink } from "../core/db.js";
 import { buildPasswordHash, generateShareToken, hashShareToken } from "../core/security.js";
 
 type AttachmentRow = {
@@ -46,6 +46,16 @@ type ShareLinkRow = {
   used_count: string | number;
   require_email: number | null;
   allowed_emails: string | null;
+};
+
+type AccessGrantRow = {
+  id: string;
+  share_link_id: string;
+  email: string;
+  token_hash: string;
+  created_at: string | number;
+  expires_at: string | number;
+  consumed_at: string | number | null;
 };
 
 function num(value: string | number | null | undefined): number {
@@ -104,6 +114,18 @@ function rowToShareLink(row: ShareLinkRow): ShareLink {
     usedCount: num(row.used_count),
     requireEmail: row.require_email === 1,
     allowedEmails: parseAllowedEmails(row.allowed_emails),
+  };
+}
+
+function rowToAccessGrant(row: AccessGrantRow): AccessGrant {
+  return {
+    id: row.id,
+    shareLinkId: row.share_link_id,
+    email: row.email,
+    tokenHash: row.token_hash,
+    createdAt: num(row.created_at),
+    expiresAt: num(row.expires_at),
+    consumedAt: numOrNull(row.consumed_at),
   };
 }
 
@@ -281,6 +303,48 @@ export class PgAttachmentsStore {
       [attachmentId],
     );
     return rows.map(rowToShareLink);
+  }
+
+  /** Mint an email-gated access grant (hosted twin of the SQLite path). */
+  async createAccessGrant(input: {
+    shareLinkId: string;
+    email: string;
+    ttlMs?: number;
+  }): Promise<{ grant: AccessGrant; token: string }> {
+    const token = generateShareToken();
+    const now = Date.now();
+    const grant: AccessGrant = {
+      id: `grant_${generateShareToken().slice(0, 16)}`,
+      shareLinkId: input.shareLinkId,
+      email: input.email,
+      tokenHash: hashShareToken(token),
+      createdAt: now,
+      expiresAt: now + (input.ttlMs ?? 30 * 60 * 1000),
+      consumedAt: null,
+    };
+    await this.client.execute(
+      `INSERT INTO access_grants
+        (id, share_link_id, email, token_hash, created_at, expires_at, consumed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        grant.id,
+        grant.shareLinkId,
+        grant.email,
+        grant.tokenHash,
+        grant.createdAt,
+        grant.expiresAt,
+        null,
+      ],
+    );
+    return { grant, token };
+  }
+
+  async findAccessGrantByToken(token: string): Promise<AccessGrant | null> {
+    const row = await this.client.get<AccessGrantRow>(
+      `SELECT * FROM access_grants WHERE token_hash = $1`,
+      [hashShareToken(token)],
+    );
+    return row ? rowToAccessGrant(row) : null;
   }
 
   async consumeShareLink(id: string): Promise<boolean> {

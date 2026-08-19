@@ -10,13 +10,15 @@
  * Named `*.test.ts` to match the existing `server.test-harness.test.ts`
  * convention in this repo (the runner tolerates a file with no tests).
  */
-import type { Attachment, ShareLink } from "../core/db.js";
+import type { AccessGrant, Attachment, ShareLink } from "../core/db.js";
 import { buildPasswordHash, generateShareToken, hashShareToken } from "../core/security.js";
 
 export class InMemoryAttachmentsStore {
   readonly attachments: Attachment[] = [];
   readonly shareLinks: ShareLink[] = [];
   readonly feedback: unknown[] = [];
+  /** Minted email-gate grants, kept in mint order; plaintext token alongside. */
+  readonly accessGrants: Array<{ grant: AccessGrant; token: string }> = [];
 
   async insert(attachment: Attachment): Promise<void> {
     this.attachments.push({ ...attachment });
@@ -117,6 +119,32 @@ export class InMemoryAttachmentsStore {
     if (!link || link.usedCount <= 0) return false;
     link.usedCount -= 1;
     return true;
+  }
+
+  async createAccessGrant(input: {
+    shareLinkId: string;
+    email: string;
+    ttlMs?: number;
+  }): Promise<{ grant: AccessGrant; token: string }> {
+    const token = generateShareToken();
+    const now = Date.now();
+    const grant: AccessGrant = {
+      id: `grant_${generateShareToken().slice(0, 16)}`,
+      shareLinkId: input.shareLinkId,
+      email: input.email,
+      tokenHash: hashShareToken(token),
+      createdAt: now,
+      expiresAt: now + (input.ttlMs ?? 30 * 60 * 1000),
+      consumedAt: null,
+    };
+    this.accessGrants.push({ grant, token });
+    return { grant, token };
+  }
+
+  async findAccessGrantByToken(token: string): Promise<AccessGrant | null> {
+    const hash = hashShareToken(token);
+    const row = this.accessGrants.find((g) => g.grant.tokenHash === hash) ?? null;
+    return row ? row.grant : null;
   }
 
   async saveFeedback(input: unknown): Promise<void> {

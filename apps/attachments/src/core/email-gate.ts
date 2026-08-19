@@ -1,4 +1,4 @@
-import { AttachmentsDB, type ShareLink } from "./db";
+import { AttachmentsDB, type AccessGrant, type ShareLink } from "./db";
 import { isValidEmail, normalizeEmail } from "./security";
 
 /**
@@ -32,12 +32,10 @@ export interface RequestAccessInput {
 }
 
 /**
- * Email-gated access: a visitor enters their email, we mint a single-window
- * grant and email them a unique access link. Returns the (normalized) email.
- * Throws EmailGateError for invalid links, bad emails, or disallowed addresses.
+ * Shared gate policy: is this share link open for email-gated access at all?
+ * Throws EmailGateError for missing, revoked, expired, or non-gated links.
  */
-export async function requestAccessGrant(input: RequestAccessInput): Promise<{ email: string }> {
-  const shareLink = input.db.findShareLinkByToken(input.token);
+function assertGateOpen(shareLink: ShareLink | null): ShareLink {
   if (!shareLink) throw new EmailGateError("Share link not found", 404);
   if (shareLink.revokedAt !== null) throw new EmailGateError("Share link has been revoked", 410);
   if (shareLink.expiresAt !== null && shareLink.expiresAt <= Date.now()) {
@@ -46,26 +44,31 @@ export async function requestAccessGrant(input: RequestAccessInput): Promise<{ e
   if (!shareLink.requireEmail) {
     throw new EmailGateError("This link does not require email access", 400);
   }
+  return shareLink;
+}
 
-  const email = normalizeEmail(input.email);
-  if (!isValidEmail(email)) throw new EmailGateError("A valid email address is required", 400);
-  if (
-    shareLink.allowedEmails &&
-    !shareLink.allowedEmails.map(normalizeEmail).includes(email)
-  ) {
+/**
+ * Shared gate policy: may this email pass the allowlist? Returns the normalized
+ * email. Throws EmailGateError for invalid or disallowed addresses.
+ */
+function authorizeEmail(email: string, shareLink: ShareLink): string {
+  const normalized = normalizeEmail(email);
+  if (!isValidEmail(normalized)) throw new EmailGateError("A valid email address is required", 400);
+  if (shareLink.allowedEmails && !shareLink.allowedEmails.map(normalizeEmail).includes(normalized)) {
     // Generic message — do not reveal who is on the allowlist.
     throw new EmailGateError("This email is not authorized for this document", 403);
   }
+  return normalized;
+}
 
-  const { token: grantToken } = input.db.createAccessGrant({
-    shareLinkId: shareLink.id,
-    email,
-    ttlMs: input.ttlMs,
-  });
-  const url = input.buildAccessUrl(grantToken);
-  const fname = input.filename ?? "the requested file";
-  await input.sender.send({
-    to: email,
+function gateEmailBody(fname: string, url: string, to: string): {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+} {
+  return {
+    to,
     subject: `Your access link for ${fname}`,
     text:
       `You requested access to ${fname}.\n\n` +
@@ -75,7 +78,24 @@ export async function requestAccessGrant(input: RequestAccessInput): Promise<{ e
       `<p>You requested access to <strong>${escapeHtml(fname)}</strong>.</p>` +
       `<p><a href="${escapeAttr(url)}">Download the file</a> — valid for a limited time.</p>` +
       `<p style="color:#888;font-size:13px">If you did not request this, you can ignore this email.</p>`,
+  };
+}
+
+/**
+ * Email-gated access: a visitor enters their email, we mint a single-window
+ * grant and email them a unique access link. Returns the (normalized) email.
+ * Throws EmailGateError for invalid links, bad emails, or disallowed addresses.
+ */
+export async function requestAccessGrant(input: RequestAccessInput): Promise<{ email: string }> {
+  const shareLink = assertGateOpen(input.db.findShareLinkByToken(input.token));
+  const email = authorizeEmail(input.email, shareLink);
+
+  const { token: grantToken } = input.db.createAccessGrant({
+    shareLinkId: shareLink.id,
+    email,
+    ttlMs: input.ttlMs,
   });
+  await input.sender.send(gateEmailBody(input.filename ?? "the requested file", input.buildAccessUrl(grantToken), email));
   return { email };
 }
 
@@ -94,10 +114,60 @@ export function verifyAccessGrant(
   token: string,
   grantToken: string
 ): VerifyGrantResult {
-  const shareLink = db.findShareLinkByToken(token);
-  if (!shareLink) throw new EmailGateError("Share link not found", 404);
-  if (shareLink.revokedAt !== null) throw new EmailGateError("Share link has been revoked", 410);
+  const shareLink = assertGateOpen(db.findShareLinkByToken(token));
   const grant = db.findAccessGrantByToken(grantToken);
+  return verifyGrantAgainstLink(grant, shareLink);
+}
+
+/**
+ * The async store surface the cloud/Postgres service implements, so the same
+ * gate policy runs on the hosted path without a local SQLite handle.
+ */
+export interface AsyncEmailGateSource {
+  findShareLinkByToken(token: string): Promise<ShareLink | null>;
+  createAccessGrant(input: {
+    shareLinkId: string;
+    email: string;
+    ttlMs?: number;
+  }): Promise<{ grant: AccessGrant; token: string }>;
+  findAccessGrantByToken(token: string): Promise<AccessGrant | null>;
+}
+
+export interface RequestAccessGrantInput {
+  source: AsyncEmailGateSource;
+  /** Plaintext share-link token from the public URL. */
+  token: string;
+  email: string;
+  sender: EmailSender;
+  /** Builds the absolute access URL the recipient clicks (receives the grant token). */
+  buildAccessUrl: (grantToken: string) => string;
+  filename?: string;
+  ttlMs?: number;
+}
+
+/**
+ * Hosted equivalent of {@link requestAccessGrant}: same policy, same email,
+ * with the async store as the only difference.
+ */
+export async function requestAccessGrantAsync(
+  input: RequestAccessGrantInput
+): Promise<{ email: string }> {
+  const shareLink = assertGateOpen(await input.source.findShareLinkByToken(input.token));
+  const email = authorizeEmail(input.email, shareLink);
+
+  const { token: grantToken } = await input.source.createAccessGrant({
+    shareLinkId: shareLink.id,
+    email,
+    ttlMs: input.ttlMs,
+  });
+  await input.sender.send(gateEmailBody(input.filename ?? "the requested file", input.buildAccessUrl(grantToken), email));
+  return { email };
+}
+
+function verifyGrantAgainstLink(
+  grant: AccessGrant | null,
+  shareLink: ShareLink
+): VerifyGrantResult {
   if (!grant || grant.shareLinkId !== shareLink.id) {
     throw new EmailGateError("Invalid access link", 401);
   }
@@ -105,6 +175,18 @@ export function verifyAccessGrant(
     throw new EmailGateError("This access link has expired", 410);
   }
   return { shareLink, email: grant.email };
+}
+
+/**
+ * Hosted equivalent of {@link verifyAccessGrant}: same policy, async store.
+ */
+export async function verifyAccessGrantAsync(
+  source: AsyncEmailGateSource,
+  token: string,
+  grantToken: string
+): Promise<VerifyGrantResult> {
+  const shareLink = assertGateOpen(await source.findShareLinkByToken(token));
+  return verifyGrantAgainstLink(await source.findAccessGrantByToken(grantToken), shareLink);
 }
 
 function escapeHtml(s: string): string {

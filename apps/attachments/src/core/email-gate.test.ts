@@ -2,11 +2,15 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { tmpdir } from "os";
 import { join } from "path";
 import { rmSync } from "fs";
-import { AttachmentsDB, type Attachment } from "./db";
+import { AttachmentsDB, type AccessGrant, type Attachment, type ShareLink } from "./db";
+import { generateShareToken, hashShareToken } from "./security";
 import {
   requestAccessGrant,
   verifyAccessGrant,
+  requestAccessGrantAsync,
+  verifyAccessGrantAsync,
   EmailGateError,
+  type AsyncEmailGateSource,
   type EmailSender,
 } from "./email-gate";
 
@@ -157,5 +161,108 @@ describe("email-gate", () => {
     } catch (e) {
       expect((e as EmailGateError).status).toBe(410);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hosted / Postgres store: the same gate policy through async methods
+// ---------------------------------------------------------------------------
+
+function makeAsyncSource() {
+  const shareLinks = new Map<string, ShareLink>();
+  const grantsByHash = new Map<string, AccessGrant>();
+  const source: AsyncEmailGateSource = {
+    findShareLinkByToken: async (token: string) => shareLinks.get(hashShareToken(token)) ?? null,
+    createAccessGrant: async (input: { shareLinkId: string; email: string; ttlMs?: number }) => {
+      const token = generateShareToken();
+      const now = Date.now();
+      const grant: AccessGrant = {
+        id: `grant_${generateShareToken().slice(0, 16)}`,
+        shareLinkId: input.shareLinkId,
+        email: input.email,
+        tokenHash: hashShareToken(token),
+        createdAt: now,
+        expiresAt: now + (input.ttlMs ?? 30 * 60 * 1000),
+        consumedAt: null,
+      };
+      grantsByHash.set(grant.tokenHash, grant);
+      return { grant, token };
+    },
+    findAccessGrantByToken: async (token: string) => grantsByHash.get(hashShareToken(token)) ?? null,
+  };
+  return { source, shareLinks, grantsByHash };
+}
+
+function seedAsyncGatedLink(
+  source: AsyncEmailGateSource,
+  shareLinks: Map<string, ShareLink>,
+  allowedEmails: string[] | null = null,
+): string {
+  const att = makeAttachment();
+  const link: ShareLink = {
+    id: `share_async_${++counter}`,
+    attachmentId: att.id,
+    tokenHash: "",
+    expiresAt: null,
+    createdAt: Date.now(),
+    revokedAt: null,
+    passwordHash: null,
+    maxUses: null,
+    usedCount: 0,
+    requireEmail: true,
+    allowedEmails,
+  };
+  const token = generateShareToken();
+  link.tokenHash = hashShareToken(token);
+  shareLinks.set(link.tokenHash, link);
+  return token;
+}
+
+describe("async email gate (hosted Postgres store)", () => {
+  it("requestAccessGrantAsync mints a grant, emails the allowlisted address, and returns it", async () => {
+    const { source, shareLinks, grantsByHash } = makeAsyncSource();
+    const token = seedAsyncGatedLink(source, shareLinks, ["dan@bcr.ro"]);
+    const { sender, sent } = makeSender();
+    let accessUrl = "";
+    const result = await requestAccessGrantAsync({
+      source,
+      token,
+      email: "DAN@bcr.ro",
+      sender,
+      buildAccessUrl: (grant) => (accessUrl = grant),
+    });
+    expect(result.email).toBe("dan@bcr.ro");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe("dan@bcr.ro");
+    expect(sent[0]!.text).toContain(accessUrl);
+    expect(grantsByHash.size).toBe(1);
+  });
+
+  it("requestAccessGrantAsync refuses a non-allowlisted address with 403", async () => {
+    const { source, shareLinks } = makeAsyncSource();
+    const token = seedAsyncGatedLink(source, shareLinks, ["dan@bcr.ro"]);
+    const { sender, sent } = makeSender();
+    await expect(
+      requestAccessGrantAsync({ source, token, email: "stranger@example.com", sender, buildAccessUrl: (g) => g })
+    ).rejects.toThrow(EmailGateError);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("verifyAccessGrantAsync accepts a minted grant and rejects a foreign one", async () => {
+    const { source, shareLinks } = makeAsyncSource();
+    const token = seedAsyncGatedLink(source, shareLinks);
+    const { sender } = makeSender();
+    let grantToken = "";
+    await requestAccessGrantAsync({
+      source,
+      token,
+      email: "a@b.com",
+      sender,
+      buildAccessUrl: (t) => (grantToken = t),
+    });
+    const ok = await verifyAccessGrantAsync(source, token, grantToken);
+    expect(ok.email).toBe("a@b.com");
+    await expect(verifyAccessGrantAsync(source, token, "bogus")).rejects.toThrow(EmailGateError);
+    await expect(verifyAccessGrantAsync(source, "wrong-token", grantToken)).rejects.toThrow(EmailGateError);
   });
 });
