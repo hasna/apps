@@ -37,6 +37,7 @@ import {
   redact,
   textOutputBlocks,
 } from "../lib/format.js";
+import { classifyLoopExecutionStaleness } from "../lib/execution-staleness.js";
 import { publicCommandDescriptor } from "../lib/command-target.js";
 import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
@@ -2046,7 +2047,19 @@ program
   }));
 
 program.command("show <idOrName>").description("show one loop by id or name").action(runAction((idOrName) => withStore(async (store) => {
-  print(publicLoop(await store.requireLoop(idOrName)));
+  const loop = await store.requireLoop(idOrName);
+  // BUG 96c837b0: the hosted control plane is scheduler-only; a loop executes
+  // only when a loops-runner claims it. A machine-pinned loop with no runner
+  // serving its machine sits due with zero runs and no error anywhere — make
+  // that state loud on the surface the operator actually reads. Computed
+  // client-side so it also works against a control plane that has not rolled
+  // the API-side execution field.
+  const hasRuns = (await store.listRuns({ loopId: loop.id, limit: 1 })).length > 0;
+  const execution = classifyLoopExecutionStaleness(loop, { now: new Date(), hasRuns });
+  if (execution.state === "unserved") {
+    console.error(`UNSERVED: ${execution.reason}`);
+  }
+  print({ ...publicLoop(loop), execution });
 })));
 
 program

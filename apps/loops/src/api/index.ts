@@ -58,6 +58,7 @@ import {
   storageConnectionReportLine,
 } from "../lib/runtime-status.js";
 import { dueSlots } from "../lib/recurrence.js";
+import { classifyLoopExecutionStaleness } from "../lib/execution-staleness.js";
 import {
   loopAdvancementPatchMatchesCurrent,
   planLoopAdvancement,
@@ -705,7 +706,14 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   if (segments.length === 1 && ctx.request.method === "GET") {
     const loop = await storage.getLoop(id);
     if (!loop) throw new LoopNotFoundError(id);
-    return ok({ loop: publicLoop(loop) });
+    // BUG 96c837b0: a machine-pinned loop with no runner serving its machine
+    // stays due with zero runs and no error. A run row exists iff a runner
+    // claimed the loop, so bounded run presence is the honest "has any runner
+    // ever served it" signal. Computed on the single-loop read only, so the
+    // list route keeps its O(1) per-row cost.
+    const hasRuns = (await storage.listRuns({ loopId: loop.id, limit: 1 })).length > 0;
+    const execution = classifyLoopExecutionStaleness(loop, { now: ctx.now(), hasRuns });
+    return ok({ loop: { ...publicLoop(loop), execution } });
   }
   if (segments.length === 1 && ctx.request.method === "PATCH") {
     const body = requiredObjectRecord(
