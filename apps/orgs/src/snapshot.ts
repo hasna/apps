@@ -459,12 +459,40 @@ function dedupeDelegationTargets(targets: DelegationTarget[]): DelegationTarget[
     }
     byId.set(target.memberId, {
       ...existing,
-      scope: [...existing.scope, ...target.scope],
+      scope: uniqueScopes([...existing.scope, ...target.scope]),
       capabilities: unique([...existing.capabilities, ...target.capabilities]),
-      dispatchTargets: [...existing.dispatchTargets, ...target.dispatchTargets],
+      dispatchTargets: uniqueDispatchTargets([...existing.dispatchTargets, ...target.dispatchTargets]),
     });
   }
   return [...byId.values()];
+}
+
+function uniqueScopes(scopes: RelationshipScope[]): RelationshipScope[] {
+  const seen = new Set<string>();
+  const result: RelationshipScope[] = [];
+  for (const scope of scopes) {
+    const entries = Object.entries(scope)
+      .filter(([, value]) => value !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)}`);
+    const key = entries.join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(scope);
+  }
+  return result;
+}
+
+function uniqueDispatchTargets(targets: DispatchTargetRef[]): DispatchTargetRef[] {
+  const seen = new Set<string>();
+  const result: DispatchTargetRef[] = [];
+  for (const target of targets) {
+    const key = `${target.machine ?? ""}:${target.target ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(target);
+  }
+  return result;
 }
 
 function matchesRecord(record: GraphNode | undefined, target: string): boolean {

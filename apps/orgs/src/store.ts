@@ -431,54 +431,46 @@ export function normalizeGraphData(input: Partial<OrgGraphData>): OrgGraphData {
   return {
     version: ORG_GRAPH_SCHEMA_VERSION,
     orgs: (input.orgs ?? []).map(normalizeBaseRecord) as OrgRecord[],
-    teams: (input.teams ?? []).map((record) => ({ ...normalizeBaseRecord(record), ...record, metadata: record.metadata ?? {}, functionIds: record.functionIds ?? [] })) as TeamRecord[],
-    functions: (input.functions ?? []).map((record) => ({ ...normalizeBaseRecord(record), ...record, metadata: record.metadata ?? {}, capabilityIds: record.capabilityIds ?? [] })) as BusinessFunctionRecord[],
-    roles: (input.roles ?? []).map((record) => ({
-      ...normalizeBaseRecord(record),
-      ...record,
-      metadata: record.metadata ?? {},
-      responsibilities: record.responsibilities ?? [],
-      requiredCapabilities: record.requiredCapabilities ?? [],
-    })) as RoleRecord[],
-    members: (input.members ?? []).map((record) => ({
-      ...normalizeBaseRecord(record),
-      ...record,
-      metadata: record.metadata ?? {},
-      roleIds: record.roleIds ?? [],
-      teamIds: record.teamIds ?? [],
-      functionIds: record.functionIds ?? [],
-      capabilities: record.capabilities ?? [],
-      responsibilities: record.responsibilities ?? [],
-      status: record.status ?? "active",
-    })) as MemberRecord[],
-    projects: (input.projects ?? []).map((record) => ({
-      ...normalizeBaseRecord(record),
-      ...record,
-      metadata: record.metadata ?? {},
-      ownerMemberIds: record.ownerMemberIds ?? [],
-      ownerTeamIds: record.ownerTeamIds ?? [],
-      stewardRoleIds: record.stewardRoleIds ?? [],
-      capabilityIds: record.capabilityIds ?? [],
-    })) as ProjectRecord[],
-    machines: (input.machines ?? []).map((record) => ({
-      ...normalizeBaseRecord(record),
-      ...record,
-      metadata: record.metadata ?? {},
-      assignedMemberIds: record.assignedMemberIds ?? [],
-      assignedTeamIds: record.assignedTeamIds ?? [],
-      projectIds: record.projectIds ?? [],
-      capabilityIds: record.capabilityIds ?? [],
-    })) as MachineRecord[],
-    capabilities: (input.capabilities ?? []).map((record) => ({
-      ...normalizeBaseRecord(record),
-      ...record,
-      metadata: record.metadata ?? {},
-      ownerMemberIds: record.ownerMemberIds ?? [],
-      ownerTeamIds: record.ownerTeamIds ?? [],
-      ownerRoleIds: record.ownerRoleIds ?? [],
-      ownerFunctionIds: record.ownerFunctionIds ?? [],
-      ownerProjectIds: record.ownerProjectIds ?? [],
-    })) as CapabilityRecord[],
+    teams: (input.teams ?? []).map((record) => {
+      const { createdAt, updatedAt, id, slug, name, ...rest } = record;
+      return { ...normalizeBaseRecord(record), ...rest, metadata: record.metadata ?? {}, functionIds: record.functionIds ?? [] };
+    }) as TeamRecord[],
+    functions: (input.functions ?? []).map((record) => {
+      const { createdAt, updatedAt, id, slug, name, ...rest } = record;
+      return { ...normalizeBaseRecord(record), ...rest, metadata: record.metadata ?? {}, capabilityIds: record.capabilityIds ?? [] };
+    }) as BusinessFunctionRecord[],
+    roles: (input.roles ?? []).map((record) => {
+      const { createdAt, updatedAt, id, slug, name, ...rest } = record;
+      return { ...normalizeBaseRecord(record), ...rest, metadata: record.metadata ?? {}, responsibilities: record.responsibilities ?? [], requiredCapabilities: record.requiredCapabilities ?? [] };
+    }) as RoleRecord[],
+    members: (input.members ?? []).map((record) => {
+      const base = normalizeBaseRecord(record);
+      const { createdAt, updatedAt, id, slug, name, ...rest } = record;
+      return {
+        ...base,
+        ...rest,
+        metadata: record.metadata ?? {},
+        roleIds: record.roleIds ?? [],
+        teamIds: record.teamIds ?? [],
+        functionIds: record.functionIds ?? [],
+        capabilities: record.capabilities ?? [],
+        responsibilities: record.responsibilities ?? [],
+        status: record.status ?? "active",
+        displayName: record.displayName ?? base.name,
+      };
+    }) as MemberRecord[],
+    projects: (input.projects ?? []).map((record) => {
+      const { createdAt, updatedAt, id, slug, name, ...rest } = record;
+      return { ...normalizeBaseRecord(record), ...rest, metadata: record.metadata ?? {}, ownerMemberIds: record.ownerMemberIds ?? [], ownerTeamIds: record.ownerTeamIds ?? [], stewardRoleIds: record.stewardRoleIds ?? [], capabilityIds: record.capabilityIds ?? [] };
+    }) as ProjectRecord[],
+    machines: (input.machines ?? []).map((record) => {
+      const { createdAt, updatedAt, id, slug, name, ...rest } = record;
+      return { ...normalizeBaseRecord(record), ...rest, metadata: record.metadata ?? {}, assignedMemberIds: record.assignedMemberIds ?? [], assignedTeamIds: record.assignedTeamIds ?? [], projectIds: record.projectIds ?? [], capabilityIds: record.capabilityIds ?? [] };
+    }) as MachineRecord[],
+    capabilities: (input.capabilities ?? []).map((record) => {
+      const { createdAt, updatedAt, id, slug, name, ...rest } = record;
+      return { ...normalizeBaseRecord(record), ...rest, metadata: record.metadata ?? {}, ownerMemberIds: record.ownerMemberIds ?? [], ownerTeamIds: record.ownerTeamIds ?? [], ownerRoleIds: record.ownerRoleIds ?? [], ownerFunctionIds: record.ownerFunctionIds ?? [], ownerProjectIds: record.ownerProjectIds ?? [] };
+    }) as CapabilityRecord[],
     relationships: (input.relationships ?? []).map(normalizeRelationshipRecord),
   };
 }
