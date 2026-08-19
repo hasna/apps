@@ -321,7 +321,13 @@ export function projectResourceLinkIntegrationProjection(
       const value = projectionValue(after[0]!);
       if (value) projected[projection.key] = value;
       else delete projected[projection.key];
-    } else if (after.length > 1 || before.length > 0) {
+    } else if (after.length > 1) {
+      const existingValue = projected[projection.key];
+      const matches = typeof existingValue === "string"
+        ? after.filter((link) => projectionValue(link) === existingValue)
+        : [];
+      if (matches.length !== 1) delete projected[projection.key];
+    } else if (before.length > 0) {
       delete projected[projection.key];
     }
   }

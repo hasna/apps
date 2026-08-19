@@ -34,7 +34,10 @@ function makeDb(): Database {
   return db;
 }
 
-function conversationsChannel(name = "email-triage"): ConversationsChannelLink {
+function conversationsChannel(
+  name = "email-triage",
+  id = "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+): ConversationsChannelLink {
   return {
     authority: "conversations",
     service_instance: "urn:hasna:conversations:service:primary",
@@ -42,7 +45,7 @@ function conversationsChannel(name = "email-triage"): ConversationsChannelLink {
     target_kind: "channel",
     locator: {
       kind: "conversations_channel_id",
-      value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      value: id,
     },
     scope: "collection",
     labels: { channel_name: name },
@@ -413,6 +416,105 @@ describe("project resource-link guarded lifecycle", () => {
       orgs_org_id: "urn:hasna:orgs:org:hasna-family",
       orgs_project_id: "urn:hasna:orgs:project:nanny-onboarding",
     });
+    db.close();
+  });
+
+  test("preserves a uniquely matching channel projection when adding a second channel link", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Multi-channel Project", slug: "multi-channel-project" }, db);
+    const first = conversationsChannel();
+    const second = conversationsChannel(
+      "incident-response",
+      "chn_1234567890abcdef1234567890abcdef",
+    );
+    const seeded = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-seed-multi-channel",
+      step_id: "links",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [first],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+    expect(seeded.outcome).toBe("accepted");
+
+    const expanded = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-add-second-channel",
+      step_id: "links",
+      mode: "add",
+      expected_revision: seeded.after!.project.updated_at,
+      links: [second],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+
+    expect(expanded.outcome).toBe("accepted");
+    expect(expanded.after?.links).toHaveLength(2);
+    expect(expanded.after?.project.integrations).toEqual({
+      conversations_channel: "email-triage",
+    });
+    db.close();
+  });
+
+  test("deletes a channel projection that matches none of several channel links", () => {
+    const db = makeDb();
+    const project = createWorkspace({
+      name: "Unmatched Channel Projection",
+      slug: "unmatched-channel-projection",
+      integrations: { conversations_channel: "not-a-linked-channel" },
+    }, db);
+    const added = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-add-unmatched-channels",
+      step_id: "links",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [
+        conversationsChannel(),
+        conversationsChannel(
+          "incident-response",
+          "chn_1234567890abcdef1234567890abcdef",
+        ),
+      ],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+
+    expect(added.outcome).toBe("accepted");
+    expect(added.after?.links).toHaveLength(2);
+    expect(added.after?.project.integrations).toEqual({});
+    db.close();
+  });
+
+  test("deletes an ambiguous channel projection that matches several channel links", () => {
+    const db = makeDb();
+    const project = createWorkspace({
+      name: "Ambiguous Channel Projection",
+      slug: "ambiguous-channel-projection",
+      integrations: { conversations_channel: "shared-channel" },
+    }, db);
+    const added = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-add-ambiguous-channels",
+      step_id: "links",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [
+        conversationsChannel("shared-channel"),
+        conversationsChannel(
+          "shared-channel",
+          "chn_1234567890abcdef1234567890abcdef",
+        ),
+      ],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+
+    expect(added.outcome).toBe("accepted");
+    expect(added.after?.links).toHaveLength(2);
+    expect(added.after?.project.integrations).toEqual({});
     db.close();
   });
 
