@@ -311,12 +311,22 @@ function accountsTransport(env: NodeJS.ProcessEnv): AccountsStorageTransport {
   return "api";
 }
 
+/**
+ * The machine id a per-machine auth-status entry is keyed under.
+ * `HASNA_ACCOUNTS_MACHINE_ID` > `ACCOUNTS_MACHINE_ID` > hostname — the same
+ * resolution the storage config has always used, so a status recorded by one
+ * process is readable by the next process on the same machine.
+ */
+export function currentMachineId(env: NodeJS.ProcessEnv = process.env): string {
+  return env.HASNA_ACCOUNTS_MACHINE_ID || env.ACCOUNTS_MACHINE_ID || hostname();
+}
+
 /** @deprecated Use resolveStore() and AccountsStore.transport. */
 export function getAccountsStorageConfig(env: NodeJS.ProcessEnv = process.env): AccountsStorageConfig {
   scrubLegacyStorageMode(env);
   return {
     transport: accountsTransport(env),
-    machineId: env.HASNA_ACCOUNTS_MACHINE_ID || env.ACCOUNTS_MACHINE_ID || hostname(),
+    machineId: currentMachineId(env),
   };
 }
 

@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
-import { type Profile, type Store, AccountsError, profileNameSchema } from "../types.js";
+import { type Profile, type ProfileAuthStatus, type Store, AccountsError, profileNameSchema } from "../types.js";
 import { loadStore, saveStore, profilesDir } from "../storage.js";
 import { DEFAULT_TOOL, getTool } from "./tools.js";
 import { detectEmail } from "./detect.js";
@@ -176,6 +176,11 @@ export interface AddOptions {
    * backend registry at add time, so a typo fails here, not at launch.
    */
   backendRef?: string;
+  /**
+   * b27cc4a0: initial per-machine auth-status map (machineId -> entry).
+   * Optional; later recordings merge per machine and never replace the map.
+   */
+  authStatus?: ProfileAuthStatus;
 }
 
 /**
@@ -246,6 +251,7 @@ export function addProfile(opts: AddOptions): Profile {
     dir,
     ...(opts.description ? { description: opts.description } : {}),
     ...(backendRef !== undefined ? { backendRef } : {}),
+    ...(opts.authStatus && Object.keys(opts.authStatus).length > 0 ? { authStatus: opts.authStatus } : {}),
     createdAt: nowIso(),
   };
 
@@ -417,6 +423,13 @@ export interface UpdateOptions {
    * See `AddOptions.backendRef`.
    */
   backendRef?: string | null;
+  /**
+   * b27cc4a0: per-machine auth-status entries to record. MERGED per machine
+   * into the existing map — a caller that only knows the one machine it just
+   * probed must not erase other machines' recorded entries. Same append/dedup
+   * discipline as `aliases`.
+   */
+  authStatus?: ProfileAuthStatus;
 }
 
 export function updateProfile(name: string, opts: UpdateOptions): Profile {
@@ -468,6 +481,11 @@ export function updateProfile(name: string, opts: UpdateOptions): Profile {
     const merged = [...existing];
     for (const alias of opts.aliases) if (!merged.includes(alias)) merged.push(alias);
     profile.aliases = merged;
+  }
+  // b27cc4a0: per-machine auth status merges entry-by-entry; a caller that
+  // records one machine must never erase the other machines' entries.
+  if (opts.authStatus !== undefined) {
+    profile.authStatus = { ...(profile.authStatus ?? {}), ...opts.authStatus };
   }
   if (opts.backendRef !== undefined) {
     const backendRef = normalizeBackendRef(opts.backendRef);

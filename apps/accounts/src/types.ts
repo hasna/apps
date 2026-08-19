@@ -349,6 +349,28 @@ const accountUuidSchema = z
     "accountUuid must be a uuid",
   );
 
+/** A machine id key in a profile's `authStatus` map. */
+const authStatusMachineIdSchema = z.string().min(1).max(128);
+
+/** One machine's recorded authentication state for a profile. */
+export const profileAuthStatusEntrySchema = z.object({
+  authenticated: z.boolean(),
+  /** ISO timestamp of when this machine's state was last probed/recorded. */
+  checkedAt: z.string(),
+  /** Optional human/CLI-readable detail, e.g. the probe verdict ("missing"). */
+  detail: z.string().optional(),
+});
+export type ProfileAuthStatusEntry = z.infer<typeof profileAuthStatusEntrySchema>;
+
+/**
+ * Per-machine authentication status map for a profile: machineId -> entry.
+ * Optional and additive on read; never fabricated by display without a write.
+ */
+const profileAuthStatusSchema = z
+  .record(authStatusMachineIdSchema, profileAuthStatusEntrySchema)
+  .optional();
+export type ProfileAuthStatus = Record<string, ProfileAuthStatusEntry>;
+
 const profileObjectSchema = z.object({
   name: profileNameSchema,
   tool: slugSchema,
@@ -399,6 +421,17 @@ const profileObjectSchema = z.object({
    * look this profile up by.
    */
   aliases: z.array(profileNameSchema).max(64).optional(),
+  /**
+   * Per-machine authentication status for this profile, keyed by machine id
+   * (`HASNA_ACCOUNTS_MACHINE_ID` / `ACCOUNTS_MACHINE_ID` / hostname).
+   *
+   * Deliberately a FIRST-CLASS field, NOT a `metadata` key: `metadata` is
+   * flat scalars only per `metadataSchema`, and per-machine auth state is a
+   * structured record of facts — stuffing it into metadata would abuse a
+   * schema that means something else. Same reasoning the 0007 migration used
+   * to give `aliases` its own JSONB column.
+   */
+  authStatus: profileAuthStatusSchema.optional(),
 });
 
 export const profileSchema = profileObjectSchema.superRefine((profile, ctx) => {

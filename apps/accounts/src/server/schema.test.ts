@@ -33,3 +33,32 @@ describe("accounts API alias fields (R-P1-4)", () => {
     expect(updateAccountSchema.safeParse({ aliases: ["ok-name", "Not Ok!"] }).success).toBe(false);
   });
 });
+
+// b27cc4a0: PATCH /v1/accounts/:tool/:name accepts a per-machine authStatus
+// map so the cloud repo can record which machines a profile is authenticated
+// on. First-class field, deliberately NOT inside `metadata` (flat scalars).
+describe("accounts API authStatus field (b27cc4a0)", () => {
+  test("update accepts per-machine authStatus entries", () => {
+    const parsed = updateAccountSchema.safeParse({
+      authStatus: {
+        "host-a": { authenticated: true, checkedAt: "2026-08-19T00:00:00.000Z", detail: "ok" },
+        "host-b": { authenticated: false, checkedAt: "2026-08-19T00:00:00.000Z" },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("update rejects an authStatus entry that is missing checkedAt", () => {
+    const parsed = updateAccountSchema.safeParse({
+      authStatus: { "host-a": { authenticated: true } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test("update rejects an authStatus entry whose authenticated flag is not a boolean", () => {
+    const parsed = updateAccountSchema.safeParse({
+      authStatus: { "host-a": { authenticated: "yes", checkedAt: "2026-08-19T00:00:00.000Z" } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});

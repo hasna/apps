@@ -204,6 +204,39 @@ describe("resolveAccountsCloud", () => {
     expect((calls[0]!.body as Record<string, unknown>).email).toBeUndefined();
   });
 
+  // b27cc4a0: per-machine auth status travels through the cloud transport —
+  // update carries it in the PATCH body, and toProfile maps it back so the
+  // ApiStore exposes the stored per-machine map to the CLI.
+  test("update carries authStatus in the PATCH body and toProfile round-trips it", async () => {
+    const authStatus = {
+      "host-a": { authenticated: true, checkedAt: "2026-08-19T00:00:00.000Z", detail: "ok" },
+    };
+    const { calls, fetchImpl } = mockFetch((c) => {
+      expect(c.method).toBe("PATCH");
+      expect(c.body).toEqual({ authStatus });
+      return {
+        status: 200,
+        body: { tool: "claude", name: "work", createdAt: "2020-01-01T00:00:00Z", authStatus },
+      };
+    });
+    const r = resolveAccountsCloud(cloudEnv, { fetchImpl });
+    if (r.transport !== "cloud-http") throw new Error("expected cloud");
+    const p = await r.api.update("work", "claude", { authStatus });
+    expect(calls[0]!.url).toBe(`${BASE}/v1/accounts/claude/work`);
+    expect(p.authStatus).toEqual(authStatus);
+  });
+
+  test("toProfile omits authStatus when the cloud row carries none", async () => {
+    const { fetchImpl } = mockFetch(() => ({
+      status: 200,
+      body: { tool: "claude", name: "bare", createdAt: "2020-01-01T00:00:00Z" },
+    }));
+    const r = resolveAccountsCloud(cloudEnv, { fetchImpl });
+    if (r.transport !== "cloud-http") throw new Error("expected cloud");
+    const p = await r.api.get("bare", "claude");
+    expect(p?.authStatus).toBeUndefined();
+  });
+
   test("rename POSTs /v1/accounts/:tool/:name/rename with the new name", async () => {
     const { calls, fetchImpl } = mockFetch(() => ({
       status: 200,

@@ -7,8 +7,10 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
-import { AccountsError, backendRouteSchema, profileProvider, type BackendRoute, type Profile, type ToolDef } from "./types.js";
+import { AccountsError, backendRouteSchema, profileProvider, type BackendRoute, type Profile, type ProfileAuthStatus, type ToolDef } from "./types.js";
 import { findAliasHolders, formatAliasNote } from "./lib/aliases.js";
+import { renderTable, type TableColumn } from "./lib/render-table.js";
+import { probeProfileAuthStatus } from "./lib/auth-status.js";
 import {
   DEFAULT_TOOL,
   getTool,
@@ -25,6 +27,7 @@ import {
 import { resolveLocalStore, resolveStore } from "./lib/store.js";
 import {
   accountsHome,
+  currentMachineId,
   getAccountsStorageStatus,
   loadAppliedMap,
   loadStore,
@@ -233,28 +236,59 @@ function formatPrelaunchLabel(prelaunch?: ConfigsPrelaunchSummary): string {
   return `  ${chalk.dim("configs:")}${color(label)}`;
 }
 
-function fmtProfile(p: Profile, active: boolean, applied = false, prelaunch?: ConfigsPrelaunchSummary): string {
-  const marker =
-    active && applied
-      ? chalk.green("●") + chalk.magenta("◉")
-      : active
-        ? chalk.green("●")
-        : applied
-          ? chalk.magenta("◉")
-          : chalk.dim("○");
-  const name =
-    active && applied
-      ? chalk.green.bold(p.name)
-      : active
-        ? chalk.green.bold(p.name)
-        : applied
-          ? chalk.magenta.bold(p.name)
-          : chalk.bold(p.name);
-  const tool = chalk.cyan(p.tool);
-  const email = p.email ? chalk.yellow(p.email) : chalk.dim("(no email)");
-  const displayName = p.displayName ? chalk.dim(` (${p.displayName})`) : "";
-  const desc = p.description ? chalk.dim(` — ${p.description}`) : "";
-  return `${marker} ${name}${displayName}  ${tool}  ${email}${desc}${formatPrelaunchLabel(prelaunch)}`;
+/**
+ * b27cc4a0: the profile table columns shared by `list` and `show` text output.
+ * Plain text by design (no ANSI in cells) so the table is aligned, greppable,
+ * and golden-testable. AUTH is this machine's STORED entry for the profile —
+ * `yes`/`no` when recorded, `—` when this machine has no recorded entry (an
+ * unrecorded machine is not the same fact as an unauthenticated one).
+ */
+interface ProfileTableRow {
+  name: string;
+  tool: string;
+  email: string;
+  active: string;
+  applied: string;
+  auth: string;
+}
+
+function profileTableColumns(): TableColumn<ProfileTableRow>[] {
+  return [
+    { header: "NAME", cell: (r) => r.name },
+    { header: "TOOL", cell: (r) => r.tool },
+    { header: "EMAIL", cell: (r) => r.email },
+    { header: "ACTIVE", cell: (r) => r.active },
+    { header: "APPLIED", cell: (r) => r.applied },
+    { header: "AUTH", cell: (r) => r.auth },
+  ];
+}
+
+function profileTableRow(
+  p: Profile,
+  active: boolean,
+  applied: boolean,
+  machineId: string,
+): ProfileTableRow {
+  const entry = p.authStatus?.[machineId];
+  return {
+    name: p.name,
+    tool: p.tool,
+    email: p.email ?? "(no email)",
+    active: active ? "yes" : "no",
+    applied: applied ? "yes" : "no",
+    auth: entry === undefined ? "—" : entry.authenticated ? "yes" : "no",
+  };
+}
+
+function printProfileTable(rows: ProfileTableRow[]): void {
+  console.log(renderTable(rows, profileTableColumns()));
+}
+
+/** One machine's auth-status entry as a detail line for `show`. */
+function formatAuthStatusLine(machineId: string, entry: { authenticated: boolean; checkedAt: string; detail?: string }): string {
+  const verdict = entry.authenticated ? chalk.green("yes") : chalk.red("no");
+  const detail = entry.detail ? ` (${entry.detail})` : "";
+  return `  ${chalk.bold(machineId)}  ${verdict}${detail}  ${chalk.dim(`checked ${entry.checkedAt}`)}`;
 }
 
 /** A profile whose tool is unknown on this machine can't have configs prelaunch;
@@ -378,6 +412,39 @@ function parseMetadataPairs(pairs: string[] | undefined): ProfileMetadata | unde
     metadata[key] = parseMetadataValue(value);
   }
   return metadata;
+}
+
+/**
+ * b27cc4a0: parse one `--auth-status MACHINE=ok|no[:detail]` value into a
+ * per-machine entry stamped with the current time.
+ */
+function parseAuthStatusValue(value: string): ProfileAuthStatus {
+  const idx = value.indexOf("=");
+  if (idx <= 0) die(`invalid --auth-status "${value}" — expected MACHINE=ok|no[:detail]`);
+  const machineId = value.slice(0, idx);
+  const rest = value.slice(idx + 1);
+  const colon = rest.indexOf(":");
+  const verdict = colon >= 0 ? rest.slice(0, colon) : rest;
+  const detail = colon >= 0 ? rest.slice(colon + 1) : undefined;
+  const authenticated = verdict === "ok" ? true : verdict === "no" ? false : undefined;
+  if (authenticated === undefined) {
+    die(`invalid --auth-status "${value}" — expected MACHINE=ok|no[:detail]`);
+  }
+  return {
+    [machineId]: {
+      authenticated,
+      checkedAt: new Date().toISOString(),
+      ...(detail && detail.length > 0 ? { detail } : {}),
+    },
+  };
+}
+
+/** Merge repeated `--auth-status` values into one per-machine map. */
+function parseAuthStatusValues(values: string[] | undefined): ProfileAuthStatus | undefined {
+  if (!values || values.length === 0) return undefined;
+  const merged: ProfileAuthStatus = {};
+  for (const value of values) Object.assign(merged, parseAuthStatusValue(value));
+  return merged;
 }
 
 function readinessColor(status: AccountsReadinessStatus): (value: string) => string {
@@ -624,11 +691,13 @@ program
         console.log(chalk.dim("no profiles yet — create one with `accounts add <name> --email you@example.com`"));
         return;
       }
-      for (const p of profiles) {
-        const active = activeFor(p.tool) === p.name;
-        const isApplied = appliedProfileName(p.tool) === p.name;
-        console.log(fmtProfile(p, active, isApplied, prelaunchSummaryFor(p)));
-      }
+      // b27cc4a0: text output is a clean aligned TABLE. The AUTH column is this
+      // machine's STORED entry (records which machines a profile is
+      // authenticated on); `—` means this machine has no recorded entry yet.
+      const machineId = currentMachineId();
+      printProfileTable(
+        profiles.map((p) => profileTableRow(p, activeFor(p.tool) === p.name, appliedProfileName(p.tool) === p.name, machineId)),
+      );
     }),
   );
 
@@ -658,7 +727,7 @@ program
         return;
       }
       const isApplied = details.applied;
-      console.log(fmtProfile(p, active, isApplied, details.prelaunch));
+      printProfileTable([profileTableRow(p, active, isApplied, currentMachineId())]);
       console.log(`  tool:       ${p.tool} (${getTool(p.tool).label})`);
       console.log(`  active:     ${active ? chalk.green("yes") : chalk.dim("no")}`);
       console.log(`  applied:    ${isApplied ? chalk.magenta("yes") : chalk.dim("no")}`);
@@ -672,6 +741,14 @@ program
       }
       if (p.nativeName) console.log(`  nativeName: ${p.nativeName}`);
       if (p.aliases && p.aliases.length > 0) console.log(`  aliases:    ${p.aliases.join(", ")}`);
+      console.log("  auth status:");
+      if (p.authStatus && Object.keys(p.authStatus).length > 0) {
+        for (const [machineId, entry] of Object.entries(p.authStatus)) {
+          console.log(formatAuthStatusLine(machineId, entry));
+        }
+      } else {
+        console.log(chalk.dim("    (none recorded — run `accounts auth-status " + p.name + "` to probe this machine)"));
+      }
       console.log(`  created:    ${p.createdAt}`);
       if (p.lastUsedAt) console.log(`  last used:  ${p.lastUsedAt}`);
       if (details.switchedAway) {
@@ -3024,6 +3101,12 @@ program
   )
   .option("--backend <id>", "bind this profile to a machine-local backend route (accounts backend add)")
   .option("--unbind-backend", "unbind this profile from its backend route (native auth)")
+  .option(
+    "--auth-status <machine>=<ok|no>[:detail]>",
+    "record per-machine authentication status (repeatable; merged per machine, never replaces other machines' entries)",
+    collectRepeated,
+    [],
+  )
   .action(
     action(
       async (
@@ -3041,6 +3124,7 @@ program
           alias?: string[];
           backend?: string;
           unbindBackend?: boolean;
+          authStatus?: string[];
         },
       ) => {
         assertLocalBackendBinding(opts.backend);
@@ -3055,10 +3139,11 @@ program
           opts.nativeName === undefined &&
           (!opts.alias || opts.alias.length === 0) &&
           opts.backend === undefined &&
-          opts.unbindBackend !== true
+          opts.unbindBackend !== true &&
+          (!opts.authStatus || opts.authStatus.length === 0)
         ) {
           die(
-            "nothing to set — pass --email, --display-name, --identity, --card-last4, --metadata, --description, --dir, --native-name, --alias, --backend, or --unbind-backend",
+            "nothing to set — pass --email, --display-name, --identity, --card-last4, --metadata, --description, --dir, --native-name, --alias, --backend, --unbind-backend, or --auth-status",
           );
         }
         if (opts.backend !== undefined && opts.unbindBackend === true) {
@@ -3076,10 +3161,43 @@ program
           nativeName: opts.nativeName,
           aliases: opts.alias && opts.alias.length > 0 ? opts.alias : undefined,
           backendRef: opts.backend !== undefined ? opts.backend : opts.unbindBackend === true ? null : undefined,
+          authStatus: parseAuthStatusValues(opts.authStatus),
         });
         console.log(chalk.green(`✓ updated ${chalk.bold(p.name)}`));
       }
     ),
+  );
+
+program
+  .command("auth-status")
+  .argument("<name>", "profile name")
+  .description("probe this machine's auth state for a profile, STORE it, and print the stored per-machine map")
+  .option("-t, --tool <tool>", "tool when the profile name exists for multiple tools")
+  .option("--json", "output JSON")
+  .action(
+    action(async (name: string, opts: { tool?: string; json?: boolean }) => {
+      const store = resolveStore();
+      const profile = await store.getProfile(name, opts.tool);
+      const machineId = currentMachineId();
+      // Probe THIS machine through the existing runtime probes and store the
+      // result: display never fabricates a fresh probe without writing it.
+      const entry = probeProfileAuthStatus(profile);
+      const updated = await store.updateProfile(name, {
+        tool: profile.tool,
+        authStatus: { [machineId]: entry },
+      });
+      if (opts.json) {
+        console.log(
+          JSON.stringify({ machine: machineId, entry, authStatus: updated.authStatus ?? {} }, null, 2),
+        );
+        return;
+      }
+      console.log(`stored auth status for ${chalk.bold(profile.name)} on ${chalk.bold(machineId)}:`);
+      const status = updated.authStatus;
+      if (status && Object.keys(status).length > 0) {
+        for (const [machine, e] of Object.entries(status)) console.log(formatAuthStatusLine(machine, e));
+      }
+    }),
   );
 
 program

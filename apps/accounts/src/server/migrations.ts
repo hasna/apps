@@ -32,6 +32,7 @@ export const APP_MIGRATION_FILES = [
   "0005a_archive_purged_fixtures.sql",
   "0006_purge_test_tool_fixtures.sql",
   "0007_alias_records.sql",
+  "0008_auth_status.sql",
 ] as const;
 
 function moduleDir(): string {

@@ -275,3 +275,154 @@ describe("AccountsRepo.update — alias records (R-P1-4)", () => {
     expect(account?.aliases).toBeUndefined();
   });
 });
+
+// b27cc4a0: auth_status is a first-class JSONB column on the accounts table.
+// UPDATE merges per-machine (append/dedup discipline like aliases — a caller
+// that only knows the one machine it probed must not erase other machines'
+// recorded entries), and INSERT writes the column with the ::jsonb cast.
+function authStatusUpdateClient(existingRow: Record<string, unknown>) {
+  let lastOneCall: { sql: string; params: unknown[] } | undefined;
+  const client = {
+    pool: {} as never,
+    close: async () => {},
+    async query() {
+      return { rows: [], rowCount: 0 };
+    },
+    async many() {
+      return [];
+    },
+    async get() {
+      return existingRow;
+    },
+    async one(sql: string, params: unknown[]) {
+      lastOneCall = { sql, params };
+      // Return the row with the merged auth_status echoed back so the test
+      // exercises rowToAccount rather than re-implementing the merge.
+      const authParam = params.find((p) => typeof p === "string" && p.includes('"authenticated"'));
+      return {
+        ...existingRow,
+        auth_status: authParam ? (JSON.parse(authParam as string) as unknown) : existingRow.auth_status,
+      };
+    },
+    async execute() {},
+  } as unknown as PoolQueryClient;
+  return { client, lastCall: () => lastOneCall };
+}
+
+describe("AccountsRepo.update — auth status (b27cc4a0)", () => {
+  test("update merges auth_status per machine (never replaces the map)", async () => {
+    const existing = {
+      ...OLD_ROW,
+      auth_status: { "host-a": { authenticated: false, checkedAt: "2026-01-01T00:00:00.000Z", detail: "missing" } },
+    };
+    const fixture = authStatusUpdateClient(existing);
+    const updated = await new AccountsRepo(fixture.client).update("claude", "old", {
+      authStatus: { "host-b": { authenticated: true, checkedAt: "2026-08-19T00:00:00.000Z", detail: "ok" } },
+    } as never);
+    const call = fixture.lastCall();
+    expect(call).toBeDefined();
+    expect(call!.sql).toMatch(/auth_status = \$\d+::jsonb/);
+    const mergedParam = call!.params.find((p) => typeof p === "string" && p.includes("host-b"));
+    expect(JSON.parse(mergedParam as string)).toEqual({
+      "host-a": { authenticated: false, checkedAt: "2026-01-01T00:00:00.000Z", detail: "missing" },
+      "host-b": { authenticated: true, checkedAt: "2026-08-19T00:00:00.000Z", detail: "ok" },
+    });
+    // rowToAccount round-trip carries both machines.
+    expect(updated.authStatus?.["host-a"]?.authenticated).toBe(false);
+    expect(updated.authStatus?.["host-b"]?.authenticated).toBe(true);
+    expect(updated.authStatus?.["host-b"]?.detail).toBe("ok");
+  });
+
+  test("rowToAccount parses an auth_status jsonb column and tolerates its absence", async () => {
+    const withStatus = {
+      ...OLD_ROW,
+      auth_status: { "host-a": { authenticated: true, checkedAt: "2026-08-19T00:00:00.000Z" } },
+    };
+    const client = {
+      pool: {} as never,
+      close: async () => {},
+      async query() {
+        return { rows: [], rowCount: 0 };
+      },
+      async many() {
+        return [];
+      },
+      async get() {
+        return withStatus;
+      },
+      async one() {
+        return withStatus;
+      },
+      async execute() {},
+    } as unknown as PoolQueryClient;
+    const account = await new AccountsRepo(client).get("claude", "old");
+    expect(account?.authStatus?.["host-a"]?.authenticated).toBe(true);
+
+    const bareClient = {
+      pool: {} as never,
+      close: async () => {},
+      async query() {
+        return { rows: [], rowCount: 0 };
+      },
+      async many() {
+        return [];
+      },
+      async get() {
+        return OLD_ROW;
+      },
+      async one() {
+        return OLD_ROW;
+      },
+      async execute() {},
+    } as unknown as PoolQueryClient;
+    const bare = await new AccountsRepo(bareClient).get("claude", "old");
+    expect(bare?.authStatus).toBeUndefined();
+  });
+});
+
+function authStatusCreateClient() {
+  let insertCall: { sql: string; params: unknown[] } | undefined;
+  const client = {
+    pool: {} as never,
+    close: async () => {},
+    async query() {
+      return { rows: [], rowCount: 0 };
+    },
+    async many() {
+      return [];
+    },
+    async get(_sql: string, params?: unknown[]) {
+      // findByName -> one param (name only); getWith -> tool+name.
+      return params && params.length >= 2 ? OLD_ROW : null;
+    },
+    async one(sql: string, params: unknown[]) {
+      if (sql.startsWith("INSERT INTO accounts")) insertCall = { sql, params };
+      const authParam = params?.[9];
+      return {
+        ...OLD_ROW,
+        auth_status: typeof authParam === "string" ? (JSON.parse(authParam) as unknown) : {},
+      };
+    },
+    async execute() {},
+    async transaction<T>(fn: (client: TypedQueryClient) => Promise<T>): Promise<T> {
+      return fn(client as unknown as TypedQueryClient);
+    },
+  } as unknown as PoolQueryClient;
+  return { client, insertCall: () => insertCall };
+}
+
+describe("AccountsRepo.create — auth status (b27cc4a0)", () => {
+  test("create writes the auth_status column with the ::jsonb cast", async () => {
+    const fixture = authStatusCreateClient();
+    const created = await new AccountsRepo(fixture.client).create({
+      tool: "claude",
+      name: "alpha",
+      authStatus: { "host-a": { authenticated: true, checkedAt: "2026-08-19T00:00:00.000Z" } },
+    } as never);
+    const call = fixture.insertCall();
+    expect(call).toBeDefined();
+    expect(call!.sql).toContain("auth_status");
+    expect(call!.sql).toMatch(/auth_status[^]*\$\d+::jsonb/);
+    expect(created.authStatus?.["host-a"]?.authenticated).toBe(true);
+  });
+});
