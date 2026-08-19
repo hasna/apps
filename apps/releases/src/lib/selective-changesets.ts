@@ -11,12 +11,19 @@ import type {
 } from "@changesets/types";
 import { getPackages, type Packages } from "@manypkg/get-packages";
 import {
+  access,
+  chmod,
   mkdir,
+  mkdtemp,
   readFile,
+  readdir,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
+import { constants } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 export type SelectiveChangesetMode = "dry-run" | "apply";
@@ -90,6 +97,7 @@ type Candidate = {
 type FileSnapshot = {
   path: string;
   contents: Buffer | null;
+  mode: number | null;
 };
 
 function fail(
@@ -326,10 +334,11 @@ function resultFor(
   candidate: Candidate,
   mode: SelectiveChangesetMode,
   touchedAbsolutePaths: readonly string[] = [],
+  reportedRootDir = candidate.rootDir,
 ): SelectiveChangesetResult {
   return {
     mode,
-    rootDir: candidate.rootDir,
+    rootDir: reportedRootDir,
     changesetIds: candidate.changesetIds,
     packageAllowlist: candidate.packageAllowlist,
     changesets: candidate.selectedChangesets.map((changeset) => ({
@@ -356,14 +365,15 @@ async function snapshotFiles(paths: readonly string[]): Promise<FileSnapshot[]> 
   return Promise.all(
     [...new Set(paths.map((path) => resolve(path)))].map(async (path) => {
       try {
-        return { path, contents: await readFile(path) };
+        const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
+        return { path, contents, mode: metadata.mode & 0o777 };
       } catch (error) {
         if (
           error instanceof Error &&
           "code" in error &&
           error.code === "ENOENT"
         ) {
-          return { path, contents: null };
+          return { path, contents: null, mode: null };
         }
         throw error;
       }
@@ -372,13 +382,16 @@ async function snapshotFiles(paths: readonly string[]): Promise<FileSnapshot[]> 
 }
 
 async function restoreSnapshots(snapshots: readonly FileSnapshot[]): Promise<void> {
-  for (const snapshot of snapshots) {
+  for (const snapshot of [...snapshots].reverse()) {
     if (snapshot.contents === null) {
       await rm(snapshot.path, { force: true, recursive: true });
       continue;
     }
     await mkdir(dirname(snapshot.path), { recursive: true });
     await writeFile(snapshot.path, snapshot.contents);
+    if (snapshot.mode !== null) {
+      await chmod(snapshot.path, snapshot.mode);
+    }
   }
 }
 
@@ -388,8 +401,14 @@ async function changedSnapshotPaths(
   const changed: string[] = [];
   for (const snapshot of snapshots) {
     let current: Buffer | null;
+    let currentMode: number | null;
     try {
-      current = await readFile(snapshot.path);
+      const [contents, metadata] = await Promise.all([
+        readFile(snapshot.path),
+        stat(snapshot.path),
+      ]);
+      current = contents;
+      currentMode = metadata.mode & 0o777;
     } catch (error) {
       if (
         error instanceof Error &&
@@ -397,6 +416,7 @@ async function changedSnapshotPaths(
         error.code === "ENOENT"
       ) {
         current = null;
+        currentMode = null;
       } else {
         throw error;
       }
@@ -405,12 +425,175 @@ async function changedSnapshotPaths(
     if (
       snapshot.contents === null
         ? current !== null
-        : current === null || !snapshot.contents.equals(current)
+        : current === null ||
+          !snapshot.contents.equals(current) ||
+          snapshot.mode !== currentMode
     ) {
       changed.push(snapshot.path);
     }
   }
   return changed.sort();
+}
+
+async function listFilesRecursively(path: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(path, { withFileTypes: true });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await listFilesRecursively(entryPath)));
+    } else if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+async function stagingSourcePathsFor(candidate: Candidate): Promise<string[]> {
+  const paths = [
+    join(candidate.rootDir, "package.json"),
+    join(candidate.rootDir, "bun.lock"),
+    ...(await listFilesRecursively(join(candidate.rootDir, ".changeset"))),
+    ...candidate.plannedAbsolutePaths,
+  ];
+
+  for (const pkg of candidate.packages.packages) {
+    paths.push(join(pkg.dir, "package.json"));
+    paths.push(join(pkg.dir, "CHANGELOG.md"));
+  }
+
+  return [...new Set(paths.map((path) => resolve(path)))].sort();
+}
+
+function relocateSnapshots(
+  snapshots: readonly FileSnapshot[],
+  fromRoot: string,
+  toRoot: string,
+): FileSnapshot[] {
+  return snapshots.map((snapshot) => ({
+    ...snapshot,
+    path: join(toRoot, toRelativePath(fromRoot, snapshot.path)),
+  }));
+}
+
+async function materializeSnapshots(
+  snapshots: readonly FileSnapshot[],
+): Promise<void> {
+  for (const snapshot of snapshots) {
+    if (snapshot.contents === null) continue;
+    await mkdir(dirname(snapshot.path), { recursive: true });
+    await writeFile(snapshot.path, snapshot.contents);
+    if (snapshot.mode !== null) {
+      await chmod(snapshot.path, snapshot.mode);
+    }
+  }
+}
+
+function snapshotsForPaths(
+  snapshots: readonly FileSnapshot[],
+  rootDir: string,
+  paths: readonly string[],
+): FileSnapshot[] {
+  const byRelativePath = new Map(
+    snapshots.map((snapshot) => [toRelativePath(rootDir, snapshot.path), snapshot]),
+  );
+  return paths.map((path) => {
+    const relativePath = toRelativePath(rootDir, path);
+    const snapshot = byRelativePath.get(relativePath);
+    if (!snapshot) {
+      fail(
+        "APPLY_INVARIANT_FAILED",
+        `missing selected-file preimage for ${relativePath}`,
+      );
+    }
+    return snapshot;
+  });
+}
+
+async function assertWritableTargets(
+  preimages: readonly FileSnapshot[],
+  outputs: readonly FileSnapshot[],
+): Promise<void> {
+  const outputsByPath = new Map(outputs.map((snapshot) => [snapshot.path, snapshot]));
+  for (const preimage of preimages) {
+    const output = outputsByPath.get(preimage.path);
+    if (!output) {
+      fail(
+        "APPLY_INVARIANT_FAILED",
+        `missing staged output for ${preimage.path}`,
+      );
+    }
+    if (output.contents === null || preimage.contents === null) {
+      await access(dirname(preimage.path), constants.W_OK);
+    } else {
+      await access(preimage.path, constants.W_OK);
+    }
+  }
+}
+
+async function commitStagedOutputs(
+  preimages: readonly FileSnapshot[],
+  stagedOutputs: readonly FileSnapshot[],
+  stagingRoot: string,
+  realRoot: string,
+): Promise<void> {
+  const realOutputs = relocateSnapshots(stagedOutputs, stagingRoot, realRoot);
+  const outputsByPath = new Map(
+    realOutputs.map((snapshot) => [snapshot.path, snapshot]),
+  );
+  await assertWritableTargets(preimages, realOutputs);
+
+  const applied: FileSnapshot[] = [];
+  try {
+    for (const preimage of preimages) {
+      const drift = await changedSnapshotPaths([preimage]);
+      if (drift.length > 0) {
+        fail(
+          "APPLY_INVARIANT_FAILED",
+          "selected files changed after planning; no concurrent content was overwritten",
+          { changedPaths: drift.map((path) => toRelativePath(realRoot, path)) },
+        );
+      }
+
+      const output = outputsByPath.get(preimage.path);
+      if (!output) {
+        fail(
+          "APPLY_INVARIANT_FAILED",
+          `missing staged output for ${toRelativePath(realRoot, preimage.path)}`,
+        );
+      }
+      applied.push(preimage);
+      if (output.contents === null) {
+        await rm(preimage.path, { force: true, recursive: true });
+      } else {
+        await mkdir(dirname(preimage.path), { recursive: true });
+        await writeFile(preimage.path, output.contents);
+        if (output.mode !== null) {
+          await chmod(preimage.path, output.mode);
+        }
+      }
+
+      const outputMismatch = await changedSnapshotPaths([output]);
+      if (outputMismatch.length > 0) {
+        fail(
+          "APPLY_INVARIANT_FAILED",
+          `selected-file write did not persist for ${toRelativePath(realRoot, preimage.path)}`,
+        );
+      }
+    }
+  } catch (error) {
+    await restoreSnapshots(applied);
+    throw error;
+  }
 }
 
 function protectedPathsFor(candidate: Candidate): string[] {
@@ -487,16 +670,33 @@ export async function planSelectiveChangesets(
 export async function applySelectiveChangesets(
   options: SelectiveChangesetOptions,
 ): Promise<SelectiveChangesetResult> {
-  const candidate = await loadCandidate(options);
-  const protectedSnapshots = await snapshotFiles(
-    protectedPathsFor(candidate),
+  const realRoot = resolve(options.cwd);
+  const initialCandidate = await loadCandidate({ ...options, cwd: realRoot });
+  const sourceSnapshots = await snapshotFiles(
+    await stagingSourcePathsFor(initialCandidate),
   );
-  const rollbackSnapshots = await snapshotFiles([
-    ...candidate.plannedAbsolutePaths,
-    ...protectedSnapshots.map((snapshot) => snapshot.path),
-  ]);
+  const stagingRoot = await mkdtemp(
+    join(tmpdir(), "releases-selective-changesets-apply-"),
+  );
 
   try {
+    await materializeSnapshots(
+      relocateSnapshots(sourceSnapshots, realRoot, stagingRoot),
+    );
+    const realNodeModules = join(realRoot, "node_modules");
+    try {
+      if ((await stat(realNodeModules)).isDirectory()) {
+        await symlink(realNodeModules, join(stagingRoot, "node_modules"), "dir");
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+
+    const candidate = await loadCandidate({ ...options, cwd: stagingRoot });
+    const stagedPreimages = await snapshotFiles(candidate.plannedAbsolutePaths);
+    const protectedSnapshots = await snapshotFiles(protectedPathsFor(candidate));
     const touchedAbsolutePaths = (
       await applyReleasePlan(
         candidate.releasePlan,
@@ -547,9 +747,57 @@ export async function applySelectiveChangesets(
     }
 
     await assertAppliedVersions(candidate);
-    return resultFor(candidate, "apply", touchedAbsolutePaths);
+    const actualChangedPaths = await changedSnapshotPaths(stagedPreimages);
+    const missingChangedPaths = expectedPaths.filter(
+      (path) => !actualChangedPaths.includes(path),
+    );
+    const unexpectedChangedPaths = actualChangedPaths.filter(
+      (path) => !expectedPaths.includes(path),
+    );
+    if (missingChangedPaths.length > 0 || unexpectedChangedPaths.length > 0) {
+      fail(
+        "APPLY_INVARIANT_FAILED",
+        "Changesets reported selected-file writes that did not persist",
+        {
+          missingChangedPaths: missingChangedPaths.map((path) =>
+            toRelativePath(candidate.rootDir, path),
+          ),
+          unexpectedChangedPaths: unexpectedChangedPaths.map((path) =>
+            toRelativePath(candidate.rootDir, path),
+          ),
+        },
+      );
+    }
+
+    const originalPreimages = snapshotsForPaths(
+      sourceSnapshots,
+      realRoot,
+      candidate.plannedAbsolutePaths.map((path) =>
+        join(realRoot, toRelativePath(stagingRoot, path)),
+      ),
+    );
+    const concurrentChanges = await changedSnapshotPaths(originalPreimages);
+    if (concurrentChanges.length > 0) {
+      fail(
+        "APPLY_INVARIANT_FAILED",
+        "selected files changed after planning; no concurrent content was overwritten",
+        {
+          changedPaths: concurrentChanges.map((path) =>
+            toRelativePath(realRoot, path),
+          ),
+        },
+      );
+    }
+
+    const stagedOutputs = await snapshotFiles(candidate.plannedAbsolutePaths);
+    await commitStagedOutputs(
+      originalPreimages,
+      stagedOutputs,
+      stagingRoot,
+      realRoot,
+    );
+    return resultFor(candidate, "apply", touchedAbsolutePaths, realRoot);
   } catch (error) {
-    await restoreSnapshots(rollbackSnapshots);
     if (error instanceof SelectiveChangesetError) {
       throw error;
     }
@@ -557,6 +805,8 @@ export async function applySelectiveChangesets(
       "APPLY_INVARIANT_FAILED",
       error instanceof Error ? error.message : String(error),
     );
+  } finally {
+    await rm(stagingRoot, { force: true, recursive: true });
   }
 }
 

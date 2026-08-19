@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -248,6 +249,61 @@ function readManifest(
   );
 }
 
+function configureConcurrentChangelog(root: string): void {
+  writeFixtureJson(root, ".changeset/config.json", {
+    $schema: "https://unpkg.com/@changesets/config@3.0.3/schema.json",
+    changelog: ["./concurrent-changelog.cjs", { realRoot: root }],
+    commit: false,
+    fixed: [],
+    linked: [],
+    access: "public",
+    baseBranch: "main",
+    updateInternalDependencies: "patch",
+    ignore: [],
+  });
+  writeFixtureFile(
+    root,
+    ".changeset/concurrent-changelog.cjs",
+    `const fs = require("node:fs");
+const path = require("node:path");
+let mutated = false;
+
+module.exports = {
+  async getReleaseLine(changeset, _type, options) {
+    if (!mutated) {
+      mutated = true;
+      const manifestPath = path.join(
+        options.realRoot,
+        "apps/conversations/package.json",
+      );
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      manifest.concurrentMarker = "must-survive";
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\\n");
+    }
+    return "- " + changeset.summary;
+  },
+  async getDependencyReleaseLine() {
+    return "";
+  },
+};
+`,
+  );
+}
+
+function changesetsCandidateCliArgs(root: string, apply = false): string[] {
+  return [
+    "bun",
+    "run",
+    join(REPO_ROOT, "apps/releases/src/cli/index.ts"),
+    "changesets-candidate",
+    "--cwd",
+    root,
+    ...(apply ? ["--apply"] : []),
+    ...SELECTED_CHANGESET_IDS.flatMap((id) => ["--changeset", id]),
+    ...PACKAGE_ALLOWLIST.flatMap((name) => ["--package", name]),
+  ];
+}
+
 describe("selective Changesets candidate", () => {
   test("dry-run plans the seven Conversations/Todos/Projects Changesets and writes nothing", async () => {
     const fixture = createFixture();
@@ -400,20 +456,99 @@ describe("selective Changesets candidate", () => {
     }
   });
 
+  test("selected-file preimage drift fails closed and preserves concurrent content", async () => {
+    const fixture = createFixture();
+    try {
+      configureConcurrentChangelog(fixture.root);
+      const unaffectedPaths = EXPECTED_PATHS.filter(
+        (path) => path !== "apps/conversations/package.json",
+      );
+      const before = readBytes(fixture.root, unaffectedPaths);
+
+      try {
+        await applySelectiveChangesets({
+          cwd: fixture.root,
+          changesetIds: SELECTED_CHANGESET_IDS,
+          packageAllowlist: PACKAGE_ALLOWLIST,
+        });
+        throw new Error("expected selected-file preimage drift to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(SelectiveChangesetError);
+        expect((error as SelectiveChangesetError).code).toBe(
+          "APPLY_INVARIANT_FAILED",
+        );
+      }
+
+      expectBytesUnchanged(fixture.root, before);
+      const conversations = JSON.parse(
+        readFileSync(
+          join(fixture.root, "apps/conversations/package.json"),
+          "utf8",
+        ),
+      ) as { version: string; concurrentMarker?: string };
+      expect(conversations.version).toBe("0.6.2");
+      expect(conversations.concurrentMarker).toBe("must-survive");
+      for (const id of SELECTED_CHANGESET_IDS) {
+        expect(existsSync(join(fixture.root, `.changeset/${id}.md`))).toBe(true);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("CLI apply detects a selected changelog write failure, commits nothing, and replays cleanly", () => {
+    const fixture = createFixture();
+    try {
+      const changelogPath = join(
+        fixture.root,
+        "apps/conversations/CHANGELOG.md",
+      );
+      chmodSync(changelogPath, 0o444);
+      const before = readBytes(fixture.root, EXPECTED_PATHS);
+
+      const result = Bun.spawnSync(changesetsCandidateCliArgs(fixture.root, true), {
+        cwd: REPO_ROOT,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode).toBe(1);
+      const report = JSON.parse(result.stdout.toString()) as {
+        code?: string;
+        touchedPaths?: string[];
+      };
+      expect(report.code).toBe("APPLY_INVARIANT_FAILED");
+      expect(report.touchedPaths).toBeUndefined();
+      expectBytesUnchanged(fixture.root, before);
+      for (const id of SELECTED_CHANGESET_IDS) {
+        expect(existsSync(join(fixture.root, `.changeset/${id}.md`))).toBe(true);
+      }
+
+      chmodSync(changelogPath, 0o644);
+      const replay = Bun.spawnSync(
+        changesetsCandidateCliArgs(fixture.root, true),
+        {
+          cwd: REPO_ROOT,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(replay.exitCode).toBe(0);
+      const replayReport = JSON.parse(replay.stdout.toString()) as {
+        mode: string;
+        touchedPaths: string[];
+      };
+      expect(replayReport.mode).toBe("apply");
+      expect(replayReport.touchedPaths).toEqual(EXPECTED_PATHS);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test("CLI defaults to dry-run and emits the same 13-path candidate", () => {
     const fixture = createFixture();
     try {
-      const args = [
-        "bun",
-        "run",
-        join(REPO_ROOT, "apps/releases/src/cli/index.ts"),
-        "changesets-candidate",
-        "--cwd",
-        fixture.root,
-        ...SELECTED_CHANGESET_IDS.flatMap((id) => ["--changeset", id]),
-        ...PACKAGE_ALLOWLIST.flatMap((name) => ["--package", name]),
-      ];
-      const result = Bun.spawnSync(args, {
+      const result = Bun.spawnSync(changesetsCandidateCliArgs(fixture.root), {
         cwd: REPO_ROOT,
         stdout: "pipe",
         stderr: "pipe",
@@ -444,18 +579,7 @@ describe("selective Changesets candidate", () => {
   test("CLI --apply uses the same explicit selection and touches the same 13 paths", () => {
     const fixture = createFixture();
     try {
-      const args = [
-        "bun",
-        "run",
-        join(REPO_ROOT, "apps/releases/src/cli/index.ts"),
-        "changesets-candidate",
-        "--cwd",
-        fixture.root,
-        "--apply",
-        ...SELECTED_CHANGESET_IDS.flatMap((id) => ["--changeset", id]),
-        ...PACKAGE_ALLOWLIST.flatMap((name) => ["--package", name]),
-      ];
-      const result = Bun.spawnSync(args, {
+      const result = Bun.spawnSync(changesetsCandidateCliArgs(fixture.root, true), {
         cwd: REPO_ROOT,
         stdout: "pipe",
         stderr: "pipe",
