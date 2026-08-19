@@ -947,6 +947,53 @@ body.native .compact-inner{padding-top:calc(14px + var(--native-inset));}
 }
 .compact-add:hover{filter:brightness(.96);}
 
+/* Record a voice note from the minimized window (task 9ec010a2) — the compact row
+   mirrors the Home composer's single-surface pattern: the mic button starts/stops,
+   and while a recording is active the input + Add hide so the 220px window shows
+   one recording surface (timer + pause + stop live in the bottom-center rec-pill). */
+.compact-rec{
+  flex:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:36px;padding:0 14px;border-radius:var(--r-control);
+  background:var(--accent);color:#fff;font-size:13px;font-weight:600;
+  transition:transform .18s cubic-bezier(.34,1.56,.64,1),background .14s,filter .12s;
+}
+.compact-rec:hover{filter:brightness(.97);}
+.compact-rec:active{transform:scale(.93);}
+.compact-rec-mic{width:14px;height:14px;display:block;flex:none;}
+.compact-rec-label{white-space:nowrap;}
+.compact-rec-stop{display:none;width:11px;height:11px;border-radius:2.5px;background:#fff;flex:none;}
+.compact-rec-timer{display:none;font-variant-numeric:tabular-nums;letter-spacing:.01em;min-width:30px;text-align:center;}
+.compact-rec-busy{display:none;width:14px;height:14px;flex:none;}
+/* Recording: red pulse, hover reveals the stop square (mirrors .qn-composer.recording). */
+.compact-form.recording .compact-rec{background:var(--rec);animation:qnRecPulse 1.7s ease-in-out infinite;}
+.compact-form.recording .compact-rec-mic,
+.compact-form.recording .compact-rec-label,
+.compact-form.recording .compact-rec-timer{display:none;}
+.compact-form.recording .compact-rec:hover .compact-rec-stop{display:block;}
+.compact-form.paused .compact-rec{background:var(--grey);}
+.compact-form.stopping .compact-rec,
+.compact-form.transcribing .compact-rec{background:var(--grey);animation:none;}
+.compact-form.stopping .compact-rec-mic,
+.compact-form.stopping .compact-rec-label,
+.compact-form.stopping .compact-rec-timer,
+.compact-form.stopping .compact-rec-stop,
+.compact-form.transcribing .compact-rec-mic,
+.compact-form.transcribing .compact-rec-label,
+.compact-form.transcribing .compact-rec-timer,
+.compact-form.transcribing .compact-rec-stop{display:none;}
+.compact-form.stopping .compact-rec-busy,
+.compact-form.transcribing .compact-rec-busy{display:block;animation:qnBusySpin 1s linear infinite;}
+.compact-form.complete .compact-rec{background:var(--green);animation:none;}
+.compact-form.error .compact-rec{background:var(--danger);animation:none;}
+.compact-form.rec-disabled .compact-rec{background:var(--placeholder);}
+/* While recording, the compact composer row IS the record surface: input + Add gone. */
+.compact-form.recording .compact-input,
+.compact-form.stopping .compact-input,
+.compact-form.transcribing .compact-input,
+.compact-form.recording .compact-add,
+.compact-form.stopping .compact-add,
+.compact-form.transcribing .compact-add{display:none;}
+
 /* ====================== ROW CONTEXT MENU ====================== */
 /* macOS 26 menus are glass chrome (Rule 1, spec §3.7): .glass-on-canvas recipe,
    concentric radii (panel 14 − 5px padding ≈ item 8 = --r-control), and the
