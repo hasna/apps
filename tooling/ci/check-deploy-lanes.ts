@@ -56,7 +56,6 @@ import * as path from "node:path";
 const UNPORTED_NESTED_DEPLOY_LANES = new Set([
   "attachments",
   "mementos",
-  "projects",
   "sessions",
 ]);
 
@@ -66,7 +65,7 @@ const UNPORTED_NESTED_DEPLOY_LANES = new Set([
  * discoverable root workflow MUST exist here. A member enters this list in the
  * same change that rewires its trust.
  */
-const PORTED_DEPLOY_LANES = new Set(["skills"]);
+const PORTED_DEPLOY_LANES = new Set(["projects", "skills"]);
 
 function memberDirs(root: string): string[] {
   const apps = path.join(root, "apps");
@@ -211,16 +210,20 @@ function selfTest(): boolean {
     return false;
   }
 
-  // Negative control: a path-scoped root workflow alone must stay silent.
+  // Negative control: the exact Projects root lane, registered as ported and
+  // scoped to apps/projects/**, must stay silent.
   const cleanTmp = fs.mkdtempSync(path.join(os.tmpdir(), "check-deploy-lanes-clean-"));
   fs.mkdirSync(path.join(cleanTmp, ".github", "workflows"), { recursive: true });
-  fs.mkdirSync(path.join(cleanTmp, "apps", "delta"), { recursive: true });
-  fs.writeFileSync(path.join(cleanTmp, "apps", "delta", "package.json"), "{}");
+  fs.mkdirSync(path.join(cleanTmp, "apps", "projects"), { recursive: true });
+  fs.writeFileSync(path.join(cleanTmp, "apps", "projects", "package.json"), "{}");
   fs.writeFileSync(
-    path.join(cleanTmp, ".github", "workflows", "deploy-delta.yml"),
-    'name: deploy-delta\non:\n  push:\n    branches: [main]\n    paths: ["apps/delta/**"]\n',
+    path.join(cleanTmp, ".github", "workflows", "deploy-projects.yml"),
+    'name: deploy-projects\non:\n  push:\n    branches: [main]\n    paths: ["apps/projects/**"]\n',
   );
-  const negative = checkDir(cleanTmp, { unported: new Set(), ported: new Set() });
+  const negative = checkDir(cleanTmp, {
+    unported: new Set(),
+    ported: new Set(["projects"]),
+  });
   if (negative.violations.length > 0) {
     console.error("self-test FAILED — clean root workflow did not stay silent");
     console.error(negative.violations.join("\n"));

@@ -3,7 +3,10 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const workflow = readFileSync(join(import.meta.dir, "..", "..", ".github", "workflows", "deploy.yml"), "utf8");
+const workflow = readFileSync(
+  join(import.meta.dir, "..", "..", "..", "..", ".github", "workflows", "deploy-projects.yml"),
+  "utf8",
+);
 const rolloutVerifier = join(import.meta.dir, "verify-ecs-rollout.sh");
 
 function runRolloutVerifier(
@@ -72,8 +75,10 @@ cat "$fixture"
 
 describe("deploy migration failure evidence", () => {
   test("keeps migration and circuit-breaker gates intact", () => {
-    expect(workflow).toContain('if [ "$EXIT" != "0" ]; then');
-    expect(workflow).toContain('bash scripts/ci/verify-ecs-rollout.sh "$CLUSTER" "$SERVICE" "$WEB_ARN"');
+    expect(workflow).toContain('if [[ "${exit_code}" != "0" ]]; then');
+    expect(workflow).toContain(
+      'bash scripts/ci/verify-ecs-rollout.sh "${CLUSTER}" "${SERVICE}" "${deployed_task_definition}"',
+    );
   });
 
   test("reports exact ECS and awslogs coordinates before failing", () => {
@@ -83,8 +88,8 @@ describe("deploy migration failure evidence", () => {
     expect(workflow).toContain("awslogs-group");
     expect(workflow).toContain("awslogs-region");
     expect(workflow).toContain("awslogs-stream-prefix");
-    expect(workflow).toContain('LOG_STREAM="${LOG_PREFIX}/${MIG_CONTAINER}/${TASK_ID}"');
-    expect(workflow).toContain('>> "$GITHUB_STEP_SUMMARY"');
+    expect(workflow).toContain('log_stream="${log_prefix}/${MIGRATION_CONTAINER}/${task_id}"');
+    expect(workflow).toContain('>> "${GITHUB_STEP_SUMMARY}"');
     expect(workflow).toContain("aws logs get-log-events");
     expect(workflow).toContain("| node scripts/ci/redact-log-lines.mjs");
   });
@@ -97,6 +102,25 @@ describe("deploy migration failure evidence", () => {
 });
 
 describe("monorepo deploy context (hasna/apps)", () => {
+  test("is a discoverable Projects root lane bound to successful ci and the member path", () => {
+    expect(workflow).toContain("name: deploy-projects");
+    expect(workflow).toContain("workflow_run:");
+    expect(workflow).toContain("workflows: [ci]");
+    expect(workflow).toContain("workflow_dispatch: {}");
+    expect(workflow).toContain("group: deploy-projects-production");
+    expect(workflow).toContain('DEPLOY_PATH_SCOPE: "apps/projects/**"');
+  });
+
+  test("pins the Projects production targets and OIDC role", () => {
+    expect(workflow).toContain("DEPLOY_MANIFEST: /hasna/deploy/projects");
+    expect(workflow).toContain("EXPECTED_CLUSTER: oss-fleet-prod");
+    expect(workflow).toContain("EXPECTED_SERVICE: projects-prod");
+    expect(workflow).toContain("EXPECTED_ECR_REPOSITORY: projects");
+    expect(workflow).toContain("EXPECTED_MIGRATION_FAMILY: projects-prod-migrate");
+    expect(workflow).toContain("LOCAL_IMAGE: projects-deploy-candidate");
+    expect(workflow).toContain("role/projects-prod-gha-deploy");
+  });
+
   test("builds the member image from the monorepo layout, not a repo-root Dockerfile", () => {
     // The monorepo root has no Dockerfile; the member one lives at
     // apps/projects/Dockerfile. A deploy step that runs `docker build .` from
@@ -105,6 +129,8 @@ describe("monorepo deploy context (hasna/apps)", () => {
     expect(workflow).toContain("defaults:");
     expect(workflow).toContain("run:");
     expect(workflow).toContain("working-directory: apps/projects");
+    expect(workflow).toContain("--target runtime");
+    expect(workflow).toContain("dist/serve/index.js --version");
   });
 
   test("resolves scripts/ci helpers from the member directory", () => {
@@ -115,6 +141,19 @@ describe("monorepo deploy context (hasna/apps)", () => {
     const scriptsBlock = workflow.slice(workflow.indexOf("working-directory: apps/projects"));
     expect(scriptsBlock).toContain("bash scripts/ci/verify-ecs-rollout.sh");
     expect(scriptsBlock).toContain("node scripts/ci/redact-log-lines.mjs");
+  });
+
+  test("scans before AWS authentication and emits Projects-specific evidence", () => {
+    expect(workflow.indexOf("Generate local vulnerability report")).toBeGreaterThan(-1);
+    expect(workflow.indexOf("Configure AWS credentials with GitHub OIDC")).toBeGreaterThan(-1);
+    expect(workflow.indexOf("Generate local vulnerability report")).toBeLessThan(
+      workflow.indexOf("Configure AWS credentials with GitHub OIDC"),
+    );
+    expect(workflow).toContain('--started-by "gha-projects-migrate-${GITHUB_RUN_ID}"');
+    expect(workflow).toContain('schema:"hasna.projects.production_deploy.v1"');
+    expect(workflow).toContain("name: projects-production-deploy-${{ github.run_id }}");
+    expect(workflow).toContain("apps/projects/deploy-evidence.json");
+    expect(workflow).toContain("## Projects production deployment");
   });
 });
 
