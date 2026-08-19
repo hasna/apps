@@ -199,6 +199,24 @@ verification fails. The workflow resolves configuration from
 service, ECR repository, or migration-family mismatch before any push or ECS
 mutation.
 
+The lane does not carry its own `push` trigger, because a push-triggered deploy
+starts independently of `ci` and can reach ECS while the repository gates for
+that same commit are still running. It is triggered by `workflow_run` on the
+`ci` workflow instead, and a gate job admits the run only when that upstream run
+concluded `success`, for a `push` on `main`. The deployed source is
+`workflow_run.head_sha` — the exact commit `ci` verified — not whatever `main`
+points at when the deployment starts. `workflow_run` accepts no `paths:` filter,
+so the member scoping that `paths: [apps/todos/**]` used to provide is applied
+in that gate against the `DEPLOY_PATH_SCOPE` pathspec: a commit that changes no
+file under `apps/todos` resolves `proceed=false` and the deploy job is skipped,
+as is a commit already superseded on `main` by a newer `apps/todos` change.
+
+The manual route is retained and is deliberately narrower than the automatic
+one. `workflow_dispatch` must be invoked on the `main` branch ref and always
+resolves to the exact current `origin/main` tip, re-checked inside the deploy
+job. The previous check accepted any ancestor of `main`, which allowed a manual
+run to deploy a historical commit.
+
 This source change does not modify IAM. Before the workflow can authenticate,
 the existing `todos-prod-gha-deploy` role's GitHub OIDC trust must admit the
 monorepo subject `repo:hasna/apps:environment:production` (audience

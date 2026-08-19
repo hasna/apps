@@ -5,15 +5,31 @@ name: deploy-todos
 # AWS authentication, then resolves and verifies every production target from
 # the package-owned SSM manifest before it can push, migrate, or update ECS.
 #
+# TRIGGERING — deployment never races the repository gates. A push to main does
+# NOT start this lane directly; the `ci` workflow does, and only after it has
+# already concluded successfully for that exact commit. `workflow_run` carries
+# `head_sha`, so the deployed source is bound to the commit CI actually
+# verified rather than to whatever main happens to point at when the deploy
+# starts. `workflow_run` does not accept a `paths:` filter, so the
+# member-scoping that `paths: [apps/todos/**]` used to provide is enforced in
+# the gate job below against DEPLOY_PATH_SCOPE — a push touching another member
+# resolves proceed=false and the deploy job is skipped, never run and failed.
+#
+# The manual route is retained and is deliberately narrower than the automatic
+# one: workflow_dispatch must be invoked on the main branch ref and always
+# resolves to the exact current origin/main tip. A historical SHA cannot be
+# deployed by hand, which is what the previous ancestor-of-main check allowed.
+#
 # External prerequisite (not changed by this repository): the
 # todos-prod-gha-deploy role trust must admit
 # repo:hasna/apps:environment:production. Until that trust is updated, OIDC
 # fails before any AWS target read or mutation.
 
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
-    paths: ["apps/todos/**"]
   workflow_dispatch: {}
 
 concurrency:
@@ -33,10 +49,97 @@ env:
   EXPECTED_ECR_REPOSITORY: todos
   EXPECTED_MIGRATION_FAMILY: todos-prod-migrate
   LOCAL_IMAGE: todos-deploy-candidate
+  # The workflow whose successful conclusion is the ONLY automatic entry point
+  # into this lane. Must equal the `name:` of .github/workflows/ci.yml and the
+  # single entry of on.workflow_run.workflows; the deploy gate cross-checks all
+  # three so renaming ci.yml cannot silently detach the binding.
+  REQUIRED_CI_WORKFLOW: ci
+  # Member scoping for this lane. Used as a real git pathspec by the gate job
+  # because workflow_run cannot carry a paths: filter.
+  DEPLOY_PATH_SCOPE: "apps/todos/**"
 
 jobs:
+  gate:
+    name: gate (successful ci for the exact main commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The gate reads git history and nothing else. It must never hold the OIDC
+    # token that the deploy job needs, so it narrows the workflow permissions.
+    permissions:
+      contents: read
+    # A failed, cancelled, non-push or non-main ci run must not open this lane.
+    # Expressed as a job condition so an unrelated ci outcome SKIPS the lane
+    # instead of reporting a red deployment for a deployment that never began.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+    outputs:
+      proceed: ${{ steps.resolve.outputs.proceed }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Resolve the deployable commit
+        id: resolve
+        shell: bash
+        env:
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          main_tip="$(git rev-parse refs/remotes/origin/main)"
+          proceed=false
+          source_sha=""
+
+          case "${GITHUB_EVENT_NAME}" in
+            workflow_run)
+              [[ "${RUN_NAME}" == "${REQUIRED_CI_WORKFLOW}" ]] || { echo "upstream workflow is ${RUN_NAME}, not ${REQUIRED_CI_WORKFLOW}" >&2; exit 1; }
+              [[ "${RUN_CONCLUSION}" == "success" ]] || { echo "upstream ci concluded ${RUN_CONCLUSION}, not success" >&2; exit 1; }
+              [[ "${RUN_EVENT}" == "push" ]] || { echo "upstream ci ran for ${RUN_EVENT}, not push" >&2; exit 1; }
+              [[ "${RUN_BRANCH}" == "main" ]] || { echo "upstream ci ran on ${RUN_BRANCH}, not main" >&2; exit 1; }
+              [[ "${RUN_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "upstream ci head sha is not a full commit id" >&2; exit 1; }
+              source_sha="${RUN_HEAD_SHA}"
+              git merge-base --is-ancestor "${source_sha}^{commit}" refs/remotes/origin/main || { echo "ci commit ${source_sha} is no longer contained in origin/main" >&2; exit 1; }
+              superseded="$(git rev-list -n 1 "${source_sha}..refs/remotes/origin/main" -- "${DEPLOY_PATH_SCOPE}")"
+              parent="$(git rev-parse --verify --quiet "${source_sha}^1" || true)"
+              if [[ -n "${superseded}" ]]; then
+                echo "superseded: origin/main already carries a newer commit touching ${DEPLOY_PATH_SCOPE}; that commit's own ci run owns the deployment"
+              elif [[ -z "${parent}" ]]; then
+                proceed=true
+              elif [[ -n "$(git diff --name-only "${parent}" "${source_sha}" -- "${DEPLOY_PATH_SCOPE}")" ]]; then
+                proceed=true
+              else
+                echo "no change under ${DEPLOY_PATH_SCOPE} in ${source_sha}; this lane has nothing to deploy"
+              fi
+              ;;
+            workflow_dispatch)
+              [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
+              source_sha="${main_tip}"
+              proceed=true
+              ;;
+            *)
+              echo "unsupported trigger ${GITHUB_EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "gate did not resolve a full source commit" >&2; exit 1; }
+          {
+            printf 'source_sha=%s\n' "${source_sha}"
+            printf 'proceed=%s\n' "${proceed}"
+          } >> "${GITHUB_OUTPUT}"
+
   deploy:
     name: build + scan + migrate + deploy
+    needs: gate
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
     runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 60
@@ -49,17 +152,25 @@ jobs:
       - name: Checkout exact source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ needs.gate.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify source is the exact main-branch commit
+      - name: Verify source is the gated ci-passed main commit
+        env:
+          GATED_SHA: ${{ needs.gate.outputs.source_sha }}
         run: |
           set -Eeuo pipefail
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${GATED_SHA}"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor "${GITHUB_SHA}^{commit}" refs/remotes/origin/main
-          printf 'SOURCE_SHA=%s\n' "${GITHUB_SHA}" >> "${GITHUB_ENV}"
-          printf 'IMAGE_TAG=deploy-%s-%s-%s\n' "${GITHUB_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_ENV}"
+          main_tip="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "${GATED_SHA}^{commit}" refs/remotes/origin/main
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
+            [[ "${GATED_SHA}" == "${main_tip}" ]] || { echo "manual deploy must target the exact current origin/main commit ${main_tip}, received ${GATED_SHA}" >&2; exit 1; }
+          fi
+          printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
+          printf 'IMAGE_TAG=deploy-%s-%s-%s\n' "${GATED_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_ENV}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -91,7 +202,7 @@ jobs:
       - name: Generate local vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ env.LOCAL_IMAGE }}:${{ github.sha }}
+          image-ref: ${{ env.LOCAL_IMAGE }}:${{ needs.gate.outputs.source_sha }}
           format: json
           output: ${{ github.workspace }}/apps/todos/trivy-local.json
           scanners: vuln
