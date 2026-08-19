@@ -204,4 +204,12 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     category: "Development Tools",
     tags: ["config", "validation", "schema", "linting"],
   },
+  {
+    name: "session-inject-monitor",
+    displayName: "Session Inject Monitor",
+    description: "Set up a declarative monitor that injects a prompt into a live coding-agent session when a watched source (conversations, email, todos, knowledge, command output) has new content",
+    category: "Development Tools",
+    tags: ["monitor", "session", "injection", "automation", "wake"],
+    kind: "instruction",
+  },
 ];

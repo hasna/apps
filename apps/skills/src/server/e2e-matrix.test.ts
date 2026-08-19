@@ -28,7 +28,7 @@
  *
  * Measured reality the lanes encode (probed on main, 2026-08-18):
  *   - The merged hosted listing includes the statically bundled official corpus
- *     (85 entries in a source checkout). Those rows carry no bundle digest, so
+ *     (86 entries in a source checkout). Those rows carry no bundle digest, so
  *     reconcile classifies every one of them "remote-only / skip — no bundle
  *     digest; verified pulls only". They are NEVER pulled and NEVER errors.
  *     Assertions are therefore entry-based, never absolute counts.

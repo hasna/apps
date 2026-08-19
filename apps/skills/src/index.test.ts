@@ -18,8 +18,8 @@ describe("public API exports", () => {
 
   test("SKILLS array is populated", () => {
     expect(Array.isArray(publicAPI.SKILLS)).toBe(true);
-    // OSS catalog: 19 instruction skills + 66 credential-free executable skills.
-    expect(publicAPI.SKILLS.length).toBe(85);
+    // OSS catalog: 20 instruction skills + 66 credential-free executable skills.
+    expect(publicAPI.SKILLS.length).toBe(86);
   });
 
   test("CATEGORIES array is populated", () => {
