@@ -36,7 +36,7 @@ describe("release verification contract", () => {
     const release = packageJson.scripts["verify:release"] ?? "";
     const postgres = packageJson.scripts["test:postgres-migrations"] ?? "";
     expect(release.match(/bun run test:postgres-migrations/g)).toHaveLength(1);
-    expect(release).toBe("bun run check && bun run test:postgres-migrations && bun run verify:pack && bun audit && bun pm untrusted");
+    expect(release).toBe("bun run check && bun run test:postgres-migrations && bun run verify:pack && bun run ../../tooling/ci/check-audit-packed.mjs && bun pm untrusted");
     expect(postgres.match(/scripts\/test-postgres-migrations\.sh/g)).toHaveLength(1);
     expect(postgres).toContain("PostgreSQL 16.13");
     expect(postgres).toContain("superuser");
