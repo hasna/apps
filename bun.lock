@@ -1041,29 +1041,6 @@
         "typescript": "^5.7.3",
       },
     },
-    "apps/markdown": {
-      "name": "@hasna/markdown",
-      "version": "0.1.21",
-      "bin": {
-        "markdown": "dist/cli/index.js",
-        "markdown-mcp": "dist/mcp/index.js",
-        "markdown-serve": "dist/server/index.js",
-      },
-      "dependencies": {
-        "@hasna/events": "^0.1.6",
-        "@modelcontextprotocol/sdk": "^1.12.1",
-        "chalk": "^5.4.1",
-        "commander": "^13.1.0",
-        "pg": "^8.20.0",
-        "zod": "^3.24.2",
-      },
-      "devDependencies": {
-        "@hasna/contracts": "0.14.0",
-        "@types/bun": "^1.2.4",
-        "@types/pg": "^8.15.6",
-        "typescript": "^5.7.3",
-      },
-    },
     "apps/mcps": {
       "name": "@hasna/mcps",
       "version": "0.0.31",
@@ -2438,7 +2415,6 @@
 
     "@hasna/machines": ["@hasna/machines@workspace:apps/machines"],
 
-    "@hasna/markdown": ["@hasna/markdown@workspace:apps/markdown"],
 
     "@hasna/mcp-harness": ["@hasna/mcp-harness@0.1.0", "", { "peerDependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "zod": "^3.24.2" } }, "sha512-dP/IaN28a7PFhaG2EXuL3xbdbcEofjSRC2sXR4qN7jcB3yuJbUXLy4ejzL9Hh7x8HhomK1g1u7c0LqKclzFWSQ=="],
 
@@ -4722,9 +4698,6 @@
 
     "@hasna/machines/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "@hasna/markdown/@hasna/contracts": ["@hasna/contracts@0.14.0", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-GruZE2ejzTu1XA4/3PH+NXb+SAfJvAQ79IWU/0SHnxDK/ThFBh4ID1knp6n/4xGOfUR+bkCDPTF0p1F4KFjryw=="],
-
-    "@hasna/markdown/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/mcps/@hasna/contracts": ["@hasna/contracts@0.11.1", "", { "dependencies": { "@hasna/secrets": "0.3.0", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-W3q07I6zdrN/MKVf4roldq0W9+UVeZCaqi4WsS76Mby8dNobbbgbR6foBm9rZ2gVe219SPmUIp5e0cx+42C/Dw=="],
 
