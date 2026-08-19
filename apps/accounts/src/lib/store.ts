@@ -204,7 +204,12 @@ class LocalStore implements AccountsStore {
  * Self-hosted/cloud registry over `<API_URL>/v1`. The account `dir` is
  * machine-local, so create/update materialize a managed local config dir on
  * this machine and record its path in the cloud record (so the creating machine
- * can immediately launch the profile).
+ * can immediately launch the profile). Read from a DIFFERENT machine, that
+ * recorded path is a foreign string that does not exist here, so every read is
+ * resolved through {@link resolveLocalProfile} to this machine's own local
+ * managed dir — otherwise the prelaunch audit write, profile env
+ * (CLAUDE_CONFIG_DIR) and keychain prep would all target a directory that is
+ * not on this host, and `accounts launch` crashes with ENOENT.
  */
 class ApiStore implements AccountsStore {
   readonly transport = "api" as const;
@@ -214,7 +219,7 @@ class ApiStore implements AccountsStore {
   async listProfiles(tool?: string): Promise<Profile[]> {
     const profiles = await this.api.list(tool);
     await this.hydrateProfileTools(profiles);
-    return profiles;
+    return profiles.map(resolveLocalProfile);
   }
 
   async getProfile(name: string, tool?: string): Promise<Profile> {
@@ -225,7 +230,7 @@ class ApiStore implements AccountsStore {
   async findProfile(name: string, tool?: string): Promise<Profile | undefined> {
     const profile = await this.api.get(name, tool);
     if (profile) await this.hydrateProfileTools([profile]);
-    return profile;
+    return profile ? resolveLocalProfile(profile) : undefined;
   }
 
   async addProfile(opts: AddOptions): Promise<Profile> {
@@ -292,10 +297,13 @@ class ApiStore implements AccountsStore {
   }
 
   async removeProfile(name: string, opts: RemoveOptions = {}): Promise<RemoveResult> {
-    const profile = await this.api.remove(name, opts.tool);
+    const profile = resolveLocalProfile(await this.api.remove(name, opts.tool));
     reconcileMachineProfileRemove(profile.tool, profile.name);
     // The row lives in the API; the DIRECTORY has always lived on this machine.
     // Skipping it here is what turned `--purge` into a silent orphan generator.
+    // The dir must be resolved to THIS machine's local path: the removed row's
+    // recorded dir is the creating host's path, which is a foreign string (and
+    // a local purge would otherwise miss the actual local managed dir).
     const { purged, purgeNote } = opts.purge ? purgeProfileDir(profile) : { purged: false, purgeNote: undefined };
     return { profile, purged, ...(purgeNote ? { purgeNote } : {}) };
   }
@@ -319,7 +327,7 @@ class ApiStore implements AccountsStore {
     if (!current) return undefined;
     const profile = await this.api.get(current.name, tool);
     if (profile) await this.hydrateProfileTools([profile]);
-    return profile;
+    return profile ? resolveLocalProfile(profile) : undefined;
   }
 
   async listCurrent(): Promise<CurrentEntry[]> {
@@ -401,7 +409,7 @@ class ApiStore implements AccountsStore {
       const profile = await this.api.get(name, tool);
       if (!profile) throw new AccountsError(`no profile named "${name}" for tool "${tool}". Run \`accounts list\` to see profiles.`);
       await this.hydrateProfileTools([profile]);
-      return profile;
+      return resolveLocalProfile(profile);
     }
     const matches = (await this.api.list()).filter((p) => p.name === name);
     if (matches.length === 0) {
@@ -414,7 +422,7 @@ class ApiStore implements AccountsStore {
     }
     const profile = matches[0]!;
     await this.hydrateProfileTools([profile]);
-    return profile;
+    return resolveLocalProfile(profile);
   }
 }
 
@@ -447,6 +455,51 @@ function prepareProfileDirectory(dir: string, managed: boolean): boolean {
   );
   mkdirSync(dir, { recursive: true });
   return !existed;
+}
+
+/**
+ * The LOCAL on-disk config dir for a profile record, for local file operations.
+ *
+ * A store record's `dir` is machine-local metadata written by whichever
+ * machine created or updated the record — the ApiStore contract says so ("the
+ * account dir is machine-local, so create/update materialize a managed local
+ * config dir on this machine and record its path in the cloud record"). Read
+ * on a DIFFERENT host, that path is a foreign string (e.g.
+ * `/home/hasna/.hasna/accounts/profiles/claude/<name>` returned on a macOS
+ * box at `/Users/hasna`) and every local file operation under it — the
+ * prelaunch audit write, profile env (`CLAUDE_CONFIG_DIR`), keychain prep —
+ * targets a directory that does not exist and crashes with ENOENT.
+ *
+ * Resolution, in order:
+ *  - an empty recorded dir has nothing to fall back on: use the deterministic
+ *    managed path `<profilesDir>/<tool>/<name>`;
+ *  - a recorded dir that EXISTS on this machine is local by definition (this is
+ *    the creating machine, or the dir was set up here): keep it unchanged;
+ *  - a recorded dir under THIS machine's local profiles root is local by
+ *    construction even when currently missing (it is where this host keeps its
+ *    managed profiles, and it is the dir a local launch recreates): keep it;
+ *  - any other recorded dir — a foreign host's path, or a vanished custom
+ *    path — is not this machine's: resolve to the deterministic managed local
+ *    path for this profile.
+ */
+export function localProfileDir(profile: Profile): string {
+  if (!profile.dir) return join(profilesDir(), profile.tool, profile.name);
+  if (existsSync(profile.dir)) return profile.dir;
+  const root = resolve(profilesDir());
+  const rel = relative(root, resolve(profile.dir));
+  if (rel !== "" && !rel.startsWith(".." + sep) && !isAbsolute(rel)) return profile.dir;
+  return join(profilesDir(), profile.tool, profile.name);
+}
+
+/**
+ * A profile whose `dir` is this host's local path, for local operations.
+ *
+ * Returns the profile unchanged when no resolution changed the dir, so callers
+ * can rely on reference identity for the common local case.
+ */
+export function resolveLocalProfile(profile: Profile): Profile {
+  const dir = localProfileDir(profile);
+  return dir === profile.dir ? profile : { ...profile, dir };
 }
 
 /**
