@@ -1,13 +1,17 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   ACTIONS_DATABASE_FILENAME,
   ACTIONS_JSON_MIGRATION_KEY,
+  HASNA_ACTIONS_DIR_ENV,
+  HASNA_ACTIONS_HOME_ENV,
   JsonActionsStore,
   SQLiteActionsStore,
+  getActionsDataDir,
+  getActiveActionsDirEnv,
   getActionsStatus,
 } from "./storage.js";
 import type { ActionAuditEvent, ActionManifest, ActionRun } from "./types.js";
@@ -404,6 +408,140 @@ describe("SQLiteActionsStore", () => {
       expect(await new SQLiteActionsStore(dir).listAuditEvents()).toHaveLength(eventsPerWriter * 2);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// agent-authored test-gap additions (SOL consult unavailable: codewith exec with
+// gpt-5.6-sol max reasoning timed out at the 570s window on two distinct accounts
+// before producing a final answer; this spec was written from direct source analysis).
+describe("storage data-dir resolution and ordering contracts", () => {
+  test("resolves the data dir from override, then env vars, then the default home", () => {
+    const priorDir = process.env[HASNA_ACTIONS_DIR_ENV];
+    const priorHome = process.env[HASNA_ACTIONS_HOME_ENV];
+    try {
+      expect(getActionsDataDir("/tmp/explicit")).toBe("/tmp/explicit");
+
+      process.env[HASNA_ACTIONS_DIR_ENV] = "/tmp/from-dir";
+      process.env[HASNA_ACTIONS_HOME_ENV] = "/tmp/from-home";
+      expect(getActionsDataDir()).toBe("/tmp/from-dir");
+      expect(getActionsDataDir(undefined)).toBe("/tmp/from-dir");
+
+      delete process.env[HASNA_ACTIONS_DIR_ENV];
+      expect(getActionsDataDir()).toBe("/tmp/from-home");
+
+      delete process.env[HASNA_ACTIONS_HOME_ENV];
+      expect(getActionsDataDir()).toBe(join(homedir(), ".hasna", "actions"));
+    } finally {
+      if (priorDir === undefined) delete process.env[HASNA_ACTIONS_DIR_ENV];
+      else process.env[HASNA_ACTIONS_DIR_ENV] = priorDir;
+      if (priorHome === undefined) delete process.env[HASNA_ACTIONS_HOME_ENV];
+      else process.env[HASNA_ACTIONS_HOME_ENV] = priorHome;
+    }
+  });
+
+  test("reports which env var is active, or null when neither is set", () => {
+    const priorDir = process.env[HASNA_ACTIONS_DIR_ENV];
+    const priorHome = process.env[HASNA_ACTIONS_HOME_ENV];
+    try {
+      expect(getActiveActionsDirEnv()).toBeNull();
+
+      process.env[HASNA_ACTIONS_HOME_ENV] = "/tmp/x";
+      expect(getActiveActionsDirEnv()).toBe(HASNA_ACTIONS_HOME_ENV);
+
+      process.env[HASNA_ACTIONS_DIR_ENV] = "/tmp/y";
+      expect(getActiveActionsDirEnv()).toBe(HASNA_ACTIONS_DIR_ENV);
+    } finally {
+      if (priorDir === undefined) delete process.env[HASNA_ACTIONS_DIR_ENV];
+      else process.env[HASNA_ACTIONS_DIR_ENV] = priorDir;
+      if (priorHome === undefined) delete process.env[HASNA_ACTIONS_HOME_ENV];
+      else process.env[HASNA_ACTIONS_HOME_ENV] = priorHome;
+    }
+  });
+
+  test("JsonActionsStore updateRun upserts an unknown run id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-json-upsert-"));
+    try {
+      const store = new JsonActionsStore(dir);
+      const unknownRun = { ...run, id: "run_upserted", status: "succeeded" as const, idempotencyKey: undefined };
+      await store.updateRun(unknownRun);
+      expect((await store.getRun("run_upserted"))?.status).toBe("succeeded");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("SQLite listRuns orders newest first and honors filters and zero limits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-sqlite-order-"));
+    try {
+      const store = new SQLiteActionsStore(dir);
+      const older = { ...run, id: "run_old", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+      const newer = { ...run, id: "run_new", createdAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" };
+      await store.createRun(older);
+      await store.createRun(newer);
+
+      const all = await store.listRuns();
+      expect(all.map((item) => item.id)).toEqual(["run_new", "run_old"]);
+
+      const filtered = await store.listRuns({ status: "planned" });
+      expect(filtered.map((item) => item.id)).toEqual(["run_new", "run_old"]);
+
+      expect(await store.listRuns({ limit: 0 })).toEqual([]);
+      expect(await store.listRuns({ status: "succeeded" })).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("idempotency lookups return the newest matching run in both stores", async () => {
+    for (const makeStore of [
+      (dir: string) => new JsonActionsStore(dir),
+      (dir: string) => new SQLiteActionsStore(dir),
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), "actions-idem-newest-"));
+      try {
+        const store = makeStore(dir);
+        const older = { ...run, id: "run_first", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+        const newer = { ...run, id: "run_second", status: "succeeded" as const, createdAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" };
+        await store.createRun(older);
+        await store.createRun(newer);
+
+        const found = await store.findRunByIdempotencyKey("test.action", "idem-1");
+        expect(found?.id).toBe("run_second");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("JSON writes are atomic: no temp files remain after a write", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-json-atomic-"));
+    try {
+      const store = new JsonActionsStore(dir);
+      await store.saveManifest(manifest);
+      await store.createRun(run);
+      await store.appendAuditEvent(auditEvent);
+      expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("getActionsStatus reports live counts and database existence for a fresh store", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "actions-status-"));
+    try {
+      const store = new SQLiteActionsStore(dir);
+      await store.saveManifest(manifest);
+      await store.createRun(run);
+      await store.createRun({ ...run, id: "run_2", idempotencyKey: undefined });
+      await store.appendAuditEvent(auditEvent);
+
+      const status = await getActionsStatus(dir);
+      expect(status.storage.engine).toBe("sqlite");
+      expect(status.storage.database.exists).toBe(true);
+      expect(status.counts).toEqual({ manifests: 1, runs: 2, auditEvents: 1 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

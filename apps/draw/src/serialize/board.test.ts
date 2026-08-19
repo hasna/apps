@@ -68,6 +68,41 @@ describe("serializeBoard / parseBoard", () => {
     expect(() => parseBoard(42)).toThrow(BoardValidationError);
   });
 
+  test("throws when the envelope wraps a non-object board", () => {
+    expect(() => parseBoard({ schema: BOARD_SCHEMA, version: BOARD_VERSION, board: 42 })).toThrow(
+      BoardValidationError,
+    );
+  });
+
+  test("a non-array cards field coerces to an empty board", () => {
+    const board = parseBoard({ cards: "not-an-array" });
+    expect(board.cards).toEqual([]);
+  });
+
+  test("a non string title is dropped", () => {
+    const board = parseBoard({ title: 42 });
+    expect(board.title).toBeUndefined();
+  });
+
+  test("an empty board id is replaced with a generated one", () => {
+    const board = parseBoard({ id: "" });
+    expect(board.id).toBeString();
+    expect(board.id.length).toBeGreaterThan(0);
+  });
+
+  test("non pretty serialization is a single line", () => {
+    const json = serializeBoard(seed());
+    expect(json).not.toContain("\n");
+  });
+
+  test("round-trips the versioned envelope through a JSON string", () => {
+    const board = seed();
+    const doc = JSON.stringify(toBoardDocument(board));
+    const back = parseBoard(doc);
+    expect(back.title).toBe("Roundtrip");
+    expect(back.cards).toHaveLength(2);
+  });
+
   test("preserves full element fidelity on a drawing card round-trip", () => {
     let scene = createScene({ background: "#123456", width: 400, height: 300 });
     scene = addElement(scene, {

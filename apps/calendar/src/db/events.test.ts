@@ -525,4 +525,151 @@ describe("events", () => {
     const limited = listEvents({ calendar_id: calendarId, limit: 3 });
     expect(limited.length).toBe(3);
   });
+
+  test("list with limit and offset returns the exact middle window", () => {
+    for (let i = 0; i < 5; i++) {
+      createEvent({
+        title: `Offset Event ${i}`,
+        calendar_id: calendarId,
+        org_id: orgId,
+        start_at: `2026-04-15T0${i}:00:00Z`,
+        end_at: `2026-04-15T0${i + 1}:00:00Z`,
+      });
+    }
+    const page = listEvents({ calendar_id: calendarId, limit: 2, offset: 2 });
+    expect(page.map((event) => event.title)).toEqual(["Offset Event 2", "Offset Event 3"]);
+  });
+
+  test("list filters by created_by, source_task_id, and their combination", () => {
+    createEvent({
+      title: "Mine", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z", end_at: "2026-04-15T10:00:00Z",
+      created_by: "agent-x", source_task_id: "task-1",
+    });
+    createEvent({
+      title: "Other Creator", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T10:00:00Z", end_at: "2026-04-15T11:00:00Z",
+      created_by: "agent-y", source_task_id: "task-1",
+    });
+    createEvent({
+      title: "Other Task", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T11:00:00Z", end_at: "2026-04-15T12:00:00Z",
+      created_by: "agent-x", source_task_id: "task-2",
+    });
+
+    expect(listEvents({ created_by: "agent-x" }).map((e) => e.title).sort()).toEqual(["Mine", "Other Task"]);
+    expect(listEvents({ source_task_id: "task-1" })).toHaveLength(2);
+    expect(listEvents({ created_by: "agent-x", source_task_id: "task-1" }).map((e) => e.title)).toEqual(["Mine"]);
+    expect(listEvents({ created_by: "nobody" })).toHaveLength(0);
+  });
+
+  test("list after/before bounds are inclusive at equality", () => {
+    createEvent({
+      title: "Exactly At After", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z", end_at: "2026-04-15T10:00:00Z",
+    });
+    createEvent({
+      title: "Exactly At Before", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T11:00:00Z", end_at: "2026-04-15T12:00:00Z",
+    });
+
+    const atAfter = listEvents({ calendar_id: calendarId, after: "2026-04-15T09:00:00Z" });
+    expect(atAfter.map((e) => e.title)).toContain("Exactly At After");
+    const atBefore = listEvents({ calendar_id: calendarId, before: "2026-04-15T11:00:00Z" });
+    expect(atBefore.map((e) => e.title)).toContain("Exactly At Before");
+    const both = listEvents({
+      calendar_id: calendarId,
+      after: "2026-04-15T09:00:00Z",
+      before: "2026-04-15T11:00:00Z",
+    });
+    expect(both.map((e) => e.title)).toEqual(["Exactly At After", "Exactly At Before"]);
+  });
+
+  test("list ties equal instants by the raw start_at string", () => {
+    createEvent({
+      title: "Z-Spelling", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z", end_at: "2026-04-15T10:00:00Z",
+    });
+    createEvent({
+      title: "A-Spelling", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T09:00:00+00:00", end_at: "2026-04-15T10:00:00+00:00",
+    });
+
+    const events = listEvents({ calendar_id: calendarId });
+    expect(events.map((e) => e.title)).toEqual(["A-Spelling", "Z-Spelling"]);
+  });
+
+  test("find conflicts — exact left and right adjacency are NOT conflicts", () => {
+    createEvent({
+      title: "Adjacent",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z",
+      end_at: "2026-04-15T10:00:00Z",
+    });
+    expect(findConflicts(calendarId, { start: "2026-04-15T08:00:00Z", end: "2026-04-15T09:00:00Z" })).toHaveLength(0);
+    expect(findConflicts(calendarId, { start: "2026-04-15T10:00:00Z", end: "2026-04-15T11:00:00Z" })).toHaveLength(0);
+  });
+
+  test("find conflicts — containment and enclosing ranges conflict", () => {
+    createEvent({
+      title: "Wide Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z",
+      end_at: "2026-04-15T10:00:00Z",
+    });
+    // Range fully inside the event.
+    expect(findConflicts(calendarId, { start: "2026-04-15T09:15:00Z", end: "2026-04-15T09:45:00Z" }).map((e) => e.title)).toEqual(["Wide Meeting"]);
+    // Range fully containing the event.
+    expect(findConflicts(calendarId, { start: "2026-04-15T08:00:00Z", end: "2026-04-15T11:00:00Z" }).map((e) => e.title)).toEqual(["Wide Meeting"]);
+    // Overlap on each edge.
+    expect(findConflicts(calendarId, { start: "2026-04-15T09:30:00Z", end: "2026-04-15T10:30:00Z" })).toHaveLength(1);
+    expect(findConflicts(calendarId, { start: "2026-04-15T08:30:00Z", end: "2026-04-15T09:30:00Z" })).toHaveLength(1);
+  });
+
+  test("FTS lifecycle — update re-tokenizes and delete removes the hit", () => {
+    const evt = createEvent({
+      title: "needle",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z",
+      end_at: "2026-04-15T10:00:00Z",
+    });
+    expect(searchEvents("needle").map((e) => e.id)).toEqual([evt.id]);
+
+    updateEvent(evt.id, { title: "haystack" });
+    expect(searchEvents("needle")).toHaveLength(0);
+    expect(searchEvents("haystack").map((e) => e.id)).toEqual([evt.id]);
+
+    deleteEvent(evt.id);
+    expect(searchEvents("haystack")).toHaveLength(0);
+  });
+
+  test("FTS lifecycle — org scoping excludes the other org", () => {
+    const otherOrg = createOrg({ name: "Other", slug: "other-org" });
+    const otherCal = createCalendar({ name: "Other Cal", org_id: otherOrg.id });
+    createEvent({
+      title: "scoped-needle",
+      calendar_id: otherCal.id,
+      org_id: otherOrg.id,
+      start_at: "2026-04-15T09:00:00Z",
+      end_at: "2026-04-15T10:00:00Z",
+    });
+
+    expect(searchEvents("scoped-needle", orgId)).toHaveLength(0);
+    expect(searchEvents("scoped-needle", otherOrg.id).map((e) => e.title)).toEqual(["scoped-needle"]);
+  });
+
+  test("FTS matches title, description, and location", () => {
+    createEvent({
+      title: "Plain Title", calendar_id: calendarId, org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z", end_at: "2026-04-15T10:00:00Z",
+      description: "contains unicorn-token",
+      location: "magic-location",
+    });
+    expect(searchEvents("unicorn-token")).toHaveLength(1);
+    expect(searchEvents("magic-location")).toHaveLength(1);
+    expect(searchEvents("plain-title")).toHaveLength(1);
+  });
 });

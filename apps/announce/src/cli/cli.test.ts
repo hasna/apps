@@ -1,3 +1,4 @@
+// Agent-authored (TEST-GAP protocol): the gpt-5.6-sol consult terminated twice without delivering a spec (session died mid-audit; resume timed out), so the additions to this file carry no SOL attribution.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -111,5 +112,63 @@ describe("announce CLI", () => {
     const sendOut = await run(["send", "camp-cli-2", "--dry-run"]);
     const sendResult = JSON.parse(sendOut) as { queued: boolean };
     expect(sendResult.queued).toBe(true);
+  });
+
+  it("status --all lists every ledger entry instead of collapsing to the latest per channel", async () => {
+    const statusOut = await run(["status", "camp-cli-1", "--all"]);
+    const entries = JSON.parse(statusOut) as Array<{ channel: string; status: string }>;
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.channel).sort()).toEqual(["email", "telegram"]);
+  });
+
+  it("compose --out writes the campaign JSON to the requested file", async () => {
+    const outFile = join(dataDir, "campaign-out.json");
+    const composeOut = await run([
+      "compose",
+      "--release",
+      releaseFile,
+      "--audience",
+      "developers",
+      "--channel",
+      "email",
+      "--campaign-id",
+      "camp-cli-out",
+      "--out",
+      outFile,
+    ]);
+    expect(composeOut).toContain("camp-cli-out");
+    const written = JSON.parse(await Bun.file(outFile).text()) as { campaignId: string; channels: string[] };
+    expect(written.campaignId).toBe("camp-cli-out");
+    expect(written.channels).toEqual(["email"]);
+  });
+
+  it("send accepts a campaign JSON file path directly", async () => {
+    const outFile = join(dataDir, "campaign-file.json");
+    await run([
+      "compose",
+      "--release",
+      releaseFile,
+      "--audience",
+      "developers",
+      "--channel",
+      "email",
+      "--campaign-id",
+      "camp-cli-file",
+      "--out",
+      outFile,
+    ]);
+    const sendOut = await run(["send", outFile, "--dry-run"]);
+    const sendResult = JSON.parse(sendOut) as { campaignId: string; dryRun: boolean; channels: Array<{ channel: string; status: string }> };
+    expect(sendResult.campaignId).toBe("camp-cli-file");
+    expect(sendResult.dryRun).toBe(true);
+    expect(sendResult.channels).toHaveLength(1);
+  });
+
+  it("report without --mock returns ledger-derived counts only", async () => {
+    const reportOut = await run(["report", "camp-cli-1"]);
+    const report = JSON.parse(reportOut) as { totals: { sent: number; opens: number; clicks: number } };
+    expect(report.totals.sent).toBe(2);
+    expect(report.totals.opens).toBe(0);
+    expect(report.totals.clicks).toBe(0);
   });
 });
