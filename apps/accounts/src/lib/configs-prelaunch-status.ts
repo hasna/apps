@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import type { Profile, ToolDef } from "../types.js";
 
 export type ConfigsManifestDrift = "ok" | "missing" | "invalid" | "mismatch" | "stale" | "unsupported";
@@ -185,12 +186,42 @@ const MAX_SOURCE_IDS = 20;
 const MAX_REASONS = 6;
 const MAX_REASON_LENGTH = 220;
 
+/**
+ * Re-root a profile dir that was recorded on a different machine's home onto
+ * the LOCAL home. A cloud-store profile record captured on Linux carries
+ * `/home/<user>/...`; joining that verbatim on macOS made the prelaunch audit
+ * try to mkdir `/home/...` (ENOENT on darwin — task 618beb78). If the profile
+ * dir sits under a known foreign home root (`/home` or `/Users`), the segment
+ * after the root is mapped onto the local `homedir()`; otherwise (local home,
+ * absolute non-home path, or empty) it is returned unchanged.
+ */
+export function rerootProfileDirOntoLocalHome(dir: string, localHome: string = homedir()): string {
+  if (!dir) return dir;
+  const normalized = resolve(dir);
+  for (const root of ["/home", "/Users"]) {
+    const prefix = root.endsWith("/") ? root : `${root}${sep}`;
+    if (normalized === root || normalized.startsWith(prefix)) {
+      // Strip the home root AND the user segment (root/user), then map the
+      // remainder (e.g. /.hasna/accounts/profiles/...) onto the local home.
+      const rest = normalized.slice(root.length);
+      const segments = rest.split(sep).filter(Boolean);
+      if (segments.length === 0) return normalized;
+      const remainder = segments.slice(1).join(sep);
+      const local = resolve(localHome, remainder || "");
+      // Only re-root when the home actually differs; a same-home dir must be
+      // untouched even if it happens to look like a foreign root.
+      return isAbsolute(local) ? local : normalized;
+    }
+  }
+  return normalized;
+}
+
 export function configsManifestPath(profile: Profile): string {
-  return join(profile.dir, ".hasna", "session-render-manifest.json");
+  return join(rerootProfileDirOntoLocalHome(profile.dir), ".hasna", "session-render-manifest.json");
 }
 
 export function configsPrelaunchAuditPath(profile: Profile): string {
-  return join(profile.dir, ".hasna", "accounts", "prelaunch-status.json");
+  return join(rerootProfileDirOntoLocalHome(profile.dir), ".hasna", "accounts", "prelaunch-status.json");
 }
 
 function sha256(value: string): string {
