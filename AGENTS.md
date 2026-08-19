@@ -50,7 +50,15 @@ public-estate imports are tracked by the import wave (todos `28ac4516`).
 
 ## Verification
 
+Sync before you work this repo — never at the cost of local changes:
+
 ```bash
+git fetch origin && git merge --ff-only origin/main   # fast-forward only; a dirty
+                                                      # tree must be preserved
+                                                      # (stash/commit) first, never
+                                                      # discarded to make the pull
+                                                      # succeed
+
 bun install                 # bun 1.3.14 (packageManager pin)
 bunx turbo run build --affected
 bun run check               # names + secrets + manifests + publish-guard
