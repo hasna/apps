@@ -46,7 +46,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "bun test",
-    "repo:conformance": "contracts repo-conformance --json .",
+    "repo:conformance": "bun scripts/contracts-cli.mjs repo-conformance --json .",
     "scan:artifact": "bun scripts/scan-artifact.ts",
     "verify:release": "bun run typecheck && bun test && bun run build && bun run repo:conformance",
     "dev:cli": "bun run src/cli/index.ts",

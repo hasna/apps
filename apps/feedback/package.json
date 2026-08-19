@@ -52,7 +52,7 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/index.ts src/api.ts src/browser.ts src/storage.ts src/events.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts src/mcp/cli.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts src/server/cli.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
-    "contract-check": "contracts repo-conformance .",
+    "contract-check": "bun scripts/contracts-cli.mjs repo-conformance .",
     "contract-gap": "bun scripts/check-contract-gap.ts",
     "artifact-scan": "bun scripts/scan-artifact.ts",
     "typecheck": "tsc --noEmit",

@@ -70,7 +70,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:postgres": "HASNA_AUTOMATIONS_REQUIRE_POSTGRES_TEST=1 bun test src/server/postgresql/store.integration.test.ts",
-    "contracts:conformance": "contracts conformance examples && contracts repo-conformance .",
+    "contracts:conformance": "bun scripts/contracts-cli.mjs conformance examples && bun scripts/contracts-cli.mjs repo-conformance .",
     "conformance": "bun run contracts:conformance",
     "scan:artifact": "bun scripts/scan-artifact.ts",
     "prepack": "bun run build && bun run scan:artifact",
