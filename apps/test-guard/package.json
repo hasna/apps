@@ -1,0 +1,36 @@
+{
+  "name": "@hasna/test-guard",
+  "version": "0.0.1",
+  "description": "Machine-wide bun test concurrency and memory guard (SC-00062): the flock-semaphore wrapper, the sentinel that watches it, and the regression battery — packaged so the control ships through the normal PR -> review -> publish -> install chain",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/apps.git"
+  },
+  "files": [
+    "battery.sh",
+    "bun-wrapper.sh",
+    "sentinel.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "bash test/smoke.sh"
+  },
+  "engines": {
+    "bun": ">=1.0.0",
+    "bash": ">=4.0"
+  },
+  "keywords": [
+    "bun",
+    "test",
+    "concurrency",
+    "semaphore",
+    "sentinel",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  }
+}
