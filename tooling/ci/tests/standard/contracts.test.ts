@@ -211,14 +211,11 @@ describe("standard-adherence: contracts conformance", () => {
       const apps = path.join(root, "apps");
       fs.mkdirSync(path.join(apps, "good"), { recursive: true });
       fs.mkdirSync(path.join(apps, "bad"), { recursive: true });
-      // The good fixture is shortlinks, validated at its pinned
-      // @hasna/contracts version (0.11.1 as of the modes removal); accounts was
-      // the original fixture but #122 moved its manifest to the recorded
-      // pre-backend-schema failure class (f6869bad), which would break this
-      // positive control. The whole app tree is copied (minus node_modules and
-      // dist) because the 0.11.1 conformance surface_bindings check resolves
-      // SDK export targets against the source tree.
-      fs.cpSync(path.join(APPS_DIR, "shortlinks"), path.join(apps, "good"), {
+      // The good fixture is access, validated at the current
+      // @hasna/contracts version (0.11.1). The whole app tree is copied (minus
+      // node_modules and dist) because the conformance surface_bindings check
+      // resolves SDK export targets against the source tree.
+      fs.cpSync(path.join(APPS_DIR, "access"), path.join(apps, "good"), {
         recursive: true,
         filter: (src) =>
           !src.includes(`${path.sep}node_modules${path.sep}`) &&

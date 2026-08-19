@@ -83,8 +83,11 @@ if (CONTRACTS_PACKAGE_VERSION !== packageJson.version) {
   throw new Error(`Version mismatch: package.json=${packageJson.version} dist=${CONTRACTS_PACKAGE_VERSION}`);
 }
 
-if (todos.TodosModeSchema.parse("local") !== "local" || todos.TodosModeSchema.parse("cloud") !== "cloud") {
-  throw new Error("dist/todos did not expose the strict Todos mode schema");
+if ("TodosModeSchema" in todos) {
+  throw new Error("dist/todos leaked the retired Todos mode schema");
+}
+if (!("TODOS_OPERATION_MANIFEST" in todos)) {
+  throw new Error("dist/todos did not expose the operation manifest");
 }
 if (todos.TODOS_OPERATION_MANIFEST.operations.length !== 125) {
   throw new Error("dist/todos operation manifest is incomplete");

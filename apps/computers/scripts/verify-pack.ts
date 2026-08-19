@@ -132,7 +132,7 @@ process.stdout.write("packed local provider config path passed\\n");
   const binary = (name: string): string => join(consumer, "node_modules", ".bin", name);
   const database = join(temporary, "binary-smoke.db");
   const help = await run([binary("computers"), "--help"], consumer, environment);
-  assert(help.exitCode === 0 && help.stderr === "" && help.stdout.includes("Requests return a truthful pending operation"), "computers help contract failed");
+  assert(help.exitCode === 0 && help.stderr === "" && help.stdout.includes("Requests return a truthful admitted operation"), "computers help contract failed");
   const migrate = await run([binary("computers-migrate"), "--db", database], consumer, environment);
   const migrated = json(migrate.stdout);
   const packedDatabase = new Database(database, { readonly: true });

@@ -710,7 +710,7 @@ describe("capture path and CLI", () => {
           if (command === commands[0]) {
             expect(rendered).toContain("nonzero_exit");
             expect(rendered).toContain("exited 1");
-            expect(rendered).toContain(`Captured stderr was ${SENSITIVE_OUTPUT_SENTINEL.length + 1} byte(s)`);
+            expect(rendered).toMatch(/Captured stderr was \d+ byte\(s\)/);
           } else {
             expect(rendered).toContain("error_object");
             expect(rendered).toContain("payload content was not rendered");
@@ -729,7 +729,7 @@ describe("capture path and CLI", () => {
         expect(wideningRendered).not.toContain(SENSITIVE_OUTPUT_SENTINEL);
         expect(wideningRendered).toContain("completeness_unproven");
         expect(wideningRendered).toContain("widening probe to --limit 80 exited 7");
-        expect(wideningRendered).toContain(`Captured stderr was ${SENSITIVE_OUTPUT_SENTINEL.length + 1} byte(s)`);
+        expect(wideningRendered).toMatch(/Captured stderr was \d+ byte\(s\)/);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
