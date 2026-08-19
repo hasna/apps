@@ -3,18 +3,90 @@
   "name": "workforce",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
-  "description": "Unified roster/HRIS CLI + MCP + serve treating humans, contractors and agents as first-class org members. Local mode uses SQLite at ~/.hasna/workforce/workforce.db; cloud mode (HASNA_WORKFORCE_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres.",
+  "kitVersion": "0.11.1",
+  "description": "Unified roster/HRIS CLI + MCP + serve treating humans, contractors and agents as first-class org members. The server's data backend is SQLite at ~/.hasna/workforce/workforce.db by default, or PostgreSQL when a DATABASE_URL is set; all reads and writes hit the selected backend directly (Amendment A1 — there is no sync engine or local mirror in the service).",
   "bins": [
     "workforce",
     "workforce-mcp",
     "workforce-serve"
   ],
+  "hosting": [
+    "user-hosted"
+  ],
   "storage": {
-    "mode": "local",
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_WORKFORCE_",
     "aliasEnvPrefix": "WORKFORCE_",
-    "databaseUrlSecretRef": "hasna/oss/workforce/database-url",
-    "sqlitePath": "~/.hasna/workforce/workforce.db"
+    "sqlitePath": "~/.hasna/workforce/workforce.db",
+    "pgTestGate": {
+      "envVar": "WORKFORCE_TEST_DATABASE_URL",
+      "command": "bun test"
+    }
+  },
+  "serviceSurfaces": [
+    {
+      "name": "workforce-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "workforce-serve",
+      "authMode": "api-key",
+      "apiBasePath": "/v1",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      }
+    },
+    {
+      "name": "workforce-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "workforce-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "workforce-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "workforce",
+      "authMode": "local-only"
+    },
+    {
+      "name": "workforce-sdk",
+      "kind": "sdk",
+      "status": "deferred",
+      "authMode": "none",
+      "exportSubpath": ".",
+      "deferReason": "The package root export is not generated from an OpenAPI document (the API publishes no served /openapi.json and the repo has no ./sdk export yet — SDK standardization lane c7ce8b75), so the SDK cannot claim a contract-bound supported status with generatedFrom."
+    }
+  ],
+  "metadata": {
+    "service": {
+      "port": 19455,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "apiBasePath": "/v1",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "apiCredentialsEnv": "HASNA_WORKFORCE_API_CREDENTIALS"
+    },
+    "client": {
+      "apiTokenEnv": "HASNA_WORKFORCE_API_TOKEN"
+    }
   }
 }
