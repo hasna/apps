@@ -117,8 +117,8 @@ export function createPolicyRuleHash(policy: BankingPolicy): string {
     policy.allowSensitiveCardData ? "sensitive" : "redacted",
     maxPayment.currency,
     maxPayment.amountMinor,
-    policy.allowedProviderIds?.join(",") ?? "*",
-    policy.blockedProviderIds?.join(",") ?? "",
+    policy.allowedProviderIds ? [...policy.allowedProviderIds].sort().join(",") : "*",
+    policy.blockedProviderIds ? [...policy.blockedProviderIds].sort().join(",") : "",
   ].join(":");
 }
 
