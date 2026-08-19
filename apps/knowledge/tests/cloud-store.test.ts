@@ -118,17 +118,27 @@ describe('knowledge HTTP store resolver', () => {
     }
   });
 
-  test('ranked search sends one producer request and requires rank plus total evidence', async () => {
+  test('search targets the deployed unified /v1/search contract and adapts its results envelope', async () => {
     const requests: URL[] = [];
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       fetch(request) {
         requests.push(new URL(request.url));
+        // The deployed knowledge server (1.0.0-rc.6) serves the unified
+        // /v1/search envelope: { results, total, query } with rankless hits.
         return Response.json({
-          items: [],
-          total: 0,
-          query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
+          results: [
+            {
+              kind: 'note',
+              id: 'k_deployed_hit',
+              title: 'Deployed unified hit',
+              snippet: 'Excerpt produced by the deployed search endpoint.',
+              url: null,
+            },
+          ],
+          total: 1,
+          query: 'alpha OR beta',
         });
       },
     });
@@ -138,17 +148,62 @@ describe('knowledge HTTP store resolver', () => {
         HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;
-      expect(await store.search({
+      const result = await store.search({
         query: 'alpha OR beta',
         archive: 'active',
         limit: 3,
         offset: 6,
-      })).toEqual({ items: [], total: 0 });
+      });
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toEqual({
+        item: {
+          id: 'k_deployed_hit',
+          short_id: null,
+          title: 'Deployed unified hit',
+          content: 'Excerpt produced by the deployed search endpoint.',
+          url: null,
+          tags: [],
+          metadata: {},
+          created_at: '',
+          updated_at: '',
+        },
+        rank: null,
+      });
       expect(requests).toHaveLength(1);
-      expect(requests[0]!.pathname).toBe('/v1/notes/search');
+      expect(requests[0]!.pathname).toBe('/v1/search');
       expect(requests[0]!.searchParams.get('q')).toBe('alpha OR beta');
       expect(requests[0]!.searchParams.get('limit')).toBe('3');
-      expect(requests[0]!.searchParams.get('offset')).toBe('6');
+      expect(requests[0]!.searchParams.get('kind')).toBe('note');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('search refuses a malformed unified envelope instead of returning a plausible empty page', async () => {
+    const requests: URL[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(request) {
+        requests.push(new URL(request.url));
+        return Response.json({
+          results: [{ id: 'missing_title_and_snippet' }],
+          total: 1,
+          query: 'alpha OR beta',
+        });
+      },
+    });
+    try {
+      const store = resolveKnowledgeHttpStore({
+        NODE_ENV: 'test',
+        HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+      } as NodeJS.ProcessEnv)!;
+      await expect(store.search({ query: 'alpha OR beta' })).rejects.toThrow(
+        /knowledge HTTP search response is missing producer evidence/,
+      );
+      expect(requests).toHaveLength(1);
     } finally {
       server.stop(true);
     }
@@ -224,11 +279,14 @@ describe('knowledge HTTP store resolver', () => {
     });
   }
 
-  test('new client rejects a plausible old-server ranked response without capability evidence', async () => {
+  test('search rejects a pre-unified ranked response shape under the deployed envelope contract', async () => {
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       fetch() {
+        // The pre-unified /notes/search shape ({ items: [{ item, rank }] })
+        // is not what the deployed server serves. Refuse it rather than
+        // treating a foreign envelope as a search result page.
         return Response.json({ items: [{ item: OLD_SERVER_ITEM, rank: 0.8 }], total: 5 });
       },
     });
@@ -238,7 +296,9 @@ describe('knowledge HTTP store resolver', () => {
         HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;
-      await expect(store.search({ query: 'old response' })).rejects.toThrow('bounded_query_capability_required');
+      await expect(store.search({ query: 'old response' })).rejects.toThrow(
+        /knowledge HTTP search response is missing producer evidence/,
+      );
     } finally {
       server.stop(true);
     }
