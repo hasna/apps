@@ -13,11 +13,47 @@
 // response envelope). If the user's local session is already authenticated —
 // the `secrets` CLI resolves its own store — the extension never prompts.
 //
+// ENV RESOLUTION (the host must work with NO PATH): Chrome launches this host
+// through the manifest with the environment launchd gives it, and launchd's
+// PATH is EMPTY (measured on station03: `launchctl getenv PATH` is empty;
+// node and the secrets CLI live only under /Users/hasna/.bun/bin). Two things
+// make that work:
+//
+//   1. install-host.sh materializes an installed copy of this file whose
+//      FIRST LINE is the absolute node binary, so the kernel does not need
+//      `env` to find node.
+//   2. install-host.sh writes host-config.json (next to the installed copy)
+//      embedding the ABSOLUTE path of the `secrets` CLI. This host spawns
+//      that exact binary — never a PATH lookup — and prepends the CLI's own
+//      directory to the child's PATH, so the CLI's interpreter (bun, which
+//      lives in the same directory) resolves without an inherited PATH.
+//
+// Without host-config.json (a dev checkout run from a shell), the host falls
+// back to resolving `secrets` from the parent's PATH, exactly as before.
+//
 // Fail-closed contract: any malformed message, unknown verb, missing CLI, or
 // failing invocation yields an explicit { ok:false, error } response. Silence
 // is not a valid answer.
 
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+
+/** Load the installed host config (absolute secrets CLI path), if present. */
+function loadHostConfig() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(__dirname, "host-config.json"), "utf8"));
+    if (parsed && typeof parsed.secretsCli === "string" && parsed.secretsCli.length > 0) {
+      return { secretsCli: parsed.secretsCli };
+    }
+  } catch {
+    /* no config: dev mode, resolve `secrets` from PATH */
+  }
+  return {};
+}
+
+const HOST_CONFIG = loadHostConfig();
+const CLI_BIN = HOST_CONFIG.secretsCli || "secrets";
 
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const CLI_TIMEOUT_MS = 20_000;
@@ -35,9 +71,19 @@ function encodeFrame(obj) {
 function runCli(args, timeoutMs = CLI_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let child;
+    const childEnv = { ...process.env };
+    if (HOST_CONFIG.secretsCli) {
+      // Chrome's launchd-inherited PATH is empty, and the installed `secrets`
+      // CLI is a `#!/usr/bin/env bun` wrapper whose interpreter lives in the
+      // same directory. Prepending the CLI's own directory makes that
+      // interpreter resolvable without the parent's PATH.
+      const cliDir = path.dirname(CLI_BIN);
+      const inherited = typeof childEnv.PATH === "string" && childEnv.PATH.length > 0 ? childEnv.PATH : "";
+      childEnv.PATH = [cliDir, inherited].filter(Boolean).join(":");
+    }
     try {
-      child = spawn("secrets", args, {
-        env: process.env,
+      child = spawn(CLI_BIN, args, {
+        env: childEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
@@ -89,7 +135,7 @@ function isNonEmptyString(v, max = 4096) {
 async function handleAuthStatus() {
   const r = await runCli(["items", "list", "--json"]);
   if (r.missing) {
-    return { ok: false, error: "E_CLI_NOT_FOUND: the 'secrets' CLI is not on PATH" };
+    return { ok: false, error: `E_CLI_NOT_FOUND: the secrets CLI could not be launched (${CLI_BIN})` };
   }
   if (r.timeout) {
     return { ok: false, error: "E_CLI_TIMEOUT: the secrets CLI did not answer in time" };
@@ -109,7 +155,7 @@ async function handleSearch(msg) {
     return { ok: false, error: "E_BAD_MESSAGE: search.query must be a non-empty string" };
   }
   const r = await runCli(["items", "search", msg.query, "--json"]);
-  if (r.missing) return { ok: false, error: "E_CLI_NOT_FOUND: the 'secrets' CLI is not on PATH" };
+  if (r.missing) return { ok: false, error: `E_CLI_NOT_FOUND: the secrets CLI could not be launched (${CLI_BIN})` };
   if (r.timeout) return { ok: false, error: "E_CLI_TIMEOUT: the secrets CLI did not answer in time" };
   if (r.code !== 0) {
     return { ok: false, error: `E_CLI: items search failed (${firstLine(r.stderr) || "exit " + r.code})` };
@@ -131,7 +177,7 @@ async function handleGet(msg) {
   // --show is the CLI's documented decrypted-output flag; the value travels
   // only through this runtime response, never into host storage.
   const r = await runCli(["items", "get", msg.id, "--show"]);
-  if (r.missing) return { ok: false, error: "E_CLI_NOT_FOUND: the 'secrets' CLI is not on PATH" };
+  if (r.missing) return { ok: false, error: `E_CLI_NOT_FOUND: the secrets CLI could not be launched (${CLI_BIN})` };
   if (r.timeout) return { ok: false, error: "E_CLI_TIMEOUT: the secrets CLI did not answer in time" };
   if (r.code !== 0) {
     const line = firstLine(r.stderr);
@@ -171,7 +217,7 @@ async function handleAddLogin(msg) {
     msg.password,
   ];
   const r = await runCli(args);
-  if (r.missing) return { ok: false, error: "E_CLI_NOT_FOUND: the 'secrets' CLI is not on PATH" };
+  if (r.missing) return { ok: false, error: `E_CLI_NOT_FOUND: the secrets CLI could not be launched (${CLI_BIN})` };
   if (r.timeout) return { ok: false, error: "E_CLI_TIMEOUT: the secrets CLI did not answer in time" };
   if (r.code !== 0) {
     return { ok: false, error: `E_CLI: items add-login failed (${firstLine(r.stderr) || "exit " + r.code})` };
