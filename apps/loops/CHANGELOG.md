@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.5
+
+### Patch Changes
+
+- 9072a3b: `loops show` (CLI, API, and MCP) no longer reports the placeholder literal `'shell'` as a shell command loop's target. Command targets now expose the real resolved command line (secret-scrubbed and bounded for shell targets), a `commandDigest` (`cmd:sha256:<hex>`) binding the exact stored command + shell-quoted args the executor will run, and `commandResolvedFrom: "stored-target"` provenance. An operator can prove the stored target matches an intended candidate by comparing digests; a one-byte mutation changes the digest; credential-shaped values remain scrubbed; non-shell command targets keep their command name and gain the same digest. The executor's shell path now shares the same resolved-command-line function, so the digest binds exactly what runs.
+- Updated dependencies [b630c48]
+  - @hasna/events@0.1.16
+
 ## 0.5.4 (2026-08-20)
 
 ### Patch Changes
@@ -23,15 +31,6 @@
 - The todos task list backing loop error reporting is resolved by slug before write: `ensureTodosTaskList` no longer issues a blind `todos task-lists --add` on every call, so a slug conflict no longer mints a fresh `-legacy-<uuid>` list per firing (247 duplicate 'Loop Error Self Heal' lists existed in the fleet store); the add runs only when the slug is genuinely absent, re-querying and failing closed if it did not materialize.
 
 - Loops-managed git worktrees now default to the canonical `~/.hasna/repos/worktrees` root instead of the app data dir `~/.hasna/loops/worktrees`, per the global worktree-placement rule; `templates`, `template-kit`, `policies` variable defaults, and the built-in workflow snapshots are updated with regression coverage asserting the canonical root is never the loops app data dir.
-
-## 0.5.4
-
-### Patch Changes
-
-- 9072a3b: `loops show` (CLI, API, and MCP) no longer reports the placeholder literal `'shell'` as a shell command loop's target. Command targets now expose the real resolved command line (secret-scrubbed and bounded for shell targets), a `commandDigest` (`cmd:sha256:<hex>`) binding the exact stored command + shell-quoted args the executor will run, and `commandResolvedFrom: "stored-target"` provenance. An operator can prove the stored target matches an intended candidate by comparing digests; a one-byte mutation changes the digest; credential-shaped values remain scrubbed; non-shell command targets keep their command name and gain the same digest. The executor's shell path now shares the same resolved-command-line function, so the digest binds exactly what runs.
-- Updated dependencies [b630c48]
-  - @hasna/contracts@0.11.2
-  - @hasna/events@0.1.16
 
 All notable changes to Loops (npm `@hasna/loops`, repo `hasna/loops`) are
 documented in this file. Version entries are generated from the
