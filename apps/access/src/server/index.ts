@@ -7,6 +7,33 @@ import { APP_VERSION } from "../version.js";
 
 export const DEFAULT_SERVE_PORT = 3483;
 
+/**
+ * Classify early-exit arguments before any bind or environment-bound work.
+ * --help/--version must answer with the port never listening (binds-before-args
+ * class; access-serve previously ignored both flags and bound unconditionally,
+ * BUG row 2920eed6).
+ */
+export function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
+  if (argv.includes("--help") || argv.includes("-h")) return "help";
+  if (argv.includes("--version") || argv.includes("-V")) return "version";
+  return "start";
+}
+
+export function printHelp(): void {
+  console.log(`usage: access-serve [--help] [--version]
+
+access-serve — self-hosted HTTP API for @hasna/access.
+
+options:
+  --help          show this help and exit
+  --version       print the package version and exit
+`);
+}
+
+export function printVersion(): void {
+  console.log(APP_VERSION);
+}
+
 export function getPort(): number {
   const raw = process.env["HASNA_ACCESS_PORT"] || process.env["ACCESS_PORT"];
   const parsed = Number.parseInt(raw ?? "", 10);
@@ -50,5 +77,14 @@ export function startServer(): ReturnType<typeof Bun.serve> {
 }
 
 if (import.meta.main) {
+  const early = handleEarlyArgs(process.argv.slice(2));
+  if (early === "help") {
+    printHelp();
+    process.exit(0);
+  }
+  if (early === "version") {
+    printVersion();
+    process.exit(0);
+  }
   startServer();
 }
