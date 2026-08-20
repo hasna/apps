@@ -11,12 +11,34 @@
 // registry serves today.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readFileSync, renameSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const repoRoot = join(import.meta.dir, "..");
-const contractsBin = join(repoRoot, "node_modules", ".bin", "contracts");
 const manifestPath = join(repoRoot, "hasna.contract.json");
+
+/**
+ * Resolve the pinned `@hasna/contracts` CLI through the installed package's
+ * own declared bin, never through node_modules/.bin. Bun creates no .bin shim
+ * for workspace-linked members (wave #602 aligned members to workspace
+ * versions), so the shim path dies with ENOENT in a fresh checkout. Reading
+ * the package's bin declaration keeps the resolution deterministic under both
+ * install shapes and still pins to what the lockfile installed.
+ */
+function resolveContractsCli(): string {
+  const packageJsonPath = fileURLToPath(import.meta.resolve("@hasna/contracts/package.json"));
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+    bin: { contracts?: string } | string;
+  };
+  const bin = typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin.contracts;
+  if (typeof bin !== "string" || bin.length === 0) {
+    throw new Error("@hasna/contracts does not declare the contracts CLI");
+  }
+  return resolve(dirname(packageJsonPath), bin);
+}
+
+const contractsBin = resolveContractsCli();
 
 // `bins_match_package` fails while package.json still exposes the `hasna-events`
 // alias: the contract allowlist admits only `events` and the documented suffixes.
@@ -97,6 +119,44 @@ describe("repo conformance", () => {
       .filter((check) => check.status === "fail" && !KNOWN_UNRESOLVED_CHECKS.has(check.id))
       .map((check) => `${check.id}: ${check.detail}`);
     expect(unexpected).toEqual([]);
+  });
+});
+
+describe("workspace-linked contracts kit", () => {
+  // Wave #602 aligned member deps to workspace versions; bun creates no .bin
+  // shim for workspace-linked members, so a resolver that assumes
+  // node_modules/.bin/contracts dies with ENOENT in a fresh checkout. The
+  // resolver must read the pinned package's own declared bin instead — the
+  // same shape the contracts/machines precedent (d1936c56d3) used.
+  test("resolves and runs the pinned contracts CLI without a package-local bin shim", () => {
+    const contractsPackage = JSON.parse(
+      readFileSync(fileURLToPath(import.meta.resolve("@hasna/contracts/package.json")), "utf8"),
+    ) as { version: string };
+    expect(contractsBin).toEndWith(join("dist", "cli", "index.js"));
+    expect(contractsBin).not.toContain(join("node_modules", ".bin"));
+
+    const shim = join(repoRoot, "node_modules", ".bin", "contracts");
+    const hiddenShim = `${shim}.clean-install-test-hidden`;
+    let shimMoved = false;
+    try {
+      lstatSync(shim);
+      renameSync(shim, hiddenShim);
+      shimMoved = true;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+
+    try {
+      const result = Bun.spawnSync([contractsBin, "--version"], {
+        cwd: repoRoot,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      expect(new TextDecoder().decode(result.stdout).trim()).toBe(contractsPackage.version);
+    } finally {
+      if (shimMoved) renameSync(hiddenShim, shim);
+    }
   });
 });
 

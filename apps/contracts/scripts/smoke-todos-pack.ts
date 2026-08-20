@@ -17,6 +17,7 @@ import {
   packInstallFallbackAllowed,
   packInstallUnavailableMessage,
   packSmokeUnverifiedMessage,
+  requiredPackFiles,
 } from "../src/testing/packed-consumer.js";
 
 // This script is `smoke:todos-pack`, which `verify:release` runs, which is both
@@ -93,24 +94,25 @@ try {
     throw new Error(`archive listing failed\n${text(listing.stderr)}`);
   }
   const entries = new Set(text(listing.stdout).split("\n").filter(Boolean));
-  for (const required of [
-    "package/dist/todos/index.js",
-    "package/dist/todos/index.d.ts",
+  // The runtime/declaration files are derived from the package's declared
+  // export map, so the list follows the actual packed layout when the
+  // declarations move (dist/ -> committed types/): a hardcoded list is exactly
+  // the drift the wave smoke gate hit. The generated JSON fixtures below are
+  // layout-stable (files field) and stay explicit.
+  const required = [
+    ...requiredPackFiles(JSON.parse(readFileSync(join(root, "package.json"), "utf8"))),
     "package/generated/todos/v1/contract.json",
     "package/generated/todos/v1/operation-manifest.json",
     "package/generated/todos/v1/invariant-registry.json",
     "package/generated/todos/v1/generator-provenance.json",
     "package/generated/todos/v1/checksums.json",
-    "package/dist/deployment/index.js",
-    "package/dist/deployment/index.d.ts",
-    "package/dist/deployment-artifacts.js",
-    "package/dist/deployment-artifacts.d.ts",
     "package/generated/deployment/v1/schema-bundle.json",
     "package/generated/deployment/v1/fixture-bundle.json",
     "package/generated/deployment/v1/checksums.json",
-  ]) {
-    if (!entries.has(required)) {
-      throw new Error(`packed archive is missing ${required}`);
+  ];
+  for (const requiredEntry of required) {
+    if (!entries.has(requiredEntry)) {
+      throw new Error(`packed archive is missing ${requiredEntry}`);
     }
   }
   for (const entry of entries) {
