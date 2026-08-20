@@ -101,6 +101,10 @@ describe("release bin artifacts", () => {
     requireSuccess(run("bun", ["run", "build"]), "bun run build");
   }, 120_000);
 
+  // `npm pack --dry-run` executes the prepack lifecycle script, which since
+  // the contract release-gate wiring runs `scan:artifact` (pack + artifact
+  // scan of the tarball). Measured ~5s on this machine (2026-08-18), so the
+  // default 5s per-test budget is too tight; 60s covers a loaded CI box.
   test("build emits executable bun bin files and package metadata preserves them", () => {
     const pkg = readPackageJson();
     const binEntries = Object.entries(pkg.bin ?? {});
@@ -124,7 +128,7 @@ describe("release bin artifacts", () => {
       expect(packedFile).toBeDefined();
       expect(packedFile!.mode & 0o111).not.toBe(0);
     }
-  });
+  }, { timeout: 60_000 });
 
   test("calendar bin runs through its shebang", () => {
     const pkg = readPackageJson();

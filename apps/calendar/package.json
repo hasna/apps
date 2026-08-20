@@ -37,6 +37,8 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
+    "prepack": "bun run scan:artifact",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
     "postinstall": "mkdir -p $HOME/.hasna/calendar $HOME/.hasna/calendar/templates 2>/dev/null || true"
   },
   "keywords": [
@@ -67,7 +69,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.4.2",
+    "@hasna/contracts": "^0.11.1",
     "@hasna/events": "^0.1.7",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
