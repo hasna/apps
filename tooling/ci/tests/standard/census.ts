@@ -505,8 +505,8 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "test-guard",
-    cause: "surface_matrix: missing supported surface declarations or eligible waivers: sdk (library-class sdk waivers are not permitted by the kit; the bash-only guard ships no importable Node SDK export — sdk declared deferred truthfully); no_cloud_guard: high sentinel.sh: Legacy .hasna/cloud runtime config is forbidden (source reference) (sentinel.sh:22 sources $HOME/.hasna/cloud/hasna-cloud-env.sh when present — a retired runtime surface, carried byte-faithfully from the machine-local install). All other checks pass: manifest_valid, bins_allowlisted, bins_match_package, surface_bindings, published_artifact_gate (prepack reaches scan:artifact), public_manifest_safety, hosting_story, credential_seam_compliance.",
-    task: "todos 940070c4-4fdf-4796-8a70-6f63d135f714 (successor conformance lane); SDK surface: SDK lane todos c7ce8b75-3d4e-4376-854c-875cd20c605b; sentinel.sh:22 no-cloud reference removal rides the normal package-home PR chain",
+    cause: "surface_matrix: missing supported surface declarations or eligible waivers: sdk (library-class sdk waivers are not permitted by the kit; the bash-only guard ships no importable Node SDK export — sdk declared deferred truthfully). All other checks pass: manifest_valid, bins_allowlisted, bins_match_package, surface_bindings, published_artifact_gate (prepack reaches scan:artifact), public_manifest_safety, hosting_story, credential_seam_compliance, no_cloud_guard (sentinel.sh no longer references the retired .hasna/cloud runtime config).",
+    task: "todos 940070c4-4fdf-4796-8a70-6f63d135f714 (successor conformance lane); SDK surface: SDK lane todos c7ce8b75-3d4e-4376-854c-875cd20c605b",
   },
 ];
 
