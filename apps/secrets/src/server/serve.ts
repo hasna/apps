@@ -16,7 +16,7 @@
 
 import { ApiKeyStore, verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import {
-  createCloudPoolFromEnv,
+  createServerPoolFromEnv,
   checkHealth,
   type PoolQueryClient,
 } from "../generated/storage-kit/index.js";
@@ -361,7 +361,7 @@ export async function startCloudServer(): Promise<void> {
   const signingSecret = resolveSigningSecret();
   const port = resolvePort();
 
-  const { client } = createCloudPoolFromEnv(APP_NAME, { applicationName: "secrets-serve" });
+  const { client } = createServerPoolFromEnv(APP_NAME, { applicationName: "secrets-serve" });
   const store = new CloudSecretsStore(client);
   // Idempotent version baseline: every existing value becomes version 1
   // (change_kind=migration) exactly once. Runs at boot before serving; a second
@@ -372,7 +372,7 @@ export async function startCloudServer(): Promise<void> {
   const verifier = verifyApiKey({
     app: APP_NAME,
     signingSecret,
-    isRevoked: keyStore.isRevoked,
+    keyStatus: keyStore.keyStatus,
     audit: (e) => {
       // Structured, value-free audit line (never logs the token or secret).
       console.log(JSON.stringify({ evt: "api_auth", ...e }));
