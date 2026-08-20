@@ -431,10 +431,18 @@ recordings_run_trusted_tailscale_status() {
     "$snapshot_app" "$snapshot_cli" "$real_host_kernel" "$snapshot_parent" "$codesign_executable" || return 1
 
   if [ "$real_host_kernel" = "Darwin" ]; then
+    # TERM must survive the scrub: measured on station06 (macOS 26.2), the official
+    # Tailscale CLI without TERM prints "The Tailscale GUI failed to start: The
+    # operation couldn't be completed. (Tailscale.CLIError error 3.)" and emits no
+    # JSON under env -i, while the same invocation with TERM set emits valid status
+    # JSON with either HOME value. TERM carries no authority; the rest of the scrubbed
+    # environment (HOME=/tmp, pinned PATH, private TMPDIR) stays untouched so no
+    # caller-provided variable reaches the official CLI.
     /usr/bin/env -i \
       HOME=/tmp \
       PATH=/usr/bin:/bin:/usr/sbin:/sbin \
       TMPDIR="$snapshot_parent" \
+      TERM="${TERM:-xterm-256color}" \
       "$snapshot_cli" status --json
   else
     # Test-only fixture controls. No caller-provided status environment reaches

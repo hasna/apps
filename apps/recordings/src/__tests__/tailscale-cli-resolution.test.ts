@@ -387,6 +387,27 @@ describe("Tailscale CLI resolution", () => {
     expect(source).not.toContain('(-R "$requirement"');
   });
 
+  test("preserves TERM in the scrubbed status environment on Darwin", () => {
+    // Measured on station06 (macOS 26.2): under `env -i HOME=... PATH=... TMPDIR=...`
+    // the official Tailscale CLI prints "The Tailscale GUI failed to start: The
+    // operation couldn't be completed. (Tailscale.CLIError error 3.)" and emits no
+    // JSON. Adding TERM=xterm-256color makes the same invocation emit valid status
+    // JSON with either HOME value. The resolver must keep the scrubbed environment
+    // (no caller-provided vars reach the official CLI) but preserve TERM, or every
+    // local build fails at the builder-identity gate on a fleet Mac.
+    const source = readFileSync(resolver, "utf8");
+    const statusFunction = sliceBetween(
+      source,
+      "recordings_run_trusted_tailscale_status() {",
+      "\n}\n",
+    );
+    // The function contains two Darwin branches (codesign selection, then the
+    // scrubbed status invocation); the assertion targets the invocation that
+    // reaches the official CLI, so pin TERM and the status invocation together.
+    expect(statusFunction).toContain('TERM="${TERM:-xterm-256color}"');
+    expect(statusFunction).toContain('"$snapshot_cli" status --json');
+  });
+
   test("resolves the canonicalization executable from both system realpath locations", () => {
     // macOS 26 ships realpath at /bin/realpath, not /usr/bin/realpath (measured on
     // station03/station06/station07: /usr/bin/realpath absent, /bin/realpath present).
