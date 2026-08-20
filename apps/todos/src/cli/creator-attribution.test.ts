@@ -105,7 +105,9 @@ describe("todos comment — records who wrote it", () => {
       task.id,
     ]);
 
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(result.stderr).toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(result.stdout)).toMatchObject({
       task_id: task.id,
       agent_id: "brutus",
@@ -154,7 +156,9 @@ describe("todos comment — records who wrote it", () => {
     }
 
     const shown = await runCli(["--json", "show", task.id]);
-    expect(shown).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(shown.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(shown.stderr).toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(shown.stdout).comments).toHaveLength(0);
   });
 

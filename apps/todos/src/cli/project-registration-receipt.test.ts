@@ -140,10 +140,9 @@ describe("project-registration receipt lookup CLI", () => {
     writeFileSync(requestPath, JSON.stringify(lookup));
 
     const success = await runCli(root, dbPath, requestPath);
-    expect({ exitCode: success.exitCode, stderr: success.stderr }).toEqual({
-      exitCode: 0,
-      stderr: "",
-    });
+    expect(success.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(success.stderr).toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(success.stdout)).toMatchObject({
       receipt: {
         receipt_id: receipt.receipt_id,

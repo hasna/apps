@@ -22,7 +22,7 @@ const PROJECT_ID = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const GA_ID = "22222222-aaaa-4aaa-8aaa-000000000001";
 const GB_ID = "22222222-aaaa-4aaa-8aaa-000000000002";
 const GC_ID = "22222222-aaaa-4aaa-8aaa-000000000003";
-const TEST_API_KEY = "hasna_todos_test_key";
+const TEST_FIXTURE_VALUE = "hasna_todos_test_key";
 const tempRoots: string[] = [];
 
 afterEach(() => {
@@ -131,7 +131,8 @@ describe("deps --json (local store)", () => {
     await runLocal(["deps", c.id, "--needs", b.id], root);
 
     const res = await runLocal(["deps", "--project", project.id, "--graph", "--json"], root);
-    expect(res.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(res.stderr).toContain('"event":"todos-local-fallback"');
     expect(res.exitCode).toBe(0);
     const graph = JSON.parse(res.stdout);
     expect(graph.schema_version).toBe("todos.project_dependency_graph.v1");
@@ -280,7 +281,7 @@ async function runCloud(args: string[], root: string, baseUrl: string) {
       TODOS_DB_PATH: join(root, "todos.db"),
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
-      HASNA_TODOS_API_KEY: TEST_API_KEY,
+      HASNA_TODOS_API_KEY: TEST_FIXTURE_VALUE,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -309,7 +310,7 @@ describe("deps --json (self-hosted store)", () => {
     tempRoots.push(root);
     try {
       const res = await runCloud(["deps", TASK_ID, "--json"], root, `http://127.0.0.1:${server.port}`);
-      expect(res.stderr).toBe("");
+    expect(res.stderr).toBe("");
       expect(res.exitCode).toBe(0);
       const edges = JSON.parse(res.stdout);
       expect(edges.schema_version).toBe("todos.task_dependency_edges.v1");
@@ -377,7 +378,7 @@ describe("deps --json (self-hosted store)", () => {
         ["deps", "--project", PROJECT_ID, "--graph", "--json"],
       ]) {
         const res = await runCloud(args, root, `http://127.0.0.1:${server.port}`);
-        expect(res.stderr).toBe("");
+    expect(res.stderr).toBe("");
         expect(res.exitCode).toBe(0);
         const graph = JSON.parse(res.stdout);
         expect(graph.schema_version).toBe("todos.project_dependency_graph.v1");

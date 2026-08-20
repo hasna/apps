@@ -10,6 +10,11 @@ let tempDir = "";
 // runner does not terminate otherwise-valid child work first.
 setDefaultTimeout(15_000);
 
+/** Local-mode todos CLI runs carry the fallback notice on stderr (incident 715712). */
+function expectLocalModeStderr(result: { stderr: string }): void {
+  expect(result.stderr).toContain('"event":"todos-local-fallback"');
+}
+
 async function runTodos(args: string[]) {
   const child = Bun.spawn({
     cmd: ["bun", "run", "src/cli/index.tsx", ...args],
@@ -48,7 +53,7 @@ describe("shared events CLI integration", () => {
     const result = await runTodos(["webhooks", "--help"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expectLocalModeStderr(result);
     expect(result.stdout).toContain("Usage: todos webhooks");
     expect(result.stdout).toContain("add [options] <target>");
     expect(result.stdout).not.toContain("Universal task management");
@@ -57,12 +62,12 @@ describe("shared events CLI integration", () => {
   test("prints JSON for event and webhook list commands", async () => {
     const events = await runTodos(["events", "list", "--json"]);
     expect(events.exitCode).toBe(0);
-    expect(events.stderr).toBe("");
+    expectLocalModeStderr(events);
     expect(JSON.parse(events.stdout)).toEqual([]);
 
     const webhooks = await runTodos(["webhooks", "list", "--json"]);
     expect(webhooks.exitCode).toBe(0);
-    expect(webhooks.stderr).toBe("");
+    expectLocalModeStderr(webhooks);
     expect(JSON.parse(webhooks.stdout)).toEqual([]);
   });
 
@@ -91,7 +96,7 @@ describe("shared events CLI integration", () => {
       "--json",
     ]);
     expect(addWebhook.exitCode).toBe(0);
-    expect(addWebhook.stderr).toBe("");
+    expectLocalModeStderr(addWebhook);
 
     const addTask = await runTodos(["add", "Webhook-delivered task", "--json"]);
     expect(addTask.exitCode).toBe(0);
@@ -138,7 +143,7 @@ describe("shared events CLI integration", () => {
       "--json",
     ]);
     expect(addWebhook.exitCode).toBe(0);
-    expect(addWebhook.stderr).toBe("");
+    expectLocalModeStderr(addWebhook);
 
     const routable = await runTodos([
       "--json",
@@ -203,7 +208,7 @@ describe("shared events CLI integration", () => {
         "--json",
       ]);
       expect(addWebhook.exitCode).toBe(0);
-      expect(addWebhook.stderr).toBe("");
+      expectLocalModeStderr(addWebhook);
     }
 
     const first = await runTodos(["--json", "task", "upsert", "--fingerprint", "loop:event:1", "--title", "Event upsert"]);

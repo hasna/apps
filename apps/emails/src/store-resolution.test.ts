@@ -13,7 +13,7 @@
 // read the ambient environment could not express the "nothing configured" quadrant at
 // all — and would have silently tested three quadrants while claiming four.
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { closeDatabase, defaultDatabasePath, getDatabasePath, resetDatabase } from "./db/database.js";
@@ -27,6 +27,7 @@ import {
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,
+  resetEmailsLocalFallbackNotice,
 } from "./store-resolution.js";
 
 /** An environment with nothing this resolver reads, so a quadrant is exactly stated. */
@@ -35,7 +36,7 @@ function bare(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
 }
 
 const A_URL = "https://mail.example.test";
-const A_TOKEN = "emss_conformance_session_token";
+const A_FIXTURE_VALUE = "hasna-test-fixture-value-01";
 
 describe("configured store resolution — the four quadrants", () => {
   it("defaults to the local SQLite database when nothing is configured", () => {
@@ -97,7 +98,7 @@ describe("configured store resolution — the four quadrants", () => {
   });
 
   it("uses the API when only the base URL is configured", () => {
-    const plan = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN }));
+    const plan = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
     expect(plan.store).toBe("api");
     if (plan.store !== "api") return;
     expect(plan.baseUrl).toBe(A_URL);
@@ -112,15 +113,15 @@ describe("configured store resolution — the four quadrants", () => {
     // exactly the input that used to serialise it with the plan.
     const plan = planEmailStore(
       bare({
-        [API_BASE_URL_SETTING]: `https://operator:${A_TOKEN}@mail.example.test/v1?t=1#frag`,
-        [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN,
+        [API_BASE_URL_SETTING]: `https://operator:${A_FIXTURE_VALUE}@mail.example.test/v1?t=1#frag`,
+        [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
       }),
     );
     expect(plan.store).toBe("api");
     if (plan.store !== "api") return;
     expect(plan.baseUrl).toBe("https://mail.example.test");
     // The whole object, because a plan is what reaches a log line.
-    expect(JSON.stringify(plan)).not.toContain(A_TOKEN);
+    expect(JSON.stringify(plan)).not.toContain(A_FIXTURE_VALUE);
     expect(JSON.stringify(plan)).not.toContain("operator");
   });
 
@@ -129,10 +130,10 @@ describe("configured store resolution — the four quadrants", () => {
     // userinfo stripping finds nothing to strip and the token survives into every string
     // derived from it, including the diagnostics detail the seam requires to be safe to
     // print. Requiring http/https is what makes the stripping happen at all.
-    for (const value of [`operator:${A_TOKEN}@mail.example.test/v1`, "mail.example.test", "ftp://mail.example.test"]) {
+    for (const value of [`operator:${A_FIXTURE_VALUE}@mail.example.test/v1`, "mail.example.test", "ftp://mail.example.test"]) {
       let thrown: unknown;
       try {
-        planEmailStore(bare({ [API_BASE_URL_SETTING]: value, [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN }));
+        planEmailStore(bare({ [API_BASE_URL_SETTING]: value, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
       } catch (error) {
         thrown = error;
       }
@@ -141,12 +142,12 @@ describe("configured store resolution — the four quadrants", () => {
       expect(error.message).toContain(API_BASE_URL_SETTING);
       expect(error.settings).toEqual([API_BASE_URL_SETTING]);
       // The offending value is never quoted back — it can carry the credential.
-      expect(error.message).not.toContain(A_TOKEN);
+      expect(error.message).not.toContain(A_FIXTURE_VALUE);
     }
     // POSITIVE CONTROL: a loopback http URL is legitimate and must still resolve, so the
     // scheme check is not simply "reject everything".
     const loopback = planEmailStore(
-      bare({ [API_BASE_URL_SETTING]: "http://127.0.0.1:8080", [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN }),
+      bare({ [API_BASE_URL_SETTING]: "http://127.0.0.1:8080", [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }),
     );
     expect(loopback.store === "api" && loopback.baseUrl).toBe("http://127.0.0.1:8080");
   });
@@ -172,7 +173,7 @@ describe("configured store resolution — the four quadrants", () => {
     ]) {
       let thrown: unknown;
       try {
-        planEmailStore(bare({ [API_BASE_URL_SETTING]: value, [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN }));
+        planEmailStore(bare({ [API_BASE_URL_SETTING]: value, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
       } catch (error) {
         thrown = error;
       }
@@ -185,7 +186,7 @@ describe("configured store resolution — the four quadrants", () => {
       expect(error.settings).toEqual([API_BASE_URL_SETTING]);
       // The refusal is the string most likely to reach a log line, and the URL's
       // userinfo can carry the credential — never quote the value back.
-      expect(error.message).not.toContain(A_TOKEN);
+      expect(error.message).not.toContain(A_FIXTURE_VALUE);
       expect(error.message).not.toContain(value);
     }
   });
@@ -199,7 +200,7 @@ describe("configured store resolution — the four quadrants", () => {
       "http://localhost:8080",
       "http://localhost",
     ]) {
-      const plan = planEmailStore(bare({ [API_BASE_URL_SETTING]: value, [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN }));
+      const plan = planEmailStore(bare({ [API_BASE_URL_SETTING]: value, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
       expect(plan.store, `${value} must resolve to the API store`).toBe("api");
     }
   });
@@ -227,7 +228,7 @@ describe("configured store resolution — the four quadrants", () => {
     const allThree = planEmailStore(
       bare({
         [API_BASE_URL_SETTING]: A_URL,
-        [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN,
+        [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
         [API_CREDENTIAL_SETTINGS[1]]: "emid_agent_identity",
         [API_CREDENTIAL_SETTINGS[2]]: "hasna_k",
       }),
@@ -253,7 +254,7 @@ describe("configured store resolution — the four quadrants", () => {
       const env = bare({
         [databaseSetting]: "/tmp/local.db",
         [API_BASE_URL_SETTING]: A_URL,
-        [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN,
+        [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
       });
       // A THROW, not an outcome. `planEmailStore` returns a value for every resolvable
       // configuration, so a returned answer here would be indistinguishable from a
@@ -277,7 +278,7 @@ describe("configured store resolution — the four quadrants", () => {
       // English.
       expect([...error.settings].sort()).toEqual([databaseSetting, API_BASE_URL_SETTING].sort());
       // No value is ever quoted, because one of these settings can be a credential.
-      expect(error.message).not.toContain(A_TOKEN);
+      expect(error.message).not.toContain(A_FIXTURE_VALUE);
       expect(error.message).not.toContain("/tmp/local.db");
     }
   });
@@ -291,7 +292,7 @@ describe("configured store resolution — the four quadrants", () => {
           [DATABASE_PATH_SETTINGS[1]]: "/tmp/b.db",
           [API_BASE_URL_SETTING]: A_URL,
           [API_SETTINGS_POINTER]: "vault://emails/client",
-          [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN,
+          [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
         }),
       );
     } catch (error) {
@@ -456,8 +457,8 @@ describe("the store the resolution actually hands back", () => {
 
   it("builds the API store for a configured base URL, and leaks no credential", () => {
     only({
-      [API_BASE_URL_SETTING]: `https://operator:${A_TOKEN}@mail.example.test/v1?t=1`,
-      [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN,
+      [API_BASE_URL_SETTING]: `https://operator:${A_FIXTURE_VALUE}@mail.example.test/v1?t=1`,
+      [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
     });
     const store = createConfiguredEmailStore();
     expect(store.capabilities).toEqual(HTTP_STORE_CAPABILITIES);
@@ -465,7 +466,7 @@ describe("the store the resolution actually hands back", () => {
     expect(HTTP_STORE_CAPABILITIES).not.toEqual(SQLITE_STORE_CAPABILITIES);
     // The diagnostics string is the one most likely to reach a log, and the configured
     // URL here carries userinfo and a query string on purpose.
-    expect(store.descriptor.detail).not.toContain(A_TOKEN);
+    expect(store.descriptor.detail).not.toContain(A_FIXTURE_VALUE);
     expect(store.descriptor.detail).not.toContain("operator");
     expect(store.descriptor.detail).toBe("Emails API at https://mail.example.test");
   });
@@ -476,7 +477,7 @@ describe("the store the resolution actually hands back", () => {
     // operation — the runtime-confirmed shape of the bug this guard exists for.
     only({
       [API_BASE_URL_SETTING]: "http://192.0.2.10:8080",
-      [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN,
+      [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
     });
     expect(() => createConfiguredEmailStore()).toThrow(StoreConfigurationError);
     expect(() => createConfiguredEmailStore()).toThrow("must use https except for a loopback development URL");
@@ -488,7 +489,7 @@ describe("the store the resolution actually hands back", () => {
     only({
       [DATABASE_PATH_SETTINGS[1]]: ":memory:",
       [API_BASE_URL_SETTING]: A_URL,
-      [API_CREDENTIAL_SETTINGS[0]]: A_TOKEN,
+      [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
     });
     expect(() => createConfiguredEmailStore()).toThrow(StoreConfigurationError);
   });
@@ -515,5 +516,66 @@ describe("what the resolver is not allowed to read", () => {
     expect(source.length).toBeGreaterThan(4_000);
     expect(source).toContain("DATABASE_PATH_SETTINGS");
     expect(source).toContain(["EMAILS", "SELF", "HOSTED", "URL"].join("_"));
+  });
+});
+
+describe("local-fallback notice (incident 715712)", () => {
+  // Regression: a harness session-env re-provision dropped EMAILS_SELF_HOSTED_URL
+  // (+ the pointer) and the CLI silently served the local SQLite store at rc=0 —
+  // the mailbox appeared empty. Before serving local on the all-unset default
+  // row, the resolver must emit one machine-readable stderr notice naming the
+  // mode switch (the same family as the merged secrets fix, PR #681 / incident
+  // 715558).
+
+  it("emits one stderr notice on the all-unset default before serving local", () => {
+    resetEmailsLocalFallbackNotice();
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const plan = planEmailStore(bare());
+      expect(plan.store).toBe("sqlite");
+      expect(plan.setting).toBeNull();
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      const notice = JSON.parse(errSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
+      expect(notice.event).toBe("emails-local-fallback");
+      expect(notice.notice).toContain(API_BASE_URL_SETTING);
+      expect(notice.notice).toContain(API_SETTINGS_POINTER);
+      expect(notice.notice).toContain("local SQLite");
+      // Once-only per process: repeated all-unset resolutions stay silent.
+      planEmailStore(bare());
+      expect(errSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("an explicitly configured database path stays silent (chosen local store, not a fallback)", () => {
+    resetEmailsLocalFallbackNotice();
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const plan = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[0]]: "/tmp/explicit.db" }));
+      expect(plan.store).toBe("sqlite");
+      expect(plan.setting).toBe(DATABASE_PATH_SETTINGS[0]);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("the API plan and the fail-closed rows emit no notice", () => {
+    resetEmailsLocalFallbackNotice();
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const api = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
+      expect(api.store).toBe("api");
+      // Pointer-without-URL and URL-without-credential remain hard boot errors —
+      // the fail-closed partial-pair behaviour is unchanged.
+      expect(() => planEmailStore(bare({ [API_SETTINGS_POINTER]: "vault://emails/client" })))
+        .toThrow(StoreConfigurationError);
+      expect(() => planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL })))
+        .toThrow(StoreConfigurationError);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

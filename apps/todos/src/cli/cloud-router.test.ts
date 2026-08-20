@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   planProjectLinkReceiptId,
   planProjectLinkResultDigest,
@@ -15,6 +15,7 @@ import {
   resolveTodosCliTransport,
   isCloudRouting,
   resetTodosCloudClient,
+  resetTodosLocalFallbackNotice,
   cloudListTasks,
   cloudGetTask,
   cloudCreateTask,
@@ -2827,5 +2828,65 @@ describe("requireTodosRemoteAuthorityEnv", () => {
     const env = requireTodosRemoteAuthorityEnv({ ...CLOUD_ENV, UNRELATED_VAR: "kept" });
 
     expect(env.UNRELATED_VAR).toBe("kept");
+  });
+});
+
+describe("local-fallback notice (incident 715712)", () => {
+  // Regression: a harness session-env re-provision dropped HASNA_TODOS_API_URL
+  // + HASNA_TODOS_API_KEY and the CLI silently served the on-box SQLite store
+  // at rc=0 — tasks appeared gone. Before serving local on the all-unset
+  // default branch, the resolver must emit one machine-readable stderr notice
+  // naming the mode switch (the same family as the merged secrets fix, PR
+  // #681 / incident 715558).
+
+  test("all-unset emits one stderr notice naming the mode switch before serving local", () => {
+    resetTodosLocalFallbackNotice();
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const resolution = resolveTodosCliTransport({});
+      expect(resolution).toEqual({ transport: "sqlite", selected: false, source: "default" });
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      const notice = JSON.parse(errSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
+      expect(notice.event).toBe("todos-local-fallback");
+      expect(notice.notice).toContain("HASNA_TODOS_API_URL");
+      expect(notice.notice).toContain("HASNA_TODOS_API_KEY");
+      expect(notice.notice).toContain("local SQLite");
+      expect(notice.apiUrlPresent).toBe(false);
+      expect(notice.apiKeyPresent).toBe(false);
+      // Once-only per process: repeated local resolutions stay silent.
+      resolveTodosCliTransport({});
+      expect(errSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test("hosted pair selects http and emits no fallback notice", () => {
+    resetTodosLocalFallbackNotice();
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const resolution = resolveTodosCliTransport({
+        HASNA_TODOS_API_URL: "https://todos.example.test",
+        HASNA_TODOS_API_KEY: "fixture-key",
+      });
+      expect(resolution.transport).toBe("http");
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test("partial pair still fails closed and emits no notice", () => {
+    resetTodosLocalFallbackNotice();
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => resolveTodosCliTransport({ HASNA_TODOS_API_URL: "https://todos.example.test" }))
+        .toThrow("REMOTE_API_KEY_MISSING");
+      expect(() => resolveTodosCliTransport({ HASNA_TODOS_API_KEY: "fixture-key" }))
+        .toThrow("REMOTE_API_URL_MISSING");
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

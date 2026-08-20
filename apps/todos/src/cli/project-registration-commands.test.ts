@@ -313,10 +313,9 @@ describe("project-registration CLI", () => {
       dbPath,
       ["--json", "project-registration", "capability"],
     );
-    expect({
-      exitCode: capabilityResult.exitCode,
-      stderr: capabilityResult.stderr,
-    }).toEqual({ exitCode: 0, stderr: "" });
+    expect(capabilityResult.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(capabilityResult.stderr).toContain('"event":"todos-local-fallback"');
     const capability = JSON.parse(capabilityResult.stdout)
       .capability as TodosProjectRegistrationCapability;
     expect(capability).toMatchObject({
@@ -346,10 +345,9 @@ describe("project-registration CLI", () => {
       dbPath,
       ["--json", "project-registration", "create", "--file", projectRequestPath],
     );
-    expect({
-      exitCode: projectBind.exitCode,
-      stderr: projectBind.stderr,
-    }).toEqual({ exitCode: 0, stderr: "" });
+    expect(projectBind.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(projectBind.stderr).toContain('"event":"todos-local-fallback"');
     const projectBindingReceipt = JSON.parse(projectBind.stdout).receipt;
     expect(projectBindingReceipt).toMatchObject({
       outcome: "accepted",
@@ -375,10 +373,9 @@ describe("project-registration CLI", () => {
         validationPath,
       ],
     );
-    expect({
-      exitCode: validationResult.exitCode,
-      stderr: validationResult.stderr,
-    }).toEqual({ exitCode: 0, stderr: "" });
+    expect(validationResult.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(validationResult.stderr).toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(validationResult.stdout).validation).toMatchObject({
       valid: true,
       source_receipt_id: projectBindingReceipt.receipt_id,
@@ -406,10 +403,9 @@ describe("project-registration CLI", () => {
       dbPath,
       ["--json", "project-registration", "create", "--file", taskListRequestPath],
     );
-    expect({
-      exitCode: taskListBind.exitCode,
-      stderr: taskListBind.stderr,
-    }).toEqual({ exitCode: 0, stderr: "" });
+    expect(taskListBind.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(taskListBind.stderr).toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(taskListBind.stdout).receipt).toMatchObject({
       outcome: "accepted",
       target_id: taskList.id,
@@ -425,8 +421,9 @@ describe("project-registration CLI", () => {
       "2",
       "--all",
     ]);
-    expect({ exitCode: listed.exitCode, stderr: listed.stderr })
-      .toEqual({ exitCode: 0, stderr: "" });
+    expect(listed.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(listed.stderr).toContain('"event":"todos-local-fallback"');
     const result = JSON.parse(listed.stdout);
     expect(result).toMatchObject({
       source_project_id: sourceProjectId,

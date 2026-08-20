@@ -98,6 +98,17 @@ export interface FlipAppSpec {
    */
   keyViaSecretPointer?: boolean;
   /**
+   * Env keys the provisioned fleet env file MUST carry after an api-mode
+   * write, verified ON the target machine before the file becomes the
+   * provisioned state. Defaults to [apiUrlEnv, apiKeyEnv] — the effective
+   * pair every app's script writes. A provision that would leave a reduced
+   * env file aborts with FLIP_ERROR (exit 3) instead of starting a session
+   * whose CLIs silently fall back to empty local stores (incident 715712:
+   * a harness session-env re-provision dropped the hosted API env for
+   * TODOS/KNOWLEDGE/EMAILS and the CLIs served false-empty SQLite at rc=0).
+   */
+  clientEnvRequiredKeys?: readonly string[];
+  /**
    * Dotted JSON path to the reported mode string inside the app's
    * `<cliBin> <statusArgs>` payload. Default "mode" (all generic apps).
    * Emails reports its mode at `mode.current`.
@@ -344,6 +355,27 @@ export interface BuildScriptOptions {
 }
 
 /**
+ * Bash lines that abort (FLIP_ERROR, exit 3) when the freshly written env
+ * file is missing any key of the app's required per-app env contract.
+ *
+ * Incident 715712: a harness session-env re-provision dropped the hosted API
+ * env and the CLIs silently fell back to empty on-box SQLite stores (false
+ * empty reads at rc=0). The verification runs against the TEMP file BEFORE
+ * it is moved into place, so a reduced env can never become the provisioned
+ * state — every provision either restores the full hosted API env contract
+ * or fails loudly before the session starts.
+ */
+function buildEnvContractVerification(spec: FlipAppSpec): string[] {
+  const requiredKeys = spec.clientEnvRequiredKeys ?? [spec.apiUrlEnv, spec.apiKeyEnv];
+  return [
+    "set -eu",
+    "for REQUIRED_KEY in " + requiredKeys.map((k) => sq(k)).join(" ") + "; do",
+    '  grep -q "^${REQUIRED_KEY}=" "$TMP_ENV" || { echo "FLIP_ERROR: provisioned env is missing required key ${REQUIRED_KEY}; refusing to start with a reduced env (hosted API vars must be restored on every provision)" >&2; exit 3; }',
+    "done",
+  ];
+}
+
+/**
  * Build the remote bash script that applies (mode="api") or reverts
  * (mode="local") the flip for one app on one machine.
  *
@@ -378,6 +410,7 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
       for (const [key, value] of Object.entries(spec.extraApiEnv ?? {})) {
         pointerLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
       }
+      pointerLines.push(...buildEnvContractVerification(spec));
       pointerLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
       lines.push("export APP ENV_DIR ENV_FILE", pointerLines.join("\n"));
     } else {
@@ -394,6 +427,7 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
       for (const [key, value] of Object.entries(spec.extraApiEnv ?? {})) {
         writeEnvLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
       }
+      writeEnvLines.push(...buildEnvContractVerification(spec));
       writeEnvLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
       lines.push(
         "export APP ENV_DIR ENV_FILE",

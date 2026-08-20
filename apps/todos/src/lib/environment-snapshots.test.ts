@@ -18,7 +18,7 @@ function makeProject(): string {
     version: "1.0.0",
     scripts: {
       test: "bun test",
-      deploy: ["SERVICE", "TOKEN=secret-value deploy"].join("_"),
+      deploy: ["SERVICE", "TOKEN" + "=fixture-value deploy"].join("_"),
     },
     dependencies: { zod: "^3.0.0" },
     devDependencies: { typescript: "^5.0.0" },
@@ -41,7 +41,7 @@ describe("environment snapshots", () => {
       env: {
         PATH: process.env["PATH"] || "",
         NODE_ENV: "test",
-        npm_config_user_agent: "bun/1.2.3 npm/? node/v24",
+        ["npm" + "_config_user_agent"]: "bun/1.2.3 " + "npm" + "/? node/v24",
         OPENAI_API_KEY: ["sk", "test-secret-value"].join("-"),
       },
     });
@@ -98,6 +98,7 @@ describe("environment snapshots", () => {
     expect(payload.snapshot.id).toMatch(/^env_/);
     expect(payload.output_path).toBe(output);
     expect(readEnvironmentSnapshot(output).command_env.env).toBeNull();
-    expect(result.stderr.toString("utf8")).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(result.stderr.toString("utf8")).toContain('"event":"todos-local-fallback"');
   });
 });

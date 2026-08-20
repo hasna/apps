@@ -208,6 +208,42 @@ function credentialFreeOrigin(value: string): string {
 }
 
 /**
+ * Once-only per-process guard for the local-fallback notice. A long-running
+ * consumer (MCP server) must not emit a notice per request; a CLI one-shot
+ * emits at most one line before its first local read.
+ */
+let emailsLocalFallbackNoticeEmitted = false;
+
+/** Test hook: re-arm the once-only local-fallback notice. */
+export function resetEmailsLocalFallbackNotice(): void {
+  emailsLocalFallbackNoticeEmitted = false;
+}
+
+/**
+ * Emit one machine-readable JSON line on stderr when the store falls back to
+ * the local database with NO hosted intent in the environment (the all-unset
+ * default row). Incident 715712: a harness session-env re-provision dropped
+ * EMAILS_SELF_HOSTED_URL (+ the pointer) and the CLI silently served the
+ * local SQLite store at rc=0 — the mailbox appeared empty. The notice names
+ * the mode switch so a false-empty read is never silent (the same family as
+ * the merged secrets fix, PR #681 / incident 715558). stdout stays pure for
+ * parsers. Values are never included.
+ */
+function emitEmailsLocalFallbackNotice(): void {
+  if (emailsLocalFallbackNoticeEmitted) return;
+  emailsLocalFallbackNoticeEmitted = true;
+  const notice = {
+    event: "emails-local-fallback",
+    store: "sqlite",
+    setting: null,
+    notice:
+      `No hosted API config (${API_BASE_URL_SETTING} + ${API_SETTINGS_POINTER}) is present; ` +
+      "using local SQLite. Hosted mail is NOT visible in this output.",
+  };
+  console.error(JSON.stringify(notice));
+}
+
+/**
  * Decide which store this configuration means, or throw.
  *
  * Pure apart from the default-path branch, which resolves (and, as the database layer
@@ -292,6 +328,14 @@ export function planEmailStore(env: NodeJS.ProcessEnv = process.env): StorePlan 
   // 5. The default: the local database. `setting` is null when nothing named it, which
   //    is the case a `doctor` line has to be able to report as "defaulted".
   const setting = databaseKeys[0] ?? null;
+  if (setting === null) {
+    // The all-unset row: no database path AND no API config. This is the
+    // unselected fallback of incident 715712 — name the mode switch once per
+    // process so a false-empty mailbox can never be a silent rc=0. An
+    // EXPLICIT database path (setting non-null) is a chosen local store and
+    // stays silent, exactly like the secrets fallback fix (PR #681).
+    emitEmailsLocalFallbackNotice();
+  }
   const databasePath = setting === null ? defaultDatabasePath() : (configured(env, setting) as string);
   return Object.freeze({ store: "sqlite" as const, databasePath, setting });
 }

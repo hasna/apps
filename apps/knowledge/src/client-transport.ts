@@ -75,6 +75,44 @@ export function assertNoRetiredKnowledgeStorageSelector(
 }
 
 /**
+ * Once-only per-process guard for the local-fallback notice. A long-running
+ * consumer (MCP server) must not emit a notice per request; a CLI one-shot
+ * emits at most one line before its first local read.
+ */
+let knowledgeLocalFallbackNoticeEmitted = false;
+
+/** Test hook: re-arm the once-only local-fallback notice. */
+export function resetKnowledgeLocalFallbackNotice(): void {
+  knowledgeLocalFallbackNoticeEmitted = false;
+}
+
+/**
+ * Emit one machine-readable JSON line on stderr when the client falls back to
+ * the on-box store with no hosted intent in the environment (the default
+ * branch). Incident 715712: a harness session-env re-provision dropped
+ * HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY and the CLI silently
+ * served the local store at rc=0 — items appeared gone. The notice names the
+ * mode switch so a false-empty read is never silent (the same family as the
+ * merged secrets fix, PR #681 / incident 715558). stdout stays pure for
+ * parsers. Values are never included.
+ */
+function emitKnowledgeLocalFallbackNotice(env: NodeJS.ProcessEnv): void {
+  if (knowledgeLocalFallbackNoticeEmitted) return;
+  knowledgeLocalFallbackNoticeEmitted = true;
+  const notice = {
+    event: 'knowledge-local-fallback',
+    transport: 'sqlite',
+    source: 'default',
+    apiUrlPresent: isPresent(env, KNOWLEDGE_API_URL_ENV),
+    apiKeyPresent: isPresent(env, KNOWLEDGE_API_KEY_ENV),
+    notice:
+      `No hosted API config (${KNOWLEDGE_API_URL_ENV} + ${KNOWLEDGE_API_KEY_ENV}) is present; ` +
+      'using local SQLite. Hosted knowledge is NOT visible in this output.',
+  };
+  console.error(JSON.stringify(notice));
+}
+
+/**
  * Resolve the client connection from canonical environment variables only.
  * An API URL without its credential fails closed instead of drifting to the
  * on-box store. Values are never included in the report or in errors.
@@ -91,6 +129,10 @@ export function resolveKnowledgeClientTransport(
       `knowledge: ${KNOWLEDGE_API_URL_ENV} selects the HTTP API, but ${KNOWLEDGE_API_KEY_ENV} is missing. `
         + `Set ${KNOWLEDGE_API_KEY_ENV}, or unset ${KNOWLEDGE_API_URL_ENV} to use local SQLite.`,
     );
+  }
+
+  if (!apiUrlPresent) {
+    emitKnowledgeLocalFallbackNotice(env);
   }
 
   return {
