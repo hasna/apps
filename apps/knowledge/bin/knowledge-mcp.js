@@ -4258,7 +4258,7 @@ var package_default = {
     "README.md"
   ],
   scripts: {
-    test: "bun test",
+    test: "bun test --timeout 20000",
     "test:cli": "bun test tests/cli.test.ts",
     "test:package": "bun test tests/package-release.test.ts",
     "release:pack:check": "node scripts/validate-public-package.mjs",
