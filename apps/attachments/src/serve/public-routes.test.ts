@@ -318,6 +318,30 @@ describe("cloud public share links", () => {
     expect(store.accessGrants).toHaveLength(1);
   });
 
+  test("request-access emails the grant on the full stored link when base_url bears a path (P1: path-bearing base_url)", async () => {
+    sentEmails.length = 0;
+    const created = await upload(app, {
+      expiry: "30d",
+      require_email: true,
+      allowed_emails: "dan@bcr.ro",
+      base_url: "https://files.corp.internal/gateway",
+    });
+    expect(created.link.startsWith("https://files.corp.internal/gateway/a/")).toBe(true);
+    const res = await app.request(`/a/${tokenOf(created.link)}/request-access`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ email: "dan@bcr.ro" }).toString(),
+    });
+    expect(res.status).toBe(200);
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]!.text).toContain(
+      `https://files.corp.internal/gateway/a/${tokenOf(created.link)}?grant=`,
+    );
+    expect(sentEmails[0]!.text).not.toContain(`https://files.corp.internal/a/${tokenOf(created.link)}`);
+    expect(sentEmails[0]!.text).not.toContain(`${PUBLIC_BASE}/a/${tokenOf(created.link)}`);
+    expect(store.accessGrants).toHaveLength(1);
+  });
+
   test("request-access from a non-allowlisted address is refused 403", async () => {
     sentEmails.length = 0;
     const created = await upload(app, { expiry: "30d", require_email: true, allowed_emails: "dan@bcr.ro" });
