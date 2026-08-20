@@ -14,7 +14,7 @@ The package's only canonical data root is:
 
 The legacy roots `~/.banking` and `~/.open-banking` (the retired `open-`-prefixed name) are not operational read
 paths. The package never copies, moves, rewrites, or deletes them. There is no
-automatic migration because the current package has no global store and no
+automatic migration: the package does not read the legacy roots and has no
 known package-owned data at those locations. Files found there must be audited
 before manual removal rather than assumed to belong to `@hasna/banking`.
 
