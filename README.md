@@ -26,7 +26,10 @@ tooling/ci/            CI gate scripts (secret scan, name conformance, publish g
 
 Member packages live under `apps/` — one directory per public `@hasna/<name>`
 package with the four surfaces (CLI, MCP server bin, `-serve` server bin,
-`./sdk` import). The LIVE member count is what the census gate prints —
+`./sdk` import). Recorded exception: `apps/agency` (reconstructed from the
+published @hasna/agency@0.3.1 bundle, row 91a7b09d) ships the CLI bin only —
+the artifact never shipped the other surfaces. The LIVE member count is what
+the census gate prints —
 `bun tooling/ci/check-names.ts` — and this README deliberately carries no
 snapshot number, because a snapshot rots while the gate's output does not.
 The initial `main` commit was the owner-approved bootstrap; everything after
