@@ -144,7 +144,7 @@ describe("release version sites", () => {
   // ("DO NOT EDIT BY HAND"), so hand-patching the stamp from `version:set` would paper over real
   // regeneration drift; the bump procedure regenerates instead, and this asserts it happened.
   // Unguarded, the stamp sat at 0.2.13 against a package version of 0.2.15 —
-  // `.github/workflows/ci.yml` reports that as a warning it explicitly cannot gate on.
+  // the repo-root CI reports that as a warning it explicitly cannot gate on.
   test("the generated SDK header carries the version package.json declares", () => {
     const generated = readFileSync(join(repoRoot(), "src/sdk/v1.generated.ts"), "utf8");
     const stamped = generated.match(/^\/\/ Source: .* (\S+)$/m)?.[1];

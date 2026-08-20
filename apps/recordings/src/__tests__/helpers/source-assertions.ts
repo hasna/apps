@@ -83,10 +83,12 @@ import { join } from "node:path";
  * which dropped a shipped CLI command inside the patch range and fails `cli.test.ts` — and it can
  * drift back mid-session, so re-check it before quoting any cross-tree comparison.
  *
- * Corollary, also corrected: this repo NOW HAS CI. `.github/workflows/ci.yml` gates the whole
- * suite with no exemptions on every pull request, so these suites are no longer gated only by
- * somebody remembering to run them. What CI does NOT cover is the Swift/C half, which does not
- * currently compile; see `.github/native-known-errors.txt`.
+ * Corollary, also corrected: this repo NOW HAS CI. The repo-root
+ * `.github/workflows/ci.yml` gates the whole TypeScript suite with no exemptions on every
+ * pull request, so these suites are no longer gated only by somebody remembering to run
+ * them. The Swift/C half compiles in CI through the repo-root
+ * `.github/workflows/recordings-macos.yml` (`verify:ci-native`); see
+ * `.github/native-known-errors.txt` for what that gate means.
  * Compare failing test NAMES, never counts — the suite is nondeterministic at the margin.
  * ---------------------------------------------------------------------------------------------
  */
