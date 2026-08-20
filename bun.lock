@@ -1017,7 +1017,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
@@ -1395,7 +1395,7 @@
     },
     "apps/repos": {
       "name": "@hasna/repos",
-      "version": "0.1.49",
+      "version": "0.1.50",
       "bin": {
         "repos": "dist/cli/index.js",
         "repos-mcp": "dist/mcp/index.js",
@@ -2413,7 +2413,6 @@
     "@hasna/feedback": ["@hasna/feedback@workspace:apps/feedback"],
 
     "@hasna/files": ["@hasna/files@workspace:apps/files"],
-
 
     "@hasna/guardrails": ["@hasna/guardrails@workspace:apps/guardrails"],
 
@@ -4710,7 +4709,6 @@
     "@hasna/files/@types/mime-types": ["@types/mime-types@2.1.4", "", {}, "sha512-lfU4b34HOri+kAY5UheuFMWPDOI+OPceBSHZKp69gEyTL/mmJ4cnU6Y/rlme3UL3GyOn6Y42hyIEw0/q8sWx5w=="],
 
     "@hasna/files/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
 
     "@hasna/guardrails/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
