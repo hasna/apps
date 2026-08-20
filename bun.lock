@@ -2039,6 +2039,13 @@
         "typescript": "^5.9.3",
       },
     },
+    "apps/test-guard": {
+      "name": "@hasna/test-guard",
+      "version": "0.0.1",
+      "bin": {
+        "test-guard": "sentinel.sh",
+      },
+    },
     "apps/testers": {
       "name": "@hasna/testers",
       "version": "0.0.91",
@@ -2683,6 +2690,8 @@
     "@hasna/tenants": ["@hasna/tenants@workspace:apps/tenants"],
 
     "@hasna/terminal": ["@hasna/terminal@workspace:apps/terminal"],
+
+    "@hasna/test-guard": ["@hasna/test-guard@workspace:apps/test-guard"],
 
     "@hasna/testers": ["@hasna/testers@workspace:apps/testers"],
 
