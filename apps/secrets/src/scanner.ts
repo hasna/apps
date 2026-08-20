@@ -276,7 +276,13 @@ const DETECTORS: Detector[] = [
     id: "package_registry_token",
     severity: "high",
     structuralOnly: true,
-    pattern: new RegExp(`${token("npm", "_")}[A-Za-z0-9_]{12,}`, "g"),
+    // Value-shaped only: real npm registry tokens are npm_ + a long alnum
+    // string. npm's documented env var NAMES (npm_lifecycle_event,
+    // npm_package_name, ...) are words that merely start with the prefix and
+    // must not match; matching on the bare prefix blocked commits on files
+    // that only reference the names (row 2693dbc4). The 20+ alnum requirement
+    // with no underscore is the fleet's established value/name discriminator.
+    pattern: new RegExp(`${token("npm", "_")}[A-Za-z0-9]{20,}`, "g"),
   },
   {
     id: "google_api_key",
@@ -326,7 +332,7 @@ const GIT_GREP_PATTERN = [
   `${token("[sr]", "k", "_")}(live|test)${token("_")}[0-9A-Za-z]{10,}`,
   `${token("---", "--")}BEGIN ([A-Z0-9]+ )*PRIVATE KEY${token("---", "--")}`,
   `${token("gh", "[opusr]", "_")}[A-Za-z0-9_]{12,}`,
-  `${token("npm", "_")}[A-Za-z0-9_]{12,}`,
+  `${token("npm", "_")}[A-Za-z0-9]{20,}`,
   `${token("AI", "za")}[A-Za-z0-9_-]{20,}`,
   `${token("AK", "IA")}[0-9A-Z]{12,}`,
   `${token("x", "ai", "-")}[A-Za-z0-9]{20,80}`,
