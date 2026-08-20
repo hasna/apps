@@ -88,12 +88,13 @@ function packagePath(root, packageName) {
   return join(root, ...packageName.split("/"));
 }
 
-function copyPackage(source, target) {
+function copyPackage(source, target, options = {}) {
   if (!existsSync(source)) throw new Error(`Package source does not exist: ${source}`);
   const sourceRoot = resolve(source);
   const privateArtifactDir = `.${"takumi"}`;
   cpSync(source, target, {
     recursive: true,
+    dereference: options.dereference === true,
     filter: (path) => {
       const normalized = relative(sourceRoot, path).replace(/\\/g, "/");
       if (!normalized) return true;
@@ -115,10 +116,42 @@ function createTempApp(name) {
   return appDir;
 }
 
+// The sdk-local fixture models a real downstream app, so it must carry the
+// package's declared hard dependencies, not just @hasna/machines. The packed
+// consumer bundle externalizes @hasna/contracts (so the install-time
+// workspace build never reads a mid-build contracts dist) and therefore
+// imports '@hasna/contracts/client' at runtime; a real install always
+// resolves it from the package's own dependency tree. Without it the fixture
+// silently depends on an ambient parent-dir node_modules and fails on any
+// clean machine — measured on the machines publish guard (3 of 3 CI failures
+// with "Cannot find module '@hasna/contracts/client'", while every local run
+// passed through /tmp/node_modules pollution). Resolve the dependency from
+// the source package's own installed ancestry and copy it in (dereferencing
+// workspace symlinks) so the case is hermetic AND faithful.
+function resolveInstalledDependency(sourceDir, packageName) {
+  let dir = resolve(sourceDir);
+  for (;;) {
+    const candidate = packagePath(join(dir, "node_modules"), packageName);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 function installPackage(appDir, sourceDir) {
   const target = packagePath(join(appDir, "node_modules"), "@hasna/machines");
   mkdirSync(dirname(target), { recursive: true });
   copyPackage(sourceDir, target);
+  const contractsDir = resolveInstalledDependency(sourceDir, "@hasna/contracts");
+  if (!contractsDir) {
+    throw new Error(
+      `sdk-local fixture cannot locate the installed @hasna/contracts dependency of @hasna/machines (walked up from ${sourceDir})`,
+    );
+  }
+  const contractsTarget = packagePath(join(appDir, "node_modules"), "@hasna/contracts");
+  mkdirSync(dirname(contractsTarget), { recursive: true });
+  copyPackage(contractsDir, contractsTarget, { dereference: true });
 }
 
 // Hermeticity barrier: module resolution walks UP from the temp app dir, so an
