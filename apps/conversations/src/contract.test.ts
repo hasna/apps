@@ -11,12 +11,18 @@ describe("hasna.contract.json", () => {
     expect(result.success).toBe(true);
   });
 
-  test("declares the three service bins", () => {
-    expect(contract.bins).toEqual(["conversations", "conversations-mcp", "conversations-serve"]);
+  test("declares the five shipped bins (three service bins plus the inbox monitor and hook entrypoints)", () => {
+    expect(contract.bins).toEqual([
+      "conversations",
+      "conversations-inbox",
+      "conversations-mcp",
+      "conversations-serve",
+      "conversations-hook",
+    ]);
   });
 
-  test("pins the vendored storage kit version", () => {
-    expect(contract.kitVersion).toBe("0.10.6");
+  test("pins the storage kit version", () => {
+    expect(contract.kitVersion).toBe("0.11.1");
   });
 
   test("service metadata exposes the versioned health/ready/version + v1 paths", () => {

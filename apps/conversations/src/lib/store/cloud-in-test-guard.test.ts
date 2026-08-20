@@ -22,7 +22,7 @@
 //
 // WHY THE GUARD KEYS ON AMBIENT RESOLUTION RATHER THAN ON A VARIABLE. A caller
 // that hands `getStore` an explicit env has chosen its target deliberately —
-// including the existing suites here that assert `cloud-http` against a synthetic
+// including the existing suites here that assert `http` against a synthetic
 // env, and the ones that point a store at a closed loopback port. A caller that
 // calls `getStore()` bare inherits whatever the operator's shell happens to hold.
 // Only the second is the defect, so only the second is refused.
@@ -220,17 +220,19 @@ describe("detectTestRuntime", () => {
 });
 
 describe("isLoopbackApiUrl", () => {
-  test("covers the whole 127.0.0.0/8 range this repo's suites actually bind", () => {
-    // poll.test.ts uses 127.0.0.9 and channel.test.ts uses 127.0.0.1; a guard
-    // that only knew 127.0.0.1 would refuse a legitimate local fixture.
+  test("matches the exact loopback authorities the client transport accepts", () => {
+    // The @hasna/contracts client only builds http clients for exact loopback
+    // authorities (localhost, 127.0.0.1, [::1]); the guard must bless exactly
+    // what the resolver can keep. poll.test.ts probes 127.0.0.9 directly over
+    // raw fetch, not through the store client.
     expect(isLoopbackApiUrl("http://127.0.0.1:9/v1")).toBe(true);
-    expect(isLoopbackApiUrl("http://127.0.0.9:9/v1")).toBe(true);
     expect(isLoopbackApiUrl("http://localhost:3000/v1")).toBe(true);
     expect(isLoopbackApiUrl("http://[::1]:8080/v1")).toBe(true);
   });
 
   test("does NOT treat a real host as loopback, including lookalikes", () => {
     expect(isLoopbackApiUrl(PROD_URL)).toBe(false);
+    expect(isLoopbackApiUrl("http://127.0.0.9:9/v1")).toBe(false);
     expect(isLoopbackApiUrl("https://localhost.attacker.example/v1")).toBe(false);
     expect(isLoopbackApiUrl("https://127.0.0.1.attacker.example/v1")).toBe(false);
     expect(isLoopbackApiUrl("not a url")).toBe(false);
@@ -330,7 +332,7 @@ describe("the guard's scope is IN-PROCESS, and that boundary is asserted", () =>
   // MEASURED: a child spawned from a `bun test` parent with a curated env has no
   // test entrypoint and no test argv, so nothing fires —
   //     CURATED_CHILD -> CHILD_INDICATORS=[] detected=false
-  //     CHILD_OUTCOME=cloud-http-REACHED baseUrl=https://conversations.hasna.xyz/v1
+  //     CHILD_OUTCOME=http-REACHED baseUrl=https://conversations.hasna.xyz/v1
   //
   // THAT IS DELIBERATE. A child's environment is CONSTRUCTED BY ITS SPAWNER, so it
   // is not ambient from the spawner's point of view — it is an authored env, and
@@ -350,12 +352,12 @@ describe("the guard's scope is IN-PROCESS, and that boundary is asserted", () =>
 });
 
 describe("the guard stays silent where it must — known-negative cases", () => {
-  test("an EXPLICIT env still resolves cloud-http, even at the production host", () => {
+  test("an EXPLICIT env still resolves http, even at the production host", () => {
     // This is what the existing store-resolution suites assert. A caller that
     // names its target has chosen it; the guard must not touch that decision.
     withAmbientCloudEnv(() => {
       const store = getStore({ [URL_VAR]: PROD_URL, [KEY_VAR]: FAKE_KEY });
-      expect(store.transport).toBe("cloud-http");
+      expect(store.transport).toBe("http");
     });
   });
 
@@ -363,9 +365,9 @@ describe("the guard stays silent where it must — known-negative cases", () => 
     withAmbientCloudEnv(
       () => {
         const store = getStore();
-        expect(store.transport).toBe("cloud-http");
+        expect(store.transport).toBe("http");
       },
-      { [URL_VAR]: "http://127.0.0.9:9/v1" },
+      { [URL_VAR]: "http://127.0.0.1:9/v1" },
     );
   });
 
@@ -373,7 +375,7 @@ describe("the guard stays silent where it must — known-negative cases", () => 
     withAmbientCloudEnv(
       () => {
         const store = getStore();
-        expect(store.transport).toBe("local");
+        expect(store.transport).toBe("sqlite");
       },
       { CONVERSATIONS_DB_PATH: "/tmp/conversations-guard-negative-control.db" },
     );
@@ -383,7 +385,7 @@ describe("the guard stays silent where it must — known-negative cases", () => 
     withAmbientCloudEnv(
       () => {
         const store = getStore();
-        expect(store.transport).toBe("cloud-http");
+        expect(store.transport).toBe("http");
       },
       { [ALLOW_CLOUD_IN_TESTS_ENV_KEY]: "1" },
     );
@@ -469,7 +471,7 @@ try {
       const production = await run(["bun", "run", asScript]);
       const underTest = await run(["bun", "test", asTest]);
 
-      expect(production).toContain("OUTCOME=cloud-http");
+      expect(production).toContain("OUTCOME=http");
       expect(underTest).toContain("OUTCOME=refused");
     } finally {
       rmSync(dir, { recursive: true, force: true });

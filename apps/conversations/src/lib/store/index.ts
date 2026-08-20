@@ -9,15 +9,16 @@
 //     graph, channel-notifications, summary, hot, messages). Those helpers are the
 //     ONLY place that opens `bun:sqlite`; nothing else in the app may touch it.
 //   • ApiStore — the HTTP API at `<API_URL>/v1` with a bearer key. Delegates to
-//     the vendored @hasna/contracts storage transport.
+//     the @hasna/contracts storage transport.
 //
 // `getStore()` resolves which transport to use from the API env pair
-// (HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY): both variables
-// set selects the HTTP API, an incomplete pair is an error that names the
-// missing variable, and neither set selects the on-box SQLite store (owner
-// directive 2026-07-29; knowledge k_ms5wv466_u0jidq). Callers NEVER branch on
-// the transport themselves and NEVER touch sqlite or fetch directly — that was
-// the split-brain bug this module eliminates.
+// (HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY). There are no
+// deployment modes (owner directive 2026-07-29; knowledge k_ms5wv466_u0jidq):
+// both variables set selects the HTTP API, an incomplete pair is an error that
+// names the missing variable, and neither set selects the on-box SQLite store.
+// Any retired storage-mode variable is rejected by the fail-loud ratchet below.
+// Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
+// directly — that was the split-brain bug this module eliminates.
 //
 // `local` is first-class and fully functional; the server backend switch
 // (`sqlite | postgresql`) lives server-side via HASNA_CONVERSATIONS_DATABASE_URL.
@@ -25,9 +26,9 @@
 // SAFETY: the API key never leaves the transport; it is never logged, returned, or
 // embedded in any value produced here. Only the HTTP transport ever holds it.
 
-import { resolveStorageClient, type HasnaStorageClient } from "../contracts-client/storage.js";
+import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { assertAmbientCloudAllowed } from "./test-runtime.js";
-import { clientTransportEnvKeys, envToken } from "../contracts-client/transport.js";
+import { clientTransportEnvKeys } from "@hasna/contracts/client";
 import { normalizeChannelName } from "../channel-names.js";
 import { localHealthChecks } from "../db.js";
 import { ApiStore } from "./api-store.js";
@@ -72,6 +73,13 @@ export const APP = "conversations";
 
 type Env = Record<string, string | undefined>;
 
+/**
+ * Upper-snake env token for {@link APP}, mirroring `envToken` in
+ * @hasna/contracts (src/env-token.ts). The package does not export that
+ * helper; the derivation is one line and stays identical to the package's.
+ */
+const ENV_TOKEN = APP.toUpperCase().replace(/-/g, "_");
+
 /** Lift a sync lib function's type into an async Store method signature. */
 type Async<F extends (...args: never[]) => unknown> = (
   ...args: Parameters<F>
@@ -94,11 +102,10 @@ type Async<F extends (...args: never[]) => unknown> = (
 // configuration stays fully supported; the bug was the silent downgrade, not local
 // storage.
 //
-// This guard lives in the APP-OWNED layer on purpose. `src/lib/contracts-client/*`
-// is a byte-faithful vendored copy of @hasna/contracts and is periodically
-// re-vendored; a guard placed there would be silently reverted by the next
-// re-vendor. The generic resolver keeps its own `misconfigured` throw as defence in
-// depth, and the same gap is tracked upstream against @hasna/contracts.
+// This guard lives in the APP-OWNED layer on purpose. The client seam is
+// imported from @hasna/contracts/client; a guard inside the package would be
+// silently replaced by the next package upgrade. The generic resolver keeps
+// its own `misconfigured` throw as defence in depth.
 
 /** Raised when the environment does not unambiguously select one store. */
 export class ConversationsStoreConfigError extends Error {
@@ -113,8 +120,8 @@ export class ConversationsStoreConfigError extends Error {
 export const ENV_KEYS = clientTransportEnvKeys(APP);
 /** Local SQLite path overrides, highest-precedence signal. */
 export const DB_PATH_KEYS = [
-  `HASNA_${envToken(APP)}_DB_PATH`,
-  `${envToken(APP)}_DB_PATH`,
+  `HASNA_${ENV_TOKEN}_DB_PATH`,
+  `${ENV_TOKEN}_DB_PATH`,
 ] as const;
 
 /**
@@ -218,8 +225,8 @@ export function conversationsCloudEnv(env: Env = process.env): Env {
 
   if (firstSet(env, DB_PATH_KEYS)) {
     // Explicit local: strip the API credentials so the vendored resolver cannot
-    // flip on them. Local is expressed by absence of an API pair (plus the DB
-    // path, which the resolver honours on its own).
+    // flip on them. Mode tokens are gone, so local is expressed by absence of an
+    // API pair (plus the DB path, which the resolver honours on its own).
     const local: Env = { ...env };
     for (const key of ENV_KEYS.apiUrlKeys) delete local[key];
     for (const key of ENV_KEYS.apiKeyKeys) delete local[key];
@@ -238,8 +245,26 @@ export function conversationsCloudEnv(env: Env = process.env): Env {
  * CAPABILITY. The test-context guard belongs on the second and not the first.
  */
 function resolveCloudClientUnguarded(env: Env): HasnaStorageClient | null {
-  const resolved = resolveStorageClient(APP, conversationsCloudEnv(env));
-  return resolved.transport === "cloud-http" ? resolved.client : null;
+  // THE APP OWNS THE DECISION. `conversationsCloudEnv` has already applied the
+  // documented precedence (explicit local DB path > API pair > error > local
+  // default) and, for the local cases, stripped the API credentials. The kit's
+  // resolver is consulted ONLY to BUILD the client for the http case: its
+  // disk tier (fleet app-config fallback) must not silently flip a store the
+  // app has already decided, or an explicit local DB path would stop being
+  // authoritative on any box that carries the fleet config.
+  const cloudEnv = conversationsCloudEnv(env);
+  if (firstSet(cloudEnv, DB_PATH_KEYS)) return null;
+  const urlHit = firstSet(cloudEnv, ENV_KEYS.apiUrlKeys);
+  if (!urlHit) return null;
+  // The env pair IS the app's documented flip signal, so the env key is a
+  // deliberate tier-1 choice. Without this the kit's credential chain prefers
+  // the fleet app-config file on disk when the two disagree, and the client
+  // would authenticate as a DIFFERENT principal than the one the env names.
+  const keyHit = firstSet(cloudEnv, ENV_KEYS.apiKeyKeys);
+  const resolved = keyHit
+    ? resolveStorageClient(APP, cloudEnv, { credentials: { apiKey: keyHit.value } })
+    : resolveStorageClient(APP, cloudEnv);
+  return resolved.transport === "http" ? resolved.client : null;
 }
 
 /**
@@ -270,17 +295,20 @@ export function resolveConversationsCloud(env: Env = process.env): HasnaStorageC
 /**
  * True when reads/writes are routed to the cloud API.
  *
- * Reads the UNGUARDED resolution ON PURPOSE. This is a predicate: it returns a
- * boolean, never a client that can write, so it closes nothing to guard it and
- * breaks a real caller if it throws — `admin-redaction.ts` calls it bare to pick
- * a branch, and a suite in this repository deliberately exports cloud
- * credentials so that bare call resolves true.
+ * Answers from the APP'S OWN decision (`conversationsCloudEnv` has already
+ * applied the documented precedence and throws for an ambiguous pair), NOT from
+ * the kit's client-build path: this is a predicate used bare by `doctor`,
+ * status payloads and admin redaction, and it must answer rather than crash
+ * when the kit would refuse to BUILD a client for the URL (e.g. a
+ * credential-bearing URL, which the status fragment must still report,
+ * sanitized).
  */
 export function isCloudStore(env: Env = process.env): boolean {
-  return resolveCloudClientUnguarded(env) !== null;
+  const cloudEnv = conversationsCloudEnv(env);
+  return !firstSet(cloudEnv, DB_PATH_KEYS) && Boolean(firstSet(cloudEnv, ENV_KEYS.apiUrlKeys));
 }
 
-/** The resolved cloud API base URL when the hosted API is selected (else null). */
+/** The resolved cloud API base URL when in cloud mode (else null). */
 export function cloudApiUrl(env: Env = process.env): string | null {
   if (!isCloudStore(env)) return null;
   return env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL ?? null;
@@ -302,7 +330,7 @@ export interface StoreHealthCheck {
 }
 
 export interface ConversationsStore {
-  readonly transport: "local" | "cloud-http";
+  readonly transport: "sqlite" | "http";
 
   /**
    * Which rows a list verb will hand back, so a caller can DISCLOSE the
@@ -498,7 +526,7 @@ export interface ConversationsStore {
 // interface is uniform across transports.
 
 export class LocalStore implements ConversationsStore {
-  readonly transport = "local" as const;
+  readonly transport = "sqlite" as const;
 
   describeListOrder: ConversationsStore["describeListOrder"] = (kind, opts) => {
     switch (kind) {

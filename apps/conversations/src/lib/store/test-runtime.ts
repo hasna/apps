@@ -7,15 +7,15 @@
 // with no isolation variable set. The same mechanism wrote 122 rows into the
 // production `@hasna/domains` store in one hour.
 //
-// WHY IT LIVES IN THE APP-OWNED LAYER. `src/lib/contracts-client/*` is a
-// byte-faithful vendored copy of `@hasna/contracts` and is periodically
-// re-vendored; a guard placed there would be silently reverted by the next
-// re-vendor. That reasoning is already recorded in `./index.ts` for this
-// module's sibling guard, and it applies here unchanged. The upstream resolver
-// has no concept of a test context at all — it keys on the API-URL keys and
-// the API-key keys, and has no notion of a local store path — so it cannot see
-// this conflict by construction. That gap is tracked upstream separately; this
-// file is what protects the app in the meantime.
+// WHY IT LIVES IN THE APP-OWNED LAYER. The client seam is imported from
+// `@hasna/contracts/client`; a guard inside the package would be silently
+// replaced by the next package upgrade. That reasoning is already recorded in
+// `./index.ts` for this module's sibling guard, and it applies here unchanged.
+// The upstream resolver
+// has no concept of a test context at all — it keys on the API-URL keys, the
+// API-key keys, and the mode, and has no notion of a local store path — so it
+// cannot see this conflict by construction. That gap is tracked upstream
+// separately; this file is what protects the app in the meantime.
 //
 // WHAT THIS DELIBERATELY DOES NOT DO. It is dormant outside a test runner. An
 // operator running the CLI by hand against production is the intended production
@@ -205,11 +205,13 @@ export function detectTestRuntime(inputs: Partial<TestRuntimeProbeInputs> = {}):
 /**
  * Is this API URL a loopback address?
  *
- * Covers the whole `127.0.0.0/8` range rather than the single literal
- * `127.0.0.1`, because this repository's own suites bind `127.0.0.9` as well —
- * a guard that knew only `127.0.0.1` would refuse a legitimate local fixture.
- * Parsing rather than matching is what keeps `localhost.attacker.example` and
- * `127.0.0.1.attacker.example` from passing as loopback.
+ * Matches the EXACT loopback authorities @hasna/contracts' client transport
+ * accepts for http (`localhost`, `127.0.0.1`, `[::1]`, optional port): a URL
+ * this predicate blesses must be a URL the kit will actually build a client
+ * for, or the guard's "allowed" would be a promise the resolver refuses to
+ * keep. Parsing rather than matching is what keeps
+ * `localhost.attacker.example` and `127.0.0.1.attacker.example` from passing
+ * as loopback.
  */
 export function isLoopbackApiUrl(apiUrl: string | null | undefined): boolean {
   if (!apiUrl) return false;
@@ -221,7 +223,7 @@ export function isLoopbackApiUrl(apiUrl: string | null | undefined): boolean {
   }
   if (hostname === "localhost") return true;
   if (hostname === "[::1]" || hostname === "::1") return true;
-  return /^127\.(?:\d{1,3})\.(?:\d{1,3})\.(?:\d{1,3})$/.test(hostname);
+  return hostname === "127.0.0.1";
 }
 
 /** The deliberate per-app opt-in. NOTHING populates this automatically. */

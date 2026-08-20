@@ -79,7 +79,7 @@ export function startPolling(opts: PollOptions): PollHandle {
       order?: "asc" | "desc";
       limit?: number;
     }): Promise<Message[]> =>
-      store.transport === "local" && !opts.store
+      store.transport === "sqlite" && !opts.store
         ? Promise.resolve(readLocalMessages(args))
         : store.readMessages(args);
 

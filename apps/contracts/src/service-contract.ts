@@ -85,7 +85,7 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
       type: "array",
       items: { type: "string", minLength: 1 },
       description:
-        "Declared bins. Allowlisted: <name>, <name>-cli, <name>-mcp, <name>-serve, <name>-worker, <name>-runner, <name>-daemon, <name>-migrate, <name>-doctor. The deployment app additionally supports its registered canonical operator entrypoint hasna-deploy."
+        "Declared bins. Allowlisted: <name>, <name>-cli, <name>-mcp, <name>-serve, <name>-worker, <name>-runner, <name>-daemon, <name>-migrate, <name>-doctor. Registered canonical operator entrypoints outside the suffix set: hasna-deploy (deployment app), conversations-inbox and conversations-hook (conversations app)."
     },
     hosting: {
       type: "array",
