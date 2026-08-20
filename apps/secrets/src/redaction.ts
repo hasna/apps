@@ -90,7 +90,7 @@ const TEXT_SENSITIVE_KEY = [
 
 const PEM_PRIVATE_KEY_PATTERN = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/g;
 const PRIVATE_KEY_MARKER_PATTERN = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*$/g;
-const TOKEN_SHAPE_PATTERN = /(?:sk-(?:proj[-])?[A-Za-z0-9_-]{8,}|sk-ant[-][A-Za-z0-9_-]{8,}|[sr]k_(?:live|test)_[0-9A-Za-z]{10,}|gh[opusr]_[A-Za-z0-9_]{8,}|npm_[A-Za-z0-9_]{8,}|AIza[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{8,}|xai[-][A-Za-z0-9_-]{8,}|ctx7sk[-][A-Za-z0-9_-]{8,}|secret[-]token[:][^\s'"]{1,})/gi;
+const TOKEN_SHAPE_PATTERN = /(?:sk-(?:proj[-])?[A-Za-z0-9_-]{8,}|sk-ant[-][A-Za-z0-9_-]{8,}|[sr]k_(?:live|test)_[0-9A-Za-z]{10,}|gh[opusr]_[A-Za-z0-9_]{8,}|npm_[A-Za-z0-9_]{8,}|AIza[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{8,}|xai[-][A-Za-z0-9]{20,80}|ctx7sk[-][A-Za-z0-9_-]{8,}|secret[-]token[:][^\s'"]{1,})/gi;
 const AUTHORIZATION_PATTERN = /(\b(?:proxy-)?authorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?([^\s,'"}]+)/gi;
 const URL_USERINFO_PATTERN = /(\b[a-z][a-z0-9+.-]*:\/\/[^:\s/@]+:)([^@\s/]+)(@)/gi;
 const QUERY_SECRET_PATTERN = new RegExp(`([?&](?:${TEXT_SENSITIVE_KEY})=)([^&#\\s]*)`, "gi");

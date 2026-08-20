@@ -103,6 +103,51 @@ describe("scan preview redaction", () => {
     expect(result.truncated).toBe(false);
   });
 
+  // The xai_api_key false-positive regression (bug a869386e). The detector
+  // used to match on the bare 'xai-' prefix, so ordinary xAI model ids — an id
+  // whose suffix is a hyphenated word — tripped the staged scan at rc=1 and
+  // blocked commits on files that contained no credential. The model-id shape
+  // below is assembled from fragments for the same reason as the sentinels
+  // above: its literal spelling in this file is itself a finding under the
+  // detector being replaced.
+  describe("xai_api_key detector", () => {
+    test("an xAI model id passes the scan", () => {
+      const modelId = join("x", "ai-grok-reasoning");
+      const result = scanInputExposures({
+        text: `"id": "${modelId}"\n`,
+        path: "model-id.json",
+      });
+
+      expect(result.findingCount).toBe(0);
+      expect(result.findings).toEqual([]);
+    });
+
+    test("an xAI model id with a version digit also passes", () => {
+      const modelId = join("x", "ai-grok-2-latest");
+      const result = scanInputExposures({
+        text: `"id": "${modelId}"\n`,
+        path: "model-id-digit.json",
+      });
+
+      expect(result.findingCount).toBe(0);
+    });
+
+    test("a value-shaped xai key still trips", () => {
+      // Synthetic sentinel: "xai-" plus 32 alphanumeric characters, matching
+      // the vendor's own published shape (xai-org/xai-proto .gitleaks.toml:
+      // xai-[a-z0-9]{20,80}, case-insensitive). Not a real key.
+      const key = join("x", "ai-", "3f9Kq8xL2mN7vR4tY6cW1bH5dJ0uS9eA");
+      const result = scanInputExposures({
+        text: `export const API_KEY = "${key}";\n`,
+        path: "real-key.ts",
+      });
+
+      expect(result.findingCount).toBeGreaterThanOrEqual(1);
+      const finding = result.findings.find((f) => f.detector === "xai_api_key");
+      expect(finding).toBeDefined();
+    });
+  });
+
   // Guards the load-bearing outputs. Blanking the preview is only acceptable
   // because these still locate the finding precisely.
   test("detector, line and column still locate the finding", () => {

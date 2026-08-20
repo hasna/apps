@@ -294,7 +294,12 @@ const DETECTORS: Detector[] = [
     id: "xai_api_key",
     severity: "high",
     structuralOnly: true,
-    pattern: new RegExp(`${token("x", "ai", "-")}[A-Za-z0-9_-]{12,}`, "g"),
+    // Value-shaped only: the vendor's published shape (xai-org/xai-proto
+    // .gitleaks.toml) is xai-[a-z0-9]{20,80} (case-insensitive). Model ids
+    // are hyphenated words after the prefix and must not match; matching on
+    // the bare 'xai-' prefix blocked commits on files containing no
+    // credential (bug a869386e).
+    pattern: new RegExp(`${token("x", "ai", "-")}[A-Za-z0-9]{20,80}`, "g"),
   },
   {
     id: "context7_api_key",
@@ -324,7 +329,7 @@ const GIT_GREP_PATTERN = [
   `${token("npm", "_")}[A-Za-z0-9_]{12,}`,
   `${token("AI", "za")}[A-Za-z0-9_-]{20,}`,
   `${token("AK", "IA")}[0-9A-Z]{12,}`,
-  `${token("x", "ai", "-")}[A-Za-z0-9_-]{12,}`,
+  `${token("x", "ai", "-")}[A-Za-z0-9]{20,80}`,
   `${token("ctx", "7", "sk", "-")}[A-Za-z0-9_-]{12,}`,
   `${token("secret", "-", "token", ":")}[^[:space:]'"]{8,}`,
   "[A-Z0-9_]*(API_KEY|APIKEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PASSWORD|PASSWD|PWD|DATABASE_URL|PRIVATE_KEY|TOKEN)[[:space:]]*=[[:space:]]*['\"]?[^'\"#[:space:]]{8,}",

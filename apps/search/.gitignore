@@ -1,9 +1,0 @@
-node_modules/
-dist/
-.secrets/
-*.db
-*.db-wal
-*.db-shm
-dashboard/dist/
-dashboard/node_modules/
-.DS_Store
