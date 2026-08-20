@@ -331,8 +331,16 @@ function classifyRemoteRequestError(baseUrl: string, route: string, error: unkno
   }
   const message = error instanceof Error ? error.message : String(error);
   if ((error instanceof Error && error.name === "AbortError") || /abort|timed?\s*out/i.test(message)) {
+    // A read that times out on /v1/tasks is almost always the UNBOUNDED shape:
+    // the hosted authority answers bounded /v1/tasks reads in ~1 s but takes
+    // O(rows) — minutes on a 64k+ task table — to materialise the full set, so
+    // it outlasts every client timeout. Name that class instead of letting the
+    // timeout read as API-down (task 5e5ed4d1).
+    const unboundedNote = route === "/tasks"
+      ? "; this is likely an UNBOUNDED task read timing out (bounded task reads from this authority return in ~1 s) — retry with a bounded/count-specific shape such as todos list --limit; local SQLite fallback is disabled"
+      : "; local SQLite fallback is disabled";
     throw new Error(
-      `REMOTE_API_TIMEOUT: configured Todos authority ${baseUrl} timed out for ${route}; local SQLite fallback is disabled`,
+      `REMOTE_API_TIMEOUT: configured Todos authority ${baseUrl} timed out for ${route}${unboundedNote}`,
       { cause: error },
     );
   }

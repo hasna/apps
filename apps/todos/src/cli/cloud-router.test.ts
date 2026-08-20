@@ -39,6 +39,7 @@ import {
   cloudEscalatedTasks,
   cloudChangedSince,
   cloudTaskStats,
+  cloudCountTasks,
   cloudRecentActivity,
   cloudListProjects,
   cloudListTaskLists,
@@ -589,6 +590,19 @@ describe("remote authority compatibility diagnostics", () => {
     await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_TIMEOUT");
   });
 
+  test("a /tasks timeout names the unbounded-read class, not API-down (task 5e5ed4d1)", async () => {
+    previousFetch ??= globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new DOMException("fixture timed out", "AbortError");
+    };
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListTasks(client, { status: "pending" })).rejects.toThrow(/UNBOUNDED task read/);
+    await expect(cloudListTasks(client, { status: "pending" })).rejects.toThrow("REMOTE_API_TIMEOUT");
+    // The note is scoped to the task-list route; other routes keep the bare message.
+    await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_TIMEOUT");
+    await expect(cloudListProjects(client)).rejects.not.toThrow(/UNBOUNDED task read/);
+  });
+
   // Regression for task 9b050845: `todos count` on a stalled /tasks endpoint
   // hung past 120s and then reported REMOTE_API_UNREACHABLE, while the host was
   // reachable (curl connected in 0.18s). A slow authority must fail within the
@@ -844,6 +858,30 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls[0]!.url).toContain("status=pending");
     expect(calls[0]!.url).toContain("limit=5");
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
+  });
+
+  test("cloudCountTasks reads the SQL-side total from ONE bounded limit=1 request (task 5e5ed4d1)", async () => {
+    const calls = installFetch((call) => {
+      expect(new URL(call.url).pathname).toBe("/v1/tasks");
+      expect(new URL(call.url).searchParams.get("limit")).toBe("1");
+      return { body: { tasks: [planProjectLinkTaskFixture()], count: 1, total: 64870 } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const total = await cloudCountTasks(client, { status: "pending" as never });
+    expect(total).toBe(64870); // the row count served is 1; total is SQL-side
+    expect(calls).toHaveLength(1); // bounded, never a second unbounded read
+    expect(new URL(calls[0]!.url).searchParams.get("status")).toBe("pending");
+  });
+
+  test("cloudCountTasks falls back to the full list when a legacy authority omits `total`", async () => {
+    const calls = installFetch(() => ({ body: { tasks: [
+      planProjectLinkTaskFixture(),
+      { ...planProjectLinkTaskFixture(), id: "task-2" },
+    ], count: 2 } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const total = await cloudCountTasks(client, { status: "pending" as never });
+    expect(total).toBe(2);
+    expect(calls.length).toBeGreaterThan(1); // bounded attempt + unbounded fallback read
   });
 
   test("get -> GET /v1/tasks/:id, unwraps { task }; 404 -> null", async () => {
