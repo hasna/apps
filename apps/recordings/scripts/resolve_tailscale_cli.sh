@@ -284,7 +284,12 @@ recordings_verify_official_tailscale_code() {
   if [ -d "$code_path" ]; then
     verification_arguments+=(--deep)
   fi
-  verification_arguments+=(-R "$requirement" "$code_path")
+  # macOS 26 codesign usage: `[-R=<req string>|-R <req file path>]`. The
+  # space-separated form is now interpreted as a FILE PATH, so it fails with
+  # "No such file or directory" + "invalid requirement specification" even for
+  # a bare `anchor apple generic` (measured on station03/06/07). The equals
+  # form passes the expression itself and verifies cleanly.
+  verification_arguments+=("-R=$requirement" "$code_path")
   if ! recordings_run_tailscale_snapshot_tool \
     "$real_host_kernel" "$snapshot_parent" "$codesign_executable" \
     "${verification_arguments[@]}"; then

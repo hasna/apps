@@ -374,6 +374,19 @@ describe("Tailscale CLI resolution", () => {
     expect(result.stdout).not.toContain("attacker");
   });
 
+  test("passes the codesign requirement as an expression, not as a separate file-path argument", () => {
+    // Measured on macOS 26 (station03/06/07): `codesign -v -R "$requirement"`
+    // treats the space-separated argument as a REQUIREMENT FILE PATH, failing
+    // with "No such file or directory" and "invalid requirement specification"
+    // even for `anchor apple generic`. The equals form `-R=<expr>` is the one
+    // documented on macOS 26 ("[-R=<req string>|-R <req file path>]") and
+    // verifies cleanly. A resolver that uses the space form cannot authenticate
+    // the Tailscale app on any fleet Mac, so the local build dies at this gate.
+    const source = readFileSync(resolver, "utf8");
+    expect(source).toContain('"-R=$requirement"');
+    expect(source).not.toContain('(-R "$requirement"');
+  });
+
   test("resolves the canonicalization executable from both system realpath locations", () => {
     // macOS 26 ships realpath at /bin/realpath, not /usr/bin/realpath (measured on
     // station03/station06/station07: /usr/bin/realpath absent, /bin/realpath present).
