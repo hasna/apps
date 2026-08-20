@@ -156,13 +156,16 @@ function packFileNames(pkgDir: string): string[] {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e: any) {
-    // npm's stderr tail is generic boilerplate ("command failed", "sh -c
-    // bun run verify:pack", "A complete log...") that names the failing
-    // prepack script but not the failure itself. The prepack's own error
-    // output is forwarded by npm into ITS stdout, so surface the captured
-    // stdout tail as well (Node attaches it to the error object) — otherwise
-    // the guard reports the mechanism without the cause and every prepack
-    // failure reads as "command failed".
+    // The prepack script's own stderr is forwarded by npm to npm's stderr
+    // (measured 2026-08-20 on npm 11 with a synthetic failing prepack: the
+    // script's error lines appear between the "> prepack" banner and the
+    // final "npm error ..." boilerplate block). The stdout side carries the
+    // prepack's stdout — build logs and, on failure, npm's `--json` error
+    // document. A 5-line stderr tail shows ONLY the boilerplate ("command
+    // failed", "sh -c bun run verify:pack", "A complete log...") and hides
+    // the actual prepack failure, so every prepack failure reads as
+    // "command failed" with no cause. Capture a generous stderr tail so the
+    // failing step is visible; both streams stay bounded by maxBuffer.
     const stdoutTail = String(e?.stdout ?? "")
       .trim()
       .split("\n")
@@ -171,7 +174,7 @@ function packFileNames(pkgDir: string): string[] {
     const stderrTail = String(e?.stderr ?? "")
       .trim()
       .split("\n")
-      .slice(-5)
+      .slice(-200)
       .join("\n");
     throw new Error(
       `npm pack --dry-run --json failed in ${pkgDir}` +
@@ -222,8 +225,12 @@ function fixturePackage(appsRoot: string, name: string, files: string[], broken:
   };
   if (broken) {
     // A prepack that fails makes `npm pack` exit non-zero: there is no JSON
-    // document to parse at all. The guard must FAIL, never pass.
-    pkg.scripts = { prepack: "echo broken-prepack-output && exit 1" };
+    // document to parse at all. The guard must FAIL, never pass. The fixture
+    // emits one marker on stdout and one on stderr: npm forwards the prepack
+    // script's stderr before its own "npm error ..." boilerplate, and the
+    // guard must surface BOTH so a prepack failure names its cause (the
+    // stderr marker is the shape machines' verify:pack failures take).
+    pkg.scripts = { prepack: "echo broken-prepack-output && echo broken-prepack-stderr >&2 && exit 1" };
   }
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
   for (const f of files) {
@@ -301,6 +308,10 @@ function selfTest(): number {
     check(
       "broken pack surfaces the prepack's own output tail (cause visible, not just npm boilerplate)",
       broken.rc === 1 && brokenOut.includes("prepack output tail") && brokenOut.includes("broken-prepack-output"),
+    );
+    check(
+      "broken pack surfaces the prepack's stderr (the shape machines verify:pack failures take)",
+      broken.rc === 1 && brokenOut.includes("npm stderr tail") && brokenOut.includes("broken-prepack-stderr"),
     );
 
     const blockedRoot = path.join(root, "blocked-root");
