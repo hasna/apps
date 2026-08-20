@@ -8,6 +8,7 @@ import {
   startRunnerService,
   stopRunnerService,
   runnerServiceStatus,
+  runnerServiceExitCode,
 } from "./install.js";
 
 interface InstallEnv {
@@ -239,6 +240,21 @@ describe("runner service verbs", () => {
       const status = runnerServiceStatus({ platform: "linux" });
       expect(status.installed).toBe(false);
       expect(status.active).toBeNull();
+    } finally {
+      env.restore();
+    }
+  });
+
+  test("start/stop propagate a failed service command via runnerServiceExitCode (P1 regression)", () => {
+    const env = withInstallEnv();
+    try {
+      installRunnerStartup({ cliEntry: "loops-runner", execPath: "/usr/bin/bun", platform: "linux" });
+      const failingSpawn = (() => ({ status: 1, stdout: "", stderr: "systemctl failed" })) as unknown as typeof import("node:child_process").spawnSync;
+      const okSpawn = (() => ({ status: 0, stdout: "", stderr: "" })) as unknown as typeof import("node:child_process").spawnSync;
+      expect(runnerServiceExitCode(startRunnerService({ platform: "linux", spawnImpl: failingSpawn }))).toBe(1);
+      expect(runnerServiceExitCode(startRunnerService({ platform: "linux", spawnImpl: okSpawn }))).toBe(0);
+      expect(runnerServiceExitCode(stopRunnerService({ platform: "linux", spawnImpl: failingSpawn }))).toBe(1);
+      expect(runnerServiceExitCode(stopRunnerService({ platform: "linux", spawnImpl: okSpawn }))).toBe(0);
     } finally {
       env.restore();
     }

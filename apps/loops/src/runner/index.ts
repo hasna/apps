@@ -20,6 +20,7 @@ import { loopControlPlaneConfig, type RuntimeConfig } from "../lib/runtime-confi
 import { applyRunnerEnvFile } from "./env-file.js";
 import {
   installRunnerStartup,
+  runnerServiceExitCode,
   runnerServiceStatus,
   startRunnerService,
   stopRunnerService,
@@ -704,11 +705,15 @@ program
   });
 
 program.command("start").description("enable and start the runner service").action(async () => {
-  console.log(JSON.stringify(startRunnerService(), null, 2));
+  const result = startRunnerService();
+  console.log(JSON.stringify(result, null, 2));
+  process.exitCode = runnerServiceExitCode(result);
 });
 
 program.command("stop").description("stop the runner service (the update path is version bump + restart)").action(async () => {
-  console.log(JSON.stringify(stopRunnerService(), null, 2));
+  const result = stopRunnerService();
+  console.log(JSON.stringify(result, null, 2));
+  process.exitCode = runnerServiceExitCode(result);
 });
 
 program

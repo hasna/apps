@@ -241,6 +241,15 @@ export interface RunnerServiceResult {
   commands: StartupEnableResult[];
 }
 
+/**
+ * Exit code the CLI should propagate for a service-control result: non-zero
+ * when any underlying systemctl/launchctl command failed, so deployment
+ * automation never sees exit 0 for a runner that failed to start or stop.
+ */
+export function runnerServiceExitCode(result: RunnerServiceResult): number {
+  return result.commands.some((entry) => entry.status !== 0) ? 1 : 0;
+}
+
 function runServiceCommands(commands: string[], spawnImpl?: typeof spawnSync): RunnerServiceResult {
   const run = spawnImpl ?? spawnSync;
   return {
