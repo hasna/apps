@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.6
+
+### Patch Changes
+
+- f1fe3f2: Port custom base URL server links (`--internal` / `base_url`) to the hosted `/v1` path. The server now accepts `base_url` on upload (JSON / multipart / query) and link-regenerate, validates it (absolute http(s), no embedded credentials, no query/fragment) and mints server-hosted share links against it instead of the configured public base URL. The CLI `--internal` flag and `UploadOptions.baseUrl` are no longer rejected in cloud client mode, and `RegenerateLinkOptions.baseUrl` is honored by both the local and hosted backends.
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

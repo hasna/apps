@@ -1,5 +1,5 @@
 /** Package version, kept in sync with package.json. */
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.1";
 
 /**
  * reveal.js version this SDK targets. Used as the default CDN pin for

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/consolidations",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Group financial consolidation: ingest entity GL data, normalize charts of accounts, translate multi-currency, run intercompany eliminations, produce consolidated P&L/BS/CF \u2014 CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",

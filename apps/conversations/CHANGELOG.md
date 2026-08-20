@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+### Patch Changes
+
+- 10a8f36: First release from the hasna/apps monorepo. The package was imported from hasna/conversations with history preserved (import capsule 1d608f84, import merge 2ac6d55b); there are no functional changes since 0.6.1 — the delta is the import itself plus the monorepo workspace wiring. This patch establishes version ownership under the monorepo.
+- 139894d: Add fail-closed adoption of an exact pre-bound project channel, including stable target, revision, digest, and message-ownership compare-and-swap evidence.
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+
 All notable changes to this project will be documented in this file.
 
 ## Unreleased

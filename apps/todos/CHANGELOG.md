@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.36
+
+### Patch Changes
+
+- 058cb86: Fix `todos comment <plan-id>` returning 404 "task not found": plans now have a comment surface end to end — `plan_comments` table (local sqlite) and `plan_comments` records (postgres), `/v1/plans/:id/comments` GET/POST, CLI `comment` task-first/plan-fallback (local + hosted), and `plans --show` listing plan comments. Plan-level outcomes can now be recorded on the plan row (todos task 04ee08fd).
+- 3fa7d73: Remove the deprecated storage-mode env selection (owner deprecation, 2026-07-29 deployment-modes removal). The client now routes on `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY` alone; any storage-mode var now hard-errors instead of silently selecting a backend. Breaking/behavioral change: configurations still setting the deprecated var must drop it before upgrading to 0.15.34.
+- 4c8ab45: Bound every authenticated /v1 request to a single 10s budget in the CLI's cloud router (task 9b050845). `todos count` on a stalled /tasks endpoint previously hung past 120s and then reported REMOTE_API_UNREACHABLE while the authority was reachable; the contracts transport's 30s timer was consumed by two retries of a timeout-shaped failure, an abort-ignoring fetch hung unbounded, and `response.text()` after headers was unbounded. A stalled request now fails within the bound with REMOTE_API_TIMEOUT (slow authority), non-retryable, instead of the multi-minute hang followed by REMOTE_API_UNREACHABLE (down authority).
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/access",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Non-human-identity governance: CLI + MCP + serve over a Hasna-contract store. Identity inventory, credential & MCP-scope mapping, JIT elevation, access reviews, one-click revocation, and the cohort MCP bearer-token issuer.",
   "type": "module",
   "main": "dist/index.js",

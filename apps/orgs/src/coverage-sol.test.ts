@@ -832,7 +832,7 @@ describe("CLI add groups and routing", () => {
 
     // version
     const version = await runJson(["--json", "version"]) as { version: string };
-    expect(version.version).toBe("0.1.0");
+    expect(version.version).toBe("0.1.1");
 
     // markdown snapshot through the CLI
     const markdown: string[] = [];

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.64
+
+### Patch Changes
+
+- 405f585: Zero-corpus release: the published tarball now ships no skills corpus (files list excludes skills/ and agent-skills/) and carries the new sync tooling — `skills storage migrate` (owner layout migration into ~/.hasna/skills/skills/), `skills sync --adopt` (unmarked-home adoption with conflict isolation), `skills sync --check` (home drift census), and `skills sync --prune` (rollback-recorded removal). Shipped as 0.1.63 (todos c2769468).
+- d4aa51f: Fix split corpus root: list/search/info/push now read the migrated corpus cache (<app folder>/skills) through the one canonical resolver instead of resolving <app folder>/installed. After `skills storage migrate`, local discovery was silently blind to the real corpus — `skills list --all --json` returned 87 entries while the migrated corpus held 688, and `skills search` missed migrated skills. getPortableSkillsRoot() now applies the canonical precedence (rootDir -> migrated skills/ cache when the layout-migration record exists -> installed/), resolveCorpusRoot() delegates to it, and pull's local mirror is removed. The pre-migration layout is unchanged: without the record, every path still resolves installed/. Regression tests cover both states across resolver, list, registry, search, info, push --dry-run, and sync (bug 170b0e9b, todos 50229cf1).
+- d8b58b4: Hosted registry gains revision identity and an optimistic-concurrency contract (T8): skills_registry rows carry revision_id (sha over the exact published content) plus revision_number/updated_at via migration 0005; publish/update require the base revision or an If-Match guard, and a stale or missing guard is refused with 409 (SkillRevisionConflictError) instead of silently overwriting; GET returns the revision id; deletes tombstone the row (410 with the marker for the configured window, then purge); pull writes a per-skill marker carrying the installed revision id and proves the revision against the installed bytes (bundle-less pulls install the fetched document verbatim — no trailing-newline normalization — so the recorded revision identifies exactly what is installed); a purged slug is reported, never swapped for the bundled skill. Two-backend parity tests cover 409 races, tombstone lifecycle, purge, revive, and the recompute property on both stores.
+- c9dabb1: fix(skills): refuse to replace a content-bearing managed home with an executable pointer stub. A corpus skill without `kind: instruction` renders as a pointer stub, and `skills sync` previously replaced an adopted full-content home with that 15-line stub at rc=0 with no warning, silently discarding the content. The write path now refuses (action `skip`, reason naming the fix) unless `--force` is passed, and the drift census plus `skills diff` label which side of a divergence is a pointer stub so content-vs-stub state is readable.
+- Updated dependencies [b630c48]
+  - @hasna/events@0.1.16
+
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]

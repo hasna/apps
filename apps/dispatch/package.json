@@ -1,6 +1,6 @@
 {
   "name": "@hasna/dispatch",
-  "version": "0.0.26",
+  "version": "0.0.27",
   "author": "Andrei Hasna <andrei@hasna.com>",
   "repository": {
     "type": "git",
@@ -86,6 +86,6 @@
   "type": "module",
   "types": "dist/index.d.ts",
   "optionalDependencies": {
-    "@hasna/machines": "^0.0.24"
+    "@hasna/machines": "^0.2.30"
   }
 }

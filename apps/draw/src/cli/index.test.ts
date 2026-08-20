@@ -236,7 +236,7 @@ describe("draw --version", () => {
   test("prints the package version", () => {
     const r = run("--version");
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe("0.1.0");
+    expect(r.stdout.trim()).toBe("0.1.1");
   });
 });
 

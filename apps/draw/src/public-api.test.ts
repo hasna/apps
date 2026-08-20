@@ -92,7 +92,7 @@ describe("public API surface", () => {
     expect(typeof fromExcalidraw).toBe("function");
     expect(Array.isArray(CARD_COLORS)).toBe(true);
     expect(CARD_COLORS).toContain("default");
-    expect(VERSION).toBe("0.1.0");
+    expect(VERSION).toBe("0.1.1");
   });
 });
 

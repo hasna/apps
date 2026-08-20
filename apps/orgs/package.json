@@ -1,6 +1,6 @@
 {
   "name": "@hasna/orgs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Open organization graph and delegation-context layer for agentic systems",
   "type": "module",
   "main": "dist/index.js",

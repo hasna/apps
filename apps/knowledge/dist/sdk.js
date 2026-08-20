@@ -19882,7 +19882,7 @@ function createKnowledgeProjectLinksHttpClient(options) {
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.106",
+  version: "0.2.107",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {

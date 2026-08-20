@@ -1,6 +1,6 @@
 {
   "name": "@hasna/signatures",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Open-source agreement and e-signature workflows for Markdown, PDFs, local signing, providers, CLI, API, and MCP",
   "type": "module",
   "bin": {
@@ -50,7 +50,7 @@
     "bun-types": "1.3.14"
   },
   "peerDependencies": {
-    "@hasna/attachments": ">=1.0.16"
+    "@hasna/attachments": ">=1.1.6"
   },
   "peerDependenciesMeta": {
     "@hasna/attachments": {
