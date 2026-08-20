@@ -83,7 +83,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@hasna/agent-registry": "^0.1.0",
-    "@hasna/contracts": "^0.11.1",
+    "@hasna/contracts": "^0.12.0",
     "@hasna/mcp-harness": "^0.1.0",
     "@types/bun": "latest",
     "@types/node-cron": "^3.0.11",

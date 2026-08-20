@@ -74,7 +74,7 @@
   "dependencies": {
     "@hasna/accounts": "0.2.23",
     "@hasna/agent-registry": "^0.1.0",
-    "@hasna/contracts": "^0.11.1",
+    "@hasna/contracts": "^0.12.0",
     "@hasna/events": "^0.1.7",
     "@hasna/mcp-harness": "^0.1.0",
     "@hasna/projects": "0.1.95",
