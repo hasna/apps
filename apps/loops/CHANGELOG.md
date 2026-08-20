@@ -7,6 +7,37 @@ unless noted.
 
 ## 0.5.2 (2026-08-19)
 
+This release carries four reliability fixes merged since 0.5.1 plus the
+`loops-runner` deployment verbs.
+
+- `loops list` pagination no longer fails when a page carries no new loop ids:
+  the daemon mutates `next_run_at` as loops run, so the offset window can land
+  entirely on already-seen rows; a no-progress page (exact repeat, zero new
+  ids, or frozen offset) now terminates pagination and returns the deduplicated
+  population gathered so far, with a stderr warning naming the reason (BUG
+  3d3521a4). The page/items safety ceilings and unusable-id checks remain hard
+  errors.
+- Agent-loop preflight (and execution) machine routing fails closed through the
+  package-owned Machines canonical route instead of degrading an unresolvable
+  machine id to a raw `ssh <machine-id>` invocation: `OpenMachines route not
+  found for machine: <id>` is thrown when the id cannot be resolved, and
+  command plans are built from the route's canonical command target (task
+  48a92f1b). All preflight paths (CLI create, workflow preflight, MCP
+  validation, doctor, runtime before-run) funnel through the same wrapper.
+- `loops show <id>` computes an execution-staleness classifier and prints
+  `UNSERVED` with the machine id and remediation hint when a machine-pinned
+  loop on the hosted control plane has a scheduled slot passed, zero run rows
+  ever, and no runner serving its machine (BUG 96c837b0); the same classifier
+  is exposed as an `execution` field on `GET /v1/loops/{id}`. The classifier
+  only reports — it never changes who may claim what.
+- `loops show` (CLI, API, and MCP) never reports the placeholder literal
+  `'shell'` as a shell command loop's target: command targets expose the real
+  resolved command line (secret-scrubbed and bounded for shell targets), a
+  `commandDigest` (`cmd:sha256:<hex>`) binding the exact stored command +
+  shell-quoted args the executor will run, and `commandResolvedFrom:
+  "stored-target"` provenance. The executor's shell path shares the same
+  resolved-command-line function, so the digest binds exactly what runs.
+
 The `loops-runner` binary gains the deployment verbs the daemon already had:
 `install`, `start`, `stop` and an extended `status`.
 
