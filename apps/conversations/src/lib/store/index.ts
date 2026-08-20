@@ -57,7 +57,7 @@ import * as projectMessageLinkageLib from "../project-message-linkage.js";
 import * as channelMergeLib from "../channel-merge.js";
 import * as projectChannelRegistrationLib from "../project-channel-registration.js";
 import { attachSendRedaction } from "../content-safety.js";
-import type { IncidentProjectionRecord, IncidentProjectionRequestV1 } from "../../types.js";
+import type { IncidentProjectionRecord, IncidentProjectionRequestV1, Message, MessagePreviewPage } from "../../types.js";
 import { previewAsCompatibilityMessage, COLLECTION_MAX_MAX_BYTES } from "../message-previews.js";
 import { runLocalReadWorker } from "../local-read-runner.js";
 
@@ -469,8 +469,27 @@ export interface ConversationsStore {
   readDigest: Async<typeof messagesLib.readDigest>;
   exportMessages: Async<typeof messagesLib.createMessageExport>;
   getThreadReplies: Async<typeof messagesLib.getThreadReplies>;
-  getUnreadBlockers: Async<typeof messagesLib.getUnreadBlockers>;
-  getUnreadBlockerPreviews: Async<typeof messagesLib.getUnreadBlockerPreviews>;
+  /**
+   * Unread blocking messages for one agent.
+   *
+   * `agent` is the identity to scope the read to. `opts.explicitFrom` tells
+   * the store whether the caller EXPLICITLY requested that agent (a `--from`
+   * / `from` flag) or resolved it as the reader's own identity. The hosted
+   * client forwards an explicitly requested agent to the server so a mismatch
+   * with the authenticated API principal fails loudly (403) instead of
+   * silently returning the principal's blockers; the default identity is
+   * never forwarded, because a drifted local identity would make the server
+   * reject a valid request. A `--from` for a different agent must fail
+   * loudly, never return another agent's blockers at rc=0.
+   */
+  getUnreadBlockers: (
+    agent: string,
+    opts?: { limit?: number; offset?: number; explicitFrom?: boolean },
+  ) => Promise<Message[]>;
+  getUnreadBlockerPreviews: (
+    agent: string,
+    opts?: { limit?: number; offset?: number; explicitFrom?: boolean; max_bytes?: number; preview_bytes?: number; timeout_ms?: number },
+  ) => Promise<MessagePreviewPage>;
   readMentionPreviews: Async<typeof messagesLib.readMentionPreviews>;
   getMessagesForAgent: Async<typeof messagesLib.getMessagesForAgent>;
   getMessageReadStatus: Async<typeof messagesLib.getMessageReadStatus>;

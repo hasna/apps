@@ -285,7 +285,7 @@ export class ConversationsClient {
     }
 
     /** List bounded, redacted current-blocker previews visible to one agent */
-    async listUnreadBlockers(query?: { "agent": string; "limit"?: number; "offset"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
+    async listUnreadBlockers(query?: { "agent"?: string; "limit"?: number; "offset"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
       return this.request("GET", `/v1/messages/blockers`, {
         body: undefined,
         query,
