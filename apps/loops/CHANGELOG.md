@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.4 (2026-08-20)
+
+### Patch Changes
+
+- Journal runner command failures with the refusal reason (todos `e22f6727`, PR #680): `logRunnerCommandFailure` previously printed only `{evt, errorType:"error"}` and the background `run` loop never wired `onError`, so a runner installed `--claim-scope bound` against a control plane that does not advertise `runner.claimScope` refused every poll with zero journal output — ten minutes of failing polls left the systemd service journal empty. New exported `RunnerRefusalError` carries messages that are static by construction (the `/version` probe failures are classified as `HTTP <status>` / `a non-JSON body` / `the version request failed`, never interpolated from foreign error text; the bound-echo refusal surfaces only `typeof` of the server-provided value), and those surface through `logRunnerCommandFailure` bounded to 500 chars while every foreign error keeps the fully opaque line — the postgres-connection-string opacity property is unchanged and its test untouched. The `run` command wires `onError` so each failing poll writes a journal line. Adversarial review: P1 (foreign-text interpolation into the surfaced refusal) fixed in cycle 1, re-review GO.
+
 ## 0.5.3 (2026-08-20)
 
 ### Patch Changes
