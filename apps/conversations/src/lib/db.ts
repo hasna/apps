@@ -781,6 +781,34 @@ export function getDb(): Database {
     BEGIN SELECT RAISE(ABORT, 'channel project linkage receipts are immutable'); END
   `);
 
+  // Immutable receipts for the guarded atomic channel merge. Apply records the
+  // exact moved row identities and prior alias/archive state; rollback creates
+  // a second receipt and never mutates the apply receipt.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_merge_receipts (
+      id TEXT PRIMARY KEY,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      operation TEXT NOT NULL CHECK (operation IN ('apply', 'rollback')),
+      source_channel TEXT NOT NULL,
+      destination_channel TEXT NOT NULL,
+      source_receipt_id TEXT,
+      request_hash TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channel_merge_receipts_source ON channel_merge_receipts(source_channel, created_at)");
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS channel_merge_receipts_no_update
+    BEFORE UPDATE ON channel_merge_receipts
+    BEGIN SELECT RAISE(ABORT, 'channel merge receipts are immutable'); END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS channel_merge_receipts_no_delete
+    BEFORE DELETE ON channel_merge_receipts
+    BEGIN SELECT RAISE(ABORT, 'channel merge receipts are immutable'); END
+  `);
+
   // Package-owned project-channel registration authority. The singleton
   // identity makes the corpus stable across process restarts, while receipts
   // remain append-only evidence for accepted, duplicate, and nonacceptance

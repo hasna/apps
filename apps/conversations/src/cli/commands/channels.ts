@@ -452,6 +452,72 @@ export function registerChannelCommands(program: Command): void {
     });
 
   channel
+    .command("merge")
+    .description("Plan or apply an atomic merge of one channel into another, preserving message ids")
+    .argument("<source>", "Source channel name")
+    .argument("<destination>", "Destination channel name")
+    .option("--dry-run", "Plan only: print the revision hash and write nothing (default)")
+    .option("--archive-source", "After the merge, archive the source channel and alias #source to #destination")
+    .option("--apply", "Perform the merge; REQUIRES --expected-revision and --idempotency-key")
+    .option("--expected-revision <hash>", "Exact revision returned by a current dry-run (compare-and-swap guard)")
+    .option("--idempotency-key <key>", "Stable key for safe apply replay; the same key returns the stored receipt")
+    .option("--from <agent>", "Agent identity that holds the channel locks during the apply")
+    .option("-j, --json", "Output as JSON")
+    .action(async (source, destination, opts) => {
+      const sourceChannel = typeof source === "string" ? source.trim() : "";
+      const destinationChannel = typeof destination === "string" ? destination.trim() : "";
+      if (!sourceChannel) {
+        printErrorLine(chalk.red("Source channel name cannot be empty."));
+        process.exit(1);
+      }
+      if (!destinationChannel) {
+        printErrorLine(chalk.red("Destination channel name cannot be empty."));
+        process.exit(1);
+      }
+      if (opts.apply && (!opts.expectedRevision?.trim() || !opts.idempotencyKey?.trim())) {
+        printErrorLine(chalk.red("--apply requires --expected-revision and --idempotency-key."));
+        process.exit(1);
+      }
+
+      try {
+        const store = getStore();
+        const base = {
+          source_channel: sourceChannel,
+          destination_channel: destinationChannel,
+          archive_source: Boolean(opts.archiveSource),
+        };
+        if (opts.apply) {
+          const result = await store.applyChannelMerge({
+            ...base,
+            expected_revision: opts.expectedRevision.trim(),
+            idempotency_key: opts.idempotencyKey.trim(),
+            agent_id: resolveIdentity(opts.from).trim(),
+          });
+          if (opts.json) {
+            printJson(result);
+          } else {
+            printLine(chalk.green(`Merged ${result.moved_message_count} message(s) from #${result.source_channel} into #${result.destination_channel}.`));
+            printLine(chalk.dim(`Receipt: ${result.receipt_id}; replayed: ${result.replayed ? "yes" : "no"}`));
+          }
+        } else {
+          const result = await store.planChannelMerge(base);
+          if (opts.json) {
+            printJson(result);
+          } else {
+            printLine(`Dry run: ${result.moved_message_count} message(s) would move from #${result.source_channel} into #${result.destination_channel}.`);
+            printLine(chalk.dim(`Revision: ${result.revision}`));
+            if (result.archive_source) {
+              printLine(chalk.dim(`Source would be archived and #${result.source_channel} aliased to #${result.destination_channel}.`));
+            }
+          }
+        }
+      } catch (error) {
+        return failCommand(error, "Failed to merge channels.");
+      }
+      closeDb();
+    });
+
+  channel
     .command("send")
     .description("Send a message to a channel")
     .argument("<channel>", "Channel name")

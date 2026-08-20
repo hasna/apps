@@ -328,6 +328,33 @@ export class ApiStore implements ConversationsStore {
     const body = await this.post<{ channel: unknown }>(`/channels/${encodeURIComponent(normalizeChannelName(name))}/unarchive`);
     return body.channel as never;
   };
+  planChannelMerge: ConversationsStore["planChannelMerge"] = async (options) => {
+    const body = await this.post<unknown>(
+      `/channels/${encodeURIComponent(normalizeChannelName(options.destination_channel))}/merge`,
+      {
+        source_channel: options.source_channel,
+        dry_run: true,
+        archive_source: options.archive_source === true,
+      },
+    );
+    return body as never;
+  };
+  applyChannelMerge: ConversationsStore["applyChannelMerge"] = async (options) => {
+    const body = await this.post<unknown>(
+      `/channels/${encodeURIComponent(normalizeChannelName(options.destination_channel))}/merge`,
+      {
+        source_channel: options.source_channel,
+        dry_run: false,
+        archive_source: options.archive_source === true,
+        expected_revision: options.expected_revision,
+        idempotency_key: options.idempotency_key,
+      },
+    );
+    return body as never;
+  };
+  rollbackChannelMerge: ConversationsStore["rollbackChannelMerge"] = async () => {
+    throw new Error("Channel merge rollback is a local-store operation; the hosted API exposes no rollback route.");
+  };
   isChannelMember: ConversationsStore["isChannelMember"] = async (channelName, agent) => {
     const body = await this.get<{ member?: boolean }>(`/channels/${encodeURIComponent(normalizeChannelName(channelName))}/members/${encodeURIComponent(agent)}`);
     return Boolean(body?.member) as never;

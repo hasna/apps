@@ -54,6 +54,7 @@ import * as hotLib from "../hot.js";
 import * as messagesLib from "../messages.js";
 import * as incidentProjectionsLib from "../incident-projections.js";
 import * as projectMessageLinkageLib from "../project-message-linkage.js";
+import * as channelMergeLib from "../channel-merge.js";
 import * as projectChannelRegistrationLib from "../project-channel-registration.js";
 import { attachSendRedaction } from "../content-safety.js";
 import type { IncidentProjectionRecord, IncidentProjectionRequestV1 } from "../../types.js";
@@ -446,6 +447,9 @@ export interface ConversationsStore {
   planChannelProjectMessageLinkage: Async<typeof projectMessageLinkageLib.planChannelProjectMessageLinkage>;
   applyChannelProjectMessageLinkage: Async<typeof projectMessageLinkageLib.applyChannelProjectMessageLinkage>;
   rollbackChannelProjectMessageLinkage: Async<typeof projectMessageLinkageLib.rollbackChannelProjectMessageLinkage>;
+  planChannelMerge: Async<typeof channelMergeLib.planChannelMerge>;
+  applyChannelMerge: Async<typeof channelMergeLib.applyChannelMerge>;
+  rollbackChannelMerge: Async<typeof channelMergeLib.rollbackChannelMerge>;
   getMessageById: Async<typeof messagesLib.getMessageById>;
   getMessageByUuid: Async<typeof messagesLib.getMessageByUuid>;
   getMessageAttachment: Async<typeof messagesLib.getMessageAttachment>;
@@ -639,6 +643,9 @@ export class LocalStore implements ConversationsStore {
   planChannelProjectMessageLinkage: ConversationsStore["planChannelProjectMessageLinkage"] = async (...a) => projectMessageLinkageLib.planChannelProjectMessageLinkage(...a);
   applyChannelProjectMessageLinkage: ConversationsStore["applyChannelProjectMessageLinkage"] = async (...a) => projectMessageLinkageLib.applyChannelProjectMessageLinkage(...a);
   rollbackChannelProjectMessageLinkage: ConversationsStore["rollbackChannelProjectMessageLinkage"] = async (...a) => projectMessageLinkageLib.rollbackChannelProjectMessageLinkage(...a);
+  planChannelMerge: ConversationsStore["planChannelMerge"] = async (...a) => channelMergeLib.planChannelMerge(...a);
+  applyChannelMerge: ConversationsStore["applyChannelMerge"] = async (...a) => channelMergeLib.applyChannelMerge(...a);
+  rollbackChannelMerge: ConversationsStore["rollbackChannelMerge"] = async (...a) => channelMergeLib.rollbackChannelMerge(...a);
   getMessageById: ConversationsStore["getMessageById"] = async (...a) => messagesLib.getMessageById(...a);
   getMessageByUuid: ConversationsStore["getMessageByUuid"] = async (...a) => messagesLib.getMessageByUuid(...a);
   getMessageAttachment: ConversationsStore["getMessageAttachment"] = async (...a) => messagesLib.getMessageAttachment(...a);
