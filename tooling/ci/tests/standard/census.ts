@@ -265,7 +265,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "actions", reason: "Library-shaped (action contracts); no server surface." },
   { member: "announce", reason: "CLI-only member; no server surface." },
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
-  { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
   { member: "catalog", reason: "Local read model; the HTTP read API is a documented local dev convenience bound to loopback (README 'Security and deployment scope'), not a supported service surface — the manifest declares the api surface deferred with that reason." },
@@ -303,13 +302,10 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "attachments", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "banking", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "brains", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "catalog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "consolidations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "context", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "controls", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "crawl", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -319,7 +315,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "evals", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "holdings", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -398,11 +393,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "controls",
     cause: "manifest_valid at pinned 0.4.1 (mode-era validator vs backend-era manifest, modes-removal lane): storage.mode Required; storage Unrecognized key(s) in object: 'backend'. The mode vocabulary is removed from the app; the two-backend schema (storage.backend sqlite|postgresql, no mode) ships with the contracts lane, which also must regenerate the vendor-kit without mode.ts.",
     task: "todos reconcile task 'Reconcile @hasna/controls contracts conformance: manifest_valid' (auto-filed by the standard suite; resolves when the contracts lane publishes the two-backend validator and controls re-pins)",
-  },
-  {
-    member: "economy",
-    cause: "manifest_valid: manifest (imported by #147) declares bin economy-otel, which is not in ALLOWED_BIN_SUFFIXES; npm @hasna/economy 0.3.9 ships the bin (faithful import), so the exception is recorded until the allowlist or the bin is reconciled.",
-    task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
   },
   {
     member: "events",
@@ -508,7 +498,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
  * their manifest has no validator pin, so conformance runs at the
  * manifest's kitVersion (or latest). */
 export const NO_VALIDATOR_PIN: string[] = [
-  "banking",
   "bridge",
   "catalog",
   "changelog",
