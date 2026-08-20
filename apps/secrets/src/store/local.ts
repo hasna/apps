@@ -785,6 +785,16 @@ export class LocalStore implements Store {
     return { mode: "local", location: path };
   }
 
+  /**
+   * Synchronous metadata-only count of local vault secret rows. Used by the CLI's
+   * local-fallback notice to state WHAT was counted (never includes values).
+   */
+  countSecretsSync(): number {
+    const db = this.db();
+    const row = db.prepare("SELECT COUNT(*) AS count FROM secrets").get() as { count: number } | null;
+    return row?.count ?? 0;
+  }
+
   async encryptVault(): Promise<EncryptVaultResult> {
     const db = this.db();
     const rows = db.prepare("SELECT key, value FROM secrets").all() as { key: string; value: string }[];

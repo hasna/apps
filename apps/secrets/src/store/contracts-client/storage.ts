@@ -27,6 +27,7 @@ import type { Env } from "./mode.js";
 import {
   createClientTransport,
   HasnaHttpError,
+  type ClientTransportResolution,
   type HasnaHttpTransport,
   type HasnaRequestOptions,
   type QueryParams,
@@ -206,14 +207,15 @@ export function createHasnaStorageClient(name: string, transport: HasnaHttpTrans
 
 /** Result of {@link resolveStorageClient}. */
 export type ResolveStorageClientResult =
-  | { transport: "local"; client: null }
-  | { transport: "cloud-http"; client: HasnaStorageClient };
+  | { transport: "local"; client: null; resolution: ClientTransportResolution }
+  | { transport: "cloud-http"; client: HasnaStorageClient; resolution: ClientTransportResolution };
 
 /**
  * The one call an app's storage resolver makes. Reads the client-flip env for
  * `name`; when it resolves to `cloud-http` (mode=cloud/self_hosted + API_URL +
  * API_KEY), returns a ready {@link HasnaStorageClient}. Otherwise returns
- * `{ transport: 'local', client: null }` so the app uses its local store.
+ * `{ transport: 'local', client: null, resolution }` so the app uses its local
+ * store with the transport decision visible (why local was selected).
  * Throws if cloud was requested but is misconfigured (so callers never silently
  * read the wrong dataset).
  */
@@ -224,7 +226,13 @@ export function resolveStorageClient(
 ): ResolveStorageClientResult {
   const wired = createClientTransport(name, env, overrides);
   if (wired.transport === "cloud-http") {
-    return { transport: "cloud-http", client: createHasnaStorageClient(name, wired.client) };
+    return {
+      transport: "cloud-http",
+      client: createHasnaStorageClient(name, wired.client),
+      // The full resolution travels with the client so a caller can see WHY this
+      // transport was chosen (mode source, present keys) — never dropped.
+      resolution: wired.resolution,
+    };
   }
-  return { transport: "local", client: null };
+  return { transport: "local", client: null, resolution: wired.resolution };
 }

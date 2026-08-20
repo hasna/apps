@@ -167,7 +167,10 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
       deprecatedAlias,
       modeSource,
       baseUrl: null,
-      apiUrlSource: null,
+      // Report what the env actually held — a URL alone is partial cloud intent
+      // (the flip signal needs BOTH url and key) and must be visible to callers
+      // that name the mode switch (incident 715558), not silently nulled.
+      apiUrlSource: urlHit ? urlHit.key : null,
       apiKeyPresent: Boolean(keyHit),
       apiKeySource: keyHit ? keyHit.key : null,
       misconfigured: false,
@@ -186,7 +189,7 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
       deprecatedAlias,
       modeSource,
       baseUrl: null,
-      apiUrlSource: null,
+      apiUrlSource: urlHit ? urlHit.key : null,
       apiKeyPresent: false,
       apiKeySource: null,
       misconfigured: true,
