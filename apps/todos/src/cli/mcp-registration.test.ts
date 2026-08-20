@@ -86,7 +86,8 @@ describe("Cursor MCP registration", () => {
     const registered = await runCli(["mcp", "--register", "cursor"], fixtureRoot);
 
     expect(registered.exitCode).toBe(0);
-    expect(registered.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(registered.stderr).toContain('"event":"todos-local-fallback"');
     expect(registered.stdout).toContain("Cursor (project): registered");
     expect(readJson(configPath)).toEqual({
       projectSetting: true,
@@ -155,7 +156,8 @@ describe("Takumi MCP registration", () => {
     const registered = await runCli(["mcp", "--register", "takumi"], fixtureRoot);
 
     expect(registered.exitCode).toBe(0);
-    expect(registered.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(registered.stderr).toContain('"event":"todos-local-fallback"');
     expect(registered.stdout).not.toContain("Unknown agent");
     expect(registered.stdout).toContain("Takumi (project): registered");
     expect(readCalls(callLog)).toEqual([
@@ -165,7 +167,8 @@ describe("Takumi MCP registration", () => {
     const unregistered = await runCli(["mcp", "--unregister", "takumi"], fixtureRoot);
 
     expect(unregistered.exitCode).toBe(0);
-    expect(unregistered.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(unregistered.stderr).toContain('"event":"todos-local-fallback"');
     expect(unregistered.stdout).toContain("Takumi (project): removed todos MCP server");
     expect(readCalls(callLog)).toEqual([
       `mcp add --scope project todos -- ${fixtureRoot.mcpBinary} --stdio`,
@@ -183,7 +186,8 @@ describe("Takumi MCP registration", () => {
     );
 
     expect(registered.exitCode).toBe(0);
-    expect(registered.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(registered.stderr).toContain('"event":"todos-local-fallback"');
     expect(registered.stdout).toContain("Takumi (user): registered");
     expect(readCalls(callLog)).toEqual([
       `mcp add --scope user todos -- ${fixtureRoot.mcpBinary} --stdio`,
@@ -195,7 +199,8 @@ describe("Takumi MCP registration", () => {
     );
 
     expect(unregistered.exitCode).toBe(0);
-    expect(unregistered.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(unregistered.stderr).toContain('"event":"todos-local-fallback"');
     expect(unregistered.stdout).toContain("Takumi (user): removed todos MCP server");
     expect(readCalls(callLog)).toEqual([
       `mcp add --scope user todos -- ${fixtureRoot.mcpBinary} --stdio`,

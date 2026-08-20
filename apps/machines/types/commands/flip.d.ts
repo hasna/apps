@@ -78,6 +78,17 @@ export interface FlipAppSpec {
      */
     keyViaSecretPointer?: boolean;
     /**
+     * Env keys the provisioned fleet env file MUST carry after an api-mode
+     * write, verified ON the target machine before the file becomes the
+     * provisioned state. Defaults to [apiUrlEnv, apiKeyEnv] — the effective
+     * pair every app's script writes. A provision that would leave a reduced
+     * env file aborts with FLIP_ERROR (exit 3) instead of starting a session
+     * whose CLIs silently fall back to empty local stores (incident 715712:
+     * a harness session-env re-provision dropped the hosted API env for
+     * TODOS/KNOWLEDGE/EMAILS and the CLIs served false-empty SQLite at rc=0).
+     */
+    clientEnvRequiredKeys?: readonly string[];
+    /**
      * Dotted JSON path to the reported mode string inside the app's
      * `<cliBin> <statusArgs>` payload. Default "mode" (all generic apps).
      * Emails reports its mode at `mode.current`.

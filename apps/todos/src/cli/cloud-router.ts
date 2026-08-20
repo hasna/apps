@@ -126,6 +126,44 @@ export interface TodosCliTransportResolution {
 }
 
 /**
+ * Once-only per-process guard for the local-fallback notice. A long-running
+ * consumer (MCP server) must not emit a notice per request; a CLI one-shot
+ * emits at most one line before its first local read.
+ */
+let todosLocalFallbackNoticeEmitted = false;
+
+/** Test hook: re-arm the once-only local-fallback notice. */
+export function resetTodosLocalFallbackNotice(): void {
+  todosLocalFallbackNoticeEmitted = false;
+}
+
+/**
+ * Emit one machine-readable JSON line on stderr when the transport falls back
+ * to the on-box SQLite store with NO hosted intent in the environment (the
+ * all-unset default branch). Incident 715712: a harness session-env
+ * re-provision dropped HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY and the CLI
+ * silently served the local store at rc=0 — tasks appeared gone. The notice
+ * names the mode switch so a false-empty read is never silent (the same
+ * family as the merged secrets fix, PR #681 / incident 715558). stdout stays
+ * pure for parsers.
+ */
+function emitTodosLocalFallbackNotice(env: Env): void {
+  if (todosLocalFallbackNoticeEmitted) return;
+  todosLocalFallbackNoticeEmitted = true;
+  const notice = {
+    event: "todos-local-fallback",
+    transport: "sqlite",
+    source: "default",
+    apiUrlPresent: Boolean(env.HASNA_TODOS_API_URL?.trim()),
+    apiKeyPresent: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
+    notice:
+      "No hosted API config (HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY) is present; " +
+      "using local SQLite. Hosted todos are NOT visible in this output.",
+  };
+  console.error(JSON.stringify(notice));
+}
+
+/**
  * Resolve the CLI transport from the environment. Retired storage-mode
  * variables are inert — never read, never mapped, never a fallback — and the
  * transport is selected by the API env pair alone: URL set without KEY (or KEY
@@ -151,6 +189,7 @@ export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCl
       "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
     );
   }
+  emitTodosLocalFallbackNotice(env);
   return {
     transport: "sqlite",
     selected: false,

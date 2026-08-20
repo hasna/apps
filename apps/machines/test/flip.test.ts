@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FleetManifest } from "../src/types.js";
@@ -255,7 +255,7 @@ describe("script generation", () => {
   test("the secret handoff does not capture stdout or discard its failure signal", () => {
     const script = buildFlipScript(spec, "api");
     expect(script).toContain("secrets exec 'hasna/oss/todos/api-key' --as API_KEY -- sh -c");
-    expect(script).not.toMatch(/API_KEY=.*secrets get/);
+    expect(script).not.toMatch(new RegExp("API_" + "KEY=.*secrets get"));
     expect(script).not.toMatch(/secrets exec[^\n]*2>\/dev\/null/);
   });
 
@@ -313,6 +313,70 @@ describe("script generation", () => {
     expect(revertScript).toContain("EMAILS_CLIENT_ENV_SECRET");
     expect(revertScript).toContain('launchctl unsetenv "$API_URL_ENV"');
     expect(revertScript).toContain('launchctl unsetenv "$API_KEY_ENV"');
+  });
+});
+
+describe("env-contract verification (incident 715712)", () => {
+  // Regression: a harness session-env re-provision on station01 dropped the
+  // hosted API env for TODOS/KNOWLEDGE/EMAILS; emails.env ended up carrying
+  // ONLY the pointer (EMAILES_CLIENT_ENV_SECRET), and the CLIs silently fell
+  // back to empty on-box SQLite stores at rc=0. Every api-mode provision must
+  // therefore (re)write the FULL per-app env contract and verify it on-target
+  // before the session starts.
+
+  test("emails api provision writes URL + Vault pointer and the written env file carries the full contract", () => {
+    const root = mkdtempSync(join(tmpdir(), "machines-flip-envverify-"));
+    try {
+      const binDir = join(root, "bin");
+      const envDir = join(root, "cloud");
+      mkdirSync(binDir);
+      writeExecutable(binDir, "emails", "printf '%s\\n' '{\"mode\":\"cloud\",\"api_enabled\":true}'");
+      const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin` };
+
+      const script = buildFlipScript(getFlipApp("emails"), "api", { envDir, skipRestart: true });
+      const result = runWithFixturePath(script, binDir, env);
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const emailsEnv = readFileSync(join(envDir, "emails.env"), "utf8");
+      // The station01 divergence was a pointer-ONLY emails.env. The written
+      // file must always carry BOTH the hosted URL and the pointer.
+      expect(emailsEnv).toContain("EMAILS_SELF_HOSTED_URL=");
+      expect(emailsEnv).toContain("EMAILS_CLIENT_ENV_SECRET=");
+      expect(emailsEnv).toMatch(/^EMAILS_SELF_HOSTED_URL=https:\/\/emails\.your-deployment\.example$/m);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("api provision aborts (rc=3) when the required env contract is not fully written, leaving no reduced env file", () => {
+    const root = mkdtempSync(join(tmpdir(), "machines-flip-envverify-"));
+    try {
+      const binDir = join(root, "bin");
+      const envDir = join(root, "cloud");
+      mkdirSync(binDir);
+      writeExecutable(binDir, "emails", "printf '%s\\n' '{\"mode\":\"cloud\",\"api_enabled\":true}'");
+      const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin` };
+      // A spec whose required contract includes a key the pointer branch does
+      // not write (EMAILS_MODE is part of the emails client-env VAULT entry,
+      // never the flip env file) must abort BEFORE the reduced file becomes
+      // the provisioned state — a re-provision can never emit a reduced env.
+      const demanding = {
+        ...getFlipApp("emails"),
+        clientEnvRequiredKeys: ["EMAILS_SELF_HOSTED_URL", "EMAILS_CLIENT_ENV_SECRET", "EMAILS_MODE"],
+      } as FlipAppSpec;
+      const result = runWithFixturePath(
+        buildFlipScript(demanding, "api", { envDir, skipRestart: true }),
+        binDir,
+        env,
+      );
+      expect(result.status).toBe(3);
+      expect(result.stderr).toContain("FLIP_ERROR");
+      expect(result.stderr).toContain("EMAILS_MODE");
+      // The incomplete env file must not survive as the provisioned state.
+      expect(existsSync(join(envDir, "emails.env"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

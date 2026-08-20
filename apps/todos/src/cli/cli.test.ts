@@ -73,6 +73,17 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
   return result;
 }
 
+/**
+ * A local-mode CLI run (no hosted API pair) now carries exactly one
+ * machine-readable fallback notice on stderr per process — incident 715712
+ * (a re-provision dropped the hosted API env and the CLI silently served
+ * local at rc=0). Assertions that used to pin stderr === "" must pin the
+ * notice instead: the mode switch is never silent.
+ */
+function expectLocalModeStderr(result: CliResult): void {
+  expect(result.stderr).toContain('"event":"todos-local-fallback"');
+}
+
 function createMinimalSourceStore(dbPath: string): void {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
@@ -341,7 +352,8 @@ describe("CLI integration", () => {
     ], dbPath);
 
     for (const result of [capability, first, second, readExact, lookup, delivered, compensateApply, compensated]) {
-      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(result.exitCode).toBe(0);
+      expectLocalModeStderr(result);
     }
     expect(JSON.parse(capability.stdout).capability).toMatchObject({
       authority: "todos",
@@ -394,7 +406,7 @@ describe("CLI integration", () => {
     ], ":memory:");
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
+    expectLocalModeStderr(result);
     expect(JSON.parse(result.stdout)).toEqual({
       error: "Expected schema_version testers.issue_report.v1",
     });
@@ -615,7 +627,7 @@ describe("CLI integration", () => {
     resetDatabase();
 
     const listJson = await runCli(["list", "--json"], dbPath);
-    expect(listJson.stderr).toBe("");
+    expectLocalModeStderr(listJson);
     expect(listJson.exitCode).toBe(0);
     const listed = JSON.parse(listJson.stdout);
     expect(listed[0].id).toBe(task.id);
@@ -628,7 +640,7 @@ describe("CLI integration", () => {
     expect(listed[0].description).not.toContain("credentiallikevalue123456");
 
     const searchJson = await runCli(["--json", "search", "Broad redaction"], dbPath);
-    expect(searchJson.stderr).toBe("");
+    expectLocalModeStderr(searchJson);
     expect(searchJson.exitCode).toBe(0);
     const searched = JSON.parse(searchJson.stdout);
     expect(searched[0].id).toBe(task.id);
@@ -641,7 +653,7 @@ describe("CLI integration", () => {
     expect(searched[0].description).not.toContain("credentiallikevalue123456");
 
     const listText = await runCli(["list"], dbPath);
-    expect(listText.stderr).toBe("");
+    expectLocalModeStderr(listText);
     expect(listText.exitCode).toBe(0);
     expect(listText.stdout).not.toContain("credentiallikevalue123456");
 
@@ -664,12 +676,12 @@ describe("CLI integration", () => {
     expect(persistedDescription).toMatch(/\[REDACTED(?:_[A-Z_]+)?\]/);
 
     const showJson = await runCli(["--json", "show", task.id], dbPath);
-    expect(showJson.stderr).toBe("");
+    expectLocalModeStderr(showJson);
     expect(showJson.exitCode).toBe(0);
     expect(JSON.parse(showJson.stdout).description).toBe(persistedDescription);
 
     const inspectJson = await runCli(["--json", "inspect", task.id], dbPath);
-    expect(inspectJson.stderr).toBe("");
+    expectLocalModeStderr(inspectJson);
     expect(inspectJson.exitCode).toBe(0);
     expect(JSON.parse(inspectJson.stdout).description).toBe(persistedDescription);
   });
@@ -710,18 +722,18 @@ describe("CLI integration", () => {
 
     const globalJson = await runCli(["list", "--json"], dbPath);
     expect(globalJson.exitCode).toBe(0);
-    expect(globalJson.stderr).toBe("");
+    expectLocalModeStderr(globalJson);
     expect(globalJson.stdout.length).toBeGreaterThan(64 * 1024);
     expect(JSON.parse(globalJson.stdout)).toHaveLength(180);
 
     const formatJson = await runCli(["list", "--format", "json"], dbPath);
     expect(formatJson.exitCode).toBe(0);
-    expect(formatJson.stderr).toBe("");
+    expectLocalModeStderr(formatJson);
     expect(JSON.parse(formatJson.stdout)).toHaveLength(180);
 
     const completedJson = await runCli(["list", "--status", "completed", "--json"], dbPath);
     expect(completedJson.exitCode).toBe(0);
-    expect(completedJson.stderr).toBe("");
+    expectLocalModeStderr(completedJson);
     expect(completedJson.stdout.length).toBeGreaterThan(64 * 1024);
     expect(JSON.parse(completedJson.stdout)).toHaveLength(80);
   });
@@ -1365,7 +1377,7 @@ describe("CLI integration", () => {
         "component=parser",
         "--json",
       ], dbPath);
-      expect(setResult.stderr).toBe("");
+      expectLocalModeStderr(setResult);
       expect(setResult.exitCode).toBe(0);
       const updated = JSON.parse(setResult.stdout);
       expect(updated.task.priority).toBe("high");
@@ -1412,7 +1424,7 @@ describe("CLI integration", () => {
         root,
         "--json",
       ], dbPath);
-      expect(result.stderr).toBe("");
+      expectLocalModeStderr(result);
       expect(result.exitCode).toBe(0);
       const report = JSON.parse(result.stdout);
       expect(report.local_only).toBe(true);
@@ -1443,7 +1455,7 @@ describe("CLI integration", () => {
       const second = JSON.parse(secondResult.stdout);
 
       const scanResult = await runCli(["dedupe", "scan", "--json"], dbPath);
-      expect(scanResult.stderr).toBe("");
+      expectLocalModeStderr(scanResult);
       expect(scanResult.exitCode).toBe(0);
       const scan = JSON.parse(scanResult.stdout);
       expect(scan.count).toBeGreaterThanOrEqual(1);
@@ -1460,7 +1472,7 @@ describe("CLI integration", () => {
         "same title",
         "--json",
       ], dbPath);
-      expect(mergeResult.stderr).toBe("");
+      expectLocalModeStderr(mergeResult);
       expect(mergeResult.exitCode).toBe(0);
       const merge = JSON.parse(mergeResult.stdout);
       expect(merge.primary_task.id).toBe(first.id);
@@ -1483,7 +1495,7 @@ describe("CLI integration", () => {
     try {
       const { stdout, stderr, exitCode } = await runCli(["project-bootstrap", root, "--json"], dbPath);
       expect(exitCode).toBe(0);
-      expect(stderr).toBe("");
+      expectLocalModeStderr({ stderr } as CliResult);
       const result = JSON.parse(stdout);
       expect(result.discovery.projectName).toBe("cli-bootstrap");
       expect(result.project.name).toBe("cli-bootstrap");
@@ -1535,7 +1547,7 @@ describe("CLI integration", () => {
         "20",
       ], dbPath, { HOME: process.env["HOME"]!, HASNA_EVENTS_DIR: process.env["HASNA_EVENTS_DIR"]! });
 
-      expect(result.stderr).toBe("");
+      expectLocalModeStderr(result);
       expect(result.exitCode).toBe(0);
       const tasks = JSON.parse(result.stdout);
       expect(tasks).toHaveLength(1);
@@ -1604,7 +1616,7 @@ describe("CLI integration", () => {
         "20",
       ], dbPath, { HOME: process.env["HOME"]!, HASNA_EVENTS_DIR: process.env["HASNA_EVENTS_DIR"]! });
 
-      expect(result.stderr).toBe("");
+      expectLocalModeStderr(result);
       expect(result.exitCode).toBe(0);
       const tasks = JSON.parse(result.stdout);
       expect(tasks).toHaveLength(1);
@@ -1937,7 +1949,7 @@ describe("CLI integration", () => {
         "command,evidence",
         "--json",
       ], dbPath);
-      expect(setResult.stderr).toBe("");
+      expectLocalModeStderr(setResult);
       expect(setResult.exitCode).toBe(0);
       expect(JSON.parse(setResult.stdout).name).toBe("local");
 
@@ -1946,7 +1958,7 @@ describe("CLI integration", () => {
       expect(JSON.parse(capsResult.stdout).capabilities).toEqual(expect.arrayContaining(["command", "evidence"]));
 
       const runResult = await runCli(["verify-providers", "run", "local", "--task", task.id, "--agent", "codex", "--json"], dbPath);
-      expect(runResult.stderr).toBe("");
+      expectLocalModeStderr(runResult);
       expect(runResult.exitCode).toBe(0);
       const result = JSON.parse(runResult.stdout);
       expect(result.status).toBe("passed");
@@ -2057,7 +2069,7 @@ describe("CLI integration", () => {
     }));
 
     const json = await runCli(["runs", "simulate", fixturePath, "--agent", "codex", "--json"], dbPath);
-    expect(json.stderr).toBe("");
+    expectLocalModeStderr(json);
     expect(json.exitCode).toBe(0);
     const simulation = JSON.parse(json.stdout);
     expect(simulation.mutates_database).toBe(false);

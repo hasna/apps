@@ -900,12 +900,30 @@ function assertNoRetiredKnowledgeStorageSelector(env = process.env) {
   if (retired)
     throw new RetiredKnowledgeStorageSelectorError(retired);
 }
+var knowledgeLocalFallbackNoticeEmitted = false;
+function emitKnowledgeLocalFallbackNotice(env) {
+  if (knowledgeLocalFallbackNoticeEmitted)
+    return;
+  knowledgeLocalFallbackNoticeEmitted = true;
+  const notice = {
+    event: "knowledge-local-fallback",
+    transport: "sqlite",
+    source: "default",
+    apiUrlPresent: isPresent(env, KNOWLEDGE_API_URL_ENV),
+    apiKeyPresent: isPresent(env, KNOWLEDGE_API_KEY_ENV),
+    notice: `No hosted API config (${KNOWLEDGE_API_URL_ENV} + ${KNOWLEDGE_API_KEY_ENV}) is present; ` + "using local SQLite. Hosted knowledge is NOT visible in this output."
+  };
+  console.error(JSON.stringify(notice));
+}
 function resolveKnowledgeClientTransport(env = process.env) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const apiUrlPresent = isPresent(env, KNOWLEDGE_API_URL_ENV);
   const apiKeyPresent = isPresent(env, KNOWLEDGE_API_KEY_ENV);
   if (apiUrlPresent && !apiKeyPresent) {
     throw new Error(`knowledge: ${KNOWLEDGE_API_URL_ENV} selects the HTTP API, but ${KNOWLEDGE_API_KEY_ENV} is missing. ` + `Set ${KNOWLEDGE_API_KEY_ENV}, or unset ${KNOWLEDGE_API_URL_ENV} to use local SQLite.`);
+  }
+  if (!apiUrlPresent) {
+    emitKnowledgeLocalFallbackNotice(env);
   }
   return {
     transport: apiUrlPresent ? "http" : "sqlite",

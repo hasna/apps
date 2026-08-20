@@ -299,7 +299,9 @@ describe("remote link-ref authoritative readback", () => {
       "--provider",
       "github",
     ], env);
-    expect({ exitCode: linked.exitCode, stderr: linked.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(linked.exitCode).toBe(0);
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(linked.stderr).toContain('"event":"todos-local-fallback"');
 
     const found = await spawnCli(["find-ref", REF_NAME, "--json"], env);
     expect(JSON.parse(found.stdout)).toEqual([

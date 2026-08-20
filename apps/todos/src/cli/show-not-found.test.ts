@@ -85,6 +85,7 @@ describe("todos show missing-task contract", () => {
     expect(human.exitCode).toBe(0);
     expect(human.stdout).toContain("Task Details:");
     expect(human.stdout).toContain("show found-task control");
-    expect(human.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(human.stderr).toContain('"event":"todos-local-fallback"');
   }, TIMEOUT);
 });

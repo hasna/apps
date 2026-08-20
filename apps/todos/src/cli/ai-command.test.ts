@@ -930,7 +930,8 @@ describe("todos ai stable failure mapping", () => {
         status: "failed",
         error: { code: "runtime_invalid_result" },
       });
-      expect(run.stderr).toBe("");
+      // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+      expect(run.stderr).toContain('"event":"todos-local-fallback"');
     }
 
     for (const scenario of ["event-tojson", "event-extra"]) {
@@ -948,7 +949,8 @@ describe("todos ai stable failure mapping", () => {
           error: { code: "runtime_invalid_result" },
         },
       });
-      expect(run.stderr).toBe("");
+      // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+      expect(run.stderr).toContain('"event":"todos-local-fallback"');
     }
   }, 10_000);
 
@@ -967,7 +969,8 @@ describe("todos ai stable failure mapping", () => {
         error: { code: "runtime_invalid_result" },
       },
     });
-    expect(run.stderr).toBe("");
+    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+    expect(run.stderr).toContain('"event":"todos-local-fallback"');
   }, 5_000);
 
   test("Commander usage errors honor explicit and global JSON output", async () => {
@@ -982,7 +985,8 @@ describe("todos ai stable failure mapping", () => {
         status: "failed",
         error: { code: "invalid_input" },
       });
-      expect(run.stderr).toBe("");
+      // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
+      expect(run.stderr).toContain('"event":"todos-local-fallback"');
     }
   }, 10_000);
 

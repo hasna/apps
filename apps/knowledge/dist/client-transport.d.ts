@@ -25,6 +25,8 @@ export declare class RetiredKnowledgeStorageSelectorError extends Error {
 }
 /** Reject stale selector variables even when their value is blank. */
 export declare function assertNoRetiredKnowledgeStorageSelector(env?: NodeJS.ProcessEnv): void;
+/** Test hook: re-arm the once-only local-fallback notice. */
+export declare function resetKnowledgeLocalFallbackNotice(): void;
 /**
  * Resolve the client connection from canonical environment variables only.
  * An API URL without its credential fails closed instead of drifting to the
