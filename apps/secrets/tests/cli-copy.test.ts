@@ -25,6 +25,13 @@ function cliEnv(): Record<string, string | undefined> {
     ...process.env,
     HASNA_SECRETS_DB_PATH: join(vaultDir, "vault.db"),
     HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
+    // #681: an unselected/default transport emits a machine-readable
+    // `secrets-local-fallback` JSON line on stderr when a local store exists.
+    // The copy suite asserts a strict empty-stderr invariant, so the local
+    // transport must be EXPLICITLY selected here (a chosen store is silent,
+    // a fallback is not). The corrupting-server test below overrides the mode
+    // to `cloud` for its own env, which is unaffected by this default.
+    HASNA_SECRETS_STORAGE_MODE: "local",
     NO_COLOR: "1",
   };
 }
