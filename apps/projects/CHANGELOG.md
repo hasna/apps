@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.134
+
+### Patch Changes
+
+- 139894d: Add fail-closed adoption of an exact pre-bound project channel, including stable target, revision, digest, and message-ownership compare-and-swap evidence.
+- 0efd36e: First release from the hasna/apps monorepo. The package was imported from hasna/projects with history preserved (import capsule 86a604070, import merge ff0c8e055); there are no functional changes since 0.1.131 — the delta is the import itself plus the monorepo workspace wiring (tsconfig bun-types→bun, ajv declared as a devDependency, changelog headings reconciled to 0.1.131). This patch establishes version ownership under the monorepo.
+- 5506f54: `projects-serve --help` and `projects-serve --version` now answer (rc=0, stdout) without a configured `HASNA_PROJECTS_DATABASE_URL`. Previously the serve entrypoint resolved the database URL before any argument handling, so help/version could not be answered without a DB URL (binds-before-args class, bug O15-00084). The fail-closed no-URL error for actual server start is unchanged.
+- Updated dependencies [10a8f36]
+- Updated dependencies [b630c48]
+- Updated dependencies [2eb72da]
+- Updated dependencies [7a5bc3f]
+- Updated dependencies [af55d54]
+- Updated dependencies [9072a3b]
+- Updated dependencies [058cb86]
+- Updated dependencies [139894d]
+- Updated dependencies [3fa7d73]
+- Updated dependencies [4c8ab45]
+  - @hasna/contracts@0.11.2
+  - @hasna/conversations@0.6.3
+  - @hasna/events@0.1.16
+  - @hasna/loops@0.5.3
+  - @hasna/todos@0.15.36
+
 ## 0.1.133
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.107
+
+### Patch Changes
+
+- 243ce8d: fix(knowledge): regenerate bin/dist bundles — the committed artifacts were stale vs source (canonical project scope + migrate-project-path verb from #362 never rebuilt into the shipped bundles)
+- Updated dependencies [b630c48]
+  - @hasna/events@0.1.16
+
 ## 0.2.106
 
 - Remove the deployment-mode storage vocabulary from the knowledge storage

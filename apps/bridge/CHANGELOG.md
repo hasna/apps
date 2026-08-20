@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.2
+
+### Patch Changes
+
+- 01a749c: Sync with hasna/bridge main (delta import): live-owner daemon lock protection, config-derived stop grace, and the 0.7.1 release bump (changelog + version). Content from org commits #14-#17; monorepo #182 content retained and reconciled.
+- 86184f1: fix(bridge): canonical data root ~/.hasna/bridge
+
 All notable changes to `@hasna/bridge` are documented here.
 
 ## 0.7.1

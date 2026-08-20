@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.17
+
+### Patch Changes
+
+- 8de5bb5: Release-line reconciliation: main is bumped to the registry-latest 1.3.15 (published by the release lane 2026-08-14 ahead of main). No functional changes — this patch establishes main/registry parity and clears the KNOWN_NPM_DRIFT record (reconcile task 78c66e3c).
+- c9bcb03: feat(emails): server-side priority folder pushdown. `GET /v1/messages?folder=priority` is now accepted (MESSAGE_FOLDERS + OpenAPI enum) and served from the `priority_sender_rules` table (migration 0026): the list returns only messages whose sender matches a priority rule (exact-address or sender-domain), within the same inbox-like scope as the counts. With zero rules the folder completes empty and promptly instead of a full-store walk. `messageCounts()`' priority count and the folder predicate share one SQL EXISTS so the list and the count mirror each other by construction. CLI-side behavior unchanged (the client already detects the honored filter).
+- 79cabc4: Fix the PG unread-by-address integration test to the measured parity contract: a message carrying cc recipients still counts for its to-recipients, so first@example.test rolls up 3 (not 2) with the given fixture; the is_read:true message stays excluded (without the exclusion the count would be 4). Both the local SQLite rollup and the PG store return 3 for this fixture — the assertion contradicted its own data. The version-wave pool (#602) computes the single @hasna/emails 1.3.17 bump from all pooled changesets; this per-PR changeset is an input to that pool, not a separate version.
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+
 All notable changes to `@hasna/emails` are documented here.
 
 ## [Unreleased]

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/pixels",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Consent-aware provider pixel orchestration for browsers, APIs, CLIs, and MCP clients",
   "type": "module",
   "repository": {

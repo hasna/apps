@@ -1,3 +1,10 @@
+## 0.4.37
+
+### Patch Changes
+
+- Updated dependencies [b630c48]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
 ## 0.4.36 (2026-08-15)
 
 ### Fixed

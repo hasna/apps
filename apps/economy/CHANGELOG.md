@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.11
+
+### Patch Changes
+
+- 0df46e0: First release from the hasna/apps monorepo. The package was imported from hasna/economy with history preserved (import capsule 18b2aaf7d, import merge 7a3018a4f); there are no functional changes since 0.3.9 — the delta is the import itself plus the monorepo workspace wiring. This patch establishes version ownership under the monorepo.
+- Updated dependencies [b630c48]
+- Updated dependencies [139894d]
+- Updated dependencies [0efd36e]
+- Updated dependencies [5506f54]
+  - @hasna/contracts@0.11.2
+  - @hasna/events@0.1.16
+  - @hasna/projects@0.1.134
+
 All notable changes to this repository are tracked here. This project follows semantic versioning for published npm packages when practical.
 
 ## @hasna/economy 0.3.10 - 2026-08-15

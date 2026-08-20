@@ -1,6 +1,6 @@
 {
   "name": "@hasna/emails",
-  "version": "1.3.16",
+  "version": "1.3.17",
   "description": "Emails \u2014 local SQLite and self-hosted email management CLI, MCP server, and library",
   "keywords": [
     "email",
@@ -96,9 +96,9 @@
     "@aws-sdk/client-sqs": "^3.1072.0",
     "@aws-sdk/client-sts": "^3.1072.0",
     "@aws-sdk/credential-provider-ini": "^3.972.55",
-    "@hasna/contracts": "0.11.1",
+    "@hasna/contracts": "0.11.2",
     "@hasna/domains": "0.0.35",
-    "@hasna/events": "^0.1.8",
+    "@hasna/events": "^0.1.16",
     "@hasna/mcp-harness": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.4.1",
