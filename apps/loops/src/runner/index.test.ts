@@ -77,6 +77,8 @@ describe("loops-runner", () => {
     try {
       await runRunnerOnce({
         apiUrl: "https://loops.invalid/",
+        apiKey: "test-token",
+        env: {},
         runnerId: "station02",
         machineId: "station02",
         claimScope: "bound",
@@ -102,6 +104,8 @@ describe("loops-runner", () => {
     try {
       await runRunnerOnce({
         apiUrl: "https://loops.invalid/",
+        apiKey: "test-token",
+        env: {},
         runnerId: "station02",
         machineId: "station02",
         claimScope: "bound",
@@ -146,6 +150,8 @@ describe("loops-runner", () => {
     try {
       const result = await runRunnerLoop({
         apiUrl: "https://loops.invalid/",
+        apiKey: "test-token",
+        env: {},
         runnerId: "station02",
         machineId: "station02",
         claimScope: "bound",
