@@ -347,6 +347,31 @@ export function getRepo(idOrPath: string | number): Repo | null {
   }
   if (valid[0]) return valid[0];
   if (mismatches[0]) throw new RepoIdentityMismatchError(mismatches[0]);
+
+  // A slash- or colon-qualified input names a GitHub identity (org/name, a
+  // full remote, or an scp-style remote), not a local directory name. Route it
+  // through the exact-remote resolution — the same contract as `--remote`:
+  // mirror-only remotes refuse, a live checkout beats a hollow sibling, and a
+  // genuinely ambiguous multi-checkout remote is reported loudly. The
+  // canonical-remote fallback below keeps its pre-migration deterministic pick
+  // (todos 0251863c) for the all-rows-missing population, which the exact
+  // lookup reports as an ambiguity among dead rows rather than a live one.
+  if (typeof idOrPath === "string" && /[\/:]/.test(idOrPath)) {
+    try {
+      const byRemote = getRepoByRemote(idOrPath);
+      if (byRemote) return byRemote;
+    } catch (error) {
+      if (!(error instanceof AmbiguousRemoteError)) throw error;
+      // An ambiguity among rows that are ALL dead is the pre-migration
+      // population, not a live conflict: the canonical-remote resolver's
+      // deterministic pick is the contract there (todos d8ed2fc2, which made
+      // the qualified form resolve live checkouts, must not regress the
+      // 0251863c pick). Only a genuinely usable multi-checkout remote is a
+      // real ambiguity and must stay loud, exactly as on the --remote path.
+      if (error.paths.some((path) => classifyCheckout(path).usable)) throw error;
+    }
+  }
+
   const byCanonicalRemote = getRepoByCanonicalRemote(idOrPath);
   if (byCanonicalRemote) return byCanonicalRemote;
   return null;

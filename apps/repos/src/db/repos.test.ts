@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll, afterEach } from "bun:test";
+import { execSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getDb, closeDb } from "./database";
 import {
   listRepos,
@@ -338,6 +342,102 @@ describe("repos", () => {
       upsertRepo({ path: "/home/u/workspace/other", name: "other", org: "hasna" });
 
       expect(getRepo("bench")).toBeNull();
+    });
+  });
+
+  // Regression for todos d8ed2fc2: `repos repo <owner>/<name> --json` — the
+  // exact full-identity lookup the canonical repository naming policy and the
+  // worktree law mandate for targeting — was rejected (rc=1, "Repo not found"
+  // plus a fuzzy suggestion) even when the canonical checkout of that exact
+  // remote was indexed with a live path. getRepo() fell through to
+  // getRepoByCanonicalRemote, whose contract is the all-rows-missing
+  // pre-migration case: any row whose path is still on disk made it refuse.
+  // That refusal is correct for BARE names (c357a1f3: silently substituting a
+  // checkout indexed under a different name is fuzzy matching wearing an
+  // exact-match's clothes), but the qualified form has named the exact remote
+  // identity, so the exact-remote resolution in getRepoByRemote is the
+  // contract that applies — it refuses mirror-only remotes, prefers a live
+  // checkout over a hollow sibling, and reports live multi-checkout ambiguity
+  // loudly, exactly like the --remote flag.
+  describe("qualified owner/name lookup resolves to the live canonical checkout", () => {
+    afterEach(() => setRepoLookupPathStateForTests(null));
+
+    it("resolves org/name to the canonical checkout when its path is on disk", () => {
+      const canonical = upsertRepo({
+        path: "/home/u/workspace/hasna/apps",
+        name: "apps",
+        org: "hasna",
+        remote_url: "github.com/hasna/apps",
+      });
+      setRepoLookupPathStateForTests(() => "present");
+
+      const repo = getRepo("hasna/apps");
+      expect(repo).toBeTruthy();
+      expect(repo!.id).toBe(canonical.id);
+      expect(repo!.path).toBe("/home/u/workspace/hasna/apps");
+    });
+
+    it("resolves the full remote identity form the same way", () => {
+      const canonical = upsertRepo({
+        path: "/home/u/workspace/hasna/apps",
+        name: "apps",
+        org: "hasna",
+        remote_url: "github.com/hasna/apps",
+      });
+      setRepoLookupPathStateForTests(() => "present");
+
+      const repo = getRepo("github.com/hasna/apps");
+      expect(repo).toBeTruthy();
+      expect(repo!.id).toBe(canonical.id);
+    });
+
+    it("prefers the live canonical checkout over a dead pre-migration sibling of the same remote", () => {
+      const livePath = mkdtempSync(join(tmpdir(), "repos-exact-lookup-"));
+      try {
+        execSync("git init", { cwd: livePath, stdio: "pipe" });
+        upsertRepo({
+          path: "/home/u/workspace/hasna/opensource/open-bench",
+          name: "open-bench",
+          org: "hasna",
+          remote_url: "github.com/hasna/bench",
+        });
+        const live = upsertRepo({
+          path: livePath,
+          name: "bench",
+          org: "hasna",
+          remote_url: "github.com/hasna/bench",
+        });
+        setRepoLookupPathStateForTests((path) =>
+          path === livePath ? "present" : "missing",
+        );
+
+        const repo = getRepo("hasna/bench");
+        expect(repo).toBeTruthy();
+        expect(repo!.id).toBe(live.id);
+        expect(repo!.path).toBe(livePath);
+      } finally {
+        setRepoLookupPathStateForTests(null);
+        rmSync(livePath, { recursive: true, force: true });
+      }
+    });
+
+    it("still refuses a qualified owner/name whose remote is indexed only by a factory scratch clone", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasnaxyz/_factory_src/iapp-company-taxes",
+        name: "iapp-company-taxes",
+        org: "hasnaxyz",
+        remote_url: "github.com/hasnaxyz/iapp-company-taxes",
+      });
+      setRepoLookupPathStateForTests(() => "present");
+
+      expect(getRepo("hasnaxyz/iapp-company-taxes")).toBeNull();
+    });
+
+    it("returns null for a qualified owner/name that is not indexed", () => {
+      upsertRepo({ path: "/tmp/other", name: "other", org: "hasna" });
+      setRepoLookupPathStateForTests(() => "present");
+
+      expect(getRepo("hasna/doesnotexist")).toBeNull();
     });
   });
 

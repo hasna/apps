@@ -157,7 +157,11 @@ function requireRepo(repoInput: string) {
   try {
     repo = getRepo(repoInput);
   } catch (error) {
-    if (error instanceof AmbiguousRepoNameError || error instanceof RepoIdentityMismatchError) {
+    if (
+      error instanceof AmbiguousRepoNameError
+      || error instanceof RepoIdentityMismatchError
+      || error instanceof AmbiguousRemoteError
+    ) {
       console.error(chalk.red(error.message));
       process.exit(1);
     }

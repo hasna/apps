@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   listRepos,
   getRepo,
+  AmbiguousRemoteError,
   searchRepos,
   listCommits,
   searchCommits,
@@ -144,7 +145,17 @@ server.tool("get_repo", "Get a repo by ID, path, or name", {
   id: z.string().describe("Repo ID, path, or name"),
   verbose: z.boolean().optional().describe("Return the full repo plus stats object"),
 }, async ({ id, verbose }) => {
-  const repo = getRepo(isNaN(Number(id)) ? id : Number(id));
+  let repo;
+  try {
+    repo = getRepo(isNaN(Number(id)) ? id : Number(id));
+  } catch (error) {
+    // A qualified owner/name that matches several live checkouts is
+    // ambiguous, not absent — the same loud refusal the CLI prints.
+    if (error instanceof AmbiguousRemoteError) {
+      return textResponse({ error: error.message });
+    }
+    throw error;
+  }
   if (!repo) return textResponse({ error: "Repo not found" });
   const stats = getRepoStats(repo.id);
   if (verbose) return textResponse({ ...repo, ...stats });
