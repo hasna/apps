@@ -152,7 +152,16 @@ function installPackage(appDir, sourceDir) {
   // and must not require it.
   const consumerBundle = join(sourceDir, "dist", "consumer.js");
   if (!existsSync(consumerBundle)) return;
-  if (!readFileSync(consumerBundle, "utf8").includes("@hasna/contracts")) return;
+  // Match an actual runtime import, not the bare package name: an inline
+  // bundle (tests building consumer.ts without externals) embeds the string
+  // "@hasna/contracts" in module-path comments, so a bare `includes` matches
+  // both shapes. Only a real `from "@hasna/contracts/..."` import statement
+  // means the bundle needs the dependency resolved at runtime.
+  const bundleSource = readFileSync(consumerBundle, "utf8");
+  const importsContracts = /from\s*["']@hasna\/contracts/.test(bundleSource)
+    || /import\(\s*["']@hasna\/contracts/.test(bundleSource)
+    || /require\(\s*["']@hasna\/contracts/.test(bundleSource);
+  if (!importsContracts) return;
   const contractsDir = resolveInstalledDependency(sourceDir, "@hasna/contracts");
   if (!contractsDir) {
     throw new Error(
