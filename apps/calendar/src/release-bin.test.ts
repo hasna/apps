@@ -48,6 +48,45 @@ function readPackageJson(): PackageJson {
   return JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as PackageJson;
 }
 
+/**
+ * npm pack --json writes the JSON array as the TRAILING document on stdout.
+ * The package's `prepack` lifecycle runs `bun run build`, whose "Bundled N
+ * modules ..." progress lines interleave with the JSON, so a raw JSON.parse
+ * of the whole stdout fails. Walk back from the end and slice the depth-0
+ * array. Mirrors the fleet publish-guard extractor
+ * (tooling/ci/check-publish-guard.ts extractJsonArraySuffix) and the
+ * conversations packaged-worker test fix.
+ */
+function extractJsonArraySuffix(raw: string): string {
+  let i = raw.length - 1;
+  while (i >= 0 && /\s/.test(raw[i])) i--;
+  if (i < 0 || raw[i] !== "]") {
+    throw new Error("pack output has no JSON array document (npm wrote no --json array)");
+  }
+  let depth = 0;
+  let inString = false;
+  for (; i >= 0; i--) {
+    const c = raw[i];
+    if (inString) {
+      if (c === '"') {
+        let backslashes = 0;
+        for (let j = i - 1; j >= 0 && raw[j] === "\\"; j--) backslashes++;
+        if (backslashes % 2 === 0) inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+    } else if (c === "]") {
+      depth++;
+    } else if (c === "[") {
+      depth--;
+      if (depth === 0) return raw.slice(i);
+    }
+  }
+  throw new Error("pack output brackets do not balance to a single JSON array");
+}
+
 async function getAvailablePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = createServer();
@@ -112,7 +151,7 @@ describe("release bin artifacts", () => {
 
     const packResult = run("npm", ["pack", "--dry-run", "--json"]);
     requireSuccess(packResult, "npm pack --dry-run --json");
-    const [pack] = JSON.parse(packResult.stdout) as PackResult[];
+    const [pack] = JSON.parse(extractJsonArraySuffix(packResult.stdout)) as PackResult[];
     const packedFiles = new Map(pack.files.map((file) => [file.path, file]));
 
     for (const [, relativePath] of binEntries) {
