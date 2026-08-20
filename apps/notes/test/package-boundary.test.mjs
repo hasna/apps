@@ -19,7 +19,7 @@ describe('package boundary', () => {
     expect(pkg.bin.notes).toBe('bin/notes.mjs');
     expect(pkg.bin['notes-mcp']).toBe('bin/notes-mcp.mjs');
     expect(pkg.exports['./events']).toBe('./tools/notes-events.mjs');
-    expect(pkg.dependencies['@hasna/events']).toBe('0.1.15');
+    expect(pkg.dependencies['@hasna/events']).toBe('0.1.16');
     // Multi-machine sync modules were removed (0.2.0) — no ./sync or ./cloud
     // exports, and no sync/ or cloud/ files in the package.
     expect(pkg.exports['./sync']).toBeUndefined();
