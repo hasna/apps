@@ -5,6 +5,7 @@ import type {
   MachineTopologyEntry,
 } from "@hasna/machines/consumer";
 import type { LoopMachineRef } from "../types.js";
+import { ValidationError } from "./errors.js";
 
 type MachinesConsumer = typeof import("@hasna/machines/consumer");
 
@@ -125,4 +126,27 @@ export function resolveMachineCommand(machineId: string, command: string): Machi
 
 export function refreshLoopMachine(machine: LoopMachineRef): LoopMachineRef {
   return resolveLoopMachine(machine.id);
+}
+
+/**
+ * Fail-closed validation of an incoming machine assignment on a create path.
+ *
+ * The scheduler gates every claim on the STORED machine ref
+ * (`runnerMatchesLoop` reads `machine.id`), so a stored value that is not a
+ * well-formed ref is a loop that can never be claimed: a bare string stores
+ * as machine_json `"spark02"` whose `id` is undefined, matching no runner,
+ * and an empty object matches no runner either. Both present as "leased but
+ * never executed" — the O15-00172 assignment-loss class. Every surface that
+ * can place a machine on a loop (server create route, SDK create) must pass
+ * machine values through here so a malformed pin fails loudly at create time
+ * instead of persisting an unclaimable loop.
+ */
+export function validateLoopMachineRef(machine: unknown, label = "machine"): asserts machine is LoopMachineRef {
+  if (!machine || typeof machine !== "object" || Array.isArray(machine)) {
+    throw new ValidationError(`${label} must be an object with a non-empty string id`);
+  }
+  const id = (machine as { id?: unknown }).id;
+  if (typeof id !== "string" || id.trim() === "") {
+    throw new ValidationError(`${label}.id must be a non-empty string`);
+  }
 }

@@ -252,6 +252,61 @@ function authProfilesOf(workflow: { steps: TestWorkflowStep[] }): string[] {
     .filter((profile: string | undefined): profile is string => Boolean(profile));
 }
 
+
+describe("loops CLI machine assignment", () => {
+  const PIN_ID = "cli-pin-test-machine";
+  const UNKNOWN_ID = "cli-no-such-machine-zz9";
+
+  function machinesEnv(): { HASNA_MACHINES_DIR: string; HASNA_MACHINES_MACHINE_ID: string } {
+    // Minimal OpenMachines topology on disk, same shape the machines lib's
+    // own tests use: the CLI subprocess resolves --machine through it.
+    const machinesDir = mkdtempSync(join(tmpdir(), "loops-cli-machines-"));
+    writeFileSync(
+      join(machinesDir, "machines.json"),
+      JSON.stringify({
+        version: 1,
+        machines: [
+          { id: PIN_ID, platform: "linux", workspacePath: "/workspace/pin", connection: "local" },
+        ],
+      }),
+    );
+    return { HASNA_MACHINES_DIR: machinesDir, HASNA_MACHINES_MACHINE_ID: PIN_ID };
+  }
+
+  test("create with --machine persists the pin and show returns the machine id", () => {
+    const env = machinesEnv();
+    const dataDir = freshDataDir("loops-cli-machine-pin-");
+    const create = runCli(
+      dataDir,
+      ["--json", "create", "command", "pinned", "--at", futureAt(), "--cmd", "true", "--machine", PIN_ID],
+      undefined,
+      env,
+    );
+    expect(create.status).toBe(0);
+    const shown = JSON.parse(runCli(dataDir, ["--json", "show", "pinned"], undefined, env).stdout) as {
+      machine?: { id: string };
+    };
+    expect(shown.machine).toMatchObject({ id: PIN_ID });
+    const stored = storedLoop(dataDir, (JSON.parse(create.stdout) as { id: string }).id);
+    expect(stored?.machine).toMatchObject({ id: PIN_ID });
+  });
+
+  test("create with an unresolvable --machine fails loudly and stores nothing", () => {
+    const env = machinesEnv();
+    const dataDir = freshDataDir("loops-cli-machine-bad-");
+    const create = runCli(
+      dataDir,
+      ["--json", "create", "command", "never-stored", "--at", futureAt(), "--cmd", "true", "--machine", UNKNOWN_ID],
+      undefined,
+      env,
+    );
+    expect(create.status).not.toBe(0);
+    expect(create.stderr + create.stdout).toContain("OpenMachines route not found for machine");
+    const listed = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout) as Array<{ name: string }>;
+    expect(listed.map((loop) => loop.name)).not.toContain("never-stored");
+  });
+});
+
 describe("loops CLI", () => {
   test("create/list/show/runs support labels and labels set/add/remove/clear", () => {
     const dataDir = freshDataDir("loops-cli-labels-");

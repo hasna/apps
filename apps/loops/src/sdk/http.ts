@@ -1,7 +1,7 @@
 // @generated from openapi/loops.json by scripts/gen-sdk.ts — DO NOT EDIT.
 // Regenerate: bun run scripts/gen-sdk.ts
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Loops 0.4.40
+// Source: Loops 0.5.1
 
 export interface PublicValidationDetails { "code": string; "reason": "not_array" | "invalid_array" | "invalid_item" | "option_not_allowed"; "path": string; "index"?: number; "option"?: string }
 
@@ -35,9 +35,9 @@ export interface StuckRunReconciliationResponse { "ok": boolean; "reconciliation
 
 export interface Foundation { "status": string; "version": string; "storage": "sqlite" | "postgresql"; "connection": "file" | "api"; "service"?: string; "detail"?: string }
 
-export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "expiresAfterRuns"?: number | null; "createdAt"?: string; "updatedAt"?: string }
+export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "expiresAfterRuns"?: number | null; "createdAt"?: string; "updatedAt"?: string; "machine"?: LoopMachineRef }
 
-export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown>; "expiresAfterRuns"?: number | null }
+export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown>; "expiresAfterRuns"?: number | null; "machine"?: LoopMachineRef }
 
 export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "expiresAfterRuns"?: number | null; "maxAttempts"?: number; "labels"?: Array<string> }
 
@@ -120,6 +120,8 @@ export interface WorkflowEventResponse { "ok": boolean; "event": WorkflowEvent }
 export interface WorkflowEventListResponse { "ok": boolean; "events": Array<WorkflowEvent> }
 
 export interface CountResponse { "ok": boolean; "count": number }
+
+export interface LoopMachineRef { "id": string; "route"?: string; "local"?: boolean; "confidence"?: "exact" | "high" | "medium" | "low" | "none"; "packageVersion"?: string; "warnings"?: Array<string> }
 
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */

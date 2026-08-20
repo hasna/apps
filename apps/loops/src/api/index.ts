@@ -38,6 +38,7 @@ import {
   WorkflowRunStepOwnershipUnverifiableError,
 } from "../lib/errors.js";
 import { validateAgentTarget, workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
+import { validateLoopMachineRef } from "../lib/machines.js";
 import type { AgentSessionContract } from "../types.js";
 import {
   publicGoal,
@@ -685,6 +686,14 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const target: unknown = body && typeof body === "object" ? (body as { target?: unknown }).target : undefined;
     if (target && typeof target === "object" && !Array.isArray(target) && (target as { type?: unknown }).type === "agent") {
       validateAgentTarget(target, "target");
+    }
+    // Fail-closed machine assignment: a machine value that is not a
+    // well-formed ref would persist as machine_json the claim gate cannot
+    // match, leaving the loop leased by nobody — the O15-00172 never-executes
+    // state. A requested machine must carry a non-empty string id, or the
+    // create is rejected before anything reaches storage.
+    if ("machine" in body && body.machine !== undefined) {
+      validateLoopMachineRef(body.machine, "machine");
     }
     const loop = await storage.createLoop(body);
     return ok({ loop: publicLoop(loop) }, { status: 201 });
