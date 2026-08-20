@@ -1,9 +1,10 @@
 // Agent-authored (SOL consult refused: "Selected model is at capacity" on two
 // distinct healthy Codewith accounts — no SOL opinion was produced for this repo).
 //
-// Accounting-reconciliation edge cases: the (source, source_id, event_type)
-// upsert semantics — including the subtle re-emit-after-written behavior where
-// the entry ref survives but the state resets — and not-found paths. A
+// Accounting-reconciliation edge cases: the (entity_id, source, source_id,
+// event_type) upsert semantics — including the re-emit-after-written behavior
+// where the entry ref survives and the written row stays written (only
+// never-written rows take the new event's state) — and not-found paths. A
 // regression here means duplicate accounting entries or lost writeback refs
 // (money recorded twice or never reconciled).
 
@@ -54,7 +55,7 @@ describe("upsert semantics on (source, source_id, event_type)", () => {
     expect(rows()[0]).toMatchObject({ source_id: "in_1", event_type: "invoice.paid", amount: 2500, state: "pending" });
   });
 
-  it("preserves the accounting_entry_ref across a re-emit but resets state to pending (excluded.state wins)", async () => {
+  it("preserves the accounting_entry_ref across a re-emit of an already-written row (written state survives)", async () => {
     const key = { entity_id: TEST_ENTITY_A, source: "stripe" as const, source_id: "in_2", event_type: "invoice.paid", amount: 1000, currency: "usd" };
     const first = emitAccountingReconciliation(db, "actor-1", key);
     const written = (await call(ctx, "mark_accounting_reconciliation_written", {
@@ -64,11 +65,14 @@ describe("upsert semantics on (source, source_id, event_type)", () => {
     expect(written.state).toBe("written");
 
     // Same stripe event re-delivered (retry of the webhook) — the ref must
-    // survive, and the row must be pending again so accounting sees it.
+    // survive, and the row must STAY written: a row already written back to
+    // accounting is never re-queued for processing (that would risk a
+    // duplicate accounting entry). Only never-written rows take the new
+    // event's state.
     emitAccountingReconciliation(db, "actor-1", key);
     const after = rows();
     expect(after).toHaveLength(1);
-    expect(after[0]).toMatchObject({ accounting_entry_ref: "acct-entry-1", state: "pending" });
+    expect(after[0]).toMatchObject({ accounting_entry_ref: "acct-entry-1", state: "written" });
   });
 
   it("replaces the accounting_entry_ref when the re-emit carries a new one", async () => {
