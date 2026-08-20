@@ -1,10 +1,12 @@
 # Changelog
 
-## 0.11.2
+## 0.12.0
 
-### Patch Changes
+### Minor Changes
 
-- Version prepared for the hasna/apps version wave (#670): the wave's contracts entry (dependency-driven patch via the @hasna/secrets changeset 8de5bb5) is split into its own release so the wave's gates can resolve @hasna/contracts@0.11.2 from the registry. The @hasna/secrets@0.3.1 dependency update remains wave-scope — 0.3.1 is unpublished and the split branch cannot carry it — so this release keeps @hasna/secrets@0.3.0 and ships no functional change.
+- Deployment-mode removal completes for the contracts kit: the public `./server-backend` export no longer ships `assertNoLegacyStorageMode` and the kit backend template drops the legacy `storage.mode` guard (net of #418, #503, #544). Consumer-visible API change: server backends that relied on the guard's refusal for legacy mode values must handle the removed export. This is the truthful minor bump for that change — the fleet-wide modes-removal directive retires the mode vocabulary, so the export is not restored.
+- Version prepared for the hasna/apps version wave (#670): the wave's contracts entry (dependency-driven patch via the @hasna/secrets changeset 8de5bb5) is folded into this release; it keeps @hasna/secrets@0.3.0 (the 0.3.1 update remains wave-scope, unpublished).
+- Wave-602 gate repair (#671): `smoke:todos-pack` derives the packed required-files list from the package's declared export map instead of a hardcoded layout. Smoke tooling and the unexported `packed-consumer` helper only — no consumer-facing behavior change.
 
 ## 0.11.1
 
