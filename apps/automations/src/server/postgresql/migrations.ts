@@ -177,13 +177,16 @@ const TAXONOMY_VOCABULARY_SQL = `
 ALTER TABLE automation_actions RENAME COLUMN claimed_by TO leased_by;
 ALTER TABLE automation_actions RENAME COLUMN claimed_at TO leased_at;
 ALTER TABLE automation_actions RENAME COLUMN claim_version TO lease_generation;
+-- Drop the old status CHECK BEFORE remapping values: a non-empty legacy queue
+-- would violate the old CHECK ('queued','claimed','retrying' allowed) the
+-- moment the UPDATE writes 'admitted'/'leased'. Add the new CHECK afterwards.
+ALTER TABLE automation_actions DROP CONSTRAINT IF EXISTS automation_actions_status_check;
 UPDATE automation_actions SET status = CASE status
   WHEN 'queued' THEN 'admitted'
   WHEN 'retrying' THEN 'admitted'
   WHEN 'claimed' THEN 'leased'
   ELSE status END
 WHERE status IN ('queued','retrying','claimed');
-ALTER TABLE automation_actions DROP CONSTRAINT IF EXISTS automation_actions_status_check;
 ALTER TABLE automation_actions ADD CONSTRAINT automation_actions_status_check
   CHECK (status IN ('admitted','waiting_approval','leased','succeeded','failed','dead','rejected','cancelled'));
 DROP INDEX automation_actions_ready_order_idx;

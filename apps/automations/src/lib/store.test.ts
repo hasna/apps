@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -814,5 +815,152 @@ describe("AutomationsStore", () => {
       ],
     };
     expect(() => validateAutomationSpec(staticApprovalDecision as never)).toThrow("approval gate templates cannot include decisions");
+  });
+
+  test("migrates a populated published-0.2.0 store (schema 3, no claim_version) to schema 7 preserving rows", () => {
+    // The published 0.2.0 store (STORE_SCHEMA_VERSION = 3) created the
+    // claim-family columns (claimed_by/claimed_at) and NO claim_version.
+    // Opening it with this version must backfill claim_version, rename the
+    // claim family to the lease family, remap the persisted status vocabulary,
+    // and preserve every row — instead of failing on the rename of a column
+    // that does not exist.
+    const dbPath = join(dataDir, "automations.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE automations (
+        id TEXT PRIMARY KEY,
+        spec_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE automation_runs (
+        id TEXT PRIMARY KEY,
+        automation_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        trigger_json TEXT NOT NULL,
+        trigger_event_id TEXT,
+        idempotency_key TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        error TEXT,
+        metadata_json TEXT,
+        FOREIGN KEY (automation_id) REFERENCES automations(id) ON DELETE CASCADE
+      );
+      CREATE TABLE automation_actions (
+        id TEXT PRIMARY KEY,
+        automation_run_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        action_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        invocation_json TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        max_attempts INTEGER NOT NULL,
+        available_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        claimed_by TEXT,
+        claimed_at TEXT,
+        lease_expires_at TEXT,
+        approval_gate_json TEXT,
+        result_json TEXT,
+        error_json TEXT,
+        dead_letter_json TEXT,
+        metadata_json TEXT,
+        FOREIGN KEY (automation_run_id) REFERENCES automation_runs(id) ON DELETE CASCADE
+      );
+      CREATE TABLE automation_replay_requests (
+        id TEXT PRIMARY KEY,
+        source_run_id TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        requested_by TEXT,
+        mode TEXT NOT NULL,
+        reason TEXT,
+        metadata_json TEXT,
+        FOREIGN KEY (source_run_id) REFERENCES automation_runs(id) ON DELETE CASCADE
+      );
+      CREATE TABLE daemon_leases (
+        id TEXT PRIMARY KEY,
+        pid INTEGER NOT NULL,
+        hostname TEXT NOT NULL,
+        heartbeat_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        metadata_json TEXT
+      );
+      CREATE TABLE webhook_routes (
+        id TEXT PRIMARY KEY,
+        automation_id TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        signature_json TEXT,
+        mapping_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        metadata_json TEXT,
+        FOREIGN KEY (automation_id) REFERENCES automations(id) ON DELETE CASCADE
+      );
+      PRAGMA user_version = 3;
+    `);
+    legacy.exec(`
+      INSERT INTO automations (id, spec_json, status, created_at, updated_at) VALUES
+        ('legacy-automation', '{"schemaVersion":"1.0","id":"legacy-automation","name":"legacy","version":"1.0.0","status":"active","triggers":[{"kind":"manual"}],"actions":[]}', 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z');
+      INSERT INTO automation_runs (id, automation_id, status, trigger_json, created_at, updated_at) VALUES
+        ('legacy-run', 'legacy-automation', 'pending', '{"kind":"manual"}', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z');
+      INSERT INTO automation_actions (
+        id, automation_run_id, step_id, action_id, idempotency_key, status, invocation_json,
+        attempt, max_attempts, available_at, created_at, updated_at, claimed_by, claimed_at, lease_expires_at
+      ) VALUES
+        ('legacy-queued', 'legacy-run', 'queued-step', 'actions.required', 'legacy-queued', 'queued', '{}', 0, 3, '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', NULL, NULL, NULL),
+        ('legacy-claimed', 'legacy-run', 'claimed-step', 'actions.required', 'legacy-claimed', 'claimed', '{}', 1, 3, '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', 'worker-a', '2026-07-24T00:00:00.000Z', '2026-07-24T00:10:00.000Z'),
+        ('legacy-retrying', 'legacy-run', 'retrying-step', 'actions.required', 'legacy-retrying', 'retrying', '{}', 1, 3, '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', 'worker-b', '2026-07-24T00:00:00.000Z', NULL),
+        ('legacy-succeeded', 'legacy-run', 'succeeded-step', 'actions.required', 'legacy-succeeded', 'succeeded', '{}', 2, 3, '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', 'worker-c', '2026-07-24T00:00:00.000Z', NULL)
+    `);
+    legacy.close();
+
+    const store = new AutomationsStore();
+    try {
+      const status = store.status();
+      expect(status.counts).toMatchObject({
+        queueDepth: 4,
+        admitted: 2,
+        leased: 1,
+        terminal: 1,
+      });
+      const queue = store.listQueueEntries();
+      const byId = new Map(queue.map((entry) => [entry.id, entry]));
+      // Row preservation and vocabulary translation: queued/retrying -> admitted,
+      // claimed -> leased, with the claim-family columns renamed to the lease
+      // family and claim_version backfilled as lease_generation 0.
+      expect(byId.get("legacy-queued")?.status).toBe("admitted");
+      expect(byId.get("legacy-retrying")?.status).toBe("admitted");
+      expect(byId.get("legacy-claimed")).toMatchObject({
+        status: "leased",
+        leasedBy: "worker-a",
+        leaseGeneration: 0,
+      });
+      expect(byId.get("legacy-claimed")?.leasedAt).toBe("2026-07-24T00:00:00.000Z");
+      expect(byId.get("legacy-claimed")?.leaseExpiresAt).toBe("2026-07-24T00:10:00.000Z");
+      // Terminal statuses are not translated and their rows are preserved.
+      expect(byId.get("legacy-succeeded")?.status).toBe("succeeded");
+      expect(status.counts.terminal).toBe(1);
+    } finally {
+      store.close();
+    }
+
+    // Reopen is idempotent: the second open must not re-run or fail.
+    const reopened = new AutomationsStore();
+    try {
+      const again = reopened.status();
+      expect(again.counts).toMatchObject({ queueDepth: 4, admitted: 2, leased: 1, terminal: 1 });
+      const version = new Database(dbPath).query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(7);
+    } finally {
+      reopened.close();
+    }
   });
 });

@@ -1249,6 +1249,15 @@ export class AutomationsStore {
     // columns to lease-family names, remap persisted status values, and rebuild
     // the partial indexes that encoded the old vocabulary. No data is deleted.
     if (!this.columnExists("automation_actions", "lease_generation")) {
+      if (!this.columnExists("automation_actions", "claim_version")) {
+        // Published 0.2.0 stores (schema 3) predate the claim_version column:
+        // backfill it with the default so the rename below is total instead of
+        // failing on a missing column. Lease generations start at 0 for these
+        // rows, which is a fresh-counter value the daemon accepts.
+        this.db.exec(`
+          ALTER TABLE automation_actions ADD COLUMN claim_version INTEGER NOT NULL DEFAULT 0;
+        `);
+      }
       this.db.exec(`
         ALTER TABLE automation_actions RENAME COLUMN claimed_by TO leased_by;
         ALTER TABLE automation_actions RENAME COLUMN claimed_at TO leased_at;
