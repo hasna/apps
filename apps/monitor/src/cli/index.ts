@@ -27,6 +27,7 @@ import type { AlertRow } from "../db/schema.js";
 import { CronEngine } from "../cron/index.js";
 import { runReportIntegrations } from "../integrations/index.js";
 import { compareInstalledApps } from "../apps.js";
+import { makeTestAlert, type TodosAlertOutcome } from "../integrations/todos.js";
 import {
   getListeningPortsLoopCheck,
   getProcessHygieneLoopCheck,
@@ -2352,6 +2353,23 @@ program
 
 // ── monitor integrations ──────────────────────────────────────────────────────
 
+/**
+ * Map a `monitor integrations test todos` outcome to a failure reason.
+ *
+ * A skip is a failure: the create endpoint was not exercised, so the run
+ * proved nothing about the integration and must not report success. Returns
+ * undefined only when creation was actually attempted and succeeded.
+ */
+export function todosTestFailureReason(
+  out: TodosAlertOutcome
+): string | undefined {
+  if (!out.ok) return out.error ?? "unknown error";
+  if (out.skipped) {
+    return "an open task already exists for the test identity — the create endpoint was not exercised";
+  }
+  return undefined;
+}
+
 const integrationsCmd = program
   .command("integrations")
   .description("Manage open-* ecosystem integrations");
@@ -2417,16 +2435,7 @@ integrationsCmd
       process.exit(1);
     }
 
-    const dummyAlert = {
-      id: 0,
-      machine_id: "test-machine",
-      triggered_at: Math.floor(Date.now() / 1000),
-      resolved_at: null as null,
-      severity: "critical" as const,
-      check_name: "test",
-      message: "This is a test alert from the monitor CLI",
-      auto_resolved: 0,
-    };
+    const dummyAlert = makeTestAlert();
 
     const dummyReport = {
       machineId: "test-machine",
@@ -2450,7 +2459,12 @@ integrationsCmd
     try {
       if (name === "todos") {
         const { createTaskForAlert } = await import("../integrations/todos.js");
-        await createTaskForAlert(dummyAlert, integrations.todos!);
+        const out = await createTaskForAlert(dummyAlert, integrations.todos!);
+        const reason = todosTestFailureReason(out);
+        if (reason !== undefined) {
+          console.error(chalk.red(`  Integration 'todos' test failed: ${reason}`));
+          process.exit(1);
+        }
       } else if (name === "conversations") {
         const { postAlertToSpace } = await import("../integrations/conversations.js");
         await postAlertToSpace(dummyAlert, integrations.conversations!);
