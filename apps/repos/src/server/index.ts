@@ -5,6 +5,7 @@ import type { ServerWebSocket } from "bun";
 import {
   listRepos,
   getRepo,
+  AmbiguousRemoteError,
   searchRepos,
   listCommits,
   searchCommits,
@@ -127,7 +128,17 @@ Bun.serve({
 
     if (path.startsWith("/api/repos/") && req.method === "GET") {
       const id = path.replace("/api/repos/", "");
-      const repo = getRepo(isNaN(Number(id)) ? id : Number(id));
+      let repo;
+      try {
+        repo = getRepo(isNaN(Number(id)) ? id : Number(id));
+      } catch (error) {
+        // A qualified owner/name that matches several live checkouts is
+        // ambiguous, not absent — the same loud refusal the CLI prints.
+        if (error instanceof AmbiguousRemoteError) {
+          return json({ error: error.message }, 404);
+        }
+        throw error;
+      }
       if (!repo) return json({ error: "Repo not found" }, 404);
       const stats = getRepoStats(repo.id);
       return json({ ...repo, ...stats });
