@@ -5,6 +5,12 @@ import { clientTransportEnvKeys, type ClientTransportResolution } from "./store/
 import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
+import {
+  copySecret,
+  verifyCopy,
+  CopySourceEqualsDestinationError,
+  CopySourceNotFoundError,
+} from "./copy.js";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
 const VAULT_ITEM_KINDS: VaultItemKind[] = [
@@ -25,6 +31,9 @@ Commands:
   docs                        show a practical usage guide
   set <key> [<value>] [--stdin] [--type <type>] [--label <label>] [--ttl <ttl>] [--reason <text>] [--rotation]
   get <key> [--show|--plaintext|--check]   redacted by default; --check prints length+sha256
+  copy <old> <new> [--type <t>] [--label <l>] [--ttl <ttl>] [--reason <text>] [--verify]
+                              value-safe copy/migration: reads <old> in-process, writes <new>
+                              in the same call; the value never renders to any output surface
   exec <key> [--as <VAR>] -- <cmd> [args...]   run <cmd> with a local vault value in its env only
   exec --provider <PROFILE> --account <ID> --env <VAR> -- <cmd> [args...]
                               run <cmd> with an account-scoped AWS secret in <VAR>
@@ -134,6 +143,12 @@ Common CLI workflows
 
   Prove a secret exists or compare values without revealing them:
     secrets get example/anthropic/test/api_key --check
+
+  Move a secret to a new path without the value ever rendering anywhere
+  (value-safe migration primitive; works on non-TTY without get --show):
+    secrets copy example/anthropic/test/api_key anthropic/test/api_key
+    secrets copy example/anthropic/test/api_key anthropic/live/api_key --type api_key \
+      --label "Anthropic (live)" --reason "taxonomy 2026-08-20" --verify
 
   Review value history without revealing values (metadata only):
     secrets versions example/anthropic/test/api_key
@@ -267,6 +282,7 @@ const BOOLEAN_FLAGS = new Set([
   "json",
   "fix-permissions",
   "rotation",
+  "verify",
 ]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
@@ -563,6 +579,86 @@ switch (command) {
       console.log(`✓ ${entry.unchanged ? "Unchanged" : "Stored"}: ${entry.key} [${entry.type}]${versionNote}${unchangedNote}${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
     } catch (e: any) {
       console.error(e.message);
+      process.exit(1);
+    }
+    break;
+  }
+
+  case "copy": {
+    // Value-safe copy: read <old> IN-PROCESS through the Store and write <new>
+    // with the same bytes in the same call. The value never renders to stdout,
+    // stderr, a transcript, a log, or a child environment — the migration
+    // primitive behind the taxonomy ruling (Fable, 2026-08-20). See src/copy.ts.
+    // Metadata (type/label/expiry) defaults to the source entry and is
+    // overridden per flag; the provenance reason auto-carries the source path.
+    const [oldKey, newKey] = positional;
+    if (!oldKey || !newKey || oldKey === newKey) {
+      console.error("Usage: secrets copy <old> <new> [--type <t>] [--label <l>] [--ttl <ttl>] [--reason <text>] [--verify] [--json]");
+      console.error("Source and destination must differ.");
+      process.exit(1);
+    }
+    const type = flags.type ? (flags.type as SecretEntry["type"]) : undefined;
+    if (type !== undefined && !SECRET_TYPES.includes(type)) {
+      console.error(`Invalid type "${type}". Valid: ${SECRET_TYPES.join(", ")}`);
+      process.exit(1);
+    }
+    const expiresAt = flags.ttl ? parseTtl(flags.ttl) : undefined;
+    try {
+      const result = await copySecret(store(), oldKey, newKey, {
+        ...(type ? { type } : {}),
+        ...(flags.label !== undefined ? { label: flags.label } : {}),
+        ...(expiresAt ? { expiresAt } : {}),
+        ...(flags.reason !== undefined ? { reason: flags.reason } : {}),
+      });
+      const wantVerify = flags.verify === "true";
+      let verified:
+        | { match: boolean; length: number | null }
+        | undefined;
+      if (wantVerify) {
+        verified = await verifyCopy(store(), oldKey, newKey);
+      }
+      if ("json" in flags) {
+        console.log(JSON.stringify({
+          old_key: result.oldKey,
+          new_key: result.newKey,
+          type: result.type,
+          reason: result.reason,
+          ...(result.label ? { label: result.label } : {}),
+          ...(result.expiresAt ? { expires_at: result.expiresAt } : {}),
+          unchanged: result.unchanged,
+          ...(verified !== undefined ? { verified: { match: verified.match, length: verified.length } } : {}),
+        }, null, 2));
+        if (verified !== undefined && !verified.match) process.exit(1);
+        break;
+      }
+      const meta = [`✓ Copied: ${result.oldKey} → ${result.newKey} [${result.type}]`];
+      if (result.label) meta.push(`label: ${result.label}`);
+      if (result.expiresAt) meta.push(`expires: ${new Date(result.expiresAt).toLocaleDateString()}`);
+      meta.push(`reason: ${result.reason}`);
+      if (verified !== undefined) {
+        if (verified.match) {
+          console.log([...meta, `verified (length=${verified.length}, sha256 match)`].join(" · "));
+        } else {
+          console.log(meta.join(" · "));
+          console.error(
+            `✗ Copy verification FAILED: ${result.newKey} does not match ${result.oldKey} ` +
+              "(length or content hash differ). The destination key was written but NOT verified. " +
+              `Inspect with: secrets get ${result.newKey} --check`,
+          );
+          process.exit(1);
+        }
+        break;
+      }
+      console.log(meta.join(" · "));
+    } catch (e: any) {
+      if (e instanceof CopySourceEqualsDestinationError) {
+        console.error(e.message);
+      } else if (e instanceof CopySourceNotFoundError) {
+        console.error(e.message);
+      } else {
+        // Clean one-line surface; the message is value-free (method/path/status).
+        console.error(`Unable to copy "${oldKey}" → "${newKey}": ${e?.message ?? String(e)}`);
+      }
       process.exit(1);
     }
     break;

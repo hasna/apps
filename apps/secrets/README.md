@@ -59,6 +59,23 @@ Prove a secret exists or compare values without revealing them:
 secrets get example/anthropic/test/api_key --check   # prints length + sha256 only
 ```
 
+Copy a secret to a new path without the value ever rendering anywhere (the
+value-safe migration primitive; works on non-TTY without `get --show`):
+
+```bash
+# carries type/label/expiry from the source and auto-records "migrated from <old>"
+secrets copy example/anthropic/test/api_key anthropic/test/api_key
+# override metadata and demand an internal verify (length + sha256) in the same call
+secrets copy example/anthropic/test/api_key anthropic/live/api_key \
+  --type api_key --label "Anthropic (live)" --reason "taxonomy 2026-08-20" --verify
+```
+
+The copy reads the source value in-process and writes the destination in the
+same call; the value never touches stdout, stderr, a transcript, a log, or a
+child environment. The source key is left intact (deletion is a separate
+explicit operation), and `--verify` exits 0 only when the source and
+destination values are internally equal.
+
 Store a value without putting it in argv (ps/shell-history safe):
 
 ```bash
