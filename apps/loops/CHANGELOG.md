@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.3 (2026-08-20)
+
+### Patch Changes
+
+- Fix the release supply-chain audit gate (todos be6817f3): `check:supply-chain:audit` no longer runs `bun audit && bun audit --production` from the member dir, which resolved against the MONOREPO lockfile and reported every member's dependency closure (`workspace:` / `workspace-transitive:` entries) — a never-passing gate that blocked every `@hasna/*` publish since the monorepo migration.
+
+  The gate now audits what the member actually SHIPS via the shared `tooling/ci/check-audit-packed.mjs`: pack the member, install the tarball into a scratch probe directory as a consumer would (`bun add <tarball>`), and run `bun audit` there, propagating its exit code. The gate remains a check that can fail — an advisory in the member's own shipped closure fails the audit at the member's own publish time. No blanket disable, no `--ignore` allowlist, no `--audit-level` lowering.
+
+  Known edge recorded in the script header: the probe resolves ranges at registry time, so the fleet 7-day `minimumReleaseAge` quarantine applies — a dependency publishing a brand-new version would fail the probe install closed (fail-closed, safe direction). Two-sided regression shipped in `tooling/ci/tests/standard/check-audit-packed.test.mjs`.
+
+- A loop created with a machine pin could lose the pin before it reached storage, leaving a pinned loop claimable by any fleet runner with no route to its machine (BUG 96c837b0). `POST /v1/loops` now validates the machine ref fail-closed (a bare string or empty object is rejected 422 instead of persisting a never-claimable loop), and the MCP create surfaces (`loops_create_command`, `loops_create_workflow`) accept a machine id resolved through the machines topology — an unresolvable machine fails the create loudly and stores nothing, never a silent NULL. The OpenAPI/SDK `LoopMachineRef` contract additionally types `confidence` as the `exact | high | medium | low | none` string enum instead of a number, matching the runtime type and the machines consumer contract.
+
 All notable changes to Loops (npm `@hasna/loops`, repo `hasna/loops`) are
 documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
@@ -20,7 +32,7 @@ This release carries four reliability fixes merged since 0.5.1 plus the
 - Agent-loop preflight (and execution) machine routing fails closed through the
   package-owned Machines canonical route instead of degrading an unresolvable
   machine id to a raw `ssh <machine-id>` invocation: `OpenMachines route not
-  found for machine: <id>` is thrown when the id cannot be resolved, and
+found for machine: <id>` is thrown when the id cannot be resolved, and
   command plans are built from the route's canonical command target (task
   48a92f1b). All preflight paths (CLI create, workflow preflight, MCP
   validation, doctor, runtime before-run) funnel through the same wrapper.
@@ -35,7 +47,7 @@ This release carries four reliability fixes merged since 0.5.1 plus the
   resolved command line (secret-scrubbed and bounded for shell targets), a
   `commandDigest` (`cmd:sha256:<hex>`) binding the exact stored command +
   shell-quoted args the executor will run, and `commandResolvedFrom:
-  "stored-target"` provenance. The executor's shell path shares the same
+"stored-target"` provenance. The executor's shell path shares the same
   resolved-command-line function, so the digest binds exactly what runs.
 
 The `loops-runner` binary gains the deployment verbs the daemon already had:
@@ -109,6 +121,7 @@ clients connect via the local file or the control-plane HTTP API.
   case cannot be constructed.
 
 ## 0.4.41 (2026-08-09)
+
 ## 0.4.41 (2026-08-09)
 
 ### Fixed
@@ -335,9 +348,9 @@ documented below.
   unconditionally in todos-task drains, so multi-repo routers that pass it as a
   concurrency group root (a non-repository directory such as the operator's
   home) sent every task to the group root and skipped it (`worktreeMode=required
-  but projectPath is not an existing git repository`), zeroing merge dispatch
+but projectPath is not an existing git repository`), zeroing merge dispatch
   fleet-wide. A drain
-  now routes each task to its own first *usable* repository path (explicit
+  now routes each task to its own first _usable_ repository path (explicit
   `project_path`, metadata, the description's `Repository:` line, then
   `working_dir` — first that is a real git repo, probed once per path per tick);
   the router-level `--project-path` remains the rescue fallback for tasks whose
@@ -854,9 +867,9 @@ CLI/MCP/SDK surface with deprecation aliases.
 
 - CLI: new `loops gc`; `routes` is the canonical event-routing surface.
   Deprecated aliases retained for one release cycle: `loops events
-  handle|drain ...` (use `loops routes create|drain`), `loops templates
-  create` (use `loops workflows create --template <id>`), and `loops goal
-  status` (merged into `loops goal show`). Internal debloat consolidated
+handle|drain ...` (use `loops routes create|drain`), `loops templates
+create` (use `loops workflows create --template <id>`), and `loops goal
+status` (merged into `loops goal show`). Internal debloat consolidated
   ~1,900 lines of template code and moved route/template plumbing into
   `src/lib/route/` and `src/lib/template-kit.ts` without removing any
   non-deprecated command.
@@ -911,9 +924,9 @@ CLI/MCP/SDK surface with deprecation aliases.
   `loop_pause`, `workflow_read`, ...) still work as deprecated aliases but
   will be removed in a future minor. Re-list tools and migrate callers.
 - **CLI deprecations** (aliases still work, removal planned): `loops events
-  handle|drain` → `loops routes create|drain`; `loops templates create` →
+handle|drain` → `loops routes create|drain`; `loops templates create` →
   `loops workflows create --template <id>`; `loops goal status` → `loops
-  goal show`.
+goal show`.
 - **Agent loops can now time out by default.** Previously an agent target
   with no `timeoutMs` could hang forever; it now idle-times-out after 30
   minutes without progress (4h for buffered agents). Long-running agents
