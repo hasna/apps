@@ -1358,3 +1358,116 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     expect(JSON.stringify(r)).not.toContain("dummy_config_value");
   });
 });
+
+// ---------------------------------------------------------------------------
+// a8c08df1 — transport selection is explicit configuration, never pointer
+// presence. The rows below lock the two directions: explicit configuration
+// selects the right transport, and unset/blank pointer variables never
+// silently flip it. Regression for the presence-inference defect class: a
+// fleet app-config pointer on disk must not silently override an explicit
+// blank in the environment, and a disk-supplied flip must never be silent.
+// ---------------------------------------------------------------------------
+describe("transport selection is explicit configuration, never pointer presence", () => {
+  const homes: string[] = [];
+
+  function home(): string {
+    const h = mkdtempSync(join(tmpdir(), "hasna-ctm-"));
+    homes.push(h);
+    return h;
+  }
+
+  function writeUrlFile(h: string, app: string, url: string): string {
+    const dir = join(h, ".hasna", "cloud");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `${app}.env`);
+    writeFileSync(
+      path,
+      `HASNA_${app.toUpperCase()}_API_URL=${url}\nHASNA_${app.toUpperCase()}_API_KEY=${app}-disk-key\n`,
+    );
+    return path;
+  }
+
+  afterEach(() => {
+    __resetCredentialDeprecationNotices();
+    while (homes.length > 0) rmSync(homes.pop()!, { recursive: true, force: true });
+  });
+
+  test("a DEFINED-BLANK API URL is an explicit local choice and wins over the disk pointer", () => {
+    const h = home();
+    const diskPath = writeUrlFile(h, "todos", "https://todos.example.com");
+
+    const r = resolveClientTransport("todos", {
+      HOME: h,
+      HASNA_TODOS_API_URL: "   ",
+    });
+
+    // The explicit blank must select local and MUST NOT be filled in from the
+    // disk pointer: presence of a pointer never overrides an explicit opinion.
+    expect(r.transport).toBe("sqlite");
+    expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
+    expect(r.misconfigured).toBe(false);
+    // The override must not be silent: the operator learns the disk pointer
+    // existed and was not selected.
+    expect(r.warning).toContain(diskPath);
+    expect(r.warning).toContain("HASNA_TODOS_API_URL");
+  });
+
+  test("a disk-supplied server URL is never silent about having flipped the transport", () => {
+    const h = home();
+    const diskPath = writeUrlFile(h, "todos", "https://todos.example.com");
+
+    const r = resolveClientTransport("todos", { HOME: h });
+
+    expect(r.transport).toBe("http");
+    expect(r.transportSource).toBe(diskPath);
+    expect(r.misconfigured).toBe(false);
+    // "no silent inference": the resolution names the file that decided.
+    expect(r.warning).not.toBeNull();
+    expect(r.warning).toContain(diskPath);
+  });
+
+  test("explicit URL+key in env selects http even when a disk pointer exists", () => {
+    const h = home();
+    writeUrlFile(h, "todos", "https://disk-would-win.example.com");
+
+    const r = resolveClientTransport("todos", {
+      HOME: h,
+      HASNA_TODOS_API_URL: "https://env-wins.example.com",
+      HASNA_TODOS_API_KEY: "env-key",
+    });
+
+    expect(r.transport).toBe("http");
+    expect(r.baseUrl).toBe("https://env-wins.example.com/v1");
+    expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
+  });
+
+  test("a value-bearing alias URL wins over a blank canonical key", () => {
+    const h = home();
+    writeUrlFile(h, "todos", "https://disk.example.com");
+
+    const r = resolveClientTransport("todos", {
+      HOME: h,
+      HASNA_TODOS_API_URL: "",
+      TODOS_API_URL: "https://alias.example.com",
+      TODOS_API_KEY: "alias-key",
+    });
+
+    expect(r.transport).toBe("http");
+    expect(r.baseUrl).toBe("https://alias.example.com/v1");
+    expect(r.transportSource).toBe("TODOS_API_URL");
+  });
+
+  test("blank URL with no disk pointer stays local without a warning", () => {
+    const r = resolveClientTransport("todos", { HASNA_TODOS_API_URL: "" });
+    expect(r.transport).toBe("sqlite");
+    expect(r.misconfigured).toBe(false);
+    expect(r.warning).toBeNull();
+  });
+
+  test("unset URL and no disk pointer stays local (documented default)", () => {
+    const r = resolveClientTransport("todos", {});
+    expect(r.transport).toBe("sqlite");
+    expect(r.transportSource).toBe("default");
+    expect(r.misconfigured).toBe(false);
+  });
+});
