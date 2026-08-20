@@ -229,7 +229,12 @@ async function breakAbandonedDaemonLock(paths: DaemonPaths): Promise<boolean> {
   // LOCK_MAX_AGE_MS while it waits for the daemon to exit. This covers a lock
   // owned by this same process too — breaking our own live lock would let a
   // second caller in alongside us.
-  if (owner && pidAlive(owner.pid)) return false;
+  //
+  // Ownership is process IDENTITY, not PID existence: a crashed daemon's pid
+  // can be recycled by an unrelated process, and bare pid liveness would then
+  // read that process as the owner forever, making the stale lock permanently
+  // unbreakable.
+  if (owner && pidAlive(owner.pid) && (await processLooksLikeBridge(owner.pid))) return false;
   const ageMs = Date.now() - info.mtimeMs;
   const expired = ageMs > LOCK_MAX_AGE_MS;
   const ownerGone = owner ? owner.pid !== process.pid && !pidAlive(owner.pid) : false;
@@ -316,6 +321,19 @@ function pidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Is the process at `pid` plausibly the bridge process recorded as the lock
+ * owner? The daemon and CLI run from the bridge bin (`.../bridge`), the
+ * packaged dist entry (`dist/cli/index.js`), or the dev entry
+ * (`src/cli/index.ts`). A recycled pid belonging to an unrelated process
+ * matches none of these and is not treated as the owner.
+ */
+async function processLooksLikeBridge(pid: number): Promise<boolean> {
+  const cmd = await processCommand(pid);
+  if (!cmd) return false;
+  return cmd.includes("bridge") || cmd.includes("dist/cli/index.js") || cmd.includes("src/cli/index.ts");
 }
 
 async function processCommand(pid: number): Promise<string | undefined> {

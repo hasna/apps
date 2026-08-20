@@ -197,7 +197,7 @@ test("an ownerless lock directory older than the max lock age is broken", async 
 test("a lock held by a live process is still respected", async () => {
   const daemonDir = await scratchDaemonDir();
   const paths = daemonPaths(daemonDir);
-  const holder = Bun.spawn(["sh", "-lc", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
+  const holder = Bun.spawn(["sh", "-lc", "sleep 30 #bridge-owner"], { stdout: "ignore", stderr: "ignore" });
   spawned.push(holder);
   await mkdir(paths.lockDir, { mode: 0o700 });
   await writeFile(join(paths.lockDir, "owner.json"), JSON.stringify({ pid: holder.pid, acquiredAt: new Date().toISOString() }), { mode: 0o600 });
@@ -210,10 +210,12 @@ test("a lock held by a live process is still respected", async () => {
 // owning process is still alive; the age of the directory alone must never
 // cause a live owner's lock to be broken (regression: lock was broken solely
 // on `expired`, defeating the mutex that protects daemon lifecycle).
+// The fixture's command line carries the bridge marker so it stands in for the
+// bridge process; ownership is verified by process identity, not PID existence.
 test("a lock held by a live process is not broken on age alone", async () => {
   const daemonDir = await scratchDaemonDir();
   const paths = daemonPaths(daemonDir);
-  const holder = Bun.spawn(["sh", "-lc", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
+  const holder = Bun.spawn(["sh", "-lc", "sleep 30 #bridge-owner"], { stdout: "ignore", stderr: "ignore" });
   spawned.push(holder);
   await mkdir(paths.lockDir, { mode: 0o700 });
   await writeFile(join(paths.lockDir, "owner.json"), JSON.stringify({ pid: holder.pid, acquiredAt: new Date().toISOString() }), { mode: 0o600 });
@@ -222,6 +224,26 @@ test("a lock held by a live process is not broken on age alone", async () => {
 
   await expect(stopProcessDaemon({ daemonDir })).rejects.toThrow("already running");
   expect(await Bun.file(join(paths.lockDir, "owner.json")).exists()).toBe(true);
+});
+
+// A crashed daemon's recorded pid can be recycled by an unrelated process;
+// bare pid liveness then reads the unrelated process as the owner and the
+// stale lock becomes permanently unbreakable ("already running" forever).
+// P1 from the @hasna/bridge@0.7.2 release review. The lock must be recovered
+// when the alive pid is not the bridge process.
+test("a stale lock whose recorded PID was recycled by an unrelated process is broken", async () => {
+  const daemonDir = await scratchDaemonDir();
+  const paths = daemonPaths(daemonDir);
+  const unrelated = Bun.spawn(["sh", "-lc", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
+  spawned.push(unrelated);
+  await mkdir(paths.lockDir, { mode: 0o700 });
+  await writeFile(join(paths.lockDir, "owner.json"), JSON.stringify({ pid: unrelated.pid, acquiredAt: new Date().toISOString() }), { mode: 0o600 });
+  const old = new Date(Date.now() - 10 * 60_000);
+  await utimes(paths.lockDir, old, old);
+
+  const stopped = await stopProcessDaemon({ daemonDir });
+  expect(stopped.running).toBe(false);
+  expect(await Bun.file(join(paths.lockDir, "owner.json")).exists()).toBe(false);
 });
 
 // The lock directory now holds an owner file, so releasing it with rmdir(2)
