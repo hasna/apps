@@ -19,6 +19,7 @@ import { resetSelfHostedConfigCache } from "../../db/self-hosted-store.js";
 import { saveConfig } from "../../lib/config.js";
 import { mergeAttachmentDetails } from "../../lib/attachment-actions.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
+import { PDFDocument } from "pdf-lib";
 import { filterAttachmentDetails } from "./inbox.remote.js";
 import { registerInboxCommands } from "./inbox.js";
 import { registerInboxCommands as registerLocalInboxCommands } from "./inbox.local.js";
@@ -1854,5 +1855,46 @@ describe("inbox source lifecycle is a client-side registry", () => {
     const result = await runInboxCommandExpectingExit(["inbox", "source", "retire", "s3-not-registered"]);
     expect(result.error).toBe("process.exit:1");
     expect(result.stderr).toContain("S3 source not found: s3-not-registered");
+  });
+});
+
+// ─── INBOX PDF (SELF_HOSTED ARM) ─────────────────────────────────────────────
+// The facade (src/cli/commands/inbox.ts) registers the remote arm when the mode
+// is self_hosted. One case here keeps the arm split from silently dropping the
+// pdf verb: the remote registration must produce the same local-file contract
+// (%PDF magic, --json {path, bytes, ok: true}) through the /v1 stub.
+describe("inbox pdf (self_hosted arm)", () => {
+  it("renders a seeded email to a local PDF through the remote arm", async () => {
+    const email = seedEmail({ subject: "PDF remote", text_body: "Remote body text" });
+    const dir = mkdtempSync(join(tmpdir(), "emails-pdf-"));
+    try {
+      const outPath = join(dir, "remote.pdf");
+      const result = await runInboxCommand(["inbox", "pdf", email.id, "--out", outPath, "--json"]);
+      const payload = result.data as { path: string; bytes: number; ok: boolean };
+      expect(payload.ok).toBe(true);
+      expect(payload.path).toBe(outPath);
+      const fileBytes = readFileSync(outPath);
+      expect(fileBytes.byteLength).toBe(payload.bytes);
+      expect(fileBytes.byteLength).toBeGreaterThan(0);
+      expect(new TextDecoder().decode(fileBytes.slice(0, 5))).toBe("%PDF-");
+      const doc = await PDFDocument.load(fileBytes);
+      expect(doc.getPageCount()).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a short-id prefix server-side like read", async () => {
+    const email = seedEmail({ subject: "PDF prefix", text_body: "Prefix body" });
+    const dir = mkdtempSync(join(tmpdir(), "emails-pdf-"));
+    try {
+      const outPath = join(dir, "prefix.pdf");
+      await runInboxCommand(["inbox", "pdf", email.id.slice(0, 8), "--out", outPath]);
+      const fileBytes = readFileSync(outPath);
+      expect(fileBytes.byteLength).toBeGreaterThan(0);
+      expect(new TextDecoder().decode(fileBytes.slice(0, 5))).toBe("%PDF-");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

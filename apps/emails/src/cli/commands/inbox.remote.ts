@@ -14,6 +14,7 @@ import {
 import { resolveMailDataSource, type MailDataSource } from "../../lib/mail-data-source.js";
 import { openLocalTarget } from "../../lib/local-actions.js";
 import { readableMessageText, renderReadableEmailDocument } from "../tui/format.js";
+import { renderEmailToPdfBytes } from "../tui/pdf.js";
 import { registerMailboxFilterCommands } from "./mailbox-filter-commands.js";
 import type {
   Mailbox,
@@ -1146,6 +1147,42 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         const formatted = opened.ok
           ? chalk.green(`Opened readable email view: ${tmpFile}`)
           : `${chalk.yellow(`Saved readable email view: ${tmpFile}`)}\n${chalk.dim(opened.error ?? "Open command unavailable.")}`;
+        output(result, formatted);
+      } catch (e) { handleError(e); }
+    });
+
+  // ─── PDF ──────────────────────────────────────────────────────────────────
+  // Mirrors `open`'s data path exactly (resolveMailId -> getMessage ->
+  // getMessageBody -> renderer -> writeFileSync) and never marks the email
+  // read: no setRead call anywhere in this handler.
+  inboxCmd
+    .command("pdf <id>")
+    .description("Render a synced email to a local PDF file (does not mark it read)")
+    .option("-j, --json", "Print JSON output", false)
+    .option("--out <path>", "Output PDF path (default: ./emails-inbox-<id8>.pdf in the working directory)")
+    .action(async (id: string, opts: { out?: string }) => {
+      try {
+        const ds = resolveMailDataSource();
+        const resolvedId = await resolveMailId(ds, id);
+        const msg = await ds.getMessage(resolvedId);
+        if (!msg) handleError(new Error(`Email not found: ${id}`));
+        const body = await ds.getMessageBody(msg);
+        const bytes = await renderEmailToPdfBytes({
+          subject: body?.subject ?? msg.subject,
+          from: body?.from ?? msg.from,
+          to: splitAddresses(body?.to ?? msg.to).join(", "),
+          cc: splitAddresses(body?.cc).join(", "),
+          date: body?.date ?? msg.date,
+          text: body?.text ?? null,
+          html: body?.html ?? null,
+          attachments: body?.attachments ?? [],
+        });
+        const { writeFileSync } = await import("node:fs");
+        const { join: pathJoin } = await import("node:path");
+        const outPath = opts.out ?? pathJoin(process.cwd(), `emails-inbox-${resolvedId.slice(0, 8)}.pdf`);
+        writeFileSync(outPath, bytes);
+        const result = { path: outPath, bytes: bytes.length, ok: true };
+        const formatted = chalk.green(`✓ Saved PDF: ${outPath} (${bytes.length} bytes)`);
         output(result, formatted);
       } catch (e) { handleError(e); }
     });
