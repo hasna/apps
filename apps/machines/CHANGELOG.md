@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.31
+
+### Patch Changes
+
+- aa09414: Committed export-map declarations (types/) plus an install-time prepare build so workspace-linked consumers (loops, dispatch) resolve @hasna/machines/consumer and the other declared subpaths in a fresh checkout — fixes the deterministic TS2307 at install for wave #670's workspace alignment.
+- 0d7a2d6: fix(machines): every api-mode fleet flip (re)provision verifies the written env file carries the full per-app env contract (default [apiUrlEnv, apiKeyEnv], overridable via clientEnvRequiredKeys) and aborts with FLIP_ERROR (exit 3) BEFORE the file becomes the provisioned state when any required key is missing. Incident 715712 (BUG 7d5f08a1): a harness session-env re-provision dropped the hosted API env for TODOS/KNOWLEDGE/EMAILS and the CLIs silently fell back to empty on-box SQLite stores at rc=0 — a re-provision can never emit a reduced env again.
+- Updated dependencies [d5b64f8]
+- Updated dependencies [1da0550]
+  - @hasna/contracts@0.13.0
+
 ## 0.2.30
 
 ### Patch Changes

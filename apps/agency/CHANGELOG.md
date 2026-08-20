@@ -1,0 +1,7 @@
+# @hasna/agency
+
+## 0.3.2
+
+### Patch Changes
+
+- 06ecb99: Reconstruct @hasna/agency source from the published 0.3.1 bundle (row 91a7b09d): the upstream repo was deleted and the tarball shipped only package.json + a bundled dist/index.js. The reconstructed tree restores a maintainable source (src/registry.ts, src/utils.ts, src/commands/*, src/db/database.ts reimplemented from the bundle's scaffold-template strings) with an identical CLI verb surface: status, doctor, init, update, sync, mcp, backup, db, connect, playground, logs, search, export, import, new, release. Parity verified byte-identical against the installed 0.3.1 for `--help` and `status --json`. Recorded deviations: (a) CLI-only member — the artifact never shipped MCP/-serve/sdk surfaces; (b) the 0.3.1 init prompt defaulted to a live internal RDS endpoint which is not carried into the public source; (c) `files` gains LICENSE, plus a `prepack` build so the publish guard packs a real dist. The embedded 45-package REGISTRY is stale by design (~28% of first-party packages) and is not the package census.

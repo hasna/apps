@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.10
+
+### Patch Changes
+
+- Updated dependencies [d5b64f8]
+- Updated dependencies [1da0550]
+- Updated dependencies [0d4f749]
+- Updated dependencies [ca7acc8]
+- Updated dependencies [4e5b690]
+- Updated dependencies [28fedae]
+  - @hasna/contracts@0.13.0
+  - @hasna/secrets@0.3.2
+
 ## 0.6.9
 
 ### Patch Changes

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.17
+
+### Patch Changes
+
+- 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
+- Updated dependencies [ba9af33]
+- Updated dependencies [bbc5a25]
+- Updated dependencies [e405538]
+- Updated dependencies [0d4f749]
+- Updated dependencies [ca7acc8]
+- Updated dependencies [4e5b690]
+- Updated dependencies [28fedae]
+- Updated dependencies [0d7a2d6]
+  - @hasna/conversations@0.7.0
+  - @hasna/connectors@1.4.2
+  - @hasna/secrets@0.3.2
+  - @hasna/sessions@0.12.15
+  - @hasna/todos@0.15.37
+
 ## 0.5.16
 
 - fix(kernel): distinguish transient vault read failures from missing key so a temporary secrets-backend read error no longer masquerades as a missing credential (#8).

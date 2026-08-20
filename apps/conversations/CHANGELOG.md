@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- ba9af33: New guarded `conversations channel merge <source> <destination>` operation: an atomic, package-owned channel merge that moves messages, memberships, subscriptions, mentions, tasks, graph edges and read state from a source channel into a destination channel by in-place row rewrite — message ids and uuids never change, so reply chains, reactions, read receipts and notifications travel with the rows. The verb plans first (dry-run prints a revision hash and writes nothing); apply is a compare-and-swap that requires the exact `--expected-revision` from a current dry-run plus a stable `--idempotency-key` (same key replays the stored receipt), and refuses ambiguous or actively-locked destinations: missing/aliased channels, held channel locks (named holder), cross-project channels, membership/subscription overlap and cross-channel reply parents. `--archive-source` archives the source and aliases `#source` to `#destination`; without it both channels stay live. Every apply and rollback appends an immutable receipt in `channel_merge_receipts` (SQLite and PostgreSQL migration 11). Exposed as the CLI verb, the `POST /v1/channels/{destination}/merge` server route, the generated `ConversationsClient.mergeChannel` SDK method, and the `LocalStore.planChannelMerge/applyChannelMerge/rollbackChannelMerge` store surface.
+
+### Patch Changes
+
+- bbc5a25: fix: archived channels reject new posts with a usable error
+  
+  A send to an archived channel used to succeed (rc=0, message stored) even
+  though archived channels are meant to be read-only history — an archived
+  #strategy accepted a test post. Both send implementations now select
+  `archived_at` and refuse a non-reply send to an archived channel inside the
+  same transaction as the existence check, with an error naming the archived
+  state and the remedy (`conversations channel list --archived` /
+  `conversations channel unarchive <name>`). Replies to messages already
+  sitting in an archived channel keep the existing reply-exempt carve-out on
+  both backends. Fixes the archived-writes bug (todos 9b502ed8).
+- e405538: Fix `conversations send <channel> "<message>"` — the positional channel form taught by the fleet charter, .claude/rules/communication.md and dispatch briefs exited rc=1 with "Recipient is required" because only `<message>` was declared as a positional: the channel token bound to `<message>` and the real body was silently dropped as an excess argument (todos 4a2a4ac1). The send command now declares an optional second positional `[channel]`; when two positionals are present the first is resolved as the channel and the second as the message. The existing flag forms `send "<message>" --channel X` and `send "<message>" --to A` are unchanged, and a conflicting positional/`--channel` pair is rejected with an explicit ambiguity error instead of sending to the wrong recipient.
+- 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
+- Updated dependencies [d5b64f8]
+- Updated dependencies [1da0550]
+  - @hasna/contracts@0.13.0
+
 ## 0.6.3
 
 ### Patch Changes

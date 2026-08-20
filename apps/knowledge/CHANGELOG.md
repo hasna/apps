@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.108
+
+### Patch Changes
+
+- 77bb3e1: Raise the knowledge suite's test budget to the measured safe margin (20000ms per test, the budget the package's own CI defines in apps/knowledge/.github/workflows/ci.yml) in the package test script. The monorepo CI runs the package's `test` script serially on a 4-core runner, where bun's 5000ms default budget is exceeded by spawn-heavy tests under worker contention — measured: `bun test --parallel=4` timed out `public knowledge sdk > exposes a stable client facade for installed apps` at 5195ms (1 fail, exit 1); the same shape with `--timeout 20000` passes 470/2/0 with exit 0. No test is weakened or skipped; the explicit per-test budgets via `tests/support/budget.ts` are unchanged.
+- 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
+- 0d7a2d6: fix(knowledge): name the local-SQLite fallback instead of serving it silently. When HASNA_KNOWLEDGE_API_URL is absent, resolveKnowledgeClientTransport now emits one machine-readable JSON notice on stderr per process (`knowledge-local-fallback`) naming the mode switch before serving local — the same family as the merged secrets fix (PR #681 / incident 715558). Incident 715712: a re-provision dropped the hosted pair and items appeared gone at rc=0. URL-without-key keeps failing closed; the notice never fires when the URL selects http.
+
 ## 0.2.107
 
 ### Patch Changes
