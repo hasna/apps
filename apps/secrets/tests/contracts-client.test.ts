@@ -154,7 +154,14 @@ describe("generic Hasna storage client", () => {
   });
 
   it("resolves local and cloud storage clients", async () => {
-    expect(resolveStorageClient("demo", {})).toEqual({ transport: "local", client: null });
+    // The resolution travels with the local result too — the CLI's fallback notice
+    // depends on seeing WHY local was selected (modeSource 'default' = unselected
+    // fallback, incident 715558). It must never be dropped at this layer.
+    expect(resolveStorageClient("demo", {})).toEqual({
+      transport: "local",
+      client: null,
+      resolution: expect.objectContaining({ transport: "local", mode: "local", modeSource: "default" }),
+    });
     const resolved = resolveStorageClient("demo", {
       HASNA_DEMO_API_URL: "http://localhost:9999",
       HASNA_DEMO_API_KEY: "fixture-key",
@@ -163,6 +170,7 @@ describe("generic Hasna storage client", () => {
     if (resolved.transport === "cloud-http") {
       expect(resolved.client.name).toBe("demo");
       expect(resolved.client.baseUrl).toBe("http://localhost:9999/v1");
+      expect(resolved.resolution).toMatchObject({ transport: "cloud-http", modeSource: "HASNA_DEMO_API_URL+HASNA_DEMO_API_KEY" });
     }
   });
 });

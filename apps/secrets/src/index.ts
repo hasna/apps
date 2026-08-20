@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-import { getStore } from "./store/index.js";
+import { getStoreWithResolution, LocalStore } from "./store/index.js";
 import type { Store } from "./store/types.js";
+import { clientTransportEnvKeys, type ClientTransportResolution } from "./store/contracts-client/transport.js";
 import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
@@ -442,7 +443,9 @@ let _store: Store | undefined;
 function store(): Store {
   if (_store) return _store;
   try {
-    _store = getStore();
+    const resolved = getStoreWithResolution();
+    emitLocalFallbackNotice(resolved.store, resolved.resolution);
+    _store = resolved.store;
   } catch (e: any) {
     // Misconfigured cloud mode (e.g. mode=cloud but no API key). Fail loud with a
     // clean message instead of silently reading the wrong dataset.
@@ -450,6 +453,49 @@ function store(): Store {
     process.exit(1);
   }
   return _store;
+}
+
+/**
+ * When the transport falls back to the LOCAL vault WITHOUT any cloud intent in
+ * the environment — no mode var, and no API_URL+API_KEY pair (the flip signal
+ * needs BOTH) — the CLI must not report a silent rc=0 empty vault. Incident
+ * 715558 (BUG b76e2d56-38bf-468e-a6f9-90ea107e1b0e): an agent in a non-systemd
+ * shell misdiagnosed ALL hosted credentials as missing because the CLI read the
+ * unselected local vault and said "Vault is empty."
+ *
+ * The emission is one machine-readable JSON line on stderr (stdout stays pure
+ * for parsers), naming WHERE the read went and WHAT the local vault held:
+ * the fallback path, the local secret count, and the fact that hosted secrets
+ * are NOT visible. An explicitly selected local store (a mode env set to
+ * `local`) is a chosen store, not a fallback, and stays silent.
+ */
+function emitLocalFallbackNotice(store: Store, resolution: ClientTransportResolution): void {
+  if (resolution.transport !== "local" || resolution.misconfigured || resolution.modeSource !== "default") {
+    return;
+  }
+  const keys = clientTransportEnvKeys("secrets");
+  const localVaultPath = store.describe().location;
+  const localSecretCount = store instanceof LocalStore ? store.countSecretsSync() : 0;
+  const notice = {
+    event: "secrets-local-fallback",
+    transport: "local",
+    modeSource: resolution.modeSource,
+    checked: {
+      modeKeys: keys.modeKeys,
+      apiUrlKeys: keys.apiUrlKeys,
+      apiKeyKeys: keys.apiKeyKeys,
+    },
+    apiUrlPresent: Boolean(resolution.apiUrlSource),
+    apiKeyPresent: resolution.apiKeyPresent,
+    localVaultPath,
+    localSecretCount,
+    hostedSecretsVisible: false,
+    notice:
+      `No hosted API config (${keys.apiUrlKeys[0]} + ${keys.apiKeyKeys[0]}) is present; ` +
+      `reading the LOCAL vault at ${localVaultPath} (${localSecretCount} secret(s)). ` +
+      "Hosted secrets are NOT visible in this output.",
+  };
+  console.error(JSON.stringify(notice));
 }
 
 switch (command) {

@@ -11,7 +11,7 @@
 // mode is requested but misconfigured (e.g. URL set, key missing) the vendored
 // resolver throws instead of silently reading local data.
 
-import { resolveStorageClient } from "./contracts-client/index.js";
+import { resolveStorageClient, type ClientTransportResolution } from "./contracts-client/index.js";
 import { ApiStore } from "./api.js";
 import { LocalStore } from "./local.js";
 import { assertTestNetworkTargetAllowed } from "../test-isolation.js";
@@ -19,8 +19,19 @@ import type { Store } from "./types.js";
 
 const APP_NAME = "secrets";
 
-/** Resolve the active Store for this process from the environment. */
-export function getStore(env: NodeJS.ProcessEnv = process.env): Store {
+/** The resolved Store plus the transport decision that selected it. */
+export interface StoreResolution {
+  store: Store;
+  resolution: ClientTransportResolution;
+}
+
+/**
+ * Resolve the active Store for this process from the environment, together with
+ * the transport resolution that chose it. Callers that must name the backing
+ * store (the CLI's local-fallback notice) read `resolution` here — the
+ * alternative is a silent `new LocalStore()` with no visibility of the switch.
+ */
+export function getStoreWithResolution(env: NodeJS.ProcessEnv = process.env): StoreResolution {
   const resolved = resolveStorageClient(APP_NAME, env as Record<string, string | undefined>);
   if (resolved.transport === "cloud-http") {
     // HC-00304: the AMBIENT process environment steering a test run onto the hosted
@@ -32,9 +43,14 @@ export function getStore(env: NodeJS.ProcessEnv = process.env): Store {
     if (env === process.env) {
       assertTestNetworkTargetAllowed(resolved.client.baseUrl, env as Record<string, string | undefined>);
     }
-    return new ApiStore(resolved.client);
+    return { store: new ApiStore(resolved.client), resolution: resolved.resolution };
   }
-  return new LocalStore();
+  return { store: new LocalStore(), resolution: resolved.resolution };
+}
+
+/** Resolve the active Store for this process from the environment. */
+export function getStore(env: NodeJS.ProcessEnv = process.env): Store {
+  return getStoreWithResolution(env).store;
 }
 
 /** True when reads/writes route to the cloud API rather than the local vault. */
