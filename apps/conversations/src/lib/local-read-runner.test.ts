@@ -44,6 +44,45 @@ const PACKED_WORKER = join("package", "bin", "local-read-worker.js");
 
 const MISSING_WORKER_MESSAGE = "local collection worker is missing from this installation";
 
+/**
+ * npm pack --json writes the JSON array as the TRAILING document on stdout.
+ * The package's `prepack` lifecycle runs `bun run build`, whose "Bundled N
+ * modules ..." progress lines interleave with the JSON, so a raw JSON.parse
+ * of the whole stdout fails. Walk back from the end and slice the depth-0
+ * array. Mirrors the fleet publish-guard extractor
+ * (tooling/ci/check-publish-guard.ts extractJsonArraySuffix) and the
+ * knowledge validator (apps/knowledge/scripts/validate-public-package.mjs).
+ */
+function extractJsonArraySuffix(raw: string): string {
+  let i = raw.length - 1;
+  while (i >= 0 && /\s/.test(raw[i])) i--;
+  if (i < 0 || raw[i] !== "]") {
+    throw new Error("pack output has no JSON array document (npm wrote no --json array)");
+  }
+  let depth = 0;
+  let inString = false;
+  for (; i >= 0; i--) {
+    const c = raw[i];
+    if (inString) {
+      if (c === '"') {
+        let backslashes = 0;
+        for (let j = i - 1; j >= 0 && raw[j] === "\\"; j--) backslashes++;
+        if (backslashes % 2 === 0) inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+    } else if (c === "]") {
+      depth++;
+    } else if (c === "[") {
+      depth--;
+      if (depth === 0) return raw.slice(i);
+    }
+  }
+  throw new Error("pack output brackets do not balance to a single JSON array");
+}
+
 // ---------------------------------------------------------------------------
 // Packaging
 // ---------------------------------------------------------------------------
@@ -121,7 +160,7 @@ describe("packaged local-read worker (regression 0ae63bc7)", () => {
     preparePackedInstall();
     const packed = run("npm", ["pack", "--dry-run", "--json"], REPO_ROOT);
     expect(packed.status, `npm pack --dry-run failed: ${packed.stderr}`).toBe(0);
-    const files: string[] = JSON.parse(packed.stdout)[0].files.map((file: { path: string }) => file.path);
+    const files: string[] = JSON.parse(extractJsonArraySuffix(packed.stdout))[0].files.map((file: { path: string }) => file.path);
     expect(files).toContain("bin/local-read-worker.js");
   }, 300_000);
 
