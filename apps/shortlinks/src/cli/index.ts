@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { resolveClientTransport } from "@hasna/contracts/client";
 import { resolveStore, type Store } from "../client-store.js";
+import { projectDestinationUrl, projectForOutput } from "./projection.js";
 import type { TotalStats } from "../store-interface.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
 import { serveShortlinks } from "../server.js";
@@ -40,7 +41,7 @@ function useJson(localOpts?: { json?: boolean }): boolean {
 
 function print(data: unknown, localOpts?: { json?: boolean }, human?: () => void): void {
   if (useJson(localOpts)) {
-    console.log(JSON.stringify(data, null, 2));
+    console.log(JSON.stringify(projectForOutput(data), null, 2));
     return;
   }
   if (human) human();
@@ -112,12 +113,12 @@ function printHint(message: string): void {
 
 function printVerbose(data: unknown, opts: { verbose?: boolean }): boolean {
   if (!opts.verbose) return false;
-  console.log(JSON.stringify(data, null, 2));
+  console.log(JSON.stringify(projectForOutput(data), null, 2));
   return true;
 }
 
 function formatLink(link: Link, maxDestinationLength = 72): string {
-  return `${chalk.green(link.short_url || `${link.hostname}/${link.slug}`)} ${chalk.dim("->")} ${truncateText(link.destination_url, maxDestinationLength)}`;
+  return `${chalk.green(link.short_url || `${link.hostname}/${link.slug}`)} ${chalk.dim("->")} ${truncateText(projectDestinationUrl(link.destination_url), maxDestinationLength)}`;
 }
 
 function printBoundedTextOutput(text: string, stream: "stdout" | "stderr"): boolean {
@@ -168,7 +169,7 @@ function printLinkSummary(link: Link): void {
 function printStatsSummary(stats: LinkStats | { domains: number; links: number; clicks: number }): void {
   if ("link" in stats) {
     console.log(`${stats.link.short_url || `${stats.link.hostname}/${stats.link.slug}`} clicks=${stats.clicks}`);
-    console.log(`  destination: ${truncateText(stats.link.destination_url)}`);
+    console.log(`  destination: ${truncateText(projectDestinationUrl(stats.link.destination_url))}`);
     console.log(`  last clicked: ${stats.last_clicked_at || "never"}`);
     const topReferrer = stats.top_referrers[0];
     const topAgent = stats.top_user_agents[0];
@@ -924,7 +925,7 @@ program
     try {
       const link = await withRuntimeStore((store) => opts.domain ? store.getLink(opts.domain, slug) : store.getLink(slug));
       if (!link) throw new Error("Link not found.");
-      print(link, opts, () => console.log(link.destination_url));
+      print(link, opts, () => console.log(projectDestinationUrl(link.destination_url)));
     } catch (error) {
       handleError(error);
     }
