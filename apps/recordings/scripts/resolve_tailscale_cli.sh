@@ -51,6 +51,41 @@ recordings_validate_tailscale_cli() {
   fi
 }
 
+recordings_resolve_realpath_executable() {
+  local real_host_kernel
+  local candidate
+  local override
+
+  real_host_kernel="$(recordings_real_host_kernel)" || return 1
+  override="${RECORDINGS_TEST_REALPATH_EXECUTABLE:-}"
+  if [ "$real_host_kernel" != "Darwin" ] && [ -n "$override" ]; then
+    # Test-only override; unreachable on a real Darwin host.
+    recordings_validate_tailscale_cli_shape "$override" || return 1
+    if [ -f "$override" ] && [ -x "$override" ]; then
+      printf '%s\n' "$override"
+      return 0
+    fi
+    echo "Configured realpath executable is not executable: $override" >&2
+    return 1
+  fi
+  # macOS 26 ships realpath at /bin/realpath, not /usr/bin/realpath (measured on
+  # the fleet Macs). Both are pinned system locations; the first existing one wins.
+  for candidate in /usr/bin/realpath /bin/realpath; do
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  echo "No system realpath executable found (checked /usr/bin/realpath and /bin/realpath)." >&2
+  return 1
+}
+
+recordings_realpath() {
+  local executable
+  executable="$(recordings_resolve_realpath_executable)" || return 1
+  "$executable" "$@"
+}
+
 recordings_resolve_tailscale_cli() {
   local candidate
 
@@ -96,7 +131,7 @@ recordings_validate_trusted_tailscale_app_cli() {
     echo "Trusted Tailscale CLI must be a canonical non-symlink trusted executable." >&2
     return 1
   fi
-  canonical="$(/usr/bin/realpath "$candidate" 2>/dev/null)" || {
+  canonical="$(recordings_realpath "$candidate" 2>/dev/null)" || {
     echo "Trusted Tailscale CLI could not be resolved canonically." >&2
     return 1
   }
@@ -145,13 +180,20 @@ recordings_validate_private_tailscale_snapshot_parent() {
     echo "Tailscale snapshot parent must be an existing private directory." >&2
     return 1
   fi
-  canonical="$(/usr/bin/realpath "$snapshot_parent" 2>/dev/null)" || {
+  canonical="$(recordings_realpath "$snapshot_parent" 2>/dev/null)" || {
     echo "Tailscale snapshot parent could not be resolved canonically." >&2
     return 1
   }
   if [ "$canonical" != "$snapshot_parent" ]; then
-    echo "Tailscale snapshot parent must be a canonical non-symlink directory." >&2
-    return 1
+    # The FINAL component is already proven above to be a real non-symlink
+    # directory. macOS routes /tmp -> /private/tmp, so a snapshot parent created
+    # under /tmp legitimately canonicalizes elsewhere while its final component
+    # is a user-owned 0700 directory. Rejecting that shape killed every local
+    # build on a fleet Mac before a single Swift line compiled; the security
+    # property that matters is the final component, which the -L test above and
+    # the ownership/mode checks below both bind. So the canonical path is
+    # accepted as the effective parent and validated in its place.
+    snapshot_parent="$canonical"
   fi
   read -r owner mode <<EOF
 $(recordings_tailscale_stat_owner_and_mode "$snapshot_parent" "$real_host_kernel")
@@ -270,7 +312,7 @@ recordings_verify_official_tailscale_app_and_cli() {
     echo "Trusted Tailscale app must be a canonical non-symlink directory." >&2
     return 1
   fi
-  canonical_app="$(/usr/bin/realpath "$app" 2>/dev/null)" || {
+  canonical_app="$(recordings_realpath "$app" 2>/dev/null)" || {
     echo "Trusted Tailscale app could not be resolved canonically." >&2
     return 1
   }
@@ -299,6 +341,16 @@ recordings_resolve_trusted_tailscale_app_cli() {
   # This probe is deliberately absolute and cannot be replaced by the
   # installer's test tool overrides or caller PATH.
   real_host_kernel="$(recordings_real_host_kernel)" || return 1
+  # macOS routes /tmp -> /private/tmp, so a parent under /tmp is not canonical.
+  # Resolve it FIRST so every derived path (snapshot_root, expected_cli, the
+  # snapshot app path) is canonical and consistent with the private-parent
+  # validation below; otherwise the snapshot app fails the canonical checks in
+  # recordings_verify_official_tailscale_app_and_cli even though it was created
+  # at the exact path it is verified at.
+  if ! snapshot_parent="$(recordings_realpath "$snapshot_parent" 2>/dev/null)"; then
+    echo "Tailscale snapshot parent could not be resolved canonically." >&2
+    return 1
+  fi
   if [ "$real_host_kernel" = "Darwin" ]; then
     source_app='/Applications/Tailscale.app'
     codesign_executable='/usr/bin/codesign'
@@ -349,6 +401,13 @@ recordings_run_trusted_tailscale_status() {
   local codesign_executable
 
   real_host_kernel="$(recordings_real_host_kernel)" || return 1
+  # Canonicalize the parent first (macOS /tmp -> /private/tmp) so expected_cli
+  # matches the canonical snapshot CLI path that recordings_resolve_trusted_tailscale_app_cli
+  # returns after its own canonicalization.
+  if ! snapshot_parent="$(recordings_realpath "$snapshot_parent" 2>/dev/null)"; then
+    echo "Tailscale snapshot parent could not be resolved canonically." >&2
+    return 1
+  fi
   expected_cli="$snapshot_parent/tailscale-identity-snapshot/Tailscale.app/Contents/MacOS/Tailscale"
   if [ "$snapshot_cli" != "$expected_cli" ]; then
     echo "Tailscale status executable is not bound to the private authenticated snapshot." >&2

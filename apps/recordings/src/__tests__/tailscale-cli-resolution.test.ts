@@ -96,12 +96,14 @@ async function trustedSnapshotWith(options: {
   identifier?: string;
   mutateSnapshot?: boolean;
   replaceSourceBeforeStatus?: boolean;
+  snapshotParentOverride?: string;
+  realpathOverride?: string;
 }) {
   const root = temporaryDirectory();
   const markerDirectory = join(root, "markers");
-  const snapshotParent = join(root, "private-work");
+  const snapshotParent = options.snapshotParentOverride ?? join(root, "private-work");
   mkdirSync(markerDirectory, { mode: 0o700 });
-  mkdirSync(snapshotParent, { mode: 0o700 });
+  if (!options.snapshotParentOverride) mkdirSync(snapshotParent, { mode: 0o700 });
   const source = createTrustedApp(root);
   if (options.team) writeFileSync(join(source.app, "signature-team"), `${options.team}\n`);
   if (options.identifier) {
@@ -135,6 +137,9 @@ recordings_run_trusted_tailscale_status "$snapshot_cli" "$SNAPSHOT_PARENT"
       RECORDINGS_TEST_TRUSTED_TAILSCALE_APP: source.app,
       RECORDINGS_TEST_TAILSCALE_CODESIGN_EXECUTABLE: codesign,
       RECORDINGS_TEST_TAILSCALE_DITTO_EXECUTABLE: ditto,
+      ...(options.realpathOverride
+        ? { RECORDINGS_TEST_REALPATH_EXECUTABLE: options.realpathOverride }
+        : {}),
     }),
     stdout: "pipe",
     stderr: "pipe",
@@ -367,6 +372,62 @@ describe("Tailscale CLI resolution", () => {
       snapshotCli,
     );
     expect(result.stdout).not.toContain("attacker");
+  });
+
+  test("resolves the canonicalization executable from both system realpath locations", () => {
+    // macOS 26 ships realpath at /bin/realpath, not /usr/bin/realpath (measured on
+    // station03/station06/station07: /usr/bin/realpath absent, /bin/realpath present).
+    // A resolver that hardcodes only /usr/bin/realpath dies on every fleet Mac with
+    // "Tailscale snapshot parent could not be resolved canonically" and the build never
+    // produces an artifact — the exact defect this lane reproduced live.
+    const source = readFileSync(resolver, "utf8");
+    const candidateSection = sliceBetween(
+      source,
+      "recordings_resolve_realpath_executable() {",
+      "\nrecordings_realpath() {",
+    );
+    expect(candidateSection).toContain("/usr/bin/realpath");
+    expect(candidateSection).toContain("/bin/realpath");
+  });
+
+  testOnNonDarwin("accepts a snapshot parent reached through a system symlink ancestor", async () => {
+    // macOS routes /tmp -> /private/tmp, so a mktemp parent under /tmp is NOT canonical
+    // even though its final component is a real user-owned 0700 directory. The previous
+    // strict canonical-equality check rejected exactly that shape, killing every local
+    // build on a fleet Mac before a single Swift line compiled.
+    const root = temporaryDirectory();
+    const realParent = join(root, "real-parent");
+    const aliasParent = join(root, "alias-parent");
+    mkdirSync(realParent, { mode: 0o700 });
+    symlinkSync(realParent, aliasParent);
+    mkdirSync(join(realParent, "private-work"), { mode: 0o700 });
+    const result = await trustedSnapshotWith({
+      snapshotParentOverride: join(aliasParent, "private-work"),
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    const snapshotCli = join(
+      realParent,
+      "private-work",
+      "tailscale-identity-snapshot",
+      "Tailscale.app",
+      "Contents",
+      "MacOS",
+      "Tailscale",
+    );
+    expect(result.stdout).toContain(`resolved=${snapshotCli}`);
+    expect(result.stdout).toContain('"Online":true');
+    expect(readFileSync(join(result.markerDirectory, "status-path.log"), "utf8").trim()).toBe(
+      snapshotCli,
+    );
+  });
+
+  testOnNonDarwin("fails loudly when no system realpath executable can be resolved", async () => {
+    const root = temporaryDirectory();
+    const result = await trustedSnapshotWith({
+      realpathOverride: join(root, "missing-realpath"),
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("could not be resolved canonically");
   });
 
   test.each([
