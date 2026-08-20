@@ -23,7 +23,7 @@ import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
-import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
+import { normalizeChannelName, unknownChannelMessage, archivedChannelMessage } from "../lib/channel-names.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
@@ -2493,7 +2493,12 @@ async function handleV1(
     // predicate the SQLite path expresses as `!requestedReplyUuid`; they must
     // stay in step, because a guard present on only one backend is absent
     // exactly where it matters.
-    // Existence only: archived channels still accept sends, as before.
+    // Archived channels are read-only history: a non-reply send to one is
+    // refused with archivedChannelMessage, checked beside the existence guard
+    // inside the same transaction (todos 9b502ed8). The reply carve-out is
+    // identical to the existence check's — a reply derives its channel from
+    // the parent, so it must still go through even when that parent sits in
+    // an archived channel.
     assertNoSensitiveContent(content, "Message content");
     const requestedProjectId = str(body.project_id) ?? null;
     // Mirror the local sendMessage session derivation so channel history and
@@ -2523,8 +2528,8 @@ async function handleV1(
     const row = await client.transaction(async (tx) => {
       let projectId = requestedProjectId;
       if (channelName) {
-        const channelRow = await tx.get<{ name: string; project_id: string | null }>(
-          "SELECT name, project_id FROM channels WHERE name = $1 FOR SHARE",
+        const channelRow = await tx.get<{ name: string; project_id: string | null; archived_at: string | null }>(
+          "SELECT name, project_id, archived_at FROM channels WHERE name = $1 FOR SHARE",
           [channelName],
         );
         if (!channelRow) {
@@ -2532,6 +2537,9 @@ async function handleV1(
           // every new non-reply channel send remains fail-closed.
           if (!replyParent) throw new Error(unknownChannelMessage(channelName));
         } else {
+          if (channelRow.archived_at !== null && !replyParent) {
+            throw new Error(archivedChannelMessage(channelName));
+          }
           if (projectId !== null && projectId !== channelRow.project_id) {
             throw new Error(
               `Message project ${projectId} conflicts with channel project ${channelRow.project_id ?? "(unlinked)"}.`,

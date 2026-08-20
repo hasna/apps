@@ -30,7 +30,7 @@ import {
 } from "fs";
 import { dirname, join, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
-import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
+import { normalizeChannelName, unknownChannelMessage, archivedChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import {
   WORK_STATUS_CHANNEL,
@@ -333,9 +333,12 @@ export function sendMessage(opts: SendMessageOptions): Message {
   // below already rejects a channel that disagrees with the parent, so nothing
   // is weakened by skipping the existence check here.
   //
-  // Existence only: an archived channel still accepts sends, exactly as before.
-  // Archival is a separate policy with its own verbs, and folding it in here
-  // would smuggle a second behaviour change under one fix.
+  // Archived channels are read-only history: a non-reply send to one is
+  // refused with archivedChannelMessage, checked beside the existence guard
+  // inside the same transaction (todos 9b502ed8 — #strategy accepted posts
+  // after archival). The reply carve-out is identical to the existence
+  // check's: a reply derives its channel from the parent, so it must still
+  // go through even when that parent sits in an archived channel.
   const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id.trim() : undefined;
   const requestedReplyId = opts.reply_to ?? null;
   const requestedReplyUuid = normalizeMessageUuid(opts.reply_to_uuid);
@@ -399,13 +402,17 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
       let projectId = opts.project_id || null;
       if (channelName) {
-        const channel = db.prepare("SELECT name, project_id FROM channels WHERE name = ?").get(channelName) as {
+        const channel = db.prepare("SELECT name, project_id, archived_at FROM channels WHERE name = ?").get(channelName) as {
           name: string;
           project_id: string | null;
+          archived_at: string | null;
         } | null;
         if (!channel) {
           if (!requestedReplyUuid) throw new Error(unknownChannelMessage(channelName));
         } else {
+          if (channel.archived_at !== null && !requestedReplyUuid) {
+            throw new Error(archivedChannelMessage(channelName));
+          }
           if (projectId !== null && projectId !== channel.project_id) {
             throw new Error(`Message project ${projectId} conflicts with channel project ${channel.project_id ?? "(unlinked)"}.`);
           }

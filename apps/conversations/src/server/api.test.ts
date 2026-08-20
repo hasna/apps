@@ -522,9 +522,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/SELECT name FROM channels WHERE name/i.test(sql)) {
         return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
       }
-      if (/SELECT name, project_id FROM channels WHERE name/i.test(sql)) {
+      if (/SELECT name, project_id.*FROM channels WHERE name/i.test(sql)) {
         const row = channels[(p as any[])[0]];
-        return row ? { name: row.name, project_id: row.project_id ?? null } : null;
+        return row ? { name: row.name, project_id: row.project_id ?? null, archived_at: row.archived_at ?? null } : null;
       }
       if (/SELECT 1 AS ok FROM channel_members/i.test(sql)) {
         const [channel, agent] = p as any[];
@@ -2180,6 +2180,68 @@ describe("conversations-serve", () => {
     expect(crossSession.status).toBe(409);
     expect((await crossSession.json()).error).toContain("does not match parent session");
     expect(activeFakeClient!.__debug.messages).toHaveLength(before);
+  });
+
+  test("POST /v1/messages rejects a send to an archived channel with an archived-channel error", async () => {
+    // Hosted regression for todos 9b502ed8 (archived-writes): the send handler
+    // selected only name/project_id, so an archived channel still accepted
+    // posts. The guard must mirror the local path and refuse with a usable
+    // error naming the archived state, writing nothing.
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "retired-on-server", created_by: "test" }),
+    });
+    expect(created.status).toBe(201);
+    activeFakeClient!.__debug.channels["retired-on-server"].archived_at = "2026-08-19T00:00:00.000Z";
+    const before = activeFakeClient!.__debug.messages.length;
+
+    const response = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "alice", channel: "retired-on-server", content: "late arrival" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("is archived");
+    expect(activeFakeClient!.__debug.messages).toHaveLength(before);
+  });
+
+  test("POST /v1/messages still allows a reply into a channel archived after the parent", async () => {
+    // Same reply-exempt carve-out as the local path: a reply derives its
+    // channel from the parent, so refusing it would strand the parent thread.
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "retired-after-parent", created_by: "test" }),
+    });
+    expect(created.status).toBe(201);
+    const sendParent = async (channel: string) => {
+      const response = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ from: "alice", channel, content: `${channel} parent` }),
+      });
+      expect(response.status).toBe(201);
+      return (await response.json()).message as { id: number; uuid: string };
+    };
+    const parent = await sendParent("retired-after-parent");
+    activeFakeClient!.__debug.channels["retired-after-parent"].archived_at = "2026-08-19T00:00:00.000Z";
+
+    const reply = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "bob",
+        channel: "retired-after-parent",
+        content: "a correction to the original report",
+        reply_to: parent.id,
+        reply_to_uuid: parent.uuid,
+      }),
+    });
+
+    expect(reply.status).toBe(201);
+    expect((await reply.json()).message.reply_to).toBe(parent.id);
   });
 
   test("POST /v1/messages rejects numeric-only and mismatched reply identities before writing", async () => {

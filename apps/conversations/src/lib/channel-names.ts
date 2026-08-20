@@ -26,6 +26,25 @@ export function unknownChannelMessage(channel: string): string {
     + `'conversations channel create ${channel}' if it is genuinely new.`;
 }
 
+/**
+ * The message a caller gets when they send to a channel that is archived.
+ *
+ * Same placement rationale as unknownChannelMessage: this module holds no
+ * storage dependency, so the SQLite path (src/lib/messages.ts) and the
+ * Postgres server path (src/server/api.ts) share one wording and the two
+ * backends cannot diverge — a guard present on only one is absent exactly
+ * where it matters.
+ *
+ * The remedy is named in the text: archived channels are read-only history,
+ * and a refusal an agent cannot act on gets retried unchanged.
+ */
+export function archivedChannelMessage(channel: string): string {
+  return `Channel "${channel}" is archived, so this message was not sent. `
+    + `Archived channels are read-only history. Check live channels with `
+    + `'conversations channel list --archived', or unarchive it with `
+    + `'conversations channel unarchive ${channel}' if it should accept new posts again.`;
+}
+
 export function buildLegacyChannelNameMap(legacyNames: Iterable<string>): Map<string, string> {
   const names = [...new Set([...legacyNames].map((name) => name.trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));
