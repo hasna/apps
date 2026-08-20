@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.51
+
+### Patch Changes
+
+- abd8e28: Worktree reconciliation handles dead gitdir pointers: `repos worktree list` names them with a `dead-gitdir` issue class (shape-valid `.git` pointers whose target gitdir is gone after a parent-checkout move — measured at ~1,600 of ~2,000 entries under the live root after the 2026-08-14 monorepo move); `repos worktree remove` refuses them with `WORKTREE_DEAD_GITDIR` instead of reading every git guard as clean, classifying the worktree as landed-detached and failing at `git worktree remove` with an opaque `GIT_FAILED`; the new `--allow-dead-gitdir` flag archives the whole working tree (with a manifest and the dead pointer) before removing the directory, bypassing git because git cannot open it; `repos worktree adopt` refuses a dead-gitdir path and reports dead candidates as `skipped` in `--all` mode instead of leasing a worktree git can never verify.
+- ac211dd: repos pr-monitor verb: 8-class PR state monitor (migration v15 pr_monitor_state + base_ref_oid capture, verdict parser, classification engine with precedence, delta emitter with fingerprint dedupe, CLI verb `repos pr-monitor`, SDK export, pr_monitor MCP tool) powering the 5-minute fleet PR loop.
+- Updated dependencies [b630c48]
+  - @hasna/events@0.1.16
+
 ## 0.1.50
 
 ### Patch Changes
