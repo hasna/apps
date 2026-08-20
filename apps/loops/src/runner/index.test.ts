@@ -89,6 +89,88 @@ describe("loops-runner", () => {
     expect((rejection as Error).message).toContain("requires a control plane advertising runner.claimScope");
   });
 
+  test("a foreign /version failure is classified, never interpolated, in the surfaced refusal", async () => {
+    // P1 regression (adversarial review of PR #680): a fetchImpl rejection
+    // carrying foreign provider detail used to be wrapped into the sentinel
+    // class and its message surfaced. The catch path must classify the
+    // failure with static text only.
+    const FOREIGN_MARKER = "FOREIGN_PROVIDER_DETAIL_MARKER postgres://user:secret@db.internal/loops";
+    const fetchImpl = (async () => {
+      throw new Error(FOREIGN_MARKER);
+    }) as unknown as typeof fetch;
+    let rejection: unknown;
+    try {
+      await runRunnerOnce({
+        apiUrl: "https://loops.invalid/",
+        runnerId: "station02",
+        machineId: "station02",
+        claimScope: "bound",
+        fetchImpl,
+      });
+    } catch (error) {
+      rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(RunnerRefusalError);
+    const message = (rejection as Error).message;
+    expect(message).toContain("the version request failed");
+    expect(message).not.toContain("FOREIGN_PROVIDER_DETAIL_MARKER");
+    expect(message).not.toContain("postgres://");
+    // And the surfaced journal line carries the classified reason only.
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logRunnerCommandFailure(rejection);
+    } finally {
+      console.error = originalError;
+    }
+    const parsed = JSON.parse(logged[0]) as Record<string, unknown>;
+    expect(String(parsed.message)).toContain("the version request failed");
+    expect(String(parsed.message)).not.toContain("postgres://");
+  });
+
+  test("runRunnerLoop reports each failing poll through onError, legibly when composed with the logger", async () => {
+    // Pins the composition the background `run` command wires: a failing
+    // poll must reach onError per iteration, and logRunnerCommandFailure on
+    // that refusal must journal the reason — the exact production invisibility
+    // defect was zero journal lines across ten minutes of failing polls.
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ status: "ok", version: "0.4.28", service: "loops" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const reported: unknown[] = [];
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      const result = await runRunnerLoop({
+        apiUrl: "https://loops.invalid/",
+        runnerId: "station02",
+        machineId: "station02",
+        claimScope: "bound",
+        fetchImpl,
+        maxIterations: 2,
+        pollIntervalMs: 1,
+        onError: (error) => {
+          reported.push(error);
+          logRunnerCommandFailure(error);
+        },
+      });
+      expect(result.errors).toBe(2);
+      expect(reported).toHaveLength(2);
+      for (const error of reported) expect(error).toBeInstanceOf(RunnerRefusalError);
+      const lines = logged.map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(lines).toHaveLength(2);
+      for (const line of lines) {
+        expect(line.evt).toBe("loops_runner_command_failed");
+        expect(String(line.message)).toContain("requires a control plane advertising runner.claimScope");
+      }
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   test("reports file connection authority by default", () => {
     const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
     const previousApiKey = process.env.HASNA_LOOPS_API_KEY;

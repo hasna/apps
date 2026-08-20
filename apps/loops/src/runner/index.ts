@@ -222,7 +222,8 @@ function resolveRunnerConfig(opts: RunRunnerOnceOptions): {
  */
 /** A refusal this package raises itself: static, safe-by-construction message
  *  (no provider detail, no credentials). logRunnerCommandFailure surfaces the
- *  reason for these and keeps every other error opaque. */
+ *  reason for these and keeps every other error opaque. Every construction
+ *  site must pass a string this module wrote itself. */
 export class RunnerRefusalError extends Error {
   constructor(message: string) {
     super(message);
@@ -230,8 +231,15 @@ export class RunnerRefusalError extends Error {
   }
 }
 
-function boundedText(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max);
+/** Module-private: a /version probe failure THIS code classified itself.
+ *  Only ever constructed with static text plus `response.status` (a number),
+ *  so its message is safe to interpolate into a surfaced refusal. Foreign
+ *  fetch/parse errors must NOT be converted to this type. */
+class VersionProbeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VersionProbeError";
+  }
 }
 
 async function assertClaimScopeEnforceable(
@@ -244,13 +252,20 @@ async function assertClaimScopeEnforceable(
       method: "GET",
       headers: config.token ? { authorization: `Bearer ${config.token}` } : {},
     });
-    if (!response.ok) throw new Error(`status ${response.status}`);
-    capabilities = ((await response.json()) as Record<string, unknown>).capabilities;
+    if (!response.ok) throw new VersionProbeError(`HTTP ${response.status}`);
+    try {
+      capabilities = ((await response.json()) as Record<string, unknown>).capabilities;
+    } catch {
+      throw new VersionProbeError("a non-JSON body");
+    }
   } catch (error) {
+    // Foreign error text (fetch rejections, JSON parse failures) can carry
+    // provider detail — URLs, connection strings — so it is never
+    // interpolated into the surfaced refusal. Only this module's own probe
+    // classifications are; everything else gets a static category.
+    const detail = error instanceof VersionProbeError ? error.message : "the version request failed";
     throw new RunnerRefusalError(
-      `loops-runner --claim-scope bound could not verify control-plane support (${
-        boundedText(error instanceof Error ? error.message : String(error), 200)
-      }); refusing to claim`,
+      `loops-runner --claim-scope bound could not verify control-plane support (${detail}); refusing to claim`,
     );
   }
   const advertised = Array.isArray(capabilities) ? capabilities : [];
@@ -493,8 +508,10 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   if (config.claimScope === "bound") {
     const echoed = (claimed.runner as Record<string, unknown> | undefined)?.claimScope;
     if (echoed !== "bound") {
+      // `echoed` is server-provided, so only its typeof is surfaced — never
+      // the value itself — keeping the refusal message static by construction.
       throw new RunnerRefusalError(
-        `loops-runner --claim-scope bound was not echoed by the control plane (got ${JSON.stringify(echoed)}); `
+        `loops-runner --claim-scope bound was not echoed by the control plane (got ${typeof echoed}); `
           + "the scope was not applied to this claim",
       );
     }
