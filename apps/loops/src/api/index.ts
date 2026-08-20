@@ -1841,7 +1841,16 @@ function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | unde
   // Only this branch is gated: loops pinned to a machine are matched exactly as
   // before, so narrowing a runner's scope can never widen what it claims.
   if (!machine) return runner.claimScope !== "bound";
-  return machine.id === runner.id;
+  // The pin's canonical id is authoritative. The runner's own identities
+  // ({id, machineId, hostname}) all bind to the authenticated principal via
+  // requireBoundRunner, so matching the pin against any of them cannot widen
+  // claims to another machine — it only restores the pre-0.5 candidate set for
+  // the rename class where runner.id is a slug while the pin carries the
+  // machine's canonical id. `requestedId` is deliberately NOT a candidate: it
+  // is the identity the pinner asked for, and matching it is the alias
+  // collision the claim test refuses.
+  const candidates = new Set([runner.id, runner.machineId, runner.hostname].filter(Boolean));
+  return candidates.has(machine.id);
 }
 
 async function heartbeatRun(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {

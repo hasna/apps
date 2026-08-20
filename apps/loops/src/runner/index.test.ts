@@ -21,7 +21,7 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
 }
 
 describe("loops-runner", () => {
-  test("command failures use stable logs without provider details", () => {
+  test("command failures surface the reason with provider details scrubbed", () => {
     const logged: string[] = [];
     const originalError = console.error;
     console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
@@ -30,7 +30,35 @@ describe("loops-runner", () => {
         name: "postgres://name-secret@db.internal/loops",
         code: "postgres://code-secret@db.internal/loops",
       }));
-      expect(logged).toEqual([JSON.stringify({ evt: "loops_runner_command_failed", errorType: "error" })]);
+      expect(logged).toHaveLength(1);
+      const entry = JSON.parse(logged[0]) as Record<string, unknown>;
+      expect(entry.evt).toBe("loops_runner_command_failed");
+      expect(entry.errorType).toBe("error");
+      expect(entry.message).toContain("[SCRUBBED]@db.internal/loops");
+      expect(entry.message).not.toContain("user:secret");
+      expect(entry.message).not.toContain("name-secret");
+      expect(entry.message).not.toContain("code-secret");
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  // The bug this locks in (BUG e22f6727): the journal emitted ONLY the event
+  // envelope, so a bound runner refused by its control plane spun with no
+  // readable cause. The exact refusal text must now reach the journal.
+  test("command failures surface a benign reason verbatim", () => {
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logRunnerCommandFailure(new Error(
+        "loops-runner --claim-scope bound requires a control plane advertising runner.claimScope; "
+          + "this one does not, so the scope would be silently ignored and this runner would claim "
+          + "the whole fleet's unbound loops. Refusing to claim.",
+      ));
+      expect(logged).toHaveLength(1);
+      const entry = JSON.parse(logged[0]) as Record<string, unknown>;
+      expect(entry.message).toContain("requires a control plane advertising runner.claimScope");
     } finally {
       console.error = originalError;
     }
@@ -417,6 +445,49 @@ describe("loops-runner", () => {
     expect(result).toMatchObject({ ok: true, claimed: 1, iterations: 2, errors: 0 });
     expect(result.completed[0]).toMatchObject({ id: "run-1", status: "succeeded" });
     expect(sleeps).toEqual([]);
+  });
+
+  // Regression (BUG e22f6727): the `run` command wires no onError, so a bound
+  // runner whose control plane cannot enforce the scope swallowed the preflight
+  // refusal entirely and the service journal showed only the claim failure
+  // count. runRunnerLoop must surface the real error on the journal even with
+  // no onError wired.
+  test("runRunnerLoop logs the failure reason when no onError is wired", async () => {
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      const fetchImpl = (async (url: string | URL) => {
+        const path = new URL(String(url)).pathname;
+        if (path.endsWith("/version")) {
+          return new Response(JSON.stringify({ status: "ok", capabilities: [] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, claims: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      const result = await runRunnerLoop({
+        apiUrl: "https://loops.example.test",
+        apiKey: "test-key",
+        runnerId: "runner-loop",
+        claimScope: "bound",
+        maxIterations: 1,
+        pollIntervalMs: 25,
+        fetchImpl,
+        sleep: async () => {},
+      });
+
+      expect(result).toMatchObject({ ok: false, claimed: 0, iterations: 1, errors: 1 });
+      expect(logged).toHaveLength(1);
+      const entry = JSON.parse(logged[0]) as Record<string, unknown>;
+      expect(entry.evt).toBe("loops_runner_command_failed");
+      expect(entry.message).toContain("requires a control plane advertising runner.claimScope");
+    } finally {
+      console.error = originalError;
+    }
   });
 
   // Regression (MEDIUM 4): if control-plane heartbeats keep failing, the lease is

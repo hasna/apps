@@ -14,6 +14,7 @@ import type {
   WorkflowStepRun,
 } from "../types.js";
 import { executeLoop } from "../lib/executor.js";
+import { scrubSecrets } from "../lib/redact.js";
 import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { loopControlPlaneConfig, type RuntimeConfig } from "../lib/runtime-config.js";
@@ -543,7 +544,12 @@ export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<Ru
     } catch (error) {
       errors += 1;
       ok = false;
-      opts.onError?.(error);
+      // The `run` service wires no onError, so without this default a
+      // deterministically-failing claim (e.g. the bound preflight against a
+      // control plane that cannot enforce the scope) spun with the journal
+      // silent. Surface the real reason unless the caller installed a handler.
+      if (opts.onError) opts.onError(error);
+      else logRunnerCommandFailure(error);
     }
 
     if (idleExitAfterMs !== undefined && nowMs() - lastClaimedAt >= idleExitAfterMs) {
@@ -781,8 +787,10 @@ if (import.meta.main) {
 }
 
 export function logRunnerCommandFailure(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
   console.error(JSON.stringify({
     evt: "loops_runner_command_failed",
     errorType: error instanceof Error ? "error" : typeof error,
+    message: scrubSecrets(message),
   }));
 }

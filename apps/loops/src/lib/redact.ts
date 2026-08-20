@@ -37,6 +37,21 @@ const TOKEN_PATTERNS: RegExp[] = [
  */
 const AUTHORIZATION_PATTERN = /(\bAuthorization(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?(?:Bearer|Basic)\s+)[A-Za-z0-9._~+/=-]{16,}/gi;
 
+/**
+ * URL userinfo (`scheme://user:password@host`) in connection strings and
+ * error messages. The whole `user:pass@` segment is replaced so the host
+ * stays readable while both halves of the credential disappear; a bare
+ * `user@host` (no colon) is not credential material and is left alone.
+ *
+ * Both character classes are length-bounded on purpose: an unbounded scheme
+ * or userinfo class backtracks O(n) per start position over long unbroken
+ * lowercase runs (the same quadratic the ASSIGNMENT_PATTERN comment below
+ * documents), which turned multi-hundred-KB run output into a multi-minute
+ * scrub. The pattern is additionally gated by a `://` indexOf precheck so it
+ * never runs at all on output with no scheme present.
+ */
+const URL_USERINFO_PATTERN = /([a-z][a-z0-9+.-]{0,16}:\/\/)(?:[^/@\s:]{1,128}):[^/@\s]{1,128}@/gi;
+
 /** PEM private key blocks (including truncated blocks missing their END line). */
 const PEM_PATTERN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g;
 
@@ -109,6 +124,9 @@ export function scrubSecrets(text: string): string {
   let scrubbed = text;
   for (const pattern of TOKEN_PATTERNS) scrubbed = scrubbed.replace(pattern, SCRUBBED);
   scrubbed = scrubbed.replace(AUTHORIZATION_PATTERN, `$1${SCRUBBED}`);
+  // indexOf precheck keeps the bounded-but-still-scanning pattern off text
+  // that cannot contain a scheme (multi-hundred-KB command output).
+  if (scrubbed.includes("://")) scrubbed = scrubbed.replace(URL_USERINFO_PATTERN, `$1${SCRUBBED}@`);
   scrubbed = scrubbed.replace(PEM_PATTERN, SCRUBBED);
   if (!mayContainAssignment(scrubbed)) return scrubbed;
   scrubbed = scrubbed.replace(
