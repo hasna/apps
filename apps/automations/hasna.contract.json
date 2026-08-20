@@ -4,7 +4,7 @@
   "name": "automations",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "0.12.0",
   "description": "Deterministic automation control plane and daemon for Hasna open-source apps. It owns local automation specs, trigger materialization, deterministic run/action queue state, replay requests, daemon leases, and signed webhook materialization.",
   "bins": [
     "automations",
