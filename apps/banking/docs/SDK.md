@@ -80,10 +80,13 @@ and policy snapshot.
 ## Stores
 
 `BankingCoreStore` is the asynchronous storage contract. `createSqliteDevStore`
-implements it with `bun:sqlite`, uses `:memory:` by default, and is explicitly
-`mode: "dev"`. A supplied file path is caller-owned. The store supports
-idempotency reservations, intents, approvals, audit events, reconciliation,
-and outbox transitions, plus a development-only `reset()`.
+implements it with `bun:sqlite`, defaults to a file-backed database at
+`~/.hasna/banking/banking.db` (the canonical package data root; `HASNA_BANKING_HOME`
+overrides the root), and is explicitly `mode: "dev"`. An explicit `path` or
+`":memory:"` wins over the default, and a caller-supplied path is
+caller-owned. The store supports idempotency reservations, intents,
+approvals, audit events, reconciliation, and outbox transitions, plus a
+development-only `reset()`.
 
 Production implementations should follow the [Postgres reference
 schema](schema/postgres.sql) and perform reservation, intent persistence,

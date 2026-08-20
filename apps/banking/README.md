@@ -56,10 +56,12 @@ Runtime and source-development commands require Bun 1.3 or newer.
 
 ## State and paths
 
-The package currently owns no persistent user-level state, and installation
-does not create or modify a home directory. `~/.hasna/banking` is reserved as
-the only package-global root if state is added later. The SQLite development
-store remains in-memory unless its caller supplies an explicit path.
+The SQLite development store defaults to a file-backed database at
+`~/.hasna/banking/banking.db` beneath the package-owned canonical data root
+(created on first use with mode `0700`). `HASNA_BANKING_HOME` overrides the
+root, and an explicit `path` passed to `createSqliteDevStore` wins over both;
+pass `":memory:"` for an in-memory store. The CLI, MCP entrypoint, and SDK do
+not initialize the store unless a command or caller creates it.
 
 Legacy global dotdirs are not read, and no package-owned project-local dotdir
 is supported. See [State layout](docs/STATE_LAYOUT.md) for the audited path

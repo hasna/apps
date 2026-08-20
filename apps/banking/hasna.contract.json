@@ -55,7 +55,7 @@
       "waivedStorageEngines": [
         {
           "engine": "postgresql",
-          "reason": "The bundled SQLite adapter is a development fixture that defaults to an in-memory database; hosts supply production storage, PostgreSQL included, through the BankingCoreStore interface in src/core/store.ts.",
+          "reason": "The bundled SQLite adapter is a development fixture that defaults to a file-backed database at the canonical package data root ~/.hasna/banking/banking.db (HASNA_BANKING_HOME overrides the root); hosts supply production storage, PostgreSQL included, through the BankingCoreStore interface in src/core/store.ts.",
           "reviewedBy": "platform-storage",
           "expiresAt": "2027-01-01T00:00:00.000Z"
         }
