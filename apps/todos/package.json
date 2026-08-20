@@ -120,7 +120,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/contracts": "0.5.2",
-    "@hasna/events": "^0.1.16",
+    "@hasna/events": "^0.1.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
