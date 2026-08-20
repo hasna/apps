@@ -4,7 +4,7 @@
 // WHAT HAPPENED (measured, 2026-07-27): this repo's own tests wrote fixtures into
 // the hosted vault at secrets.hasna.xyz. `getStore()` reads the client-flip env
 // from the ambient process environment, and on a fleet machine that environment
-// carries HASNA_SECRETS_STORAGE_MODE + HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY.
+// carries HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY.
 // Tests set OPEN_SECRETS_DB (which only steers LocalStore) and were therefore
 // trusted, by convention alone, to stay local. Any test that reached src/env.ts
 // or src/aws.ts — both of which call getStore() internally — wrote to production.
@@ -38,7 +38,7 @@ const rootDir = join(import.meta.dir, "..");
 /** Every env key that can steer the secrets client at a hosted vault. */
 const SELECTOR_KEYS = (() => {
   const keys = clientTransportEnvKeys("secrets");
-  return [...keys.modeKeys, ...keys.apiUrlKeys, ...keys.apiKeyKeys];
+  return [...keys.apiUrlKeys, ...keys.apiKeyKeys];
 })();
 
 /** Snapshot + restore the selector keys so one test cannot leak into the next. */
@@ -82,7 +82,6 @@ describe("test-vault isolation — hosted writes", () => {
     // The ambient environment is the attacker here: set the client-flip vars on
     // process.env exactly the way a fleet machine sets them, then ask for a
     // write the way src/env.ts and src/aws.ts do (bare getStore(), no argument).
-    process.env.HASNA_SECRETS_STORAGE_MODE = "cloud";
     process.env.HASNA_SECRETS_API_URL = "https://vault.invalid";
     process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
 
@@ -102,7 +101,6 @@ describe("test-vault isolation — hosted writes", () => {
   it("refuses to resolve the ambient environment onto the hosted production vault", async () => {
     // Resolution only — no method is called on the result, so this performs no
     // I/O against the real host under any version of the code.
-    process.env.HASNA_SECRETS_STORAGE_MODE = "cloud";
     process.env.HASNA_SECRETS_API_URL = "https://secrets.hasna.xyz";
     process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
 
@@ -137,7 +135,6 @@ describe("test-vault isolation — hosted writes", () => {
       },
     });
     try {
-      process.env.HASNA_SECRETS_STORAGE_MODE = "cloud";
       process.env.HASNA_SECRETS_API_URL = `http://127.0.0.1:${server.port}`;
       process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
 

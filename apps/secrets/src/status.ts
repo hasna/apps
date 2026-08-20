@@ -17,7 +17,7 @@ export interface SecretReferenceStatus {
     version: string;
   };
   /** `local` (on-box sqlite) or `api` (cloud HTTP API). */
-  mode: "local" | "api";
+  kind: "local" | "api";
   /** Vault file path (local) or API origin (api). Never contains a key. */
   location: string;
   counts: {
@@ -57,7 +57,7 @@ export async function getSecretReferenceStatus(): Promise<SecretReferenceStatus>
     service: "secrets",
     schemaVersion: "2.0",
     package: { name: PACKAGE_NAME, version: packageVersion() },
-    mode: descriptor.mode,
+    kind: descriptor.kind,
     location: redactLocation(descriptor),
     counts,
     references: { opaqueStoreRef: opaqueRef(descriptor.location || "default") },
@@ -74,8 +74,8 @@ export async function getSecretReferenceStatus(): Promise<SecretReferenceStatus>
 
 export const getSecretsStatus = getSecretReferenceStatus;
 
-function redactLocation(descriptor: { mode: "local" | "api"; location: string }): string {
-  if (descriptor.mode === "api") return descriptor.location;
+function redactLocation(descriptor: { kind: "local" | "api"; location: string }): string {
+  if (descriptor.kind === "api") return descriptor.location;
   return redactLocalPath(descriptor.location);
 }
 

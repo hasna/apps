@@ -12,8 +12,6 @@ RUN bun run build
 FROM oven/bun:1.3.13-alpine AS runtime
 ENV NODE_ENV=production \
     HASNA_APP_NAME=secrets \
-    HASNA_APP_MODE=self_hosted \
-    HASNA_SECRETS_STORAGE_MODE=cloud \
     PORT=8080 \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem

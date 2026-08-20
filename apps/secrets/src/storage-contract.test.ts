@@ -13,14 +13,14 @@ describe("secrets storage surface contract", () => {
   it("resolves LocalStore without api env and ApiStore with url+key", () => {
     const local = getStore({} as NodeJS.ProcessEnv);
     expect(local).toBeInstanceOf(LocalStore);
-    expect(local.mode).toBe("local");
+    expect(local.kind).toBe("local");
 
     const api = getStore({
       HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
       HASNA_SECRETS_API_KEY: "hasna_secrets_test_key",
     } as unknown as NodeJS.ProcessEnv);
     expect(api).toBeInstanceOf(ApiStore);
-    expect(api.mode).toBe("api");
+    expect(api.kind).toBe("api");
   });
 
   it("does not embed the api key in the ApiStore descriptor", () => {
@@ -29,7 +29,7 @@ describe("secrets storage surface contract", () => {
       HASNA_SECRETS_API_KEY: "hasna_secrets_super_secret_value",
     } as unknown as NodeJS.ProcessEnv);
     const descriptor = api.describe();
-    expect(descriptor.mode).toBe("api");
+    expect(descriptor.kind).toBe("api");
     expect(JSON.stringify(descriptor)).not.toContain("hasna_secrets_super_secret_value");
   });
 

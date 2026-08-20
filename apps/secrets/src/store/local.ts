@@ -273,7 +273,7 @@ function hostSearchTerms(host: string): string[] {
 }
 
 export class LocalStore implements Store {
-  readonly mode = "local" as const;
+  readonly kind = "local" as const;
 
   private db(): Database {
     return getDb();
@@ -782,7 +782,7 @@ export class LocalStore implements Store {
 
   describe(): StoreDescriptor {
     const path = String((this.db() as { filename?: string }).filename ?? "");
-    return { mode: "local", location: path };
+    return { kind: "local", location: path };
   }
 
   async encryptVault(): Promise<EncryptVaultResult> {

@@ -1,22 +1,23 @@
 /**
- * secrets-serve — the deployed HTTP API (PURE REMOTE, Amendment A1).
+ * secrets-serve — the deployed HTTP API.
  *
  * Surfaces:
- *   GET /health   -> { status, version, mode }             (no auth)
- *   GET /ready    -> { status, version, mode, pendingMigrations }  (no auth)
- *   GET /version  -> { status, version, mode }             (no auth)
- *   GET /openapi.json                                       (no auth)
+ *   GET /health   -> { status, version }             (no auth)
+ *   GET /ready    -> { status, version, pendingMigrations }  (no auth)
+ *   GET /version  -> { status, version }             (no auth)
+ *   GET /openapi.json                                (no auth)
  *   /v1/*         -> strict API-key auth (@hasna/contracts) + scope checks
  *
  * Auth is stateless HMAC verification (no DB round-trip to prove authenticity)
  * plus a per-request revocation check against the api_keys table. Every secret
- * value is encrypted at rest (cloud-crypto). Reads/writes hit cloud Postgres
- * directly; there is no cache or local mirror.
+ * value is encrypted at rest server-side. Reads/writes hit PostgreSQL directly
+ * (HASNA_SECRETS_DATABASE_URL present -> PostgreSQL, else SQLite); there is no
+ * cache or local mirror.
  */
 
 import { ApiKeyStore, verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import {
-  createCloudPoolFromEnv,
+  createServerPoolFromEnv,
   checkHealth,
   type PoolQueryClient,
 } from "../generated/storage-kit/index.js";
@@ -89,10 +90,10 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       // ---- unauthenticated probes ----
       if (path === "/health" && method === "GET") {
         const health = await checkHealth(client);
-        return json({ status: health.ok ? "ok" : "degraded", version: VERSION, mode: "cloud", latencyMs: health.latencyMs }, health.ok ? 200 : 503);
+        return json({ status: health.ok ? "ok" : "degraded", version: VERSION, latencyMs: health.latencyMs }, health.ok ? 200 : 503);
       }
       if (path === "/version" && method === "GET") {
-        return json({ status: "ok", version: VERSION, mode: "cloud" });
+        return json({ status: "ok", version: VERSION });
       }
       if (path === "/ready" && method === "GET") {
         // The one-shot secrets-prod-migrate task owns schema changes and its
@@ -100,7 +101,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         // schema_migrations read access just to pass its liveness gate.
         const ready = await checkHealth(client);
         return json(
-          { status: ready.ok ? "ok" : "not_ready", version: VERSION, mode: "cloud", pendingMigrations: [] },
+          { status: ready.ok ? "ok" : "not_ready", version: VERSION, pendingMigrations: [] },
           ready.ok ? 200 : 503,
         );
       }
@@ -361,7 +362,7 @@ export async function startCloudServer(): Promise<void> {
   const signingSecret = resolveSigningSecret();
   const port = resolvePort();
 
-  const { client } = createCloudPoolFromEnv(APP_NAME, { applicationName: "secrets-serve" });
+  const { client } = createServerPoolFromEnv(APP_NAME, { applicationName: "secrets-serve" });
   const store = new CloudSecretsStore(client);
   // Idempotent version baseline: every existing value becomes version 1
   // (change_kind=migration) exactly once. Runs at boot before serving; a second
@@ -372,7 +373,7 @@ export async function startCloudServer(): Promise<void> {
   const verifier = verifyApiKey({
     app: APP_NAME,
     signingSecret,
-    isRevoked: keyStore.isRevoked,
+    keyStatus: keyStore.keyStatus,
     audit: (e) => {
       // Structured, value-free audit line (never logs the token or secret).
       console.log(JSON.stringify({ evt: "api_auth", ...e }));
@@ -391,6 +392,6 @@ export async function startCloudServer(): Promise<void> {
     },
   });
 
-  console.log(`secrets-serve listening on 0.0.0.0:${port} (mode=cloud, version=${VERSION})`);
+  console.log(`secrets-serve listening on 0.0.0.0:${port} (version=${VERSION})`);
   await new Promise<never>(() => {});
 }

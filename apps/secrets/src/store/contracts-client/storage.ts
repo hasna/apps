@@ -1,7 +1,7 @@
 // HTTP storage client for the Hasna Service Contract v1.
 //
-// This is the piece that makes `mode=self_hosted` real for a client. It sits on
-// top of `createHasnaHttpTransport` and implements the generic resource CRUD
+// This is the piece that makes the HOSTED client real. It sits on top of
+// `createHasnaHttpTransport` and implements the generic resource CRUD
 // vocabulary every Hasna serve app exposes under `/v1`:
 //
 //   list   -> GET    /v1/<resource>            -> { items, total, ... }
@@ -10,9 +10,9 @@
 //   update -> PATCH  /v1/<resource>/<id>       -> <entity>   (PUT via method opt)
 //   delete -> DELETE /v1/<resource>/<id>       -> void       (204/404 => ok)
 //
-// An app's storage resolver selects this client when the client-flip contract
-// resolves to `cloud-http` (mode=cloud/self_hosted AND API_URL+API_KEY set), and
-// falls through to the local store otherwise. See `resolveClientTransport` /
+// An app's storage resolver selects this client when the client env contract
+// resolves to `hosted-http` (API_URL AND API_KEY both set), and falls through
+// to the local store otherwise. See `resolveClientTransport` /
 // `createClientTransport` in ./transport.ts.
 //
 // Guarantees carried up from the transport: JSON in/out, per-request timeout,
@@ -23,7 +23,7 @@
 // SAFETY: never logs, returns, or embeds the API key. The key lives only inside
 // the transport it wraps.
 
-import type { Env } from "./mode.js";
+import type { Env } from "./transport.js";
 import {
   createClientTransport,
   HasnaHttpError,
@@ -207,15 +207,15 @@ export function createHasnaStorageClient(name: string, transport: HasnaHttpTrans
 /** Result of {@link resolveStorageClient}. */
 export type ResolveStorageClientResult =
   | { transport: "local"; client: null }
-  | { transport: "cloud-http"; client: HasnaStorageClient };
+  | { transport: "hosted-http"; client: HasnaStorageClient };
 
 /**
- * The one call an app's storage resolver makes. Reads the client-flip env for
- * `name`; when it resolves to `cloud-http` (mode=cloud/self_hosted + API_URL +
- * API_KEY), returns a ready {@link HasnaStorageClient}. Otherwise returns
+ * The one call an app's storage resolver makes. Reads the client env contract
+ * for `name`; when it resolves to `hosted-http` (API_URL + API_KEY both set),
+ * returns a ready {@link HasnaStorageClient}. Otherwise returns
  * `{ transport: 'local', client: null }` so the app uses its local store.
- * Throws if cloud was requested but is misconfigured (so callers never silently
- * read the wrong dataset).
+ * Throws if the hosted config is partial (so callers never silently read the
+ * wrong dataset).
  */
 export function resolveStorageClient(
   name: string,
@@ -223,8 +223,8 @@ export function resolveStorageClient(
   overrides?: Parameters<typeof createClientTransport>[2],
 ): ResolveStorageClientResult {
   const wired = createClientTransport(name, env, overrides);
-  if (wired.transport === "cloud-http") {
-    return { transport: "cloud-http", client: createHasnaStorageClient(name, wired.client) };
+  if (wired.transport === "hosted-http") {
+    return { transport: "hosted-http", client: createHasnaStorageClient(name, wired.client) };
   }
   return { transport: "local", client: null };
 }

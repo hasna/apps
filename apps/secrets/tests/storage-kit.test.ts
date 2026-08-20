@@ -3,13 +3,12 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  DEPRECATED_STORAGE_MODE_ALIASES,
-  normalizeStorageMode,
   envToken,
-  storageEnvKeys,
-  resolveStorageMode,
+  serverDataBackendEnvKeys,
+  assertNoLegacyStorageMode,
+  resolveServerDataBackend,
   resolveDatabaseUrl,
-} from "../src/generated/storage-kit/mode.js";
+} from "../src/generated/storage-kit/backend.js";
 import {
   sslModeFromConnectionString,
   resolveTlsConfig,
@@ -27,7 +26,7 @@ import {
   MigrationLedger,
 } from "../src/generated/storage-kit/migrations.js";
 import { checkHealth, checkReady } from "../src/generated/storage-kit/health.js";
-import { createCloudPoolFromEnv, createPgPool } from "../src/generated/storage-kit/pool.js";
+import { createServerPoolFromEnv, createPgPool } from "../src/generated/storage-kit/pool.js";
 
 const tempFiles: string[] = [];
 
@@ -35,53 +34,42 @@ afterEach(() => {
   for (const file of tempFiles.splice(0)) rmSync(file, { force: true });
 });
 
-describe("generated storage mode contract", () => {
-  it("normalizes canonical modes, deprecated aliases, and invalid values", () => {
-    expect(normalizeStorageMode(" LOCAL ")).toEqual({ mode: "local", deprecatedAlias: null });
-    expect(normalizeStorageMode("cloud")).toEqual({ mode: "cloud", deprecatedAlias: null });
-    for (const alias of DEPRECATED_STORAGE_MODE_ALIASES) {
-      expect(normalizeStorageMode(alias.replace("_", "-"))).toEqual({
-        mode: "cloud",
-        deprecatedAlias: alias,
-      });
-    }
-    expect(() => normalizeStorageMode("offline")).toThrow("Unknown storage mode");
-  });
-
-  it("builds env keys and resolves canonical, alias, default, and warning paths", () => {
+describe("generated server data-backend contract", () => {
+  it("resolves sqlite by default and postgresql when a DATABASE_URL is set", () => {
     expect(envToken("my-app")).toBe("MY_APP");
-    expect(storageEnvKeys("my-app")).toEqual({
-      modeKeys: ["HASNA_MY_APP_STORAGE_MODE", "MY_APP_STORAGE_MODE"],
+    expect(serverDataBackendEnvKeys("my-app")).toEqual({
       databaseUrlKeys: ["HASNA_MY_APP_DATABASE_URL", "MY_APP_DATABASE_URL"],
     });
 
-    expect(resolveStorageMode("my-app", {})).toEqual({
-      mode: "local",
+    expect(resolveServerDataBackend("my-app", {})).toEqual({
+      backend: "sqlite",
       source: "default",
-      deprecatedAlias: null,
       databaseUrlPresent: false,
       databaseUrlSource: null,
-      warning: null,
     });
 
-    const canonical = resolveStorageMode("my-app", {
-      HASNA_MY_APP_STORAGE_MODE: "cloud",
+    const withUrl = resolveServerDataBackend("my-app", {
       HASNA_MY_APP_DATABASE_URL: " postgres://canonical ",
     });
-    expect(canonical.mode).toBe("cloud");
-    expect(canonical.databaseUrlSource).toBe("HASNA_MY_APP_DATABASE_URL");
-    expect(canonical.warning).toBeNull();
-    expect(resolveDatabaseUrl("my-app", { HASNA_MY_APP_DATABASE_URL: " postgres://canonical " })).toBe(
-      "postgres://canonical",
-    );
-    expect(resolveDatabaseUrl("my-app", {})).toBeNull();
+    expect(withUrl.backend).toBe("postgresql");
+    expect(withUrl.databaseUrlSource).toBe("HASNA_MY_APP_DATABASE_URL");
 
-    const alias = resolveStorageMode("my-app", { MY_APP_STORAGE_MODE: "self-hosted" });
-    expect(alias.mode).toBe("cloud");
-    expect(alias.deprecatedAlias).toBe("self_hosted");
-    expect(alias.warning).toContain("Deprecated storage mode");
-    expect(alias.warning).toContain("needs HASNA_MY_APP_DATABASE_URL");
-    expect(alias.warning).toContain("Using alias env");
+    expect(
+      resolveDatabaseUrl("my-app", { MY_APP_DATABASE_URL: " postgres://canonical " }),
+    ).toBe("postgres://canonical");
+    expect(resolveDatabaseUrl("my-app", {})).toBeNull();
+  });
+
+  it("rejects legacy storage-mode variables instead of interpreting them", () => {
+    expect(() =>
+      assertNoLegacyStorageMode("my-app", { HASNA_MY_APP_STORAGE_MODE: "cloud" }),
+    ).toThrow(/HASNA_MY_APP_STORAGE_MODE was removed/);
+    expect(() =>
+      resolveServerDataBackend("my-app", { MY_APP_STORAGE_MODE: "self_hosted" }),
+    ).toThrow(/was removed/);
+    expect(resolveServerDataBackend("my-app", { HASNA_MY_APP_DATABASE_URL: "postgres://x/db" }).backend).toBe(
+      "postgresql",
+    );
   });
 });
 
@@ -98,26 +86,31 @@ describe("generated TLS contract", () => {
   });
 
   it("resolves disabled, relaxed, and verified TLS with every CA source", () => {
-    expect(resolveTlsConfig("postgres://x/db")).toBeUndefined();
-    expect(resolveTlsConfig("postgres://x/db?sslmode=prefer")).toBeUndefined();
-    // `env: {}` is load-bearing. loadCaBundle() falls back to process.env, so on a
-    // host that sets NODE_EXTRA_CA_CERTS or PGSSLROOTCERT this call picks up a real
-    // CA bundle and returns { rejectUnauthorized: false, ca }. Without the explicit
-    // env the assertion asserts a property of the machine rather than of the code —
-    // it passes where those are unset and fails where they are set. Every other
-    // assertion in this test already pins its CA source; this one was the omission.
-    expect(resolveTlsConfig("postgres://x/db?sslmode=require", { env: {} })).toEqual({
-      rejectUnauthorized: false,
+    // `env: {}` (or an env with the CA vars stripped) is load-bearing on every
+    // TLS-selecting row: loadCaBundle() falls back to process.env, so on a host
+    // that sets NODE_EXTRA_CA_CERTS or PGSSLROOTCERT the resolution picks up a
+    // real CA bundle and the assertion asserts a property of the machine rather
+    // than of the code.
+    const noCaEnv = {};
+    expect(resolveTlsConfig("postgres://x/db", { env: noCaEnv })).toBeUndefined();
+    expect(resolveTlsConfig("postgres://x/db?sslmode=disable", { env: noCaEnv })).toBe(false);
+    expect(resolveTlsConfig("postgres://x/db?sslmode=require", { env: noCaEnv })).toEqual({
+      rejectUnauthorized: true,
+    });
+    // `prefer` matches `require`: pg has always treated it as an alias for
+    // verify-full, so the resolved config says so.
+    expect(resolveTlsConfig("postgres://x/db?sslmode=prefer", { env: noCaEnv })).toEqual({
+      rejectUnauthorized: true,
     });
     expect(resolveTlsConfig("postgres://x/db?sslmode=require", { ca: " INLINE " })).toEqual({
-      rejectUnauthorized: false,
+      rejectUnauthorized: true,
       ca: " INLINE ",
     });
     expect(resolveTlsConfig("postgres://x/db?sslmode=verify-full", { ca: "cert" })).toEqual({
       rejectUnauthorized: true,
       ca: "cert",
     });
-    expect(() => resolveTlsConfig("postgres://x/db?sslmode=verify-ca", { env: {} })).toThrow(
+    expect(() => resolveTlsConfig("postgres://x/db?sslmode=verify-ca", { env: noCaEnv })).toThrow(
       "requires a CA bundle",
     );
 
@@ -275,8 +268,11 @@ describe("generated migration and health helpers", () => {
 
 describe("generated Postgres pool factory", () => {
   it("constructs configured pools without opening a connection", async () => {
+    // `env: {}` strips ambient PGSSLROOTCERT / NODE_EXTRA_CA_CERTS so the
+    // assertion pins the kit, not the host's shell profile.
     const pool = createPgPool({
       connectionString: "postgres://user:pass@127.0.0.1/db?sslmode=require",
+      env: {},
       max: 3,
       idleTimeoutMillis: 10,
       connectionTimeoutMillis: 20,
@@ -287,24 +283,23 @@ describe("generated Postgres pool factory", () => {
       idleTimeoutMillis: 10,
       connectionTimeoutMillis: 20,
       application_name: "tests",
-      ssl: { rejectUnauthorized: false },
+      ssl: { rejectUnauthorized: true },
     });
     await pool.end();
 
-    const plain = createPgPool({ connectionString: "postgres://user:pass@127.0.0.1/db" });
+    const plain = createPgPool({ connectionString: "postgres://user:pass@127.0.0.1/db", env: {} });
     expect((plain as any).options.ssl).toBeUndefined();
     await plain.end();
   });
 
-  it("requires cloud mode and a URL, then returns a closable query client", async () => {
-    expect(() => createCloudPoolFromEnv("demo", { env: {} })).toThrow("requires demo storage mode 'cloud'");
-    expect(() => createCloudPoolFromEnv("demo", { env: { HASNA_DEMO_STORAGE_MODE: "cloud" } })).toThrow(
-      "needs a database URL",
-    );
+  it("requires a DATABASE_URL and rejects legacy storage-mode variables", async () => {
+    expect(() => createServerPoolFromEnv("demo", { env: {} })).toThrow("needs a database URL");
+    expect(() =>
+      createServerPoolFromEnv("demo", { env: { HASNA_DEMO_STORAGE_MODE: "cloud" } }),
+    ).toThrow(/was removed/);
 
-    const result = createCloudPoolFromEnv("demo", {
+    const result = createServerPoolFromEnv("demo", {
       env: {
-        HASNA_DEMO_STORAGE_MODE: "cloud",
         DEMO_DATABASE_URL: "postgres://user:pass@127.0.0.1/db",
       },
       max: 2,

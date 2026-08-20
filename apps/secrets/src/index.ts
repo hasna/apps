@@ -444,7 +444,7 @@ function store(): Store {
   try {
     _store = getStore();
   } catch (e: any) {
-    // Misconfigured cloud mode (e.g. mode=cloud but no API key). Fail loud with a
+    // Partial hosted config (e.g. API_URL set but no API key). Fail loud with a
     // clean message instead of silently reading the wrong dataset.
     console.error(e?.message ?? String(e));
     process.exit(1);
@@ -1031,7 +1031,7 @@ switch (command) {
       console.log(JSON.stringify(status, null, 2));
     } else {
       console.log(`secrets ${status.package.version}`);
-      console.log(`mode: ${status.mode}`);
+      console.log(`kind: ${status.kind}`);
       console.log(`location: ${status.location}`);
       console.log(`secrets: ${status.counts.secrets}`);
       console.log(`users: ${status.counts.users}`);
@@ -1431,8 +1431,8 @@ switch (command) {
     // The `key` family (init, kms setup, status) manages the LOCAL encryption
     // master key. In api mode the server owns encryption at rest, so these are
     // meaningless and must not create a local key file. Guard like encrypt-vault.
-    if (store().mode === "api") {
-      console.error("`secrets key` is a local-vault operation; in api mode the server owns encryption at rest.");
+    if (store().kind === "api") {
+      console.error("`secrets key` is a local-vault operation; with the hosted store the server owns encryption at rest.");
       process.exit(1);
     }
     const [sub] = positional;

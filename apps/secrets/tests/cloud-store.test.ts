@@ -94,20 +94,17 @@ describe("cloud environment bridge", () => {
     bootstrapCloudEnv(env);
     expect(env).toMatchObject({
       HASNA_SECRETS_DATABASE_URL: "postgres://ecs",
-      HASNA_SECRETS_STORAGE_MODE: "cloud",
       HASNA_SECRETS_API_SIGNING_KEY: "ecs-signing",
     });
 
     const configured = {
       DATABASE_URL: "postgres://ignored",
       HASNA_SECRETS_DATABASE_URL: "postgres://canonical",
-      SECRETS_STORAGE_MODE: "local",
       HASNA_SECRETS_API_SIGNING_KEY: "canonical-signing",
       API_KEY_SIGNING_SECRET: "ignored",
     } as NodeJS.ProcessEnv;
     bootstrapCloudEnv(configured);
     expect(configured.HASNA_SECRETS_DATABASE_URL).toBe("postgres://canonical");
-    expect(configured.HASNA_SECRETS_STORAGE_MODE).toBeUndefined();
     expect(configured.HASNA_SECRETS_API_SIGNING_KEY).toBe("canonical-signing");
   });
 

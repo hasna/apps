@@ -4,7 +4,7 @@
 //
 // It does one job: take the hosted-vault steering wheel away from the ambient
 // environment. On a Hasna fleet machine the shell profile exports
-// HASNA_SECRETS_STORAGE_MODE / _API_URL / _API_KEY, which is what routed this repo's
+// HASNA_SECRETS_API_URL / HASNA_SECRETS_API_KEY, which is what routed this repo's
 // own fixtures into the production vault four times (HC-00304).
 //
 // This is the CONVENIENCE half of the fix, not the load-bearing half: with the
@@ -23,7 +23,7 @@ const APP_NAME = "secrets";
 // the client-flip contract later is scrubbed automatically instead of needing this
 // file to be remembered and edited.
 const keys = clientTransportEnvKeys(APP_NAME);
-const selectorKeys = [...keys.modeKeys, ...keys.apiUrlKeys, ...keys.apiKeyKeys];
+const selectorKeys = [...keys.apiUrlKeys, ...keys.apiKeyKeys];
 
 const removed: string[] = [];
 for (const key of selectorKeys) {
