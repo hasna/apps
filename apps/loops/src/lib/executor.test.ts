@@ -277,6 +277,202 @@ describe("executeLoop", () => {
     });
   });
 
+  // Regression: row e84f3956-1083-4b4a-bb73-59f901b054b7 (2026-07-30, measured
+  // runner-origin). The runner's own process.env (systemd/launchd launcher)
+  // lacks CLAUDE_CONFIG_DIR, and neither ~/.hasna/cloud/*.env nor an explicit
+  // spec.account supplies it, so a spawned headless claude resolved to the
+  // DEFAULT account profile — a silent identity switch that only surfaces once
+  // that account is spent (measured: 429 on the default while the configured
+  // profile sat idle; exit 0, zero cost, ~3s — indistinguishable from a config
+  // bug). The runner must propagate the tool's config-selecting var from the
+  // accounts CLI's ACTIVE profile when the value is otherwise absent.
+  describe("active claude profile config-dir propagation into spawned targets", () => {
+    function writeFakeAccounts(binDir: string, configDir: string, exitCode = 0): string {
+      const accounts = join(binDir, "accounts");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        accounts,
+        [
+          "#!/usr/bin/env bash",
+          'if [[ "$1" != "env" || "$2" != "--tool" || "$3" != "claude" ]]; then',
+          '  echo "unexpected accounts args: $*" >&2',
+          "  exit 2",
+          "fi",
+          `printf 'export CLAUDE_CONFIG_DIR="%s"\\n' "${configDir}"`,
+          `exit ${exitCode}`,
+          "",
+        ].join("\n"),
+      );
+      chmodSync(accounts, 0o755);
+      return accounts;
+    }
+
+    function writeFakeClaude(binDir: string): string {
+      const claude = join(binDir, "claude");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        claude,
+        ["#!/usr/bin/env bash", 'printf "%s" "${CLAUDE_CONFIG_DIR:-UNSET}"', ""].join("\n"),
+      );
+      chmodSync(claude, 0o755);
+      return claude;
+    }
+
+    function hermeticEnv(root: string, binDir: string): NodeJS.ProcessEnv {
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        HOME: root,
+        PATH: `${binDir}:/usr/bin:/bin`,
+      };
+      delete env.CLAUDE_CONFIG_DIR;
+      return env;
+    }
+
+    test("agent target carries CLAUDE_CONFIG_DIR the runner process never had", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-active-claude-"));
+      const binDir = join(root, "bin");
+      const profileDir = join(root, "claude-profile");
+      mkdirSync(profileDir, { recursive: true });
+      writeFakeAccounts(binDir, profileDir);
+      writeFakeClaude(binDir);
+      try {
+        const result = await executeTarget(
+          { type: "agent", provider: "claude", prompt: "hi", configIsolation: "safe" },
+          {},
+          { env: hermeticEnv(root, binDir) },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe(profileDir);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("command target whose command starts with claude carries CLAUDE_CONFIG_DIR", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-active-claude-cmd-"));
+      const binDir = join(root, "bin");
+      const profileDir = join(root, "claude-profile");
+      mkdirSync(profileDir, { recursive: true });
+      writeFakeAccounts(binDir, profileDir);
+      writeFakeClaude(binDir);
+      try {
+        const result = await executeTarget(
+          { type: "command", command: "claude -p hi", shell: true, timeoutMs: 5_000 },
+          {},
+          { env: hermeticEnv(root, binDir) },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe(profileDir);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("does not clobber a config dir the runner already has", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-active-claude-keep-"));
+      const binDir = join(root, "bin");
+      const profileDir = join(root, "claude-profile");
+      const explicitDir = join(root, "explicit-profile");
+      mkdirSync(profileDir, { recursive: true });
+      mkdirSync(explicitDir, { recursive: true });
+      writeFakeAccounts(binDir, profileDir);
+      writeFakeClaude(binDir);
+      try {
+        const result = await executeTarget(
+          { type: "agent", provider: "claude", prompt: "hi", configIsolation: "safe" },
+          {},
+          { env: { ...hermeticEnv(root, binDir), CLAUDE_CONFIG_DIR: explicitDir } },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe(explicitDir);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("does not clobber an explicit target account env", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-active-claude-account-"));
+      const binDir = join(root, "bin");
+      const profileDir = join(root, "claude-profile");
+      const workDir = join(root, "work-profile");
+      mkdirSync(profileDir, { recursive: true });
+      mkdirSync(workDir, { recursive: true });
+      const accounts = join(binDir, "accounts");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        accounts,
+        [
+          "#!/usr/bin/env bash",
+          'if [[ "$1" == "env" && "$2" == "work" ]]; then',
+          `  printf 'export CLAUDE_CONFIG_DIR="%s"\\n' "${workDir}"`,
+          "  exit 0",
+          "fi",
+          'if [[ "$1" == "env" && "$2" == "--tool" && "$3" == "claude" ]]; then',
+          `  printf 'export CLAUDE_CONFIG_DIR="%s"\\n' "${profileDir}"`,
+          "  exit 0",
+          "fi",
+          '  echo "unexpected accounts args: $*" >&2',
+          "  exit 2",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(accounts, 0o755);
+      writeFakeClaude(binDir);
+      try {
+        const result = await executeTarget(
+          {
+            type: "agent",
+            provider: "claude",
+            prompt: "hi",
+            configIsolation: "safe",
+            account: { profile: "work", tool: "claude" },
+          },
+          {},
+          { env: hermeticEnv(root, binDir) },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe(workDir);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("degrades gracefully when the accounts CLI is unavailable", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-active-claude-noacc-"));
+      const binDir = join(root, "bin");
+      writeFakeClaude(binDir);
+      try {
+        const result = await executeTarget(
+          { type: "command", command: "claude -p hi", shell: true, timeoutMs: 5_000 },
+          {},
+          { env: hermeticEnv(root, binDir) },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe("UNSET");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("degrades gracefully when accounts env fails", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-active-claude-fail-"));
+      const binDir = join(root, "bin");
+      writeFakeAccounts(binDir, join(root, "unused-profile"), 3);
+      writeFakeClaude(binDir);
+      try {
+        const result = await executeTarget(
+          { type: "command", command: "claude -p hi", shell: true, timeoutMs: 5_000 },
+          {},
+          { env: hermeticEnv(root, binDir) },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe("UNSET");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("normalizes SHLVL for bash login command targets with guarded exits", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-login-shell-env-"));

@@ -5,7 +5,7 @@ import { spawnCapture } from "./agent-adapter.js";
 
 const EXPORT_RE = /^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 
-const ACCOUNTS_ENV_TIMEOUT_MS = 30_000;
+export const ACCOUNTS_ENV_TIMEOUT_MS = 30_000;
 
 export function accountToolForProvider(provider: AgentProvider): string {
   switch (provider) {
@@ -51,7 +51,7 @@ function primaryAccountDir(output: string): string | undefined {
   return undefined;
 }
 
-function accountDirEnvVar(tool: string): string | undefined {
+export function accountDirEnvVar(tool: string): string | undefined {
   switch (tool) {
     case "claude":
       return "CLAUDE_CONFIG_DIR";
