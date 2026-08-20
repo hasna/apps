@@ -6,19 +6,19 @@
 
 ARG BUN_IMAGE=oven/bun:1.3.13-alpine@sha256:588e1fb0d80ee1c09cc6e2d7d1ff8e3502191fba9cad12a4a77cb93d4d7f84f9
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS deps
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 # --ignore-scripts: the package `prepare` script builds from src/ (absent here);
 # the build stage runs `bun run build` explicitly after src/ is copied.
 RUN bun install --frozen-lockfile --ignore-scripts
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS prod-deps
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS prod-deps
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile --ignore-scripts
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS build
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS build
 WORKDIR /app
 COPY package.json bun.lock tsconfig.json tsconfig.build.json ./
 COPY --from=deps /app/node_modules ./node_modules
@@ -27,7 +27,7 @@ COPY scripts ./scripts
 COPY openapi ./openapi
 RUN bun run build
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS runner
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS runner
 WORKDIR /app
 RUN apk upgrade --no-cache libcrypto3 libssl3 openssl \
     && apk add --no-cache postgresql16-client
