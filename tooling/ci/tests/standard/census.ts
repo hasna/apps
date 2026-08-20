@@ -386,11 +386,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
  * carries the measured failure cause and the filed remediation task. */
 export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: string }> = [
   {
-    member: "accounts",
-    cause: "manifest_valid: pre-backend-schema-era manifest after #122 (deployment-mode vocabulary removal) validated at pinned 0.5.2 — storage.mode Required; storage Unrecognized key(s) in object: 'backend','engines','pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'.",
-    task: "todos f6869bad-0aa9-466a-824b-b4a76a0b9b7b (contracts task — accounts)",
-  },
-  {
     member: "calendar",
     cause: "manifest_valid at pinned 0.4.2 (mode-era schema vs mixed-era manifest): storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; <root> Unrecognized key(s) in object: 'hosting', 'serviceSurfaces'. The earlier mode_enum_compliance env-var cause no longer fires.",
     task: "todos a967c9bd (contracts task — calendar)",
@@ -505,7 +500,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 /** kitVersion must match the member's pinned @hasna/contracts version
  * (normalized). Recorded mismatches: */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
-  { member: "accounts", kitVersion: "0.10.6", pinned: "0.5.2" },
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
   { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
