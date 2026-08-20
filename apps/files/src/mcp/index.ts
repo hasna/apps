@@ -620,24 +620,38 @@ registerTool("download_file", "Download a file from S3 to a local path", {
   return { content: [{ type: "text", text: `Downloaded to: ${outPath}` }] };
 });
 
-registerTool("upload_file", "Upload a local file to an S3 source", {
-  local_path: z.string().describe("Path to local file"),
-  source_id: z.string().describe("Target S3 source ID"),
-  s3_key: z.string().optional().describe("Custom S3 key (defaults to prefix/filename)"),
+registerTool("upload_file", "Upload a local document (cloud: server-owned ingestion as a tagged project resource; local: to an S3 source)", {
+  local_path: z.string().describe("Path to the local document to upload"),
+  source_id: z.string().optional().describe("Target S3 source ID (local mode only; the cloud service owns its upload source)"),
+  s3_key: z.string().optional().describe("Custom S3 key (local mode; defaults to prefix/filename)"),
+  project_id: z.string().optional().describe("Link the uploaded file to a project as a tagged resource"),
+  tags: z.array(z.string()).optional().describe("Tags to apply to the uploaded file"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
-}, async ({ local_path, source_id, s3_key, agent_id }) => {
-  const denied = requireLocalTransport("upload_file");
-  if (denied) return denied;
-  const source = await store().getSource(source_id);
-  if (!source) return { content: [{ type: "text", text: `Source not found: ${source_id}` }], isError: true };
-  if (source.type !== "s3") return { content: [{ type: "text", text: "upload_file only works with S3 sources" }], isError: true };
+}, async ({ local_path, source_id, s3_key, project_id, tags, agent_id }) => {
   if (!existsSync(local_path)) return { content: [{ type: "text", text: `File not found: ${local_path}` }], isError: true };
-
-  const machine = await store().currentMachine();
-  const key = await uploadToS3(source, local_path, s3_key);
-  await indexS3Source(source, machine.id);
-  if (agent_id) logActivity({ agent_id, action: "upload", source_id, metadata: { local_path, s3_key: key } });
-  return { content: [{ type: "text", text: `Uploaded to s3://${source.bucket}/${key}` }] };
+  if (source_id && !project_id && !tags?.length) {
+    // Fast path that preserves the exact previous single-read behaviour.
+    const source = await store().getSource(source_id);
+    if (!source) return { content: [{ type: "text", text: `Source not found: ${source_id}` }], isError: true };
+    if (source.type !== "s3") return { content: [{ type: "text", text: "upload_file only works with S3 sources" }], isError: true };
+    const machine = await store().currentMachine();
+    const key = await uploadToS3(source, local_path, s3_key);
+    await indexS3Source(source, machine.id);
+    if (agent_id) logActivity({ agent_id, action: "upload", source_id, metadata: { local_path, s3_key: key } });
+    return { content: [{ type: "text", text: `Uploaded to s3://${source.bucket}/${key}` }] };
+  }
+  const result = await store().uploadFile({
+    path: local_path,
+    source_id,
+    source_key: s3_key,
+    tags,
+    project_id,
+  });
+  if (agent_id) logActivity({ agent_id, action: "upload", file_id: result.file.id, metadata: { local_path, project_id, tags } });
+  const lines = [`Uploaded ${result.file.name} (${result.file.id})`];
+  if (result.file.tags?.length) lines.push(`tags: ${result.file.tags.join(", ")}`);
+  if (project_id) lines.push(`linked to project ${project_id}`);
+  return { content: [{ type: "text", text: lines.join("\n") }] };
 });
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────

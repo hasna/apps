@@ -4,6 +4,8 @@
  * ids passed by callers are resolved here so command handlers stay
  * transport-agnostic.
  */
+import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import type {
   Collection,
   DuplicateGroup,
@@ -19,6 +21,7 @@ import type {
   Tag,
   UpsertFileSearchDocumentInput,
 } from "../types/index.js";
+import { uploadToS3, indexS3Source } from "../lib/s3.js";
 import { createSource, deleteSource, getSource, listSources, updateSource } from "../db/sources.js";
 import {
   annotateFile,
@@ -103,6 +106,7 @@ import type {
   CreateProjectOptions,
   CreateSourceInput,
   FeedbackInput,
+  FileUploadResult,
   FilesStore,
   LogActivityInput,
   ProjectDetail,
@@ -110,6 +114,7 @@ import type {
   UpdateCollectionInput,
   UpdateProjectInput,
   UpdateSourceInput,
+  UploadFileInput,
 } from "./types.js";
 
 export class LocalStore implements FilesStore {
@@ -273,6 +278,31 @@ export class LocalStore implements FilesStore {
   }
   async removeFromProject(projectId: string, fileId: string): Promise<void> {
     removeFromProject(requireId(projectId, "projects"), requireId(fileId, "files"));
+  }
+  async uploadFile(input: UploadFileInput): Promise<FileUploadResult> {
+    // On-box ingestion: upload into an S3 source, re-index to register the
+    // file row, then apply tags + the project link (the hosted transport
+    // implements the same seam against the files service).
+    const sourceId = requireId(input.source_id ?? "", "sources");
+    const source = getSource(sourceId);
+    if (!source) throw new Error(`Source not found: ${sourceId}`);
+    if (source.type !== "s3") throw new Error("upload only works with S3 sources");
+    if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
+    await uploadToS3(source, input.path, input.source_key);
+    const machine = getCurrentMachine();
+    await indexS3Source(source, machine.id);
+    const key = input.source_key ?? (source.prefix ? `${source.prefix}/${basename(input.path)}` : basename(input.path));
+    const filed = getFileByPath(sourceId, key);
+    if (!filed) throw new Error("uploaded file was not indexed");
+    for (const tag of input.tags ?? []) {
+      if (tag && tag.trim()) tagFile(filed.id, tag.trim());
+    }
+    if (input.project_id && input.project_id.trim()) {
+      addToProject(requireId(input.project_id.trim(), "projects"), filed.id);
+    }
+    const file = getFile(filed.id);
+    if (!file) throw new Error("uploaded file could not be read back");
+    return { file, replayed: false };
   }
 
   // ── feedback ─────────────────────────────────────────────────────────────

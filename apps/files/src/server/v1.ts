@@ -36,6 +36,9 @@ function asAssetStatus(value: string | null | undefined): FileAssetStatus | unde
   return value && (FILE_ASSET_STATUSES as readonly string[]).includes(value) ? (value as FileAssetStatus) : undefined;
 }
 
+/** Upper bound for a single hosted document ingestion (2 GiB). */
+const MAX_INGEST_BYTES = 2 * 1024 * 1024 * 1024;
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -74,6 +77,9 @@ export interface V1HandlerOptions {
   verifier?: ApiKeyVerifier;
   signingSecret?: string;
   readObject?: RemoteObjectReader;
+  /** Server-owned object verification for the file-upload complete route.
+   *  Injected so the route is testable without live S3; defaults to a HEAD. */
+  verifyUploadedObject?: store.RemoteUploadVerifier;
 }
 
 export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
@@ -212,6 +218,60 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
               limit: Number(url.searchParams.get("limit") ?? 50),
               offset: Number(url.searchParams.get("offset") ?? 0),
             }));
+          }
+          // Hosted ingestion: stage a file record + server-owned S3 object and
+          // sign a PUT URL the client PUTs bytes to (same server-owned storage
+          // doctrine as the evidence vault, on the regular files data plane).
+          // Bug de9aeeed: this route did not exist, so a document could not be
+          // added to the service in cloud mode as a tagged project resource.
+          if (seg.length === 1 && method === "POST") {
+            const b = await body();
+            const tenantId = await store.getApiKeyTenant(client, decision.principal.kid);
+            if (!tenantId) return err("File tenant binding not found", 403);
+            const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : undefined;
+            if (!name) return err("name is required", 400);
+            if (name.length > 512) return err("name is too long (max 512 bytes)", 400);
+            const size = typeof b.size === "number" && Number.isInteger(b.size) && b.size > 0 && b.size <= MAX_INGEST_BYTES ? b.size : undefined;
+            if (!size) return err(`size must be a positive integer <= ${MAX_INGEST_BYTES}`, 400);
+            const checksum = typeof b.checksum === "string" && /^[a-f0-9]{64}$/i.test(b.checksum.trim()) ? b.checksum.trim().toLowerCase() : undefined;
+            if (b.checksum !== undefined && !checksum) return err("checksum must be a sha256 hex digest", 400);
+            const mime = typeof b.mime === "string" && b.mime.trim() ? b.mime.trim() : undefined;
+            try {
+              const created = await store.createFileUploadIntent(client, {
+                tenantId, name, size, mime, checksum,
+                checksumAlgorithm: checksum ? "sha256" : undefined,
+              });
+              return json({
+                file_id: created.file.id,
+                upload_url: created.upload_url,
+                method: created.method,
+                required_headers: created.required_headers,
+              }, 201);
+            } catch (e) {
+              return err((e as Error).message, 400);
+            }
+          }
+          // Hosted ingestion completion: verify the stored object, then apply
+          // tags + the project link so the document is a tagged project resource.
+          if (seg.length === 3 && seg[2] === "complete" && method === "POST") {
+            const tenantId = await store.getApiKeyTenant(client, decision.principal.kid);
+            if (!tenantId) return err("File tenant binding not found", 403);
+            const b = await body();
+            const tags = Array.isArray(b.tags)
+              ? b.tags.filter((value): value is string => typeof value === "string" && value.trim() !== "").map((value) => value.trim())
+              : undefined;
+            const projectId = typeof b.project_id === "string" && b.project_id.trim() ? b.project_id.trim() : undefined;
+            try {
+              const file = await store.completeFileUpload(
+                client, seg[1]!, tenantId,
+                { tags, projectId },
+                options.verifyUploadedObject ?? store.s3HeadUploadVerifier,
+              );
+              if (!file) return err("File not found", 404);
+              return json({ file });
+            } catch (e) {
+              return err((e as Error).message, 400);
+            }
           }
           // Derived-content search documents (hosted mirror of the local
           // `file_search_documents` writer; keywords take precedence over {id}).

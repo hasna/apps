@@ -169,6 +169,22 @@ async function startFakeServer(): Promise<FakeServer> {
       if (method === "GET" && f) {
         return Response.json(HOSTED_FILE);
       }
+      // Cloud ingestion (bug de9aeeed): fake hosted /v1 accepts upload intents,
+      // the byte PUT, and completion.
+      if (method === "POST" && path === "/files") {
+        return Response.json(
+          { file_id: "f_hosted_upload", upload_url: `${url.origin}/uploads/f_hosted_upload`, method: "PUT", required_headers: { "content-type": "application/octet-stream" } },
+          { status: 201 },
+        );
+      }
+      const up = path.match(/^\/uploads\/([^/]+)$/);
+      if (method === "PUT" && up) {
+        return new Response("ok", { status: 200 });
+      }
+      const comp = path.match(/^\/files\/([^/]+)\/complete$/);
+      if (method === "POST" && comp) {
+        return Response.json({ file: { ...HOSTED_FILE, id: comp[1]!, tags: ["partner-deal"] } });
+      }
       return new Response(JSON.stringify({ error: `fake server: no route ${method} ${path}` }), { status: 404 });
     },
   });
@@ -324,6 +340,28 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
       await close();
     }
   });
+
+  test("upload_file ingests a local document through the hosted transport as a tagged project resource", async () => {
+    const fixture = join(testDir!, "partner-contract.pdf");
+    writeFileSync(fixture, "contract bytes");
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "upload_file",
+        arguments: { local_path: fixture, project_id: "prj_deal1", tags: ["partner-deal"] },
+      });
+      expect(result.isError).not.toBe(true);
+      const text = callText(result);
+      expect(text).toContain("f_hosted_upload");
+      expect(text).toContain("prj_deal1");
+      expect(text).toContain("partner-deal");
+      // Cloud ingestion happens through the hosted routes, not an on-box refusal.
+      expect(fake.hits.some((h) => h.method === "POST" && h.path === "/files")).toBe(true);
+      expect(fake.hits.some((h) => h.method === "POST" && h.path === "/files/f_hosted_upload/complete")).toBe(true);
+    } finally {
+      await close();
+    }
+  });
 });
 
 // ─── Kept local-only tools: api-mode refusal with the recorded reason ─────────
@@ -335,7 +373,6 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
     { tool: "preflight_google_drive_sync", args: { source_id: "src_1" } },
     { tool: "sync_google_drive", args: {} },
     { tool: "index_source", args: {} },
-    { tool: "upload_file", args: { local_path: "/tmp/nope.txt", source_id: "src_1" } },
     { tool: "build_context_pack", args: {} },
     { tool: "search_context_pack", args: { query: "anything" } },
     { tool: "export_knowledge_manifest", args: {} },

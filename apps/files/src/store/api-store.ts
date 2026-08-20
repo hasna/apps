@@ -56,9 +56,12 @@ import type {
   ActivityQueryOptions,
   CollectionDetail,
   CreateCollectionOptions,
+  CreateFileUploadInput,
   CreateProjectOptions,
   CreateSourceInput,
   FeedbackInput,
+  FileUploadIntent,
+  FileUploadResult,
   FilesStore,
   LogActivityInput,
   ProjectDetail,
@@ -66,6 +69,7 @@ import type {
   UpdateCollectionInput,
   UpdateProjectInput,
   UpdateSourceInput,
+  UploadFileInput,
 } from "./types.js";
 
 const seg = (value: string): string => encodeURIComponent(value);
@@ -404,6 +408,45 @@ export class ApiStore implements FilesStore {
   }
   async removeFromProject(projectId: string, fileId: string): Promise<void> {
     await this.client.delete(`projects/${seg(projectId)}/files`, fileId);
+  }
+
+  // ── ingestion (cloud file records) ────────────────────────────────────────
+  /** Stage a hosted file record and sign a server-owned S3 PUT URL. */
+  async createFileUploadIntent(input: CreateFileUploadInput): Promise<FileUploadIntent> {
+    return this.http.post<FileUploadIntent>("/files", input);
+  }
+  /** Verify + finalize a staged upload, applying tags and the project link. */
+  async completeFileUpload(
+    fileId: string,
+    input: { tags?: string[]; project_id?: string } = {},
+  ): Promise<FileWithTags | null> {
+    const res = await orNull(this.http.post<{ file: FileWithTags }>(`/files/${seg(fileId)}/complete`, input));
+    return res ? res.file : null;
+  }
+  /** The seam ingestion: intent -> PUT bytes to the server-owned URL -> complete. */
+  async uploadFile(input: UploadFileInput): Promise<FileUploadResult> {
+    if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
+    const stat = statSync(input.path);
+    const name = input.name ?? basename(input.path);
+    const mime = (mimeLookup(input.path) || "application/octet-stream").toString();
+    const intent = await this.createFileUploadIntent({
+      name,
+      size: stat.size,
+      mime,
+      checksum: sha256File(input.path),
+      checksum_algorithm: "sha256",
+      tags: input.tags,
+      project_id: input.project_id,
+    });
+    const res = await fetch(intent.upload_url, {
+      method: intent.method,
+      headers: intent.required_headers,
+      body: readFileSync(input.path),
+    });
+    if (!res.ok) throw new Error(`File byte upload failed: ${res.status} ${res.statusText}`);
+    const file = await this.completeFileUpload(intent.file_id, { tags: input.tags, project_id: input.project_id });
+    if (!file) throw new Error("File upload completion returned no file");
+    return { file, replayed: false };
   }
 
   // ── feedback ─────────────────────────────────────────────────────────────

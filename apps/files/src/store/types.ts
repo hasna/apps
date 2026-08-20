@@ -117,6 +117,49 @@ export interface UpdateProjectInput {
   metadata?: Record<string, unknown>;
 }
 
+/** Input to {@link FilesStore.createFileUploadIntent} (hosted ingestion). The
+ *  server owns the destination source and object storage; a thin hosted client
+ *  never supplies a bucket. `size`/`checksum` may be left to the caller-level
+ *  convenience {@link UploadFileInput} to fill from the local file. */
+export interface CreateFileUploadInput {
+  name?: string;
+  size?: number;
+  mime?: string;
+  checksum?: string;
+  checksum_algorithm?: string;
+  tags?: string[];
+  project_id?: string;
+}
+
+/** Server-signed upload intent for one hosted file. The client PUTs the bytes
+ *  to `upload_url` with `required_headers`, then calls `completeFileUpload`. */
+export interface FileUploadIntent {
+  file_id: string;
+  upload_url: string;
+  method: "PUT";
+  required_headers: Record<string, string>;
+}
+
+/** Input to {@link FilesStore.uploadFile}: a local document to add to the
+ *  files service as a tagged, project-linked resource. On the hosted
+ *  transport the service owns ingestion; on the local transport `source_id`
+ *  selects the S3 source to upload into. */
+export interface UploadFileInput {
+  path: string;
+  name?: string;
+  source_id?: string;
+  /** Custom S3 object key (local transport only; the cloud assigns its own). */
+  source_key?: string;
+  tags?: string[];
+  project_id?: string;
+}
+
+/** Result of {@link FilesStore.uploadFile}. */
+export interface FileUploadResult {
+  file: FileWithTags;
+  replayed: false;
+}
+
 /** A collection with derived counts + children. */
 export type CollectionDetail = Collection & { file_count: number; children: Collection[] };
 /** A project with a derived file count. */
@@ -220,6 +263,18 @@ export interface FilesStore {
   getOrCreateProject(name: string, description?: string): Promise<Project>;
   addToProject(projectId: string, fileId: string): Promise<void>;
   removeFromProject(projectId: string, fileId: string): Promise<void>;
+
+  // ── ingestion ────────────────────────────────────────────────────────────
+  /**
+   * Add a local document to the files service as a tagged, project-linked
+   * resource. On the hosted transport this is server-owned ingestion (sign a
+   * PUT URL, upload the bytes, complete, then apply tags + the project link);
+   * on the local transport it uploads into an S3 source and links it. This is
+   * the seam operation behind `files upload`, so partner documents (contracts,
+   * statements) can be filed in cloud mode where the files service owns
+   * ingestion. `source_id` is required on the local transport only.
+   */
+  uploadFile(input: UploadFileInput): Promise<FileUploadResult>;
 
   // ── feedback ─────────────────────────────────────────────────────────────
   recordFeedback(input: FeedbackInput): Promise<void>;
