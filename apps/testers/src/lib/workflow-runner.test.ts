@@ -3,7 +3,7 @@
 // shell happens to export. These tests assume the LOCAL transport (they write
 // fixtures through the `db/*` modules directly and expect the sandbox bundle
 // to carry a `testers.db` snapshot); with ambient HASNA_TESTERS_API_URL +
-// HASNA_TESTERS_API_KEY set, the same tests would resolve cloud-http and fail
+// HASNA_TESTERS_API_KEY set, the same tests would resolve http and fail
 // on split-brain reads and the (intentionally local-only) snapshot verb. The
 // cloud-transport counterpart is exercised explicitly in the
 // "cloud transport:" test below, which sets the env and resets the cached
@@ -22,6 +22,14 @@ process.env.TESTERS_DB_PATH = ":memory:";
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// The @hasna/contracts client seam resolves the transport from the environment
+// FIRST and from the fleet app-config on disk ($HOME/.config/hasna/<app>-cloud.env)
+// as a fallback. This machine's real app-config carries the hosted route, so the
+// local-transport tests must pin HOME away from it — same isolation the db
+// home tests use.
+const pinnedHome = mkdtempSync(join(tmpdir(), "testers-workflow-home-"));
+const originalPinnedHome = process.env.HOME;
+process.env.HOME = pinnedHome;
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, resetDatabase } from "../db/database.js";
@@ -55,6 +63,9 @@ describe("workflow runner", () => {
     restoreEnv("HASNA_TESTERS_API_KEY", ambientApiKey);
     restoreEnv("TESTERS_API_URL", ambientUrlAlias);
     restoreEnv("TESTERS_API_KEY", ambientKeyAlias);
+    if (originalPinnedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalPinnedHome;
+    rmSync(pinnedHome, { recursive: true, force: true });
     resetStore();
   });
 

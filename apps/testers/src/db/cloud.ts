@@ -6,7 +6,7 @@
  * vendored storage kit), otherwise the app runs on SQLite. There is no sync
  * engine, cache, or local mirror in the service.
  */
-import { createCloudPoolFromEnv } from "../generated/storage-kit/pool.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/pool.js";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 
 export const APP_NAME = "testers";
@@ -24,7 +24,7 @@ export function databaseUrlPresent(env: NodeJS.ProcessEnv = process.env): boolea
  */
 export function getCloudClient(): PoolQueryClient {
   if (cached) return cached;
-  cached = createCloudPoolFromEnv(APP_NAME, {
+  cached = createServerPoolFromEnv(APP_NAME, {
     applicationName: "testers-serve",
     max: Number(process.env["TESTERS_PG_POOL_MAX"] ?? "10"),
   }).client;

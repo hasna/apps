@@ -2672,7 +2672,7 @@ program
       const hasApiKey =
         !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
       const storage = storageStatus();
-      const isCloud = storage.transport === "cloud-http";
+      const isCloud = storage.transport === "http";
       // TRUTH: on the hosted transport reads/writes go to the /v1 API — there is no local db.
       const dbPath = isCloud
         ? null
