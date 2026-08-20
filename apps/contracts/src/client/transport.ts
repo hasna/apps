@@ -180,6 +180,19 @@ function firstEnv(
   return null;
 }
 
+/**
+ * The first URL key that is DEFINED in the environment, even when its value is
+ * blank. A defined-but-blank key is an explicit opinion ("no server") and must
+ * be told apart from a fully silent environment: only silence may fall through
+ * to the disk pointer tier, and only a VALUE may select HTTP.
+ */
+function firstEnvDefinedKey(env: Env, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    if (env[key] !== undefined) return key;
+  }
+  return null;
+}
+
 function rawAuthority(value: string): string {
   const match = /^[a-z][a-z0-9+.-]*:\/\//i.exec(value);
   if (!match) throw new Error("API URL must be absolute.");
@@ -310,8 +323,10 @@ export interface ClientTransportResolution {
   /** Where the client should read/write from. */
   transport: ClientTransportKind;
   /**
-   * What selected HTTP: an API URL env key NAME, the absolute PATH of the fleet
-   * app-config file that supplied the URL, or `"default"` for local SQLite.
+   * What selected the transport: an API URL env key NAME, the absolute PATH of
+   * the fleet app-config file that supplied the URL, `"default"` for local
+   * SQLite with a silent environment, or the env key NAME of a DEFINED-but-blank
+   * URL that explicitly selected local.
    */
   transportSource: string;
   /** `<origin>/v1` base for the server API when transport is http, else null. */
@@ -374,9 +389,14 @@ export function resolveClientTransport(
 ): ClientTransportResolution {
   const keys = clientTransportEnvKeys(name);
   const envUrlHit = firstEnv(env, keys.apiUrlKeys, { preserveRaw: true });
+  // A URL key that is DEFINED in the environment with a blank value is an
+  // explicit local choice ("no server"). Presence of a pointer must never
+  // override an explicit opinion, so the disk tier is consulted only when the
+  // environment is fully silent about the URL — not when it blanked it.
+  const explicitLocalKey = envUrlHit ? null : firstEnvDefinedKey(env, keys.apiUrlKeys);
   // Only consulted when the environment is silent, so the env keeps precedence
   // and a client with an explicit URL never pays a stat for a file it ignores.
-  const diskUrlHit = envUrlHit ? null : appConfigDiskValue(name, env, keys.apiUrlKeys);
+  const diskUrlHit = envUrlHit || explicitLocalKey ? null : appConfigDiskValue(name, env, keys.apiUrlKeys);
   // `key` carries the SOURCE for every downstream field: an env key name, or the
   // absolute path of the file that decided. `apiKeySource` already reports its
   // tier this way, so an operator reads both the same way.
@@ -388,6 +408,29 @@ export function resolveClientTransport(
   // credential chain here: a client authenticating to nothing must not read or
   // emit credential state.
   if (!urlHit) {
+    // A DEFINED-but-blank URL key selected local on purpose. When a disk
+    // pointer exists it was overridden, and the override must not be silent:
+    // the operator learns the pointer existed and was not selected.
+    if (explicitLocalKey) {
+      const overriddenPointer = appConfigDiskValue(name, env, keys.apiUrlKeys);
+      if (overriddenPointer) {
+        warnings.push(
+          `${explicitLocalKey} is defined but blank, which selects the local store. ` +
+            `The server URL in ${overriddenPointer.path} was NOT selected: an explicit blank wins over a disk pointer.`,
+        );
+      }
+      return {
+        transport: "sqlite",
+        transportSource: explicitLocalKey,
+        baseUrl: null,
+        apiUrlSource: null,
+        apiKeyPresent: Boolean(keyHit),
+        apiKeySource: keyHit ? keyHit.key : null,
+        apiKeyTier: null,
+        misconfigured: false,
+        warning: warnings.length > 0 ? warnings.join(" ") : null,
+      };
+    }
     return {
       transport: "sqlite",
       transportSource: "default",
@@ -399,6 +442,15 @@ export function resolveClientTransport(
       misconfigured: false,
       warning: null,
     };
+  }
+
+  // A server URL decided by a disk pointer while the environment was silent is
+  // a deliberate flip, and it must not be silent: name the file that decided.
+  if (diskUrlHit) {
+    warnings.push(
+      `No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` +
+        `Unset the pointer or remove the file to stay on the local store.`,
+    );
   }
 
   // An API URL explicitly selects HTTP. Resolve the credential at call time.
