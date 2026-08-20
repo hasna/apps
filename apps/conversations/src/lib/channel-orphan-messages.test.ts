@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createChannel, getChannel, listChannels } from "./channels";
 import { sendMessage, readMessages } from "./messages";
+import { archivedChannelMessage } from "./channel-names";
 import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -189,14 +190,41 @@ describe("the guard is narrow — these must keep working", () => {
     expect(reply.reply_to).toBe(parent.id);
   });
 
-  test("an archived channel still accepts sends, so this changes only existence", () => {
-    // Archival policy is a separate question with its own verbs. Conflating it
-    // here would smuggle in a second behaviour change under one fix.
+  test("a send to an archived channel is rejected with an archived-channel error and writes nothing", () => {
+    // Regression for todos 9b502ed8 (archived-writes): #strategy was archived
+    // and still accepted posts. An archived channel is read-only history, so a
+    // non-reply send must be refused with a usable error naming the archived
+    // state — checked beside the existence guard, inside the same transaction.
     createChannel("retired", "alice");
     getDb().prepare(`UPDATE channels SET archived_at = ? WHERE name = ?`).run(new Date().toISOString(), "retired");
 
-    const msg = sendMessage({ from: "alice", to: "", channel: "retired", content: "late arrival" });
+    expect(() =>
+      sendMessage({ from: "alice", to: "", channel: "retired", content: "late arrival" }),
+    ).toThrow(archivedChannelMessage("retired"));
 
-    expect(msg.id).toBeGreaterThan(0);
+    const stored = getDb().prepare(`SELECT COUNT(*) AS n FROM messages WHERE channel = ?`).get("retired") as { n: number };
+    expect(stored.n).toBe(0);
+  });
+
+  test("a reply to a message in an archived channel is still allowed", () => {
+    // Codebase precedent: the existence guard is reply-exempt — replies to
+    // legacy data the author did not write must still go through — and the
+    // archived guard mirrors the same carve-out predicate. A reply derives its
+    // channel from the parent, so refusing it would strand the parent thread.
+    createChannel("retired", "alice");
+    const parent = sendMessage({ from: "alice", to: "", channel: "retired", content: "the original report" });
+    getDb().prepare(`UPDATE channels SET archived_at = ? WHERE name = ?`).run(new Date().toISOString(), "retired");
+
+    const reply = sendMessage({
+      from: "bob",
+      to: "",
+      channel: "retired",
+      content: "a correction to the original report",
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
+
+    expect(reply.id).toBeGreaterThan(0);
+    expect(reply.reply_to).toBe(parent.id);
   });
 });
