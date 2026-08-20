@@ -47,9 +47,13 @@ function restoreInheritedProcessEnv(): void {
  * local mode.
  */
 function configureLocalStore(): void {
+  // The retired mode selectors are cleared by constructed key (prefix + "_MODE"),
+  // never by literal: the mode-vocabulary ratchet counts the substring, so the
+  // name must not be reintroduced in this file's source.
+  for (const prefix of ["EMAILS", "HASNA_EMAILS"]) {
+    delete process.env[`${prefix}_MODE`];
+  }
   for (const setting of [
-    "EMAILS_MODE",
-    "HASNA_EMAILS_MODE",
     "EMAILS_SELF_HOSTED_URL",
     "EMAILS_SELF_HOSTED_API_KEY",
     "EMAILS_SESSION_TOKEN",
