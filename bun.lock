@@ -57,6 +57,22 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/agency": {
+      "name": "@hasna/agency",
+      "version": "0.3.1",
+      "bin": {
+        "agency": "dist/index.js",
+      },
+      "dependencies": {
+        "@hasna/cloud": "^0.1.5",
+        "chalk": "^5",
+        "commander": "^12",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5",
+      },
+    },
     "apps/attachments": {
       "name": "@hasna/attachments",
       "version": "1.1.5",
@@ -2352,6 +2368,8 @@
 
     "@hasna/actions": ["@hasna/actions@workspace:apps/actions"],
 
+    "@hasna/agency": ["@hasna/agency@workspace:apps/agency"],
+
     "@hasna/agent-registry": ["@hasna/agent-registry@0.1.0", "", { "dependencies": { "pg": "^8.13.3" }, "peerDependencies": { "@hasna/events": "^0.1.13", "@modelcontextprotocol/sdk": "^1.12.1", "zod": "^3.24.2" }, "optionalPeers": ["@hasna/events"], "bin": { "agent-registry": "dist/cli/index.js" } }, "sha512-BIcb2f3ufChZQQLBF7QOP8+EIWCcLkBdVJd8X9SocyLAnrNcPDCzrxicu3ld+e99rSPMv8W38hEQqGPpHvGHFg=="],
 
     "@hasna/attachments": ["@hasna/attachments@workspace:apps/attachments"],
@@ -2373,6 +2391,8 @@
     "@hasna/catalog": ["@hasna/catalog@workspace:apps/catalog"],
 
     "@hasna/changelog": ["@hasna/changelog@workspace:apps/changelog"],
+
+    "@hasna/cloud": ["@hasna/cloud@0.1.41", "", { "dependencies": { "@hasna/events": "^0.1.6", "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/bin.js" } }, "sha512-KTMmSshAlPjIKiXb+VTq+tdnSGiCdX6xaaDfxwjORtdLtvM9Zui5OyCto5o3PbPm6Eu4BvTOndn1TbTeEMQftw=="],
 
     "@hasna/computers": ["@hasna/computers@workspace:apps/computers"],
 
@@ -4523,6 +4543,10 @@
     "@hasna/actions/bun-types": ["bun-types@1.3.9", "", { "dependencies": { "@types/node": "*" } }, "sha512-+UBWWOakIP4Tswh0Bt0QD0alpTY8cb5hvgiYeWCMet9YukHbzuruIEeXC2D7nMJPB12kbh8C7XJykSexEqGKJg=="],
 
     "@hasna/actions/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/agency/commander": ["commander@12.1.0", "", {}, "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA=="],
+
+    "@hasna/agency/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/attachments/@hasna/contracts": ["@hasna/contracts@0.8.7", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-wLSmzL8vjx+tREowbQ0LJqj9i0wuQRKvzLT3cCD+897HikIu+6UFg7oBrYBmkSOvCTWM0Xs/+9hsl78hWZizUw=="],
 
