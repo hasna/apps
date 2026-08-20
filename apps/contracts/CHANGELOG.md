@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.2
+
+### Patch Changes
+
+- Version prepared for the hasna/apps version wave (#670): the wave's contracts entry (dependency-driven patch via the @hasna/secrets changeset 8de5bb5) is split into its own release so the wave's gates can resolve @hasna/contracts@0.11.2 from the registry. The @hasna/secrets@0.3.1 dependency update remains wave-scope — 0.3.1 is unpublished and the split branch cannot carry it — so this release keeps @hasna/secrets@0.3.0 and ships no functional change.
+
 ## 0.11.1
 
 ### Patch Changes
