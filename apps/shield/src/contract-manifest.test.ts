@@ -86,7 +86,7 @@ describe("hasna.contract.json", () => {
     expect(manifest.schema).toBe("hasna.service_contract.v1");
     expect(manifest.name).toBe("shield");
     expect(manifest.contractVersion).toBe("v1");
-    expect(manifest.kitVersion).toBe("0.11.1");
+    expect(manifest.kitVersion).toBe("0.12.0");
   });
 
   test("declared bins match package.json bin", () => {

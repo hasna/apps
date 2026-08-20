@@ -127,7 +127,7 @@
         "automations-daemon": "dist/daemon/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "^0.11.1",
+        "@hasna/contracts": "^0.12.0",
         "postgres": "^3.4.7",
       },
       "devDependencies": {
@@ -447,7 +447,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-      "version": "0.11.2",
+      "version": "0.12.0",
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",
@@ -713,7 +713,7 @@
       "dependencies": {
         "@hasna/accounts": "0.2.23",
         "@hasna/agent-registry": "^0.1.0",
-        "@hasna/contracts": "^0.11.1",
+        "@hasna/contracts": "^0.12.0",
         "@hasna/events": "^0.1.7",
         "@hasna/mcp-harness": "^0.1.0",
         "@hasna/projects": "0.1.95",
@@ -933,7 +933,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "^0.11.1",
+        "@hasna/contracts": "^0.12.0",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.11.10",
         "@types/react": "^18.3.18",
@@ -1055,7 +1055,7 @@
       "devDependencies": {
         "@biomejs/biome": "^1.9.4",
         "@hasna/agent-registry": "^0.1.0",
-        "@hasna/contracts": "^0.11.1",
+        "@hasna/contracts": "^0.12.0",
         "@hasna/mcp-harness": "^0.1.0",
         "@types/bun": "latest",
         "@types/node-cron": "^3.0.11",
@@ -1140,7 +1140,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "^0.11.1",
+        "@hasna/contracts": "^0.12.0",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.15.6",
         "typescript": "^5.7.3",
@@ -1656,7 +1656,7 @@
         "zod": "^3.24.4",
       },
       "devDependencies": {
-        "@hasna/contracts": "^0.11.1",
+        "@hasna/contracts": "^0.12.0",
         "@types/better-sqlite3": "^7.6.13",
         "@types/bun": "^1.2.12",
         "@types/express": "^5.0.2",
@@ -1682,7 +1682,7 @@
         "pg": "^8.13.3",
       },
       "devDependencies": {
-        "@hasna/contracts": "^0.11.1",
+        "@hasna/contracts": "^0.12.0",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.11.11",
         "typescript": "^5.7.3",
@@ -2500,7 +2500,6 @@
     "@hasna/feedback": ["@hasna/feedback@workspace:apps/feedback"],
 
     "@hasna/files": ["@hasna/files@workspace:apps/files"],
-
 
     "@hasna/gateway": ["@hasna/gateway@workspace:apps/gateway"],
 
@@ -4807,7 +4806,6 @@
     "@hasna/files/@types/mime-types": ["@types/mime-types@2.1.4", "", {}, "sha512-lfU4b34HOri+kAY5UheuFMWPDOI+OPceBSHZKp69gEyTL/mmJ4cnU6Y/rlme3UL3GyOn6Y42hyIEw0/q8sWx5w=="],
 
     "@hasna/files/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
 
     "@hasna/gateway/@hasna/contracts": ["@hasna/contracts@0.2.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xpOkF8NIH1+P6kSkb7LiOMfb+yLR2iVvtP1SR93G4f6puGx6YSSj/JgpzaAN4lG0WbpftG5w7xqTsk3Dl/27Rw=="],
 
