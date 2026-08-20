@@ -296,6 +296,14 @@ export HASNA_FILES_API_KEY=<scoped-api-key>
 files list --json
 ```
 
+On the hosted transport, `files upload <local-path> --project <prj-id> --tag <tag>`
+ingests a document into the files service (server-owned S3 storage) as a tagged,
+project-linked resource — the supported way to store e.g. partner contract PDFs
+to a Hasna Projects project. This works because project-resource linking
+(`files projects add`) and file tags are data-plane operations supported on both
+transports; the missing half was ingestion, which `files upload` now performs
+against the hosted `/v1` surface instead of refusing.
+
 The service is different from the client: `files-serve` uses PostgreSQL when
 `HASNA_FILES_DATABASE_URL` is set, and must also be configured with
 `HASNA_FILES_API_SIGNING_KEY`. Run `files-migrate --check`, then

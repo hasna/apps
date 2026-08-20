@@ -95,6 +95,36 @@ export const openApiDocument = {
       NameBody: { type: "object", properties: { name: { type: "string" }, description: { type: "string" } }, required: ["name"] },
       FileIdBody: { type: "object", properties: { file_id: { type: "string" } }, required: ["file_id"] },
       TagsBody: { type: "object", properties: { tags: { type: "array", items: { type: "string" } } }, required: ["tags"] },
+      CreateFileUpload: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Document name, e.g. partner-contract.pdf" },
+          size: { type: "integer", description: "Byte size of the document" },
+          mime: { type: "string" },
+          checksum: { type: "string", description: "sha256 hex digest of the document bytes" },
+          checksum_algorithm: { type: "string", enum: ["sha256"] },
+          tags: { type: "array", items: { type: "string" } },
+          project_id: { type: "string", description: "Link the completed upload to this project (prj_ registry) as a resource" },
+        },
+        required: ["name", "size"],
+      },
+      CompleteFileUpload: {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: { type: "string" } },
+          project_id: { type: "string" },
+        },
+      },
+      HostedUploadIntent: {
+        type: "object",
+        properties: {
+          file_id: { type: "string" },
+          upload_url: { type: "string", description: "Server-owned S3 PUT URL the caller uploads the bytes to" },
+          method: { type: "string", enum: ["PUT"] },
+          required_headers: { type: "object", additionalProperties: { type: "string" } },
+        },
+        required: ["file_id", "upload_url", "method", "required_headers"],
+      },
       Ok: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
       Stats: { type: "object", properties: { total_files: { type: "integer" }, total_size: { type: "integer" }, by_ext: { type: "array", items: { type: "object", additionalProperties: true } }, by_source: { type: "array", items: { type: "object", additionalProperties: true } } }, required: ["total_files", "total_size"] },
       ExtractedText: {
@@ -338,6 +368,21 @@ export const openApiDocument = {
           { name: "offset", in: "query", schema: { type: "integer" } },
         ],
         responses: { "200": ok({ type: "array", items: ref("File") }) },
+      },
+      post: {
+        operationId: "createFileUploadIntent",
+        summary: "Stage a hosted file upload intent (server-owned S3) — returns a PUT URL the caller uploads bytes to, then POST /files/{id}/complete",
+        requestBody: { required: true, content: { "application/json": { schema: ref("CreateFileUpload") } } },
+        responses: { "201": ok(ref("HostedUploadIntent")) },
+      },
+    },
+    "/files/{id}/complete": {
+      post: {
+        operationId: "completeFileUpload",
+        summary: "Verify + finalize a staged upload, applying tags and a project link",
+        parameters: [idParam("id")],
+        requestBody: { required: false, content: { "application/json": { schema: ref("CompleteFileUpload") } } },
+        responses: { "200": ok({ type: "object", properties: { file: ref("File") }, required: ["file"] }) },
       },
     },
     "/files/{id}/search-documents": {

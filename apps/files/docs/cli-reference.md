@@ -35,7 +35,7 @@ the machine where they run.
 | `files untag <file-id> <tags...>` | Remove tags | Data plane |
 | `files tags` | List tags | Data plane |
 | `files download <file-id> [dest]` | Resolve/download bytes | On-box |
-| `files upload <local-path> <source-id> [s3-key]` | Upload to an S3 source and reindex | On-box |
+| `files upload <local-path> [source-id] [s3-key]` | Upload a local document. Cloud (api) mode: server-owned ingestion into the files service, optionally tagged + linked to a project (`--project`, `--tag`). Local mode: upload to an S3 source and reindex | Data plane |
 | `files collections` | Manage collections | Data plane |
 | `files projects` | Manage projects | Data plane |
 | `files project-panel` | Build a project-panel contract from local data | Process-local |

@@ -16,7 +16,7 @@ import { registerEvidenceCommands } from "./evidence.js";
 import { registerOrganizationCommands } from "./organize.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDrives, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
-import { indexS3Source, uploadToS3 } from "../lib/s3.js";
+import { indexS3Source } from "../lib/s3.js";
 import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "../lib/file-object.js";
 import { extractTextFromFile } from "../lib/extraction.js";
 import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
@@ -1185,21 +1185,41 @@ program
   });
 
 // ─── upload ──────────────────────────────────────────────────────────────────
+// Cloud-mode ingestion: `files upload` used to refuse on the hosted transport
+// ("runs on-box only ... the files service owns ingestion"), and the hosted
+// service had no ingestion route — so a document could not be added as a
+// tagged, project-linked resource in cloud mode (bug de9aeeed). It now routes
+// through the store seam: ApiStore signs a server-owned PUT URL, uploads the
+// bytes, completes, and applies tags + the project link; LocalStore keeps the
+// existing S3-source upload and adds the same tag/project application.
+
+const collectTag = (value: string, acc: string[]): string[] => [...acc, value];
 
 program
-  .command("upload <local-path> <source-id> [s3-key]")
-  .description("Upload a local file to an S3 source")
-  .action(async (localPath: string, sourceId: string, s3Key?: string) => {
-    requireLocalTransport("files upload");
-    let source; try { source = getSource(requireId(sourceId, "sources"))!; } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
-    if (source.type !== "s3") { console.error(chalk.red("upload only works with S3 sources")); process.exit(1); }
-    if (!existsSync(localPath)) { console.error(chalk.red(`File not found: ${localPath}`)); process.exit(1); }
-    console.log(chalk.dim(`Uploading ${localPath}...`));
-    const machine = getCurrentMachine();
-    const key = await uploadToS3(source, localPath, s3Key);
-    console.log(chalk.green(`✓ Uploaded to s3://${source.bucket}/${key}`));
-    // Re-index source to register the new file
-    await indexS3Source(source, machine.id);
+  .command("upload <local-path> [source-id] [s3-key]")
+  .description("Upload a local document (cloud: server-owned ingestion as a tagged project resource; local: to an S3 source)")
+  .option("--project <id>", "Link the uploaded file to a project as a resource")
+  .option("--tag <tag>", "Tag the uploaded file (repeatable)", collectTag, [])
+  .option("--name <name>", "Stored file name (defaults to the local basename)")
+  .action(async (localPath: string, sourceId: string | undefined, s3Key: string | undefined, opts: { project?: string; tag?: string[]; name?: string }) => {
+    try {
+      const result = await store().uploadFile({
+        path: localPath,
+        name: opts.name,
+        source_id: sourceId,
+        source_key: s3Key,
+        tags: opts.tag ?? [],
+        project_id: opts.project,
+      });
+      const f = result.file;
+      const tags = f.tags?.length ? ` (tags: ${f.tags.join(", ")})` : "";
+      console.log(chalk.green(`✓ Uploaded ${f.name} ${chalk.dim(f.id)}${tags}`));
+      if (opts.project) console.log(chalk.dim(`Linked to project ${opts.project}`));
+      if (sourceId && sourceId.trim()) console.log(chalk.dim(`Source: ${sourceId}`));
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
   });
 
 // ─── collections / projects ──────────────────────────────────────────────────

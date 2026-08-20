@@ -7,11 +7,13 @@
  * (never a silent no-op).
  */
 import { createHash } from "node:crypto";
+import { basename, extname } from "node:path";
 import { nanoid } from "nanoid";
 import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { sanitizeSourceConfig } from "../db/sources.js";
 import { generateCanonicalName } from "../lib/normalize.js";
+import { getPresignedPutUrl, headS3Object } from "../lib/s3.js";
 import type { ActionType, AutoRules } from "../types/index.js";
 import type {
   Agent,
@@ -1539,3 +1541,201 @@ export function evidenceDbFor(client: TypedQueryClient) {
     createFileAccessEvent: (i: CreateFileAccessEventInput) => evCreateAccessEvent(client, i),
   };
 }
+
+// ── Cloud ingestion (hosted file records) ────────────────────────────────────
+//
+// The hosted `/v1` surface owns document ingestion: a thin api-mode client
+// NEVER points it at a client-supplied bucket. Files are staged as rows
+// (files + s3_objects + an active file_versions row) bound to the API-key
+// tenant, a server-owned S3 PUT URL is signed, the client PUTs the bytes, and
+// `completeFileUpload` verifies the object landed before applying tags and the
+// project link. This is the same server-owned storage doctrine as the
+// evidence vault, applied to regular `files` records so a document can be a
+// tagged, project-linked resource (e.g. partner contract PDFs).
+
+/** Key prefix under which hosted uploads live (per-tenant, per-month folders). */
+export const UPLOAD_SOURCE_PREFIX = "uploads";
+
+/** Input to {@link createFileUploadIntent}. */
+export interface UploadIngestInput {
+  tenantId: string;
+  name: string;
+  size: number;
+  mime?: string;
+  checksum?: string;
+  checksumAlgorithm?: "sha256" | "unknown";
+}
+
+/** Tags and project link applied by {@link completeFileUpload}. */
+export interface CompleteUploadInput {
+  tags?: string[];
+  projectId?: string;
+}
+
+/** Created upload intent for one document (the client PUTs bytes to upload_url). */
+export interface CreatedUploadIntent {
+  file: FileWithTags;
+  upload_url: string;
+  method: "PUT";
+  required_headers: Record<string, string>;
+}
+
+/** Verifier over the server-owned object after the client PUTs the bytes. */
+export type RemoteUploadVerifier = (
+  source: Source,
+  objectKey: string,
+  expected: { size: number; checksumSha256?: string },
+) => Promise<{ ok: true } | { ok: false; reason: string }>;
+
+/** Production verifier: HEAD the object and compare size (+checksum when known). */
+export const s3HeadUploadVerifier: RemoteUploadVerifier = async (source, objectKey, expected) => {
+  const head = await headS3Object(source, objectKey);
+  if (!head) return { ok: false, reason: "uploaded object not found" };
+  if (head.size !== expected.size) {
+    return { ok: false, reason: `object size mismatch: expected ${expected.size}, found ${head.size}` };
+  }
+  if (expected.checksumSha256 && head.checksum_sha256 && head.checksum_sha256 !== expected.checksumSha256) {
+    return { ok: false, reason: "object checksum mismatch" };
+  }
+  return { ok: true };
+};
+
+function cleanUploadSegment(value: string): string {
+  return value.trim().replace(/[\\/]/g, "-").replace(/[^a-zA-Z0-9._ -]+/g, "-").replace(/^-+|-+$/g, "") || "file";
+}
+
+/**
+ * Deterministic per-tenant S3 source that hosts ingested documents. The server
+ * owns the object store, configured exactly like the evidence vault
+ * (HASNA_FILES_S3_BUCKET / region env); a missing bucket fails clearly at
+ * signing time, never silently writing to the wrong place.
+ */
+export async function getOrCreateUploadSource(client: TypedQueryClient, tenantId: string): Promise<Source> {
+  const digest = createHash("sha256").update(`files-upload:${tenantId}`).digest("hex").slice(0, 12);
+  const id = `src_uploads_${digest}`;
+  const existing = await client.get<Record<string, unknown>>("SELECT * FROM sources WHERE id = $1", [id]);
+  if (existing) return toSource(existing);
+  const bucket = process.env.HASNA_FILES_S3_BUCKET ?? process.env.HASNA_FILES_EVIDENCE_BUCKET ?? "";
+  const region = process.env.HASNA_FILES_S3_REGION ?? process.env.HASNA_FILES_AWS_REGION ?? "us-east-1";
+  await client.execute(
+    `INSERT INTO sources (id, name, type, path, bucket, prefix, region, config, machine_id, enabled)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING`,
+    [id, "uploads", "s3", null, bucket || null, UPLOAD_SOURCE_PREFIX, region, "{}", "files-serve", true],
+  );
+  const row = await client.get<Record<string, unknown>>("SELECT * FROM sources WHERE id = $1", [id]);
+  return toSource(row!);
+}
+
+/**
+ * Stage a hosted file record + immutable S3 object + active version for one
+ * document upload, and sign a server-owned PUT URL. The file row exists
+ * immediately (status active, hash = expected checksum) so it is linkable and
+ * searchable; the bytes are verified by {@link completeFileUpload} before the
+ * caller should rely on the content.
+ */
+export async function createFileUploadIntent(
+  client: TypedQueryClient,
+  input: UploadIngestInput,
+): Promise<CreatedUploadIntent> {
+  const machine = await ensureServiceMachine(client);
+  const source = await getOrCreateUploadSource(client, input.tenantId);
+  if (!source.bucket) {
+    throw new Error("files ingestion requires HASNA_FILES_S3_BUCKET (server-owned object storage)");
+  }
+
+  const fileId = `f_${nanoid(10)}`;
+  const revisionId = `rev_${nanoid(10)}`;
+  const objectId = `obj_${nanoid(10)}`;
+  const now = new Date();
+  const yyyy = String(now.getUTCFullYear());
+  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const ext = extname(input.name).toLowerCase();
+  const base = basename(input.name, ext);
+  const objectKey = `${UPLOAD_SOURCE_PREFIX}/${input.tenantId}/${yyyy}/${mm}/${fileId}-${cleanUploadSegment(input.name)}`;
+  const canonical = generateCanonicalName(input.name);
+  const identity = `s3://${source.bucket}/${objectKey}`;
+  const mime = input.mime && input.mime.trim() ? input.mime.trim() : "application/octet-stream";
+  const region = source.region ?? "us-east-1";
+  const nowIso = now.toISOString();
+
+  await client.execute(
+    `INSERT INTO s3_objects (id, identity, bucket, region, object_key, org_id, size, content_type, discovered_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (identity) DO NOTHING`,
+    [objectId, identity, source.bucket, region, objectKey, input.tenantId, input.size, mime, nowIso],
+  );
+  await client.execute(
+    `INSERT INTO files (id, source_id, machine_id, path, name, original_name, canonical_name, ext, size, mime, hash, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [fileId, source.id, machine.id, objectKey, base, input.name, canonical, ext, input.size, mime, input.checksum ?? null, "active"],
+  );
+  const revisionIdentity = `${identity}|${input.checksum ?? ""}|${input.size}|${mime}|${base}`;
+  const sourceRef = `open-files://file/${fileId}/revision/${revisionId}`;
+  const contentHashAlgorithm = input.checksumAlgorithm ?? (input.checksum ? "sha256" : "unknown");
+  await client.execute(
+    `INSERT INTO file_versions (
+       id, file_id, source_id, source_ref, revision_identity, content_hash_algorithm,
+       content_hash, size, mime, storage_provider, bucket, region, object_key,
+       local_path, source_path, indexed_at, state, source_provenance, created_at, s3_object_id
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+    [
+      revisionId, fileId, source.id, sourceRef, revisionIdentity, contentHashAlgorithm,
+      input.checksum ?? null, input.size, mime, "s3", source.bucket, region, objectKey,
+      null, objectKey, nowIso, "active", "{}", nowIso, objectId,
+    ],
+  );
+
+  const upload_url = await getPresignedPutUrl(source, objectKey, {
+    expiresIn: 600,
+    contentType: mime,
+    contentLength: input.size,
+    ...(input.checksum ? { checksumSha256: input.checksum } : {}),
+    metadata: { "file-id": fileId, "org-id": input.tenantId },
+  });
+  const file = await getFile(client, fileId);
+  if (!file) throw new Error("upload intent file could not be read back");
+  return { file, upload_url, method: "PUT", required_headers: { "content-type": mime } };
+}
+
+/**
+ * Verify the uploaded bytes landed (server-owned HEAD), then apply tags and
+ * the project link. Returns null when the file is absent or not bound to the
+ * given tenant — the route answers 404, never leaking another tenant's file.
+ */
+export async function completeFileUpload(
+  client: TypedQueryClient,
+  fileId: string,
+  tenantId: string,
+  input: CompleteUploadInput,
+  verify: RemoteUploadVerifier = s3HeadUploadVerifier,
+): Promise<FileWithTags | null> {
+  const file = await getFile(client, fileId);
+  if (!file) return null;
+  const locator = await getRemoteFileLocator(client, fileId);
+  if (!locator || locator.tenant_id !== tenantId) return null;
+
+  const source: Source = {
+    id: "src_uploads",
+    name: "uploads",
+    type: "s3",
+    bucket: locator.bucket,
+    prefix: UPLOAD_SOURCE_PREFIX,
+    region: locator.region ?? "us-east-1",
+    config: {},
+    machine_id: "files-serve",
+    enabled: true,
+    file_count: 0,
+    created_at: "",
+    updated_at: "",
+  };
+  const verified = await verify(source, locator.object_key, { size: locator.size, checksumSha256: file.hash });
+  if (!verified.ok) throw new Error(verified.reason);
+
+  for (const tag of input.tags ?? []) {
+    if (tag && tag.trim()) await tagFile(client, fileId, tag.trim());
+  }
+  if (input.projectId && input.projectId.trim()) {
+    await addToProject(client, input.projectId.trim(), fileId);
+  }
+  return getFile(client, fileId);
+}
+

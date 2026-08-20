@@ -27,6 +27,12 @@ export interface FileIdBody { "file_id": string }
 
 export interface TagsBody { "tags": Array<string> }
 
+export interface CreateFileUpload { "name": string; "size": number; "mime"?: string; "checksum"?: string; "checksum_algorithm"?: "sha256"; "tags"?: Array<string>; "project_id"?: string }
+
+export interface CompleteFileUpload { "tags"?: Array<string>; "project_id"?: string }
+
+export interface HostedUploadIntent { "file_id": string; "upload_url": string; "method": "PUT"; "required_headers": Record<string, string> }
+
 export interface Ok { "ok": boolean }
 
 export interface Stats { "total_files": number; "total_size": number; "by_ext"?: Array<Record<string, unknown>>; "by_source"?: Array<Record<string, unknown>> }
@@ -234,10 +240,28 @@ export class FilesClient {
       });
     }
 
+    /** Stage a hosted file upload intent (server-owned S3) — returns a PUT URL the caller uploads bytes to, then POST /files/{id}/complete */
+    async createFileUploadIntent(body: CreateFileUpload, init?: RequestInit): Promise<HostedUploadIntent> {
+      return this.request("POST", `/files`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get a file */
     async getFile(id: string, init?: RequestInit): Promise<File> {
       return this.request("GET", `/files/${encodeURIComponent(String(id))}`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Verify + finalize a staged upload, applying tags and a project link */
+    async completeFileUpload(id: string, body?: CompleteFileUpload, init?: RequestInit): Promise<{ "file": File }> {
+      return this.request("POST", `/files/${encodeURIComponent(String(id))}/complete`, {
+        body,
         query: undefined,
         init,
       });
