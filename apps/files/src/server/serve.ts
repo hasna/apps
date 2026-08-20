@@ -26,7 +26,7 @@ import { homedir } from "os";
 import { createRequire } from "module";
 import type { FileAssetStatus, GoogleDriveConfig, S3Config, SourceType } from "../types/index.js";
 import { createV1Handler } from "./v1.js";
-import { cloudEnabled, getCloudClient } from "./pg-store.js";
+import { getCloudClient, postgresBackendEnabled } from "./pg-store.js";
 import { checkHealth } from "../generated/storage-kit/health.js";
 import { CLOUD_MIGRATIONS } from "../db/cloud-migrations.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
@@ -34,9 +34,9 @@ import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-/** Storage backend reported by /health, /ready, /version. */
-function serviceBackend(): "postgres" | "sqlite" {
-  return cloudEnabled() ? "postgres" : "sqlite";
+/** Server data backend reported by /health, /ready, /version. */
+function serviceBackend(): "postgresql" | "sqlite" {
+  return postgresBackendEnabled() ? "postgresql" : "sqlite";
 }
 
 /**
@@ -237,18 +237,18 @@ async function routeRestRequest(req: Request): Promise<Response> {
       const method = req.method;
 
       // ── Liveness / readiness / version (unauthenticated) ───────────────
-      if (path === "/health") return json({ status: "ok", version: pkg.version, storage: serviceBackend() });
-      if (path === "/version") return json({ status: "ok", version: pkg.version, storage: serviceBackend() });
+      if (path === "/health") return json({ status: "ok", version: pkg.version, backend: serviceBackend() });
+      if (path === "/version") return json({ status: "ok", version: pkg.version, backend: serviceBackend() });
       if (path === "/ready") {
-        if (!cloudEnabled()) return json({ status: "ok", version: pkg.version, storage: "sqlite" });
+        if (!postgresBackendEnabled()) return json({ status: "ok", version: pkg.version, backend: "sqlite" });
         try {
           const ready = await readiness(getCloudClient());
           if (!ready.ok) {
-            return json({ status: "degraded", version: pkg.version, storage: "postgres", latency_ms: ready.latencyMs, pending_migrations: ready.pending, error: ready.error }, 503);
+            return json({ status: "degraded", version: pkg.version, backend: "postgresql", latency_ms: ready.latencyMs, pending_migrations: ready.pending, error: ready.error }, 503);
           }
-          return json({ status: "ok", version: pkg.version, storage: "postgres", latency_ms: ready.latencyMs });
+          return json({ status: "ok", version: pkg.version, backend: "postgresql", latency_ms: ready.latencyMs });
         } catch (e) {
-          return json({ status: "error", version: pkg.version, storage: "postgres", error: (e as Error).message }, 503);
+          return json({ status: "error", version: pkg.version, backend: "postgresql", error: (e as Error).message }, 503);
         }
       }
 

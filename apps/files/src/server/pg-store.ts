@@ -8,7 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
-import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { sanitizeSourceConfig } from "../db/sources.js";
 import { generateCanonicalName } from "../lib/normalize.js";
@@ -50,16 +50,20 @@ let cached: { client: TypedQueryClient; connectionSource: string } | null = null
 /** Lazily build (and memoize) the Postgres pool. Throws when the database URL is missing. */
 export function getCloudClient(): TypedQueryClient {
   if (cached) return cached.client;
-  const pool = createCloudPoolFromEnv(APP, { applicationName: "files-serve", max: 5 });
+  const pool = createServerPoolFromEnv(APP, { applicationName: "files-serve", max: 5 });
   cached = { client: pool.client, connectionSource: pool.connectionSource };
   return cached.client;
 }
 
-/** True when the service is configured for Postgres (`HASNA_FILES_DATABASE_URL` set). */
-export function cloudEnabled(): boolean {
-  const token = "FILES";
-  const url = process.env[`HASNA_${token}_DATABASE_URL`] ?? process.env[`${token}_DATABASE_URL`];
-  return Boolean(url);
+/**
+ * True when the service is configured for the PostgreSQL backend. The backend
+ * is selected by HASNA_FILES_DATABASE_URL / FILES_DATABASE_URL alone; the
+ * retired storage-mode variables are refused by the contracts resolver and
+ * must not be a live configuration surface here.
+ */
+export function postgresBackendEnabled(): boolean {
+  const url = process.env["HASNA_FILES_DATABASE_URL"] ?? process.env["FILES_DATABASE_URL"];
+  return Boolean(url?.trim());
 }
 
 function parseJson<T>(raw: unknown, fallback: T): T {

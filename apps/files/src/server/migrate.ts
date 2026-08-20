@@ -9,7 +9,7 @@
  * pre-created) is inventoried and never clobbered (all DDL is IF NOT EXISTS /
  * ADD COLUMN IF NOT EXISTS).
  */
-import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import { MigrationLedger } from "../generated/storage-kit/migrations.js";
 import { CLOUD_MIGRATIONS } from "../db/cloud-migrations.js";
 
@@ -29,7 +29,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     return;
   }
   const dryRun = argv.includes("--check") || argv.includes("--dry-run");
-  const { client, connectionSource } = createCloudPoolFromEnv("files", { applicationName: "files-migrate", max: 2 });
+  const { client, connectionSource } = createServerPoolFromEnv("files", { applicationName: "files-migrate", max: 2 });
   console.log(`files-migrate: connected (source=${connectionSource}) — ${CLOUD_MIGRATIONS.length} migrations`);
   const ledger = new MigrationLedger(client, CLOUD_MIGRATIONS);
   const result = await ledger.migrate({ dryRun });
