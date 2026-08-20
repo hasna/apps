@@ -257,6 +257,39 @@ describe("exposure scanner", () => {
     expect(result.findingCount).toBe(0);
   });
 
+  it("does not flag npm env var NAMES as package registry tokens while real npm_ values still fire (two-sided)", () => {
+    // Known-negative: npm's documented lifecycle env var names are variable
+    // NAMES (npm_ + a word), never token values. Regression for the staged
+    // scan blocking commits on files that merely reference them (row
+    // 2693dbc4): "npm_" + 12+ chars of [A-Za-z0-9_] matched
+    // npm_lifecycle_event and npm_package_name.
+    const namesDir = join(testDir, "names");
+    mkdirSync(namesDir, { recursive: true });
+    writeFileSync(
+      join(namesDir, "lifecycle.ts"),
+      'const lifecycleEvent = process.env["npm_lifecycle_event"];\n',
+    );
+    writeFileSync(join(namesDir, "manifest.ts"), 'const pkg = process.env["npm_package_name"];\n');
+
+    const names = scanWorkspaceExposures({ root: namesDir });
+    expect(names.findingCount).toBe(0);
+    expect(
+      names.findings.some((f) => f.detector === "package_registry_token"),
+    ).toBe(false);
+
+    // Known-positive: a value-shaped npm_ token (npm_ + 20+ alnum, the fleet's
+    // established value/name discriminator) must still fire.
+    const valuesDir = join(testDir, "values");
+    mkdirSync(valuesDir, { recursive: true });
+    const value = ["npm", "livevalueabcdefghijklmnopqrstuvwxyz"].join("_");
+    writeFileSync(join(valuesDir, "config.env"), `PACKAGE_TOKEN=${value}\n`);
+
+    const values = scanWorkspaceExposures({ root: valuesDir });
+    expect(
+      values.findings.some((f) => f.detector === "package_registry_token"),
+    ).toBe(true);
+  });
+
   it("does not treat task-first slugs as OpenAI keys while preserving synthetic key detection", () => {
     const taskFirstSlug = ["global-signal-to-ta", "sk", "-first-never-drift"].join("");
     const syntheticOpenAiKey = fakeOpenAiToken();
