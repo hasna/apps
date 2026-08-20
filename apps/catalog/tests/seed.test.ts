@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
   DUPLICATE_CHECKOUTS,
   excludedFolderReason,
   loadDuplicateCheckouts,
+  loadProjectsJoin,
   readSeedCandidate,
   resolveDuplicateCheckouts,
   seedCatalog,
@@ -143,6 +145,23 @@ describe("readSeedCandidate", () => {
     makeRepo("open-z", null);
     expect(readSeedCandidate(root, "open-z")).toBeNull();
   });
+
+  it("returns null when package.json is not valid JSON", () => {
+    // A corrupt package.json must not crash the scan — the folder is skipped
+    // like a missing one.
+    makeRepo("open-corrupt", null);
+    writeFileSync(join(root, "open-corrupt", "package.json"), "{ not json");
+    expect(readSeedCandidate(root, "open-corrupt")).toBeNull();
+  });
+
+  it("drops empty bin keys from object-form bin fields", () => {
+    makeRepo("open-bins", {
+      name: "@example/bins",
+      bin: { "": "x", "real": "y" },
+    });
+    const candidate = readSeedCandidate(root, "open-bins");
+    expect(candidate?.bins).toEqual(["real"]);
+  });
 });
 
 describe("dedupeByNpmName", () => {
@@ -172,6 +191,17 @@ describe("dedupeByNpmName", () => {
       candidate("open-kappa", "codewith-monorepo"),
     ]);
     expect(kept.map((c) => c.folder)).toEqual(["open-kappa"]);
+  });
+
+  it("breaks equal-length ties alphabetically", () => {
+    // Two same-length folders sharing one npm name, neither matching
+    // open-<unscoped>: the deterministic tiebreak is alphabetical.
+    const { kept, dropped } = dedupeByNpmName([
+      candidate("open-c", "@example/shared"),
+      candidate("open-a", "@example/shared"),
+    ]);
+    expect(kept.map((c) => c.folder)).toEqual(["open-a"]);
+    expect(dropped.map((d) => d.folder)).toEqual(["open-c"]);
   });
 });
 
@@ -224,6 +254,31 @@ describe("buildAppRecord", () => {
     makeRepo("open-pi", { name: "@example/pi" });
     const app = buildAppRecord(readSeedCandidate(root, "open-pi")!);
     expect(app.metadata?.["seededFrom"]).toBe(DEFAULT_SEED_SOURCE);
+  });
+
+  it("marks a repo without bins or a version as a stub", () => {
+    makeRepo("open-stub", { name: "@example/stub" });
+    const app = buildAppRecord(readSeedCandidate(root, "open-stub")!);
+    expect(app.lifecycle).toBe("stub");
+  });
+
+  it("throws when the candidate has no npm name", () => {
+    makeRepo("open-noname", { version: "1.0.0" });
+    const candidate = readSeedCandidate(root, "open-noname")!;
+    expect(() => buildAppRecord(candidate)).toThrow(/no name/);
+  });
+
+  it("falls back to the default org URL when the join remote is not a github url", () => {
+    // An ssh-form git remote is not an accepted GithubUrlSchema value, so the
+    // record must fall back to the package repository field, then the default.
+    makeRepo("open-ssh", { name: "@example/ssh", repository: "https://github.com/example/ssh.git" });
+    const app = buildAppRecord(readSeedCandidate(root, "open-ssh")!, {
+      slug: "hasna-ssh",
+      primaryPath: join(root, "open-ssh"),
+      gitRemote: "git@github.com:example/ssh.git",
+      description: null,
+    });
+    expect(app.githubUrl).toBe("https://github.com/example/ssh.git");
   });
 });
 
@@ -279,5 +334,124 @@ describe("seedCatalog", () => {
       DEFAULT_SEED_SOURCE,
       DEFAULT_SEED_SOURCE,
     ]);
+  });
+
+  it("joins project records by primary path and counts them", () => {
+    makeRepo("open-alpha", { name: "@example/alpha", version: "1.0.0" });
+    makeRepo("open-beta", { name: "@example/beta", version: "2.0.0" });
+    const alphaPath = join(root, "open-alpha");
+    const report = seedCatalog({
+      root,
+      now: "2026-07-06T09:00:00.000Z",
+      projectsJoin: [
+        {
+          slug: "hasna-alpha",
+          primaryPath: alphaPath,
+          gitRemote: "https://github.com/example/alpha.git",
+          description: "Joined description",
+        },
+      ],
+    });
+    expect(report.joinedProjects).toBe(1);
+    const alpha = report.seeded.find((app) => app.appId === "open-alpha");
+    expect(alpha?.projectSlug).toBe("hasna-alpha");
+    expect(alpha?.githubUrl).toBe("https://github.com/example/alpha.git");
+    expect(alpha?.summary).toBe("Joined description");
+    const beta = report.seeded.find((app) => app.appId === "open-beta");
+    expect(beta?.projectSlug).toBe("open-beta");
+  });
+
+  it("produces byte-identical fixtures regardless of directory creation order", () => {
+    // Directory scan order is sorted, but the fixture must be stable even when
+    // the input tree was created in a different order with a fixed `now`.
+    const rootA = mkdtempSync(join(tmpdir(), "catalog-seed-idem-a-"));
+    const rootB = mkdtempSync(join(tmpdir(), "catalog-seed-idem-b-"));
+    try {
+      for (const dir of [rootA, rootB]) {
+        mkdirSync(join(dir, "open-beta", ".git"), { recursive: true });
+        writeFileSync(join(dir, "open-beta", "package.json"), JSON.stringify({ name: "@example/beta" }));
+        mkdirSync(join(dir, "open-alpha", ".git"), { recursive: true });
+        writeFileSync(join(dir, "open-alpha", "package.json"), JSON.stringify({ name: "@example/alpha" }));
+      }
+      const reportA = seedCatalog({ root: rootA, fixturePath: join(rootA, "out.jsonl"), now: "2026-07-06T09:00:00.000Z" });
+      const reportB = seedCatalog({ root: rootB, fixturePath: join(rootB, "out.jsonl"), now: "2026-07-06T09:00:00.000Z" });
+      expect(reportA.seeded.map((app) => app.appId)).toEqual(reportB.seeded.map((app) => app.appId));
+      expect(reportA.skipped).toEqual(reportB.skipped);
+      expect(readFileSync(join(rootA, "out.jsonl"), "utf8")).toBe(readFileSync(join(rootB, "out.jsonl"), "utf8"));
+    } finally {
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+
+  it("is idempotent across repeated runs against the same store and fixture", () => {
+    const store = new CatalogStore({ dbPath: ":memory:" });
+    const fixturePath = join(root, "fixtures", "apps.seed.jsonl");
+    makeRepo("open-alpha", { name: "@example/alpha", version: "1.0.0" });
+    const first = seedCatalog({ root, store, fixturePath, now: "2026-07-06T09:00:00.000Z" });
+    const firstBytes = readFileSync(fixturePath, "utf8");
+    const second = seedCatalog({ root, store, fixturePath, now: "2026-07-06T09:00:00.000Z" });
+    expect(second.seeded.map((app) => app.appId)).toEqual(first.seeded.map((app) => app.appId));
+    expect(store.countApps()).toBe(1);
+    expect(readFileSync(fixturePath, "utf8")).toBe(firstBytes);
+  });
+
+  it("seeds an empty root to an empty fixture and zero records", () => {
+    const empty = mkdtempSync(join(tmpdir(), "catalog-seed-empty-"));
+    try {
+      const report = seedCatalog({ root: empty, fixturePath: join(empty, "out.jsonl"), now: "2026-07-06T09:00:00.000Z" });
+      expect(report.scanned).toBe(0);
+      expect(report.seeded).toEqual([]);
+      expect(readFileSync(join(empty, "out.jsonl"), "utf8")).toBe("");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("loadProjectsJoin", () => {
+  // loadProjectsJoin shells out to the `projects` CLI through Bun.spawnSync,
+  // which resolves executables from the PATH captured at process start — a
+  // runtime process.env mutation is invisible to it. So each case runs in a
+  // fresh child bun process whose PATH puts a stub `projects` first.
+  const repoRoot = join(import.meta.dir, "..");
+  function withStubProjects(script: string): ReturnType<typeof loadProjectsJoin> {
+    const binDir = mkdtempSync(join(tmpdir(), "stub-projects-"));
+    writeFileSync(join(binDir, "projects"), script, { mode: 0o755 });
+    try {
+      const result = spawnSync(
+        "bun",
+        ["-e", `import { loadProjectsJoin } from "./src/seed.js"; console.log(JSON.stringify(loadProjectsJoin()));`],
+        {
+          cwd: repoRoot,
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${binDir}:${process.env["PATH"] ?? ""}` },
+        }
+      );
+      expect(result.status).toBe(0);
+      return JSON.parse(result.stdout) as ReturnType<typeof loadProjectsJoin>;
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  }
+
+  it("maps valid rows and nulls from the projects CLI", () => {
+    const rows = withStubProjects(
+      `#!/bin/sh\ncat <<'EOF'\n[{"slug":"hasna-alpha","primary_path":"/x/alpha","git_remote":null,"description":"Desc"}]\nEOF\n`
+    );
+    expect(rows).toEqual([{ slug: "hasna-alpha", primaryPath: "/x/alpha", gitRemote: null, description: "Desc" }]);
+  });
+
+  it("returns [] when the CLI exits nonzero, prints malformed JSON, or is absent", () => {
+    expect(withStubProjects("#!/bin/sh\necho boom >&2\nexit 1\n")).toEqual([]);
+    expect(withStubProjects("#!/bin/sh\nprintf 'not json'\n")).toEqual([]);
+    expect(withStubProjects("#!/bin/sh\nprintf '{\"not\":\"an array\"}'\n")).toEqual([]);
+    expect(withStubProjects("#!/bin/sh\nprintf ''\n")).toEqual([]);
+    expect(withStubProjects("#!/bin/sh\nexit 0\n")).toEqual([]);
+  });
+
+  it("drops rows without a string slug", () => {
+    const rows = withStubProjects(`#!/bin/sh\nprintf '[{"slug":123},{"slug":"ok","primary_path":"/x"}]'\n`);
+    expect(rows).toEqual([{ slug: "ok", primaryPath: "/x", gitRemote: null, description: null }]);
   });
 });

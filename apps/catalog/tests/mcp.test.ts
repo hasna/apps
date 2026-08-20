@@ -148,4 +148,80 @@ describe("catalog MCP tools/call", () => {
     expect((missingRequired as ToolCallResult).isError).toBe(true);
     expect(text(missingRequired)).toContain("-32602");
   });
+
+  it("rejects an empty app_id and a zero limit at the schema boundary", async () => {
+    const emptyId = await client.callTool({ name: "catalog_get", arguments: { app_id: "" } });
+    expect((emptyId as ToolCallResult).isError).toBe(true);
+    expect(text(emptyId)).toContain("-32602");
+
+    const zeroLimit = await client.callTool({ name: "catalog_list", arguments: { limit: 0 } });
+    expect((zeroLimit as ToolCallResult).isError).toBe(true);
+    expect(text(zeroLimit)).toContain("-32602");
+  });
+
+  it("accepts a whitespace-only query and returns the full catalog", async () => {
+    // The HTTP surface rejects whitespace-only q (400); the MCP surface trims
+    // to an empty needle and matches everything. Pin the divergence so the two
+    // surfaces cannot drift silently in either direction.
+    const result = await client.callTool({ name: "catalog_list", arguments: { query: "   " } });
+    expect((result as ToolCallResult).isError).toBeFalsy();
+    expect((JSON.parse(text(result)) as { count: number }).count).toBe(2);
+  });
+
+  it("filters after limiting, so a late lifecycle match underfills the result", async () => {
+    // searchApps applies its limit, THEN the tool filters by lifecycle/channel.
+    // A match that lives beyond the limit is therefore missing from the result
+    // even though it satisfies the filter — the documented behavior, pinned so
+    // the surprising interaction cannot silently change.
+    const result = await client.callTool({
+      name: "catalog_list",
+      arguments: { query: "alpha", lifecycle: "stub", limit: 1 },
+    });
+    expect((result as ToolCallResult).isError).toBeFalsy();
+    expect((JSON.parse(text(result)) as { count: number }).count).toBe(0);
+  });
+
+  it("survives a throwing store: tool error, no crash, next call still works", async () => {
+    const boom = (): never => {
+      throw new Error("secret store detail");
+    };
+    const throwingStore = {
+      upsertApps: boom,
+      getApp: boom,
+      listApps: boom,
+      searchApps: boom,
+      countApps: boom,
+    };
+    const failing = createCatalogMcpServer({ store: throwingStore });
+    const [fClientTransport, fServerTransport] = InMemoryTransport.createLinkedPair();
+    const failingClient = new Client({ name: "catalog-failing-test", version: "0.0.0" });
+    await failing.connect(fServerTransport);
+    await failingClient.connect(fClientTransport);
+
+    const listResult = await failingClient.callTool({ name: "catalog_list", arguments: {} });
+    expect((listResult as ToolCallResult).isError).toBe(true);
+    expect(text(listResult)).toContain("secret store detail");
+    expect(text(listResult)).not.toContain("at ");
+    // A non-Error throw is contained too, without a raw stack.
+    const throwingNonError = {
+      upsertApps: boom,
+      getApp: boom,
+      listApps: (): never => {
+        throw "plain string failure";
+      },
+      searchApps: boom,
+      countApps: boom,
+    };
+    const failing2 = createCatalogMcpServer({ store: throwingNonError });
+    const [f2ClientTransport, f2ServerTransport] = InMemoryTransport.createLinkedPair();
+    const failingClient2 = new Client({ name: "catalog-failing-test", version: "0.0.0" });
+    await failing2.connect(f2ServerTransport);
+    await failingClient2.connect(f2ClientTransport);
+    const thrown = await failingClient2.callTool({ name: "catalog_list", arguments: {} });
+    expect((thrown as ToolCallResult).isError).toBe(true);
+    expect(text(thrown)).toContain("plain string failure");
+
+    await failingClient.close();
+    await failingClient2.close();
+  });
 });
