@@ -44,7 +44,8 @@
     "test:incident-pg": "bun run ./src/server/incident-projection-pg.verify.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build:dashboard && bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/conversations $HOME/.hasna/conversations/training 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/conversations $HOME/.hasna/conversations/training 2>/dev/null || true",
+    "prepack": "bun run build"
   },
   "keywords": [
     "conversations",

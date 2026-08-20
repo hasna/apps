@@ -45,7 +45,8 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/testers/screenshots $HOME/.hasna/testers/browser/profiles 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/testers/screenshots $HOME/.hasna/testers/browser/profiles 2>/dev/null || true",
+    "prepack": "bun run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

@@ -36,7 +36,8 @@
     "db:migrate": "bunx drizzle-kit migrate",
     "db:studio": "bunx drizzle-kit studio",
     "prepublishOnly": "bun run typecheck && bun test && bun run build",
-    "postinstall": "install -d -m 700 \"$HOME/.hasna/brains\" \"$HOME/.hasna/brains/datasets\" 2>/dev/null || mkdir -p \"$HOME/.hasna/brains/datasets\""
+    "postinstall": "install -d -m 700 \"$HOME/.hasna/brains\" \"$HOME/.hasna/brains/datasets\" 2>/dev/null || mkdir -p \"$HOME/.hasna/brains/datasets\"",
+    "prepack": "bun run build"
   },
   "keywords": [
     "brains",

@@ -344,6 +344,36 @@ try {
   }
 }
 
+function extractJsonArraySuffix(raw: string): string {
+  let i = raw.length - 1;
+  while (i >= 0 && /\s/.test(raw[i])) i--;
+  if (i < 0 || raw[i] !== "]") {
+    throw new Error("pack output has no JSON array document (npm wrote no --json array)");
+  }
+  let depth = 0;
+  let inString = false;
+  for (; i >= 0; i--) {
+    const c = raw[i];
+    if (inString) {
+      if (c === '"') {
+        let backslashes = 0;
+        for (let j = i - 1; j >= 0 && raw[j] === "\\"; j--) backslashes++;
+        if (backslashes % 2 === 0) inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+    } else if (c === "]") {
+      depth++;
+    } else if (c === "[") {
+      depth--;
+      if (depth === 0) return raw.slice(i);
+    }
+  }
+  throw new Error("pack output brackets do not balance to a single JSON array");
+}
+
 async function preparePackagedRuntime(): Promise<PackagedRuntime> {
   const packDir = join(dataDir, "npm-pack");
   const extractDir = join(dataDir, "npm-package-extracted");
@@ -358,7 +388,11 @@ async function preparePackagedRuntime(): Promise<PackagedRuntime> {
     60_000,
   );
   commands.push(pack);
-  const packOutput = JSON.parse(pack.stdout) as Array<{
+  // npm pack --json writes the JSON array as the trailing stdout document;
+  // the prepack lifecycle's "Bundled N modules ..." progress lines interleave
+  // ahead of it, so raw JSON.parse fails. Slice the depth-0 trailing array
+  // (mirrors tooling/ci/check-publish-guard.ts extractJsonArraySuffix).
+  const packOutput = JSON.parse(extractJsonArraySuffix(pack.stdout)) as Array<{
     filename?: string;
     files?: Array<{ path?: string }>;
   }>;

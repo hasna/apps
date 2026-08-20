@@ -57,7 +57,8 @@
     "prepublishOnly": "bun run typecheck && bun test && bun run build",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:ingest": "bun run src/cli/index.tsx ingest --verbose",
-    "postinstall": "mkdir -p $HOME/.hasna/sessions 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/sessions 2>/dev/null || true",
+    "prepack": "bun run build"
   },
   "keywords": [
     "sessions",
