@@ -51,6 +51,21 @@ else
   echo "PASS no-cloud-guard: no retired .hasna/cloud runtime config reference in shipped scripts"
 fi
 
+# CLI surface regression (a6fc52c7): --help exits 0 with usage; --version
+# prints the exact package version; positional $1/$2 contract unchanged.
+CLI_FAIL=0
+if ! "$HERE/sentinel.sh" --help >/dev/null 2>&1; then
+  echo "FAIL cli-help: sentinel.sh --help did not exit 0" >&2
+  CLI_FAIL=1
+fi
+PKG_VERSION=$(grep -m1 '"version"' "$HERE/package.json" | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+ACTUAL_VERSION=$("$HERE/sentinel.sh" --version 2>/dev/null)
+if [ "$ACTUAL_VERSION" != "hasna-test-guard sentinel $PKG_VERSION" ]; then
+  echo "FAIL cli-version: sentinel.sh --version printed '$ACTUAL_VERSION', expected 'hasna-test-guard sentinel $PKG_VERSION'" >&2
+  CLI_FAIL=1
+fi
+[ "$CLI_FAIL" = "0" ] && echo "PASS cli-surface: --help exits 0 and --version matches package.json"
+
 RUNNER="$(mktemp /tmp/tg-smoke.XXXXXX)"
 trap 'rm -f "$RUNNER"' EXIT
 
@@ -79,7 +94,7 @@ export BUN_TEST_GUARD_WRAPPER_SOURCE="$HERE/bun-wrapper.sh"
 
 bash "$RUNNER"
 RC=$?
-if [ "$CLOUD_GUARD_FAIL" = "1" ]; then
+if [ "$CLOUD_GUARD_FAIL" = "1" ] || [ "$CLI_FAIL" = "1" ]; then
   exit 1
 fi
 exit "$RC"

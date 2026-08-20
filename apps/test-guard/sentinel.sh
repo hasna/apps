@@ -19,6 +19,35 @@
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 
+# Manual version constant; the smoke test asserts it matches package.json.
+VERSION="0.0.1"
+
+# CLI surface: --help / --version as the FIRST argument only; the positional
+# $1/$2 contract (alternate bun path / wrapper source, for tests) is unchanged.
+case "${1:-}" in
+  --help)
+    cat <<'EOF'
+Usage: sentinel.sh [--help|--version] [bun-path] [wrapper-source]
+
+hasna-test-guard sentinel (SC-00062) — verifies the bun-test concurrency cap
+is installed and viable (wrapper marker, bun-real, slots dir, e2e canary).
+
+  --help             show this help and exit
+  --version          print the sentinel version and exit
+  bun-path           optional alternate bun to check (tests)
+  wrapper-source     optional alternate wrapper source (tests)
+
+Env: SENTINEL_DRY_RUN=1 prints the would-be alert instead of posting.
+EOF
+    exit 0
+    ;;
+  --version)
+    printf '%s
+' "hasna-test-guard sentinel ${VERSION}"
+    exit 0
+    ;;
+esac
+
 BUN_PATH="${1:-/home/hasna/.bun/bin/bun}"
 REAL="/home/hasna/.bun/bin/bun-real"
 WRAPPER_SOURCE="${2:-/home/hasna/.hasna/test-guard/bun-wrapper.sh}"
