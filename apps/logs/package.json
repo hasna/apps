@@ -48,7 +48,8 @@
     "validate:structured-logs": "bun scripts/structured-log-validation-lab.ts",
     "validate:streams": "bun scripts/stream-load-validation.ts",
     "lint": "tsc --noEmit -p tsconfig.build.json",
-    "postinstall": "install -d -m 700 \"$HOME/.hasna/logs\" 2>/dev/null || true"
+    "postinstall": "install -d -m 700 \"$HOME/.hasna/logs\" 2>/dev/null || true",
+    "prepack": "bun run build"
   },
   "repository": {
     "type": "git",

@@ -60,7 +60,8 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
-    "postinstall": "mkdir -p ${XDG_DATA_HOME:-$HOME/.local/share}/open-domains ${XDG_CONFIG_HOME:-$HOME/.config}/open-domains 2>/dev/null || true"
+    "postinstall": "mkdir -p ${XDG_DATA_HOME:-$HOME/.local/share}/open-domains ${XDG_CONFIG_HOME:-$HOME/.config}/open-domains 2>/dev/null || true",
+    "prepack": "bun run build"
   },
   "keywords": [
     "domains",

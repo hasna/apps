@@ -51,7 +51,8 @@
     "check": "bun run validate:hardening && bun run typecheck && bun test && bun run build",
     "verify:release": "bun run typecheck && bun test && bun run build",
     "prepublishOnly": "bun run verify:release",
-    "postinstall": "mkdir -p $HOME/.hasna/snapshots/{exports,logs,plans} 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/snapshots/{exports,logs,plans} 2>/dev/null || true",
+    "prepack": "bun run build"
   },
   "keywords": [
     "snapshots",
