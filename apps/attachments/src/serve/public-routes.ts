@@ -17,6 +17,30 @@ import type { Context, Hono } from "hono";
 import type { Attachment } from "../core/db.js";
 import type { AttachmentsConfig } from "../core/config.js";
 import { getPublicBaseUrl, normalizePublicPath } from "../core/config.js";
+
+/**
+ * The base the emailed grant link must use. The share link was minted at upload
+ * time against the requested `base_url` when one was given (`--internal` /
+ * `base_url`), and the stored `attachment.link` carries that choice. Emailing a
+ * grant against a different base (the configured public one) would hand the
+ * recipient a link that either does not resolve on the uploader's chosen host
+ * or escapes the internal routing the uploader selected. Fall back to the
+ * configured public base only when no absolute http(s) stored link exists.
+ */
+function grantLinkBase(config: AttachmentsConfig, attachment: Attachment): string {
+  const stored = attachment.link;
+  if (stored) {
+    try {
+      const parsed = new URL(stored);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.origin;
+      }
+    } catch {
+      // fall through to the configured public base
+    }
+  }
+  return getPublicBaseUrl(config);
+}
 import { openAttachmentStream } from "../core/download.js";
 import { contentDispositionAttachment } from "../core/security.js";
 import {
@@ -371,7 +395,7 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
         sender,
         filename: access.attachment.filename,
         buildAccessUrl: (grant) =>
-          `${getPublicBaseUrl(config)}${sharePagePath(token, publicPath)}?grant=${encodeURIComponent(grant)}`,
+          `${grantLinkBase(config, access.attachment)}${sharePagePath(token, publicPath)}?grant=${encodeURIComponent(grant)}`,
       });
       return downloadPage(c, token, access, {
         notice: "Check your inbox — we emailed you an access link.",
