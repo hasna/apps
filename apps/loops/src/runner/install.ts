@@ -307,7 +307,9 @@ export function stopRunnerService(
       throw new Error(`${SERVICE_NAME} is not installed; run: loops-runner install`);
     }
     return runServiceCommands(
-      [`launchctl bootout gui/$(id -u) ${shellQuote(plist)} 2>/dev/null || true`],
+      [
+        `launchctl bootout gui/$(id -u) ${shellQuote(plist)} 2>/dev/null; s=$?; if [ "$s" -ne 0 ] && [ "$s" -ne 113 ]; then exit "$s"; fi`,
+      ],
       opts.spawnImpl,
     );
   }
