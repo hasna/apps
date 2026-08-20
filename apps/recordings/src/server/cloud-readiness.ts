@@ -227,7 +227,7 @@ export async function assertCloudSchemaContract(
                   ON attribute_row.attrelid = constraint_row.conrelid
                  AND attribute_row.attnum = key_row.attnum
                ORDER BY key_row.position
-            ) AS columns,
+            )::text[] AS columns,
             referenced_namespace.nspname AS referenced_schema,
             referenced_table.relname AS referenced_table,
             CASE WHEN constraint_row.confrelid = 0 THEN ARRAY[]::text[] ELSE ARRAY(
@@ -237,7 +237,7 @@ export async function assertCloudSchemaContract(
                   ON attribute_row.attrelid = constraint_row.confrelid
                  AND attribute_row.attnum = key_row.attnum
                ORDER BY key_row.position
-            ) END AS referenced_columns,
+            )::text[] END AS referenced_columns,
             NULLIF(constraint_row.confdeltype::text, ' ') AS delete_action,
             NULLIF(constraint_row.confupdtype::text, ' ') AS update_action,
             NULLIF(constraint_row.confmatchtype::text, ' ') AS match_type
@@ -278,7 +278,7 @@ export async function assertCloudSchemaContract(
                  AND attribute_row.attnum = key_row.attnum
                WHERE key_row.position <= index_row.indnkeyatts
                ORDER BY key_row.position
-            ) AS columns
+            )::text[] AS columns
        FROM pg_index index_row
        JOIN pg_class table_row ON table_row.oid = index_row.indrelid
        JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace

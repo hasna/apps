@@ -275,6 +275,36 @@ describe("cloud schema readiness", () => {
     }))).rejects.toThrow("recordings.goal");
   });
 
+  test("catalog constraint/index queries cast key-column ARRAY subqueries to text[]", async () => {
+    // Regression (I38-00531): the ARRAY(SELECT attname ...) subqueries produce name[]
+    // (pg oid 1003), which node-postgres does NOT parse — the driver returns the raw
+    // string "{id}" and sameColumns() always fails, so assertCloudSchemaContract threw
+    // "cloud schema has incompatible projects constraints" on every database and the
+    // recordings migrate container could never pass. The ::text[] casts force the
+    // driver's text[] parser (oid 1009), which returns real arrays.
+    const calls: string[] = [];
+    const pg = {
+      async all(sql: string) {
+        calls.push(sql);
+        if (/FROM pg_constraint/i.test(sql)) return READY_CONSTRAINTS;
+        if (/FROM pg_index/i.test(sql)) return [];
+        return READY_COLUMNS;
+      },
+      async get() {
+        return READY_ROLE;
+      },
+    } as unknown as PgAdapterAsync;
+    // With READY_CONSTRAINTS satisfied and no unique indexes, the index loop throws.
+    await expect(assertCloudSchemaContract(pg)).rejects.toThrow("unique indexes");
+    const constraintSql = calls.find((sql) => /FROM pg_constraint/i.test(sql));
+    const indexSql = calls.find((sql) => /FROM pg_index/i.test(sql));
+    expect(constraintSql).toBeDefined();
+    expect(indexSql).toBeDefined();
+    expect(constraintSql!).toMatch(/\)::text\[\] AS columns,/);
+    expect(constraintSql!).toMatch(/\)::text\[\] END AS referenced_columns/);
+    expect(indexSql!).toMatch(/\)::text\[\] AS columns/);
+  });
+
   test("rejects missing or wrong canonical base-table keys and foreign keys", async () => {
     for (const [table, columns] of [
       ["recordings", ["id"]],
