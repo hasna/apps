@@ -9,13 +9,26 @@ export interface StartChangelogServerOptions extends ChangelogApiOptions {
 
 export function startChangelogServer(options: StartChangelogServerOptions = {}): ReturnType<typeof Bun.serve> {
   const host = options.host ?? process.env["CHANGELOG_HOST"] ?? "127.0.0.1";
-  const port = options.port ?? Number.parseInt(process.env["CHANGELOG_PORT"] ?? "8788", 10);
+  const port = options.port ?? resolveServerPort(process.env["CHANGELOG_PORT"]);
   const handler = createChangelogHandler(options);
   return Bun.serve({
     hostname: host,
     port,
     fetch: handler,
   });
+}
+
+/**
+ * Resolve the CHANGELOG_PORT env value. Unset -> the documented default 8788;
+ * a set-but-non-numeric string (including an empty string) -> 0, which
+ * Bun.serve turns into an ephemeral port; a valid numeric string -> the parsed
+ * number. Never returns NaN, which Bun.serve rejects with ERR_OUT_OF_RANGE on
+ * current Bun versions.
+ */
+export function resolveServerPort(raw: string | undefined): number {
+  if (raw === undefined) return 8788;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function printHelp(): void {
