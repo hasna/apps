@@ -516,6 +516,7 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "accounts", kitVersion: "0.10.6", pinned: "0.5.2" },
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
   { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
+  { member: "economy", kitVersion: "0.11.2", pinned: "0.11.1" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
