@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.2.1
+## 0.3.0
+
+### Minor Changes
+
+- The `hasna-automations` bin alias is removed from the published package; use
+  `automations` instead. `@hasna/contracts` repo-conformance (`bins_allowlisted`)
+  only permits `automations` and `automations-daemon`. Anything resolving
+  `^0.2.0` that invokes `hasna-automations` will fail with
+  `command not found` after upgrading; this is released as a minor bump (0.3.0),
+  not a patch (#10). `automations` and `automations-daemon` are unchanged.
 
 ### Patch Changes
 
@@ -13,27 +22,12 @@
   - Persisted schema migrated in place, no data deleted: SQLite schema 6 -> 7 renames the claim-family columns and remaps stored status values; PostgreSQL gains migration `0004_taxonomy_queue_vocabulary` (columns, status CHECK, and the partial indexes that encoded the old vocabulary). Existing migration checksums are unchanged.
 - Updated dependencies [ebf862c]
   - @hasna/actions@0.2.1
-  - @hasna/contracts@0.11.2
+  - @hasna/contracts@0.12.0
 
 All notable changes to `@hasna/automations` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-### Removed (BREAKING)
-- The `hasna-automations` bin alias is removed from the published package; use
-  `automations` instead. `@hasna/contracts` repo-conformance (`bins_allowlisted`)
-  only permits `automations` and `automations-daemon`. Anything resolving
-  `^0.2.0` that invokes `hasna-automations` will fail with
-  `command not found` after upgrading, so this must be released as a **minor
-  bump (0.3.0)**, not a patch (#10).
-
-### Added
-- `hasna.contract.json` manifest, `contracts repo-conformance` wired into
-  `contracts:conformance`, and a published-artifact scan (`scan:artifact`)
-  wired into `prepack`/`prepublishOnly` (#10).
 
 ## [0.2.0] - 2026-07-24
 

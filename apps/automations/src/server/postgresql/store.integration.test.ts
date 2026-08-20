@@ -225,6 +225,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       "0001_server_schema",
       "0002_scale_indexes",
       "0003_bounded_claim_candidates",
+      "0004_taxonomy_queue_vocabulary",
     ]);
   });
 
@@ -274,6 +275,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       "0001_server_schema",
       "0002_scale_indexes",
       "0003_bounded_claim_candidates",
+      "0004_taxonomy_queue_vocabulary",
     ]);
     const indexes = await admin!.unsafe<[{ indexname: string }]>(
       "SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND indexname LIKE '%_idx' ORDER BY indexname",
@@ -306,7 +308,77 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       "0001_server_schema",
       "0002_scale_indexes",
       "0003_bounded_claim_candidates",
+      "0004_taxonomy_queue_vocabulary",
     ]);
+  });
+
+  test("migrates a populated pre-0004 database containing every legacy queue status", async () => {
+    const [first] = await connectPair();
+    await first.createAutomation(spec("pre0004-legacy-statuses", {
+      actions: [{ id: "step", actionId: "actions.required" }],
+    }));
+    await first.createRun({
+      id: "pre0004-legacy-run",
+      automationId: "pre0004-legacy-statuses",
+      trigger: { kind: "manual" },
+    });
+    // Simulate a populated pre-0004 database: revert the 0004 objects and
+    // ledger entry, restore the legacy status CHECK and the 0003-era indexes,
+    // then populate rows with every legacy queue status.
+    await admin!.unsafe("DELETE FROM hasna_automations_schema_migrations WHERE id='0004_taxonomy_queue_vocabulary'");
+    await admin!.unsafe(`
+      ALTER TABLE automation_actions RENAME COLUMN leased_by TO claimed_by;
+      ALTER TABLE automation_actions RENAME COLUMN leased_at TO claimed_at;
+      ALTER TABLE automation_actions RENAME COLUMN lease_generation TO claim_version;
+      ALTER TABLE automation_actions DROP CONSTRAINT IF EXISTS automation_actions_status_check;
+      ALTER TABLE automation_actions ADD CONSTRAINT automation_actions_status_check
+        CHECK (status IN ('queued','waiting_approval','claimed','retrying','succeeded','failed','dead','rejected','cancelled'));
+      DROP INDEX IF EXISTS automation_actions_ready_order_idx;
+      DROP INDEX IF EXISTS automation_actions_expired_lease_order_idx;
+      CREATE INDEX automation_actions_ready_order_idx ON automation_actions(available_at,created_at,id)
+        WHERE status IN ('queued','retrying') AND unmet_dependencies=0;
+      CREATE INDEX automation_actions_expired_claim_order_idx ON automation_actions(lease_expires_at,available_at,created_at,id)
+        WHERE status='claimed' AND lease_expires_at IS NOT NULL AND unmet_dependencies=0;
+      INSERT INTO automation_actions (
+        id,automation_run_id,step_id,action_id,idempotency_key,status,invocation_json,
+        available_at,created_at,updated_at,claim_version
+      ) VALUES
+        ('pre0004-queued','pre0004-legacy-run','queued-step','actions.required','pre0004-queued','queued','{}'::jsonb,$1,$1,$1,1),
+        ('pre0004-retrying','pre0004-legacy-run','retrying-step','actions.required','pre0004-retrying','retrying','{}'::jsonb,$1,$1,$1,2),
+        ('pre0004-claimed','pre0004-legacy-run','claimed-step','actions.required','pre0004-claimed','claimed','{}'::jsonb,$1,$1,$1,3)
+    `, [BASE_TIME]);
+    await first.close();
+    stores = stores.filter((store) => store !== first);
+
+    const migrated = await PostgreSqlServerAutomationsStore.connect(databaseUrl!);
+    stores.push(migrated);
+    const remapped = await admin!.unsafe<[{ id: string; status: string; lease_generation: string }]>(
+      `SELECT id,status,lease_generation FROM automation_actions
+       WHERE automation_run_id='pre0004-legacy-run' ORDER BY id`,
+    );
+    expect(remapped).toEqual([
+      { id: "pre0004-claimed", status: "leased", lease_generation: "3" },
+      { id: "pre0004-queued", status: "admitted", lease_generation: "1" },
+      { id: "pre0004-retrying", status: "admitted", lease_generation: "2" },
+    ]);
+    const constraint = await admin!.unsafe<[{ conname: string }]>(
+      "SELECT conname FROM pg_constraint WHERE conname='automation_actions_status_check'",
+    );
+    expect(constraint).toHaveLength(1);
+    const migratedLedger = await admin!.unsafe<[{ id: string }]>("SELECT id FROM hasna_automations_schema_migrations ORDER BY id");
+    expect(migratedLedger.map((row) => row.id)).toEqual([
+      "0001_server_schema",
+      "0002_scale_indexes",
+      "0003_bounded_claim_candidates",
+      "0004_taxonomy_queue_vocabulary",
+    ]);
+    // Reopen is idempotent: the second connect must not re-run or fail.
+    const reopened = await PostgreSqlServerAutomationsStore.connect(databaseUrl!);
+    stores.push(reopened);
+    const stillRemapped = await admin!.unsafe<[{ status: string }]>(
+      "SELECT status FROM automation_actions WHERE id='pre0004-claimed'",
+    );
+    expect(stillRemapped[0]?.status).toBe("leased");
   });
 
   test("refuses a checksum mismatch in the published 0002 ledger entry", async () => {
