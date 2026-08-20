@@ -29,6 +29,54 @@ const ASSIGNMENT_HEAD = join("Sentinel", "AAAA");
 const ASSIGNMENT_TAIL = "SentinelTAILBBBB";
 const ASSIGNMENT_LINE = `${ASSIGNMENT_KEY}=${ASSIGNMENT_HEAD}#${ASSIGNMENT_TAIL}`;
 
+// Ordinary identifiers the scanner must not treat as npm registry tokens.
+// Assembled from fragments because the literal names (npm_ followed by
+// packages_seen / global_duplicates) would trip the very detector this test
+// fixes.
+const NPM_NAME_A = join("npm", "_", "packages", "_seen");
+const NPM_NAME_B = join("npm", "_", "global", "_duplicates");
+// A real npm granular registry token is `npm_` + 36 hex chars. Assembled so
+// this file carries no literal credential shape.
+const NPM_TOKEN_SENTINEL = join(
+  "npm", "_",
+  "abcdef1234567890", "abcdef1234567890", "abcd",
+);
+
+describe("package_registry_token distinguishes values from names", () => {
+  // Regression for the fleet npm-token standard: npm_ + 20+ chars is what
+  // separates a value from a name (the repo's own pre-commit gate in
+  // tooling/ci/check-secrets.ts and the documented pattern history both use
+  // 20+). The detector used {12,}, which fired on identifiers such as the
+  // pr-monitor summary fields ending in packages_seen / global_duplicates
+  // and blocked commits on files that contain no credential (found while
+  // fixing the repos exact lookup, todos d8ed2fc2).
+  test("an npm_ identifier name does not fire", () => {
+    const result = scanInputExposures({
+      text: `${NPM_NAME_A} ${NPM_NAME_B}\n`,
+      path: "names.txt",
+    });
+
+    expect(
+      result.findings.filter((finding) => finding.detector === "package_registry_token"),
+    ).toHaveLength(0);
+  });
+
+  test("a real npm_ registry token value still fires", () => {
+    const result = scanInputExposures({
+      text: `registry=${NPM_TOKEN_SENTINEL}\n`,
+      path: "token.txt",
+    });
+
+    const npmFindings = result.findings.filter(
+      (finding) => finding.detector === "package_registry_token",
+    );
+    expect(npmFindings.length).toBeGreaterThanOrEqual(1);
+    for (const finding of npmFindings) {
+      expect(finding.preview).not.toContain(NPM_TOKEN_SENTINEL);
+    }
+  });
+});
+
 describe("scan preview redaction", () => {
   test("a match at column 0 does not put the value in the preview", () => {
     const result = scanInputExposures({
