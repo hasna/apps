@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.18
+
+### Patch Changes
+
+- Updated dependencies [b2638b2]
+  - @hasna/secrets@0.3.3
+  - @hasna/conversations@0.7.1
+  - @hasna/todos@0.15.38
+
 ## 0.5.17
 
 ### Patch Changes

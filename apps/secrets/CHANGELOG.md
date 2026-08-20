@@ -1,13 +1,19 @@
 # Changelog
 
+## 0.3.3
+
+### Patch Changes
+
+- b2638b2: fix(scanner): package*registry_token fires on npm* identifiers — align the tail threshold with the fleet-documented value-length standard ({12,} → {20,}, matching tooling/ci/check-secrets.ts and the commit-gate pattern history). The detector matched ordinary names (identifiers ending in packages*seen / global_duplicates) and blocked commits on credential-free files; real npm granular tokens (npm* + 36 hex) still fire. Regression tests cover both directions (todos 12ccb3a2).
+
 ## 0.3.2
 
 ### Patch Changes
 
 - 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
 - ca7acc8: Emit a machine-readable stderr notice naming the local-vault fallback when no hosted API config (API_URL + API_KEY) is present, instead of a silent rc=0 "Vault is empty." — names the fallback path, the local secret count, and that hosted secrets are not visible (incident 715558, BUG b76e2d56).
-- 4e5b690: fix(secrets): package_registry_token requires a value-shaped npm_ suffix, not a bare prefix
-  
+- 4e5b690: fix(secrets): package*registry_token requires a value-shaped npm* suffix, not a bare prefix
+
   The detector matched `npm_` followed by 12+ of `[A-Za-z0-9_]`, so npm's documented
   env var NAMES (`npm_lifecycle_event`, `npm_package_name`, ...) tripped
   `secrets scan staged` at rc=1 and blocked commits on files that only reference
@@ -15,9 +21,10 @@
   20+ alphanumeric characters with no underscore — which is the fleet's established
   value/name discriminator, applied consistently to the scanner detector and the
   history-scan git-grep pattern. Regression tests cover both directions: env var
-  names pass, a value-shaped npm_ token still trips.
+  names pass, a value-shaped npm\_ token still trips.
+
 - 28fedae: fix(secrets): xai_api_key detector requires a value-shaped suffix, not a bare 'xai-' prefix
-  
+
   The detector matched `xai-` followed by 12+ of `[A-Za-z0-9_-]`, so ordinary xAI
   model ids (a hyphenated word after the prefix) tripped `secrets scan` at rc=1
   and blocked commits on files containing no credential (bug a869386e, incident

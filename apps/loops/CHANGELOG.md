@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.7
+
+### Patch Changes
+
+- @hasna/contracts@0.13.1
+
 ## 0.5.6
 
 ### Patch Changes

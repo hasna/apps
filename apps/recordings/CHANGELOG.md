@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5
+
+### Patch Changes
+
+- @hasna/contracts@0.13.1
+
 ## 0.3.4
 
 ### Patch Changes
@@ -15,10 +21,11 @@
 
 - fc80bf1: Record the strong reason for the local-only artifact policy (local-only-capability-removal workflow 2026-08-18): ad-hoc / Developer ID signed, non-notarized builds bound to a single approved target machine are a native macOS distribution policy, not a data-backend capability — the signing identity is keychain-held on the build Mac and the machine binding is the capability itself. The release path keeps rejecting the local-only policy fields as a security control; gate comments in release-install-policy.ts now carry the dated evidence chain. No runtime behavior change.
 - 55c591a: Rename the macOS app bundle to HasnaRecordings.app per the fleet naming convention (knowledge k_msxd5rz3_jfvl3i): the full app now builds, signs, notarizes, installs, and updates as `/Applications/HasnaRecordings.app` (display name "Hasna Recordings") for both the full and bar variants — the previous bundle name `Recordings.app` is retained only in install/status discovery and journal recovery so legacy installs are found and cleaned up. The bundle identifier stays `com.hasna.recordings` and the executable inside the bundle stays `Recordings`, so TCC grants and update-client wiring keep keying on the same identity.
-  
+
   The release artifact basename follows the bundle name (`HasnaRecordings-<version>-macos-...`), consistent with the bar variant.
-  
+
   Also hardens install-lifecycle tests whose sentinel `sleep 30` children expired naturally during install cycles that run longer than 30 seconds under load (pre-existing ESRCH flake, reproduced on the base checkout), widens one smoke-timeout budget for the same reason, and teaches the install-journal validator to accept the data-dir `HasnaRecordings.app` install site alongside the legacy `Recordings.app` one.
+
 - First release from the hasna/apps monorepo. The package was imported from hasna/recordings with history preserved (import capsule a28d4f0b, import merge bcff7306); the frozen source tip is the 0.3.0 line (deployment-mode removal), which was never published from the source repo — npm latest there was 0.2.14. The delta vs 0.2.14 is that 0.3.0 content, plus the monorepo workspace wiring and the documented absorption fixes (exact registry pins for @hasna/contracts 0.8.4 and @hasna/events 0.1.11, matching the standalone lockfile). This patch establishes version ownership under the monorepo.
 - Updated dependencies [b630c48]
   - @hasna/contracts@0.11.2
@@ -59,14 +66,14 @@ the number is being corrected before it ships.
 ### Breaking — deployment modes are removed (`8ef9ed8`)
 
 `local | self_hosted | cloud`, and the surviving `remote` / `hybrid` aliases,
-are gone. They described *where* something ran, which is an operational fact
+are gone. They described _where_ something ran, which is an operational fact
 rather than a product variant. Two independent, role-named switches replace all
 five words:
 
-| role | variable | values |
-| --- | --- | --- |
+| role                | variable                        | values                   |
+| ------------------- | ------------------------------- | ------------------------ |
 | server data backend | `HASNA_RECORDINGS_STORAGE_MODE` | `sqlite` \| `postgresql` |
-| client store | `HASNA_RECORDINGS_CLIENT_STORE` | `sqlite` \| `http` |
+| client store        | `HASNA_RECORDINGS_CLIENT_STORE` | `sqlite` \| `http`       |
 
 A retired mode word is now a **hard error** naming the variable to set and the
 exact value to set it to — it is not silently normalized. That silent

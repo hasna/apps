@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.93
+
+### Patch Changes
+
+- @hasna/browser@0.5.18
+- @hasna/contracts@0.13.1
+
 ## 0.0.92
 
 ### Patch Changes

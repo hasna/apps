@@ -1,3 +1,9 @@
+## 0.4.39
+
+### Patch Changes
+
+- @hasna/contracts@0.13.1
+
 ## 0.4.38
 
 ### Patch Changes
@@ -6,6 +12,7 @@
 - Updated dependencies [d5b64f8]
 - Updated dependencies [1da0550]
   - @hasna/contracts@0.13.0
+
 ## 0.4.37
 
 ### Patch Changes
@@ -13,6 +20,7 @@
 - Updated dependencies [b630c48]
   - @hasna/contracts@0.11.2
   - @hasna/events@0.1.16
+
 ## 0.4.36 (2026-08-15)
 
 ### Fixed
@@ -31,6 +39,7 @@
 Publishes merged PR #119, which releases the mode-removal content from PR #111
 (removing the deployment-mode vocabulary per the canonical doctrine). The
 release carries the exact merged main tree at `918cbc03`.
+
 ## 0.4.34
 
 Fixes the Cursor fixed global-authority guard blocking every cursor session
@@ -40,7 +49,6 @@ path stamps that marker onto every write to `.cursor/rules/hasna-global.mdc`.
 Foreign, tampered, and non-regular files remain blocked. `session plan` also
 exits non-zero when the render plan is blocked instead of returning rc=0 with
 an empty plan.
-
 
 ## 0.4.33
 
@@ -255,11 +263,11 @@ Closes **relocation**, the third and last credential-destruction route, which
 0.4.15 shipped with and named as still open in its own entry above.
 
 **What was destroying, and why both guards missed it.** `wouldDestroyACredential`
-scanned with the config's *declared* `ConfigFormat`. That union has no `shell`
+scanned with the config's _declared_ `ConfigFormat`. That union has no `shell`
 member, and `detectFormat` returns `text` for any extensionless path — so
 `~/.zshrc`, `~/.bashrc` and `~/.npmrc`, the three files most likely to hold a
 literal credential, all arrived declared `text`. `text` routes to
-`redactGeneric`, which matches token *shapes* only and never key names, so a
+`redactGeneric`, which matches token _shapes_ only and never key names, so a
 credential with a secret-class KEY and a shapeless VALUE was invisible to the
 scan arm on exactly those files. Pair that with a relocation — the placeholder
 moved from prose onto the live slot, total count conserved — and the count
@@ -299,7 +307,7 @@ disk, never on an exit code — the whole defect is that the destroying path exi
   `.zshenv`, `*.env` resolve to `shell`; `.npmrc`, `.yarnrc`, `.curlrc`,
   `.netrc` resolve to `ini`. **Any other extensionless credential-bearing file
   still resolves to `text` and is still blind on the scan arm.** The sharpest
-  case is **`~/.aws/credentials`**: the `ini` dialect *would* catch
+  case is **`~/.aws/credentials`**: the `ini` dialect _would_ catch
   `aws_secret_access_key`, so that one is blind only because the path is not
   listed. **`~/.pgpass` is a different and worse shape** — colon-delimited with
   no key at all, so neither `shell` nor `ini` detects it and adding it to the map
@@ -320,11 +328,11 @@ Ships the two already-merged fixes that stop `apply` destroying live credentials
 and lifts `PUBLISH_HOLD` under that file's own condition (both named defects
 fixed and merged, with the sha, never one of the two).
 
-**Read this before assuming you were safe.** `PUBLISH_HOLD` stated *"Exposure is
+**Read this before assuming you were safe.** `PUBLISH_HOLD` stated _"Exposure is
 currently ZERO: installed and npm-latest are both 0.4.14, which predates the #38
-merge."* That is **false**, measured on station01 and station02 rather than
+merge."_ That is **false**, measured on station01 and station02 rather than
 argued. 0.4.14 carries **no guard at all**, so it destroys on every shape — and
-0.4.12 destroys identically. The route is the one #38 was *fixing*, not the one
+0.4.12 destroys identically. The route is the one #38 was _fixing_, not the one
 it introduced: ingest redacts a live value to `{{AUTHORIZATION}}` in the stored
 row, and `apply` writes that stored row to disk, exits 0, and prints
 `OK (changed)`. Anyone who ran `instructions apply` against a credential-bearing
@@ -342,7 +350,7 @@ Reproduced by reviewer `tullius` on this candidate. Do not read this release as
 
 The guard is targeted rather than blanket, verified with drifted disk content so
 a write was genuinely required: ordinary configs, non-secret `{{VAR}}` prose, and
-a rules file that *documents* `{{NPM_TOKEN}}` all still apply.
+a rules file that _documents_ `{{NPM_TOKEN}}` all still apply.
 
 - fix(apply): refuse to overwrite live config with a secret-class placeholder
   (#40, `06ff066`, todos `e043e6df`). Decides from `scanSecrets` — the same
@@ -444,7 +452,7 @@ place. Announced as [BREAKING] before the release landed.
 ## 0.4.12
 
 - fix(diff): stop printing credential values from disk (#30, #31). `instructions
-  diff` rendered the stored `${VAR}` placeholder against the literal value on
+diff` rendered the stored `${VAR}` placeholder against the literal value on
   disk, so the comparison manufactured plaintext that existed in neither side
   alone. Backfilled here — 0.4.12 shipped without a changelog entry.
 
@@ -498,8 +506,8 @@ suites had never actually run on a Mac.
 ## 0.4.9
 
 Release cutting the three PRs landed on `main` since 0.4.8 with no prior version
-bump. The reason to cut it now is operational: a standing fleet warning — *never
-run `instructions apply` on any `04-hasna-agent-operating-rules-md*` slug* — exists
+bump. The reason to cut it now is operational: a standing fleet warning — _never
+run `instructions apply` on any `04-hasna-agent-operating-rules-md_` slug\* — exists
 because of a defect that #18 fixes, and that warning cannot be retired while the
 fix is unpublished.
 
