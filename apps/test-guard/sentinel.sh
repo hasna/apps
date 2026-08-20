@@ -18,8 +18,6 @@
 
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
-# shellcheck disable=SC1091
-[ -f "$HOME/.hasna/cloud/hasna-cloud-env.sh" ] && . "$HOME/.hasna/cloud/hasna-cloud-env.sh"
 
 BUN_PATH="${1:-/home/hasna/.bun/bin/bun}"
 REAL="/home/hasna/.bun/bin/bun-real"

@@ -2,7 +2,9 @@
 # hasna-test-guard wrapper v1 (SC-00062, 2026-07-30) — DO NOT REMOVE THIS MARKER LINE
 #
 # --posix IS LOAD-BEARING (incident 2026-07-30 ~15:0xZ): agent shells on this
-# fleet export BASH_ENV=~/.hasna/cloud/agent-env.sh. A plain non-interactive
+# fleet export BASH_ENV pointing at the retired fleet cloud-runtime env file
+# (path token intentionally not spelled here; the no-cloud guard forbids the
+# retired runtime config pattern in packed content). A plain non-interactive
 # bash sources $BASH_ENV at startup, and that chain `set -a` re-exports the
 # todos/conversations/mementos API routing variables — silently REVERTING any
 # `env -u VAR bun ...` unset and CLOBBERING any explicit override of those

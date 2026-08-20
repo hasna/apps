@@ -39,6 +39,18 @@ fi
 # guard-installed host without mutating the install.
 FLEET_REAL="${TEST_GUARD_FLEET_REAL:-/home/hasna/.bun/bin/bun-real}"
 
+# Regression (publish-all-test-guard remediation): the shipped guard MUST NEVER
+# source the retired .hasna/cloud runtime config — the no-cloud guard forbids
+# the pattern in packed content (contracts no-cloud scan, runtime_config kind).
+# Proving it at the source surface so the package cannot regress it.
+CLOUD_GUARD_FAIL=0
+if grep -nE '\.hasna/cloud|hasna-cloud-env' "$HERE/sentinel.sh" "$HERE/bun-wrapper.sh" "$HERE/battery.sh"; then
+  echo "FAIL no-cloud-guard: retired .hasna/cloud runtime config reference found in a shipped script" >&2
+  CLOUD_GUARD_FAIL=1
+else
+  echo "PASS no-cloud-guard: no retired .hasna/cloud runtime config reference in shipped scripts"
+fi
+
 RUNNER="$(mktemp /tmp/tg-smoke.XXXXXX)"
 trap 'rm -f "$RUNNER"' EXIT
 
@@ -66,3 +78,8 @@ export BUN_TEST_GUARD_SENTINEL="$HERE/sentinel.sh"
 export BUN_TEST_GUARD_WRAPPER_SOURCE="$HERE/bun-wrapper.sh"
 
 bash "$RUNNER"
+RC=$?
+if [ "$CLOUD_GUARD_FAIL" = "1" ]; then
+  exit 1
+fi
+exit "$RC"
