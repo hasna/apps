@@ -26,6 +26,40 @@ import { join, relative, sep } from "node:path";
 
 type Environment = Record<string, string | undefined>;
 
+interface ExportsEntry {
+  types?: string;
+  import?: string;
+}
+
+interface PackageJsonWithExports {
+  exports?: Record<string, ExportsEntry | string>;
+}
+
+/**
+ * Derive the packed-layout paths a consumer must be able to load from the
+ * package's DECLARED export map, as archive-relative entries. Wave #602's
+ * committed-declarations change moved the declaration emit from dist/ to a
+ * committed types/ directory; a required-files list that hardcoded
+ * `package/dist/...` went stale against the new layout and the smoke gate
+ * failed on files the package no longer declares. Deriving the list from the
+ * exports map reconciles it to the actual layout by construction.
+ */
+export function requiredPackFiles(packageJson: PackageJsonWithExports): string[] {
+  const derived: string[] = [];
+  const exportsMap = packageJson.exports ?? {};
+  for (const subpath of [".", "./todos", "./deployment", "./deployment/artifacts"]) {
+    const entry = exportsMap[subpath];
+    if (typeof entry === "string") continue;
+    for (const key of ["types", "import"] as const) {
+      const target = entry?.[key];
+      if (typeof target === "string" && target.startsWith("./")) {
+        derived.push(`package/${target.slice(2)}`);
+      }
+    }
+  }
+  return [...new Set(derived)];
+}
+
 /**
  * Opt-in that lets the pack smoke run the offline archive-extraction
  * diagnostic when an isolated `bun install` is unavailable. It never turns a

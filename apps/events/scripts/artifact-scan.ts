@@ -8,13 +8,29 @@
 // Packing uses `--ignore-scripts`: without it, packing from inside `prepack`
 // would re-enter `prepack` forever.
 //
-// The scanner comes from the pinned `@hasna/contracts` devDependency
-// (node_modules/.bin), never `bunx` — an unpinned package runner makes the
-// release gate depend on whatever the registry serves that day.
+// The scanner comes from the pinned `@hasna/contracts` devDependency, never
+// `bunx` — an unpinned package runner makes the release gate depend on
+// whatever the registry serves that day. It is resolved through the installed
+// package's own declared bin (not node_modules/.bin): bun creates no .bin
+// shim for workspace-linked members, so the shim path dies with ENOENT in a
+// fresh checkout.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+function resolveContractsCli(): string {
+  const packageJsonPath = fileURLToPath(import.meta.resolve("@hasna/contracts/package.json"));
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+    bin: { contracts?: string } | string;
+  };
+  const bin = typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin.contracts;
+  if (typeof bin !== "string" || bin.length === 0) {
+    throw new Error("@hasna/contracts does not declare the contracts CLI");
+  }
+  return resolve(dirname(packageJsonPath), bin);
+}
 
 function run(command: string[], cwd: string): string {
   const result = Bun.spawnSync(command, { cwd, stdout: "pipe", stderr: "pipe" });
@@ -27,7 +43,7 @@ function run(command: string[], cwd: string): string {
 }
 
 const repoRoot = join(import.meta.dir, "..");
-const scanner = join(repoRoot, "node_modules", ".bin", "contracts");
+const scanner = resolveContractsCli();
 const workspace = mkdtempSync(join(tmpdir(), "events-artifact-scan-"));
 
 try {

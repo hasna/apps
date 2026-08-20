@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -18,6 +19,7 @@ import {
   PACK_INSTALL_FALLBACK_ENV,
   packInstallDenied,
   packInstallFallbackAllowed,
+  requiredPackFiles,
 } from "../../src/testing/packed-consumer.js";
 
 const root = join(import.meta.dir, "..", "..");
@@ -108,6 +110,49 @@ describe("auditExtractedPackage", () => {
     expect(audit.failures).toContain(
       "extracted package is missing an archive entry: dist/todos/index.js",
     );
+  });
+});
+
+describe("requiredPackFiles", () => {
+  test("derives the consumer-loadable paths from the declared export map", () => {
+    const derived = requiredPackFiles(
+      JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as never,
+    );
+    for (const required of [
+      "package/dist/todos/index.js",
+      "package/dist/todos/index.d.ts",
+      "package/dist/deployment/index.js",
+      "package/dist/deployment/index.d.ts",
+      "package/dist/deployment-artifacts.js",
+      "package/dist/deployment-artifacts.d.ts",
+    ]) {
+      expect(derived).toContain(required);
+    }
+  });
+
+  test("follows the declarations when they move from dist/ to a committed types/ layout", () => {
+    // Wave #602's committed-declarations change moved the types targets to
+    // types/; the required list must follow the declared layout, not hardcode
+    // dist/ — that hardcode is exactly the drift the smoke gate hit.
+    const waveLayout = {
+      exports: {
+        ".": { types: "./types/index.d.ts", import: "./dist/index.js" },
+        "./todos": { types: "./types/todos/index.d.ts", import: "./dist/todos/index.js" },
+        "./deployment": {
+          types: "./types/deployment/index.d.ts",
+          import: "./dist/deployment/index.js",
+        },
+        "./deployment/artifacts": {
+          types: "./types/deployment-artifacts.d.ts",
+          import: "./dist/deployment-artifacts.js",
+        },
+      },
+    } as never;
+    const derived = requiredPackFiles(waveLayout);
+    expect(derived).toContain("package/types/todos/index.d.ts");
+    expect(derived).toContain("package/types/deployment/index.d.ts");
+    expect(derived).toContain("package/types/deployment-artifacts.d.ts");
+    expect(derived).not.toContain("package/dist/todos/index.d.ts");
   });
 });
 
