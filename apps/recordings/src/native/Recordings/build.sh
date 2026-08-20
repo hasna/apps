@@ -506,11 +506,12 @@ generate_and_verify_native_fs_guard() {
       const addon = createRequire(import.meta.url)(process.argv[1]);
       const expected = [
         "chmodHandle", "close", "copyRegularNoReplaceAt", "fsyncHandle",
-        "linkNoReplaceAt", "mkdirAt", "openDirAt", "openRegularAt", "openTrustedHome",
-        "readDir", "readRegularAt", "removeTreeAt", "removeTreeHandleAt",
-        "renameHandleNoReplaceAt", "renameNoReplaceAt", "renameReplaceAt",
-        "sameBinding", "sha256Handle", "sha256RegularAt", "statAt", "statHandle",
-        "unlinkDirAt", "unlinkFileAt", "unlinkFileHandleAt", "writeFileAt",
+        "handleHasNoExtendedAcl", "linkNoReplaceAt", "mkdirAt", "openDirAt",
+        "openRegularAt", "openTrustedHome", "readDir", "readRegularAt",
+        "removeTreeAt", "removeTreeHandleAt", "renameHandleNoReplaceAt",
+        "renameNoReplaceAt", "renameReplaceAt", "sameBinding", "sha256Handle",
+        "sha256RegularAt", "statAt", "statHandle", "unlinkDirAt", "unlinkFileAt",
+        "unlinkFileHandleAt", "writeFileAt",
       ];
       const actual = Object.getOwnPropertyNames(addon).sort();
       if (JSON.stringify(actual) !== JSON.stringify(expected)) {

@@ -140,6 +140,12 @@ describe("native release build hardening contract", () => {
     expect(buildScript).toContain('run_bun pm pack --destination "$pack_root" --ignore-scripts');
     expect(buildScript).toContain("Native filesystem guard exports are incompatible");
     expect(buildScript).toContain("Object.getOwnPropertyNames(addon).sort()");
+    // The build's expected export list must cover every export the loader calls.
+    // The C source registers 26 exports including handleHasNoExtendedAcl, and
+    // native_fs_guard.ts calls all of them; the build.sh list previously omitted
+    // handleHasNoExtendedAcl, so every real macOS build died at this gate with
+    // "Native filesystem guard exports are incompatible" (measured on station06).
+    expect(buildScript).toContain('"handleHasNoExtendedAcl"');
     expect(buildScript).toContain('/usr/bin/lipo "$addon" -verify_arch arm64 x86_64');
     expect(buildScript).toContain('run_codesign --verify --strict --all-architectures');
     expect(buildScript).toContain(
