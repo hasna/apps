@@ -152,7 +152,7 @@ describe("ApiStore bounded message reads", () => {
     expect(calls.map((call) => call.path)).toEqual(["/messages", "/messages", "/messages"]);
   });
 
-  test("getUnreadBlockers relies on the authenticated principal instead of a local agent query", async () => {
+  test("getUnreadBlockers without an explicit --from omits the agent query (principal-scoped read)", async () => {
     const queries: Array<Record<string, unknown>> = [];
     const client = {
       name: "conversations",
@@ -162,7 +162,7 @@ describe("ApiStore bounded message reads", () => {
           expect(path).toBe("/messages/blockers");
           const query = options?.query ?? {};
           queries.push(query);
-          if ("agent" in query) throw new Error("agent query must be omitted");
+          if ("agent" in query) throw new Error("agent query must be omitted for a default identity read");
           return {
             messages: [preview],
             count: 1,
@@ -181,11 +181,59 @@ describe("ApiStore bounded message reads", () => {
       },
     } as unknown as HasnaStorageClient;
 
+    // The resolved DEFAULT identity (drifted from the API principal, as in bug
+    // #160) must never reach the route as a query filter.
     const result = await new ApiStore(client).getUnreadBlockers("codewith-iapp-news");
 
     expect(result).toHaveLength(1);
     expect(result[0]?.content).toBe("bounded announcement");
     expect(queries).toEqual([{
+      limit: 20,
+      cursor: 0,
+      max_bytes: 65_536,
+      preview_bytes: 320,
+      timeout_ms: 3_000,
+      detail: "preview",
+    }]);
+  });
+
+  test("getUnreadBlockers forwards an EXPLICIT --from agent so the server can enforce the identity match", async () => {
+    const queries: Array<Record<string, unknown>> = [];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (path: string, options?: { query?: Record<string, unknown> }) => {
+          expect(path).toBe("/messages/blockers");
+          const query = options?.query ?? {};
+          queries.push(query);
+          return {
+            messages: [preview],
+            count: 1,
+            limit: 20,
+            cursor: 0,
+            next_cursor: null,
+            has_more: false,
+            skipped_count: 0,
+            byte_length: 0,
+            max_bytes: 65_536,
+            timeout_ms: 3_000,
+            compact: true,
+            detail_path: "messages/{id}",
+          };
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    // Regression: the flag used to be silently dropped, so --from <any-agent>
+    // returned the authenticated principal's blockers at rc=0. An explicit
+    // request must reach the server, which answers 403 on mismatch — never a
+    // silent wrong-scope read.
+    const result = await new ApiStore(client).getUnreadBlockers("agent-chief-staff", { explicitFrom: true });
+
+    expect(result).toHaveLength(1);
+    expect(queries).toEqual([{
+      agent: "agent-chief-staff",
       limit: 20,
       cursor: 0,
       max_bytes: 65_536,

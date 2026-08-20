@@ -278,10 +278,15 @@ export function registerAgentTools(
   }, async (args: Record<string, any>) => {
     const { from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
+    // `explicitFrom` marks an EXPLICIT `from` argument: the hosted store
+    // forwards it so the server can enforce the identity match instead of
+    // silently returning the principal's blockers. The connection-bound
+    // default identity is never forwarded.
+    const explicitFrom = Boolean(fromParam?.trim());
     const window = resolveMcpWindow(args);
     const blockers = await getStore().getUnreadBlockers(
       agent,
-      args.verbose ? undefined : { limit: window.limit + 1, offset: window.offset },
+      { ...(args.verbose ? undefined : { limit: window.limit + 1, offset: window.offset }), explicitFrom },
     );
 
     return {
