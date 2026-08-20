@@ -13,7 +13,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { addProfile, purgeProfileDir, removeProfile } from "./lib/profiles.js";
 import { addCustomTool, getTool } from "./lib/tools.js";
@@ -57,17 +57,16 @@ function readJson(path: string): Record<string, unknown> {
 
 /**
  * Run `fn` with PATH and Bun's install root isolated, restoring both caller
- * values afterwards. The installed-statusline provisioner resolves from both
- * sources, so every test that mints a fresh profile and asserts something about
- * settings.json must pin them or the runner's ambient installation makes the
- * test environment-dependent (measured on station01, where statusline is installed).
+ * values afterwards. A temporary BUN_INSTALL sentinel is used by default so
+ * tests that intentionally omit statusline remain independent of the host's
+ * default ~/.bun/bin; pass null to exercise that real default discovery path.
  */
-function withPath<T>(pathValue: string, fn: () => T, bunInstall?: string): T {
+function withPath<T>(pathValue: string, fn: () => T, bunInstall?: string | null): T {
   const previousPath = process.env.PATH;
   const previousBunInstall = process.env.BUN_INSTALL;
   process.env.PATH = pathValue;
-  if (bunInstall === undefined) delete process.env.BUN_INSTALL;
-  else process.env.BUN_INSTALL = bunInstall;
+  if (bunInstall === null) delete process.env.BUN_INSTALL;
+  else process.env.BUN_INSTALL = bunInstall ?? join(home, "no-bun-install");
   try {
     return fn();
   } finally {
@@ -962,6 +961,28 @@ test("a fresh Claude profile finds the Bun-installed statusline when PATH omits 
     join(home, "path-without-statusline"),
     () => addProfile({ name: "bun-statusline-at-birth" }),
     bunInstall,
+  );
+
+  expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+    type: "command",
+    command: `${statuslineBin} render`,
+    padding: 0,
+  });
+});
+
+test("a fresh Claude profile finds the default Bun install when env and PATH omit it", () => {
+  // This is the station-level regression: Bun installs global binaries under
+  // ~/.bun/bin, while a newly minted profile may be created without either
+  // BUN_INSTALL or that directory on PATH. The package is a prerequisite for
+  // this real-path check; environments without it retain the fixture-based
+  // coverage above.
+  const statuslineBin = join(homedir(), ".bun", "bin", "statusline");
+  if (!existsSync(statuslineBin)) return;
+
+  const p = withPath(
+    join(home, "path-without-statusline"),
+    () => addProfile({ name: "default-bun-statusline" }),
+    null,
   );
 
   expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
