@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -143,6 +144,15 @@ function installPackage(appDir, sourceDir) {
   const target = packagePath(join(appDir, "node_modules"), "@hasna/machines");
   mkdirSync(dirname(target), { recursive: true });
   copyPackage(sourceDir, target);
+  // Only an externalized consumer bundle (the packed tarball, whose build
+  // keeps @hasna/contracts external so the install-time workspace build
+  // never reads a mid-build contracts dist) imports @hasna/contracts at
+  // runtime and needs the dependency in the fixture. A source-built inline
+  // bundle (tests building consumer.ts without externals) is self-contained
+  // and must not require it.
+  const consumerBundle = join(sourceDir, "dist", "consumer.js");
+  if (!existsSync(consumerBundle)) return;
+  if (!readFileSync(consumerBundle, "utf8").includes("@hasna/contracts")) return;
   const contractsDir = resolveInstalledDependency(sourceDir, "@hasna/contracts");
   if (!contractsDir) {
     throw new Error(
