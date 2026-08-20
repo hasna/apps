@@ -240,3 +240,96 @@ describe("CLI JSON workflow", () => {
     expect(JSON.parse(webhooksJson.stdout.toString())).toHaveLength(25);
   }, 60_000);
 });
+
+describe("CLI projects capability-bearing destination URLs (incident 716957)", () => {
+  // Synthetic S3 V4 presigned-URL shape. Never a live capability.
+  const PRESIGNED =
+    "https://s3.amazonaws.com/bucket/object?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+    "&X-Amz-Credential=fleettestkey%2F20260820%2Fus-east-1%2Fs3%2Faws4_request" +
+    "&X-Amz-Date=20260820T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host" +
+    "&X-Amz-Signature=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+  const SIGNATURE_VALUE = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+  test("link get --json emits the plain reference, never the signed capability", () => {
+    expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
+    expect(runCli(["create", PRESIGNED, "--slug", "secret"]).exitCode).toBe(0);
+
+    const get = runCli(["link", "get", "secret"]);
+    expect(get.exitCode).toBe(0);
+    const text = get.stdout.toString();
+    expect(text).not.toContain("X-Amz-Signature");
+    expect(text).not.toContain(SIGNATURE_VALUE);
+    expect(JSON.parse(text).destination_url).toBe("https://s3.amazonaws.com/bucket/object");
+  });
+
+  test("link list --json projects every row", () => {
+    expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
+    expect(runCli(["create", "https://example.com/plain", "--slug", "plain"]).exitCode).toBe(0);
+    expect(runCli(["create", PRESIGNED, "--slug", "secret"]).exitCode).toBe(0);
+
+    const rows = JSON.parse(runCli(["link", "list"]).stdout.toString()) as Array<{ destination_url: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].destination_url).toBe("https://s3.amazonaws.com/bucket/object");
+    expect(rows[1].destination_url).toBe("https://example.com/plain");
+  });
+
+  test("resolve projects in both JSON and human modes", () => {
+    expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
+    expect(runCli(["create", PRESIGNED, "--slug", "secret"]).exitCode).toBe(0);
+
+    const json = runCli(["resolve", "secret"]);
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.stdout.toString()).destination_url).toBe("https://s3.amazonaws.com/bucket/object");
+
+    const human = runCli(["resolve", "secret"], { json: false });
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout.toString().trim()).toBe("https://s3.amazonaws.com/bucket/object");
+    expect(human.stdout.toString()).not.toContain("X-Amz-Signature");
+  });
+
+  test("stats output projects the destination in JSON and human modes", () => {
+    expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
+    expect(runCli(["create", PRESIGNED, "--slug", "secret"]).exitCode).toBe(0);
+
+    const statsJson = runCli(["stats", "secret"]);
+    expect(statsJson.exitCode).toBe(0);
+    expect(JSON.parse(statsJson.stdout.toString()).link.destination_url).toBe("https://s3.amazonaws.com/bucket/object");
+
+    const statsHuman = runCli(["stats", "secret"], { json: false });
+    expect(statsHuman.exitCode).toBe(0);
+    expect(statsHuman.stdout.toString()).not.toContain("X-Amz-Signature");
+    expect(statsHuman.stdout.toString()).not.toContain(SIGNATURE_VALUE);
+  });
+
+  test("human link output and --verbose JSON never carry the signed capability", () => {
+    expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
+    expect(runCli(["create", PRESIGNED, "--slug", "secret"]).exitCode).toBe(0);
+
+    const human = runCli(["link", "get", "secret"], { json: false });
+    expect(human.exitCode).toBe(0);
+    const text = human.stdout.toString();
+    expect(text).not.toContain("X-Amz-Signature");
+    expect(text).not.toContain(SIGNATURE_VALUE);
+    expect(text).toContain("https://s3.amazonaws.com/bucket/object");
+
+    const verbose = runCli(["link", "get", "secret", "--verbose"], { json: false });
+    expect(verbose.exitCode).toBe(0);
+    expect(JSON.parse(verbose.stdout.toString()).destination_url).toBe("https://s3.amazonaws.com/bucket/object");
+
+    const list = runCli(["link", "list"], { json: false });
+    expect(list.stdout.toString()).not.toContain("X-Amz-Signature");
+    expect(list.stdout.toString()).not.toContain(SIGNATURE_VALUE);
+  });
+
+  test("a plain destination still round-trips unchanged through every surface", () => {
+    expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
+    const plainUrl = "https://example.com/page?utm_campaign=compact-output";
+    expect(runCli(["create", plainUrl, "--slug", "plain"]).exitCode).toBe(0);
+
+    const get = runCli(["link", "get", "plain"]);
+    expect(JSON.parse(get.stdout.toString()).destination_url).toBe(plainUrl);
+
+    const human = runCli(["resolve", "plain"], { json: false });
+    expect(human.stdout.toString().trim()).toBe(plainUrl);
+  });
+});
