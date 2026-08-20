@@ -88,6 +88,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("send")
     .description("Send a message to an agent")
     .argument("<message>", "Message content")
+    .argument("[channel]", "Channel name — positional form: `send <channel> \"<message>\"`")
     .option("--to <agent>", "Recipient agent ID (required unless --channel is used)")
     .option("--from <agent>", "Sender agent ID")
     .option("--session <id>", "Session ID (auto-generated if omitted)")
@@ -102,16 +103,37 @@ export function registerMessagingCommands(program: Command): void {
     .option("--reply-to <message-reference>", "Reply to a parent UUID, or numeric ID with --channel/--session")
     .option("--blocking", "Send as a blocking message (recipient must acknowledge)")
     .option("-j, --json", "Output as JSON")
-    .action(async (message, opts) => {
+    .action(async (message, channelArg, opts) => {
       const from = resolveIdentity(opts.from).trim();
       let to = typeof opts.to === "string" ? opts.to.trim() : "";
       let channel = typeof opts.channel === "string" ? opts.channel.trim() : "";
-      const content = typeof message === "string" ? message : "";
+      let content = typeof message === "string" ? message : "";
       let session = typeof opts.session === "string" && opts.session.trim()
         ? opts.session.trim()
         : undefined;
       let replyTo: number | undefined;
       let replyToUuid: string | undefined;
+
+      // Documented positional form `send <channel> "<message>"` (charter
+      // working agreement, .claude/rules, dispatch briefs): when a second
+      // positional is present, the FIRST positional is the channel and the
+      // SECOND is the message. Before this branch, the channel token bound to
+      // <message> and the real body was silently dropped as an excess
+      // argument, so the documented form exited rc=1 "Recipient is required"
+      // (todos 4a2a4ac1). The single-positional forms
+      // (`send "<message>" --channel X`, `send "<message>" --to A`) are
+      // unchanged: channelArg is absent there.
+      if (typeof channelArg === "string" && channelArg.length > 0) {
+        const positionalChannel = message.trim();
+        if (channel && normalizeChannelName(channel) !== normalizeChannelName(positionalChannel)) {
+          emitCliError(
+            `Ambiguous channel: positional ${positionalChannel} differs from --channel ${channel}.`,
+            opts,
+          );
+        }
+        channel = positionalChannel;
+        content = channelArg;
+      }
 
       if (!from) {
         emitCliError("Sender identity is required.", opts);
@@ -955,9 +977,16 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
+      // `explicitFrom` marks an EXPLICIT --from flag. The hosted store forwards
+      // it so the server can enforce the identity match; the default identity
+      // is never forwarded (it drifted from the API principal and made the
+      // server reject valid requests — bug #160). An explicit --from for a
+      // different agent must fail loudly, never return another agent's
+      // blockers at rc=0.
       const agent = resolveIdentity(opts.from);
+      const explicitFrom = Boolean(opts.from?.trim());
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const blockers = await getStore().getUnreadBlockers(agent, opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset });
+      const blockers = await getStore().getUnreadBlockers(agent, { ...(opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset }), explicitFrom });
       const page = opts.json
         ? { items: blockers, count: blockers.length, total: blockers.length, hasMore: false, nextCursor: null }
         : pageFromQuery(blockers, window);

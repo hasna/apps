@@ -1295,16 +1295,20 @@ export class ApiStore implements ConversationsStore {
     const page = await this.getUnreadBlockerPreviews(agent, { ...opts, max_bytes: COLLECTION_MAX_MAX_BYTES });
     return page.messages.map(previewAsCompatibilityMessage) as never;
   };
-  getUnreadBlockerPreviews: ConversationsStore["getUnreadBlockerPreviews"] = async (_agent, opts = {}) => {
+  getUnreadBlockerPreviews: ConversationsStore["getUnreadBlockerPreviews"] = async (agent, opts = {}) => {
     const limit = resolveCollectionLimit(opts.limit);
     const cursor = resolveCollectionOffset(opts.offset);
     const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
     return await this.getBounded<MessagePreviewPage>("/messages/blockers", {
-      // Blocker reads are scoped by the authenticated API principal. Sending
-      // the CLI's local identity as a query filter makes the server reject a
-      // valid request when the two identity surfaces have drifted.
+      // Blocker reads are scoped by the authenticated API principal. The
+      // caller's DEFAULT identity is deliberately NOT forwarded: when the two
+      // identity surfaces have drifted, the server would reject a valid
+      // request (403). An EXPLICITLY requested agent (the CLI's --from flag)
+      // IS forwarded, so a request for someone else's blockers fails loudly
+      // at the server instead of silently returning the principal's blockers.
+      agent: opts.explicitFrom ? agent : undefined,
       limit,
       cursor,
       max_bytes: maxBytes,

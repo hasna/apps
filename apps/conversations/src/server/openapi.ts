@@ -649,8 +649,9 @@ export const openapiSpec = {
       get: {
         operationId: "listUnreadBlockers",
         summary: "List bounded, redacted current-blocker previews visible to one agent",
+        description: "Reads are scoped to the authenticated API principal. The optional `agent` query MUST match the authenticated agent when provided (mismatch is a 403); omit it to read the principal's own blockers. A hosted client sends `agent` only for an explicit --from request, so a request for another agent's blockers fails loudly instead of returning the principal's blockers.",
         parameters: [
-          { name: "agent", in: "query", required: true, schema: { type: "string" } },
+          { name: "agent", in: "query", required: false, schema: { type: "string" }, description: "Explicitly requested agent; MUST match the authenticated agent (403 otherwise). Omit for the authenticated agent's own blockers." },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
           { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
           { name: "max_bytes", in: "query", schema: { type: "integer", minimum: 512, maximum: 65536 } },
