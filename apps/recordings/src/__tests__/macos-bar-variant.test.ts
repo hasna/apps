@@ -243,7 +243,11 @@ describe("run_swift variant-flag guard (P1 #1: empty-array abort)", () => {
 
     const bar = runSwiftOnHost("bar");
     expect(bar.exitCode, `bar-build run_swift harness failed`).toBe(0);
-    expect(bar.args).toEqual(["-Xswiftc", "-DRECORDINGS_BAR_ONLY", "build", "--product", "App"]);
+    // Measured on station06 (macOS 26.2): the Swift driver rejects -Xswiftc BEFORE
+    // the subcommand (`swift -Xswiftc ... build` -> "error: unknown argument:
+    // '-Xswiftc'"), and accepts it AFTER it (`swift build -Xswiftc ...`). The
+    // variant flags therefore follow the subcommand, never precede it.
+    expect(bar.args).toEqual(["build", "-Xswiftc", "-DRECORDINGS_BAR_ONLY", "--product", "App"]);
   });
 
   test.skipIf(!hasDockerBash43())(
@@ -282,9 +286,9 @@ describe("run_swift variant-flag guard (P1 #1: empty-array abort)", () => {
           expect(args).toEqual(["build", "--product", "App"]);
         } else {
           expect(args).toEqual([
+            "build",
             "-Xswiftc",
             "-DRECORDINGS_BAR_ONLY",
-            "build",
             "--product",
             "App",
           ]);

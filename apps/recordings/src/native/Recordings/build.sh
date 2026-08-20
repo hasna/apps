@@ -627,14 +627,22 @@ run_swift() {
     # idiom (see run_bun, run_xcrun, run_release_sensitive_tool); do not reintroduce
     # a bare expansion here.
     #
-    # The flags are arguments TO swift (after the executable), never before it:
-    # placed before the executable they would be consumed by /usr/bin/env as its
-    # own options and the build would die with `env: '-Xswiftc': No such file`.
+    # The flags are arguments to the swift SUBCOMMAND, never to the driver and
+    # never before it: placed before the executable they would be consumed by
+    # /usr/bin/env as its own options (`env: '-Xswiftc': No such file`), and
+    # placed between the executable and the subcommand they are rejected by the
+    # driver itself. Measured on station06 (macOS 26.2):
+    #   swift -Xswiftc -DRECORDINGS_BAR_ONLY build   -> error: unknown argument: '-Xswiftc'
+    #   swift build -Xswiftc -DRECORDINGS_BAR_ONLY   -> accepted
+    # So the first positional argument is the subcommand, and the variant flags
+    # follow it.
+    local subcommand="$1"
+    shift
     "$ENV_EXECUTABLE" -i \
         HOME="$BUILD_HOME" \
         PATH="$SANITIZED_PATH" \
         TMPDIR="$BUILD_WORK_DIR" \
-        "$SWIFT_EXECUTABLE" \
+        "$SWIFT_EXECUTABLE" "$subcommand" \
         ${VARIANT_SWIFT_FLAGS[0]+"${VARIANT_SWIFT_FLAGS[@]}"} \
         "$@"
 }
