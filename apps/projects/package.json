@@ -85,7 +85,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "0.11.2",
+    "@hasna/contracts": "0.10.2",
     "@hasna/conversations": "0.6.3",
     "@hasna/events": "0.1.16",
     "@hasna/mementos": "0.14.81",
