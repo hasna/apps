@@ -4,7 +4,7 @@
 # ARM64 / Bun. PURE REMOTE per Amendment A1: the service reads/writes the shared
 # cloud Postgres directly. No local state. API-key auth via @hasna/contracts.
 # =============================================================================
-FROM --platform=linux/arm64 oven/bun:1-alpine AS build
+FROM --platform=linux/amd64 oven/bun:1-alpine AS build
 WORKDIR /app
 
 # Install dependencies first (better layer caching). The package postinstall
@@ -22,7 +22,7 @@ COPY . .
 RUN bun run build
 
 # ---- runtime -----------------------------------------------------------------
-FROM --platform=linux/arm64 oven/bun:1-alpine AS runtime
+FROM --platform=linux/amd64 oven/bun:1-alpine AS runtime
 WORKDIR /app
 # Amazon RDS global CA bundle so TLS verification to the shared cloud Postgres
 # succeeds (the vendored storage kit resolves sslmode=require with
