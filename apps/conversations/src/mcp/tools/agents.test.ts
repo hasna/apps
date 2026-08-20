@@ -305,6 +305,36 @@ describe("agent MCP tools", () => {
       expect(result.messages).toHaveLength(1);
       expect(result.messages[0].preview).toContain("BLOCK");
     });
+
+    test("posted blockers are scoped by --from: another agent's --from must not see them (regression: silent flag ignore)", async () => {
+      // A distinct target so this test is independent of the other blocker
+      // test's message (shared store across tests in this file).
+      const target = "blocker-target-scoped";
+      const { sendMessage: sendMsg } = await import("../../lib/messages");
+      sendMsg({
+        from: "blocker-sender",
+        to: target,
+        content: "BLOCK: fix this now",
+        priority: "urgent",
+        blocking: true,
+      });
+
+      // Positive control first: the posted blocker is visible to ITS agent.
+      const forTarget = parseResult(await client.callTool({
+        name: "get_blockers",
+        arguments: { from: target },
+      }) as any) as any;
+      expect(forTarget.messages).toHaveLength(1);
+
+      // Negative control: the same posted blocker must be INVISIBLE to a
+      // different --from agent. Identical results across --from values at rc=0
+      // was the unscoped-read signature (claim 715731).
+      const forOther = parseResult(await client.callTool({
+        name: "get_blockers",
+        arguments: { from: "blocker-unrelated" },
+      }) as any) as any;
+      expect(forOther.messages).toHaveLength(0);
+    });
   });
 
   /**
