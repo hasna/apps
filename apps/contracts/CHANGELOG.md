@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- d5b64f8: Release 0.12.0: the truthful minor bump for the deployment-mode removal. The public `./server-backend` export no longer ships `assertNoLegacyStorageMode` and the kit backend template drops the legacy `storage.mode` guard (net of #418, #503, #544) — a consumer-visible API change that the previous 0.11.2 patch line incorrectly described as "no functional change" (adversarial review P1, 2026-08-20). Also folds in the wave #670 contracts-split entry and the wave-602 smoke-tooling repair (#671). Per the fleet-wide modes-removal directive the guard is not restored; the minor bump records the API change.
+
+### Patch Changes
+
+- 1da0550: Client transport selection is explicit configuration, never pointer presence (todos a8c08df1). A defined-but-blank `HASNA_<NAME>_API_URL` is an explicit local choice that now wins over the fleet app-config disk pointer — previously the blank was skipped and the disk pointer silently flipped the client to the server. A server URL supplied by the disk tier while the environment is silent is no longer silent: the resolution warning names the file that decided, so a transport flip is always observable.
+- Updated dependencies [0d4f749]
+- Updated dependencies [ca7acc8]
+- Updated dependencies [4e5b690]
+- Updated dependencies [28fedae]
+  - @hasna/secrets@0.3.2
+
 ## 0.12.0
 
 ### Minor Changes

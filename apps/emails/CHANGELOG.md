@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0
+
+### Minor Changes
+
+- ad7e0da: feat(emails): `emails inbox pdf <id>` renders a synced email to a local PDF file (--out path, --json {path, bytes, ok: true}); mirrors `open`'s data path and never marks the email read. Rendering is local-only via pdf-lib (pure-JS, no external service); the body is reduced through the package's canonical html->text path with the same fallbacks as the TUI.
+
+### Patch Changes
+
+- 0d7a2d6: fix(emails): name the local-SQLite fallback instead of serving it silently. On the all-unset default row (no EMAILS_SELF_HOSTED_URL, no pointer, no database path), planEmailStore now emits one machine-readable JSON notice on stderr per process (`emails-local-fallback`) naming the mode switch before serving local — the same family as the merged secrets fix (PR #681 / incident 715558). Incident 715712: a re-provision dropped EMAILS_SELF_HOSTED_URL and the mailbox appeared empty at rc=0. An explicitly configured database path stays silent (chosen local store); pointer-without-URL and URL-without-credential keep failing closed.
+- Updated dependencies [d5b64f8]
+- Updated dependencies [1da0550]
+- Updated dependencies [0d4f749]
+  - @hasna/contracts@0.13.0
+  - @hasna/domains@0.0.40
+
 ## 1.3.17
 
 ### Patch Changes

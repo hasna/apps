@@ -1,6 +1,6 @@
 {
   "name": "@hasna/logs",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -84,7 +84,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@hasna/agent-registry": "^0.1.0",
-    "@hasna/contracts": "^0.12.0",
+    "@hasna/contracts": "^0.13.0",
     "@hasna/mcp-harness": "^0.1.0",
     "@types/bun": "latest",
     "@types/node-cron": "^3.0.11",

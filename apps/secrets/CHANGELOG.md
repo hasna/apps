@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.2
+
+### Patch Changes
+
+- 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
+- ca7acc8: Emit a machine-readable stderr notice naming the local-vault fallback when no hosted API config (API_URL + API_KEY) is present, instead of a silent rc=0 "Vault is empty." — names the fallback path, the local secret count, and that hosted secrets are not visible (incident 715558, BUG b76e2d56).
+- 4e5b690: fix(secrets): package_registry_token requires a value-shaped npm_ suffix, not a bare prefix
+  
+  The detector matched `npm_` followed by 12+ of `[A-Za-z0-9_]`, so npm's documented
+  env var NAMES (`npm_lifecycle_event`, `npm_package_name`, ...) tripped
+  `secrets scan staged` at rc=1 and blocked commits on files that only reference
+  the names (bug 2693dbc4). The pattern now requires the value shape — `npm_` plus
+  20+ alphanumeric characters with no underscore — which is the fleet's established
+  value/name discriminator, applied consistently to the scanner detector and the
+  history-scan git-grep pattern. Regression tests cover both directions: env var
+  names pass, a value-shaped npm_ token still trips.
+- 28fedae: fix(secrets): xai_api_key detector requires a value-shaped suffix, not a bare 'xai-' prefix
+  
+  The detector matched `xai-` followed by 12+ of `[A-Za-z0-9_-]`, so ordinary xAI
+  model ids (a hyphenated word after the prefix) tripped `secrets scan` at rc=1
+  and blocked commits on files containing no credential (bug a869386e, incident
+  715866). The pattern now matches the vendor's published shape
+  (xai-org/xai-proto `.gitleaks.toml`): `xai-` plus 20-80 alphanumeric
+  characters. Applied consistently to the scanner detector, the history-scan
+  git-grep pattern, and the redaction token mask. Regression tests cover both
+  directions: model ids pass, a value-shaped key still trips.
+
 ## 0.3.1
 
 ### Patch Changes

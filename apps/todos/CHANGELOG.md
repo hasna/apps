@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.37
+
+### Patch Changes
+
+- 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
+- 0d7a2d6: fix(todos): name the local-SQLite fallback instead of serving it silently. When neither HASNA_TODOS_API_URL nor HASNA_TODOS_API_KEY is set, resolveTodosCliTransport now emits one machine-readable JSON notice on stderr per process (`todos-local-fallback`) naming the mode switch before serving local — the same family as the merged secrets fix (PR #681 / incident 715558). Incident 715712: a re-provision dropped the hosted pair and tasks appeared gone at rc=0. Partial pairs keep failing closed; the notice never fires when the hosted pair selects http.
+- Updated dependencies [d5b64f8]
+- Updated dependencies [1da0550]
+  - @hasna/contracts@0.13.0
+
 ## 0.15.36
 
 ### Patch Changes
