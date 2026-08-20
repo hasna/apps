@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.3
+
+### Patch Changes
+
+- 4e9ac70: fix(bridge): daemon lock recovery verifies process identity, so a recycled pid can never wedge the daemon. A crashed daemon's recorded pid can be re-used by an unrelated process; bare pid liveness then read that process as the owner and the stale lock became permanently unbreakable ("already running" forever). Ownership is now confirmed by the owner's command line (bridge bin / dist / dev entry) before a live pid protects the lock, and a stale lock whose pid belongs to an unrelated process is recovered normally. Regression test added.
+
 ## 0.7.2
 
 ### Patch Changes
@@ -12,6 +18,7 @@ All notable changes to `@hasna/bridge` are documented here.
 ## 0.7.1
 
 ### Fixed
+
 - **Daemon stop honors a config-derived grace window.** `daemon stop` (and
   `serve` shutdown) no longer assume a hard-coded 5s: the grace is derived from
   the configured agent timeouts and channel poll timeouts — one in-flight agent
@@ -32,6 +39,7 @@ All notable changes to `@hasna/bridge` are documented here.
   cannot have its lock stolen by a stale-metadata sweep.
 
 ### Hardened
+
 - **`bridge doctor` failures are real exit codes.** A failing check exits
   non-zero in both human and `--json` output, so CI and scripts can gate on
   bridge health. Checks carry an explicit `warn`/`error` severity: optional
@@ -42,6 +50,7 @@ All notable changes to `@hasna/bridge` are documented here.
 ## 0.7.0
 
 ### Added
+
 - **Full YOLO mode for codewith agents.** Bridge codewith runs now pass
   `--dangerously-bypass-approvals-and-sandbox` alongside `--skip-git-repo-check`
   on every codewith invocation (durable + compatibility exec paths), so the
@@ -64,6 +73,7 @@ All notable changes to `@hasna/bridge` are documented here.
   on the next run.
 
 ### Fixed
+
 - **Auth-profile rotation now carries conversation context.** Durable codewith
   runs previously went through `accounts run codewith -p <profile>`, which points
   `CODEWITH_HOME` at a per-account directory and so forked the thread store per
@@ -82,6 +92,7 @@ All notable changes to `@hasna/bridge` are documented here.
   so users are told about a context reset only when one actually happened.
 
 ### Hardened
+
 - **Failed runs surface a clear ERROR REPLY.** A message that dead-letters now
   sends the sender an explicit `⚠️ I could not process that message …` reply
   (via the normal allow-listed response path) carrying the structured codewith
@@ -117,6 +128,7 @@ All notable changes to `@hasna/bridge` are documented here.
   compatibility agents too, not only codewith.
 
 ### Changed (breaking, pre-1.0)
+
 - `AgentSessionRef` drops the per-profile `providerSessions` map; the conversation
   thread is the single shared `refId`. `recordDurableSession` / `resolveDurableTarget`
   now read/write `refId` directly. Persisted `0.6.x` state still loads and resumes
@@ -129,8 +141,9 @@ All notable changes to `@hasna/bridge` are documented here.
 ## 0.6.1
 
 ### Hardened
+
 - **Exhaustion detection is now structured, not a raw-string match.**
-  `isExhaustionSignal` classifies codewith `--json` *error events* (their
+  `isExhaustionSignal` classifies codewith `--json` _error events_ (their
   type/code/message fields) plus exit code, so the assistant merely mentioning
   "rate limit" or "429" in a normal reply no longer triggers a rotation.
 - **Cross-profile rotation resets context honestly.** When exhaustion rotates to
@@ -149,9 +162,10 @@ All notable changes to `@hasna/bridge` are documented here.
 ## 0.6.0
 
 ### Added
+
 - **Automatic auth-profile rotation on exhaustion.** codewith agents accept an
   ordered `fallbackProfileIds` rotation pool (`bridge agents add ... --profile A
-  --fallback-profile B C`). When the active profile hits a usage/quota/auth
+--fallback-profile B C`). When the active profile hits a usage/quota/auth
   exhaustion signal (rate-limit / quota / auth-expired / 429 / 401 / 403), the
   durable adapter rotates to the next profile and continues the turn in the same
   call. Each profile keeps its own codewith session id, so switching profiles
@@ -167,6 +181,7 @@ All notable changes to `@hasna/bridge` are documented here.
 ## 0.5.0
 
 ### Added
+
 - **`bridge serve --resume` and resume-by-default daemon.** Serve can reconcile
   durable in-flight state (bindings, sessions, persisted getUpdates offsets, and
   interrupted ledger entries) before polling, logging a resume banner.
@@ -184,11 +199,12 @@ All notable changes to `@hasna/bridge` are documented here.
   poison-message handling.
 - Regression coverage that a per-conversation codewith `thread_id` survives a
   state `saveState`/`loadState` restart and is resumed with `codewith exec resume
-  <thread_id>` on the next message.
+<thread_id>` on the next message.
 
 ## 0.4.0
 
 ### Added
+
 - **Durable codewith sessions driven through `accounts`.** codewith agents now
   run via `accounts run codewith -p <profile> -- exec --json --durable -o <file>`
   so each conversation keeps a real codewith session id and resumes it with
@@ -203,6 +219,7 @@ All notable changes to `@hasna/bridge` are documented here.
   event). Structured stdout is flagged and is never relayed to the user.
 
 ### Security
+
 - `buildAgentEnv` no longer inherits the full station environment into the
   code-executing agent. It now uses an explicit **allow-list** (PATH/HOME/locale,
   XDG base dirs, and the `codewith`/`accounts`/`bun` toolchain prefixes) instead
@@ -216,6 +233,7 @@ All notable changes to `@hasna/bridge` are documented here.
 ## 0.3.0
 
 ### Added
+
 - **Inbound reply auto-sessions.** Channels can declare a `defaultAgentId`
   (`bridge channels add-telegram <id> --default-agent <agent>`). When an inbound
   message arrives for a conversation that has no session binding and no matching
@@ -227,6 +245,7 @@ All notable changes to `@hasna/bridge` are documented here.
   channel's `defaultAgentId` does not resolve to a configured agent.
 
 ### Hardened
+
 - Auto-session provisioning is gated on channel authorization, so unauthorized
   chats can never provision sessions.
 - Auto-session provisioning no longer requires an explicit `defaultAgentId`: when

@@ -11,9 +11,19 @@
     "controls-serve": "dist/server/index.js"
   },
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
-  "files": ["dist", "hasna.contract.json", "openapi.json", "docker-compose.yml", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "hasna.contract.json",
+    "openapi.json",
+    "docker-compose.yml",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external hono && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
@@ -29,11 +39,21 @@
     "postinstall": "node -e \"try{const os=require('os'),fs=require('fs'),p=require('path');const b=p.join(os.homedir(),'.hasna','controls');for(const d of ['','config','data','exports','backups','logs','tmp']) fs.mkdirSync(p.join(b,d),{recursive:true});}catch(e){}\"",
     "prepack": "bun run build"
   },
-  "publishConfig": { "registry": "https://registry.npmjs.org", "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/hasna/controls.git" },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/controls.git"
+  },
   "homepage": "https://github.com/hasna/controls#readme",
-  "bugs": { "url": "https://github.com/hasna/controls/issues" },
-  "engines": { "bun": ">=1.1.0" },
+  "bugs": {
+    "url": "https://github.com/hasna/controls/issues"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
@@ -47,7 +67,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.13.0",
+    "@hasna/contracts": "0.13.1",
     "bun-types": "1.3.14",
     "@types/bun": "^1.2.4",
     "@types/pg": "^8.20.0",

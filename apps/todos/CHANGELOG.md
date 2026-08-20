@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.38
+
+### Patch Changes
+
+- @hasna/contracts@0.13.1
+
 ## 0.15.37
 
 ### Patch Changes
@@ -217,7 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Exact stale task locks can be handed off atomically.** `todos
-  stale-lock-handoff <id>` fences on the expected holder and lock version,
+stale-lock-handoff <id>` fences on the expected holder and lock version,
   rejects live or mismatched locks, transfers only the named task across local
   and authenticated `/v1` authorities, and returns an immutable audit receipt.
 
@@ -250,7 +256,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Task failure now routes through the selected authority.** `todos fail
-  --reason [--retry]` uses the supported local or authenticated `/v1` lifecycle
+--reason [--retry]` uses the supported local or authenticated `/v1` lifecycle
   path, preserves failure reasons in readback, exposes the operation through
   OpenAPI and the generated SDK, and rejects unsupported lifecycle status
   values at the server boundary ([#237](https://github.com/hasna/todos/pull/237)).
@@ -422,7 +428,7 @@ so `0.15.9` is the first releasable package containing the SQLite repair.
   - **Read-back verification.** After the patch the row is re-read and every field the
     delegation claims to have written is checked. If the authority accepted the request
     but did not persist the lineage, the command refuses and names the missing fields
-    *before* the `[DISPATCH]` comment is written, so a partial delegation can never be
+    _before_ the `[DISPATCH]` comment is written, so a partial delegation can never be
     reported as a complete one. This matters most where `assigned_by` still holds the
     filer — a plausible value, which is what would otherwise make the no-op invisible.
   - **Depth threshold and embargo are data, not constants.** The threshold ships unset:
@@ -553,8 +559,8 @@ Both gaps are closed here, so input that survived `0.14.0` can now fail.
   a permanently empty dashboard that reads as "there is no work". This is worse than the
   `list` case it mirrors, because a live view invites an operator to sit and watch it.
   `watch` now exits non-zero and names the accepted vocabulary. Documented aliases
-  (`done` -> `completed`) still resolve, so every previously *valid* input behaves
-  identically; only previously *invalid* input changes, from a silent empty view at exit
+  (`done` -> `completed`) still resolve, so every previously _valid_ input behaves
+  identically; only previously _invalid_ input changes, from a silent empty view at exit
   0 to a named rejection.
 - **BREAKING (CLI): an empty or blank enum element is now rejected instead of being
   dropped.** `--status=` was parsed by Commander as an explicit empty string and fell
@@ -574,7 +580,7 @@ Both gaps are closed here, so input that survived `0.14.0` can now fail.
   SQLite.
 - **`todos list` no longer warns about an assignee it never queried.** The empty-result
   warning resolved the assignee separately from the query, so `--assigned <bogus>
-  --inbox` warned about a value that was never used as a filter, while
+--inbox` warned about a value that was never used as a filter, while
   `--agent-name "" --assigned <bogus>` stayed silent about the value that actually was.
   The effective assignee is now resolved once and read for both the filter and the
   warning.
@@ -639,7 +645,7 @@ published to npm; `0.13.12` is the version this supersedes.
   case-variant assignee alone instead of resolving it arbitrarily.** Where a database
   holds two distinct agents whose names differ only by case — the same split-identity
   condition the entry above closes at its source — `rename_agent` matched `assigned_to`
-  case-insensitively and therefore moved *both* agents' tasks onto the renamed one, and
+  case-insensitively and therefore moved _both_ agents' tasks onto the renamed one, and
   `rebalance_workload` indexed both roster rows under one lower-cased key, attributing
   those tasks to whichever row happened to be indexed last. `rename_agent` now widens to
   a case-insensitive match only when the old name uniquely identifies the agent being
@@ -713,8 +719,8 @@ published to npm; `0.13.12` is the version this supersedes.
   cannot write into the shared hosted store.** Measured on 2026-07-30, three repositories
   had between them left **2,094 rows** in the live authority purely from tests:
   1,151 from a consumer test suite (`Short ID resolution test`, `Scoped getTask resolution
-  test`, `seed-task-<epoch>` under `test-resolution-*` projects) and 943 `Merge the release
-  PR` rows from `hasna/loops`' `drain.test.ts`, which shelled out to the real `todos` CLI
+test`, `seed-task-<epoch>` under `test-resolution-*` projects) and 943 `Merge the release
+PR` rows from `hasna/loops`' `drain.test.ts`, which shelled out to the real `todos` CLI
   with an unmodified `process.env`. None was ever assigned, commented on, or actioned.
   The cause is the same in every case: the client resolves its transport from the
   environment, and every shell on a fleet machine exports the shared-store pointers.
@@ -776,9 +782,9 @@ published to npm; `0.13.12` is the version this supersedes.
   code. `--no-fail-on-findings` is the explicit opt-out for a consumer that gates on exit `0`;
   findings are still reported, and the printed exit code is always the one the process
   returns — a suppressed run prints `(exit 0 — findings gate suppressed by
-  --no-fail-on-findings; the verdict is 1)` rather than a `(exit 1)` the process never
+--no-fail-on-findings; the verdict is 1)` rather than a `(exit 1)` the process never
   used. `doctor --json` gains an `integrity` block (`schema_version:
-  "todos.integrity.v1"`) plus `exit_code` (the status the process RETURNS),
+"todos.integrity.v1"`) plus `exit_code` (the status the process RETURNS),
   `verdict_exit_code` (the status the rows IMPLY) and `fail_on_findings`; `ok` keeps its
   name and finally means what it says.
 - **Integrity findings are report-only.** `doctor --apply` repairs schema/hygiene only and
@@ -791,7 +797,7 @@ published to npm; `0.13.12` is the version this supersedes.
 
 - **`blocked_by` now means "tasks that block me" on every machine-readable surface —
   the inverted orientation deadlocked dependency chains** (task 4599ef37). `todos deps
-  <id> --json` (schema `todos.task_dependency_edges.v1`), `todos show/inspect --json`,
+<id> --json` (schema `todos.task_dependency_edges.v1`), `todos show/inspect --json`,
   `getTaskWithRelations`, and the self-hosted hydration all placed this task's
   DEPENDENTS in the field named `blocked_by`, while the human `Depends on:`/`Blocks:`
   output read the same data correctly. Schedulers consuming the JSON by name
@@ -813,9 +819,9 @@ published to npm; `0.13.12` is the version this supersedes.
   (`[REDACTED_GITHUB_TOKEN]`, `[REDACTED_NPM_TOKEN]`), key-based redaction matched the word
   `TOKEN` inside the placeholder itself and replaced the untouched value beneath it with
   `[REDACTED]` — silent loss of non-secret data. Redaction is now idempotent for keys that are
-  *entirely* a placeholder. Keys of the form `NAME=[REDACTED]` are deliberately **not** exempt:
+  _entirely_ a placeholder. Keys of the form `NAME=[REDACTED]` are deliberately **not** exempt:
   that shape is what env-assignment redaction produces, and the value beneath it is opaque, so
-  key-based redaction must still apply there. **Accepted trade-off:** a key named *literally*
+  key-based redaction must still apply there. **Accepted trade-off:** a key named _literally_
   `[REDACTED_GITHUB_TOKEN]` / `[REDACTED_TOKEN]` / `[REDACTED_PASSWORD]` no longer has its value
   redacted by key name — previously it did, because the placeholder text contains `TOKEN` /
   `PASSWORD`. Such a key is indistinguishable from this module's own output, and keeping it
@@ -823,7 +829,7 @@ published to npm; `0.13.12` is the version this supersedes.
 
 ### Known issues
 
-- **Secret-bearing metadata *keys* are not redacted on every write path.** `redactValue()`
+- **Secret-bearing metadata _keys_ are not redacted on every write path.** `redactValue()`
   redacts metadata values but leaves key text intact; only `sanitizePreWriteValue()` rewrites
   keys. Task metadata is covered (via `sanitizeUpdateTaskInput`), but `task_findings.metadata`
   is built with `redactValue()` alone and persists a credential placed in key position — and
@@ -874,7 +880,7 @@ published to npm; `0.13.12` is the version this supersedes.
 
 - **`/api/*` and `/mcp` no longer fail open when no API key is configured.** `checkAuth`
   began with `if (!apiKey && !generatedKeysEnabled) return null; // no key configured,
-  skip auth`, so a server started without `TODOS_API_KEY` and without a stored key
+skip auth`, so a server started without `TODOS_API_KEY` and without a stored key
   treated **every** request as authorized. On any deployment that binds a non-loopback
   host (e.g. `HOST=0.0.0.0` behind a load balancer) that published, to anonymous
   callers: `POST /mcp` (the full MCP tool catalog plus `tools/call` — create/start/
@@ -900,14 +906,14 @@ published to npm; `0.13.12` is the version this supersedes.
     `todos api-keys create` closes an already-open anonymous window without a restart;
   - otherwise the server **refuses to start**, exiting non-zero with an actionable
     error naming `TODOS_API_KEY` — starting wide open is never an option.
-  `/v1` was not affected (it authenticates itself against the cloud API-key store) and
-  `/health`, `/ready`, `/version`, `/openapi.json` remain public by design, so
-  load-balancer and container health checks are unchanged.
-  Regression coverage: `src/server/auth-fail-closed.test.ts` (unconfigured server exits
-  non-zero and nothing listens; every `/api/*` read and write route, `POST`/`GET`/
-  `DELETE /mcp`, and `/v1` reject a credential-less request; probes stay public) and
-  `src/server/auth-posture.test.ts` (full posture matrix, including "no input ever
-  yields an anonymous plane on an off-box bind").
+    `/v1` was not affected (it authenticates itself against the cloud API-key store) and
+    `/health`, `/ready`, `/version`, `/openapi.json` remain public by design, so
+    load-balancer and container health checks are unchanged.
+    Regression coverage: `src/server/auth-fail-closed.test.ts` (unconfigured server exits
+    non-zero and nothing listens; every `/api/*` read and write route, `POST`/`GET`/
+    `DELETE /mcp`, and `/v1` reject a credential-less request; probes stay public) and
+    `src/server/auth-posture.test.ts` (full posture matrix, including "no input ever
+    yields an anonymous plane on an off-box bind").
 
 ### Changed
 
@@ -933,44 +939,53 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.12.3] - 2026-07-25
 
 ### Fixed
+
 - Remote `show`/`inspect` no longer report empty `dependencies`/`blocked_by` while `deps <id>` lists persisted edges (#58). The `/v1` task row endpoint returns no relation graphs, and the cloud detail assembly hard-coded both arrays to `[]`, so a blocked remote task looked unblocked and `inspect` never printed its `BLOCKED by N unfinished dep(s)` warning. `show`/`inspect` now read `GET /v1/tasks/:id/dependencies` and hydrate each referenced id into a full task row (deduplicated across both directions, bounded concurrency), matching local-mode output. An edge whose target task cannot be read degrades to an explicit `(unavailable task …)` placeholder instead of erasing the readable relations, and a dependency-endpoint failure warns on stderr rather than sinking the whole detail view (a `404`/`501` from a server without the route is silently treated as "no edges").
 
 ## [0.12.2] - 2026-07-25
 
 ### Fixed
+
 - `todos bulk plan|move-plan --plan <id>` / `--clear-plan` now works under a remote (`self_hosted`/cloud) authority. Stage A rejected the whole invocation with `REMOTE_COMMAND_UNSUPPORTED` because the bulk handler resolved the plan reference through the local SQLite `resolvePlanId`, which is unavailable in remote mode. The cloud path now resolves the plan against the shared dataset (`cloudResolvePlan`) once, up front, so an unknown plan still fails closed before any task is mutated, and the Stage-A gate admits the two plan actions. Single-task `todos update <id> --plan` was already remote-capable; bulk reassignment is now at parity (#31).
 
 ## [0.12.1] - 2026-07-24
 
 ### Fixed
+
 - SQLite task search no longer silently degrades or fails on queries containing punctuation. The `shouldUseFts` gate rejected any query with punctuation (e.g. `login: urgent`), falling back to a literal substring LIKE that matched nothing. A real FTS5 query parser now handles punctuation safely: AND-by-default terms, quoted phrases, and prefix matching, with FTS5 operator characters stripped/quoted instead of rejected.
 - Task search is now bounded. `searchTasks` built its SQL with no `LIMIT`, so a broad query scanned/returned the whole table. It now applies a bounded default (1000) and honors an explicit `SearchOptions.limit`.
 
 ### Changed
+
 - SQLite FTS ranking now uses `bm25()` column weighting (title >> description > tags), mirroring the Postgres `ts_rank_cd` A/B/C weights so both backends rank equivalently. The FTS path is unioned with the id/short_id/working_dir/metadata LIKE fallback so identifier/fingerprint/path pastes still resolve, with full-text hits ranked first.
 
 ## [0.12.0] - 2026-07-24
 
 ### Fixed
+
 - Postgres full-text search parity (cloud/self-hosted returned nothing). `searchTasks` only ever queried the local SQLite FTS5 index, which is empty on a Postgres deployment. Task search now runs through the storage abstraction (`store.tasks.list({ query })`) so cloud/self-hosted executes a real Postgres query.
 
 ### Added
+
 - `migrations/0006_task_fulltext_search.sql`: a weighted (`title`>`description`>`tags`) `tsvector` generated column on `todos_sync_records`, a GIN index for ranked full-text search, and a `pg_trgm` trigram GIN index for typo/fuzzy matching, all diacritics-insensitive via an immutable `unaccent` wrapper. Idempotent with automatic backfill; mirrored into `postgresTodosSyncSchemaSql` so fresh cloud bootstraps get it too.
 - `TaskFilter.query` full-text field, honored by BOTH storage adapters so `GET /v1/tasks?q=` searches whether the server is Postgres- or SQLite-backed. The Postgres adapter emits a `websearch_to_tsquery` predicate (AND-by-default, quoted phrases, punctuation-tolerant) with a single-term `pg_trgm` word-similarity fuzzy fallback, ranked by `ts_rank_cd`; the local SQLite adapter routes the query through the FTS5 `searchTasks` path and applies the remaining filters. Exposed over `GET /v1/tasks?q=`; the `todos search` CLI routes through it under a self-hosted authority.
 
 ## [0.11.96] - 2026-07-24
 
 ### Security
+
 - Remove internal production-infrastructure identifiers from the published open-source package. The managed database cluster name and the AWS Secrets Manager runtime path are no longer hardcoded in `src/storage/config.ts`; they are now supplied at runtime by the private hosting wrapper via `HASNA_TODOS_RDS_CLUSTER` and `HASNA_TODOS_RDS_RUNTIME_PATH`, and resolve to `null` when unset (no baked-in defaults).
 - Scrub the internal cloud domain (`*.hasna.xyz`) from source comments, the `union-backfill` script default endpoint, and test fixtures; compose the private billing host in the headless outbound-boundary allowlist from parts so it is not shipped as a plaintext literal (the outbound guard still blocks it).
 - Replace the real fleet machine identifier and private Tailscale/LAN addresses in the README machine-topology example with neutral placeholders.
 
 ### Changed
+
 - **Breaking (public API):** `getCanonicalTodosRdsConfig()` now accepts an optional `env` argument and returns `cluster` / `runtimeSecretPath` as `string | null`. The exported constants `CANONICAL_TODOS_RDS_CLUSTER` and `CANONICAL_TODOS_RDS_RUNTIME_PATH` are replaced by `CANONICAL_TODOS_RDS_CLUSTER_ENV` and `CANONICAL_TODOS_RDS_RUNTIME_PATH_ENV`.
 
 ## [0.11.92] - 2026-07-18
 
 ### Fixed
+
 - Route supported ordinary CLI coordination commands through the configured authenticated self-hosted `/v1` authority when remote storage mode is selected, before any local database adapter or ID helper can run.
 - Fail closed on missing credentials, invalid or conflicting storage selectors, unsafe or incompatible authority URLs/routes, redirects, authentication errors, timeouts, and server failures; remote commands never fall back to SQLite.
 - Make remote storage/status diagnostics HTTP-aware and harden release verification so a candidate must come from a clean tracked tree with commit/tree provenance and verified tarball integrity.
@@ -980,29 +995,34 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.11.76] - 2026-07-06
 
 ### Fixed
+
 - Auto project detection now skips disposable git roots under the system temp directory, preventing accidental registration of transient `/tmp` project shells.
 - Added guarded `todos projects --deregister` support that preserves tasks and refuses to deregister any project with incomplete tasks.
 
 ## [0.11.75] - 2026-07-05
 
 ### Added
+
 - `todos doctor routing` — deterministic routing-metadata drift detection (wrong/null `working_dir`, null/unresolvable `task_list_id`, invalid project paths, cross-repo intent, no-auto conflicts) with per-finding `repair_class` (`safe_auto` | `blocker_*` | `unsupported`), project-stable `--shard i/N` scoping, and a machine-consumable `--json` contract (`todos.routing_doctor.v1`) with documented exit codes (0 clean / 1 findings / 2 invalid invocation).
 - `todos doctor routing --apply` — safe repairs for `safe_auto` findings only, via supported update paths (no raw DB edits), with a DB backup, per-task evidence comments, and an undo record carrying real per-repair undo commands.
 - `todos update --working-dir <path>`, `--clear-working-dir`, and `--clear-list` — first-class routing-metadata repair and null-reset flags for existing tasks; `--list` now resolves exact UUID → partial UUID → project-scoped slug (UUID authoritative) and errors on unresolvable references instead of silently succeeding.
 - `scripts/routing-health-scan.mjs` — deterministic OpenLoops command-loop consumer of the doctor JSON (deduped per-scope task upserts), and `scripts/routing-remediation.workflow.json` — validated planner → worker → adversarial-reviewer remediation workflow spec.
 
 ### Fixed
+
 - `doctor routing --apply`/`--fix` reached the subcommand as a silent dry-run (Commander actionable-parent option shadowing); the flags now apply and are guarded by a CLI-level end-to-end regression test.
 - Multi-megabyte `doctor routing --json` reports intermittently truncated when stdout was a pipe; now emitted through the flush-safe writer.
 
 ## [0.11.74] - 2026-07-05
 
 ### Fixed
+
 - Task `route_state` made authoritative and aligned with the OpenLoops drain: the `auto:route`/`route:enabled` tag authorizes routing when `route_enabled` is unset; explicit denies and `no-auto` still deny. Added `route_class`, route evidence, and optional project-root verification (backfilled entry for the #37/#38 release).
 
 ## [0.11.73] - 2026-07-03
 
 ### Fixed
+
 - **Security:** authenticate the `/mcp` endpoint and rate-limit it (and `/health`) — previously an unauthenticated write surface even with `--api-key` set. Preserves the 127.0.0.1-no-key default.
 - **Security:** key the HTTP rate limiter on `server.requestIP`; honor `X-Forwarded-For` only under `TODOS_TRUST_PROXY` (was spoofable / shared "unknown" bucket).
 - Task completion lifecycle: `completeTask` returns the correct post-commit version (was stale → follow-up updates conflicted) and is idempotent; completion via `updateTask`/PATCH/CLI now spawns recurrence exactly once and clears the lock; reopening clears `completed_at`; confidence preserved when omitted.
@@ -1015,26 +1035,31 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.11.72] - 2026-07-02
 
 ### Added
+
 - Multi-store route source discovery.
 
 ## [0.11.71] - 2026-07-01
 
 ### Changed
+
 - Plan slug compatibility alignment and related maintenance.
 
 ## [0.11.70] - 2026-06-30
 
 ### Changed
+
 - Maintenance and internal improvements (backfilled entry).
 
 ## [0.11.69] - 2026-06-29
 
 ### Fixed
+
 - Keep large CLI JSON output complete when stdout is piped, including `todos list --json` and `todos list --format json` for large or status-filtered task lists.
 
 ## [0.11.59] - 2026-06-27
 
 ### Added
+
 - Add deterministic task upsert support for loop/workflow automation.
 - Emit richer task event metadata for task-created routing workflows.
 - Expose task upsert through CLI, SDK, MCP, and HTTP API surfaces.
@@ -1042,37 +1067,44 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.29] - 2026-03-12
 
 ### Performance
+
 - Eliminate redundant `getTask()` re-fetches in `updateTask`, `startTask`, `completeTask` — saves 1 SELECT per mutation (33% fewer DB queries)
 
 ## [0.9.28] - 2026-03-12
 
 ### Performance
+
 - Strip all 119 `.describe()` strings from MCP tool params (lean stubs pattern) — 90% cold start token reduction
 
 ## [0.9.27] - 2026-03-11
 
 ### Added
+
 - CLI `--format=compact|csv|json|table` on `todos list` — compact is 95% fewer tokens than JSON
 
 ## [0.9.26] - 2026-03-11
 
 ### Changed
+
 - MCP mutation responses (create/update/start/complete) now return compact 1-line format instead of 10-line detail — 80% smaller
 
 ## [0.9.25] - 2026-03-11
 
 ### Added
+
 - REST API field filtering: `GET /api/tasks?fields=id,title,status` returns only requested fields — 60-80% smaller responses
 
 ## [0.9.24] - 2026-03-11
 
 ### Added
+
 - `search_tools` and `describe_tools` MCP meta-tools for dynamic tool discovery (90-96% input token reduction)
 - Trimmed 14 MCP tool descriptions to ≤60 chars
 
 ## [0.9.23] - 2026-03-11
 
 ### Added
+
 - `@hasna/todos-sdk` — universal agent SDK package (TodosClient, OpenAI-compatible schemas)
 - Agent discovery: `GET /api/agents/me` with auto-register, stats, assigned tasks
 - Agent task queue: `GET /api/agents/:id/queue` sorted by priority
@@ -1086,11 +1118,13 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.22] - 2026-03-11
 
 ### Changed
+
 - README: comprehensive REST API docs (30+ endpoints), MCP tools reference (40 tools), CLI reference
 
 ## [0.9.21] - 2026-03-10
 
 ### Added
+
 - Server API endpoints for audit log, webhooks, templates
 - Dashboard activity feed showing audit log entries
 - 61 new tests for audit, webhooks, templates, auto-audit
@@ -1098,6 +1132,7 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.20] - 2026-03-10
 
 ### Added
+
 - 11 new MCP tools: `get_task_history`, `get_recent_activity`, `create_webhook`, `list_webhooks`, `delete_webhook`, `create_template`, `list_templates`, `create_task_from_template`, `delete_template`, `approve_task`
 - Auto-audit: task mutations (start/complete/update) automatically log to task_history
 - CLI commands: `todos history`, `todos approve`, `todos templates`
@@ -1106,11 +1141,13 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.19] - 2026-03-10
 
 ### Fixed
+
 - Bulletproof migration system: `ensureSchema()` individually checks every table, column, and index on startup — handles fresh install, any upgrade path, partial migration recovery
 
 ## [0.9.18] - 2026-03-10
 
 ### Added
+
 - Migration 10: audit log (`task_history`), webhooks, task templates, estimated time, approval workflow, agent permissions
 - `logTaskChange`, `getTaskHistory`, `getRecentActivity` for audit trail
 - `createWebhook`, `listWebhooks`, `deleteWebhook`, `dispatchWebhook` with HMAC signatures
@@ -1121,6 +1158,7 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.17] - 2026-03-10
 
 ### Added
+
 - Plans page in web dashboard with data table, markdown description, create/edit dialogs
 - Plans can be attached to projects, task lists, or be free-standing
 - Plans have owner agent (`agent_id`)
@@ -1129,12 +1167,14 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.16] - 2026-03-10
 
 ### Changed
+
 - npm package published with public access
 - Added `publishConfig.access: "public"` to package.json
 
 ## [0.9.15] - 2026-03-10
 
 ### Changed
+
 - Open-source release polish: badges, dashboard/API docs in README
 - Fix git clone URL, MCP server version, SECURITY.md versions
 - Add repository, homepage, bugs, engines to package.json
@@ -1143,11 +1183,13 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.14] - 2026-03-09
 
 ### Added
+
 - 27 new tests: lock expiry, partial ID resolution, updateAgent, getTaskListBySlug, ensureTaskList, server CRUD, export, bulk ops
 
 ## [0.9.13] - 2026-03-09
 
 ### Added
+
 - Agent role field (migration 8) with admin/agent/observer roles
 - `updateAgent()` function and `PATCH /api/agents/:id` endpoint
 - Agents page: online/offline status, detail dialog, edit mode, role badges, last task, merge duplicates, comparison
@@ -1157,16 +1199,19 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.12] - 2026-03-09
 
 ### Added
+
 - Kanban view QoL: drag-and-drop, collapse/expand columns, priority filter, sort within columns, group by project, cancelled toggle, compact/detailed mode, inline actions, assignee avatars, hover preview, show more pagination
 
 ## [0.9.11] - 2026-03-09
 
 ### Added
+
 - Auto-find free port when default 19427 is in use (scans up to 100 ports)
 
 ## [0.9.10] - 2026-03-09
 
 ### Added
+
 - CLI: `todos count`, `todos bulk`, `todos watch`, `todos config`
 - CLI: `--project-name`, `--agent-name`, `--sort` on `todos list`
 - Better error messages with "Did you mean?" suggestions
@@ -1176,6 +1221,7 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.9] - 2026-03-09
 
 ### Added
+
 - Card shadows removed across dashboard
 - shadcn Select, Dialog, DatePicker components
 - Task detail opens in dialog instead of inline
@@ -1187,6 +1233,7 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.8] - 2026-03-09
 
 ### Added
+
 - Web dashboard (React/Vite/Tailwind/shadcn) served by Bun HTTP server
 - Dashboard page with stats cards, completion rate, recent activity
 - Tasks data table with search, filters, sorting, pagination
@@ -1200,11 +1247,13 @@ published to npm; `0.13.12` is the version this supersedes.
 - `todos-serve` binary and `todos serve` CLI command
 
 ### Changed
+
 - Removed default LIMIT 100 from `listTasks()` — returns all by default
 
 ## [0.9.7] - 2026-03-08
 
 ### Added
+
 - Completion guard: configurable throttling to prevent AI agents from faking task completions
   - 4 guards: status check, min work duration, rate limit, cooldown
   - Per-project overrides via config
@@ -1213,17 +1262,20 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.9.0] - 2026-02-28
 
 ### Added
+
 - Agents with 8-char UUID identity system (migration 5)
 - Task lists as named containers (migration 5)
 - Task prefixes with auto-incrementing short IDs per project (migration 6)
 - Comprehensive test coverage (295 tests across 14 files)
 
 ### Changed
+
 - Integrated agents and task lists across CLI, MCP, and library surfaces
 
 ## [0.5.1] - 2026-02-15
 
 ### Added
+
 - Full detail pages for tasks, plans, and projects
 - Breadcrumb navigation on detail pages
 - Tabbed editing interface
@@ -1231,6 +1283,7 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.5.0] - 2026-02-15
 
 ### Added
+
 - API key authentication with SHA-256 hashed keys
 - Dashboard redesign with docs page, about/contact/legal pages
 - Combobox, Tabs components
@@ -1239,6 +1292,7 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.4.0] - 2026-02-15
 
 ### Added
+
 - Plans as first-class entity with CRUD across all surfaces
 - URL-based routing in dashboard
 - Dashboard home page with stats cards
@@ -1246,6 +1300,7 @@ published to npm; `0.13.12` is the version this supersedes.
 ## [0.3.7] - 2026-02-14
 
 ### Added
+
 - Initial release with CLI, MCP server, and web dashboard
 - Task management with optimistic locking
 - Project management with auto-detection

@@ -1,7 +1,7 @@
 {
   "name": "@hasna/testers",
-  "version": "0.0.92",
-  "description": "AI-powered QA testing CLI \u2014 spawns cheap AI agents to test web apps with headless browsers",
+  "version": "0.0.93",
+  "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -51,8 +51,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
     "@e2b/code-interpreter": "^1.5.1",
-    "@hasna/browser": "0.5.17",
-    "@hasna/contracts": "^0.13.0",
+    "@hasna/browser": "0.5.18",
+    "@hasna/contracts": "^0.13.1",
     "@hasna/events": "^0.1.13",
     "@hasna/projects": "^0.1.67",
     "@hasna/sandboxes": "^0.1.40",

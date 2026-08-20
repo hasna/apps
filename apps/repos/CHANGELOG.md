@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.53
+
+### Patch Changes
+
+- b2638b2: fix(repos): exact owner/name lookup resolves the live canonical checkout (todos d8ed2fc2). `repos repo <owner>/<name> --json` — the exact-target form the worktree law mandates — was rejected rc=1 with a fuzzy "Repo not found" suggestion even when the canonical checkout of that exact remote was indexed with a live path, because getRepo() fell through to the all-rows-missing pre-migration resolver. Qualified identities now route through the exact-remote resolution (the same contract as `--remote`): mirror-only remotes still refuse, a live checkout beats a hollow sibling, live multi-checkout ambiguity stays loud (now caught on the CLI, HTTP API and MCP surfaces), and the all-dead pre-migration deterministic pick (todos 0251863c) is preserved.
+
 ## 0.1.52
 
 ### Patch Changes
@@ -308,7 +314,7 @@ Makes `repos prs` usable as a source of truth for pull requests (#26).
 - **The scanner no longer erases remote identities.** A failed `git remote get-url origin`
   read used to overwrite a known-good `remote_url` with NULL; supplying a remote that fails
   sanitization still clears it. `git -C` also searches upward, so a directory with a gutted
-  `.git` answered with its *ancestor's* remote — that read is now rejected unless git
+  `.git` answered with its _ancestor's_ remote — that read is now rejected unless git
   considers the path the top of its working tree.
 - **`open-repos.pr-queue.v1`** shares the de-duplicated listing, so the queue no longer
   spends its `limit` on duplicate copies, and task fingerprints name the repository that
