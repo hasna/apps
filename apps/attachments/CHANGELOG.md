@@ -5,25 +5,19 @@
 ### Patch Changes
 
 - f1fe3f2: Port custom base URL server links (`--internal` / `base_url`) to the hosted `/v1` path. The server now accepts `base_url` on upload (JSON / multipart / query) and link-regenerate, validates it (absolute http(s), no embedded credentials, no query/fragment) and mints server-hosted share links against it instead of the configured public base URL. The CLI `--internal` flag and `UploadOptions.baseUrl` are no longer rejected in cloud client mode, and `RegenerateLinkOptions.baseUrl` is honored by both the local and hosted backends.
-- Updated dependencies [b630c48]
-  - @hasna/contracts@0.11.2
-  - @hasna/events@0.1.16
+- 85724aaf: `--encrypt` encryption-at-rest now works on the hosted `/v1` path, not only local mode. The cloud upload path derives the key from the same password scheme as the local backend (salt/iv/tag ride in the metadata row), and the download path re-derives it from the password.
+- f482324: Presigned direct upload now works on the hosted `/v1` backend, not only local mode. `presign-upload` / `presign-complete` (CLI) and `presign_upload` / `complete_presigned_upload` (MCP) previously refused with "only available in local mode". The hosted server now mints the presigned PUT URL (it holds the S3 credentials — the client never needs any) via `POST /v1/attachments/presign-upload` and finalizes via `POST /v1/attachments/:id/presign-upload/complete`, with size checks, expiry handling, and presigned-or-server link selection identical to the local path. The client `Store` surface (`ApiStore`) now implements both verbs through the `/v1` API.
+- 51a1aaf: Email-gated share links (`--require-email` / `--allowed-email`) now work on the hosted `/v1` path. The public `/a/:token` page renders the email form, `request-access` mints a grant and emails the access link, and download requires the grant (bogus/expired grant -> 401/410, non-allowlisted address -> generic 403, sender unconfigured -> 503). The emailed access link uses the same base the share link was minted with (`base_url` / `--internal` when given).
+- Friendly, password-protected share aliases are now supported end to end. Use `attachments slug <slug>` for a read-only availability check, then `attachments link <id> --regenerate --slug <slug> --password <password>` to create `https://<public-host>/a/<slug>`. Slugs are stored only as hashes in the existing share-link table, so no schema migration is required.
+- f95fca2: `hasna.contract.json` aligned to the current contracts schema.
+- Updated dependencies:
+  - @hasna/contracts@^0.8.2 (was ^0.5.2)
+  - @hasna/events@0.1.16 (was ^0.1.6)
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-### Added
-
-- **Presigned direct upload now works on the hosted `/v1` backend, not only local mode.** `presign-upload` / `presign-complete` (CLI) and `presign_upload` / `complete_presigned_upload` (MCP) previously refused with "only available in local mode". The hosted server now mints the presigned PUT URL (it holds the S3 credentials — the client never needs any) via `POST /v1/attachments/presign-upload` and finalizes via `POST /v1/attachments/:id/presign-upload/complete`, with size checks, expiry handling, and presigned-or-server link selection identical to the local path. The client `Store` surface (`ApiStore`) now implements both verbs through the `/v1` API.
-- Friendly, password-protected share aliases are now supported end to end. Use
-  `attachments slug <slug>` for a read-only availability check, then
-  `attachments link <id> --regenerate --slug <slug> --password <password>` to
-  create `https://<public-host>/a/<slug>`. Slugs are stored only as hashes in
-  the existing share-link table, so no schema migration is required.
 
 ## [1.1.5] - 2026-07-25
 
