@@ -285,6 +285,78 @@ export interface ProjectMessageLinkageRollbackResult {
   replayed?: boolean;
 }
 
+// Guarded atomic channel merge: source content moves into the destination by
+// in-place row rewrite, message ids and uuids never change, and every apply or
+// rollback appends an immutable receipt.
+export interface ChannelMergePlan {
+  operation: "merge";
+  dry_run: true;
+  source_channel: string;
+  destination_channel: string;
+  archive_source: boolean;
+  revision: string;
+  source_message_count: number;
+  moved_message_count: number;
+  message_ids: number[];
+  message_uuids: string[];
+  message_id_min: number | null;
+  message_id_max: number | null;
+}
+
+export interface ChannelMergeGraphEdge {
+  from_type: string;
+  from_id: string;
+  to_type: string;
+  to_id: string;
+  relation: string;
+  weight: number;
+  metadata: string | null;
+}
+
+export interface ChannelMergeAliasPrior {
+  old_channel: string;
+  current_channel: string;
+  renamed_at: string;
+}
+
+export interface ChannelMergeReceipt extends Omit<ChannelMergePlan, "dry_run"> {
+  dry_run: false;
+  receipt_id: string;
+  idempotency_key: string;
+  request_hash: string;
+  pre_revision: string;
+  post_revision: string;
+  source_members: string[];
+  source_subscriptions: string[];
+  source_task_ids: number[];
+  source_graph_edges: ChannelMergeGraphEdge[];
+  prior_source_archived_at: string | null;
+  prior_alias_destination: ChannelMergeAliasPrior | null;
+  prior_aliases_of_source: Array<{ old_channel: string; renamed_at: string }>;
+  created_at: string;
+  replayed: boolean;
+}
+
+export interface ChannelMergeRollbackResult {
+  operation: "rollback";
+  dry_run: boolean;
+  source_receipt_id: string;
+  source_channel: string;
+  destination_channel: string;
+  expected_revision: string;
+  current_revision: string;
+  target_count: number;
+  target_message_ids: number[];
+  target_message_uuids: string[];
+  restored_count: number;
+  receipt_id?: string;
+  idempotency_key?: string;
+  request_hash?: string;
+  post_revision?: string;
+  created_at?: string;
+  replayed?: boolean;
+}
+
 // Canonical append-only Todos incident projections.
 export type IncidentSeverity = "info" | "low" | "medium" | "high" | "critical";
 export type IncidentStatus = "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded";

@@ -1131,4 +1131,37 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (10) ON CONFLICT DO NOTHING;
   `,
+  // Migration 11: immutable receipts for the guarded atomic channel merge.
+  // Apply appends the exact moved row identities and prior alias/archive
+  // state; rollback creates a second receipt and never mutates the apply
+  // receipt.
+  `
+  CREATE TABLE IF NOT EXISTS channel_merge_receipts (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    operation TEXT NOT NULL CHECK (operation IN ('apply', 'rollback')),
+    source_channel TEXT NOT NULL,
+    destination_channel TEXT NOT NULL,
+    source_receipt_id TEXT REFERENCES channel_merge_receipts(id),
+    request_hash TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_channel_merge_receipts_source
+    ON channel_merge_receipts(source_channel, created_at);
+
+  CREATE OR REPLACE FUNCTION conversations_reject_merge_receipt_mutation()
+  RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    RAISE EXCEPTION 'channel merge receipts are immutable';
+  END;
+  $$;
+  DROP TRIGGER IF EXISTS channel_merge_receipts_no_mutation
+    ON channel_merge_receipts;
+  CREATE TRIGGER channel_merge_receipts_no_mutation
+    BEFORE UPDATE OR DELETE ON channel_merge_receipts
+    FOR EACH ROW EXECUTE FUNCTION conversations_reject_merge_receipt_mutation();
+
+  INSERT INTO _migrations (id) VALUES (11) ON CONFLICT DO NOTHING;
+  `,
 ];

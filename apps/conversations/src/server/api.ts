@@ -43,6 +43,7 @@ import {
   stableProjectMessageLinkageHash,
   type ProjectMessageLinkageRow,
 } from "../lib/project-message-linkage.js";
+import { CHANNEL_MERGE_RECEIPTS_TABLE, stableChannelMergeHash } from "../lib/channel-merge.js";
 import type {
   ProjectMessageLinkageHash,
   ProjectMessageLinkageReceipt,
@@ -813,6 +814,399 @@ async function renameChannelServer(
     await tx.query(`UPDATE resource_locks SET resource_id = $1 WHERE resource_type = 'channel' AND resource_id = $2`, [to, from]);
     await tx.query(`DELETE FROM channels WHERE name = $1`, [from]);
     return { ok: true as const, name: to };
+  });
+}
+
+// Message columns whose values survive a channel merge untouched; identical
+// to the SQLite preserved-column set so plan revisions are comparable.
+const MERGE_PRESERVED_COLUMNS = [
+  "id", "uuid", "from_agent", "project_id", "content", "priority",
+  "working_dir", "repository", "branch", "metadata", "edited_at",
+  "pinned_at", "blocking", "attachments", "reply_to", "created_at", "read_at",
+] as const;
+const MERGE_FULL_COLUMNS = [
+  ...MERGE_PRESERVED_COLUMNS,
+  "session_id", "to_agent", "channel",
+] as const;
+
+interface MergeServerPlan {
+  operation: "merge";
+  dry_run: boolean;
+  source_channel: string;
+  destination_channel: string;
+  archive_source: boolean;
+  revision: string;
+  source_message_count: number;
+  moved_message_count: number;
+  message_ids: number[];
+  message_uuids: string[];
+  message_id_min: number | null;
+  message_id_max: number | null;
+}
+
+type MergeServerMessageRow = Record<string, unknown> & { id: number; uuid: string };
+
+async function readMergeServerMessages(
+  client: TypedQueryClient,
+  channel: string,
+): Promise<MergeServerMessageRow[]> {
+  return client.many<MergeServerMessageRow>(
+    `SELECT ${MERGE_FULL_COLUMNS.join(", ")} FROM messages WHERE channel = $1 ORDER BY id ASC`,
+    [channel],
+  );
+}
+
+function mergeServerPreservedHash(row: MergeServerMessageRow): string {
+  return stableChannelMergeHash(
+    Object.fromEntries(MERGE_PRESERVED_COLUMNS.map((column) => [column, row[column] ?? null])),
+  );
+}
+
+function mergeServerFullHash(row: MergeServerMessageRow): string {
+  return stableChannelMergeHash(
+    Object.fromEntries(MERGE_FULL_COLUMNS.map((column) => [column, row[column] ?? null])),
+  );
+}
+
+function buildMergeServerPlan(
+  source: string,
+  destination: string,
+  sourceProjectId: string | null,
+  destinationProjectId: string | null,
+  sourceMessages: MergeServerMessageRow[],
+  sourceMembers: string[],
+  destinationMembers: string[],
+  sourceSubscriptions: string[],
+  destinationSubscriptions: string[],
+  dryRun: boolean,
+  archiveSource: boolean,
+): MergeServerPlan {
+  const ordered = sourceMessages.slice().sort((a, b) => Number(a.id) - Number(b.id));
+  const ids = ordered.map((row) => Number(row.id));
+  const revision = stableChannelMergeHash({
+    source_channel: source,
+    destination_channel: destination,
+    source_project_id: sourceProjectId,
+    destination_project_id: destinationProjectId,
+    source_messages: ordered.map((row) => ({
+      id: Number(row.id),
+      uuid: String(row.uuid),
+      preserved_hash: mergeServerPreservedHash(row),
+    })),
+    source_members: sourceMembers,
+    destination_members: destinationMembers,
+    source_subscriptions: sourceSubscriptions,
+    destination_subscriptions: destinationSubscriptions,
+  });
+  return {
+    operation: "merge",
+    dry_run: dryRun,
+    source_channel: source,
+    destination_channel: destination,
+    archive_source: archiveSource,
+    revision,
+    source_message_count: ordered.length,
+    moved_message_count: ordered.length,
+    message_ids: ids,
+    message_uuids: ordered.map((row) => String(row.uuid)),
+    message_id_min: ids.length > 0 ? Math.min(...ids) : null,
+    message_id_max: ids.length > 0 ? Math.max(...ids) : null,
+  };
+}
+
+function mergeServerPostRevision(
+  source: string,
+  destination: string,
+  sourceProjectId: string | null,
+  destinationProjectId: string | null,
+  destinationMessages: MergeServerMessageRow[],
+  destinationMembers: string[],
+  destinationSubscriptions: string[],
+): string {
+  return stableChannelMergeHash({
+    source_channel: source,
+    destination_channel: destination,
+    source_project_id: sourceProjectId,
+    destination_project_id: destinationProjectId,
+    source_messages: [],
+    destination_messages: destinationMessages.map((row) => ({
+      id: Number(row.id),
+      uuid: String(row.uuid),
+      hash: mergeServerFullHash(row),
+    })),
+    destination_members: destinationMembers,
+    destination_subscriptions: destinationSubscriptions,
+  });
+}
+
+type StoredServerMergeReceipt = {
+  id: string;
+  idempotency_key: string;
+  operation: "apply" | "rollback";
+  source_channel: string;
+  destination_channel: string;
+  source_receipt_id: string | null;
+  request_hash: string;
+  payload: string;
+};
+
+/**
+ * Guarded atomic channel merge over PostgreSQL. Mirrors the SQLite merge
+ * contract: both channel rows are locked FOR UPDATE, every collision is
+ * refused inside the same transaction, messages move by in-place rewrite
+ * (ids and uuids never change), and apply appends an immutable receipt.
+ */
+async function mergeChannelServer(
+  client: PoolQueryClient,
+  sourceName: string,
+  destinationName: string,
+  opts: { dryRun: boolean; archiveSource: boolean; expectedRevision?: string; idempotencyKey?: string },
+): Promise<{ ok: true; plan: Record<string, unknown> } | { ok: false; error: string; status: number }> {
+  const source = normalizeChannelName(sourceName);
+  const destination = normalizeChannelName(destinationName);
+  const requestHash = stableChannelMergeHash({
+    operation: "apply",
+    source_channel: source,
+    destination_channel: destination,
+    archive_source: opts.archiveSource,
+    expected_revision: opts.expectedRevision ?? "",
+  });
+
+  return client.transaction(async (tx) => {
+    await tx.get(
+      "SELECT pg_advisory_xact_lock($1::bigint) AS channel_identity_locked",
+      [CHANNEL_IDENTITY_ADVISORY_LOCK],
+    );
+    if (source === destination) {
+      return { ok: false as const, error: `Channel merge refused: source and destination must differ (both normalize to ${source}).`, status: 409 };
+    }
+    const sourceRow = await tx.get<{ name: string; project_id: string | null }>(
+      `SELECT name, project_id FROM channels WHERE name = $1 FOR UPDATE`,
+      [source],
+    );
+    if (!sourceRow) return { ok: false as const, error: `Channel not found: ${source}`, status: 404 };
+    const destinationRow = await tx.get<{ name: string; project_id: string | null }>(
+      `SELECT name, project_id FROM channels WHERE name = $1 FOR UPDATE`,
+      [destination],
+    );
+    if (!destinationRow) return { ok: false as const, error: `Channel not found: ${destination}`, status: 404 };
+    const reserved = await tx.get<{ current_channel: string }>(
+      "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1 FOR UPDATE",
+      [destination],
+    );
+    if (reserved && reserved.current_channel !== source) {
+      return { ok: false as const, error: `Channel merge refused: #${destination} is a reserved historical alias for #${reserved.current_channel}.`, status: 409 };
+    }
+    const held = await tx.get<{ agent_id: string }>(
+      `SELECT agent_id FROM resource_locks
+       WHERE resource_type = 'channel' AND resource_id IN ($1, $2)
+       ORDER BY locked_at ASC LIMIT 1`,
+      [source, destination],
+    );
+    if (held) {
+      return { ok: false as const, error: `Channel merge refused: #${source} or #${destination} is locked by ${held.agent_id}.`, status: 409 };
+    }
+    const memberOverlap = await tx.many<{ agent: string }>(
+      `SELECT agent FROM channel_members
+       WHERE channel = $1 AND agent IN (SELECT agent FROM channel_members WHERE channel = $2)
+       ORDER BY agent`,
+      [source, destination],
+    );
+    if (memberOverlap.length > 0) {
+      return { ok: false as const, error: `Channel merge refused: member overlap with #${destination}: ${memberOverlap.map((row) => row.agent).join(", ")}.`, status: 409 };
+    }
+    const subscriptionOverlap = await tx.many<{ agent: string }>(
+      `SELECT agent FROM channel_subscriptions
+       WHERE channel = $1 AND agent IN (SELECT agent FROM channel_subscriptions WHERE channel = $2)
+       ORDER BY agent`,
+      [source, destination],
+    );
+    if (subscriptionOverlap.length > 0) {
+      return { ok: false as const, error: `Channel merge refused: subscription overlap with #${destination}: ${subscriptionOverlap.map((row) => row.agent).join(", ")}.`, status: 409 };
+    }
+    if (
+      sourceRow.project_id !== null &&
+      destinationRow.project_id !== null &&
+      sourceRow.project_id !== destinationRow.project_id
+    ) {
+      return { ok: false as const, error: `Channel merge refused: channels belong to different projects (${sourceRow.project_id} vs ${destinationRow.project_id}).`, status: 409 };
+    }
+    const stranded = await tx.get<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM messages
+       WHERE channel IS NOT NULL AND channel <> $1 AND channel <> $2
+         AND reply_to IN (SELECT id FROM messages WHERE channel = $1)`,
+      [source, destination],
+    );
+    const strandedCount = stranded?.n ?? 0;
+    if (strandedCount > 0) {
+      return { ok: false as const, error: `Channel merge refused: ${strandedCount} message(s) in a third channel reply to a #${source} message.`, status: 409 };
+    }
+
+    const sourceMessages = await readMergeServerMessages(tx, source);
+    const sourceMembers = (await tx.many<{ agent: string }>(
+      "SELECT agent FROM channel_members WHERE channel = $1 ORDER BY agent", [source],
+    )).map((row) => row.agent);
+    const destinationMembers = (await tx.many<{ agent: string }>(
+      "SELECT agent FROM channel_members WHERE channel = $1 ORDER BY agent", [destination],
+    )).map((row) => row.agent);
+    const sourceSubscriptions = (await tx.many<{ agent: string }>(
+      "SELECT agent FROM channel_subscriptions WHERE channel = $1 ORDER BY agent", [source],
+    )).map((row) => row.agent);
+    const destinationSubscriptions = (await tx.many<{ agent: string }>(
+      "SELECT agent FROM channel_subscriptions WHERE channel = $1 ORDER BY agent", [destination],
+    )).map((row) => row.agent);
+
+    const plan = buildMergeServerPlan(
+      source, destination, sourceRow.project_id, destinationRow.project_id,
+      sourceMessages, sourceMembers, destinationMembers,
+      sourceSubscriptions, destinationSubscriptions,
+      opts.dryRun, opts.archiveSource,
+    );
+    if (opts.dryRun) return { ok: true as const, plan: plan as MergeServerPlan & Record<string, unknown> };
+
+    const expectedRevision = opts.expectedRevision ?? "";
+    const idempotencyKey = opts.idempotencyKey ?? "";
+    if (!expectedRevision || !idempotencyKey) {
+      return { ok: false as const, error: "expected_revision and idempotency_key are required when apply is true", status: 400 };
+    }
+    if (plan.revision !== expectedRevision) {
+      return { ok: false as const, error: `Stale channel merge revision: expected ${expectedRevision}, current ${plan.revision}.`, status: 409 };
+    }
+    const existing = await tx.get<StoredServerMergeReceipt>(
+      `SELECT * FROM ${CHANNEL_MERGE_RECEIPTS_TABLE} WHERE idempotency_key = $1`,
+      [idempotencyKey],
+    );
+    if (existing) {
+      if (existing.request_hash !== requestHash) {
+        return { ok: false as const, error: "Idempotency key was already used with a different request.", status: 409 };
+      }
+      return { ok: true as const, plan: { ...(JSON.parse(existing.payload) as Record<string, unknown>), replayed: true } };
+    }
+
+    await tx.get(
+      "SELECT set_config('hasna.conversations.channel_scope_rewrite', $1, TRUE) AS configured",
+      [JSON.stringify({
+        old_session_id: `channel:${source}`,
+        new_session_id: `channel:${destination}`,
+        old_channel: source,
+        new_channel: destination,
+        old_to_agent: source,
+        new_to_agent: destination,
+      })],
+    );
+    await tx.query(
+      `UPDATE messages
+       SET channel = $1,
+           session_id = CASE WHEN session_id = $2 THEN $1 ELSE session_id END,
+           to_agent = CASE WHEN to_agent = $3 THEN $1 ELSE to_agent END
+       WHERE channel = $3`,
+      [destination, `channel:${source}`, source],
+    );
+    await tx.query(
+      `UPDATE messages SET session_id = $1 WHERE session_id = $2 AND (channel IS NULL OR channel <> $3)`,
+      [`channel:${destination}`, `channel:${source}`, destination],
+    );
+    await tx.query(`UPDATE channel_members SET channel = $1 WHERE channel = $2`, [destination, source]);
+    await tx.query(`UPDATE channel_subscriptions SET channel = $1 WHERE channel = $2`, [destination, source]);
+    await tx.query(`UPDATE message_mentions SET channel = $1 WHERE channel = $2`, [destination, source]);
+    await tx.query(`UPDATE tasks SET channel = $1 WHERE channel = $2`, [destination, source]);
+    // Graph edges: a duplicate destination edge inherits the source edge's
+    // weight/metadata and is removed, then remaining source edges move to the
+    // destination (exact renameChannelServer dedupe pattern).
+    await tx.query(
+      `UPDATE graph_edges AS target
+       SET weight = source.weight, metadata = source.metadata, updated_at = source.updated_at
+       FROM graph_edges AS source
+       WHERE source.from_type = 'channel' AND source.from_id = $2
+         AND target.from_type = source.from_type AND target.from_id = $1
+         AND target.to_type = source.to_type AND target.to_id = source.to_id
+         AND target.relation = source.relation`,
+      [destination, source],
+    );
+    await tx.query(
+      `DELETE FROM graph_edges AS source
+       USING graph_edges AS target
+       WHERE source.from_type = 'channel' AND source.from_id = $2
+         AND target.from_type = source.from_type AND target.from_id = $1
+         AND target.to_type = source.to_type AND target.to_id = source.to_id
+         AND target.relation = source.relation`,
+      [destination, source],
+    );
+    await tx.query(`UPDATE graph_edges SET from_id = $1 WHERE from_type = 'channel' AND from_id = $2`, [destination, source]);
+    await tx.query(
+      `UPDATE graph_edges AS target
+       SET weight = source.weight, metadata = source.metadata, updated_at = source.updated_at
+       FROM graph_edges AS source
+       WHERE source.to_type = 'channel' AND source.to_id = $2
+         AND target.to_type = source.to_type AND target.to_id = $1
+         AND target.from_type = source.from_type AND target.from_id = source.from_id
+         AND target.relation = source.relation`,
+      [destination, source],
+    );
+    await tx.query(
+      `DELETE FROM graph_edges AS source
+       USING graph_edges AS target
+       WHERE source.to_type = 'channel' AND source.to_id = $2
+         AND target.to_type = source.to_type AND target.to_id = $1
+         AND target.from_type = source.from_type AND target.from_id = source.from_id
+         AND target.relation = source.relation`,
+      [destination, source],
+    );
+    await tx.query(`UPDATE graph_edges SET to_id = $1 WHERE to_type = 'channel' AND to_id = $2`, [destination, source]);
+
+    if (opts.archiveSource) {
+      await tx.query(`UPDATE channels SET archived_at = NOW()::text WHERE name = $1`, [source]);
+      await tx.query(`DELETE FROM channel_rename_aliases WHERE old_channel = $1`, [destination]);
+      await tx.query(
+        "UPDATE channel_rename_aliases SET current_channel = $1, renamed_at = NOW() WHERE current_channel = $2",
+        [destination, source],
+      );
+      await tx.query(
+        `INSERT INTO channel_rename_aliases (old_channel, current_channel) VALUES ($1,$2)
+         ON CONFLICT (old_channel) DO UPDATE SET current_channel = EXCLUDED.current_channel, renamed_at = NOW()`,
+        [source, destination],
+      );
+      await tx.query(`DELETE FROM channel_rename_aliases WHERE old_channel = current_channel`);
+    }
+
+    const postMessages = await readMergeServerMessages(tx, destination);
+    const movedIds = new Set(plan.message_ids);
+    const movedPresent = postMessages.filter((row) => movedIds.has(Number(row.id)));
+    if (movedPresent.length !== plan.message_ids.length) {
+      throw new Error(
+        `Channel merge verification failed: ${plan.message_ids.length - movedPresent.length} moved message(s) missing after commit.`,
+      );
+    }
+    const postMembers = (await tx.many<{ agent: string }>(
+      "SELECT agent FROM channel_members WHERE channel = $1 ORDER BY agent", [destination],
+    )).map((row) => row.agent);
+    const postSubscriptions = (await tx.many<{ agent: string }>(
+      "SELECT agent FROM channel_subscriptions WHERE channel = $1 ORDER BY agent", [destination],
+    )).map((row) => row.agent);
+
+    const createdAt = new Date().toISOString();
+    const receipt: MergeServerPlan & Record<string, unknown> = {
+      ...plan,
+      dry_run: false,
+      receipt_id: randomUUID(),
+      idempotency_key: idempotencyKey,
+      request_hash: requestHash,
+      pre_revision: plan.revision,
+      post_revision: mergeServerPostRevision(
+        source, destination, sourceRow.project_id, destinationRow.project_id,
+        postMessages, postMembers, postSubscriptions,
+      ),
+      created_at: createdAt,
+      replayed: false,
+    };
+    await tx.query(
+      `INSERT INTO ${CHANNEL_MERGE_RECEIPTS_TABLE} (
+         id, idempotency_key, operation, source_channel, destination_channel,
+         source_receipt_id, request_hash, payload, created_at
+       ) VALUES ($1,$2,'apply',$3,$4,NULL,$5,$6,NOW())`,
+      [receipt.receipt_id, idempotencyKey, source, destination, requestHash, JSON.stringify(receipt)],
+    );
+    return { ok: true as const, plan: receipt };
   });
 }
 
@@ -2891,6 +3285,42 @@ async function handleV1(
     );
     if (!row) return json({ error: "Channel not found" }, 404);
     return json({ channel: parseServerChannel(row) });
+  }
+
+  const chanMerge = sub.match(/^channels\/([^/]+)\/merge$/);
+  if (chanMerge && method === "POST") {
+    const destination = normalizeChannelName(decodeURIComponent(chanMerge[1]));
+    const body = await readJson(req);
+    if (body.tenant_id !== undefined) {
+      return json({ error: "tenant_id is owned by the authenticated storage context and cannot be supplied." }, 400);
+    }
+    const sourceChannel = str(body.source_channel);
+    if (!sourceChannel) return json({ error: "source_channel is required" }, 400);
+    const dryRun = body.dry_run === true;
+    const archiveSource = body.archive_source === true;
+    const expectedRevision = str(body.expected_revision);
+    const idempotencyKey = str(body.idempotency_key);
+    if (!dryRun && (expectedRevision === undefined || idempotencyKey === undefined)) {
+      return json({ error: "expected_revision and idempotency_key are required when apply is true" }, 400);
+    }
+    try {
+      const result = await mergeChannelServer(client, sourceChannel, destination, {
+        dryRun,
+        archiveSource,
+        expectedRevision,
+        idempotencyKey,
+      });
+      if (!result.ok) return json({ error: result.error }, result.status);
+      return json(result.plan, result.plan.replayed ? 200 : dryRun ? 200 : 201);
+    } catch (error) {
+      const message = (error as Error).message;
+      const status = /not found/i.test(message)
+        ? 404
+        : /stale|conflict|refused|idempotency|verification|missing|locked/i.test(message)
+          ? 409
+          : 400;
+      return json({ error: message }, status);
+    }
   }
 
   const chanMatch = sub.match(/^channels\/([^/]+)$/);

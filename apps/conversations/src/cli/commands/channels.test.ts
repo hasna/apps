@@ -109,6 +109,24 @@ describe("registerChannelCommands", () => {
     expect(rollback?.options.some((o) => o.long === "--receipt")).toBe(true);
     expect(rollback?.options.some((o) => o.long === "--apply")).toBe(true);
   });
+
+  test("registers the guarded channel merge verb with plan-first and apply-gated flags", () => {
+    const program = new Command();
+    registerChannelCommands(program);
+
+    const channel = program.commands.find((c) => c.name() === "channel");
+    const merge = channel?.commands.find((c) => c.name() === "merge");
+    expect(merge).toBeDefined();
+    const mergeHelp = merge?.helpInformation() ?? "";
+    expect(mergeHelp).toContain("<source>");
+    expect(mergeHelp).toContain("<destination>");
+    expect(merge?.options.some((o) => o.long === "--dry-run")).toBe(true);
+    expect(merge?.options.some((o) => o.long === "--apply")).toBe(true);
+    expect(merge?.options.some((o) => o.long === "--archive-source")).toBe(true);
+    expect(merge?.options.some((o) => o.long === "--expected-revision")).toBe(true);
+    expect(merge?.options.some((o) => o.long === "--idempotency-key")).toBe(true);
+    expect(merge?.options.some((o) => o.long === "--json")).toBe(true);
+  });
 });
 
 describe("mergeChannelClassMetadata", () => {

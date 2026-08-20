@@ -230,6 +230,15 @@ export class ConversationsClient {
       });
     }
 
+    /** Plan or apply an atomic merge of a source channel into this destination channel, preserving message ids */
+    async mergeChannel(name: string, body: { "source_channel": string; "dry_run"?: boolean; "archive_source"?: boolean; "expected_revision"?: string; "idempotency_key"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/channels/${encodeURIComponent(String(name))}/merge`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Plan or apply guarded project linkage for every message in one exact project-linked channel */
     async applyChannelProjectMessageLinkage(name: string, body: { "project_id": string; "apply": boolean; "expected_revision"?: string; "idempotency_key"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/channels/${encodeURIComponent(String(name))}/project-message-linkage`, {

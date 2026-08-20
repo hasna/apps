@@ -1235,6 +1235,39 @@ export const openapiSpec = {
         },
       },
     },
+    "/v1/channels/{name}/merge": {
+      post: {
+        operationId: "mergeChannel",
+        summary: "Plan or apply an atomic merge of a source channel into this destination channel, preserving message ids",
+        description:
+          "With dry_run=true (default), returns a non-mutating plan and revision with every collision refused. " +
+          "With dry_run=false, expected_revision and idempotency_key are required; the server locks both channel " +
+          "rows, rewrites messages/memberships/subscriptions/mentions/tasks/graph edges in place (ids and uuids " +
+          "never change), optionally archives and aliases the source, and appends an immutable receipt.",
+        parameters: [{ name: "name", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["source_channel"],
+            properties: {
+              source_channel: { type: "string" },
+              dry_run: { type: "boolean" },
+              archive_source: { type: "boolean" },
+              expected_revision: { type: "string" },
+              idempotency_key: { type: "string" },
+            },
+          } } },
+        },
+        responses: {
+          "200": { description: "dry-run plan or idempotent replay", content: { "application/json": { schema: okObject } } },
+          "201": { description: "immutable merge receipt", content: { "application/json": { schema: okObject } } },
+          "404": { description: "source or destination channel not found", content: { "application/json": { schema: errorObject } } },
+          "409": { description: "stale revision, ambiguous destination, or inconsistent idempotency key", content: { "application/json": { schema: errorObject } } },
+        },
+      },
+    },
     "/v1/projects": {
       get: {
         operationId: "listProjects",
