@@ -220,6 +220,20 @@ function resolveRunnerConfig(opts: RunRunnerOnceOptions): {
  * reaches the control plane, so a non-enforcing server is the EXPECTED state on
  * day one, not an edge case. Fail closed: claim nothing.
  */
+/** A refusal this package raises itself: static, safe-by-construction message
+ *  (no provider detail, no credentials). logRunnerCommandFailure surfaces the
+ *  reason for these and keeps every other error opaque. */
+export class RunnerRefusalError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunnerRefusalError";
+  }
+}
+
+function boundedText(value: string, max: number): string {
+  return value.length <= max ? value : value.slice(0, max);
+}
+
 async function assertClaimScopeEnforceable(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
@@ -233,15 +247,15 @@ async function assertClaimScopeEnforceable(
     if (!response.ok) throw new Error(`status ${response.status}`);
     capabilities = ((await response.json()) as Record<string, unknown>).capabilities;
   } catch (error) {
-    throw new Error(
+    throw new RunnerRefusalError(
       `loops-runner --claim-scope bound could not verify control-plane support (${
-        error instanceof Error ? error.message : String(error)
+        boundedText(error instanceof Error ? error.message : String(error), 200)
       }); refusing to claim`,
     );
   }
   const advertised = Array.isArray(capabilities) ? capabilities : [];
   if (!advertised.includes(RUNNER_CLAIM_SCOPE_CAPABILITY)) {
-    throw new Error(
+    throw new RunnerRefusalError(
       `loops-runner --claim-scope bound requires a control plane advertising ${RUNNER_CLAIM_SCOPE_CAPABILITY}; `
         + "this one does not, so the scope would be silently ignored and this runner would claim the whole fleet's "
         + "unbound loops. Refusing to claim.",
@@ -479,7 +493,7 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   if (config.claimScope === "bound") {
     const echoed = (claimed.runner as Record<string, unknown> | undefined)?.claimScope;
     if (echoed !== "bound") {
-      throw new Error(
+      throw new RunnerRefusalError(
         `loops-runner --claim-scope bound was not echoed by the control plane (got ${JSON.stringify(echoed)}); `
           + "the scope was not applied to this claim",
       );
@@ -763,6 +777,10 @@ program
       maxIterations: opts.maxIterations,
       idleExitAfterMs: opts.idleExitAfterMs,
       signal: shutdownSignal(),
+      // A failing service poll must reach the journal, not vanish into the
+      // loop's error counter: ten minutes of failing polls previously left the
+      // journal with nothing but the unit start line.
+      onError: (error) => logRunnerCommandFailure(error),
     });
     if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
     else {
@@ -781,8 +799,15 @@ if (import.meta.main) {
 }
 
 export function logRunnerCommandFailure(error: unknown): void {
-  console.error(JSON.stringify({
+  const line: Record<string, unknown> = {
     evt: "loops_runner_command_failed",
     errorType: error instanceof Error ? "error" : typeof error,
-  }));
+  };
+  // Refusals this package raises itself carry static, safe-by-construction
+  // messages (no provider detail, no credentials), so the reason is surfaced:
+  // a runner that fails every poll with only errorType is an undiagnosable
+  // monitor. Foreign errors keep the opaque line — their message field is
+  // exactly where credentials have been observed to live (connection strings).
+  if (error instanceof RunnerRefusalError) line.message = error.message.slice(0, 500);
+  console.error(JSON.stringify(line));
 }
