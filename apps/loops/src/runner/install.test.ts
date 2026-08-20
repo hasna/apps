@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import {
   startRunnerService,
   stopRunnerService,
   runnerServiceStatus,
+  runnerServiceExitCode,
 } from "./install.js";
 
 interface InstallEnv {
@@ -239,6 +241,52 @@ describe("runner service verbs", () => {
       const status = runnerServiceStatus({ platform: "linux" });
       expect(status.installed).toBe(false);
       expect(status.active).toBeNull();
+    } finally {
+      env.restore();
+    }
+  });
+
+  test("start/stop propagate a failed service command via runnerServiceExitCode (P1 regression)", () => {
+    const env = withInstallEnv();
+    try {
+      installRunnerStartup({ cliEntry: "loops-runner", execPath: "/usr/bin/bun", platform: "linux" });
+      const failingSpawn = (() => ({ status: 1, stdout: "", stderr: "systemctl failed" })) as unknown as typeof import("node:child_process").spawnSync;
+      const okSpawn = (() => ({ status: 0, stdout: "", stderr: "" })) as unknown as typeof import("node:child_process").spawnSync;
+      expect(runnerServiceExitCode(startRunnerService({ platform: "linux", spawnImpl: failingSpawn }))).toBe(1);
+      expect(runnerServiceExitCode(startRunnerService({ platform: "linux", spawnImpl: okSpawn }))).toBe(0);
+      expect(runnerServiceExitCode(stopRunnerService({ platform: "linux", spawnImpl: failingSpawn }))).toBe(1);
+      expect(runnerServiceExitCode(stopRunnerService({ platform: "linux", spawnImpl: okSpawn }))).toBe(0);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test("stop propagates darwin launchctl failures, treating not-loaded (113) as idempotent success", () => {
+    const env = withInstallEnv();
+    try {
+      installRunnerStartup({ cliEntry: "loops-runner", execPath: "/usr/bin/bun", platform: "darwin" });
+      const fakeDir = mkdtempSync(join(tmpdir(), "loops-fake-launchctl-"));
+      const fake = join(fakeDir, "launchctl");
+      // bun's spawnSync snapshots the environment at worker start, so PATH
+      // injection is delivered through the spawn env option here; the real
+      // `sh -c` command string is executed end-to-end.
+      const spawnImpl = ((command: string, args: string[]) =>
+        spawnSync(command, args, {
+          env: { ...process.env, PATH: `${fakeDir}:${process.env.PATH ?? ""}` },
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        })) as unknown as typeof import("node:child_process").spawnSync;
+
+      writeFileSync(fake, "#!/usr/bin/env bash\nexit 113\n");
+      chmodSync(fake, 0o755);
+      const notLoaded = stopRunnerService({ platform: "darwin", spawnImpl });
+      expect(runnerServiceExitCode(notLoaded)).toBe(0);
+
+      writeFileSync(fake, "#!/usr/bin/env bash\nexit 1\n");
+      chmodSync(fake, 0o755);
+      const failed = stopRunnerService({ platform: "darwin", spawnImpl });
+      expect(runnerServiceExitCode(failed)).toBe(1);
+      expect(failed.commands[0].status).toBe(1);
     } finally {
       env.restore();
     }
