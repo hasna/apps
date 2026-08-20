@@ -92,23 +92,43 @@ describe("embedded registry (stale-by-design 45-entry list)", () => {
 });
 
 describe("status verb (read-only)", () => {
-  test("status --filter todos --json returns the todos row with the expected shape", () => {
-    const res = runCli(["status", "--filter", "todos", "--json"]);
-    expect(res.code).toBe(0);
-    const rows = JSON.parse(res.stdout);
-    expect(Array.isArray(rows)).toBe(true);
-    expect(rows.length).toBe(1);
-    expect(rows[0].name).toBe("todos");
-    for (const key of ["name", "installed", "db", "mcp", "http", "dir"]) {
-      expect(key in rows[0]).toBe(true);
-    }
-  });
+  test(
+    "status --filter todos --json returns the todos row with the expected shape",
+    () => {
+      const res = runCli(["status", "--filter", "todos", "--json"]);
+      expect(res.code).toBe(0);
+      const rows = JSON.parse(res.stdout);
+      expect(Array.isArray(rows)).toBe(true);
+      expect(rows.length).toBe(1);
+      expect(rows[0].name).toBe("todos");
+      for (const key of ["name", "installed", "db", "mcp", "http", "dir"]) {
+        expect(key in rows[0]).toBe(true);
+      }
+    },
+    // CI-measured 7509.29ms elapsed under the 5000ms bun default (run
+    // 32402573104); the sibling full-enumeration completed at 37802.25ms in
+    // the same environment. 120s = 3.2x the worst measured complete duration.
+    120_000,
+  );
 
   test(
-    "status --installed --json is an array",
+    "status --installed --json is an array (or the 0.3.1-faithful empty-install message)",
     () => {
       const res = runCli(["status", "--installed", "--json"]);
       expect(res.code).toBe(0);
+      // Root cause of the CI failure: status.ts prints the human
+      // empty-install message "No @hasna/* packages installed globally."
+      // before the --json branch, exactly as the published 0.3.1 bundle does
+      // (1 occurrence, byte-verified by review). On a machine with no global
+      // @hasna installs, stdout is therefore NOT JSON and a blind JSON.parse
+      // throws `SyntaxError: JSON Parse error: Unexpected identifier "No"`.
+      // Two-state parity assertion: the exact 0.3.1-faithful message when no
+      // installs exist; the array shape when installs exist. Any other
+      // output fails loudly (JSON.parse throws) — no silent skip.
+      const trimmed = res.stdout.trim();
+      if (trimmed === "No @hasna/* packages installed globally.") {
+        return;
+      }
       const rows = JSON.parse(res.stdout);
       expect(Array.isArray(rows)).toBe(true);
     },
