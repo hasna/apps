@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 setDefaultTimeout(60_000);
 
@@ -87,7 +88,7 @@ function startFixtureAuthority(options: FixtureOptions): { server: ReturnType<ty
 async function runRemoteCli(args: string[], port: number): Promise<CliResult> {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: CWD,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env["PATH"] ?? "",
       BUN_INSTALL: process.env["BUN_INSTALL"] ?? join(process.env["HOME"] ?? "/home/hasna", ".bun"),
       HOME: join(testRoot, "home"),
@@ -97,7 +98,7 @@ async function runRemoteCli(args: string[], port: number): Promise<CliResult> {
       TODOS_DB_PATH: join(testRoot, "must-not-exist", "todos.db"),
       HASNA_TODOS_API_URL: `http://127.0.0.1:${port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

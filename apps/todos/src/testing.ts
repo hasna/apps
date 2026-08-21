@@ -33,6 +33,9 @@
  * ```
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 /**
  * Every environment variable that can point this client at a store shared with other
  * people. Blanking all of them is what makes a test physically unable to reach the
@@ -96,11 +99,34 @@ export type TodosTestEnv = Record<string, string | undefined>;
  * `*_STORAGE_MODE` variables are DELETED, not blanked, so a test never
  * inherits a stale fragment from the host environment.
  */
+/**
+ * Deliver an explicitly supplied API key through the modern DISK tier
+ * (`$HOME/.hasna/cloud/todos.env`) instead of the legacy env tier, and return
+ * the env unchanged. The contracts client demoted the env vars to a deprecated
+ * fallback and prints a DEPRECATED notice to stderr whenever the key arrives
+ * from there; a CLI subprocess test that asserts empty (or exact) stderr then
+ * fails even though authentication succeeded. Disk is re-read per call and is
+ * the path the deprecation notice itself recommends. Safe by construction for
+ * subprocess fixtures: it writes only when the env it is handed carries both a
+ * HOME override and the key, and a raw `env: { ... }` literal never contains a
+ * machine HOME it did not deliberately set.
+ */
+export function deliverTodosApiKeyViaDisk(env: TodosTestEnv): TodosTestEnv {
+  const home = env.HOME;
+  const apiKey = env.HASNA_TODOS_API_KEY;
+  if (home && apiKey) {
+    const dir = join(home, ".hasna", "cloud");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "todos.env"), `HASNA_TODOS_API_KEY=${apiKey}\n`);
+  }
+  return env;
+}
+
 export function localTodosTestEnv(overrides: TodosTestEnv = {}): TodosTestEnv {
   const env: TodosTestEnv = { ...process.env };
   for (const key of SHARED_TODOS_STORE_ENV_KEYS) env[key] = "";
   for (const key of REMOVED_TODOS_ENV_KEYS) delete env[key];
-  return { ...env, ...overrides };
+  return deliverTodosApiKeyViaDisk({ ...env, ...overrides });
 }
 
 /**

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const TASK_ID = "aaaaaaaa-1111-4111-8111-111111111111";
@@ -20,7 +21,7 @@ afterEach(() => {
 async function runCli(args: string[], root: string, baseUrl: string) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -29,7 +30,7 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

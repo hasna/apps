@@ -30,6 +30,7 @@ import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
 import type { CreateTaskInput, Task } from "../types/index.js";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 setDefaultTimeout(60_000);
 
@@ -162,7 +163,7 @@ async function runRemote(args: string[], port: number, root: string): Promise<Cl
   const localDbPath = join(root, "local-must-not-exist", "todos.db");
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: join(root, "home"),
@@ -173,7 +174,7 @@ async function runRemote(args: string[], port: number, root: string): Promise<Cl
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${port}`,
       HASNA_TODOS_API_KEY: TEST_AUTH_VALUE,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

@@ -184,8 +184,9 @@ function bootStderr(
   cache: string,
   home: string,
   options: { unreachableRegistry?: boolean } = {},
+  args: string[] = [],
 ): string {
-  const booted = Bun.spawnSync([process.execPath, "dist/server/index.js"], {
+  const booted = Bun.spawnSync([process.execPath, "dist/server/index.js", ...args], {
     cwd: app,
     env: runnerEnv(app, cache, home, options),
     stdout: "pipe",
@@ -266,9 +267,37 @@ describe("server bundle is self-contained in the runner image", () => {
     build(outDir, EXTERNALIZE_CONTRACTS);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
-    const output = bootStderr(app, cache, home);
-    expect(output).toContain("Cannot find module");
-    expect(output).toContain("@hasna/contracts");
+    // The normal serve flow refuses on the missing credential before any
+    // module that imports @hasna/contracts loads (the migration path is the
+    // only boot-time consumer), so the control boots the MIGRATE path, which
+    // loads the externalized contracts import before anything else can run.
+    // A throwing contracts stub at the runner's own node_modules makes the
+    // outcome deterministic in any environment: the nearest node_modules wins
+    // over ambient ancestor directories (e.g. /tmp/node_modules left by
+    // concurrently running tests), so the externalized bundle must load the
+    // stub and die, while a self-contained bundle never touches it.
+    mkdirSync(join(app, "node_modules", "@hasna", "contracts"), { recursive: true });
+    writeFileSync(
+      join(app, "node_modules", "@hasna", "contracts", "package.json"),
+      JSON.stringify({
+        name: "@hasna/contracts",
+        version: "0.0.0-runner-stub",
+        main: "index.js",
+        exports: { ".": "./index.js", "./auth": "./index.js", "./client/storage": "./index.js", "./*": "./index.js" },
+      }),
+    );
+    writeFileSync(
+      join(app, "node_modules", "@hasna", "contracts", "index.js"),
+      [
+        'export const verifyApiKey = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
+        'export const ApiKeyStore = class {};',
+        'export const resolveStorageClient = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
+        'throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image");',
+      ].join("\n") + "\n",
+    );
+
+    const output = bootStderr(app, cache, home, {}, ["migrate"]);
+    expect(output).toContain("RUNNER_STUB: @hasna/contracts");
   });
 
   test("the bundle boots with the package registry unreachable", () => {
@@ -288,14 +317,34 @@ describe("server bundle is self-contained in the runner image", () => {
 
   test("POSITIVE CONTROL: an externalized bundle cannot boot without the registry", () => {
     // Proves the case above is a statement about the bundle and not about the
-    // harness quietly resolving everything from somewhere else.
+    // harness quietly resolving everything from somewhere else. Boots the
+    // migrate path with the same throwing stub as the filesystem control.
     const outDir = serverFixtureRoot("todos-offline-external-");
     build(outDir, EXTERNALIZE_CONTRACTS);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
-    const output = bootStderr(app, cache, home, { unreachableRegistry: true });
-    expect(output).toContain("Cannot find module");
-    expect(output).toContain("@hasna/contracts");
+    mkdirSync(join(app, "node_modules", "@hasna", "contracts"), { recursive: true });
+    writeFileSync(
+      join(app, "node_modules", "@hasna", "contracts", "package.json"),
+      JSON.stringify({
+        name: "@hasna/contracts",
+        version: "0.0.0-runner-stub",
+        main: "index.js",
+        exports: { ".": "./index.js", "./auth": "./index.js", "./client/storage": "./index.js", "./*": "./index.js" },
+      }),
+    );
+    writeFileSync(
+      join(app, "node_modules", "@hasna", "contracts", "index.js"),
+      [
+        'export const verifyApiKey = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
+        'export const ApiKeyStore = class {};',
+        'export const resolveStorageClient = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
+        'throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image");',
+      ].join("\n") + "\n",
+    );
+
+    const output = bootStderr(app, cache, home, { unreachableRegistry: true }, ["migrate"]);
+    expect(output).toContain("RUNNER_STUB: @hasna/contracts");
   });
 
   test("the runner image disables auto-install so a missing module fails loudly", () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 /**
  * `todos deps` machine-readable read (todos deps --json).
@@ -273,7 +274,7 @@ function startServer(options: {
 async function runCloud(args: string[], root: string, baseUrl: string) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -282,7 +283,7 @@ async function runCloud(args: string[], root: string, baseUrl: string) {
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_FIXTURE_VALUE,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });
