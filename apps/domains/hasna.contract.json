@@ -3,19 +3,26 @@
   "name": "domains",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.13.1",
-  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). The client uses local SQLite at ~/.local/share/open-domains/domains.db, or the hosted HTTP API when HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY are set; domains-serve reads and writes PostgreSQL directly (HASNA_DOMAINS_DATABASE_URL), no cache or sync in the service.",
+  "kitVersion": "0.13.3",
+  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). The client uses local SQLite at ~/.hasna/domains/domains.db, or the hosted HTTP API when HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY are set; domains-serve reads and writes PostgreSQL directly (HASNA_DOMAINS_DATABASE_URL), no cache or sync in the service.",
   "bins": [
     "domains",
     "domains-mcp",
     "domains-serve"
   ],
   "storage": {
-    "mode": "local",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_DOMAINS_",
     "aliasEnvPrefix": "DOMAINS_",
-    "databaseUrlSecretRef": "hasna/oss/domains/database-url",
-    "sqlitePath": "~/.local/share/open-domains/domains.db"
+    "backend": "sqlite",
+    "sqlitePath": "~/.hasna/domains/domains.db",
+    "pgTestGate": {
+      "envVar": "HASNA_DOMAINS_TEST_DATABASE_URL",
+      "command": "HASNA_DOMAINS_DATABASE_URL=\"${HASNA_DOMAINS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" bun test src/server"
+    }
   },
   "metadata": {
     "serve": {
@@ -30,15 +37,86 @@
         "domains:read",
         "domains:write"
       ],
-      "signingKeyEnv": "HASNA_DOMAINS_API_SIGNING_KEY",
-      "ownerDatabaseUrlSecretRef": "hasna/oss/domains/database-url-owner",
-      "apiKeySigningSecretRef": "hasna/oss/domains/api-key-signing-secret"
+      "signingKeyEnv": "HASNA_DOMAINS_API_SIGNING_KEY"
     },
     "sdk": {
       "export": "@hasna/domains/sdk",
       "client": "DomainsClient",
       "envUrl": "DOMAINS_API_URL",
       "envKey": "DOMAINS_API_KEY"
+    },
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    },
+    "conformance": {
+      "waivedAssetInventories": [
+        {
+          "kind": "domain",
+          "reason": "Fixed third-party endpoints the CLI must contact to function: registrar/DNS APIs (godaddy, namecheap, cloudflare, sedo, brandsight), RDAP/IANA (iana.org), DNSBL check hosts (spamcop.net, sorbs.net, barracudacentral.org), and Cloudflare nameserver hosts. Product constants, not a bulk inventory.",
+          "reviewedBy": "publish-all-domains",
+          "expiresAt": "2026-11-21T00:00:00Z"
+        },
+        {
+          "kind": "host",
+          "reason": "Same fixed provider/check endpoints as the domain waiver (registrar APIs, RDAP, DNSBL hosts, Cloudflare NS hosts); each host is a required integration target, not an asset inventory.",
+          "reviewedBy": "publish-all-domains",
+          "expiresAt": "2026-11-21T00:00:00Z"
+        }
+      ]
     }
-  }
+  },
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "domains-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "domains-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "domains-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json",
+      "clientClassName": "DomainsClient"
+    },
+    {
+      "name": "domains-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "domains-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "domains-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "domains",
+      "authMode": "local-only"
+    }
+  ]
 }

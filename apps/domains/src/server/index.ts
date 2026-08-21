@@ -13,7 +13,7 @@
  */
 
 import { ApiKeyStore } from "@hasna/contracts/auth";
-import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import { getPackageVersion } from "../lib/version.js";
 import { createServeApp } from "./app.js";
 
@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   const version = getPackageVersion();
   const signingSecret = resolveSigningSecret();
 
-  const { client, connectionSource } = createCloudPoolFromEnv("domains", {
+  const { client, connectionSource } = createServerPoolFromEnv("domains", {
     applicationName: "domains-serve",
     max: 5,
   });

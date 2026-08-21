@@ -60,8 +60,9 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
-    "postinstall": "mkdir -p ${XDG_DATA_HOME:-$HOME/.local/share}/open-domains ${XDG_CONFIG_HOME:-$HOME/.config}/open-domains 2>/dev/null || true",
-    "prepack": "bun run build"
+    "postinstall": "mkdir -p $HOME/.hasna/domains 2>/dev/null || true",
+    "prepack": "bun run build && bun run artifact-scan",
+    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/domains-artifact-scan.tgz\" && bunx @hasna/contracts@0.13.3 artifact-scan domains-artifact-scan.tgz; rc=$?; rm -f \"$PWD/domains-artifact-scan.tgz\"; exit $rc"
   },
   "keywords": [
     "domains",
