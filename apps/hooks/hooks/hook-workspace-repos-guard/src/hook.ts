@@ -30,8 +30,10 @@
  * tools are inspected through their `*** Add File:` / `*** Update File:` /
  * `*** Delete File:` markers. Parenthesized command groups are unwrapped.
  *
- * Allowed orgs default to hasna,hasnaxyz,hasna-internal,hasna-products and are
- * overridable with the WORKSPACE_REPOS_GUARD_ORGS env var (comma-separated).
+ * Allowed orgs default to hasna,hasnaxyz,hasna-products and are overridable
+ * with the WORKSPACE_REPOS_GUARD_ORGS env var (comma-separated). Private
+ * workspace orgs must be added per-install via that var; they are never part
+ * of the public default.
  * Home is resolved with os.homedir(); never hardcoded. Fail-open on any parse
  * or evaluation error so a guard defect cannot wedge the agent.
  */
@@ -51,7 +53,7 @@ const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"])
 
 const PATCH_TOOLS = new Set(["apply_patch", "ApplyPatch", "functions.apply_patch"]);
 
-const DEFAULT_ORGS = ["hasna", "hasnaxyz", "hasna-internal", "hasna-products"];
+const DEFAULT_ORGS = ["hasna", "hasnaxyz", "hasna-products"];
 
 const RULE = "workspace-repos-guard";
 
