@@ -92,7 +92,14 @@ journald tag `hasna-test-guard`.
    PATH, so it hits the wrapper and IS capped. Not a gap on bun 1.3.14.
 4. A fresh bun reinstall (curl installer) replaces the wrapper. `bun upgrade`
    through the wrapper updates bun-real and is safe. The **sentinel** catches
-   the clobber case.
+   the clobber case and (since 0.0.3, row 7112181b) **auto-rearms**: it
+   restores the wrapper from the package source and re-pins bun-real to the
+   fleet-pinned 1.3.14 build (sha `37141662ebed915a…`, sha-verified) instead
+   of only alerting. A rearm only exits the sentinel as healthy after the
+   wrapper marker, the byte-identical wrapper, the pinned bun-real version,
+   and the end-to-end canary (rc=0, '1 pass', exact cgroup limits,
+   `acquired ... argv=test`) all pass; an unverifiable rearm keeps the alert
+   path (fail-closed).
 5. `bun --some-flag test` (flags BEFORE the subcommand) bypasses the guard —
    the wrapper checks only `$1`. Pre-existing shape, reviewer P3-5; no such
    invocation observed in production logs. Follow-up, not a blocker.
@@ -123,15 +130,28 @@ verifies wrapper marker + bun-real viability + slots dir; posts [ALERT] to
 ac4558ab fix it classifies a failed functional probe per state — rc=78
 (engaged, degraded), rc=124 with acquisition (engaged, saturated), rc=124
 without (unverifiable) — and words the NOT ENGAGED alert only for wrapper
-missing or silent bypass.
+missing or silent bypass. Since 0.0.3 (row 7112181b) the sentinel also
+AUTO-REARMS the clobber classes (marker missing / integrity mismatch): it
+restores the wrapper from the package source (atomic `.new` + `mv -f`) and
+re-pins bun-real to the fleet-pinned 1.3.14 build (sha-verified: the 
+clobbering ELF is promoted if it matches the pinned sha, else a
+sha-verified download of the pinned release, cached in the guard dir's
+`pinned/` store), then requires the full static chain AND the functional
+canary to pass before it may exit 0. An unverifiable rearm fails closed into
+the alert path. Pin constants are config-overridable
+(`PINNED_BUN_VERSION` / `PINNED_BUN_SHA256` / `PINNED_BUN_ASSET` in the guard
+dir's `config`); the recorded sha is the aarch64 build this machine's bun.sh
+installer installs — on a different-arch host, set the matching sha in
+`config` or the sentinel keeps alerting (fail-closed, never promotes an
+unverified binary).
 
 ## Tests
 
-- `bun run test` (in this package) runs the hermetic smoke: battery section 16
-  (sentinel canary-state classification) against the repo copies. No machine
-  guard install needed.
-- `battery.sh` is the full 53-check regression sweep and must run on a station
-  with the guard installed:
+- `bun run test` (in this package) runs the hermetic smoke: battery sections 16
+  (sentinel canary-state classification) and 17 (auto-rearm on a temp-dir COPY
+  of the bin layout) against the repo copies. No machine guard install needed.
+- `battery.sh` is the full regression sweep (sections 1-17, 60 checks) and
+  must run on a station with the guard installed:
 
   ```bash
   BUN_TEST_GUARD_SENTINEL=<repo>/sentinel.sh \
@@ -140,6 +160,12 @@ missing or silent bypass.
   ```
 
 ## Reinstall (if clobbered)
+
+Since 0.0.3 (row 7112181b) the sentinel AUTO-REARMS the clobber within one
+20-minute firing — restore the wrapper from the package source and re-pin
+bun-real to the fleet-pinned 1.3.14 build (sha-verified), then require the
+full static chain and the functional canary before declaring health. The
+manual path below remains for a machine whose rearm cannot verify:
 
 ```bash
 cp -p /home/hasna/.bun/bin/bun /home/hasna/.bun/bin/bun-real   # only if bun is a real ELF again
