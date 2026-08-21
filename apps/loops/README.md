@@ -1195,17 +1195,18 @@ one when the plane recovers.
 - **Close**: after 2 consecutive successful polls, with one recovery event. A
   recovery is never emitted before its still-undelivered open event.
 - **Exactly-once events**: the episode id is deterministic (derived from the
-  streak's persisted `firstFailureAt` and the runner id), outbox appends are
-  idempotent per `(event, episodeId)` (bounded tail scan), and each state
-  update runs under a short-lived lock file. Delivery is **state-first**: the
+  streak's persisted `firstFailureAt` and the runner id), and every event
+  carries a deterministic `messageId` (`<evt>:<episodeId>`). Delivery truth is
+  the STATE FILE: the protocol is journal → outbox append → claim (a
+  `deliveredAt` write into the state file) → notifier spawn. Once claimed, no
+  code path appends or notifies again for that `messageId`. The outbox is an
+  append-only log — never read back, never the dedupe authority; the only
+  possible duplicate line is a crash-window re-delivery that carries the SAME
+  `messageId` for consumer-side dedupe. Delivery is **state-first**: the
   pending episode (and pending recovery) is persisted BEFORE the outbox
   append, so the outbox can never hold an event the state file does not know
   about — every crash window converges to one open + one recovery event, with
-  the pending delivery retried on the next poll. Stale-lock takeover uses an
-  atomic rename (exactly one contender wins; a live holder's lock is never
-  deleted), and lock contention is a short bounded retry (µs-scale critical
-  sections) followed by skipping that update — episode tracking never
-  meaningfully delays a poll.
+  the pending delivery retried on the next poll.
 - **Failure classes** are `connectivity | http_5xx | auth | contract | refusal`,
   derived only from safe signals (this package's own error types and the numeric
   HTTP status). Episode state and events never contain error text, request
@@ -1222,8 +1223,10 @@ network call of its own. A deployment binds delivery through:
 
 1. **Outbox file** (durable, always on): every event is appended as one JSON
    line to `<dataDir>/runner-events.outbox.jsonl`. An external relay consumes
-   it; if the file is unwritable the episode state stays `open_pending` and
-   delivery is retried on the next poll.
+   it and dedupes by `messageId` (a crash-window re-delivery carries the same
+   `messageId` as the line it re-delivers); if the file is unwritable the
+   episode state stays `open_pending` and delivery is retried on the next
+   poll. The file is append-only — the package never reads it back.
 2. **Notifier command** (optional): when `LOOPS_RUNNER_NOTIFIER_CMD` is set, the
    runner spawns it detached (`sh -c <command>`) with one event JSON object on
    **stdin** and ignores everything about the result — exit code, stderr, even
@@ -1233,8 +1236,8 @@ network call of its own. A deployment binds delivery through:
 Event shapes (one JSON object per line):
 
 ```json
-{"evt":"loops_runner_control_plane_unreachable","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","lastFailureAt":"…","openedAt":"…","consecutiveCount":3,"failureClass":"connectivity","lastSuccessAt":null}
-{"evt":"loops_runner_control_plane_recovered","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","openedAt":"…","recoveredAt":"…","consecutiveCount":822,"failureClass":"connectivity","outageMs":58080000}
+{"evt":"loops_runner_control_plane_unreachable","messageId":"loops_runner_control_plane_unreachable:ep_…","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","lastFailureAt":"…","openedAt":"…","consecutiveCount":3,"failureClass":"connectivity","lastSuccessAt":null}
+{"evt":"loops_runner_control_plane_recovered","messageId":"loops_runner_control_plane_recovered:ep_…","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","openedAt":"…","recoveredAt":"…","consecutiveCount":822,"failureClass":"connectivity","outageMs":58080000}
 ```
 
 The same lines go to the runner's stderr journal, so `journalctl` shows the
