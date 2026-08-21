@@ -59,6 +59,7 @@ export {
   SESSION_RENDER_TOOLS,
   SESSION_TOOL_ADAPTERS,
   cleanSessionPathInput,
+  getRawStoreRoot,
   planSessionRender,
   resolveSessionPath,
   resolveSessionTargetOwnership,

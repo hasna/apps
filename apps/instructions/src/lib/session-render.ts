@@ -55,7 +55,7 @@ export {
   SESSION_RENDER_SCHEMA,
   SESSION_RENDER_SNAPSHOT_RELATIVE_DIR,
 } from "./session-render-contract.js";
-export const RAW_STORE_ROOT_ENV = "HASNA_CONFIGS_HOME";
+export { RAW_STORE_ROOT_ENV } from "./raw-store-root.js";
 export const ANTIGRAVITY_RULE_FILE_CHAR_LIMIT = 12_000;
 export const SESSION_RENDERER_OWNER_ID = "instructions-session-renderer";
 
@@ -733,9 +733,7 @@ function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-export function getRawStoreRoot(): string {
-  return resolve(process.env[RAW_STORE_ROOT_ENV] || join(process.env["HOME"] || homedir(), ".hasna", "instructions"));
-}
+export { getRawStoreRoot } from "./raw-store-root.js";
 
 function defaultTargetHome(tool: SessionRenderTool, profile: string, sessionId?: string): string {
   const home = process.env["HOME"] || homedir();

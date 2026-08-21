@@ -3,13 +3,13 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
+import { getRawStoreRoot } from "../lib/raw-store-root.js";
 
 function getDbPath(): string {
   if (process.env["HASNA_INSTRUCTIONS_DB_PATH"]) {
     return process.env["HASNA_INSTRUCTIONS_DB_PATH"];
   }
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const dir = join(home, ".hasna", "instructions");
+  const dir = getRawStoreRoot();
   mkdirSync(dir, { recursive: true });
   return join(dir, "instructions.db");
 }

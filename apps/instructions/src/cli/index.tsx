@@ -16,6 +16,7 @@ import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
+import { getRawStoreRoot } from "../lib/raw-store-root.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
@@ -999,7 +1000,7 @@ program
     const store = resolveConfigStore();
     const dbPath = isApiTransport()
       ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1`
-      : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(homedir(), ".hasna", "instructions", "instructions.db");
+      : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db");
     const stats = await store.getConfigStats();
     console.log(chalk.bold("@hasna/instructions") + chalk.dim(" v" + pkg.version));
     console.log(chalk.cyan(isApiTransport() ? "API:" : "DB:") + " " + dbPath);
@@ -1956,7 +1957,7 @@ program
     }
     const location = isApiTransport()
       ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1`
-      : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(homedir(), ".hasna", "instructions", "instructions.db");
+      : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db");
     console.log(chalk.dim(`\n${isApiTransport() ? "API" : "DB"}: ${location}`));
   });
 
@@ -2042,7 +2043,7 @@ program
   .description("Export configs to a timestamped backup file")
   .action(async () => {
     const { mkdirSync: mk } = await import("node:fs");
-    const backupDir = join(homedir(), ".hasna", "instructions", "backups");
+    const backupDir = join(getRawStoreRoot(), "backups");
     mk(backupDir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "-").slice(0, 19);
     const outPath = join(backupDir, `configs-${ts}.tar.gz`);
