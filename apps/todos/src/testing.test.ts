@@ -238,6 +238,25 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
     }
   });
 
+  test("REFUSE ARM: a trailing-slash spelling of the machine home is still refused", () => {
+    // The commonest accidental spelling: `HOME: root + "/"` or a path built by
+    // joining. `resolve` collapses it, so the guard must not be comparing raw
+    // strings.
+    const realBefore = snapshotRealCredential();
+    const pretendHome = scratch("pretend-trailing-slash");
+    try {
+      withPretendMachineHome(pretendHome, () => {
+        expect(() =>
+          deliverTodosApiKeyViaDisk({ HOME: `${pretendHome}/`, HASNA_TODOS_API_KEY: SENTINEL }),
+        ).toThrow(/TODOS_FIXTURE_HOME_IS_MACHINE_HOME/);
+      });
+      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(snapshotRealCredential()).toEqual(realBefore);
+    } finally {
+      rmSync(pretendHome, { recursive: true, force: true });
+    }
+  });
+
   test("REFUSE ARM: a symlink pointing at the machine home is still refused", () => {
     const realBefore = snapshotRealCredential();
     const pretendHome = scratch("pretend-symlink-target");
