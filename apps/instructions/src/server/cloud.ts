@@ -93,8 +93,11 @@ export function getApiKeyStore(): ApiKeyStore {
 
 /**
  * The framework-agnostic API-key verifier for `/v1`. Tokens are stateless,
- * HMAC-signed by the contracts issuer; revocation is checked against the RDS
- * `api_keys` table. Fails closed when no signing secret is configured.
+ * HMAC-signed by the contracts issuer; lifecycle status is checked against the
+ * RDS `api_keys` table through the contracts `keyStatus` hook — the recommended
+ * wiring, which refuses unknown, revoked AND expired kids (the deprecated
+ * `isRevoked`-only form cannot refuse a key this service has no record of).
+ * Fails closed when no signing secret is configured.
  */
 export function getCloudVerifier(): ApiKeyVerifier {
   if (cachedVerifier) return cachedVerifier;
@@ -108,7 +111,7 @@ export function getCloudVerifier(): ApiKeyVerifier {
   cachedVerifier = verifyApiKey({
     app: INSTRUCTIONS_APP_SLUG,
     signingSecret,
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
   });
   return cachedVerifier;
 }
@@ -150,7 +153,7 @@ export function getHonoAuthMiddleware(requiredScopes: string[]): ReturnType<type
   const mw = honoApiKey({
     app: INSTRUCTIONS_APP_SLUG,
     signingSecret,
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
     requiredScopes,
   });
   honoMiddlewareCache.set(key, mw);
