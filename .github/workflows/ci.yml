@@ -50,8 +50,19 @@ jobs:
         with:
           bun-version: 1.3.14 # in lockstep with package.json "packageManager"
 
+      # bun install runs workspace member prepare scripts CONCURRENTLY with no
+      # topological ordering (measured on bun 1.3.14, 2026-08-21), so
+      # @hasna/machines' prepare-time tsc read @hasna/contracts/dist while
+      # contracts' own prepare was mid-rebuild and failed with TS7016 — root CI
+      # red 5/5 (todos 3b2a7f1e). The edge bun's install runner cannot express
+      # is declared in the root `prepare:ordered` chain (deterministic
+      # topological order, @hasna/contracts first); the build phase runs through
+      # it, and member scripts (prepare/postinstall) are skipped here. The
+      # install-order standard-adherence test keeps chain and CI in lockstep.
       - name: Install
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run prepare:ordered
 
       # The scan runs its OWN two-sided self-test first and fails if the patterns
       # cannot fire — a scanner whose regexes are broken reports a clean tree, and
@@ -142,7 +153,9 @@ jobs:
           bun-version: 1.3.14 # in lockstep with package.json "packageManager"
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run prepare:ordered
 
       - name: Versioning integrity suite (offline default)
         run: bun run test:versioning
@@ -165,7 +178,9 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run prepare:ordered
 
       # Member test suites may drive a real browser (playwright chromium, e.g.
       # apps/browser). Provision the browser runtime from the MEMBER directory
@@ -312,7 +327,9 @@ jobs:
           bun-version: 1.3.14 # LOAD-BEARING — see the note above and in apps/knowledge ci.yml
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run prepare:ordered
 
       - name: Verify generated artifacts (knowledge — rebuild + byte-compare bin/ dist/)
         run: bun run verify:generated
@@ -334,7 +351,9 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run prepare:ordered
 
       # The guard dry-runs `npm pack --json` per member and parses the real
       # entry list; prepack scripts interleave stdout with the JSON document,
