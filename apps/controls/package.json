@@ -28,9 +28,9 @@
     "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external hono && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "conformance": "bunx @hasna/contracts@0.13.3 vendor-kit --check && bunx @hasna/contracts@0.13.3 repo-conformance",
+    "conformance": "bunx @hasna/contracts@0.13.1 vendor-kit --check && bunx @hasna/contracts@0.13.1 repo-conformance",
     "verify": "bun run typecheck && bun run test && bun run build && bun run conformance",
-    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/controls-artifact-scan.tgz\" && bunx @hasna/contracts@0.13.3 artifact-scan controls-artifact-scan.tgz; rc=$?; rm -f \"$PWD/controls-artifact-scan.tgz\"; exit $rc",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/controls-artifact-scan.tgz\" && bunx @hasna/contracts@0.13.1 artifact-scan controls-artifact-scan.tgz; rc=$?; rm -f \"$PWD/controls-artifact-scan.tgz\"; exit $rc",
     "test:postgres": "bun scripts/pg-test-gate.mjs",
     "openapi:generate": "bun run src/cli/index.tsx openapi generate --out openapi.json --minify",
     "openapi:check": "bun run src/cli/index.tsx openapi check --path openapi.json",
@@ -69,7 +69,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.13.3",
+    "@hasna/contracts": "0.13.1",
     "bun-types": "1.3.14",
     "@types/bun": "^1.2.4",
     "@types/pg": "^8.20.0",
