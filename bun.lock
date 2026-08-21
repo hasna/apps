@@ -993,7 +993,7 @@
       },
       "devDependencies": {
         "@electric-sql/pglite": "^0.5.4",
-        "@hasna/contracts": "0.13.0",
+        "@hasna/contracts": "0.13.1",
         "@types/bun": "^1.3.14",
         "@types/pg": "^8.15.6",
         "typescript": "5.9.3",
@@ -1236,7 +1236,7 @@
       },
       "dependencies": {
         "@hasna/contracts": "0.10.6",
-        "@hasna/events": "0.1.15",
+        "@hasna/events": "0.1.16",
         "hono": "^4.6.0",
         "pg": "^8.16.3",
       },
@@ -1368,7 +1368,7 @@
         "recordings-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.13.0",
+        "@hasna/contracts": "0.13.1",
         "@hasna/events": "0.1.11",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -1398,7 +1398,7 @@
         "@changesets/pre": "2.0.2",
         "@changesets/read": "0.6.7",
         "@changesets/types": "6.1.0",
-        "@hasna/events": "^0.1.13",
+        "@hasna/events": "^0.1.16",
         "@manypkg/get-packages": "1.1.3",
         "@modelcontextprotocol/sdk": "^1.26.0",
         "commander": "^13.1.0",
@@ -1441,7 +1441,7 @@
       "name": "@hasna/router",
       "version": "0.2.0",
       "bin": {
-        "open-router": "dist/cli/index.js",
+        "router": "dist/cli/index.js",
       },
       "dependencies": {
         "zod": "^3.25.76",
@@ -1611,7 +1611,7 @@
         "pg": "^8.13.3",
       },
       "devDependencies": {
-        "@hasna/contracts": "^0.12.0",
+        "@hasna/contracts": "^0.13.0",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.11.11",
         "typescript": "^5.7.3",
