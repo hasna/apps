@@ -504,12 +504,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
   { member: "hooks", kitVersion: "0.8.4", pinned: "0.11.1" },
-  // economy: the wave wrote the caret pin ^0.13.0 expecting 0.13.0, which was
-  // never published (the line jumped 0.12.0 -> 0.13.1); its lockfile cannot be
-  // regenerated until @hasna/projects@0.1.134 publishes (the manifest pins it),
-  // so the pin stays ^0.13.0 and the kit stays on the published 0.13.1 line.
-  // Recorded 2026-08-21 while completing the #717 wave residue.
-  { member: "economy", kitVersion: "0.13.1", pinned: "0.13.0" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —
