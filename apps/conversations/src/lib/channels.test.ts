@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers, isChannelMember } from "./channels";
 import { createProject } from "./projects";
-import { sendMessage, readMessages } from "./messages";
+import { sendMessage, readMessages, readDigest } from "./messages";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -247,6 +247,37 @@ describe("renameChannel", () => {
 
     expect(getChannel("new-name")?.id).toBe(original.id);
     expect(getChannel("old-name")).toBeNull();
+  });
+
+  test("rejects reserved aliases consistently while the canonical channel remains usable", () => {
+    const original = createChannel("chief-research", "agent-chief-research");
+    renameChannel("chief-research", "agent-chief-research");
+
+    expect(() => createChannel("chief-research", "agent-chief-research")).toThrow(
+      "Channel #chief-research is a reserved historical alias for #agent-chief-research.",
+    );
+    expect(() => sendMessage({
+      from: "agent-chief-research",
+      to: "chief-research",
+      channel: "chief-research",
+      content: "alias must not write",
+    })).toThrow("Channel #chief-research is a reserved historical alias for #agent-chief-research.");
+    expect(() => readDigest({ channel: "chief-research" })).toThrow(
+      "Channel #chief-research is a reserved historical alias for #agent-chief-research.",
+    );
+
+    const sent = sendMessage({
+      from: "agent-chief-research",
+      to: "agent-chief-research",
+      channel: "agent-chief-research",
+      content: "canonical channel remains usable",
+    });
+    const digest = readDigest({ channel: "agent-chief-research" });
+
+    expect(sent.channel).toBe("agent-chief-research");
+    expect(digest.message_ids).toEqual([sent.id]);
+    expect(getChannel("agent-chief-research")?.id).toBe(original.id);
+    expect(listChannels()).toHaveLength(1);
   });
 
   test("normalizes the new name", () => {

@@ -1,5 +1,5 @@
 import { getDb } from "./db.js";
-import { normalizeChannelName } from "./channel-names.js";
+import { normalizeChannelName, reservedHistoricalChannelMessage } from "./channel-names.js";
 import { newChannelId } from "./channel-id.js";
 import type { Channel, ChannelInfo, ChannelMember } from "../types.js";
 import { CHANNEL_LIST_ORDER, CHANNEL_MEMBER_ORDER, simpleOrderByClause } from "./list-order.js";
@@ -59,7 +59,7 @@ export function createChannel(
     "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = ?",
   ).get(channelName) as { current_channel: string } | null;
   if (historicalAlias) {
-    throw new Error(`Channel #${channelName} is a reserved historical alias for #${historicalAlias.current_channel}.`);
+    throw new Error(reservedHistoricalChannelMessage(channelName, historicalAlias.current_channel));
   }
 
   if (options?.project_id) {

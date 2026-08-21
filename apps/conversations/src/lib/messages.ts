@@ -30,7 +30,12 @@ import {
 } from "fs";
 import { dirname, join, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
-import { normalizeChannelName, unknownChannelMessage, archivedChannelMessage } from "./channel-names.js";
+import {
+  normalizeChannelName,
+  unknownChannelMessage,
+  archivedChannelMessage,
+  reservedHistoricalChannelMessage,
+} from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import {
   WORK_STATUS_CHANNEL,
@@ -299,6 +304,15 @@ function assertNoSensitiveSendFields(opts: SendMessageOptions, serializedMetadat
   }
 }
 
+function assertNotReservedHistoricalAlias(db: Database, channelName: string): void {
+  const historicalAlias = db.prepare(
+    "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = ?",
+  ).get(channelName) as { current_channel: string } | null;
+  if (historicalAlias) {
+    throw new Error(reservedHistoricalChannelMessage(channelName, historicalAlias.current_channel));
+  }
+}
+
 export function sendMessage(opts: SendMessageOptions): Message {
   if (opts.tenant_id !== undefined) {
     throw new Error("tenant_id is owned by the active storage context and cannot be supplied on a message write.");
@@ -312,12 +326,13 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   checkRateLimit(opts.from);
 
-  const preparedAttachments = prepareAttachmentSources(opts.attachments);
   const db = getDb();
+  const requestedChannel = opts.channel ? normalizeChannelName(opts.channel) : null;
+  if (requestedChannel) assertNotReservedHistoricalAlias(db, requestedChannel);
+
+  const preparedAttachments = prepareAttachmentSources(opts.attachments);
   let stagingDir = stageAttachments(preparedAttachments);
   let committedAttachmentDir: string | null = null;
-
-  const requestedChannel = opts.channel ? normalizeChannelName(opts.channel) : null;
   // `messages.channel` is free text with no foreign key to `channels`, so before
   // this check a typo'd name wrote an ORPHAN: readable by `digest`, invisible to
   // `channel list` (which selects FROM channels), and unarchivable — the archive
@@ -1361,6 +1376,7 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
   const limit = resolveDigestLimit(opts.limit);
   const cursor = resolveDigestCursor(opts.cursor);
   const channel = opts.channel ? normalizeChannelName(opts.channel) : null;
+  if (channel) assertNotReservedHistoricalAlias(getDb(), channel);
   const counts = countDigestMessages({
     channel: channel ?? undefined,
     session_id: opts.session_id,
