@@ -513,13 +513,17 @@ export function applyChannelMerge(options: ApplyChannelMergeOptions): ChannelMer
            AND target.to_type = source.to_type AND target.to_id = source.to_id
            AND target.relation = source.relation`,
       ).run(source, destination);
+      // SQLite has no DELETE ... USING (Postgres-only); the portable form is a
+      // correlated EXISTS against the destination edge (exact dedupe semantics).
       db.prepare(
-        `DELETE FROM graph_edges AS source
-         USING graph_edges AS target
-         WHERE source.from_type = 'channel' AND source.from_id = ?
-           AND target.from_type = source.from_type AND target.from_id = ?
-           AND target.to_type = source.to_type AND target.to_id = source.to_id
-           AND target.relation = source.relation`,
+        `DELETE FROM graph_edges
+         WHERE from_type = 'channel' AND from_id = ?
+           AND EXISTS (
+             SELECT 1 FROM graph_edges AS target
+             WHERE target.from_type = 'channel' AND target.from_id = ?
+               AND target.to_type = graph_edges.to_type AND target.to_id = graph_edges.to_id
+               AND target.relation = graph_edges.relation
+           )`,
       ).run(source, destination);
       db.prepare(
         "UPDATE graph_edges SET from_id = ? WHERE from_type = 'channel' AND from_id = ?",
@@ -534,12 +538,14 @@ export function applyChannelMerge(options: ApplyChannelMergeOptions): ChannelMer
            AND target.relation = source.relation`,
       ).run(source, destination);
       db.prepare(
-        `DELETE FROM graph_edges AS source
-         USING graph_edges AS target
-         WHERE source.to_type = 'channel' AND source.to_id = ?
-           AND target.to_type = source.to_type AND target.to_id = ?
-           AND target.from_type = source.from_type AND target.from_id = source.from_id
-           AND target.relation = source.relation`,
+        `DELETE FROM graph_edges
+         WHERE to_type = 'channel' AND to_id = ?
+           AND EXISTS (
+             SELECT 1 FROM graph_edges AS target
+             WHERE target.to_type = 'channel' AND target.to_id = ?
+               AND target.from_type = graph_edges.from_type AND target.from_id = graph_edges.from_id
+               AND target.relation = graph_edges.relation
+           )`,
       ).run(source, destination);
       db.prepare(
         "UPDATE graph_edges SET to_id = ? WHERE to_type = 'channel' AND to_id = ?",

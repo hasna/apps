@@ -509,3 +509,58 @@ describe("rollbackChannelMerge", () => {
     })).toThrow(/stale/i);
   });
 });
+
+describe("applyChannelMerge with graph_edges present (SQLite)", () => {
+  const GRAPH_EDGES_DDL = `
+    CREATE TABLE IF NOT EXISTS graph_edges (
+      from_type TEXT NOT NULL,
+      from_id TEXT NOT NULL,
+      to_type TEXT NOT NULL,
+      to_id TEXT NOT NULL,
+      relation TEXT NOT NULL,
+      weight REAL NOT NULL DEFAULT 1,
+      metadata TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      UNIQUE(from_type, from_id, to_type, to_id, relation)
+    )
+  `;
+
+  test("dedupes and rewrites graph edges referencing the source channel without a SQL syntax error", () => {
+    const { source, destination } = seedChannels();
+    seedSourceMessages(source, 2);
+    joinChannel(source, "alice");
+    joinChannel(destination, "carol");
+
+    const db = getDb();
+    db.exec(GRAPH_EDGES_DDL);
+    const insertEdge = (fromType: string, fromId: string, toType: string, toId: string, relation: string, weight: number) =>
+      db.prepare(
+        "INSERT INTO graph_edges (from_type, from_id, to_type, to_id, relation, weight, updated_at) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))",
+      ).run(fromType, fromId, toType, toId, relation, weight);
+    // Source edge (duplicate target exists on the destination: dedupe case).
+    insertEdge("channel", source, "project", "proj-1", "belongs_to", 1);
+    insertEdge("channel", destination, "project", "proj-1", "belongs_to", 2);
+    // Edge pointing TO the source channel (rewrite case).
+    insertEdge("project", "proj-1", "channel", source, "member_of", 1);
+
+    const plan = planChannelMerge({ source_channel: source, destination_channel: destination });
+    const receipt = applyChannelMerge({
+      source_channel: source,
+      destination_channel: destination,
+      expected_revision: plan.revision,
+      idempotency_key: "graph-edges-apply",
+    });
+
+    expect(receipt.dry_run).toBe(false);
+    const remaining = db.prepare(
+      "SELECT from_type, from_id, to_type, to_id, relation, weight FROM graph_edges ORDER BY from_id, to_id, relation",
+    ).all() as Array<{ from_type: string; from_id: string; to_type: string; to_id: string; relation: string; weight: number }>;
+    // The duplicate source edge is removed and the destination edge inherits its weight;
+    // the edge pointing at the source channel is rewritten to the destination.
+    expect(remaining).toEqual([
+      { from_type: "channel", from_id: destination, to_type: "project", to_id: "proj-1", relation: "belongs_to", weight: 1 },
+      { from_type: "project", from_id: "proj-1", to_type: "channel", to_id: destination, relation: "member_of", weight: 1 },
+    ]);
+  });
+});
