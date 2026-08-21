@@ -27,6 +27,7 @@ import {
 } from "./project-context.js";
 import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
 import { applyTransform } from "./transforms.js";
+import { providerVersionSatisfies } from "./provider-version.js";
 import { configAssetDigest, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
 import {
   detectCursorAuthorityConflicts,
@@ -261,6 +262,8 @@ export interface SessionRenderInput {
   providerConfig?: SessionProviderConfig;
   /** Explicit provider loading surface selected by the compiled capability descriptor. */
   providerSurface?: SessionProviderSurface;
+  /** Provider version (e.g. "2.1.84"); gates version-sensitive emission such as Claude paths-gated rules. */
+  provider_version?: string;
   skippedSources?: SessionSkippedSource[];
   /** Executable/supporting assets remain separate from instruction sources. */
   assetPlan?: AssetPlan;
@@ -1506,19 +1509,73 @@ function indexHeader(tool: SessionRenderTool, profile: string): string {
   ].join("\n");
 }
 
+/**
+ * Claude Code native rules files support YAML-list `paths:` frontmatter from
+ * v2.1.84; older clients ignore the files silently. Below that version, glob
+ * bindings render as always-on fragments so instructions are never lost.
+ */
+const CLAUDE_PATHS_RULES_VERSION_RANGE = ">=2.1.84";
+
+function isCompiledClaudeGlobSource(
+  adapter: SessionToolAdapter,
+  source: OrderedSessionInstructionSource,
+  providerVersion?: string,
+): boolean {
+  if (adapter.tool !== "claude") return false;
+  if (providerVersion && !providerVersionSatisfies(providerVersion, CLAUDE_PATHS_RULES_VERSION_RANGE)) return false;
+  const compiledBinding = source.provenance?.["profileBinding"];
+  if (!compiledBinding || typeof compiledBinding !== "object") return false;
+  const activation = source.metadata?.["activation"] as { mode?: string } | undefined;
+  return activation?.mode === "glob";
+}
+
+function claudeGlobRuleFile(
+  targetHome: string,
+  index: number,
+  source: OrderedSessionInstructionSource,
+): SessionRenderFile {
+  const globs = source.globs ?? [];
+  if (globs.length === 0) throw new Error(`Claude glob source ${source.id} has no paths.`);
+  const n = String(index + 1).padStart(2, "0");
+  const relativePath = posix.join("rules", `${n}-${source.normalizedId}.md`);
+  const content = [
+    "---",
+    "paths:",
+    ...globs.map((glob) => `  - ${yamlQuote(glob)}`),
+    "---",
+    "",
+    sectionForSource(source),
+    ...source.resolvedRules.flatMap((rule) => ["", sectionForRule(source, rule)]),
+  ].join("\n");
+  return makeFile(
+    targetHome,
+    relativePath,
+    "rule",
+    content,
+    [source.id, ...source.resolvedRules.map((rule) => rule.id)],
+  );
+}
+
 function buildNativeImportFiles(
   targetHome: string,
   adapter: SessionToolAdapter,
   profile: string,
   sources: OrderedSessionInstructionSource[],
+  providerVersion?: string,
 ): SessionRenderFile[] {
   const indexFile = adapter.indexFile!;
-  const fragments = sources.flatMap((source, index) => [
-    makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
-    ...source.resolvedRules.map((rule) =>
-      makeFile(targetHome, ruleFragmentPath(adapter, source, rule), "rule", sectionForRule(source, rule), [source.id, rule.id])
-    ),
-  ]);
+  const fragments = sources.flatMap((source, index) => {
+    if (isCompiledClaudeGlobSource(adapter, source, providerVersion)) return [];
+    return [
+      makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
+      ...source.resolvedRules.map((rule) =>
+        makeFile(targetHome, ruleFragmentPath(adapter, source, rule), "rule", sectionForRule(source, rule), [source.id, rule.id])
+      ),
+    ];
+  });
+  const conditionalRules = sources.flatMap((source, index) =>
+    isCompiledClaudeGlobSource(adapter, source, providerVersion) ? [claudeGlobRuleFile(targetHome, index, source)] : []
+  );
   const imports = fragments.map((file) => `@${importPath(indexFile, file.relativePath)}`);
   const index = makeFile(
     targetHome,
@@ -1527,7 +1584,7 @@ function buildNativeImportFiles(
     [indexHeader(adapter.tool, profile), ...imports].join("\n"),
     sources.map((source) => source.id),
   );
-  return [index, ...fragments];
+  return [index, ...fragments, ...conditionalRules];
 }
 
 function buildFlattenedMarkdownFiles(
@@ -1790,10 +1847,11 @@ function buildFiles(
   profile: string,
   sources: OrderedSessionInstructionSource[],
   providerConfig?: SessionProviderConfig,
+  providerVersion?: string,
 ): SessionRenderFile[] {
   switch (adapter.mode) {
     case "native-imports":
-      return buildNativeImportFiles(targetHome, adapter, profile, sources);
+      return buildNativeImportFiles(targetHome, adapter, profile, sources, providerVersion);
     case "flattened-markdown":
       return buildFlattenedMarkdownFiles(targetHome, adapter, profile, sources);
     case "cursor-mdc":
@@ -2071,7 +2129,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   if (input.providerConfig && input.tool !== "opencode") {
     throw new Error("Provider base config is supported only for OpenCode session renders.");
   }
-  const baseFiles = blocked ? [] : buildFiles(targetHome, adapter, input.profile, orderedSources, input.providerConfig);
+  const baseFiles = blocked ? [] : buildFiles(targetHome, adapter, input.profile, orderedSources, input.providerConfig, input.provider_version);
   const projectContext = blocked
     ? null
     : composeProjectContextSessionRender({

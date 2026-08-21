@@ -1093,20 +1093,30 @@ function planFileResult(
  */
 function assertNotSilentManagedWipeout(plan: SessionRenderPlan, results: SessionApplyFileResult[]): void {
   if (plan.allowEmptySources) return;
-  const managedDir = plan.adapter.managedDir;
-  const underManagedDir = (relativePath: string) => relativePath === managedDir || relativePath.startsWith(`${managedDir}/`);
-  const staleDeletions = results.filter((result) => result.action === "delete" && underManagedDir(result.relativePath));
+  const staleDeletions = results.filter(
+    (result) => result.action === "delete" && isPlanManagedFile(plan, result.relativePath, result.role),
+  );
   if (staleDeletions.length === 0) return;
   const managedRetained = results.some(
-    (result) => result.action !== "delete" && underManagedDir(result.relativePath),
+    (result) => result.action !== "delete" && isPlanManagedFile(plan, result.relativePath, result.role),
   );
   if (managedRetained) return;
   throw new SessionApplyError(
     `Session render plan for ${plan.tool} (${plan.adapter.mode}) would delete ${staleDeletions.length} `
-      + `previously managed file(s) under "${managedDir}" and create or update none there: `
+      + "previously managed file(s) and create or update none: "
       + `${staleDeletions.map((result) => result.relativePath).join(", ")}. `
       + "Pass --allow-empty-sources only for explicit empty renders.",
   );
+}
+
+function isPlanManagedFile(
+  plan: SessionRenderPlan,
+  relativePath: string,
+  role: SessionRenderFileRole,
+): boolean {
+  const managedDir = plan.adapter.managedDir;
+  if (relativePath === managedDir || relativePath.startsWith(`${managedDir}/`)) return true;
+  return plan.tool === "claude" && role === "rule" && relativePath.startsWith("rules/");
 }
 
 function planStaleFileResults(
@@ -1117,10 +1127,9 @@ function planStaleFileResults(
   options: SessionApplyOptions,
 ): SessionApplyFileResult[] {
   if (!previousManifest) return [];
-  const managedPrefix = `${plan.adapter.managedDir}/`;
   return previousManifest.files
     .filter((file) => !currentRelativePaths.has(file.relativePath))
-    .filter((file) => file.relativePath === plan.adapter.managedDir || file.relativePath.startsWith(managedPrefix))
+    .filter((file) => isPlanManagedFile(plan, file.relativePath, file.role))
     .map((file) => planStaleFileResult(file, targetHome, options))
     .filter((result): result is SessionApplyFileResult => result !== null);
 }

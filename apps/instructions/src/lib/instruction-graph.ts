@@ -81,7 +81,12 @@ function capability(
  * matched independently through provider_version_range.
  */
 const DEFAULT_PROVIDER_CAPABILITIES: Readonly<Record<SessionRenderTool, ProviderCapability>> = Object.freeze({
-  claude: capability("claude", ">=1.0.0", "native-import", "CLAUDE.md @ imports", { native_imports: true, asset_surface: "code" }),
+  claude: capability("claude", ">=1.0.0", "native-import", "CLAUDE.md @ imports plus path-gated rules", {
+    activation_modes: ["always", "glob"],
+    native_imports: true,
+    conditional_artifacts: true,
+    asset_surface: "code",
+  }),
   codex: capability("codex", ">=0.1.0", "flattened", "AGENTS.md", { asset_surface: "cli" }),
   cursor: capability("cursor", ">=1.0.0", "cursor-rule", ".cursor/rules/*.mdc", { activation_modes: ["always", "glob"], conditional_artifacts: true, asset_surface: "ide" }),
   opencode: capability("opencode", ">=1.0.0", "managed-fragment", "opencode.json instructions", { provider_variant: "v1-instructions", session_surface: "opencode-config-instructions" }),
@@ -500,7 +505,6 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
   });
   const {
     profile_id: _profileId,
-    provider_version: _providerVersion,
     configs: _configs,
     bindings: _bindings,
     asset_configs: _assetConfigs,
