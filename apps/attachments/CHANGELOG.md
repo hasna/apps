@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7
+
+### Patch Changes
+
+- 738590f: attachments-serve answers --help and --version before creating the DB pool; previously it died with `createCloudPoolFromEnv requires attachments storage mode 'cloud'` before printing either (BUG row 970d7c6f).
+
 ## 1.1.6
 
 ### Patch Changes
