@@ -16,7 +16,15 @@ describe("recordings MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
 
+  const savedApiUrl = process.env.HASNA_RECORDINGS_API_URL;
+  const savedApiKey = process.env.HASNA_RECORDINGS_API_KEY;
+
   beforeAll(() => {
+    // The suite is hermetic by contract: a publisher's ambient hosted-store
+    // configuration must not route these in-process tool calls to the hosted
+    // API. Restored in afterAll.
+    delete process.env.HASNA_RECORDINGS_API_URL;
+    delete process.env.HASNA_RECORDINGS_API_KEY;
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -35,6 +43,10 @@ describe("recordings MCP HTTP transport", () => {
   });
 
   afterAll(() => {
+    if (savedApiUrl === undefined) delete process.env.HASNA_RECORDINGS_API_URL;
+    else process.env.HASNA_RECORDINGS_API_URL = savedApiUrl;
+    if (savedApiKey === undefined) delete process.env.HASNA_RECORDINGS_API_KEY;
+    else process.env.HASNA_RECORDINGS_API_KEY = savedApiKey;
     httpServer.stop();
   });
 

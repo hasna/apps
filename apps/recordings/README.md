@@ -87,7 +87,7 @@ RECORDINGS_NOTARY_KEYCHAIN_PROFILE="recordings-notary" \
 RECORDINGS_RELEASE_SEQUENCE="1" \
 RECORDINGS_RELEASE_KEY_EPOCH="1" \
 RECORDINGS_RELEASE_ENVELOPE_EXPIRES_AT_UTC="2026-08-01T00:00:00.000Z" \
-RECORDINGS_RELEASE_ENVELOPE_PRIVATE_KEY="/absolute/private/envelope-key.raw" \
+RECORDINGS_RELEASE_ENVELOPE_PRIVATE_KEY="<path to your private envelope key>" \
 RECORDINGS_RELEASE_ENVELOPE_PUBLIC_KEY="/absolute/public/envelope-key.raw" \
   ./build.sh release initial-bootstrap
 
@@ -112,7 +112,7 @@ RECORDINGS_NOTARY_KEYCHAIN_PROFILE="recordings-notary" \
 RECORDINGS_RELEASE_SEQUENCE="2" \
 RECORDINGS_RELEASE_KEY_EPOCH="1" \
 RECORDINGS_RELEASE_ENVELOPE_EXPIRES_AT_UTC="2026-08-15T00:00:00.000Z" \
-RECORDINGS_RELEASE_ENVELOPE_PRIVATE_KEY="/absolute/private/envelope-key.raw" \
+RECORDINGS_RELEASE_ENVELOPE_PRIVATE_KEY="<path to your private envelope key>" \
 RECORDINGS_RELEASE_ENVELOPE_PUBLIC_KEY="/absolute/public/envelope-key.raw" \
 RECORDINGS_RELEASE_COMPATIBLE_COHORT_MANIFEST="/Library/Application Support/Hasna/Recordings/BuildTrust/compatible-cohorts/AUTHENTICATED_COHORT_SHA256.json" \
   ./build.sh release app-update
@@ -444,7 +444,11 @@ read the on-box `sqlite` file, or call the server's `/v1` HTTP API. The
 presence of BOTH `HASNA_RECORDINGS_API_URL` and `HASNA_RECORDINGS_API_KEY`
 selects the API; any other environment reads the on-box file. A partial setup
 (one of the two variables set) fails closed rather than silently reading the
-wrong dataset.
+wrong dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` |
+`http`) wins over the auto-selection, so a configuration that sets it to
+`sqlite` keeps reading the local file even when the hosted pair is present.
+`RECORDINGS_API_KEY` is the OpenAI transcription-key override only and never
+selects client transport.
 
 ```bash
 recordings-serve --port 8874          # start the API
@@ -478,8 +482,8 @@ The typed `/v1` client is generated from the serve OpenAPI document
 import { RecordingsV1Client } from "@hasna/recordings/sdk";
 
 const client = new RecordingsV1Client({
-  baseUrl: process.env.RECORDINGS_API_URL!,
-  apiKey: process.env.RECORDINGS_API_KEY!,
+  baseUrl: process.env.HASNA_RECORDINGS_API_URL!,
+  apiKey: process.env.HASNA_RECORDINGS_API_KEY!,
 });
 const { recordings } = await client.listRecordings({ limit: 20 });
 ```

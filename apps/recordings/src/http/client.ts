@@ -16,7 +16,10 @@
 // hosted API; any other environment reads the on-box SQLite file. A partial
 // hosted setup (one of the two variables set, the other absent) is a
 // misconfiguration and fails closed — the client must never silently drift
-// onto the wrong on-box dataset.
+// onto the wrong on-box dataset. The explicit `HASNA_<APP>_CLIENT_STORE`
+// override (`sqlite` | `http`) wins over the auto-selection, so a config that
+// sets `..._CLIENT_STORE=sqlite` keeps reading the local file even when the
+// hosted URL/key pair is present.
 //
 // SAFETY: never logs, returns, or embeds the API key value.
 
@@ -30,16 +33,30 @@ function envToken(name: string): string {
 }
 
 interface EnvKeys {
+  /** The explicit client-store switch. Wins over auto-selection. */
+  storeKeys: [string, ...string[]];
   apiUrlKeys: [string, ...string[]];
   apiKeyKeys: [string, ...string[]];
 }
 
+// The hosted contract is the HASNA_-prefixed pair only. The unprefixed
+// `<APP>_API_KEY` is the legacy OpenAI transcription-key override
+// (src/lib/config.ts) and must never select or fail client transport; the
+// unprefixed `<APP>_API_URL` is legacy and equally outside the contract.
 function envKeys(name: string): EnvKeys {
   const token = envToken(name);
   return {
-    apiUrlKeys: [`HASNA_${token}_API_URL`, `${token}_API_URL`],
-    apiKeyKeys: [`HASNA_${token}_API_KEY`, `${token}_API_KEY`],
+    storeKeys: [`HASNA_${token}_CLIENT_STORE`, `${token}_CLIENT_STORE`],
+    apiUrlKeys: [`HASNA_${token}_API_URL`],
+    apiKeyKeys: [`HASNA_${token}_API_KEY`],
   };
+}
+
+function normalizeClientStore(value: string): ClientStore {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "sqlite") return "sqlite";
+  if (normalized === "http" || normalized === "https") return "http";
+  throw new Error(`Unknown client store: ${value}. Use sqlite or http.`);
 }
 
 function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
@@ -79,19 +96,27 @@ export interface TransportResolution {
 }
 
 // Resolve where a client should read/write given the environment.
-// transport is `http` IFF both the API URL and the API key are present. A
-// partial hosted setup — URL without key, or key without URL — is reported as
+// An explicit `HASNA_<APP>_CLIENT_STORE` wins; otherwise transport is `http`
+// IFF both the (prefixed) API URL and the API key are present. A partial
+// hosted setup — URL without key, or key without URL — is reported as
 // misconfigured (callers hard-fail) so the client never silently drifts onto
 // the wrong on-box dataset.
 export function resolveTransport(name: string, env: Env = process.env): TransportResolution {
   const keys = envKeys(name);
+  const storeHit = firstEnv(env, keys.storeKeys);
   const urlHit = firstEnv(env, keys.apiUrlKeys);
   const keyHit = firstEnv(env, keys.apiKeyKeys);
 
   let requested: ClientStore = "sqlite";
   let modeSource = "default";
 
-  if (urlHit && keyHit) {
+  if (storeHit) {
+    // The explicit store switch is the patch-compatible override: it wins over
+    // auto-selection, so `..._CLIENT_STORE=sqlite` forces the on-box file even
+    // when the hosted URL/key pair is present.
+    requested = normalizeClientStore(storeHit.value);
+    modeSource = storeHit.key;
+  } else if (urlHit && keyHit) {
     // The presence of BOTH variables IS the signal to use the API. Rollback =
     // unset either variable -> back to the on-box SQLite file.
     requested = "http";
@@ -117,7 +142,31 @@ export function resolveTransport(name: string, env: Env = process.env): Transpor
     return { transport: "sqlite", requested, modeSource, baseUrl: null, apiKeyPresent: Boolean(keyHit), misconfigured: false, warning: null };
   }
 
-  const rawUrl = urlHit!.value;
+  if (!urlHit) {
+    return {
+      transport: "sqlite",
+      requested,
+      modeSource,
+      baseUrl: null,
+      apiKeyPresent: Boolean(keyHit),
+      misconfigured: true,
+      warning: `${modeSource}=http but no API URL is set (${keys.apiUrlKeys[0]}). Refusing to route to the API.`,
+    };
+  }
+
+  if (!keyHit) {
+    return {
+      transport: "sqlite",
+      requested,
+      modeSource,
+      baseUrl: null,
+      apiKeyPresent: false,
+      misconfigured: true,
+      warning: `${modeSource}=http but no API key is set (${keys.apiKeyKeys[0]}). Refusing to route to the API.`,
+    };
+  }
+
+  const rawUrl = urlHit.value;
   let baseUrl: string;
   try {
     baseUrl = toV1BaseUrl(rawUrl);
