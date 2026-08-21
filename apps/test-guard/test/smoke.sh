@@ -68,6 +68,37 @@ if [ "$ACTUAL_VERSION" != "hasna-test-guard sentinel $PKG_VERSION" ]; then
 fi
 [ "$CLI_FAIL" = "0" ] && echo "PASS cli-surface: --help exits 0 and --version matches package.json"
 
+# Regression (1804474f, class b335a922): the sentinel's VERSION must DERIVE
+# from the package.json BESIDE THE SCRIPT — a wave bumping package.json to a
+# new version must flow into `sentinel.sh --version` with no manual edit. The
+# prior static constant was the versioning runtime-export drift that failed
+# wave PR 791 (the packed artifact carried 0.0.2 while package.json was
+# 0.0.3). Proven on a temp-dir COPY of sentinel.sh with a deliberately
+# different package.json version: red-before (static literal) prints the
+# stale constant; green-after (derive) prints the temp version. The fallback
+# for a standalone copy WITHOUT package.json must fail closed (exit non-zero)
+# rather than silently report a possibly-stale version — the fleet install at
+# ~/.hasna/test-guard is exactly such a copy, and the main probe does not
+# depend on VERSION, so only the version surface is affected.
+DERIVE_FAIL=0
+DERIVE_DIR=$(mktemp -d /tmp/tg-derive.XXXXXX)
+cp "$HERE/sentinel.sh" "$DERIVE_DIR/sentinel.sh"
+printf '{\n  "name": "@hasna/test-guard",\n  "version": "9.9.9-test"\n}\n' > "$DERIVE_DIR/package.json"
+DERIVED=$("$DERIVE_DIR/sentinel.sh" --version 2>/dev/null)
+if [ "$DERIVED" != "hasna-test-guard sentinel 9.9.9-test" ]; then
+  echo "FAIL cli-version-derive: sentinel.sh --version printed '$DERIVED', expected 'hasna-test-guard sentinel 9.9.9-test' (the version in the package.json beside it)" >&2
+  DERIVE_FAIL=1
+fi
+rm -rf "$DERIVE_DIR"
+NOPKG_DIR=$(mktemp -d /tmp/tg-nopkg.XXXXXX)
+cp "$HERE/sentinel.sh" "$NOPKG_DIR/sentinel.sh"
+if "$NOPKG_DIR/sentinel.sh" --version >/dev/null 2>&1; then
+  echo "FAIL cli-version-nopkg: sentinel.sh --version exited 0 in a standalone copy without package.json (would silently report a stale version)" >&2
+  DERIVE_FAIL=1
+fi
+rm -rf "$NOPKG_DIR"
+[ "$DERIVE_FAIL" = "0" ] && echo "PASS cli-version-derive: --version derives from the package.json beside the script; standalone copy without package.json fails closed"
+
 RUNNER="$(mktemp /tmp/tg-smoke.XXXXXX)"
 trap 'rm -f "$RUNNER"' EXIT
 
@@ -97,7 +128,7 @@ export BUN_TEST_GUARD_WRAPPER_SOURCE="$HERE/bun-wrapper.sh"
 
 bash "$RUNNER"
 RC=$?
-if [ "$CLOUD_GUARD_FAIL" = "1" ] || [ "$CLI_FAIL" = "1" ]; then
+if [ "$CLOUD_GUARD_FAIL" = "1" ] || [ "$CLI_FAIL" = "1" ] || [ "$DERIVE_FAIL" = "1" ]; then
   exit 1
 fi
 exit "$RC"

@@ -30,8 +30,23 @@
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 
-# Manual version constant; the smoke test asserts it matches package.json.
-VERSION="0.0.2"
+# VERSION is DERIVED from the package.json beside the script (rows 1804474f /
+# b335a922): a wave bumping package.json must flow into --version with no
+# manual edit — the prior static constant was the versioning runtime-export
+# drift that failed wave PR 791 (the packed artifact carried 0.0.2 while
+# package.json was 0.0.3). The sentinel guards bun, so the read uses POSIX
+# tools only (grep/sed — the established shape, same as test/smoke.sh); no
+# bun/node/jq dependency at read time. A standalone copy WITHOUT a package.json
+# beside it fails closed on the version surface (--version exits non-zero with
+# a clear message) instead of silently reporting a possibly-stale version —
+# the fleet install at ~/.hasna/test-guard is exactly such a copy, and the
+# main probe below does not depend on VERSION.
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
+VERSION=""
+if [ -n "$SCRIPT_DIR" ] && [ -r "$SCRIPT_DIR/package.json" ]; then
+  VERSION=$(grep -m1 '"version"' "$SCRIPT_DIR/package.json" 2>/dev/null \
+    | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+fi
 
 # CLI surface: --help / --version as the FIRST argument only; the positional
 # $1/$2 contract (alternate bun path / wrapper source, for tests) is unchanged.
@@ -58,8 +73,11 @@ EOF
     exit 0
     ;;
   --version)
-    printf '%s
-' "hasna-test-guard sentinel ${VERSION}"
+    if [ -z "$VERSION" ]; then
+      printf '%s\n' "hasna-test-guard sentinel: VERSION unavailable — package.json not found or unreadable beside $0; refusing to report a possibly-stale version" >&2
+      exit 1
+    fi
+    printf '%s\n' "hasna-test-guard sentinel ${VERSION}"
     exit 0
     ;;
 esac

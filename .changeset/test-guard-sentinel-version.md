@@ -1,0 +1,5 @@
+---
+"@hasna/test-guard": patch
+---
+
+fix: sentinel.sh VERSION now DERIVES from the package.json beside the script (script-relative, POSIX-only grep/sed — no bun/node/jq dependency at read time) instead of a static constant. The manual `VERSION="0.0.2"` was the versioning runtime-export drift class (b335a922) that failed wave PR 791: the wave bumped package.json to 0.0.3 while the packed sentinel still carried 0.0.2, so the prepack smoke (which asserts `--version` == package.json version) and the publish guard failed. A standalone copy without a package.json beside it now fails closed on the version surface (--version exits non-zero with a clear message) rather than silently reporting a possibly-stale version; the main probe is unaffected (it does not depend on VERSION, and the fleet install at ~/.hasna/test-guard is such a copy). smoke.sh gains a red-before/green-after regression on a temp-dir copy with a deliberately different version, plus the no-package.json fail-closed assertion. Rows 1804474f / b335a922.
