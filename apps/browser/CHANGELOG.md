@@ -34,6 +34,10 @@
 
 ### Patch Changes
 
+- d88b39a: Fix Bun.WebView opt-in fallback leaving the CLI process alive after the window closes (#10).
+- a2164ba: Expose `./sdk` import surface for library use (4-surface standard) (#83).
+- ef45d73: Security hardening wave-2: close tmux MCP injection, bind styles, timing-safe compares, static containment (#201).
+- 3ae7cc5: Display name updated to "Hasna Browser" (open- prefix retired) (#345).
 - 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
 - Updated dependencies [ba9af33]
 - Updated dependencies [bbc5a25]
