@@ -75,7 +75,7 @@
     },
     "apps/attachments": {
       "name": "@hasna/attachments",
-      "version": "1.1.6",
+      "version": "1.1.7",
       "bin": {
         "attachments": "dist/cli/index.js",
         "attachments-mcp": "dist/mcp/server.js",
@@ -139,7 +139,7 @@
     },
     "apps/billing": {
       "name": "@hasna/billing",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "billing": "dist/cli/index.js",
         "billing-mcp": "dist/mcp/index.js",
@@ -216,7 +216,7 @@
     },
     "apps/browser": {
       "name": "@hasna/browser",
-      "version": "0.5.21",
+      "version": "0.5.22",
       "bin": {
         "browser": "dist/cli/index.js",
         "browser-mcp": "dist/mcp/index.js",
@@ -257,7 +257,7 @@
     },
     "apps/calendar": {
       "name": "@hasna/calendar",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "bin": {
         "calendar": "dist/cli/index.js",
         "calendar-mcp": "dist/mcp/bin.js",
@@ -1035,7 +1035,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.5.9",
+      "version": "0.5.10",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
@@ -1874,14 +1874,14 @@
     },
     "apps/test-guard": {
       "name": "@hasna/test-guard",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "bin": {
         "test-guard": "sentinel.sh",
       },
     },
     "apps/testers": {
       "name": "@hasna/testers",
-      "version": "0.0.96",
+      "version": "0.0.97",
       "bin": {
         "testers": "dist/cli/index.js",
         "testers-mcp": "dist/mcp/index.js",
@@ -1890,7 +1890,7 @@
       "dependencies": {
         "@anthropic-ai/sdk": "^0.52.0",
         "@e2b/code-interpreter": "^1.5.1",
-        "@hasna/browser": "0.5.21",
+        "@hasna/browser": "0.5.22",
         "@hasna/contracts": "^0.13.3",
         "@hasna/events": "^0.1.13",
         "@hasna/projects": "^0.1.137",
