@@ -52,7 +52,7 @@ describe("the retired storage-mode env keys are not a selection mechanism", () =
     expect(getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud" })).toBeInstanceOf(LocalStore);
     // With URL/key, a stale mode var must still resolve hosted.
     const env = { ...HOSTED, HASNA_DOMAINS_STORAGE_MODE: "local" };
-    expect((getStore({ ...env, NODE_ENV: "production" }) as unknown as { transport: string }).transport).toBe("cloud-http");
+    expect((getStore({ ...env, NODE_ENV: "production" }) as unknown as { transport: string }).transport).toBe("http");
   });
 
   test("the retired keys are enumerated so the scrub is testable", () => {

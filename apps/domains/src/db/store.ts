@@ -85,7 +85,7 @@ type Env = Record<string, string | undefined>;
 
 export interface DomainsStore {
   /** Which transport backs this store (for banners/diagnostics only). */
-  readonly transport: "local" | "cloud-http";
+  readonly transport: "local" | "http";
 
   // domains
   createDomain(input: CreateDomainInput): Promise<Domain>;
@@ -165,6 +165,24 @@ export interface DomainsStore {
   listHighThreatDomains(threshold?: number): Promise<DomainReputation[]>;
   deleteDomainReputation(id: string): Promise<boolean>;
 }
+
+// ── Compile-time regression: removed-modes transport union ────────────────────
+//
+// The deployment-mode vocabulary is REMOVED (owner directive 2026-07-29), and
+// @hasna/contracts resolves client transports as "sqlite" | "http" — there is
+// no 'cloud-http' token in the system. These assertions run in the member
+// build's tsc step (hasna/apps row 0fdd8998: TS2367/TS2339 at store.ts:920/:926
+// were the modes-residue failure): reintroducing 'cloud-http' into the union
+// below, or widening the union with any other member, fails compilation here.
+
+type _IsNever<T> = [T] extends [never] ? true : false;
+type _RemovedModeToken = Extract<DomainsStore["transport"], "cloud-http">;
+const _removedModeTokenAbsent: _IsNever<_RemovedModeToken> extends true ? true : never = true;
+const _transportUnionExactlyLocalOrHttp: "local" | "http" extends DomainsStore["transport"]
+  ? DomainsStore["transport"] extends "local" | "http"
+    ? true
+    : never
+  : never = true;
 
 // ── LocalStore ────────────────────────────────────────────────────────────────
 // Delegates to the sqlite-backed helper modules. Every method is async so the
@@ -256,7 +274,7 @@ function enc(id: string): string {
 }
 
 export class ApiStore implements DomainsStore {
-  readonly transport = "cloud-http" as const;
+  readonly transport = "http" as const;
   constructor(private readonly client: HasnaStorageClient) {}
 
   private get http() {
@@ -917,7 +935,7 @@ function assertNoStoreConflict(env: Env): void {
  */
 function requireHostedClient(env: Env, flip: ClientFlip): HasnaStorageClient {
   const resolved = resolveStorageClient(APP, withoutRetiredModeKeys(env));
-  if (resolved.transport !== "cloud-http") {
+  if (resolved.transport !== "http") {
     throw new Error(
       `Hosted domains client was requested (${flip.urlSource} + ${flip.keySource}) but ` +
         `@hasna/contracts resolved transport '${resolved.transport}'. Refusing to read the wrong dataset.`,
