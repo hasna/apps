@@ -566,6 +566,7 @@ export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): Mess
   const offset = resolveCollectionOffset(opts.offset);
   const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.max_content_length);
   const db = getDb();
+  if (opts.channel) assertNotReservedHistoricalAlias(db, normalizeChannelName(opts.channel));
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
@@ -1460,6 +1461,7 @@ export function exportMessages(opts: ExportMessagesOptions = {}): string {
   const resolved = resolveMessageExportOptions(opts);
   const startedAt = performance.now();
   const db = getDb();
+  if (opts.channel) assertNotReservedHistoricalAlias(db, normalizeChannelName(opts.channel));
   const conditions: string[] = [];
   const params: (string | number)[] = [];
   if (opts.channel) { conditions.push("channel = ?"); params.push(normalizeChannelName(opts.channel)); }
@@ -1831,6 +1833,7 @@ export function searchMessagePreviews(opts: SearchMessagePreviewsOptions): Messa
   const offset = resolveCollectionOffset(opts.offset);
   const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.snippet_length);
   const db = getDb();
+  if (opts.channel) assertNotReservedHistoricalAlias(db, normalizeChannelName(opts.channel));
   const sortByRelevance = opts.sort !== "recent";
 
   try {

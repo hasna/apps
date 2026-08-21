@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers, isChannelMember } from "./channels";
 import { createProject } from "./projects";
-import { sendMessage, readMessages, readDigest } from "./messages";
+import { sendMessage, readMessages, readMessagePreviews, searchMessages, exportMessages, readDigest } from "./messages";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -265,6 +265,18 @@ describe("renameChannel", () => {
     expect(() => readDigest({ channel: "chief-research" })).toThrow(
       "Channel #chief-research is a reserved historical alias for #agent-chief-research.",
     );
+    expect(() => readMessagePreviews({ channel: "chief-research" })).toThrow(
+      "Channel #chief-research is a reserved historical alias for #agent-chief-research.",
+    );
+    expect(() => readMessages({ channel: "chief-research" })).toThrow(
+      "Channel #chief-research is a reserved historical alias for #agent-chief-research.",
+    );
+    expect(() => searchMessages({ query: "anything", channel: "chief-research" })).toThrow(
+      "Channel #chief-research is a reserved historical alias for #agent-chief-research.",
+    );
+    expect(() => exportMessages({ channel: "chief-research" })).toThrow(
+      "Channel #chief-research is a reserved historical alias for #agent-chief-research.",
+    );
 
     const sent = sendMessage({
       from: "agent-chief-research",
@@ -313,9 +325,10 @@ describe("renameChannel", () => {
 
     renameChannel("old-name", "new-name");
 
-    const oldMsgs = readMessages({ channel: "old-name" });
+    expect(() => readMessages({ channel: "old-name" })).toThrow(
+      "Channel #old-name is a reserved historical alias for #new-name.",
+    );
     const newMsgs = readMessages({ channel: "new-name" });
-    expect(oldMsgs).toHaveLength(0);
     expect(newMsgs).toHaveLength(2);
     expect(newMsgs.map((m) => m.content).sort()).toEqual(["first", "second"]);
     // Session id and recipient are rewritten to the new channel.
@@ -385,7 +398,9 @@ describe("renameChannel", () => {
 
     const moved = readMessages({ channel: "thread-moved" });
     expect(moved).toHaveLength(2);
-    expect(readMessages({ channel: "thread-reparent" })).toHaveLength(0);
+    expect(() => readMessages({ channel: "thread-reparent" })).toThrow(
+      "Channel #thread-reparent is a reserved historical alias for #thread-moved.",
+    );
     expect(moved.every((m) => m.channel === "thread-moved" && m.session_id === "channel:thread-moved")).toBe(true);
 
     const movedRoot = moved.find((m) => m.id === root.id);
