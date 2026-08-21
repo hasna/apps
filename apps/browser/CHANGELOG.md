@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.19
+
+### Patch Changes
+
+- Updated dependencies [edf3cea]
+  - @hasna/sessions@0.12.16
+  - @hasna/conversations@0.7.2
+  - @hasna/todos@0.15.39
+
 ## 0.5.18
 
 ### Patch Changes

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.135
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
+  - @hasna/conversations@0.7.2
+  - @hasna/loops@0.5.8
+  - @hasna/todos@0.15.39
+
 ## 0.1.134
 
 ### Patch Changes
@@ -456,9 +466,10 @@ fails against that build.
   `experiment` maps to `null` for a related reason: the `initiative` class the
   old table assigned it additionally requires the channel topic to carry
   `owner:<agent> until:<date|gate-id>`, which nothing here can supply.
+
 - **BREAKING — `ensureProjectChannel` no longer writes the project record.**
   It previously persisted the resolved channel onto
-  `integrations.conversations_channel`. For a *derived* name that write is
+  `integrations.conversations_channel`. For a _derived_ name that write is
   one-way: an explicit link outranks derivation permanently, so the first
   `projects start` after a derivation change would pin the new name and keep
   resolving to it even after the change was reverted, silently moving a project
@@ -472,6 +483,7 @@ fails against that build.
   derivation rather than storing it — 1460 of 1527 (96%) by a per-kind
   enumeration, and the same ratio holds on a wider 2332-row sample. Both counts
   are floors: `projects list` truncates, which is filed separately.
+
 - **Display and bundle surfaces fall back to derivation.** `projects show`,
   `projects context` and `projects handoff` read
   `integrations.conversations_channel` directly and would therefore have gone
@@ -496,7 +508,7 @@ fails against that build.
   `#{session_path}`, but a session added to a group by hand
   (`tmux new-session -t <project> -s <peer>`) still records the cwd of the shell
   that ran the move — usually `/home/<user>`. tmux resolves the start directory
-  of a window opened by an *attached* client from that session cwd, so grouped
+  of a window opened by an _attached_ client from that session cwd, so grouped
   windows opened by hand kept landing outside the project. `projects start` now
   realigns every session in the target session's group onto the project path
   (new `alignGroupedSessionWorkingDirectories()` / `listSessionLocations()` /
@@ -574,7 +586,7 @@ fails against that build.
 - **Ensure results now carry structured partial-state evidence.**
   `ProjectChannelEnsureResult` gained `warnings: string[]` and
   `side_effects: { channel_created, channel_present, integration_linked,
-  event_recorded }`, both surfaced in `projects channel --ensure --json` and
+event_recorded }`, both surfaced in `projects channel --ensure --json` and
   printed on failure in text mode, so a retry is informed rather than blind.
   Ensure remains idempotent: a second run on an existing, already-linked channel
   reports `status: "exists"` with no duplicate write.
@@ -590,12 +602,12 @@ fails against that build.
 ### Added
 
 - **Projects secret redaction across every output surface.** New
-  `src/lib/redaction.ts` scrubs secret-shaped keys (password/token/api_key/
+  `src/lib/redaction.ts` scrubs secret-shaped keys (password/token/api*key/
   client_secret/authorization/cookie/dsn/connection_string/…), URL credentials,
   `Authorization` headers, secret CLI flags, `ENV=value` assignments, PEM
-  private-key blocks, and known token prefixes (`sk-`, `ghp[_]`, `github_pat[_]`,
-  `npm_`, `xox*`, `AKIA…`). It is wired through CLI JSON/text printers, the MCP
-  JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
+  private-key blocks, and known token prefixes (`sk-`, `ghp[*]`, `github*pat[*]`,
+`npm\_`, `xox*`, `AKIA…`). It is wired through CLI JSON/text printers, the MCP
+JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
   servers, and the agent context/handoff/runs surfaces, and is also applied at
   write time for agent-run and workspace-event records.
 - **`projects permissions repair` (CLI) and `projects_permissions_repair` (MCP)
@@ -703,7 +715,7 @@ fails against that build.
 ### Fixed
 
 - Preserved existing dashboard render imports when `projects dashboard render
-  --write` rewrites `.hasna/project/dashboard/render.json`, and exposed linked
+--write` rewrites `.hasna/project/dashboard/render.json`, and exposed linked
   stored canvases plus dashboard imports in the default dashboard render model.
 - Made dashboard server canvas routes use the enriched dashboard render so
   linked canvases/imports remain visible when served.

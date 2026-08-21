@@ -1,7 +1,7 @@
 {
   "name": "@hasna/files",
   "version": "0.3.17",
-  "description": "Agent-first file management \u2014 index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
+  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -102,7 +102,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.13.1",
+    "@hasna/contracts": "0.13.2",
     "@hasna/mcp-harness": "^0.1.0",
     "@types/mime-types": "^2.1.4",
     "@types/pg": "^8.11.11",

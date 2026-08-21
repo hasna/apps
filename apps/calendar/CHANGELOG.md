@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
+
 ## 0.3.2
 
 ### Patch Changes
@@ -49,12 +56,12 @@ path the instant anyone pointed the process at the shared store.
 startup, before the socket is bound** (the `local-plane-disabled` posture follows
 `hasna/todos#94`):
 
-| Configuration | Posture | `/mcp` | `/v1` | `/health` `/ready` `/version` `/openapi.json` |
-| --- | --- | --- | --- | --- |
-| `CALENDAR_SERVE_API_KEY` / `--api-key` | `enforce` | credential required | authenticated | public |
-| hosted (DSN, or mode `self_hosted`/`cloud`) and no serve key | `local-plane-disabled` | **404 `LOCAL_PLANE_DISABLED`**, not mounted | authenticated | public |
-| loopback bind **and** `--allow-anonymous` | `anonymous-loopback` | anonymous, **loopback peers only** | authenticated | public |
-| anything else | — | **refuses to start, exit 1** | — | — |
+| Configuration                                                | Posture                | `/mcp`                                      | `/v1`         | `/health` `/ready` `/version` `/openapi.json` |
+| ------------------------------------------------------------ | ---------------------- | ------------------------------------------- | ------------- | --------------------------------------------- |
+| `CALENDAR_SERVE_API_KEY` / `--api-key`                       | `enforce`              | credential required                         | authenticated | public                                        |
+| hosted (DSN, or mode `self_hosted`/`cloud`) and no serve key | `local-plane-disabled` | **404 `LOCAL_PLANE_DISABLED`**, not mounted | authenticated | public                                        |
+| loopback bind **and** `--allow-anonymous`                    | `anonymous-loopback`   | anonymous, **loopback peers only**          | authenticated | public                                        |
+| anything else                                                | —                      | **refuses to start, exit 1**                | —             | —                                             |
 
 - Refusing to start beats starting wide open; the error names
   `CALENDAR_SERVE_API_KEY`, the hosted option, and `--allow-anonymous`, and never
@@ -77,7 +84,7 @@ startup, before the socket is bound** (the `local-plane-disabled` posture follow
   too: it binds loopback only, now rejects any non-loopback transport peer, and
   requires `CALENDAR_SERVE_API_KEY` when one is set.
 
-**Also closed, same class, behind a credential.** A hosted process that *did* set
+**Also closed, same class, behind a credential.** A hosted process that _did_ set
 `CALENDAR_SERVE_API_KEY` would serve `/mcp` through `getStore()` — on-box SQLite
 unless the client-flip env is set — while `/v1` used Postgres: defect 2 again,
 authenticated instead of anonymous. `resolveAuthPosture` now throws
@@ -172,7 +179,7 @@ should eventually say `cloud`.
   reported service mode is never `"remote"`.
 
 **Both directions were checked.** Against `origin/main` (8d9503c) in a separate
-pristine worktree, with only the two new *source* modules copied in and none of the
+pristine worktree, with only the two new _source_ modules copied in and none of the
 fixes: **13 fail / 40 pass**, plus 2 file-level import errors for symbols that do
 not exist on main. The failures are the real ones — anonymous `/mcp` answers 200
 with `create_org` in every posture, `serve()` happily binds `0.0.0.0` with

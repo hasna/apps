@@ -1,5 +1,13 @@
 # @hasna/sessions
 
+## 0.12.16
+
+### Patch Changes
+
+- edf3cea: Migrate off the removed @hasna/contracts/mode subpath (owner directive 2026-07-29: no mode vocabulary) and onto the current client-storage transport token.
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
+
 ## 0.12.15
 
 ### Patch Changes
