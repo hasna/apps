@@ -57,7 +57,7 @@ export function databaseUrlPresent(env: Env = process.env): boolean {
  * Resolve the PostgreSQL DSN at startup. Order:
  *   1. `HASNA_CONTROLS_DATABASE_URL_FILE` (a 0400 path),
  *   2. inline `HASNA_CONTROLS_DATABASE_URL` (local/dev only),
- * The secret-ref (`hasna/oss/controls/database-url`) is fetched by the runtime
+ * The database secret-ref is fetched by the runtime
  * task role out-of-band and surfaced as the FILE path in production.
  */
 export function resolveDatabaseUrl(env: Env = process.env): string | undefined {

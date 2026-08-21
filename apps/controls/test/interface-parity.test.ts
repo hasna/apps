@@ -33,9 +33,15 @@ import { captureTools, callTool } from "./helpers/mcp.js";
 let tmp: string;
 const CLI = join(process.cwd(), "src", "cli", "index.tsx");
 
-/** Real, non-bypass credential the /v1 + MCP surfaces authenticate as. */
-const PARITY_TOKEN = "tok-controls-parity";
-const PARITY_CRED_ID = "parity-caller";
+/**
+ * Test-only fixture identity, provisioned by this suite into the in-process
+ * credential store (`configureScopedCredential` + HASNA_CONTROLS_API_CREDENTIALS).
+ * The value is a per-run random fixture, never a real service credential: the
+ * surfaces authenticate by exact match against the store this suite configures,
+ * so any value works and a committed literal must not look credential-shaped.
+ */
+const PARITY_TOKEN = `fixture-token-${crypto.randomUUID()}`;
+const PARITY_CRED_ID = `fixture-caller-${crypto.randomUUID()}`;
 
 /**
  * Least-privilege role that authorizes EXACTLY `action` at the service layer
