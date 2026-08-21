@@ -30,16 +30,20 @@ function runCli(args: string[], env: Record<string, string> = {}): { code: numbe
 }
 
 describe("package manifest", () => {
-  test("version is 0.3.1 (parity with the installed published bundle)", () => {
-    const pkg = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8"));
-    expect(pkg.version).toBe("0.3.1");
+  const pkg = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")) as {
+    version: string;
+    name: string;
+  };
+
+  test("version is 0.3.2 (parity with the release candidate)", () => {
+    expect(pkg.version).toBe("0.3.2");
     expect(pkg.name).toBe("@hasna/agency");
   });
 
-  test("--version prints 0.3.1", () => {
+  test("--version prints the manifest version", () => {
     const res = runCli(["--version"]);
     expect(res.code).toBe(0);
-    expect(res.stdout.trim()).toBe("0.3.1");
+    expect(res.stdout.trim()).toBe(pkg.version);
   });
 });
 

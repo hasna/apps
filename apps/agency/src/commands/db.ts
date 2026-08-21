@@ -19,9 +19,9 @@ function findDbFiles(pkg: PackageEntry): DbFile[] {
   try {
     const entries = readdirSync(dp, { recursive: true });
     for (const entry of entries) {
-      const full = join(dp, entry);
+      const full = join(dp, String(entry));
       if ((full.endsWith(".db") || full.endsWith(".sqlite") || full.endsWith(".sqlite3")) && fileExists(full)) {
-        files.push({ pkg: pkg.name, file: entry, path: full, size: statSync(full).size });
+        files.push({ pkg: pkg.name, file: String(entry), path: full, size: statSync(full).size });
       }
     }
   } catch {

@@ -39,7 +39,7 @@ function findDbFiles(serviceDir: string): string[] {
   try {
     const entries = readdirSync(serviceDir, { recursive: true });
     for (const entry of entries) {
-      const full = join(serviceDir, entry);
+      const full = join(serviceDir, String(entry));
       if ((full.endsWith(".db") || full.endsWith(".sqlite") || full.endsWith(".sqlite3")) && existsSync(full)) {
         try {
           if (statSync(full).isFile()) {

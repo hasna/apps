@@ -49,8 +49,8 @@ function findLogFiles(services?: string[]): LogFile[] {
     try {
       const entries = readdirSync(dp, { recursive: true });
       for (const entry of entries) {
-        if (!entry.endsWith(".log")) continue;
-        const full = join(dp, entry);
+        if (!String(entry).endsWith(".log")) continue;
+        const full = join(dp, String(entry));
         try {
           if (statSync(full).isFile()) {
             results.push({ service: pkg.name, path: full });
