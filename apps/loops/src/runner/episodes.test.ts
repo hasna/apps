@@ -11,6 +11,8 @@ import {
   EPISODE_OPEN_SPAN_MS,
   runnerEpisodesStatePath,
   runnerEventsOutboxPath,
+  runnerEpisodeLockKindForTest,
+  __episodeTestFlock,
   type RunnerEpisodeRecorder,
 } from "./episodes.js";
 import { LoopsApiError, RunnerRefusalError } from "./errors.js";
@@ -74,6 +76,28 @@ function harness(overrides: Partial<Parameters<typeof createRunnerEpisodeRecorde
       return clock;
     },
   };
+}
+
+/** True when this environment can spawn a child process at all (the concurrency + real-delivery gates degrade without it). */
+async function probeSpawnCapability(): Promise<boolean> {
+  const probe = mkdtempSync(join(tmpdir(), "loops-spawn-cap-"));
+  const sink = join(probe, "ok");
+  try {
+    const child = spawn(process.execPath, ["-e", `require("node:fs").writeFileSync(${JSON.stringify(sink)}, "1")`], { stdio: "ignore" });
+    child.on("error", () => {});
+    for (let attempt = 0; attempt < 40; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      try {
+        readFileSync(sink, "utf8");
+        return true;
+      } catch {
+        // not yet
+      }
+    }
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
 }
 
 describe("classifyRunnerFailure", () => {
@@ -340,8 +364,9 @@ describe("runner failure episodes", () => {
     }
     const original = outboxLines(h.dir)[0];
     // Roll back to the mid-transaction durable state: episode known, delivery
-    // still pending, outbox line already appended (append landed, confirm
-    // write lost) — the dedup must skip a duplicate.
+    // claim lost, outbox line already appended — the state file (the single
+    // delivery truth) says undelivered, so exactly ONE re-delivery happens:
+    // one more line carrying the SAME messageId, one more notification.
     writeFileSync(runnerEpisodesStatePath(h.dir), `${JSON.stringify({
       version: 1,
       runnerId: "station02-test",
@@ -358,7 +383,10 @@ describe("runner failure episodes", () => {
     h.nowMs();
     h.recorder.recordFailure(foreignError());
     let events = outboxLines(h.dir);
-    expect(events).toHaveLength(1); // deduped: same episodeId
+    const openLines = events.filter((e) => e.evt === "loops_runner_control_plane_unreachable");
+    expect(openLines).toHaveLength(2); // one re-delivery across the crash — never more
+    expect(new Set(openLines.map((e) => e.messageId)).size).toBe(1); // one logical event
+    expect(openLines[0].messageId).toBe(openLines[1].messageId);
     let state = readStateFile(h.dir) as { streak?: Record<string, unknown> };
     expect(state.streak?.deliveryState).toBe("open");
     expect(state.streak?.consecutiveCount).toBe(4);
@@ -390,9 +418,10 @@ describe("runner failure episodes", () => {
 
   test("crash after the open append followed by successes still emits the recovery (reviewer repro)", () => {
     // The exact cycle-2 finding-1 repro: open event reached the outbox, the
-    // confirm state-write was lost. Under state-first ordering the durable
-    // state already records the episode (open_pending), so the next successes
-    // complete the open (dedup) and then close with exactly one recovery.
+    // confirm state-write was lost. Under state-file delivery truth the
+    // durable state still records the episode (open_pending, unclaimed), so
+    // the next successes complete the open (one re-delivery, same messageId)
+    // and then close with exactly one recovery.
     const h = harness({ notifierCommand: undefined });
     for (let i = 0; i < 3; i++) {
       h.nowMs();
@@ -415,10 +444,12 @@ describe("runner failure episodes", () => {
     h.recorder.recordSuccess();
     h.recorder.recordSuccess();
     const events = outboxLines(h.dir);
-    expect(events).toHaveLength(2);
-    expect(events[0].evt).toBe("loops_runner_control_plane_unreachable");
-    expect(events[1].evt).toBe("loops_runner_control_plane_recovered");
-    expect(events[1].episodeId).toBe(original.episodeId);
+    const openLines = events.filter((e) => e.evt === "loops_runner_control_plane_unreachable");
+    const recoveryLines = events.filter((e) => e.evt === "loops_runner_control_plane_recovered");
+    expect(openLines).toHaveLength(2); // original + one crash-window re-delivery
+    expect(new Set(openLines.map((e) => e.messageId)).size).toBe(1);
+    expect(recoveryLines).toHaveLength(1);
+    expect(recoveryLines[0].episodeId).toBe(original.episodeId);
     const state = readStateFile(h.dir) as { streak?: Record<string, unknown> };
     expect(state.streak).toBeUndefined();
     rmSync(h.dir, { recursive: true, force: true });
@@ -447,26 +478,23 @@ describe("runner failure episodes", () => {
     rmSync(h.dir, { recursive: true, force: true });
   });
 
-  test("lock contention skips without throwing and later transitions are not lost", async () => {
+  test("a pre-existing legacy lock file does not jam the flock recorder (old-version residue)", () => {
+    // Under flock the lock is the kernel's, held on the recorder's persistent
+    // fd — a leftover `.lock` file from an older pathname-lock build is inert
+    // residue and must not block or corrupt anything.
     const h = harness();
+    writeFileSync(`${runnerEpisodesStatePath(h.dir)}.lock`, "stale residue from a prior version", { mode: 0o600 });
     for (let i = 0; i < 3; i++) {
       h.nowMs();
-      h.recorder.recordFailure(foreignError());
+      expect(() => h.recorder.recordFailure(foreignError())).not.toThrow();
     }
-    // Simulate a live lock held by another runner process.
-    writeFileSync(`${runnerEpisodesStatePath(h.dir)}.lock`, "held", { mode: 0o600 });
-    expect(() => h.recorder.recordSuccess()).not.toThrow(); // skipped after bounded retries
-    const midState = readStateFile(h.dir) as { streak?: Record<string, unknown> };
-    expect(midState.streak?.deliveryState).toBe("open");
-    rmSync(`${runnerEpisodesStatePath(h.dir)}.lock`);
-    // Contention clears: the skipped success did not corrupt anything, and the
-    // episode still closes on the next two successes — the transition was
-    // delayed, not lost.
-    h.recorder.recordSuccess();
-    h.recorder.recordSuccess();
     const events = outboxLines(h.dir);
-    expect(events).toHaveLength(2);
-    expect(events[1].evt).toBe("loops_runner_control_plane_recovered");
+    expect(events).toHaveLength(1);
+    const state = readStateFile(h.dir) as { streak?: Record<string, unknown> };
+    expect(state.streak?.deliveryState).toBe("open");
+    h.recorder.recordSuccess();
+    h.recorder.recordSuccess();
+    expect(outboxLines(h.dir).filter((e) => e.evt === "loops_runner_control_plane_recovered")).toHaveLength(1);
     rmSync(h.dir, { recursive: true, force: true });
   });
 
@@ -533,6 +561,11 @@ describe("runner failure episodes", () => {
     // there the binding contract's durable surface is the outbox, already
     // asserted by every other test, so this gate degrades with a reason
     // instead of false-red on a platform property.
+    // TIMEOUT (verdict-3 finding 1): the degraded path can legitimately spend
+    // 20 x 25 ms probing shell capability plus 100 x 50 ms waiting for a
+    // delivery that cannot happen — 5.5 s inside Bun's default 5 s test
+    // timeout, which red-herringed the cycle-3 review. The timeout must sit
+    // ABOVE the degraded-path budget, so the assertions are always reached.
     const probe = mkdtempSync(join(tmpdir(), "loops-ep-probe-"));
     const probeSink = join(probe, "probe");
     const probeChild = spawn("sh", ["-c", `printf ok > ${JSON.stringify(probeSink)}`], { stdio: "ignore", detached: true });
@@ -592,6 +625,250 @@ describe("runner failure episodes", () => {
       expect(outboxLines(dir)).toHaveLength(1);
     }
     rmSync(dir, { recursive: true, force: true });
+  }, 20_000);
+});
+
+describe("state-file delivery confirmation (verdict-3 findings 1-5 remediation)", () => {
+  /** The reviewer's finding-3 probe state shape: recovery_pending, recovery line already in the outbox. */
+  function recoveryPendingState(episodeId: string, delivery?: { messageId: string; deliveredAt?: string }): string {
+    return `${JSON.stringify({
+      version: 1,
+      runnerId: "station02-test",
+      streak: {
+        firstFailureAt: "2026-08-20T21:08:26.000Z",
+        lastFailureAt: "2026-08-20T21:10:26.000Z",
+        consecutiveCount: 3,
+        failureClass: "connectivity",
+        episodeId,
+        openedAt: "2026-08-20T21:10:26.000Z",
+        consecutiveSuccesses: 2,
+        deliveryState: "recovery_pending",
+        ...(delivery ? { delivery } : {}),
+      },
+    }, null, 2)}\n`;
+  }
+
+  function openEventLine(episodeId: string): string {
+    return JSON.stringify({
+      evt: "loops_runner_control_plane_unreachable",
+      episodeId,
+      runnerId: "station02-test",
+      firstFailureAt: "2026-08-20T21:08:26.000Z",
+      lastFailureAt: "2026-08-20T21:10:26.000Z",
+      openedAt: "2026-08-20T21:10:26.000Z",
+      consecutiveCount: 3,
+      failureClass: "connectivity",
+      lastSuccessAt: null,
+    });
+  }
+
+  test("a recovery whose delivery is CONFIRMED in the state file is never re-appended or re-notified (finding 3)", () => {
+    // The finding-3 crash window: recovery appended + notified, confirm-write
+    // lost — except that under state-file delivery truth the durable claim IS
+    // the confirm. This state carries the claim (deliveredAt): the retry must
+    // do NOTHING — no second outbox line, no second notifier call — and close.
+    const h = harness();
+    const episodeId = "ep_finding3";
+    const messageId = `loops_runner_control_plane_recovered:${episodeId}`;
+    writeFileSync(runnerEpisodesStatePath(h.dir), recoveryPendingState(episodeId, { messageId, deliveredAt: "2026-08-20T21:20:26.000Z" }), { mode: 0o600 });
+    writeFileSync(runnerEventsOutboxPath(h.dir), `${openEventLine(episodeId)}\n${JSON.stringify({
+      evt: "loops_runner_control_plane_recovered",
+      episodeId,
+      messageId,
+    })}\n`, { mode: 0o600 });
+    let notifierCalls = 0;
+    const recorder = createRunnerEpisodeRecorder({
+      dataDir: h.dir,
+      runnerId: "station02-test",
+      notifierCommand: "probe",
+      now: () => new Date(Date.parse("2026-08-20T21:21:26.000Z")),
+      journal: () => {},
+      spawnNotifier: () => {
+        notifierCalls += 1;
+      },
+    });
+    recorder.recordSuccess();
+    expect(notifierCalls).toBe(0); // retry_notifier_calls=0 — the probe's defect line defeated
+    const events = outboxLines(h.dir);
+    expect(events.filter((e) => e.evt === "loops_runner_control_plane_recovered")).toHaveLength(1);
+    const state = readStateFile(h.dir) as { streak?: unknown };
+    expect(state.streak).toBeUndefined(); // episode closed
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("a recovery whose delivery was never confirmed re-delivers EXACTLY once, never twice (acceptance a)", () => {
+    // Claim lost (crash between the append and the deliveredAt write): the
+    // state file — the single source of delivery truth — says undelivered, so
+    // the retry re-appends one line carrying the SAME messageId (append-only
+    // log; consumers dedupe by messageId) and notifies exactly once. A second
+    // success must not notify again.
+    const h = harness();
+    const episodeId = "ep_claimlost";
+    writeFileSync(runnerEpisodesStatePath(h.dir), recoveryPendingState(episodeId), { mode: 0o600 });
+    writeFileSync(runnerEventsOutboxPath(h.dir), `${openEventLine(episodeId)}\n${JSON.stringify({
+      evt: "loops_runner_control_plane_recovered",
+      episodeId,
+      messageId: `loops_runner_control_plane_recovered:${episodeId}`,
+    })}\n`, { mode: 0o600 });
+    let notifierCalls = 0;
+    const recorder = createRunnerEpisodeRecorder({
+      dataDir: h.dir,
+      runnerId: "station02-test",
+      notifierCommand: "probe",
+      now: () => new Date(Date.parse("2026-08-20T21:21:26.000Z")),
+      journal: () => {},
+      spawnNotifier: () => {
+        notifierCalls += 1;
+      },
+    });
+    recorder.recordSuccess(); // re-delivery
+    expect(notifierCalls).toBe(1); // exactly one re-delivery
+    recorder.recordSuccess(); // episode closed; nothing left to deliver
+    expect(notifierCalls).toBe(1); // never two
+    const events = outboxLines(h.dir);
+    const recoveryLines = events.filter((e) => e.evt === "loops_runner_control_plane_recovered");
+    expect(recoveryLines.length).toBe(2); // append-only log: one line per delivery attempt across the crash
+    expect(new Set(recoveryLines.map((e) => e.messageId)).size).toBe(1); // identical messageId — one logical event
+    expect(recoveryLines[0].messageId).toBe(`loops_runner_control_plane_recovered:${episodeId}`);
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("a success observed during a held lock is persisted as an intent and never lost (finding 2)", () => {
+    expect(runnerEpisodeLockKindForTest()).toBe("flock");
+    const h = harness();
+    for (let i = 0; i < 3; i++) {
+      h.nowMs();
+      h.recorder.recordFailure(foreignError());
+    }
+    // Hold the advisory flock from OUTSIDE the recorder (a second runner
+    // process mid-update). The recorder must not throw, must not block long,
+    // and must persist the skipped transition as an intent file.
+    const lockFd = __episodeTestFlock.hold(`${runnerEpisodesStatePath(h.dir)}.lock`);
+    expect(lockFd).toBeDefined();
+    const started = Date.now();
+    expect(() => h.recorder.recordSuccess()).not.toThrow();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    const intents = readdirSync(h.dir).filter((n) => n.includes(".intent-"));
+    expect(intents.length).toBe(1);
+    const intent = JSON.parse(readFileSync(join(h.dir, intents[0]), "utf8")) as Record<string, unknown>;
+    expect(intent.kind).toBe("success");
+    const midState = readStateFile(h.dir) as { streak?: Record<string, unknown> };
+    expect(midState.streak?.consecutiveSuccesses ?? 0).toBe(0); // not yet applied — deferred, not dropped
+    __episodeTestFlock.release(lockFd!);
+    // ONE more real success: the drain applies the deferred intent FIRST, so
+    // the two successes land together and the episode closes now — the
+    // reviewer's CONTENTION probe (2 real successes, 0 recovery events) fails.
+    h.recorder.recordSuccess();
+    const events = outboxLines(h.dir);
+    expect(events.filter((e) => e.evt === "loops_runner_control_plane_recovered")).toHaveLength(1);
+    const state = readStateFile(h.dir) as { streak?: unknown };
+    expect(state.streak).toBeUndefined();
+    expect(readdirSync(h.dir).filter((n) => n.includes(".intent-"))).toHaveLength(0); // drained
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("parallel one-shot processes against one state file drop no transitions and emit each event once (acceptance d)", async () => {
+    const canSpawn = await probeSpawnCapability();
+    if (!canSpawn) {
+      console.log("SKIP-REASON: this environment cannot spawn child processes; concurrency gate degraded to the in-process flock probe");
+      expect(runnerEpisodeLockKindForTest()).toBe("flock");
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "loops-episodes-concurrent-"));
+    // Open the episode serially first (the 120s span needs the injectable clock).
+    let clock = Date.parse("2026-08-20T21:07:26.000Z");
+    const opener = createRunnerEpisodeRecorder({
+      dataDir: dir,
+      runnerId: "concurrent-probe",
+      now: () => new Date(clock),
+      journal: () => {},
+      spawnNotifier: () => {},
+    });
+    for (let i = 0; i < 3; i++) {
+      clock += 60_000;
+      opener.recordFailure(foreignError());
+    }
+    // 4 parallel processes x 5 failures each: 20 silent increments under real contention.
+    const fixture = join(import.meta.dir, "episodes.concurrent.fixture.ts");
+    const run = (mode: string, count: number) =>
+      new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, [fixture, dir, mode, String(count), "40"], { stdio: "ignore" });
+        child.on("error", reject);
+        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`fixture exited ${code}`))));
+      });
+    await Promise.all([run("fail", 5), run("fail", 5), run("fail", 5), run("fail", 5)]);
+    const afterFailures = readStateFile(dir) as { streak?: Record<string, unknown> };
+    expect(afterFailures.streak?.consecutiveCount).toBe(23); // 3 + 20 — none dropped, none double-counted
+    expect(afterFailures.streak?.deliveryState).toBe("open");
+    let events = outboxLines(dir);
+    expect(events.filter((e) => e.evt === "loops_runner_control_plane_unreachable")).toHaveLength(1);
+    expect(new Set(events.map((e) => `${e.evt}:${e.episodeId}`)).size).toBe(events.length); // no duplicate logical events
+    // 4 parallel successes: >= 2 must arrive, exactly one recovery event, episode closed.
+    await Promise.all([run("succeed", 1), run("succeed", 1), run("succeed", 1), run("succeed", 1)]);
+    events = outboxLines(dir);
+    expect(events.filter((e) => e.evt === "loops_runner_control_plane_recovered")).toHaveLength(1);
+    expect(new Set(events.map((e) => `${e.evt}:${e.episodeId}`)).size).toBe(events.length);
+    const finalState = readStateFile(dir) as { streak?: unknown };
+    expect(finalState.streak).toBeUndefined();
+    expect(readdirSync(dir).filter((n) => n.includes(".intent-"))).toHaveLength(0); // all intents drained
+    rmSync(dir, { recursive: true, force: true });
+  }, 30_000);
+
+  test("a claimed open event behind 10k outbox lines is neither re-appended nor re-notified, with no outbox scan (findings 3+4)", () => {
+    const h = harness();
+    const episodeId = "ep_bigoutbox";
+    const messageId = `loops_runner_control_plane_unreachable:${episodeId}`;
+    // The target open line sits at the HEAD of a 10,001-line outbox — far
+    // outside any bounded tail. The state file carries the durable claim.
+    const junk = Array.from({ length: 10_000 }, (_, i) => JSON.stringify({ evt: "other", episodeId: `other-${i}` }));
+    writeFileSync(runnerEventsOutboxPath(h.dir), `${openEventLine(episodeId)}\n${junk.join("\n")}\n`, { mode: 0o600 });
+    writeFileSync(runnerEpisodesStatePath(h.dir), `${JSON.stringify({
+      version: 1,
+      runnerId: "station02-test",
+      streak: {
+        firstFailureAt: "2026-08-20T21:08:26.000Z",
+        lastFailureAt: "2026-08-20T21:10:26.000Z",
+        consecutiveCount: 3,
+        failureClass: "connectivity",
+        episodeId,
+        openedAt: "2026-08-20T21:10:26.000Z",
+        deliveryState: "open_pending",
+        delivery: { messageId, deliveredAt: "2026-08-20T21:10:26.000Z" },
+      },
+    }, null, 2)}\n`, { mode: 0o600 });
+    let notifierCalls = 0;
+    const recorder = createRunnerEpisodeRecorder({
+      dataDir: h.dir,
+      runnerId: "station02-test",
+      notifierCommand: "probe",
+      now: () => new Date(Date.parse("2026-08-20T21:12:26.000Z")),
+      journal: () => {},
+      spawnNotifier: () => {
+        notifierCalls += 1;
+      },
+    });
+    recorder.recordFailure(foreignError());
+    expect(notifierCalls).toBe(0);
+    const lines = readFileSync(runnerEventsOutboxPath(h.dir), "utf8").split("\n").filter((l) => l.trim());
+    expect(lines).toHaveLength(10_001); // nothing appended — the claim, not a scan, decided
+    expect(lines.filter((l) => l.includes(episodeId))).toHaveLength(1);
+    const state = readStateFile(h.dir) as { streak?: { deliveryState?: string; consecutiveCount?: number; delivery?: { deliveredAt?: string } } };
+    expect(state.streak?.deliveryState).toBe("open");
+    expect(state.streak?.consecutiveCount).toBe(4);
+    expect(state.streak?.delivery?.deliveredAt).toBeDefined();
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("a hanging notifier command never blocks the recording call (acceptance e)", () => {
+    const h = harness({ notifierCommand: "sleep 60", spawnNotifier: undefined });
+    const started = Date.now();
+    for (let i = 0; i < 3; i++) {
+      h.nowMs();
+      expect(() => h.recorder.recordFailure(foreignError())).not.toThrow();
+    }
+    expect(Date.now() - started).toBeLessThan(5_000); // detached by construction, killed at NOTIFIER_KILL_MS
+    expect(outboxLines(h.dir)).toHaveLength(1); // the durable surface delivered regardless
+    rmSync(h.dir, { recursive: true, force: true });
   });
 });
 
