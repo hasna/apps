@@ -1,5 +1,14 @@
 # @hasna/domains
 
+## 0.0.42
+
+### Patch Changes
+
+- d7d615b: Pin @hasna/contracts to the published 0.13.1 (was ^0.13.0; 0.13.0 is unpublished, which makes the standard-suite conformance validator cannot-run) and align hasna.contract.json kitVersion to the declared contracts kit 0.13.1. Todos d175d558.
+- f5d44c4: Wire the recommended `keyStatus` hook (`ApiKeyStore.keyStatus` from @hasna/contracts/auth) into domains-serve's verifier, replacing the deprecated `isRevoked`-only wiring and the hook-less test construction (row 5eb0c0df). The contracts auth verifier fails closed at construction without a key-status hook, so the server suite's 10 app tests threw at build time. Tests now construct the app with a key-status resolver and add a regression proving a revoked key is denied through the hook.
+- 9469090: Remove the dead 'cloud-http' transport token from the store wiring (row 0fdd8998). The removed-modes directive (owner 2026-07-29) retired the deployment-mode vocabulary and @hasna/contracts now resolves client transports as "sqlite" | "http"; the stale 'cloud-http' comparison made the member build fail with TS2367/TS2339 at src/db/store.ts:920/:926. The DomainsStore transport union, ApiStore constant, hosted-client check and the doctor banner now use "http", with a compile-time union regression in store.ts.
+  - @hasna/contracts@0.13.3
+
 ## 0.0.41
 
 ### Patch Changes

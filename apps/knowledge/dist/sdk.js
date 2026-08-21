@@ -19866,7 +19866,7 @@ function createKnowledgeProjectLinksHttpClient(options) {
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.110",
+  version: "0.2.111",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -19975,7 +19975,7 @@ var package_default = {
   },
   devDependencies: {
     "@electric-sql/pglite": "^0.5.4",
-    "@hasna/contracts": "0.13.2",
+    "@hasna/contracts": "0.13.3",
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.15.6",
     typescript: "5.9.3"

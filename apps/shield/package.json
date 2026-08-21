@@ -1,6 +1,6 @@
 {
   "name": "@hasna/shield",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
   "main": "dist/index.js",
@@ -61,7 +61,7 @@
     "zod": "^3.24.4"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.13.2",
+    "@hasna/contracts": "0.13.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/bun": "^1.2.12",
     "@types/express": "^5.0.2",

@@ -1,3 +1,13 @@
+## 1.4.5
+
+### Patch Changes
+
+- Updated dependencies [d7d615b]
+- Updated dependencies [f5d44c4]
+- Updated dependencies [9469090]
+  - @hasna/domains@0.0.42
+  - @hasna/contracts@0.13.3
+
 ## 1.4.4
 
 ### Patch Changes

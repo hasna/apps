@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.95
+
+### Patch Changes
+
+- d7d615b: Align hasna.contract.json kitVersion to the declared contracts kit 0.13.1 (the pinned @hasna/contracts version). Todos d175d558.
+  - @hasna/browser@0.5.20
+  - @hasna/projects@0.1.136
+  - @hasna/contracts@0.13.3
+
 ## 0.0.94
 
 ### Patch Changes
