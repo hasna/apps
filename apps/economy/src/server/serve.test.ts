@@ -584,6 +584,41 @@ describe('REST API server', () => {
     expect(budget['percent_used']).toBeNumber()
   })
 
+  it('POST /v1/ingest recomputes session aggregates from the requests table (incremental sync cannot overwrite hosted totals)', async () => {
+    // Regression for the cloud-ingest port: an incremental sync computes
+    // session aggregates from only the newly changed provider files, so the
+    // session row it pushes is a PARTIAL aggregate (request_count counts only
+    // this run's delta). Trusting that row overwrites the hosted session
+    // totals (two requests stored, session reports request_count: 1). The
+    // server must recompute touched sessions from its authoritative requests
+    // table after ingest.
+    const reqBase = (id: string) => ({
+      id, agent: 'opencode', session_id: 'agg-sess-1', model: 'gpt-5-codex',
+      input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 1, cost_basis: 'estimated', duration_ms: 100, timestamp: NOW,
+      source_request_id: `agg-src-${id}`, machine_id: 'machineA',
+    })
+    const sessRow = {
+      id: 'agg-sess-1', agent: 'opencode', project_path: '', project_name: '',
+      started_at: NOW, ended_at: null, total_cost_usd: 0, total_tokens: 0, request_count: 0,
+      machine_id: 'machineA',
+    }
+    // Run 1: request A + session row whose totals reflect only the delta.
+    await req(handler, '/v1/ingest', 'POST', {
+      requests: [reqBase('agg-req-a')],
+      sessions: [{ ...sessRow, request_count: 1, total_cost_usd: 1, total_tokens: 15 }],
+    })
+    // Run 2: request B for the SAME session + a partial session aggregate
+    // (request_count 1 again — the reviewer's reproduction).
+    await req(handler, '/v1/ingest', 'POST', {
+      requests: [reqBase('agg-req-b')],
+      sessions: [{ ...sessRow, request_count: 1, total_cost_usd: 1, total_tokens: 15 }],
+    })
+    const sess = db.prepare(`SELECT * FROM sessions WHERE id = 'agg-sess-1'`).get() as Record<string, unknown>
+    expect(Number(sess['request_count'])).toBe(2)
+    expect(Number(sess['total_cost_usd'])).toBe(2)
+  })
+
   it('POST /v1/ingest bulk-imports rows and merges by id (idempotent)', async () => {
     const rows = {
       sessions: [{
