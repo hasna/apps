@@ -15,9 +15,13 @@
 # manifest is not wired into a package.json aggregate script.
 #
 # --- every version site agrees with package.json. Models 8de7068: one site bumped, the rest not.
-duplicate	src/__tests__/version-site-guard.test.ts	agree in the working tree, on the version package.json declares	src/version.ts	.15	1
-duplicate	src/__tests__/version-site-guard.test.ts	agree in the working tree, on the version package.json declares	src/native/Recordings/RecordingsLib/Info.plist	0.2.15	1
-duplicate	src/__tests__/version-site-guard.test.ts	agree in the working tree, on the version package.json declares	src/native/Recordings/RecordingsLib/Info.plist	0.2.15	2
+# I38-00553 (2026-08-21): src/version.ts now DERIVES from package.json and holds no literal, so it
+# is no longer a writer site (see set-version.ts) and cannot be mutated here. The residual drift
+# class is the mirror direction: the package.json authority corrupted while the native sites stay
+# put. Rows below were re-needled to the 0.3.5 tree.
+delete	src/__tests__/version-site-guard.test.ts	agree in the working tree, on the version package.json declares	package.json	0.3.5	1
+duplicate	src/__tests__/version-site-guard.test.ts	agree in the working tree, on the version package.json declares	src/native/Recordings/RecordingsLib/Info.plist	0.3.5	1
+duplicate	src/__tests__/version-site-guard.test.ts	agree in the working tree, on the version package.json declares	src/native/Recordings/RecordingsLib/Info.plist	0.3.5	2
 # --- a stale site is reported, not silently accepted: the mismatch filter removed.
 delete	src/__tests__/version-site-guard.test.ts	a single stale site is reported rather than silently accepted	scripts/set-version.ts	.filter((reading) => reading.version !== expected)	1
 # --- applyVersion writes every site in one pass: the per-file grouping removed.
@@ -58,4 +62,4 @@ delete	src/__tests__/version-site-guard.test.ts	applyVersion rewrites every site
 #
 # The generated SDK's version stamp -- a fifth copy of the release version that `versionSites`
 # deliberately does not write -- goes stale again.
-delete	src/__tests__/version-site-guard.test.ts	the generated SDK header carries the version package.json declares	src/sdk/v1.generated.ts	.15	1
+delete	src/__tests__/version-site-guard.test.ts	the generated SDK header carries the version package.json declares	src/sdk/v1.generated.ts	0.3.5	1

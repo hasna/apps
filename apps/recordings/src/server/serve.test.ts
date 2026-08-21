@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import packageJson from "../../package.json";
 import { requireSigningSecret } from "./cloud-config.js";
 import { buildFetch } from "./serve.js";
 
@@ -66,5 +67,21 @@ describe("public readiness", () => {
     expect(body).not.toContain("private-db");
     expect(JSON.stringify(logged)).not.toContain("secret");
     expect(JSON.stringify(logged)).not.toContain("private-db");
+  });
+});
+
+describe("version surface", () => {
+  // Regression for I38-00553: /version reported a hardcoded literal that had
+  // drifted from package.json. The route must report the version package.json
+  // declares — the same value VERSION derives from in src/version.ts.
+  test("reports the version package.json declares", async () => {
+    const fetch = buildFetch({});
+    const response = await fetch(
+      new Request("http://localhost/version"),
+      { requestIP: () => ({ address: "203.0.113.7" }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).version).toBe(packageJson.version);
   });
 });
