@@ -3,7 +3,7 @@
   "name": "controls",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
+  "kitVersion": "0.13.1",
   "description": "Spend-authorization/approval control plane over wallets+payments: per-entity/per-agent spend caps, counterparty allowlists, tiered human-approval thresholds, segregation-of-duties, emergency freeze, and an immutable hash-chained money audit. CLI + MCP + serve triad. SQLite at ~/.hasna/controls/controls.db is authoritative unless HASNA_CONTROLS_DATABASE_URL is set, which selects the PostgreSQL backend.",
   "bins": [
     "controls",

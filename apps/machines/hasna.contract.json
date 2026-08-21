@@ -3,7 +3,7 @@
   "name": "machines",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "0.13.1",
   "description": "Machine fleet control-plane: CLI + MCP + serve (HTTP /v1 registry API) + typed SDK. The data backend is the only runtime switch: SQLite at ~/.hasna/machines/machines.db by default, or PostgreSQL when a database URL is configured, in which case the serve process reads and writes PostgreSQL directly (PURE REMOTE — no sync engine). Every /v1 route requires an @hasna/contracts API key.",
   "bins": [
     "machines",
