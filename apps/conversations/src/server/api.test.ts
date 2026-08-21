@@ -13,6 +13,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   { id: "proj-valid", name: "Chief of Harness" },
 ]) {
   const channels: Record<string, any> = {};
+  const channelAliases: Record<string, string> = {};
   const channelMembers = new Set<string>();
   const messages: any[] = [];
   const messageAttachments: any[] = [];
@@ -502,6 +503,10 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       // Match only the standalone message-count query, not channel/project
       // GETs that carry COUNT(*) subqueries for member_count/message_count.
       if (/count\(\*\)::bigint\s+as\s+n/i.test(sql)) return { n: messages.length };
+      if (/SELECT current_channel FROM channel_rename_aliases/i.test(sql)) {
+        const currentChannel = channelAliases[String((p as any[])[0])];
+        return currentChannel ? { current_channel: currentChannel } : null;
+      }
       if (/INSERT INTO channels/i.test(sql)) {
         const [id, name, description, topic, project_id, created_by, metadata, tags] = p as any[];
         const row = {
@@ -910,8 +915,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         releaseTransaction.resolve();
       }
     },
-    __debug: {
-      channels,
+      __debug: {
+        channels,
+        channelAliases,
       channelMembers,
       messages,
       messageAttachments,
@@ -2527,6 +2533,91 @@ describe("conversations-serve", () => {
     const fetched = await got.json();
     expect(fetched.channel.metadata.channel_schema.class).toBe("loop-lane");
     expect(fetched.channel.member_count).toBe(1);
+  });
+
+  test("reserved channel aliases reject create/send/read without creating duplicates", async () => {
+    const fake = activeFakeClient!;
+    fake.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000054",
+      name: "agent-chief-research",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "agent-chief-research",
+      created_at: "2026-08-21T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, ["agent-chief-research"], []);
+    fake.__debug.channelAliases["chief-research"] = "agent-chief-research";
+    const aliasError = "Channel #chief-research is a reserved historical alias for #agent-chief-research.";
+
+    const create = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: "chief-research", created_by: "agent-chief-research" }),
+    });
+    expect(create.status).toBe(409);
+    expect(await create.json()).toEqual({ error: aliasError });
+
+    const send = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "agent-chief-research",
+        to: "chief-research",
+        channel: "chief-research",
+        content: "alias must not write",
+      }),
+    });
+    expect(send.status).toBe(409);
+    expect(await send.json()).toEqual({ error: aliasError });
+
+    const read = await fetch(`${base}/v1/messages?channel=chief-research&since=2026-08-20T00:00:00.000Z`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(read.status).toBe(409);
+    expect(await read.json()).toEqual({ error: aliasError });
+
+    const canonicalSend = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "agent-chief-research",
+        to: "agent-chief-research",
+        channel: "agent-chief-research",
+        content: "canonical channel remains usable",
+      }),
+    });
+    expect(canonicalSend.status).toBe(201);
+    expect((await canonicalSend.json()).message.channel).toBe("agent-chief-research");
+    expect(fake.__debug.channels["chief-research"]).toBeUndefined();
+    expect(fake.__debug.channels["agent-chief-research"]).toBeDefined();
+    expect(fake.__debug.messages.filter((message: any) => message.content === "alias must not write")).toHaveLength(0);
+    expect(fake.__debug.messages.filter((message: any) => message.content === "canonical channel remains usable").map((message: any) => message.channel))
+      .toEqual(["agent-chief-research"]);
+  });
+
+  test("reserved channel aliases reject pinned and for-agent reads before querying", async () => {
+    const fake = activeFakeClient!;
+    fake.__debug.channelAliases["chief-research"] = "agent-chief-research";
+    const aliasError = "Channel #chief-research is a reserved historical alias for #agent-chief-research.";
+
+    const pinnedQueryMark = fake.__debug.manyCalls.length;
+    const pinned = await fetch(`${base}/v1/messages/pinned?channel=chief-research`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(pinned.status).toBe(409);
+    expect(await pinned.json()).toEqual({ error: aliasError });
+    expect(fake.__debug.manyCalls.slice(pinnedQueryMark).filter((call: any) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+
+    const mentionQueryMark = fake.__debug.manyCalls.length;
+    const mentions = await fetch(`${base}/v1/messages/for-agent?agent=reader&channel=chief-research`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(mentions.status).toBe(409);
+    expect(await mentions.json()).toEqual({ error: aliasError });
+    expect(fake.__debug.manyCalls.slice(mentionQueryMark).filter((call: any) => /FROM messages/i.test(call.sql))).toHaveLength(0);
   });
 
   test("POST /v1/channels reports rejected project_id with field and reason", async () => {

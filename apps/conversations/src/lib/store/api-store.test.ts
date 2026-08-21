@@ -152,6 +152,25 @@ describe("ApiStore bounded message reads", () => {
     expect(calls.map((call) => call.path)).toEqual(["/messages", "/messages", "/messages"]);
   });
 
+  test("readDigest preserves the hosted reserved-alias error instead of returning an empty digest", async () => {
+    const aliasError = Object.assign(
+      new Error("Channel #chief-research is a reserved historical alias for #agent-chief-research."),
+      { name: "HasnaHttpError", status: 409 },
+    );
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (_path: string, options?: { query?: Record<string, unknown> }) => {
+          expect(options?.query?.channel).toBe("chief-research");
+          throw aliasError;
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    await expect(new ApiStore(client).readDigest({ channel: "chief-research" })).rejects.toThrow(aliasError.message);
+  });
+
   test("getUnreadBlockers without an explicit --from omits the agent query (principal-scoped read)", async () => {
     const queries: Array<Record<string, unknown>> = [];
     const client = {

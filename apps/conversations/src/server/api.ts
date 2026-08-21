@@ -23,7 +23,12 @@ import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
-import { normalizeChannelName, unknownChannelMessage, archivedChannelMessage } from "../lib/channel-names.js";
+import {
+  normalizeChannelName,
+  unknownChannelMessage,
+  archivedChannelMessage,
+  reservedHistoricalChannelMessage,
+} from "../lib/channel-names.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
@@ -466,6 +471,17 @@ async function readProjectLinkageChannel(
     throw new Error(`Project ${expectedProjectId} conflicts with channel project ${row.project_id}.`);
   }
   return { channel, project_id: row.project_id };
+}
+
+async function readReservedHistoricalChannelAlias(
+  client: TypedQueryClient,
+  channel: string,
+): Promise<string | null> {
+  const row = await client.get<{ current_channel: string }>(
+    "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1",
+    [channel],
+  );
+  return row?.current_channel ?? null;
 }
 
 async function readProjectLinkageRows(
@@ -1782,7 +1798,13 @@ async function handleV1(
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
 
-    if (channel) channel = normalizeChannelName(channel);
+    if (channel) {
+      channel = normalizeChannelName(channel);
+      const currentChannel = await readReservedHistoricalChannelAlias(client, channel);
+      if (currentChannel) {
+        return json({ error: reservedHistoricalChannelMessage(channel, currentChannel) }, 409);
+      }
+    }
     const unreadOnly = isTrue(url.searchParams.get("unread_only"));
     const threadsOnly = isTrue(url.searchParams.get("threads_only"));
     const pinnedOnly = isTrue(url.searchParams.get("pinned_only"));
@@ -2034,6 +2056,13 @@ async function handleV1(
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
+    if (channel) {
+      channel = normalizeChannelName(channel);
+      const currentChannel = await readReservedHistoricalChannelAlias(client, channel);
+      if (currentChannel) {
+        return json({ error: reservedHistoricalChannelMessage(channel, currentChannel) }, 409);
+      }
+    }
     const collection = collectionReadOptions(url);
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
@@ -2139,6 +2168,13 @@ async function handleV1(
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
     if (!who) return json({ error: "agent is required" }, 400);
+    if (channel) {
+      channel = normalizeChannelName(channel);
+      const currentChannel = await readReservedHistoricalChannelAlias(client, channel);
+      if (currentChannel) {
+        return json({ error: reservedHistoricalChannelMessage(channel, currentChannel) }, 409);
+      }
+    }
     const clauses = ["mm.mentioned_agent = $1"];
     const params: unknown[] = [who.toLowerCase()];
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
@@ -2380,6 +2416,12 @@ async function handleV1(
     const from = str(body.from) ?? agent ?? undefined;
     const content = str(body.content);
     const requestedChannel = body.channel ? normalizeChannelName(String(body.channel)) : null;
+    if (requestedChannel) {
+      const currentChannel = await readReservedHistoricalChannelAlias(client, requestedChannel);
+      if (currentChannel) {
+        return json({ error: reservedHistoricalChannelMessage(requestedChannel, currentChannel) }, 409);
+      }
+    }
     const requestedSession = str(body.session_id);
     const workingDir = str(body.working_dir);
     const repository = str(body.repository);
@@ -3202,7 +3244,7 @@ async function handleV1(
         [name],
       );
       if (reserved) {
-        return json({ error: `Channel #${name} is a reserved historical alias for #${reserved.current_channel}.` }, 409);
+        return json({ error: reservedHistoricalChannelMessage(name, reserved.current_channel) }, 409);
       }
       const existing = await tx.get(`SELECT name FROM channels WHERE name = $1`, [name]);
       if (existing) return json({ error: "Channel already exists" }, 409);

@@ -27,6 +27,16 @@ export function unknownChannelMessage(channel: string): string {
 }
 
 /**
+ * The message a caller gets when it addresses a channel name reserved as a
+ * historical alias. Aliases are deliberately rejected rather than redirected
+ * so callers cannot accidentally post to a renamed channel under stale
+ * routing information.
+ */
+export function reservedHistoricalChannelMessage(channel: string, currentChannel: string): string {
+  return `Channel #${channel} is a reserved historical alias for #${currentChannel}.`;
+}
+
+/**
  * The message a caller gets when they send to a channel that is archived.
  *
  * Same placement rationale as unknownChannelMessage: this module holds no
