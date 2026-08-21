@@ -15533,7 +15533,7 @@ function createDeploymentSchemas(primitives) {
 }
 
 // src/schemas.ts
-var CONTRACTS_PACKAGE_VERSION = "0.13.1";
+var CONTRACTS_PACKAGE_VERSION = "0.13.3";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
