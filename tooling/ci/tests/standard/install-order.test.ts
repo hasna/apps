@@ -77,6 +77,48 @@ export function prepareScriptMembers(appsDir: string): string[] {
 }
 
 /**
+ * Parse the root package.json `prepare:ordered` script into the ordered list
+ * of member package names whose postinstall it runs. These are postinstall
+ * scripts that install nested dependencies (gate-load-bearing: without them a
+ * scriptless install leaves a build missing its tools); the chain must carry
+ * them as `bun run --filter @hasna/<name> postinstall` segments.
+ */
+export function orderedPostinstallMembers(rootPkgJson: unknown): string[] {
+  const scripts = (rootPkgJson as { scripts?: Record<string, string> }).scripts ?? {};
+  const chain = scripts["prepare:ordered"];
+  if (!chain) return [];
+  const out: string[] = [];
+  for (const segment of chain.split("&&")) {
+    const m = segment.match(/--filter\s+(@hasna\/[a-z0-9-]+)\s+postinstall/);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+/**
+ * Members whose postinstall script installs nested dependencies — measured to
+ * be gate-load-bearing under the scriptless CI install: @hasna/connectors'
+ * postinstall runs `cd dashboard && bun install` for its non-workspace
+ * dashboard package, and the turbo build fails with `vite: command not found`
+ * when it is skipped. Detection: the postinstall body invokes a package
+ * installer (`bun install` / `npm install`). Pure data-dir creation
+ * (mkdir/install -d/chmod/node fs.mkdirSync) is not gate-load-bearing and
+ * must NOT be forced into the chain.
+ */
+export function dependencyInstallingPostinstallMembers(appsDir: string): string[] {
+  const out: string[] = [];
+  for (const dir of fs.readdirSync(appsDir, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const pkgPath = path.join(appsDir, dir.name, "package.json");
+    if (!fs.existsSync(pkgPath)) continue;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { scripts?: Record<string, string> };
+    const postinstall = pkg.scripts?.postinstall;
+    if (postinstall !== undefined && /\b(bun|npm|pnpm|yarn)\s+install\b/.test(postinstall)) out.push(dir.name);
+  }
+  return out;
+}
+
+/**
  * CI Install-step violations: every `- name: Install` block's `run:` body must
  * run the scriptless install AND the ordered prepare chain. A bare scriptful
  * `bun install --frozen-lockfile` is the unordered-scheduling defect.
@@ -146,6 +188,16 @@ describe("standard-adherence: install ordering", () => {
     expect(violations, `install-ordering violations:\n${violations.join("\n")}`).toEqual([]);
   });
 
+  test("prepare:ordered runs the postinstall of every member whose postinstall installs nested dependencies", () => {
+    const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG_PATH, "utf8"));
+    const chainPostinstall = orderedPostinstallMembers(rootPkg);
+    const gateLoadBearing = dependencyInstallingPostinstallMembers(path.join(REPO_ROOT, "apps")).map(
+      (n) => `@hasna/${n}`,
+    );
+    const missing = gateLoadBearing.filter((p) => !chainPostinstall.includes(p));
+    expect(missing, `postinstall-gap violations:\n${missing.join("\n")}`).toEqual([]);
+  });
+
   test("self-test: the checks fire on the defect shapes and stay silent on the compliant shapes", () => {
     const brokenChain = JSON.stringify({
       scripts: {
@@ -182,5 +234,17 @@ describe("standard-adherence: install ordering", () => {
     const fixed = ciInstallViolations(fixedInstall);
     expect(bare.length, `bare scriptful install must be a violation:\n${bare.join("\n")}`).toBeGreaterThan(0);
     expect(fixed, `compliant Install step must be silent:\n${fixed.join("\n")}`).toEqual([]);
+
+    const noPostinstallStep = JSON.stringify({
+      scripts: { "prepare:ordered": "bun run --filter @hasna/contracts build" },
+    });
+    const withPostinstallStep = JSON.stringify({
+      scripts: {
+        "prepare:ordered":
+          "bun run --filter @hasna/contracts build && bun run --filter @hasna/connectors postinstall",
+      },
+    });
+    expect(orderedPostinstallMembers(JSON.parse(noPostinstallStep))).toEqual([]);
+    expect(orderedPostinstallMembers(JSON.parse(withPostinstallStep))).toEqual(["@hasna/connectors"]);
   });
 });
