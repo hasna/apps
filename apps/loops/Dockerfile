@@ -4,7 +4,7 @@
 # Postgres directly with @hasna/contracts API-key auth.
 # The ECS one-shot migration task overrides the command with `... migrate`.
 
-ARG BUN_IMAGE=oven/bun:1.3.13-alpine@sha256:588e1fb0d80ee1c09cc6e2d7d1ff8e3502191fba9cad12a4a77cb93d4d7f84f9
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
 
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS deps
 WORKDIR /app
