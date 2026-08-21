@@ -971,7 +971,7 @@
     },
     "apps/knowledge": {
       "name": "@hasna/knowledge",
-      "version": "0.2.108",
+      "version": "0.2.109",
       "bin": {
         "knowledge": "bin/knowledge.js",
         "knowledge-mcp": "bin/knowledge-mcp.js",
@@ -1361,7 +1361,7 @@
     },
     "apps/recordings": {
       "name": "@hasna/recordings",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "bin": {
         "recordings": "dist/cli/index.js",
         "recordings-mcp": "dist/mcp/index.js",
