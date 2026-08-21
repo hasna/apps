@@ -46,13 +46,60 @@ describe("client env-selection contract", () => {
     expect(r.warning).toContain("HASNA_RECORDINGS_API_URL");
   });
 
-  test("the unprefixed API_URL + API_KEY forms select the hosted store too", () => {
+  test("unprefixed RECORDINGS_API_KEY alone -> on-box sqlite, not misconfigured (OpenAI transcription key only)", () => {
+    const r = resolveTransport(APP, { RECORDINGS_API_KEY: "test-key" });
+    expect(r.transport).toBe("sqlite");
+    expect(r.misconfigured).toBe(false);
+    expect(() => resolveStorageClient(APP, { RECORDINGS_API_KEY: "test-key" })).not.toThrow();
+  });
+
+  test("unprefixed API_URL + API_KEY forms do NOT select the hosted store (not the hosted contract)", () => {
     const r = resolveTransport(APP, {
       RECORDINGS_API_URL: "https://api.example.com",
       RECORDINGS_API_KEY: "test-key",
     });
+    expect(r.transport).toBe("sqlite");
+    expect(r.misconfigured).toBe(false);
+    expect(r.baseUrl).toBeNull();
+  });
+
+  test("HASNA_RECORDINGS_CLIENT_STORE=sqlite overrides auto http (patch-compatible)", () => {
+    const r = resolveTransport(APP, {
+      HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
+      HASNA_RECORDINGS_API_KEY: "test-key",
+    });
+    expect(r.transport).toBe("sqlite");
+    expect(r.misconfigured).toBe(false);
+    expect(r.baseUrl).toBeNull();
+  });
+
+  test("HASNA_RECORDINGS_CLIENT_STORE=http with URL+key -> hosted http", () => {
+    const r = resolveTransport(APP, {
+      HASNA_RECORDINGS_CLIENT_STORE: "http",
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
+      HASNA_RECORDINGS_API_KEY: "test-key",
+    });
     expect(r.transport).toBe("http");
+    expect(r.misconfigured).toBe(false);
     expect(r.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  test("HASNA_RECORDINGS_CLIENT_STORE=http without a key -> fail closed", () => {
+    const r = resolveTransport(APP, {
+      HASNA_RECORDINGS_CLIENT_STORE: "http",
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
+    });
+    expect(r.transport).toBe("sqlite");
+    expect(r.misconfigured).toBe(true);
+    expect(() => resolveStorageClient(APP, {
+      HASNA_RECORDINGS_CLIENT_STORE: "http",
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
+    })).toThrow();
+  });
+
+  test("unknown HASNA_RECORDINGS_CLIENT_STORE value -> throws", () => {
+    expect(() => resolveTransport(APP, { HASNA_RECORDINGS_CLIENT_STORE: "bogus" })).toThrow(/Unknown client store/);
   });
 });
 

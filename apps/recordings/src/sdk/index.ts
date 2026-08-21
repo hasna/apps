@@ -6,8 +6,8 @@
  *
  *   import { RecordingsV1Client } from "@hasna/recordings/sdk";
  *   const client = new RecordingsV1Client({
- *     baseUrl: process.env.RECORDINGS_API_URL!,
- *     apiKey: process.env.RECORDINGS_API_KEY!,
+ *     baseUrl: process.env.HASNA_RECORDINGS_API_URL!,
+ *     apiKey: process.env.HASNA_RECORDINGS_API_KEY!,
  *   });
  *   const { recordings } = await client.listRecordings({ limit: 20 });
  */

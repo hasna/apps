@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - d7d615b: Align hasna.contract.json kitVersion to the declared contracts kit 0.13.1 (the pinned @hasna/contracts version). Todos d175d558.
+- c5335b7b: Store selection is the environment contract only, with the explicit client-store override retained. The client's store is `sqlite | http`, auto-selected by the presence of BOTH `HASNA_RECORDINGS_API_URL` and `HASNA_RECORDINGS_API_KEY`; a partial hosted setup (one of the two set) fails closed instead of silently reading the wrong dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` | `http`) wins over the auto-selection, so an existing configuration with `HASNA_RECORDINGS_CLIENT_STORE=sqlite` keeps reading the local file even when the hosted URL/key pair is present (patch-compatible). `RECORDINGS_API_KEY` remains the OpenAI transcription-key override only and never selects or fails client transport. `defaultApiBaseUrl` is removed: a hosted client is selected only by a configured API URL, never by a defaulted hostname.
   - @hasna/contracts@0.13.3
 
 ## 0.3.7
@@ -77,25 +78,12 @@ internal-infra string can no longer reach a published tarball.
 
 ### Selection is the environment contract alone
 
-The `0.3.0` breaking change shipped an interim rejection layer that named the
-retired placement words so a stale value would fail loudly, plus two explicit
-selection variables. Both are removed in this release: the placement
-vocabulary no longer exists anywhere in the package, nothing is mapped, and
-nothing throws on a stale word — the word simply selects nothing because
-nothing reads it.
-
-Selection is the environment contract only:
-
-- the server's backend is `sqlite | postgresql`, selected by the presence of a
-  PostgreSQL DSN (`HASNA_RECORDINGS_DATABASE_URL` / `RECORDINGS_DATABASE_URL` /
-  `DATABASE_URL`);
-- the client's store is `sqlite | http`, selected by the presence of BOTH
-  `HASNA_RECORDINGS_API_URL` and `HASNA_RECORDINGS_API_KEY`; a partial hosted
-  setup (one of the two set) fails closed instead of silently reading the
-  wrong dataset.
-
-`defaultApiBaseUrl` is removed with it: a hosted client is selected only by a
-configured API URL, never by a defaulted hostname.
+The client's store is `sqlite | http`, auto-selected by the presence of BOTH
+`HASNA_RECORDINGS_API_URL` and `HASNA_RECORDINGS_API_KEY`; a partial hosted
+setup (one of the two set) fails closed instead of silently reading the
+wrong dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` |
+`http`) wins over the auto-selection. `defaultApiBaseUrl` is removed: a hosted
+client is selected only by a configured API URL, never by a defaulted hostname.
 
 
 ## 0.3.0 — unreleased
