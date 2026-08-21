@@ -101,10 +101,12 @@ export const APPS_DIR = path.join(REPO_ROOT, "apps");
 export const MIN_VALIDATOR_VERSION = "0.4.1";
 
 /** Numeric segment compare — "0.10.4" >= "0.4.1" must be TRUE (string
- * compare gets this wrong: "1" < "4"). */
+ * compare gets this wrong: "1" < "4"). A leading range prefix ("^0.13.0",
+ * "~0.8.2") is stripped before comparing — members pin @hasna/contracts with
+ * caret ranges, and the pin must still select the pinned validator. */
 export function versionAtLeast(v: string, min: string): boolean {
-  const a = v.split(".").map(Number);
-  const b = min.split(".").map(Number);
+  const a = v.replace(/^[^0-9]*/, "").split(".").map(Number);
+  const b = min.replace(/^[^0-9]*/, "").split(".").map(Number);
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const av = a[i] ?? 0;
     const bv = b[i] ?? 0;
@@ -198,7 +200,9 @@ export function membersIn(appsDir: string): Member[] {
         hasSdk: exports["./sdk"] !== undefined,
         hasManifest,
         hasFilesField: Array.isArray(pkg.files),
-        contractsDep: allDeps["@hasna/contracts"]?.replace(/^\^/, ""),
+        // Raw pin, range prefix included: resolveValidatorVersion hands the
+        // pin to bunx, which resolves caret ranges against the registry.
+        contractsDep: allDeps["@hasna/contracts"],
       };
     });
 }
@@ -500,6 +504,12 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
   { member: "hooks", kitVersion: "0.8.4", pinned: "0.11.1" },
+  // economy: the wave wrote the caret pin ^0.13.0 expecting 0.13.0, which was
+  // never published (the line jumped 0.12.0 -> 0.13.1); its lockfile cannot be
+  // regenerated until @hasna/projects@0.1.134 publishes (the manifest pins it),
+  // so the pin stays ^0.13.0 and the kit stays on the published 0.13.1 line.
+  // Recorded 2026-08-21 while completing the #717 wave residue.
+  { member: "economy", kitVersion: "0.13.1", pinned: "0.13.0" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —
