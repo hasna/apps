@@ -126,7 +126,16 @@ export function localTodosTestEnv(overrides: TodosTestEnv = {}): TodosTestEnv {
   const env: TodosTestEnv = { ...process.env };
   for (const key of SHARED_TODOS_STORE_ENV_KEYS) env[key] = "";
   for (const key of REMOVED_TODOS_ENV_KEYS) delete env[key];
-  return deliverTodosApiKeyViaDisk({ ...env, ...overrides });
+  const result = { ...env, ...overrides };
+  // Disk delivery happens ONLY when the caller DELIBERATELY supplied HOME.
+  // An inherited machine home must never receive a fixture credential: the
+  // ordinary suite's in-process tests call this helper without a HOME
+  // override, and writing through process.env.HOME would replace the
+  // machine's configured credential file (review P1, hasna/apps#719).
+  if (overrides.HOME && result.HASNA_TODOS_API_KEY) {
+    deliverTodosApiKeyViaDisk(result);
+  }
+  return result;
 }
 
 /**
