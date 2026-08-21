@@ -96,7 +96,7 @@ function channelMatchesEvent(channel, event) {
   return channel.filters.some((filter) => eventMatchesFilter(event, filter));
 }
 export {
-  channelMatchesEvent,
+  matchString,
   eventMatchesFilter,
-  matchString
+  channelMatchesEvent
 };

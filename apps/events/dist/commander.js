@@ -1715,8 +1715,8 @@ function replaySummary(events, deliveries, nextCursor) {
   return `Replayed ${events} event(s), ${deliveries} delivery result(s)${suffix}`;
 }
 export {
-  DEFAULT_EVENT_LIST_LIMIT,
-  registerChannelCommands,
+  registerEventsCommands,
   registerEventCommands,
-  registerEventsCommands
+  registerChannelCommands,
+  DEFAULT_EVENT_LIST_LIMIT
 };

@@ -365,18 +365,18 @@ function requireTimestamp(value, key, issues) {
   }
 }
 export {
-  APP_EVENT_V1_MAX_DATA_BYTES,
-  APP_EVENT_V1_MAX_REFS,
-  APP_EVENT_V1_MAX_SUMMARY_LENGTH,
-  APP_EVENT_V1_MAX_TARGETS,
-  APP_EVENT_V1_METADATA_KEY,
-  APP_EVENT_V1_SCHEMA_VERSION,
-  AppEventReplaySafetyError,
-  AppEventValidationError,
-  appEventV1FromEventEnvelope,
-  appEventV1ReplayIdentity,
-  appEventV1ToEventInput,
-  assertAppEventV1,
+  validateAppEventV1,
   assertAppEventV1ReplaySafe,
-  validateAppEventV1
+  assertAppEventV1,
+  appEventV1ToEventInput,
+  appEventV1ReplayIdentity,
+  appEventV1FromEventEnvelope,
+  AppEventValidationError,
+  AppEventReplaySafetyError,
+  APP_EVENT_V1_SCHEMA_VERSION,
+  APP_EVENT_V1_METADATA_KEY,
+  APP_EVENT_V1_MAX_TARGETS,
+  APP_EVENT_V1_MAX_SUMMARY_LENGTH,
+  APP_EVENT_V1_MAX_REFS,
+  APP_EVENT_V1_MAX_DATA_BYTES
 };

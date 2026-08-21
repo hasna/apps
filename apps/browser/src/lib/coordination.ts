@@ -47,9 +47,15 @@ export async function announceNavigation(
 
   // Try conversations SDK
   const sdk = await getConversationsSDK();
-  if (sdk?.sendMessage) {
+  if (sdk?.getStore) {
     try {
-      await (sdk.sendMessage as any)(SPACE_NAME, `🌐 Navigating to ${hostname} (session: ${sessionId.slice(0, 8)})`);
+      const store = sdk.getStore();
+      await store.sendMessage({
+        from: agentName,
+        to: agentName,
+        channel: SPACE_NAME,
+        content: `🌐 Navigating to ${hostname} (session: ${sessionId.slice(0, 8)})`,
+      });
     } catch {}
   }
 
@@ -77,17 +83,18 @@ export async function checkDuplicate(url: string): Promise<DuplicateCheck> {
 
   // Try conversations SDK to check recent messages
   const sdk = await getConversationsSDK();
-  if (sdk?.readMessages) {
+  if (sdk?.getStore) {
     try {
-      const messages = await (sdk.readMessages as any)(SPACE_NAME, { limit: 20 });
-      const recent = ((messages as any)?.messages ?? messages ?? []).filter((m: any) =>
+      const store = sdk.getStore();
+      const messages = await store.readMessages({ channel: SPACE_NAME, limit: 20 });
+      const recent = (messages ?? []).filter((m: any) =>
         m.content?.includes(hostname) &&
         new Date(m.created_at).getTime() > cutoff
       );
       if (recent.length > 0) {
         return {
           is_duplicate: true,
-          by_agent: recent[0].sender_name ?? "unknown",
+          by_agent: recent[0].from_agent ?? "unknown",
           started_at: recent[0].created_at,
         };
       }

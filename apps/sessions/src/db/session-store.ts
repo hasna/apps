@@ -795,7 +795,7 @@ export function resolveSessionStore(
   overrides?: Parameters<typeof resolveStorageClient>[2],
 ): SessionStore {
   const resolved = resolveStorageClient(APP, sessionsCloudEnv(env), overrides);
-  if (resolved.transport === "cloud-http") return cloudStore(resolved.client);
+  if (resolved.transport === "http") return cloudStore(resolved.client);
   return localStore();
 }
 

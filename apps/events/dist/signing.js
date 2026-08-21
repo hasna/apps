@@ -33,10 +33,10 @@ function verifyWebhookSignature(secret, timestamp, body, signature, options = {}
   return verifyPayloadSignature(secret, timestamp, body, signature);
 }
 export {
-  DEFAULT_SIGNATURE_TOLERANCE_MS,
-  buildSignatureBase,
-  isTimestampWithinTolerance,
-  signPayload,
+  verifyWebhookSignature,
   verifyPayloadSignature,
-  verifyWebhookSignature
+  signPayload,
+  isTimestampWithinTolerance,
+  buildSignatureBase,
+  DEFAULT_SIGNATURE_TOLERANCE_MS
 };

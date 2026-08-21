@@ -13,8 +13,8 @@
 //     guard),
 //   - `dryRun` reports the plan without mutating anything.
 //
-// Migrations run against the PostgreSQL backend selected by the environment.
-// There is no sync of ledger rows between machines.
+// PURE REMOTE (Amendment A1): migrations run against the cloud Postgres. There
+// is no local schema and no sync of ledger rows between machines.
 
 import { createHash } from "node:crypto";
 import type { TypedQueryClient } from "./query.js";
