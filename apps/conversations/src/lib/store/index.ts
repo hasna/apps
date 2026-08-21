@@ -251,7 +251,7 @@ function resolveCloudClientUnguarded(env: Env): HasnaStorageClient | null {
  * consumer reaches it without ever touching {@link getStore}. Measured on
  * 92f632c3 inside a test process, with the guard on `getStore` alone:
  * `getStore()` refused, while `resolveConversationsCloud()` returned a client at
- * `https://conversations.hasna.xyz/v1` carrying create/update/delete. A guard on
+ * the hosted API base URL carrying create/update/delete. A guard on
  * one entry point of a module whose siblings are re-exported wholesale protects
  * the entry point, not the module — so the guard moved to the single place a
  * writable client is produced, and every caller inherits it.
@@ -803,8 +803,8 @@ export function getStore(env?: Env): ConversationsStore {
   // single place a writable client is produced, so it applies here by inheritance
   // rather than by a second copy. The fleet exports the API URL and key into
   // every interactive shell, so an ambient resolution inside a test runner
-  // reaches the LIVE deployment — measured in this repository at
-  // conversations.hasna.xyz with no isolation variable set. A caller that passes
+  // reaches the LIVE deployment — measured in this repository at the hosted
+  // conversations API with no isolation variable set. A caller that passes
   // an env has named its own target and is left alone; passing `process.env`
   // through unchanged keeps the bare call an ambient read.
   const client = resolveConversationsCloud(env ?? process.env);
