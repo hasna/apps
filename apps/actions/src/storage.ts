@@ -1,6 +1,7 @@
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { ActionAuditEvent, ActionManifest, ActionRun } from "./types.js";
@@ -376,29 +377,98 @@ export class SQLiteActionsStore implements ActionsStore {
 export const JSON_STORE_LOCK_DIRNAME = ".actions-write.lock";
 const JSON_STORE_LOCK_TIMEOUT_MS = 15_000;
 const JSON_STORE_LOCK_STALE_MS = 30_000;
+/** File inside the lock directory identifying the current holder. */
+export const JSON_STORE_LOCK_OWNER_FILE = "owner.json";
+
+/**
+ * Holder identity written into the lock directory. The token is unique per acquire;
+ * pid + host identify the process that created it. The write lock is only ever removed
+ * by the holder that created it, and a stale lock is only broken when its recorded
+ * process is no longer alive — so a suspended or slow writer keeps its lock and a
+ * successor can never overlap it (overlapping whole-file renames is the audit-record
+ * loss the lock exists to prevent).
+ */
+export interface JsonStoreLockOwner {
+  token: string;
+  pid: number;
+  host: string;
+  startedAt: string;
+}
+
+async function readLockOwner(lockPath: string): Promise<JsonStoreLockOwner | null> {
+  try {
+    const raw = await readFile(join(lockPath, JSON_STORE_LOCK_OWNER_FILE), "utf8");
+    const parsed = JSON.parse(raw) as JsonStoreLockOwner;
+    if (typeof parsed.token !== "string" || typeof parsed.pid !== "number") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but is owned by another user: alive.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Removes the lock directory only while it is still owned by `token`. A holder whose
+ * lock was broken and re-acquired by a successor must never delete the successor's
+ * lock — that would recreate concurrent writers.
+ */
+export async function releaseJsonStoreLockIfOwned(lockPath: string, token: string): Promise<void> {
+  const owner = await readLockOwner(lockPath);
+  if (owner === null || owner.token !== token) return;
+  await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+}
 
 /**
  * Serializes a read-modify-write cycle with an atomic `mkdir` lock. The JSON store
  * writes whole files, so two processes appending disjoint records without a lock
  * both read the old file and the later rename silently drops the earlier writer's
- * records. A stale lock (holder died mid-cycle) is broken on age rather than
- * blocking the next writer forever.
+ * records. A stale lock (holder died mid-cycle) is broken on age when the holder's
+ * process is no longer alive; a stale lock whose holder is still alive is never
+ * broken, and release only ever removes a lock this process still owns.
  */
 async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
   await mkdir(dataDir, { recursive: true });
   const lockPath = join(dataDir, JSON_STORE_LOCK_DIRNAME);
+  const token = randomUUID();
+  const owner: JsonStoreLockOwner = {
+    token,
+    pid: process.pid,
+    host: hostname(),
+    startedAt: new Date().toISOString(),
+  };
   const deadline = Date.now() + JSON_STORE_LOCK_TIMEOUT_MS;
   for (;;) {
     try {
       await mkdir(lockPath);
+      try {
+        await writeFile(join(lockPath, JSON_STORE_LOCK_OWNER_FILE), JSON.stringify(owner));
+      } catch (error) {
+        // The lock was acquired but its owner file could not be written: remove the
+        // fresh lock so it cannot wedge the store, then surface the failure.
+        await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
         const info = await stat(lockPath);
         if (Date.now() - info.mtimeMs > JSON_STORE_LOCK_STALE_MS) {
-          await rm(lockPath, { recursive: true, force: true });
-          continue;
+          const existing = await readLockOwner(lockPath);
+          if (existing === null || !isProcessAlive(existing.pid)) {
+            await rm(lockPath, { recursive: true, force: true });
+            continue;
+          }
         }
       } catch {
         // The holder released between stat and now; retry the acquire.
@@ -412,7 +482,7 @@ async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Prom
   try {
     return await fn();
   } finally {
-    await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    await releaseJsonStoreLockIfOwned(lockPath, token);
   }
 }
 
