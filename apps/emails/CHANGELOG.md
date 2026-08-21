@@ -1,3 +1,9 @@
+## 1.4.2
+
+### Patch Changes
+
+- Release-lane live-test fix: pin @hasna/domains to 0.0.39 (the published version). The wave bumped the dep to 0.0.40, which was never published, making 1.4.1 uninstallable. The four r53 functions emails imports are present in 0.0.39 (verified against the published tarball).
+
 # Changelog
 
 ## 1.4.1
