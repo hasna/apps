@@ -9,7 +9,7 @@
 FROM --platform=linux/arm64 oven/bun:1.2 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --ignore-scripts
 COPY . .
 RUN bun run build
 
