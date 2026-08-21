@@ -15,8 +15,8 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
   return null;
 }describe("hook-workspace-repos-guard", () => {
   describe("resolveAllowedOrgs", () => {
-    test("defaults to the four canonical GitHub orgs", () => {
-      expect([...resolveAllowedOrgs({})].sort()).toEqual(["hasna", "hasna-internal", "hasna-products", "hasnaxyz"]);
+    test("defaults to the three public canonical GitHub orgs", () => {
+      expect([...resolveAllowedOrgs({})].sort()).toEqual(["hasna", "hasna-products", "hasnaxyz"]);
     });
 
     test("parses comma-separated env override, trimming whitespace and empties", () => {
@@ -31,9 +31,9 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
       expect(isBlocked(result)).toBeNull();
     });
 
-    test("Edit inside hasna-internal org continues", () => {
-      const result = evaluate(preToolUse("Edit", { file_path: join(REPOS, "hasna-internal", "platform", "docs", "readme.md") }));
-      expect(result.output.continue).toBe(true);
+    test("Edit inside a non-default org is blocked", () => {
+      const result = evaluate(preToolUse("Edit", { file_path: join(REPOS, "notanorg", "platform", "docs", "readme.md") }));
+      expect(isBlocked(result)).not.toBeNull();
     });
 
     test("MultiEdit with relative file_path resolves against cwd and continues inside allowed org", () => {
@@ -65,7 +65,7 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
         `echo note > ${join(REPOS, "hasna", "apps", "scratch.md")}`,
         `touch ${join(REPOS, "hasna", "apps", "apps", "foo", "x.txt")}`,
         `git clone https://github.com/hasna/foo.git ${join(REPOS, "hasna", "foo")}`,
-        `mkdir -p ${join(REPOS, "hasna-internal", "platform", "apps")}`,
+        `mkdir -p ${join(REPOS, "hasnaxyz", "iapp-probe", "docs")}`,
       ];
       for (const command of commands) {
         const result = evaluate(preToolUse("Bash", { command }));
@@ -77,7 +77,7 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
       const commands = [
         `touch ~/workspace/repos/hasna/apps/foo.md`,
         `echo x > ~/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
-        `mkdir -p "${HOME}/workspace/repos/hasna-internal/platform/apps"`,
+        `mkdir -p "${HOME}/workspace/repos/hasnaxyz/iapp-probe/notes"`,
         `touch "$HOME"/workspace/repos/hasna/apps/x.txt`,
         `echo x > "\${HOME}"/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
       ];

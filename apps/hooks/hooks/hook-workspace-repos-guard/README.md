@@ -35,9 +35,10 @@ it sits under `repos/`; parenthesized command groups
 
 ## Configuration
 
-Allowed orgs default to `hasna,hasnaxyz,hasna-internal,hasna-products` and
-are overridable with the `WORKSPACE_REPOS_GUARD_ORGS` env var
-(comma-separated). The home directory is resolved with `os.homedir()` —
+Allowed orgs default to `hasna,hasnaxyz,hasna-products` and are overridable
+with the `WORKSPACE_REPOS_GUARD_ORGS` env var (comma-separated). Private
+workspace orgs must be added per-install via that var; they are never part
+of the public default. The home directory is resolved with `os.homedir()` —
 never hardcoded.
 
 ## Failure mode
