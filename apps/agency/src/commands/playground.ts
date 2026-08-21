@@ -62,7 +62,7 @@ function readJsonRpcMessage(proc: { stdout: ReadableStream<Uint8Array> }, timeou
   });
 }
 
-function sendJsonRpc(proc: { stdin: WritableStream }, msg: object): void {
+function sendJsonRpc(proc: { stdin: { write(data: string): void } }, msg: object): void {
   const data = JSON.stringify(msg) + "\n";
   proc.stdin.write(data);
 }

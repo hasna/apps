@@ -31,7 +31,7 @@ export function dbSize(dir: string): number {
     let total = 0;
     const entries = readdirSync(dir, { recursive: true });
     for (const entry of entries) {
-      const full = join(dir, entry);
+      const full = join(dir, String(entry));
       if (full.endsWith(".db") || full.endsWith(".sqlite") || full.endsWith(".sqlite3")) {
         try {
           total += statSync(full).size;
@@ -92,7 +92,7 @@ export function spawnWithTimeout(
     let stdout = "";
     let stderr = "";
     let killed = false;
-    const opts = { stdio: ["pipe", "pipe", "pipe"] as const };
+    const opts = { stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"] };
     const child = spawn(cmd, args, opts);
     const timer = setTimeout(() => {
       killed = true;
