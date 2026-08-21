@@ -584,7 +584,7 @@ describe("CLI runtime and misc commands", () => {
     // Real top-level subcommands that were historically omitted because the
     // completion generator used a hand-maintained list (see audit
     // completion-missing-subcmds). These must always tab-complete.
-    const previouslyMissingSubcmds = ["runs", "exports", "storage", "webhooks", "events"];
+    const previouslyMissingSubcmds = ["runs", "exports", "storage", "channels", "events"];
 
     test("bash completion includes all current top-level commands", async () => {
       const { stdout } = await runCli(["completion", "bash"]);
