@@ -140,19 +140,19 @@ const HOSTED_EXTRACT = {
 
 interface FakeServer {
   baseUrl: string;
-  hits: Array<{ method: string; path: string; body?: unknown }>;
+  hits: Array<{ method: string; path: string; search?: URLSearchParams; body?: unknown }>;
   close: () => Promise<void>;
 }
 
 async function startFakeServer(): Promise<FakeServer> {
-  const hits: Array<{ method: string; path: string; body?: unknown }> = [];
+  const hits: Array<{ method: string; path: string; search?: URLSearchParams; body?: unknown }> = [];
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname.replace(/^\/v1/, "") || "/";
       const method = req.method;
-      hits.push({ method, path, body: method === "POST" ? await req.json().catch(() => undefined) : undefined });
+      hits.push({ method, path, search: url.searchParams, body: method === "POST" ? await req.json().catch(() => undefined) : undefined });
       const m = path.match(/^\/files\/([^/]+)\/content$/);
       if (method === "GET" && m) {
         return new Response(HOSTED_CONTENT, { headers: { "Content-Type": "text/markdown" } });
@@ -265,6 +265,76 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
     }
   });
 
+  test("get_file_content asks the hosted server for only the bounded bytes", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "get_file_content",
+        arguments: { id: "f_hosted1", max_bytes: 8 },
+      });
+      expect(result.isError).not.toBe(true);
+      const hit = fake.hits.find((h) => h.method === "GET" && h.path === "/files/f_hosted1/content");
+      expect(hit).toBeDefined();
+      expect(hit!.search?.get("max_bytes")).toBe("8");
+    } finally {
+      await close();
+    }
+  });
+
+  test("get_file_content keeps the truncation marker when the server honors max_bytes", async () => {
+    // A server that honors max_bytes returns exactly `bound` bytes with a
+    // truncation header — the chunk loop cannot detect the oversized object
+    // on its own, so the marker must come from the server signal.
+    const hits: Array<{ method: string; path: string; search?: URLSearchParams }> = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        hits.push({ method: req.method, path: url.pathname.replace(/^\/v1/, ""), search: url.searchParams });
+        const m = url.pathname.replace(/^\/v1/, "").match(/^\/files\/([^/]+)\/content$/);
+        if (req.method === "GET" && m) {
+          const maxBytes = Number(url.searchParams.get("max_bytes"));
+          const bytes = HOSTED_CONTENT.slice(0, maxBytes);
+          return new Response(bytes, {
+            headers: {
+              "Content-Type": "text/markdown",
+              ...(maxBytes < HOSTED_CONTENT.length ? { "x-files-truncated": "1", "x-files-size": String(HOSTED_CONTENT.length) } : {}),
+            },
+          });
+        }
+        return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+      },
+    });
+    const old = new Map<string, string | undefined>();
+    for (const key of ENV_KEYS) old.set(key, process.env[key]);
+    process.env.HASNA_FILES_API_URL = `http://127.0.0.1:${server.port}/v1`;
+    process.env.HASNA_FILES_API_KEY = "k_test";
+    delete process.env.HASNA_FILES_STORAGE_MODE;
+    resetStoreCache();
+    try {
+      const { client, close } = await connectedClient();
+      try {
+        const result = await client.callTool({
+          name: "get_file_content",
+          arguments: { id: "f_hosted1", max_bytes: 8 },
+        });
+        expect(result.isError).not.toBe(true);
+        const text = callText(result);
+        expect(text.startsWith("hello ho")).toBe(true);
+        expect(text).toContain("[truncated");
+      } finally {
+        await close();
+      }
+    } finally {
+      server.stop(true);
+      for (const [key, value] of old) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      resetStoreCache();
+    }
+  });
+
   test("extract_file_text posts to the hosted extract-text route and returns the result", async () => {
     const { client, close } = await connectedClient();
     try {
@@ -319,6 +389,22 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
       expect(parsed.preview.split("\n").length).toBeLessThanOrEqual(2);
       expect(fake.hits.some((h) => h.method === "GET" && h.path === "/files/f_hosted1")).toBe(true);
       expect(fake.hits.some((h) => h.method === "GET" && h.path === "/files/f_hosted1/content")).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  test("describe_file bounds its preview read on the hosted server", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "describe_file",
+        arguments: { id: "f_hosted1", lines: 2 },
+      });
+      expect(result.isError).not.toBe(true);
+      const hit = fake.hits.find((h) => h.method === "GET" && h.path === "/files/f_hosted1/content");
+      expect(hit).toBeDefined();
+      expect(hit!.search?.get("max_bytes")).toBe("262144");
     } finally {
       await close();
     }

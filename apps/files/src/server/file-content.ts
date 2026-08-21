@@ -27,6 +27,21 @@ export interface RemoteObjectReadOptions {
   max_bytes?: number;
 }
 
+/** Server-side cap for the hosted content route's max_bytes query parameter.
+ *  A client may request fewer bytes than this, never more: the cap keeps a
+ *  reachable large object from exhausting server network/process resources. */
+export const MAX_CONTENT_READ_BYTES = 10 * 1024 * 1024;
+
+/** Normalize the content route's max_bytes query value. Absent or malformed
+ *  values mean "no bound" (backwards-compatible full read); numeric values are
+ *  floored and clamped to the server cap. */
+export function normalizeContentReadLimit(raw: string | null): number | undefined {
+  if (raw === null || raw === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return Math.min(Math.floor(value), MAX_CONTENT_READ_BYTES);
+}
+
 export type RemoteObjectReader = (
   locator: RemoteFileLocator,
   options?: RemoteObjectReadOptions,

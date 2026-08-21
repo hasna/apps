@@ -183,7 +183,7 @@ describe("ApiStore listFiles logical limits", () => {
       const stderr = readFileSync(stderrPath, "utf8");
 
       expect(exitCode).toBe(0);
-      expect(stderr).toBe("");
+      expect(stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
       let files: FileWithTags[];
       try {
         files = JSON.parse(stdout) as FileWithTags[];

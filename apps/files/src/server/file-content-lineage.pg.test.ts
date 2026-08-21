@@ -259,7 +259,11 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       const store = wrapExecutor(client);
       const handler = createV1Handler({
         getClient: () => store,
-        verifier: verifyApiKey({ app: "files", signingSecret: TEST_SIGNING_MATERIAL }),
+        verifier: verifyApiKey({
+          app: "files",
+          signingSecret: TEST_SIGNING_MATERIAL,
+          keyStatus: async () => "active",
+        }),
         readObject: async (locator) => {
           reads++;
           expect(locator.bucket).toBe("private-files-bucket");
@@ -360,7 +364,11 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       let reads = 0;
       const wrongTenantHandler = createV1Handler({
         getClient: () => store,
-        verifier: verifyApiKey({ app: "files", signingSecret: TEST_SIGNING_MATERIAL }),
+        verifier: verifyApiKey({
+          app: "files",
+          signingSecret: TEST_SIGNING_MATERIAL,
+          keyStatus: async () => "active",
+        }),
         readObject: async () => {
           reads++;
           return new Response(PRIVATE_BYTES);
@@ -378,7 +386,11 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       const before = (await client.query(`SELECT COUNT(*)::int AS count FROM s3_objects`)).rows[0];
       const missingObjectHandler = createV1Handler({
         getClient: () => store,
-        verifier: verifyApiKey({ app: "files", signingSecret: TEST_SIGNING_MATERIAL }),
+        verifier: verifyApiKey({
+          app: "files",
+          signingSecret: TEST_SIGNING_MATERIAL,
+          keyStatus: async () => "active",
+        }),
         readObject: async () => null,
       });
       const missingRequest = new Request("https://files.example.test/v1/files/f_legacy/content", {
@@ -417,7 +429,11 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       let reads = 0;
       const handler = createV1Handler({
         getClient: () => store,
-        verifier: verifyApiKey({ app: "files", signingSecret: TEST_SIGNING_MATERIAL }),
+        verifier: verifyApiKey({
+          app: "files",
+          signingSecret: TEST_SIGNING_MATERIAL,
+          keyStatus: async () => "active",
+        }),
         readObject: async () => {
           reads++;
           return new Response(PRIVATE_BYTES);
@@ -457,7 +473,11 @@ describe.skipIf(!DATABASE_URL)("PostgreSQL legacy file-content lineage", () => {
       let reads = 0;
       const handler = createV1Handler({
         getClient: () => store,
-        verifier: verifyApiKey({ app: "files", signingSecret: TEST_SIGNING_MATERIAL }),
+        verifier: verifyApiKey({
+          app: "files",
+          signingSecret: TEST_SIGNING_MATERIAL,
+          keyStatus: async () => "active",
+        }),
         readObject: async () => {
           reads++;
           return new Response(PRIVATE_BYTES);

@@ -69,9 +69,17 @@ function fakeClient(options: FakeClientOptions = {}): TypedQueryClient {
 
 function handler(reader: RemoteObjectReader, options: FakeClientOptions = {}) {
   const client = fakeClient(options);
+  const keyTenants = options.keyTenants ?? {
+    "kid-a": TENANT_A,
+    "kid-b": TENANT_B,
+  };
   return createV1Handler({
     getClient: () => client,
-    verifier: verifyApiKey({ app: "files", signingSecret: SIGNING_SECRET }),
+    verifier: verifyApiKey({
+      app: "files",
+      signingSecret: SIGNING_SECRET,
+      keyStatus: async (kid) => (keyTenants[kid] !== undefined ? "active" : "unknown"),
+    }),
     readObject: reader,
   });
 }
@@ -98,6 +106,47 @@ describe("authenticated hosted file content", () => {
     expect(response?.headers.get("cache-control")).toBe("private, no-store");
     expect(response?.headers.get("content-disposition")).toBeNull();
     expect(reads).toBe(1);
+  });
+
+  test("content route passes a bounded max_bytes to the object reader and serves only the bound", async () => {
+    const seen: Array<{ max_bytes?: number }> = [];
+    const h = handler(async (_locator, options) => {
+      seen.push(options ?? {});
+      const bound = options?.max_bytes ?? PRIVATE_BYTES.byteLength;
+      return new Response(PRIVATE_BYTES.subarray(0, bound));
+    });
+    const req = request("/v1/files/f_remote/content?max_bytes=4", token("kid-a"));
+    const response = await h.handle(req, new URL(req.url));
+
+    expect(response?.status).toBe(200);
+    expect(Buffer.from(await response!.arrayBuffer())).toEqual(Buffer.from("PRIV"));
+    expect(seen[0]?.max_bytes).toBe(4);
+  });
+
+  test("content route clamps an absurd max_bytes to the server-side cap", async () => {
+    const seen: Array<{ max_bytes?: number }> = [];
+    const h = handler(async (_locator, options) => {
+      seen.push(options ?? {});
+      return new Response(PRIVATE_BYTES);
+    });
+    const req = request("/v1/files/f_remote/content?max_bytes=999999999999", token("kid-a"));
+    const response = await h.handle(req, new URL(req.url));
+
+    expect(response?.status).toBe(200);
+    expect(seen[0]?.max_bytes).toBeLessThanOrEqual(10 * 1024 * 1024);
+  });
+
+  test("content route signals truncation when the bound is below the object size", async () => {
+    const h = handler(async (_locator, options) => {
+      const bound = options?.max_bytes ?? PRIVATE_BYTES.byteLength;
+      return new Response(PRIVATE_BYTES.subarray(0, bound));
+    });
+    const req = request("/v1/files/f_remote/content?max_bytes=4", token("kid-a"));
+    const response = await h.handle(req, new URL(req.url));
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("x-files-truncated")).toBe("1");
+    expect(response?.headers.get("x-files-size")).toBe(String(PRIVATE_BYTES.byteLength));
   });
 
   test("returns exact derived extraction to the authorized tenant", async () => {
@@ -210,14 +259,16 @@ describe("authenticated hosted file content", () => {
   });
 
   test("fails closed for every missing key/object tenant combination before object access", async () => {
-    const cases: FakeClientOptions[] = [
-      { keyTenants: {}, objectTenant: undefined },
-      { keyTenants: {}, objectTenant: TENANT_A },
-      { keyTenants: { "kid-a": TENANT_A }, objectTenant: undefined },
-      { keyTenants: { "kid-a": TENANT_B }, objectTenant: TENANT_A },
+    const cases: Array<[FakeClientOptions, number]> = [
+      // Unregistered key: contracts 0.13.1 denies with 401 (unknown keyStatus).
+      [{ keyTenants: {}, objectTenant: undefined }, 401],
+      [{ keyTenants: {}, objectTenant: TENANT_A }, 401],
+      // Registered key but missing or mismatched object tenant: 404, no object read.
+      [{ keyTenants: { "kid-a": TENANT_A }, objectTenant: undefined }, 404],
+      [{ keyTenants: { "kid-a": TENANT_B }, objectTenant: TENANT_A }, 404],
     ];
 
-    for (const options of cases) {
+    for (const [options, expectedStatus] of cases) {
       let reads = 0;
       const h = handler(async () => {
         reads++;
@@ -226,7 +277,7 @@ describe("authenticated hosted file content", () => {
       const req = request("/v1/files/f_remote/content", token("kid-a"));
       const response = await h.handle(req, new URL(req.url));
 
-      expect(response?.status).toBe(404);
+      expect(response?.status).toBe(expectedStatus);
       expect(await response!.text()).not.toContain(PRIVATE_BYTES.toString("utf8").trim());
       expect(reads).toBe(0);
     }
