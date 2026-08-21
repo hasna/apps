@@ -33,8 +33,9 @@
  * ```
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 /**
  * Every environment variable that can point this client at a store shared with other
@@ -89,6 +90,95 @@ export type SharedTodosStoreEnvKey = (typeof SHARED_TODOS_STORE_ENV_KEYS)[number
 export type TodosTestEnv = Record<string, string | undefined>;
 
 /**
+ * Canonicalise a path for comparison: absolute, dot-segments collapsed, and
+ * symlinks resolved where the path exists. `realpathSync` throws for a path that
+ * does not exist yet — a legitimate case for a fixture home — so the lexical
+ * form is the fallback rather than an error.
+ */
+function canonicalisePath(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
+/**
+ * Every canonical spelling of THIS machine's real home directory. Both sources
+ * are consulted because they can disagree: `homedir()` falls back to the passwd
+ * entry when `HOME` is unset, and a caller may have cleared `HOME` before
+ * reaching here.
+ */
+function machineHomeCandidates(): string[] {
+  const candidates: string[] = [];
+  const fromEnv = process.env.HOME;
+  if (fromEnv && fromEnv.trim() !== "") candidates.push(fromEnv);
+  try {
+    const fromPasswd = homedir();
+    if (fromPasswd && fromPasswd.trim() !== "") candidates.push(fromPasswd);
+  } catch {
+    // homedir() throws when the passwd entry is unreadable; HOME alone is then
+    // the whole guard, which is still better than no guard.
+  }
+  return candidates.map(canonicalisePath);
+}
+
+/**
+ * Deliver an explicitly supplied API key through the modern DISK tier
+ * (`$HOME/.hasna/cloud/todos.env`) instead of the legacy env tier, and return
+ * the env unchanged. The contracts client demoted the env vars to a deprecated
+ * fallback and prints a DEPRECATED notice to stderr whenever the key arrives
+ * from there; a CLI subprocess test that asserts empty (or exact) stderr then
+ * fails even though authentication succeeded. Disk is re-read per call and is
+ * the path the deprecation notice itself recommends.
+ *
+ * ## This function writes a real file, so it guards itself
+ *
+ * It THROWS when `env.HOME` resolves to this machine's own home directory,
+ * because the write would replace the operator's configured todos credential
+ * with a fixture value. That is not hypothetical: on 2026-08-21 a fixture whose
+ * env inherited `process.env.HOME` destroyed `~/.hasna/cloud/todos.env` on
+ * station01 and cost a seat nine hours without a task system.
+ *
+ * The guard lives HERE, in the function, and not only in {@link localTodosTestEnv}.
+ * This symbol is exported, so `deliverTodosApiKeyViaDisk(localTodosTestEnv({ ... }))`
+ * is a call any consumer can write, and it hands this function an env whose HOME
+ * was copied from `process.env`. A check on one route into a dangerous function
+ * leaves the function dangerous.
+ *
+ * Comparison is by EXACT canonical equality with the machine home, never
+ * "somewhere underneath it": the artefact at risk is precisely
+ * `$HOME/.hasna/cloud/todos.env`, and an under-home rule would reject fixtures
+ * that legitimately create a scratch root inside the home tree.
+ *
+ * A missing HOME or a missing key stays a silent no-op — nothing is written, so
+ * nothing is at risk. Only the machine-home case is loud, because there the
+ * caller is about to lose data and needs to be told rather than left believing
+ * the credential was delivered.
+ */
+export function deliverTodosApiKeyViaDisk(env: TodosTestEnv): TodosTestEnv {
+  const home = env.HOME;
+  const apiKey = env.HASNA_TODOS_API_KEY;
+  if (!home || !apiKey) return env;
+
+  const target = canonicalisePath(home);
+  if (machineHomeCandidates().includes(target)) {
+    throw new Error(
+      `TODOS_FIXTURE_HOME_IS_MACHINE_HOME: refusing to write ${join(target, ".hasna", "cloud", "todos.env")} — ` +
+        "HOME resolves to this machine's real home directory, so this write would replace the machine's " +
+        "configured todos credential with a fixture value. Pass a throwaway home, e.g. " +
+        'HOME: mkdtempSync(join(tmpdir(), "todos-fixture-")).',
+    );
+  }
+
+  const dir = join(home, ".hasna", "cloud");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "todos.env"), `HASNA_TODOS_API_KEY=${apiKey}\n`);
+  return env;
+}
+
+/**
  * `process.env` with every shared-store pointer blanked and the retired
  * storage-mode variables deleted, so the transport resolves to a local SQLite
  * file. Overrides are applied last, so a test that deliberately exercises the
@@ -99,29 +189,6 @@ export type TodosTestEnv = Record<string, string | undefined>;
  * `*_STORAGE_MODE` variables are DELETED, not blanked, so a test never
  * inherits a stale fragment from the host environment.
  */
-/**
- * Deliver an explicitly supplied API key through the modern DISK tier
- * (`$HOME/.hasna/cloud/todos.env`) instead of the legacy env tier, and return
- * the env unchanged. The contracts client demoted the env vars to a deprecated
- * fallback and prints a DEPRECATED notice to stderr whenever the key arrives
- * from there; a CLI subprocess test that asserts empty (or exact) stderr then
- * fails even though authentication succeeded. Disk is re-read per call and is
- * the path the deprecation notice itself recommends. Safe by construction for
- * subprocess fixtures: it writes only when the env it is handed carries both a
- * HOME override and the key, and a raw `env: { ... }` literal never contains a
- * machine HOME it did not deliberately set.
- */
-export function deliverTodosApiKeyViaDisk(env: TodosTestEnv): TodosTestEnv {
-  const home = env.HOME;
-  const apiKey = env.HASNA_TODOS_API_KEY;
-  if (home && apiKey) {
-    const dir = join(home, ".hasna", "cloud");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "todos.env"), `HASNA_TODOS_API_KEY=${apiKey}\n`);
-  }
-  return env;
-}
-
 export function localTodosTestEnv(overrides: TodosTestEnv = {}): TodosTestEnv {
   const env: TodosTestEnv = { ...process.env };
   for (const key of SHARED_TODOS_STORE_ENV_KEYS) env[key] = "";
