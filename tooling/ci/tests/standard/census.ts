@@ -494,9 +494,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 /** kitVersion must match the member's pinned @hasna/contracts version
  * (normalized). Recorded mismatches: */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
-  { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
   { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
-  { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
