@@ -132,7 +132,7 @@
     "zod": "4.4.3"
   },
   "optionalDependencies": {
-    "@hasna/machines": "0.2.29"
+    "@hasna/machines": "0.2.34"
   },
   "overrides": {
     "fast-uri": "3.1.5",
