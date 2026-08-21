@@ -768,7 +768,10 @@ export function startServer(port = 3456, options: StartServerOptions = {}): Retu
       handlerOptions.authenticator = verifyApiKey({
         app: APP,
         signingSecret,
-        isRevoked: keys.statusChecker(), // strict: unknown OR revoked kids denied
+        // Strict: anything other than "active" (unknown, revoked, expired)
+        // denies. The contract refuses the deprecated `isRevoked`-only wiring
+        // eagerly at construction — use the recommended `keyStatus` hook.
+        keyStatus: keys.keyStatus,
         audit: (event) => log(JSON.stringify({ evt: 'api_auth', outcome: event.outcome, kid: event.kid, reason: event.reason, path: event.path, status: event.status })),
       }) as unknown as ApiAuthenticator
     } else if (!isLocalHost(hostname)) {
