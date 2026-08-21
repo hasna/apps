@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.12
+
+### Patch Changes
+
+- Remove the private workspace org from hook-workspace-repos-guard's default allowed-orgs list. The public tarball must not ship the private org marker (the repo publish guard defines it as a forbidden internal-infra string; it scans packed member names, so it cannot see it in file contents — this release sanitizes the shipped content). Private workspace orgs are restored per-install with the WORKSPACE_REPOS_GUARD_ORGS env var (comma-separated). Installs relying on the default become fail-closed for writes into repos of non-default orgs.
+
 ## 0.6.11
 
 ### Patch Changes
