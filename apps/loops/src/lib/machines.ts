@@ -97,7 +97,14 @@ export function listOpenMachines(): OpenMachineSummary[] {
 
 export function resolveLoopMachine(machineId: string): LoopMachineRef {
   const consumer = machinesConsumer();
-  const topology = consumer.discoverMachineTopology();
+  // Route resolution must see the FULL topology: the consumer's own
+  // resolveMachineRoute default builds an unpaginated topology
+  // (limit: null, offset: 0), and passing it a paginated one silently drops
+  // manifest-declared machines beyond the default page (10) — on a host with
+  // 10+ tailscale peers a pinned machine sorts last (updated_at null) and
+  // resolves as "route not found". Measured on station01 with machines
+  // 0.2.34: create with a machine pin failed exactly this way.
+  const topology = consumer.discoverMachineTopology({ limit: null, offset: 0 });
   const route = consumer.resolveMachineRoute(machineId, { topology });
   return machineFromRoute(route, topology);
 }
