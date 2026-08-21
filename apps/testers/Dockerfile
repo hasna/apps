@@ -35,8 +35,13 @@ RUN bun run build:cli \
 # ---- runtime ----------------------------------------------------------------
 FROM oven/bun:1-slim AS runtime
 WORKDIR /app
+# Amazon RDS global CA bundle so verify-full-capable TLS to the shared RDS
+# succeeds (pg-connection-string escalates sslmode=require to verify-full).
+COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
-    PORT=8080
+    PORT=8080 \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
+    PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
