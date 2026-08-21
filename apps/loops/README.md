@@ -1177,6 +1177,77 @@ An unrecognised value is rejected (`invalid_claim_scope`, HTTP 422) rather than
 falling back to the permissive default: a typo that answered 200 and drained the
 fleet anyway is the failure this option exists to prevent.
 
+## Runner Failure Episodes
+
+A runner whose every claim/poll fails knows the control plane is broken long
+before anyone else does — and historically all it could do was write one opaque
+journal line per poll, losing even the in-memory streak whenever a oneshot
+timer exited. Failure episodes fix that: the streak is persisted, one episode
+opens per outage, and exactly one structured event is emitted when it opens and
+one when the plane recovers.
+
+- **State** lives in `<dataDir>/runner-episodes.json` (`LOOPS_DATA_DIR`, else
+  `~/.hasna/loops`), written atomically (tmp + rename), and survives process
+  exits — a oneshot timer that restarts every poll continues the same streak.
+- **Open**: after 3 consecutive claim/poll failures whose streak spans at least
+  120s. Further failures update the counts silently — no repeated events, no
+  duplicates, ever.
+- **Close**: after 2 consecutive successful polls, with one recovery event. A
+  recovery is never emitted before its still-undelivered open event.
+- **Exactly-once events**: the episode id is deterministic (derived from the
+  streak's persisted `firstFailureAt` and the runner id), outbox appends are
+  idempotent per `(event, episodeId)`, and each state update runs under a
+  short-lived lock file. Delivery is **state-first**: the pending episode (and
+  pending recovery) is persisted BEFORE the outbox append, so the outbox can
+  never hold an event the state file does not know about — every crash window
+  converges to one open + one recovery event, with the pending delivery
+  retried on the next poll. Delivery confirmation lives in the state file:
+  each append attempt records the outbox offset where it began
+  (`pendingAppend`), and a retry scans exactly the bytes appended since that
+  offset — the only region that can hold the attempted line — so dedup is
+  exact (no duplicates however large the outbox grows) and never reads the
+  outbox history. The notifier fires only when the event is freshly appended.
+  Locks carry the acquirer's token and are released only by their owner (a
+  displaced holder can never delete the successor's lock), stale-lock takeover
+  uses an atomic rename (exactly one contender wins), and lock contention is a
+  short bounded retry (µs-scale critical sections) followed by skipping that
+  update — except successes, which are persisted and drained under the lock so
+  no recovery transition is ever dropped. Episode tracking never meaningfully
+  delays a poll.
+- **Failure classes** are `connectivity | http_5xx | auth | contract | refusal`,
+  derived only from safe signals (this package's own error types and the numeric
+  HTTP status). Episode state and events never contain error text, request
+  bodies, URLs, or credentials — foreign errors stay opaque here exactly as
+  they do in the journal logger, and the runner id is validated against a
+  conservative identifier shape before it reaches any durable surface
+  (anything else is recorded as `unknown` in full, never partially masked).
+
+### Escalation binding contract (delivery is not a package dependency)
+
+The package owns **detection** plus a generic, best-effort delivery hook. It
+deliberately has no hardcoded destination — no channel, no incident tool, no
+network call of its own. A deployment binds delivery through:
+
+1. **Outbox file** (durable, always on): every event is appended as one JSON
+   line to `<dataDir>/runner-events.outbox.jsonl`. An external relay consumes
+   it; if the file is unwritable the episode state stays `open_pending` and
+   delivery is retried on the next poll.
+2. **Notifier command** (optional): when `LOOPS_RUNNER_NOTIFIER_CMD` is set, the
+   runner spawns it detached (`sh -c <command>`) with one event JSON object on
+   **stdin** and ignores everything about the result — exit code, stderr, even
+   whether it exists. A notifier that fails, hangs (killed after 30s), or is
+   unconfigured never blocks, slows, or fails a poll.
+
+Event shapes (one JSON object per line):
+
+```json
+{"evt":"loops_runner_control_plane_unreachable","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","lastFailureAt":"…","openedAt":"…","consecutiveCount":3,"failureClass":"connectivity","lastSuccessAt":null}
+{"evt":"loops_runner_control_plane_recovered","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","openedAt":"…","recoveredAt":"…","consecutiveCount":822,"failureClass":"connectivity","outageMs":58080000}
+```
+
+The same lines go to the runner's stderr journal, so `journalctl` shows the
+episode within one streak window.
+
 ## Agent Adapter Notes
 
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
