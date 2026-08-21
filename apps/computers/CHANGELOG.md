@@ -1,5 +1,11 @@
 # @hasna/computers
 
+## 0.1.2
+
+### Patch Changes
+
+- Fix the release-time audit gate (todos be6817f3) regression found by the publish-all live test: `VERSION` is derived from `package.json` at build time instead of a hardcoded constant, so `computers --version`, the help header, and the server `/version` endpoint always report the packaged version. Adds a regression test asserting the CLI version surface matches the package version.
+
 ## 0.1.1
 
 ### Patch Changes

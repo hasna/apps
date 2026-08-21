@@ -19,6 +19,13 @@ async function runCli(args: string[]): Promise<{ code: number; stdout: string; s
 }
 
 describe("release verification contract", () => {
+  test("CLI version surface matches the packaged version (never drifts from package.json)", async () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+    const { code, stdout } = await runCli(["--version"]);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe(packageJson.version);
+  });
+
   test("owns an offline clean-install packed artifact gate without prepack recursion", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
     expect(packageJson.scripts["verify:pack"]).toBe("bun run scripts/verify-pack.ts");
