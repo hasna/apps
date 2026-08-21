@@ -18,6 +18,14 @@
  * (the owning lane lands its fix, or a quarantined package ages out of the
  * 7-day window), the gate exits 1 and demands the entry be removed. Any
  * failure outside the allowlist fails the gate.
+ *
+ * The gate FAILS CLOSED on abnormal termination: a non-zero suite exit is
+ * acceptable only when it is fully explained by allowlisted failures — the
+ * runner completed (its summary line is present), every parsed failure is
+ * allowlisted, at least one allowlisted failure fired, and the runner's
+ * reported failure count equals the parsed count. A crash, signal kill,
+ * timeout, or runner error that produces a non-zero exit without a complete
+ * summary fails the gate (remediation cycle 2 of PR hasna/apps#826).
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -126,7 +134,33 @@ if (unexpected.length > 0) {
   process.exit(1);
 }
 
-// 6. Self-invalidation: an allowlisted failure that no longer fails must be removed.
+// 6. Fail closed on abnormal termination. A non-zero suite exit is only
+// acceptable when it is fully explained by the allowlisted failures: the
+// runner completed (summary line present), every parsed failure is
+// allowlisted, at least one allowlisted failure fired, and the runner's
+// reported failure count equals the parsed count (no unparsed failures).
+// A crash, signal kill, timeout, or runner error produces a non-zero exit
+// without a complete summary and must fail the gate.
+if (suiteStatus !== 0) {
+  const summaryMatch = /Ran (\d+) tests across (\d+) files/.exec(output);
+  const failCountMatch = /(\d+) fail/.exec(output);
+  const reportedFails = failCountMatch ? Number(failCountMatch[1]) : null;
+  const anyAllowlistedFired = failPairs.length > 0;
+  const complete = summaryMatch !== null && reportedFails !== null && reportedFails === failPairs.length;
+  if (!anyAllowlistedFired || !complete) {
+    console.error(
+      "release-suite-gate: FAIL - suite exited " + suiteStatus +
+        " with " + failPairs.length + " parsed failure(s) but the run is incomplete or unexplained:" +
+        "\n  summary line present: " + (summaryMatch !== null) +
+        "\n  reported failure count: " + String(reportedFails) +
+        "\n  parsed failure count: " + failPairs.length,
+    );
+    console.error("Full suite log: " + logPath);
+    process.exit(1);
+  }
+}
+
+// 7. Self-invalidation: an allowlisted failure that no longer fails must be removed.
 const stale = GATED_KEYS.filter((key) => (failuresByKey.get(key.file + SEP + key.test) ?? 0) === 0);
 if (stale.length > 0) {
   console.error(
