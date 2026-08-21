@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- **Corrected release metadata.** This release is the first publish of the 0.3.13–0.3.15 wave. The dependency pins shipped here point at published versions: `@hasna/contracts` 0.13.3 with manifest `kitVersion` 0.13.3, and `@hasna/projects` 0.1.134 (the wave's original 0.1.137 pin was unpublished at release time and is not shipped). Internal-infra literals (`economy.hasna.xyz`) were removed from shipped content (OpenAPI servers list, `economy init` help, storage-seam comment).
+- **Corrected release metadata.** This release is the first publish of the 0.3.13–0.3.15 wave. The dependency pins shipped here point at published versions: `@hasna/contracts` 0.13.3 with manifest `kitVersion` 0.13.3, and `@hasna/projects` 0.1.134 (the wave's original 0.1.137 pin was unpublished at release time and is not shipped). Internal-infra host literals were removed from shipped content (OpenAPI servers list, `economy init` help, storage-seam comment).
 - c5232cc: fix: prepack typecheck resolves the optional @hasna/projects SDK as a runtime-only module (non-literal dynamic import), so the build no longer fails TS2307 against the unbuilt workspace member in a fresh checkout. Todos 029ceb00.
   - @hasna/projects@0.1.134
 
