@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5
+
+### Patch Changes
+
+- Fix the 0.3.4 serve boot-crash (todos row 0650cc5e): wire `keyStatus: keyStore.keyStatus` instead of the deprecated `isRevoked`-only hook, which @hasna/contracts >= 0.8.7 refuses at verifier construction — the eager construction inside startCloudServer made the throw a container boot failure (ECS taskdef :17, auto-rolled back). Same migration shape as hasna/apps#769 (todos' cloud.ts). Regression tests: `src/server/auth-wiring.test.ts` (real verifier + real ApiKeyStore over an in-memory client: valid registered key allows; unknown/revoked/expired keys refuse with 401 unknown_key/revoked/expired) and the corrected serve harness in `tests/serve.test.ts`.
+
 ## 0.3.4
 
 ### Patch Changes
