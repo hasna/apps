@@ -25,7 +25,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external hono && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun build src/cli/index.tsx --outdir dist/cli --external pg --external zod --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono && bun build src/mcp/index.ts --outdir dist/mcp --external pg --external zod --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --external pg --external zod --target bun --external hono && bun build src/index.ts --outdir dist --external pg --external zod --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 120000",
     "conformance": "contracts vendor-kit --check && bun run scripts/conformance.ts",
