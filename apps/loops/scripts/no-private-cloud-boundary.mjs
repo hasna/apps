@@ -61,6 +61,11 @@ const secretPatterns = [
   { id: "authorization-bearer", pattern: /authorization:\s*bearer\s+[A-Za-z0-9._~+/=-]{16,}/i },
   { id: "google-api-key", pattern: new RegExp(["AI", "za[A-Za-z0-9_-]{16,}"].join("")) },
   { id: "aws-access-key", pattern: new RegExp(["AK", "IA[A-Z0-9]{16}"].join("")) },
+  // Internal-infra content-level patterns, mirroring the monorepo publish guard
+  // (tooling/ci/check-publish-guard.ts): AWS ARNs and 12-digit AWS account ids
+  // must never reach a packed artifact.
+  { id: "aws-arn", pattern: /arn[:]aws[:]/ },
+  { id: "aws-account-id", pattern: /\b[0-9]{12}\b/ },
   { id: "xai" + "-key", pattern: new RegExp(["x", "ai-[A-Za-z0-9_-]{16,}"].join("")) },
   { id: "secret-token-field", pattern: new RegExp(["secret", "-token:\\s*[A-Za-z0-9._~+/=-]{16,}"].join(""), "i") },
   { id: "generic-credential-assignment", pattern: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*["'][A-Za-z0-9._~+/=-]{16,}["']/i },

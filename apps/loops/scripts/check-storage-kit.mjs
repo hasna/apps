@@ -48,6 +48,7 @@ const backendSource = readFileSync(join(kitDir, "backend.ts"), "utf8");
 const backendCode = codeOnly(backendSource);
 
 const forbidden = [
+  "STORAGE_MODE",
   "STORAGE_MODES",
   "storageEnvKeys",
   "modeKeys",
@@ -68,38 +69,22 @@ for (const token of forbidden) {
 if (!backendCode.includes('SERVER_DATA_BACKENDS = ["sqlite", "postgresql"]')) {
   fail("backend.ts does not declare the sqlite | postgresql backend enum");
 }
-if (!backendSource.includes("assertNoLegacyStorageMode")) {
-  fail("backend.ts does not reject legacy STORAGE_MODE env vars");
-}
-if (!backendSource.includes("was removed")) {
-  fail("backend.ts does not state the STORAGE_MODE removal guidance");
+if (!backendCode.includes("resolveServerDataBackend")) {
+  fail("backend.ts does not export the server data-backend resolver");
 }
 
-// STORAGE_MODE may exist in the kit ONLY inside backend.ts's legacyModeKeys
-// rejection list; anywhere else it is dead mode vocabulary.
-const backendLines = backendSource.split("\n");
-const blockStart = backendSource.indexOf("function legacyModeKeys(");
-if (blockStart === -1) {
-  fail("backend.ts does not define the legacyModeKeys rejection list");
+// Modes are fully removed (owner directive 2026-07-29). The kit carries NO
+// STORAGE_MODE vocabulary anywhere — not even a legacy rejection list, because
+// nothing is consulted: the environment contract (HASNA_<APP>_DATABASE_URL)
+// alone selects the backend. A kit that reintroduces the variable regresses.
+if (backendSource.includes("STORAGE_MODE")) {
+  fail("backend.ts reintroduces STORAGE_MODE vocabulary");
 }
-const blockEnd = backendSource.indexOf("\n}", blockStart);
-let offset = 0;
-const lineStarts = [];
-for (const line of backendLines) {
-  lineStarts.push(offset);
-  offset += line.length + 1;
-}
-for (let index = 0; index < backendLines.length; index += 1) {
-  if (!backendLines[index].includes("STORAGE_MODE")) continue;
-  const start = lineStarts[index];
-  if (start < blockStart || start > blockEnd) {
-    fail(`backend.ts:${index + 1} carries STORAGE_MODE outside the legacyModeKeys rejection list`);
-  }
-}
+
 for (const file of ["tls.ts", "query.ts", "pool.ts", "migrations.ts", "health.ts", "index.ts", "own.ts"]) {
   const source = readFileSync(join(kitDir, file), "utf8");
   if (source.includes("STORAGE_MODE")) {
-    fail(`${file} contains STORAGE_MODE (backend.ts rejection list only)`);
+    fail(`${file} reintroduces STORAGE_MODE vocabulary`);
   }
 }
 

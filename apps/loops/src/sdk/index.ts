@@ -293,12 +293,12 @@ export class LoopsClient {
     return buildHealthReport(this.localRuntime("health()"), opts);
   }
 
-  healthScan(opts: Omit<BuildHealthScanOptions, "doctor" | "daemon" | "selfHeals"> & { doctor?: boolean; daemon?: boolean } = {}): LoopsHealthScan {
+  healthScan(opts: Omit<BuildHealthScanOptions, "doctor" | "daemon" | "selfHeals"> & { doctor?: boolean; daemon?: boolean; daemonPidPath?: string } = {}): LoopsHealthScan {
     const store = this.localRuntime("healthScan()");
     return buildHealthScan(store, {
       ...opts,
       doctor: opts.doctor ? runDoctor(store) : undefined,
-      daemon: opts.daemon ? daemonStatus(store) : undefined,
+      daemon: opts.daemon ? daemonStatus(store, opts.daemonPidPath) : undefined,
     });
   }
 

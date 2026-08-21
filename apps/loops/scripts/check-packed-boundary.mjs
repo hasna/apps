@@ -96,6 +96,21 @@ try {
     packageRoot,
   ]);
   process.stdout.write(scan.stdout);
+
+  // Content-level credential scan over the extracted package. Fail closed on
+  // any finding (rc=1) and on a scan that could not run (rc=2).
+  const secretScan = spawnSync(
+    "secrets",
+    ["scan", "workspace", packageRoot, "--json"],
+    { encoding: "utf8" },
+  );
+  if (secretScan.status !== 0) {
+    throw new Error(
+      `packed content secrets scan failed (rc=${secretScan.status})\n` +
+        [secretScan.stdout, secretScan.stderr].filter(Boolean).join("\n"),
+    );
+  }
+  process.stdout.write("Loops packed artifact secrets scan passed\n");
   console.log("Loops packed artifact boundary and loops-api export smoke passed");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });

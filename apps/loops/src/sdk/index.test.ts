@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -158,10 +158,23 @@ describe("loops sdk", () => {
       expect(health.summary.loops).toBe(1);
       expect(health.expectations[0]?.loop.id).toBe(active.id);
       expect(client.health({ includeArchived: true }).summary.loops).toBe(2);
-      const scan = client.healthScan({ daemon: true });
-      expect(scan.counts.loops).toBe(1);
-      expect(scan.daemon?.running).toBe(false);
-      expect(scan.findings.map((finding) => finding.kind)).toContain("daemon");
+      // The daemon probe reads the machine pid file by default, so assert on
+      // an isolated stale pid record instead of the ambient machine daemon
+      // (a live fleet daemon makes the default-path assertion machine-dependent).
+      const daemonPidPath = join(tmpdir(), `loops-sdk-daemon-${process.pid}.pid`);
+      writeFileSync(
+        daemonPidPath,
+        JSON.stringify({ pid: 2_147_483_647, startedAt: Date.now() }),
+      );
+      try {
+        const scan = client.healthScan({ daemon: true, daemonPidPath });
+        expect(scan.counts.loops).toBe(1);
+        expect(scan.daemon?.running).toBe(false);
+        expect(scan.daemon?.stale).toBe(true);
+        expect(scan.findings.map((finding) => finding.kind)).toContain("daemon");
+      } finally {
+        rmSync(daemonPidPath, { force: true });
+      }
     } finally {
       client.close();
     }

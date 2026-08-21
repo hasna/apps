@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.8
+
+### Patch Changes
+
+- fix(release): regenerate the contracts storage kit to @hasna/contracts@0.13.1 (storage-kit manifest and hasna.contract.json kitVersion), and align the storage-kit check to the 0.13.1 contract — the kit carries NO STORAGE_MODE vocabulary (modes fully removed; the environment contract alone selects the backend), so the check now asserts that end-state instead of the transitional legacy-rejection list. The check also now asserts the server data-backend resolver surface.
+- fix(release): pin the optional @hasna/machines dependency to the published 0.2.29. The 0.5.5 changelog entry cited machines@0.2.30 and the wave pinned 0.2.32 — neither was published to npm, so clean consumers silently lost the machine-assign capability; 0.2.29 carries the consumed byte-compatible ./consumer surface and installs.
+- fix(release): harden the packed-artifact gate — the boundary scanner now blocks AWS ARNs and 12-digit AWS account ids in packed content (previously filename-only in the monorepo guard), and the packed-boundary check runs a content-level `secrets scan` over the extracted tarball, failing closed on findings or scan failure. Two-sided known-positive/known-negative fixtures guard the new patterns.
+- fix(sdk): `LoopsClient.healthScan` accepts an optional `daemonPidPath` so daemon state can be probed against an isolated pid file; the SDK health-scan test now asserts against a stale fixture record instead of the machine's ambient daemon (a live fleet daemon made the old assertion machine-dependent and broke the publish gate on daemon-bearing hosts).
 ## 0.5.7
 
 ### Patch Changes
