@@ -1,3 +1,9 @@
+## 1.4.3
+
+### Patch Changes
+
+- Release-lane live-test fix: rebuild dist for the 1.4.2 version line. The 1.4.2 tarball carried a stale mcp bundle baked with version 1.4.1 (the publish skipped the rebuild); emails-mcp --version reported 1.4.1. This version ships a freshly built dist so every bin reports the published version.
+
 ## 1.4.2
 
 ### Patch Changes
