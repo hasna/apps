@@ -77,7 +77,7 @@
     "@hasna/contracts": "0.13.3",
     "@hasna/events": "^0.1.16",
     "@hasna/mcp-harness": "^0.1.0",
-    "@hasna/projects": "0.1.137",
+    "@hasna/projects": "0.1.134",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

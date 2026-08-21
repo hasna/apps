@@ -2,9 +2,8 @@
 //
 // When the contracts client seam resolves to the `http` transport
 // (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY are set), the CLI must route
-// its reads and writes to the app's cloud API at `https://economy.hasna.xyz/v1`
-// with the bearer key — NOT to the local SQLite store, and NEVER to a raw
-// database DSN.
+// its reads and writes to the configured cloud API with the bearer key — NOT
+// to the local SQLite store, and NEVER to a raw database DSN.
 //
 // This module is the single seam the CLI consults. It returns a ready
 // `HasnaStorageClient` (from @hasna/contracts) when the http transport is active,

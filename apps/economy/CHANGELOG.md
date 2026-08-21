@@ -4,14 +4,15 @@
 
 ### Patch Changes
 
+- **Corrected release metadata.** This release is the first publish of the 0.3.13–0.3.15 wave. The dependency pins shipped here point at published versions: `@hasna/contracts` 0.13.3 with manifest `kitVersion` 0.13.3, and `@hasna/projects` 0.1.134 (the wave's original 0.1.137 pin was unpublished at release time and is not shipped). Internal-infra host literals were removed from shipped content (OpenAPI servers list, `economy init` help, storage-seam comment).
 - c5232cc: fix: prepack typecheck resolves the optional @hasna/projects SDK as a runtime-only module (non-literal dynamic import), so the build no longer fails TS2307 against the unbuilt workspace member in a fresh checkout. Todos 029ceb00.
-  - @hasna/projects@0.1.137
+  - @hasna/projects@0.1.134
 
 ## 0.3.14
 
 ### Patch Changes
 
-- d7d615b: Pin @hasna/contracts to the published 0.13.1 (was ^0.13.0; 0.13.0 is unpublished, which makes the standard-suite conformance validator cannot-run) and align hasna.contract.json kitVersion to the declared contracts kit 0.13.1. Todos d175d558.
+- d7d615b: Pin @hasna/contracts to the published 0.13.1 (was ^0.13.0; 0.13.0 is unpublished, which makes the standard-suite conformance validator cannot-run); the ship-latest wave then moved the pin to the published 0.13.3, and the manifest shipped here declares kitVersion 0.13.3 with the economy-otel bin. Todos d175d558.
   - @hasna/projects@0.1.136
   - @hasna/contracts@0.13.3
 
@@ -19,6 +20,7 @@
 
 ### Patch Changes
 
+- 94f40c27: economy serve boots despite auth-contract refusal — the serve process no longer aborts at startup when the contracts auth seam refuses (missing or rejected API key); it stays up and reports the refusal (I38-00556).
 - Updated dependencies [5e32853]
   - @hasna/contracts@0.13.2
   - @hasna/projects@0.1.135

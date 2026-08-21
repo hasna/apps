@@ -264,7 +264,7 @@ export function registerExtendedCommands(program: Command): void {
       console.log('  7. Linux status:    economy tui --watch  |  economy waybar')
       console.log()
       console.log('  Self-hosted/cloud mode (shared cloud API — reads/writes route to it):')
-      console.log('  a. API URL:         export HASNA_ECONOMY_API_URL=https://economy.hasna.xyz/v1')
+      console.log('  a. API URL:         export HASNA_ECONOMY_API_URL=https://your-economy-host.example.com/v1')
       console.log('  b. API key:         export HASNA_ECONOMY_API_KEY=<bearer key>   (never a DB DSN)')
       console.log()
     })

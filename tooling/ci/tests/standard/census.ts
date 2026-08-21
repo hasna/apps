@@ -405,7 +405,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "economy",
-    cause: "manifest_valid: manifest (imported by #147) declares bin economy-otel, which is not in ALLOWED_BIN_SUFFIXES; npm @hasna/economy 0.3.9 ships the bin (faithful import), so the exception is recorded until the allowlist or the bin is reconciled.",
+    cause: "bins_match_package: package.json ships bin economy-otel that the manifest cannot declare (economy-otel is not in ALLOWED_BIN_SUFFIXES; the kit allowlist lacks an -otel suffix). Validated at pinned 0.13.3 (kitVersion 0.13.3). Same recorded class as conversations/events/monitor/instructions.",
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
   },
   {
