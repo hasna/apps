@@ -1,6 +1,6 @@
 {
   "name": "@hasna/brains",
-  "version": "0.0.36",
+  "version": "0.0.37",
   "description": "Fine-tuned model tracker and trainer — wraps OpenAI + Tinker, gathers training data from todos/mementos/conversations/sessions",
   "type": "module",
   "main": "./dist/index.js",
