@@ -16,6 +16,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDatabase } from "../src/db/database.js";
+import { upgradeLegacyReconciliationConstraint } from "../src/db/schema.js";
 import { emitAccountingReconciliation } from "../src/services/reconciliation.js";
 import { TEST_ENTITY_A } from "./helpers.js";
 
@@ -149,5 +150,117 @@ describe("legacy 0.1.0 SQLite upgrade", () => {
       .query("SELECT COUNT(*) AS c FROM accounting_reconciliation_events WHERE source_id = 'evt_fresh_1'")
       .get() as { c: number };
     expect(rows.c).toBe(1);
+  });
+});
+
+// Release-review cycle-2 P1 regression (publish-all workflow, 2026-08-21):
+// the table rebuild was not transactional. A failure after creating the
+// replacement but before copying rows left the replacement empty and the
+// original rows in accounting_reconciliation_events_legacy; the guard then
+// saw the replacement's new constraint and skipped recovery — silently
+// removing existing reconciliation history from the active table.
+// This pins both halves: (1) the rebuild is atomic — any mid-rebuild failure
+// rolls back to the untouched legacy state; (2) a legacy table left in place
+// by an interrupted rebuild is recovered (rows copied back) on the next open.
+
+const ENTITY_SCOPED_TABLE_SQL = `CREATE TABLE accounting_reconciliation_events (
+  id TEXT PRIMARY KEY,
+  entity_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  accounting_entry_ref TEXT,
+  amount INTEGER,
+  currency TEXT,
+  state TEXT NOT NULL DEFAULT 'pending',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (entity_id, source, source_id, event_type)
+)`;
+
+describe("legacy upgrade atomicity (release-review cycle-2 P1)", () => {
+  it("recovers rows orphaned by an interrupted rebuild (legacy table present on open)", () => {
+    const path = join(dir, "interrupted.db");
+    const raw = new Database(path);
+    raw.run(LEGACY_TABLE_SQL);
+    raw.run(
+      `INSERT INTO accounting_reconciliation_events
+         (id, entity_id, source, source_id, event_type, state, payload_json)
+       VALUES ('interrupted-1', 'legacy-entity', 'stripe', 'evt_int_1', 'invoice.payment_succeeded', 'written', '{}')`,
+    );
+    // Simulate a crash after rename+create but before the copy: the active
+    // table carries the entity-scoped constraint (so the guard would skip),
+    // and the rows sit orphaned in the _legacy table.
+    raw.run("ALTER TABLE accounting_reconciliation_events RENAME TO accounting_reconciliation_events_legacy");
+    raw.run(ENTITY_SCOPED_TABLE_SQL);
+    raw.close();
+
+    const db = openLegacyDb(path);
+    const legacyTable = db
+      .query("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'accounting_reconciliation_events_legacy'")
+      .get();
+    expect(legacyTable).toBeNull();
+    const recovered = db
+      .query("SELECT entity_id, source, source_id, event_type, state FROM accounting_reconciliation_events WHERE id = 'interrupted-1'")
+      .get() as { entity_id: string; state: string } | null;
+    expect(recovered).not.toBeNull();
+    expect(recovered?.entity_id).toBe("legacy-entity");
+    expect(recovered?.state).toBe("written");
+  });
+
+  it("rolls back the rebuild when a mid-rebuild step fails (no orphaned legacy rows, retry succeeds)", () => {
+    const path = join(dir, "atomic.db");
+    writeLegacyDb(path);
+
+    // Failure injection: the copy step throws. Without a transaction the
+    // rename+create would already be committed and the rows orphaned.
+    const raw = new Database(path);
+    const origRun = raw.run.bind(raw);
+    let injected = false;
+    raw.run = ((sql: string, ...params: unknown[]) => {
+      if (!injected && /INTO\s+accounting_reconciliation_events\b/i.test(sql)) {
+        injected = true;
+        throw new Error("injected failure mid-rebuild");
+      }
+      return origRun(sql, ...params);
+    }) as typeof raw.run;
+
+    let threw = false;
+    try {
+      upgradeLegacyReconciliationConstraint(raw);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+
+    // The original legacy state must be intact: no replacement, no legacy
+    // table, the row still in the active table with the OLD constraint.
+    const activeSql = raw
+      .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounting_reconciliation_events'")
+      .get() as { sql: string } | null;
+    expect(activeSql?.sql).toContain("UNIQUE (source, source_id, event_type)");
+    expect(activeSql?.sql).not.toContain("UNIQUE (entity_id, source, source_id, event_type)");
+    const legacyTable = raw
+      .query("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'accounting_reconciliation_events_legacy'")
+      .get();
+    expect(legacyTable).toBeNull();
+    const row = raw
+      .query("SELECT COUNT(*) AS c FROM accounting_reconciliation_events WHERE id = 'legacy-1'")
+      .get() as { c: number };
+    expect(row.c).toBe(1);
+
+    // A retry with the failure removed completes the upgrade and preserves rows.
+    raw.run = origRun;
+    upgradeLegacyReconciliationConstraint(raw);
+    const upgradedSql = raw
+      .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounting_reconciliation_events'")
+      .get() as { sql: string } | null;
+    expect(upgradedSql?.sql).toContain("UNIQUE (entity_id, source, source_id, event_type)");
+    const finalRow = raw
+      .query("SELECT COUNT(*) AS c FROM accounting_reconciliation_events WHERE id = 'legacy-1'")
+      .get() as { c: number };
+    expect(finalRow.c).toBe(1);
+    raw.close();
   });
 });
