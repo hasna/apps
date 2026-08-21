@@ -1,10 +1,12 @@
 # Changelog
 
-## 0.6.12
+## 0.7.0
 
-### Patch Changes
+### Minor Changes
 
-- Remove the private workspace org from hook-workspace-repos-guard's default allowed-orgs list. The public tarball must not ship the private org marker (the repo publish guard defines it as a forbidden internal-infra string; it scans packed member names, so it cannot see it in file contents — this release sanitizes the shipped content). Private workspace orgs are restored per-install with the WORKSPACE_REPOS_GUARD_ORGS env var (comma-separated). Installs relying on the default become fail-closed for writes into repos of non-default orgs.
+- **Breaking default change:** remove the private workspace org from hook-workspace-repos-guard's default allowed-orgs list. The public tarball must not ship the private org marker (the repo publish guard defines it as a forbidden internal-infra string; it scans packed member names, so it cannot see it in file contents — this release sanitizes the shipped content). Private workspace orgs are restored per-install with the WORKSPACE_REPOS_GUARD_ORGS env var (comma-separated). Installs relying on the default become fail-closed for writes into repos of non-default orgs. This is a behavior-default change, so it ships on a new non-compatible line (0.7.0) rather than a patch; consumers on ^0.6.x ranges are not auto-upgraded.
+
+This release also carries the previously unshipped 0.6.9-0.6.11 version-wave content (dependency bumps).
 
 ## 0.6.11
 
