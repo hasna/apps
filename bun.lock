@@ -439,7 +439,6 @@
         "contracts-cli": "dist/cli/contracts-cli.js",
       },
       "dependencies": {
-        "@hasna/secrets": "0.3.3",
         "commander": "^13.1.0",
         "zod": "^3.25.76",
         "zod-to-json-schema": "^3.24.6",
@@ -450,6 +449,9 @@
         "@types/pg": "^8.11.10",
         "pg": "^8.13.1",
         "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "@hasna/secrets": "0.3.3",
       },
     },
     "apps/controls": {
