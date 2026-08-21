@@ -18,6 +18,21 @@ import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { loopControlPlaneConfig, type RuntimeConfig } from "../lib/runtime-config.js";
 import { applyRunnerEnvFile } from "./env-file.js";
+import { LoopsApiError, RunnerRefusalError, VersionProbeError } from "./errors.js";
+import { createRunnerEpisodeRecorder, type RunnerEpisodeRecorder } from "./episodes.js";
+export { LoopsApiError, RunnerRefusalError } from "./errors.js";
+export {
+  classifyRunnerFailure,
+  createRunnerEpisodeRecorder,
+  runnerEpisodesStatePath,
+  runnerEventsOutboxPath,
+  type RunnerEpisodeEvent,
+  type RunnerEpisodeRecorder,
+  type RunnerEpisodeRecorderOptions,
+  type RunnerEpisodeStreak,
+  type RunnerEpisodesFile,
+  type RunnerFailureClass,
+} from "./episodes.js";
 import {
   installRunnerStartup,
   runnerServiceExitCode,
@@ -174,6 +189,8 @@ export interface RunRunnerLoopOptions extends RunRunnerOnceOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   nowMs?: () => number;
   onError?: (error: unknown) => void;
+  /** Failure-episode tracker; the CLI wires the default persisted recorder. */
+  episodeRecorder?: RunnerEpisodeRecorder;
 }
 
 function resolveClaimScope(
@@ -220,28 +237,6 @@ function resolveRunnerConfig(opts: RunRunnerOnceOptions): {
  * reaches the control plane, so a non-enforcing server is the EXPECTED state on
  * day one, not an edge case. Fail closed: claim nothing.
  */
-/** A refusal this package raises itself: static, safe-by-construction message
- *  (no provider detail, no credentials). logRunnerCommandFailure surfaces the
- *  reason for these and keeps every other error opaque. Every construction
- *  site must pass a string this module wrote itself. */
-export class RunnerRefusalError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RunnerRefusalError";
-  }
-}
-
-/** Module-private: a /version probe failure THIS code classified itself.
- *  Only ever constructed with static text plus `response.status` (a number),
- *  so its message is safe to interpolate into a surfaced refusal. Foreign
- *  fetch/parse errors must NOT be converted to this type. */
-class VersionProbeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "VersionProbeError";
-  }
-}
-
 async function assertClaimScopeEnforceable(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
@@ -292,7 +287,14 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : `loops-api request failed: ${response.status}`);
+  // LoopsApiError carries the numeric status for failure classification; the
+  // message stays what it always was and is never read by episode tracking.
+  if (!response.ok) {
+    throw new LoopsApiError(
+      typeof payload.error === "string" ? payload.error : `loops-api request failed: ${response.status}`,
+      response.status,
+    );
+  }
   return payload;
 }
 
@@ -571,10 +573,15 @@ export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<Ru
       completed.push(...result.completed);
       if (!result.ok) ok = false;
       if (result.claimed > 0) lastClaimedAt = nowMs();
+      // A poll that returned at all proves the control plane was reachable —
+      // that is the success signal for failure episodes, independent of
+      // whether the claimed run itself later reports failure.
+      opts.episodeRecorder?.recordSuccess();
     } catch (error) {
       errors += 1;
       ok = false;
       opts.onError?.(error);
+      opts.episodeRecorder?.recordFailure(error);
     }
 
     if (idleExitAfterMs !== undefined && nowMs() - lastClaimedAt >= idleExitAfterMs) {
@@ -759,15 +766,25 @@ program
   )
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
-    const result = await runRunnerOnce({
-      apiUrl: opts.apiUrl,
-      runnerId: opts.runnerId,
-      machineId: opts.machineId,
-      claimScope: opts.claimScope,
-    });
-    if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
-    else console.log(`claimed=${result.claimed} completed=${result.completed.length}`);
-    if (!result.ok) process.exitCode = 1;
+    // Persisted failure episodes: a oneshot timer exits after every poll, so
+    // the streak must live on disk to survive it. Detection is always on;
+    // delivery binds through the outbox + optional notifier command.
+    const episodeRecorder = createRunnerEpisodeRecorder();
+    try {
+      const result = await runRunnerOnce({
+        apiUrl: opts.apiUrl,
+        runnerId: opts.runnerId,
+        machineId: opts.machineId,
+        claimScope: opts.claimScope,
+      });
+      episodeRecorder.recordSuccess();
+      if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
+      else console.log(`claimed=${result.claimed} completed=${result.completed.length}`);
+      if (!result.ok) process.exitCode = 1;
+    } catch (error) {
+      episodeRecorder.recordFailure(error);
+      throw error;
+    }
   });
 
 program
@@ -798,6 +815,9 @@ program
       // loop's error counter: ten minutes of failing polls previously left the
       // journal with nothing but the unit start line.
       onError: (error) => logRunnerCommandFailure(error),
+      // Persisted failure episodes: open ONE episode per outage, emit ONE
+      // structured event, close with ONE recovery event. Never blocks a poll.
+      episodeRecorder: createRunnerEpisodeRecorder(),
     });
     if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
     else {

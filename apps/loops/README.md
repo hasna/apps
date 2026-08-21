@@ -1177,6 +1177,54 @@ An unrecognised value is rejected (`invalid_claim_scope`, HTTP 422) rather than
 falling back to the permissive default: a typo that answered 200 and drained the
 fleet anyway is the failure this option exists to prevent.
 
+## Runner Failure Episodes
+
+A runner whose every claim/poll fails knows the control plane is broken long
+before anyone else does — and historically all it could do was write one opaque
+journal line per poll, losing even the in-memory streak whenever a oneshot
+timer exited. Failure episodes fix that: the streak is persisted, one episode
+opens per outage, and exactly one structured event is emitted when it opens and
+one when the plane recovers.
+
+- **State** lives in `<dataDir>/runner-episodes.json` (`LOOPS_DATA_DIR`, else
+  `~/.hasna/loops`), written atomically (tmp + rename), and survives process
+  exits — a oneshot timer that restarts every poll continues the same streak.
+- **Open**: after 3 consecutive claim/poll failures whose streak spans at least
+  120s. Further failures update the counts silently — no repeated events, no
+  duplicates, ever.
+- **Close**: after 2 consecutive successful polls, with one recovery event.
+- **Failure classes** are `connectivity | http_5xx | auth | contract | refusal`,
+  derived only from safe signals (this package's own error types and the numeric
+  HTTP status). Episode state and events never contain error text, request
+  bodies, URLs, or credentials — foreign errors stay opaque here exactly as
+  they do in the journal logger.
+
+### Escalation binding contract (delivery is not a package dependency)
+
+The package owns **detection** plus a generic, best-effort delivery hook. It
+deliberately has no hardcoded destination — no channel, no incident tool, no
+network call of its own. A deployment binds delivery through:
+
+1. **Outbox file** (durable, always on): every event is appended as one JSON
+   line to `<dataDir>/runner-events.outbox.jsonl`. An external relay consumes
+   it; if the file is unwritable the episode state stays `open_pending` and
+   delivery is retried on the next poll.
+2. **Notifier command** (optional): when `LOOPS_RUNNER_NOTIFIER_CMD` is set, the
+   runner spawns it detached (`sh -c <command>`) with one event JSON object on
+   **stdin** and ignores everything about the result — exit code, stderr, even
+   whether it exists. A notifier that fails, hangs, or is unconfigured never
+   blocks, slows, or fails a poll.
+
+Event shapes (one JSON object per line):
+
+```json
+{"evt":"loops_runner_control_plane_unreachable","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","lastFailureAt":"…","openedAt":"…","consecutiveCount":3,"failureClass":"connectivity","lastSuccessAt":null}
+{"evt":"loops_runner_control_plane_recovered","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","openedAt":"…","recoveredAt":"…","consecutiveCount":822,"failureClass":"connectivity","outageMs":58080000}
+```
+
+The same lines go to the runner's stderr journal, so `journalctl` shows the
+episode within one streak window.
+
 ## Agent Adapter Notes
 
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
