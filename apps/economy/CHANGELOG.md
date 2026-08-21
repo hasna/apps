@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.13
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
+  - @hasna/projects@0.1.135
+
 ## 0.3.12
 
 ### Patch Changes
@@ -48,14 +56,14 @@ metadata correction.
 
 **Breaking for server operators.** `HASNA_ECONOMY_STORAGE_MODE` (and the
 `ECONOMY_STORAGE_MODE` alias) are retired for server backend selection. They are
-now *rejected at startup with a migration hint* rather than normalized, so a
+now _rejected at startup with a migration hint_ rather than normalized, so a
 half-migrated deployment fails loudly instead of quietly serving the wrong store.
 The server data backend is `sqlite | postgresql`, selected by the presence of
 `HASNA_ECONOMY_DATABASE_URL` alone. If you set `HASNA_ECONOMY_STORAGE_MODE=cloud`
 to reach Postgres, unset it and rely on the database URL.
 
 - **#27** `fix(client)` — hard-fail a half-applied cloud flip instead of silently
-  serving local data. An `API_URL` set *without* an `API_KEY` previously resolved
+  serving local data. An `API_URL` set _without_ an `API_KEY` previously resolved
   to `local` with no warning, byte-identical to an unconfigured host: the CLI
   served the local SQLite store while the operator had pointed it at the cloud
   API — a different dataset rendered as plausible spend numbers. It now reports

@@ -29,7 +29,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@types/bun": "^1.2.4",
         "@types/node": "^26.1.2",
         "@types/pg": "^8.11.0",
@@ -216,7 +216,7 @@
     },
     "apps/browser": {
       "name": "@hasna/browser",
-      "version": "0.5.18",
+      "version": "0.5.19",
       "bin": {
         "browser": "dist/cli/index.js",
         "browser-mcp": "dist/mcp/index.js",
@@ -225,13 +225,13 @@
       "dependencies": {
         "@anthropic-ai/sdk": "0.104.1",
         "@hasna/connectors": "1.4.2",
-        "@hasna/conversations": "0.7.1",
+        "@hasna/conversations": "0.7.2",
         "@hasna/events": "0.1.3",
         "@hasna/mementos": "0.14.37",
         "@hasna/secrets": "0.3.3",
-        "@hasna/sessions": "0.12.15",
+        "@hasna/sessions": "0.12.16",
         "@hasna/skills": "0.1.41",
-        "@hasna/todos": "0.15.38",
+        "@hasna/todos": "0.15.39",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@onkernel/sdk": "0.67.0",
         "chalk": "^5.4.1",
@@ -257,14 +257,14 @@
     },
     "apps/calendar": {
       "name": "@hasna/calendar",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "bin": {
         "calendar": "dist/cli/index.js",
         "calendar-mcp": "dist/mcp/bin.js",
         "calendar-serve": "dist/server/bin.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.7",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -433,7 +433,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-      "version": "0.13.1",
+      "version": "0.13.2",
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",
@@ -473,7 +473,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.20.0",
         "@types/react": "^18.3.18",
@@ -483,7 +483,7 @@
     },
     "apps/conversations": {
       "name": "@hasna/conversations",
-      "version": "0.7.1",
+      "version": "0.7.2",
       "bin": {
         "conversations": "bin/index.js",
         "conversations-inbox": "bin/inbox",
@@ -492,7 +492,7 @@
         "conversations-hook": "bin/hook.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.16",
         "@modelcontextprotocol/sdk": "^1.26.0",
         "chalk": "^5.3.0",
@@ -618,7 +618,7 @@
     },
     "apps/domains": {
       "name": "@hasna/domains",
-      "version": "0.0.40",
+      "version": "0.0.41",
       "bin": {
         "domains": "dist/cli/index.js",
         "domains-mcp": "dist/mcp/index.js",
@@ -628,7 +628,7 @@
         "@aws-sdk/client-route-53": "^3.1067.0",
         "@aws-sdk/client-route-53-domains": "^3.1067.0",
         "@aws-sdk/credential-provider-ini": "3.972.53",
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
@@ -691,7 +691,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.12",
+      "version": "0.3.13",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -701,10 +701,10 @@
       "dependencies": {
         "@hasna/accounts": "0.2.23",
         "@hasna/agent-registry": "^0.1.0",
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.16",
         "@hasna/mcp-harness": "^0.1.0",
-        "@hasna/projects": "0.1.134",
+        "@hasna/projects": "0.1.135",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
@@ -720,7 +720,7 @@
     },
     "apps/emails": {
       "name": "@hasna/emails",
-      "version": "1.4.3",
+      "version": "1.4.4",
       "bin": {
         "emails": "dist/cli/index.js",
         "emails-mcp": "dist/mcp/index.js",
@@ -735,8 +735,8 @@
         "@aws-sdk/client-sqs": "^3.1072.0",
         "@aws-sdk/client-sts": "^3.1072.0",
         "@aws-sdk/credential-provider-ini": "^3.972.55",
-        "@hasna/contracts": "0.13.1",
-        "@hasna/domains": "0.0.39",
+        "@hasna/contracts": "0.13.2",
+        "@hasna/domains": "0.0.41",
         "@hasna/events": "^0.1.16",
         "@hasna/mcp-harness": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
@@ -763,7 +763,7 @@
     },
     "apps/evals": {
       "name": "@hasna/evals",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "bin": {
         "evals": "dist/cli/index.js",
         "evals-mcp": "dist/mcp/index.js",
@@ -771,7 +771,7 @@
       },
       "dependencies": {
         "@anthropic-ai/sdk": "^0.82.0",
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.6",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "ajv": "^8.18.0",
@@ -857,7 +857,7 @@
         "zod": "^3.25.76",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/mcp-harness": "^0.1.0",
         "@smithy/types": "^4.16.1",
         "@types/mime-types": "^2.1.4",
@@ -901,7 +901,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.11.10",
         "@types/react": "^18.3.18",
@@ -911,13 +911,13 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "bin": {
         "hooks": "bin/index.js",
         "hooks-serve": "bin/serve.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.16",
         "@hasna/secrets": "0.3.3",
         "@modelcontextprotocol/sdk": "^1.26.0",
@@ -933,7 +933,7 @@
         "zod": "3.25.76",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@types/bun": "latest",
         "@types/pg": "^8.15.6",
         "@types/react": "^18.2.0",
@@ -943,7 +943,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.4.39",
+      "version": "0.4.40",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
@@ -952,7 +952,7 @@
         "configs-mcp": "dist/mcp/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.16",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -973,7 +973,7 @@
     },
     "apps/knowledge": {
       "name": "@hasna/knowledge",
-      "version": "0.2.109",
+      "version": "0.2.110",
       "bin": {
         "knowledge": "bin/knowledge.js",
         "knowledge-mcp": "bin/knowledge-mcp.js",
@@ -1035,7 +1035,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.5.7",
+      "version": "0.5.8",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
@@ -1045,7 +1045,7 @@
       },
       "dependencies": {
         "@aws-sdk/client-secrets-manager": "^3.1083.0",
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.16",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@openrouter/ai-sdk-provider": "2.9.1",
@@ -1061,12 +1061,12 @@
         "typescript": "^5.7.3",
       },
       "optionalDependencies": {
-        "@hasna/machines": "0.2.32",
+        "@hasna/machines": "0.2.33",
       },
     },
     "apps/machines": {
       "name": "@hasna/machines",
-      "version": "0.2.32",
+      "version": "0.2.33",
       "bin": {
         "machines": "dist/cli/index.js",
         "machines-mcp": "dist/mcp/index.js",
@@ -1074,7 +1074,7 @@
         "machines-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.7",
         "@hasna/mcp-harness": "^0.1.0",
         "@modelcontextprotocol/sdk": "^1.26.0",
@@ -1108,7 +1108,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.15.6",
         "typescript": "^5.7.3",
@@ -1300,18 +1300,18 @@
     },
     "apps/projects": {
       "name": "@hasna/projects",
-      "version": "0.1.134",
+      "version": "0.1.135",
       "bin": {
         "projects": "dist/cli/index.js",
         "projects-mcp": "dist/mcp/index.js",
         "projects-serve": "dist/serve/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.10.2",
-        "@hasna/conversations": "0.7.1",
+        "@hasna/contracts": "0.13.2",
+        "@hasna/conversations": "0.7.2",
         "@hasna/events": "0.1.3",
         "@hasna/mementos": "0.14.81",
-        "@hasna/todos": "0.15.19",
+        "@hasna/todos": "0.15.39",
         "@json-render/core": "0.19.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "@openrouter/ai-sdk-provider": "^2.9.0",
@@ -1329,7 +1329,7 @@
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
-        "@hasna/loops": ">=0.3.0",
+        "@hasna/loops": ">=0.5.8",
       },
       "optionalPeers": [
         "@hasna/loops",
@@ -1363,7 +1363,7 @@
     },
     "apps/recordings": {
       "name": "@hasna/recordings",
-      "version": "0.3.6",
+      "version": "0.3.7",
       "bin": {
         "recordings": "dist/cli/index.js",
         "recordings-mcp": "dist/mcp/index.js",
@@ -1506,7 +1506,7 @@
     },
     "apps/sessions": {
       "name": "@hasna/sessions",
-      "version": "0.12.15",
+      "version": "0.12.16",
       "bin": {
         "sessions": "dist/cli/index.js",
         "sessions-mcp": "dist/mcp/index.js",
@@ -1516,7 +1516,7 @@
         "@aws-sdk/client-s3": "^3.1007.0",
         "@aws-sdk/lib-storage": "3.1007.0",
         "@aws-sdk/s3-request-presigner": "^3.1007.0",
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.16",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "commander": "^13.0.0",
@@ -1587,7 +1587,7 @@
         "zod": "^3.24.4",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@types/better-sqlite3": "^7.6.13",
         "@types/bun": "^1.2.12",
         "@types/express": "^5.0.2",
@@ -1881,7 +1881,7 @@
     },
     "apps/testers": {
       "name": "@hasna/testers",
-      "version": "0.0.93",
+      "version": "0.0.94",
       "bin": {
         "testers": "dist/cli/index.js",
         "testers-mcp": "dist/mcp/index.js",
@@ -1890,10 +1890,10 @@
       "dependencies": {
         "@anthropic-ai/sdk": "^0.52.0",
         "@e2b/code-interpreter": "^1.5.1",
-        "@hasna/browser": "0.5.18",
-        "@hasna/contracts": "^0.13.1",
+        "@hasna/browser": "0.5.19",
+        "@hasna/contracts": "^0.13.2",
         "@hasna/events": "^0.1.13",
-        "@hasna/projects": "^0.1.67",
+        "@hasna/projects": "^0.1.135",
         "@hasna/sandboxes": "^0.1.40",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "ai": "^6.0.175",
@@ -1949,14 +1949,14 @@
     },
     "apps/todos": {
       "name": "@hasna/todos",
-      "version": "0.15.38",
+      "version": "0.15.39",
       "bin": {
         "todos": "dist/cli/index.js",
         "todos-mcp": "dist/mcp/index.js",
         "todos-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.2",
         "@hasna/events": "^0.1.11",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -4644,8 +4644,6 @@
 
     "@hasna/emails/@aws-sdk/credential-provider-ini": ["@aws-sdk/credential-provider-ini@3.973.12", "", { "dependencies": { "@aws-sdk/core": "^3.977.6", "@aws-sdk/credential-provider-env": "^3.972.67", "@aws-sdk/credential-provider-http": "^3.972.69", "@aws-sdk/credential-provider-login": "^3.972.74", "@aws-sdk/credential-provider-process": "^3.972.67", "@aws-sdk/credential-provider-sso": "^3.973.11", "@aws-sdk/credential-provider-web-identity": "^3.972.73", "@aws-sdk/nested-clients": "^3.997.41", "@aws-sdk/types": "^3.974.2", "@smithy/core": "^3.31.1", "@smithy/credential-provider-imds": "^4.4.16", "@smithy/types": "^4.16.1", "tslib": "^2.6.2" } }, "sha512-pNEf/OeyN5X3VmLKlgSO6TqaWmW10CvI3TfwL1XhsuhYjSLT2VDaxFnCPHnOeQXSaFisMX4jNhpETriqN8DOmg=="],
 
-    "@hasna/emails/@hasna/domains": ["@hasna/domains@0.0.39", "", { "dependencies": { "@aws-sdk/client-route-53": "^3.1067.0", "@aws-sdk/client-route-53-domains": "^3.1067.0", "@aws-sdk/credential-provider-ini": "3.972.53", "@hasna/contracts": "^0.5.2", "@modelcontextprotocol/sdk": "^1.29.0", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "ink-text-input": "^6.0.0", "pg": "^8.21.0", "react": "^18.3.1", "zod": "^3.24.2" }, "optionalDependencies": { "@hasna/events": "^0.1.7" }, "peerDependencies": { "@hasna/contacts": "^0.6.19" }, "optionalPeers": ["@hasna/contacts"], "bin": { "domains": "dist/cli/index.js", "domains-mcp": "dist/mcp/index.js", "domains-serve": "dist/server/index.js" } }, "sha512-PWYqHOVnxbFtLrquHxJL54ZDO/rjzoPGn90SePRceR1tzNV/SJQsBvy5bMaHJuu1aLpENLX9FggLWQILrxmJnw=="],
-
     "@hasna/emails/commander": ["commander@15.0.0", "", {}, "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="],
 
     "@hasna/emails/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
@@ -4732,13 +4730,9 @@
 
     "@hasna/pixels/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
-    "@hasna/projects/@hasna/contracts": ["@hasna/contracts@0.10.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-RajMNOt1eHv3T0R/eO0F23K2DiA0j2e7f1ya+lSf3h3rMEFJehkRNXfotLTIRFbHNlJYsRmwg4l4Tv86VUyWXw=="],
-
     "@hasna/projects/@hasna/events": ["@hasna/events@0.1.3", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-0PgS0wSfLPg/kqxoDhzr/t00p8/H8LzfJAAlP4hhEByvTkM0UXGEzayFoZ1dOk7uqKtLuD5vrIDRdUoHwuVBkQ=="],
 
     "@hasna/projects/@hasna/mementos": ["@hasna/mementos@0.14.81", "", { "dependencies": { "@ai-sdk/anthropic": "^3.0.82", "@ai-sdk/openai": "^3.0.69", "@ai-sdk/openai-compatible": "^2.0.48", "@hasna/contracts": "0.8.5", "@hasna/events": "^0.1.6", "@modelcontextprotocol/sdk": "^1.12.1", "ai": "^6.0.199", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "pdf-parse": "^1.1.1", "pg": "^8.13.3", "react": "^18.3.1", "tesseract.js": "^5.1.1", "zod": "^3.24.2" }, "bin": { "mementos": "dist/cli/index.js", "mementos-mcp": "dist/mcp/index.js", "mementos-serve": "dist/server/index.js" } }, "sha512-mLDMLC0rzc/xORSu3JF+lCSaM6k9kpQpF7mxwgdPaHKOmZJrgWx2QoPqqO9i/l/BVHRq5nO4R8RHpgOJOo8fjQ=="],
-
-    "@hasna/projects/@hasna/todos": ["@hasna/todos@0.15.19", "", { "dependencies": { "@hasna/contracts": "0.5.2", "@hasna/events": "^0.1.11", "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "react": "^18.3.1", "zod": "^3.24.2" }, "bin": { "todos": "dist/cli/index.js", "todos-mcp": "dist/mcp/index.js", "todos-serve": "dist/server/index.js" } }, "sha512-E8SY2pDzplareDvsWmrJKs2tDAmW+zD6OJnSHW6Dt5J0j6d4S7YtHucN2bI2xfV7aa5KKqPyJW+LBEh2cVK72w=="],
 
     "@hasna/projects/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
@@ -5138,12 +5132,6 @@
 
     "@hasna/connectors/@hasna/events/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
-    "@hasna/emails/@hasna/domains/@aws-sdk/credential-provider-ini": ["@aws-sdk/credential-provider-ini@3.972.53", "", { "dependencies": { "@aws-sdk/core": "^3.974.20", "@aws-sdk/credential-provider-env": "^3.972.46", "@aws-sdk/credential-provider-http": "^3.972.48", "@aws-sdk/credential-provider-login": "^3.972.52", "@aws-sdk/credential-provider-process": "^3.972.46", "@aws-sdk/credential-provider-sso": "^3.972.52", "@aws-sdk/credential-provider-web-identity": "^3.972.52", "@aws-sdk/nested-clients": "^3.997.20", "@aws-sdk/types": "^3.973.12", "@smithy/core": "^3.24.6", "@smithy/credential-provider-imds": "^4.3.7", "@smithy/types": "^4.14.3", "tslib": "^2.6.2" } }, "sha512-ZfdhIOR41q8TcWEnUac+gCOb+O2LBWdHLmjedXpXz4IEFW2ppNuFcm6p0sMTavpM+zD5TYfpH5Gp7guRyqSgsQ=="],
-
-    "@hasna/emails/@hasna/domains/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
-
-    "@hasna/emails/@hasna/domains/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
-
     "@hasna/files/@hasna/connectors/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
 
     "@hasna/files/@hasna/connectors/@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.30.0", "", { "dependencies": { "@hono/node-server": "^1.19.9 || ^2.0.5", "ajv": "^8.17.1", "ajv-formats": "^3.0.1", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.2.1", "express-rate-limit": "^8.2.1", "hono": "^4.11.4", "jose": "^6.1.3", "json-schema-typed": "^8.0.2", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.25 || ^4.0", "zod-to-json-schema": "^3.25.1" }, "peerDependencies": { "@cfworker/json-schema": "^4.1.1" }, "optionalPeers": ["@cfworker/json-schema"] }, "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA=="],
@@ -5165,10 +5153,6 @@
     "@hasna/projects/@hasna/mementos/@hasna/contracts": ["@hasna/contracts@0.8.5", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-Iyk5srD6J3R7ci2g0gkyt+MCa6Da/lghPosGtgWBRgtJeGYCIAAnHF1yweoXnnqGAWZajFuDgJEWDVH11qpUhA=="],
 
     "@hasna/projects/@hasna/mementos/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
-
-    "@hasna/projects/@hasna/todos/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
-
-    "@hasna/projects/@hasna/todos/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
 
     "@hasna/servers/ink/@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.3.0", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-p+CMKJ93HFmLkjXKlXiVGlMQEuRb6H0MokBSwUsX+S6BRX8eV5naFZpQJFfJHjRZY0Hmnqy1/r6UWl3x+19zYA=="],
 

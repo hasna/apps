@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
+
 ## 0.2.1
 
 ### Patch Changes
@@ -17,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Generic `ValidationPlan` and `ProofBundle` SDK outputs backed by the canonical
   `@hasna/contracts` schemas and validators. Eval-specific metadata records
   deterministic assertions, LLM judge details, artifact references, per-case
@@ -26,18 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pushes to `main`.
 
 ### Fixed
+
 - Test-only module mocks no longer leak into later integration tests when the full
   suite runs in one Bun process.
 
 ### Changed
+
 - Enabled TypeScript checks for implicit returns and switch fallthrough.
 
 ### Removed
+
 - Unused `chalk` runtime dependency.
 
 ## [0.2.0] - 2026-07-27
 
 ### Removed
+
 - **BREAKING:** `evals sync push`, `evals sync pull` and `evals sync status`. The
   commands existed only to copy the local SQLite eval store into a shared Postgres
   through a retired dependency that no longer has a maintained home, so they are
@@ -49,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sync` from the bash and zsh completion scripts.
 
 ### Added
+
 - `src/no-cloud-boundary.test.ts` regression guard: fails if a manifest, any lockfile,
   a shipped source file or a built artifact reintroduces the retired dependency, or if
   the CLI/MCP/library entry points grow a cloud-sync surface again. The built-output
@@ -59,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dist/cli/index.js` from 1,267,809 to 888,211 bytes.
 
 ### Changed
+
 - The completion test now derives its expectations from the CLI's own `--help` output
   and asserts that completions advertise no command the CLI does not register — the
   failure mode that let a stale `sync` entry ship.
@@ -70,30 +84,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.20] - 2026-04-02
 
 ### Added
+
 - `evals generate` now supports `-j, --json` to output a machine-readable generation summary
 
 ### Changed
+
 - Added CLI help coverage for `generate --help` JSON flag visibility
 
 ## [0.1.19] - 2026-04-02
 
 ### Added
+
 - `evals doctor` now supports machine-readable `--json` / `-j` output with `ok`, `checks`, and `summary`
 - Added `renderMarkdownDiff` unit coverage for markdown-native compare output
 
 ### Changed
+
 - `evals compare --markdown` now prints markdown diff sections instead of ANSI terminal diff lines
 - Added short `-j` aliases for JSON output on `run`, `estimate`, `compare`, `doctor`, `ci run`, and `judge`
 
 ## [0.1.18] - 2026-04-02
 
 ### Fixed
+
 - Shell completion scripts now include the `sync` command for both bash and zsh output
 - Added CLI regression test to ensure completion output stays aligned with available top-level commands
 
 ## [0.1.14] - 2026-04-02
 
 ### Added
+
 - 179 unit tests across 14 test files (assertions, judge, runner, all adapters, reporter, store, CLI, MCP server, E2E pipeline)
 - `evals mcp register` command with `--claude`, `--codex`, `--gemini`, `--all` flags (replaces broken `evals mcp --claude`)
 - Auto-resolve `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` from `~/.secrets` when not in environment (fixes doctor + judge in non-shell contexts)
@@ -107,15 +127,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nightly cron script at `~/.local/bin/open-evals-sync.sh` (auto-commit + pull + test)
 
 ### Fixed
+
 - `--no-judge` flag parsed incorrectly (Commander boolean vs string)
 - `evals mcp --claude` was invalid Commander subcommand name
 - `evals doctor` example dataset path wrong when globally installed
 - OpenAI v6 `tool_calls` type change (`function` property access)
 
 ### Changed
+
 - Upgraded all dependencies to latest: `@anthropic-ai/sdk@0.82`, `openai@6`, `zod@4`, `commander@14`, `typescript@6`, `@modelcontextprotocol/sdk@1.29`, `@hasna/cloud@1.30`
 
 ## [0.1.0] - 2026-03-27
 
 ### Added
+
 - Initial implementation: 20+ assertion types, LLM-as-judge (CoT-before-verdict, PASS/FAIL/UNKNOWN), 6 adapters (http, anthropic, openai, mcp, function, cli), eval runner with parallel execution, dataset loader (JSONL/JSON), SQLite store, reporter (terminal/JSON/markdown), full CLI, MCP server with 8 tools

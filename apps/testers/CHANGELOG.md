@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.94
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
+  - @hasna/browser@0.5.19
+  - @hasna/projects@0.1.135
+
 ## 0.0.93
 
 ### Patch Changes
