@@ -24,6 +24,38 @@ import { createServeApp } from "./app.js";
 
 const APP_SLUG = "attachments";
 
+/**
+ * Classify early-exit arguments before any pool creation or bind work.
+ * --help/--version must answer with rc=0 and the pool never created
+ * (binds-before-help class; attachments-serve previously created the DB pool
+ * first and died on createCloudPoolFromEnv before answering, BUG row 970d7c6f).
+ */
+export function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
+  if (argv.includes("--help") || argv.includes("-h")) return "help";
+  if (argv.includes("--version") || argv.includes("-V")) return "version";
+  return "start";
+}
+
+export function printHelp(): void {
+  console.log(`usage: attachments-serve [--help] [--version] [migrate] [--no-migrate]
+
+attachments-serve — cloud HTTP service for @hasna/attachments.
+
+commands:
+  migrate             run migrations and exit (one-shot task)
+  --no-migrate        serve without running migrations on boot
+
+options:
+  --help              show this help and exit
+  --version           print the package version and exit
+`);
+}
+
+export async function printVersion(): Promise<void> {
+  const version = process.env.ATTACHMENTS_VERSION || (await import("../../package.json")).version;
+  console.log(version);
+}
+
 function resolveSigningSecret(): string {
   const secret =
     process.env.HASNA_ATTACHMENTS_API_SIGNING_KEY?.trim() ||
@@ -82,6 +114,15 @@ async function runMigrations(client: TypedQueryClient) {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  const early = handleEarlyArgs(args);
+  if (early === "help") {
+    printHelp();
+    return;
+  }
+  if (early === "version") {
+    await printVersion();
+    return;
+  }
   const migrateOnly = args.includes("migrate");
   const skipMigrate = args.includes("--no-migrate") || process.env.ATTACHMENTS_SKIP_MIGRATE === "1";
 
