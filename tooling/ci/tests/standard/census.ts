@@ -399,11 +399,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos ee9fbb4d (import row — conversations; reconcile the two bins against the manifest or extend the manifest's bins)",
   },
   {
-    member: "controls",
-    cause: "manifest_valid at pinned 0.4.1 (mode-era validator vs backend-era manifest, modes-removal lane): storage.mode Required; storage Unrecognized key(s) in object: 'backend'. The mode vocabulary is removed from the app; the two-backend schema (storage.backend sqlite|postgresql, no mode) ships with the contracts lane, which also must regenerate the vendor-kit without mode.ts.",
-    task: "todos reconcile task 'Reconcile @hasna/controls contracts conformance: manifest_valid' (auto-filed by the standard suite; resolves when the contracts lane publishes the two-backend validator and controls re-pins)",
-  },
-  {
     member: "economy",
     cause: "bins_match_package: package.json ships bin economy-otel that the manifest cannot declare (economy-otel is not in ALLOWED_BIN_SUFFIXES; the kit allowlist lacks an -otel suffix). Validated at pinned 0.13.3 (kitVersion 0.13.3). Same recorded class as conversations/events/monitor/instructions.",
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",

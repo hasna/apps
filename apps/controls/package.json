@@ -28,8 +28,10 @@
     "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external hono && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "conformance": "bunx @hasna/contracts@0.4.1 vendor-kit --check && bunx @hasna/contracts@0.4.1 repo-conformance",
+    "conformance": "bunx @hasna/contracts@0.13.1 vendor-kit --check && bunx @hasna/contracts@0.13.1 repo-conformance",
     "verify": "bun run typecheck && bun run test && bun run build && bun run conformance",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/controls-artifact-scan.tgz\" && bunx @hasna/contracts@0.13.1 artifact-scan controls-artifact-scan.tgz; rc=$?; rm -f \"$PWD/controls-artifact-scan.tgz\"; exit $rc",
+    "test:postgres": "bun scripts/pg-test-gate.mjs",
     "openapi:generate": "bun run src/cli/index.tsx openapi generate --out openapi.json --minify",
     "openapi:check": "bun run src/cli/index.tsx openapi check --path openapi.json",
     "smoke:package": "bun run src/release/package-smoke.ts",
@@ -37,7 +39,7 @@
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8886",
     "dev:serve": "bun run src/server/index.ts",
     "postinstall": "node -e \"try{const os=require('os'),fs=require('fs'),p=require('path');const b=p.join(os.homedir(),'.hasna','controls');for(const d of ['','config','data','exports','backups','logs','tmp']) fs.mkdirSync(p.join(b,d),{recursive:true});}catch(e){}\"",
-    "prepack": "bun run build"
+    "prepack": "bun run verify && bun run scan:artifact"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -67,7 +69,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.13.3",
+    "@hasna/contracts": "0.13.1",
     "bun-types": "1.3.14",
     "@types/bun": "^1.2.4",
     "@types/pg": "^8.20.0",
