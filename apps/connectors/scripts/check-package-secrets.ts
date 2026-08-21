@@ -221,8 +221,8 @@ function scanNpmrc(path: string, lines: string[]): Finding[] {
         });
       }
     }
-    findings.push(...scanCredentialedUrl(path, i + 1, line));
-    findings.push(...scanTokenPatterns(path, i + 1, line));
+    // Token and credentialed-URL rules are NOT duplicated here: scanPaths
+    // applies scanLineRules exactly once to every scanned text file.
   }
   return findings;
 }
@@ -265,7 +265,8 @@ function scanBunConfig(path: string, lines: string[]): Finding[] {
     inReleaseAgeExcludes = startsReleaseAgeExcludes
       ? line.includes("[") && !line.includes("]")
       : inReleaseAgeExcludes && !line.includes("]");
-    findings.push(...scanTokenPatterns(path, i + 1, line));
+    // Token and credentialed-URL rules are NOT duplicated here: scanPaths
+    // applies scanLineRules exactly once to every scanned text file.
   }
   if (!hasMinimumReleaseAge) {
     findings.push({
@@ -378,12 +379,13 @@ export function scanPaths(paths: string[]): ScanResult {
       findings.push(...scanNpmrc(path, lines));
     } else if (basename(path) === "bunfig.toml" || basename(path) === ".bunfig.toml") {
       findings.push(...scanBunConfig(path, lines));
-    } else {
-      // EVERY text file gets the token and credentialed-URL rules — including
-      // generated bundles (bin/, dist/, dashboard/dist/) once the scan runs
-      // after the build. A value that survived bundling is still a value.
-      findings.push(...scanLineRules(path, lines));
     }
+    // Token and credentialed-URL rules apply EXACTLY ONCE to every scanned
+    // text file — lockfiles, source, docs, generated bundles (bin/, dist/,
+    // dashboard/dist/) once the scan runs after the build, and npmrc/bunfig
+    // alike. A value that survived bundling or config formatting is still a
+    // value. Format-specific checks live in the parsers above.
+    findings.push(...scanLineRules(path, lines));
     findings.push(...scanDeploymentIdentifiers(path, lines));
   }
   return { findings, scanned, symlinks, absent };

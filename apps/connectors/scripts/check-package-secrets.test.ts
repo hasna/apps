@@ -307,6 +307,33 @@ describe("file selection — the gate is what was actually broken", () => {
     expect(scanPaths(paths).findings.map((f) => f.rule)).toEqual(["npmrc-literal-auth"]);
   });
 
+  test("a credentialed URL in a bunfig.toml is flagged (all-text rules cover config files)", () => {
+    // Cycle-1 review finding: scanBunConfig used to run only token patterns,
+    // so a credentialed URL inside a supported Bun config escaped the
+    // all-text rule. scanLineRules now applies to every scanned text file.
+    const { paths } = makeTree({
+      "bunfig.toml": `minimumReleaseAge = 604800\n[install]\nregistry = "https://user:${SENTINEL_URL_PASSWORD}@registry.example.com"\n`,
+    });
+
+    const { findings, scanned } = scanPaths(paths);
+
+    expect(scanned).toBe(1);
+    expect(findings.map((f) => f.rule)).toEqual(["package-manager-url-credentials"]);
+  });
+
+  test("npmrc/bunfig do not double-report the shared line rules", () => {
+    // scanNpmrc/scanBunConfig keep only their format-specific checks; the
+    // token/credentialed-URL rules run exactly once via scanLineRules.
+    const { paths } = makeTree({
+      ".npmrc": `https://user:${SENTINEL_URL_PASSWORD}@registry.example.com\n`,
+      "bunfig.toml": `minimumReleaseAge = 604800\ninstall = "https://user:${SENTINEL_URL_PASSWORD}@registry.example.com"\n`,
+    });
+
+    const { findings } = scanPaths(paths);
+
+    expect(findings.map((f) => f.rule)).toEqual(["package-manager-url-credentials", "package-manager-url-credentials"]);
+  });
+
   test("token-shaped values are flagged in NON-package-manager text files", () => {
     // P1 remediation: token rules used to run only on package-manager files, so
     // a leaked value sitting in a README, a source file, or a GENERATED BUNDLE
