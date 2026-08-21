@@ -7,6 +7,7 @@
 - c8e6fec: Move the deployment workflow to the monorepo root (`.github/workflows/deploy-projects.yml`). The member-local `apps/projects/.github/workflows/deploy.yml` is removed and `scripts/ci/deploy-workflow.test.ts` is rewritten to test the root workflow.
 - 0f5205b: Remediate image vulnerabilities in the Dockerfile — `apk upgrade --no-cache` in the build and runtime stages — and pin `undici` to 7.29.0 via an npm override.
 - Release-lane fix: pin `@hasna/conversations` to 0.7.1 so the pre-bound project channel adoption path (`adoptExistingProjectChannel`, shipped in 0.1.133) resolves the SDK method instead of failing closed at runtime with `Conversations SDK does not expose adoptExistingProjectChannel`.
+- Release-lane fix: the producer verification read-back path now projects the stored receipt through the same allowlist as the verification envelope before the exact canonical comparison, so the SDK-internal `prior_state` read-back field (introduced by conversations 0.7.x) is excluded while every envelope field is still compared exactly.
 
 ## 0.1.133
 
