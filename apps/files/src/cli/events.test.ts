@@ -22,7 +22,10 @@ describe("events CLI", () => {
       const stdout = new TextDecoder().decode(result.stdout);
       expect(result.exitCode).toBe(0);
       expect(stdout).toContain("events");
-      expect(stdout).toContain("webhooks");
+      // The `webhooks` command was deliberately removed from @hasna/events
+      // (its own commander.test.ts asserts the name is absent); the files CLI
+      // help advertises the events and channels commands instead.
+      expect(stdout).toContain("channels");
     } finally {
       rmSync(eventsDir, { recursive: true, force: true });
     }
