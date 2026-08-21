@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.109
+
+### Patch Changes
+
+- 745b73d: knowledge-serve --help and --version now answer with exit 0 before any environment-bound work: the serve entry parses self-describing flags ahead of the HASNA_KNOWLEDGE_DATABASE_URL check instead of constructing the DB client first (binds-before-args class).
+
 ## 0.2.108
 
 ### Patch Changes
