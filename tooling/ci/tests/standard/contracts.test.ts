@@ -55,7 +55,7 @@ export interface ConformanceEntry {
  * the gate validate at the same effective version with the same invocation. */
 
 function buildReport(): { entries: ConformanceEntry[]; known: Set<string>; kitByMember: Map<string, string>; pinnedByMember: Map<string, string | undefined> } {
-  const known = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6"]);
+  const known = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6", "0.13.1"]);
   const entries: ConformanceEntry[] = [];
   const kitByMember = new Map<string, string>();
   const pinnedByMember = new Map<string, string | undefined>();

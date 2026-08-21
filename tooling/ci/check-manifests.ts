@@ -47,7 +47,7 @@ import {
 
 /** Known valid kit versions — identical to the standard suite's report set,
  * so both resolve the same effective validator version. */
-const KNOWN_VALIDATOR_VERSIONS = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6"]);
+const KNOWN_VALIDATOR_VERSIONS = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6", "0.13.1"]);
 
 export interface ManifestGateEntry {
   member: string;
