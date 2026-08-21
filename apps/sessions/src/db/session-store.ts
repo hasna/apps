@@ -17,7 +17,7 @@
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { existsSync } from "node:fs";
-import { normalizeStorageMode } from "@hasna/contracts/mode";
+import { normalizeStorageMode } from "../generated/storage-kit/mode.js";
 import {
   SESSION_SOURCES,
   type Machine,
@@ -190,7 +190,7 @@ function anySet(source: Env, keys: readonly string[]): boolean {
  * The probe runs through the library's own `normalizeStorageMode`, so the answer
  * comes from the installed code rather than from our belief about it.
  */
-export const SERVER_MODE_CANDIDATES = ["postgres", "self_hosted", "cloud"] as const;
+export const SERVER_MODE_CANDIDATES = ["cloud", "local"] as const;
 
 /** Accepts a mode token or throws. Injectable so both enum generations are testable. */
 export type ModeNormalizer = (value: string) => unknown;
@@ -795,7 +795,7 @@ export function resolveSessionStore(
   overrides?: Parameters<typeof resolveStorageClient>[2],
 ): SessionStore {
   const resolved = resolveStorageClient(APP, sessionsCloudEnv(env), overrides);
-  if (resolved.transport === "cloud-http") return cloudStore(resolved.client);
+  if (resolved.transport === "http") return cloudStore(resolved.client);
   return localStore();
 }
 

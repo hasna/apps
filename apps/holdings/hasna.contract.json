@@ -3,7 +3,7 @@
   "name": "holdings",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.12.0",
+  "kitVersion": "0.13.1",
   "description": "IP portfolio system-of-record CLI + MCP + serve. SQLite at ~/.hasna/holdings/holdings.db is authoritative when no DATABASE_URL is configured; with one, reads/writes go directly to the operator-owned Postgres.",
   "bins": [
     "holdings",

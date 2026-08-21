@@ -372,7 +372,7 @@ export async function startCloudServer(): Promise<void> {
   const verifier = verifyApiKey({
     app: APP_NAME,
     signingSecret,
-    isRevoked: keyStore.isRevoked,
+    keyStatus: keyStore.keyStatus,
     audit: (e) => {
       // Structured, value-free audit line (never logs the token or secret).
       console.log(JSON.stringify({ evt: "api_auth", ...e }));

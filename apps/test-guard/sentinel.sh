@@ -20,7 +20,7 @@ set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 
 # Manual version constant; the smoke test asserts it matches package.json.
-VERSION="0.0.1"
+VERSION="0.0.2"
 
 # CLI surface: --help / --version as the FIRST argument only; the positional
 # $1/$2 contract (alternate bun path / wrapper source, for tests) is unchanged.

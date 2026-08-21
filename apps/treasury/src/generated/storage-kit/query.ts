@@ -15,9 +15,9 @@
 //   one     -> T                       (exactly one row, else throws)
 //   execute -> void                    (DDL / writes where rows are ignored)
 //
-// This wrapper reads and writes the PostgreSQL backend directly. There is no
-// cache, no local mirror, and no merge — a `get()` hits the database every
-// time.
+// PURE REMOTE (Amendment A1): this wrapper reads and writes the same cloud
+// Postgres. There is no cache, no local mirror, and no merge — a `get()` hits
+// the database every time.
 
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 

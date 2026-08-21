@@ -917,7 +917,7 @@ function assertNoStoreConflict(env: Env): void {
  */
 function requireHostedClient(env: Env, flip: ClientFlip): HasnaStorageClient {
   const resolved = resolveStorageClient(APP, withoutRetiredModeKeys(env));
-  if (resolved.transport !== "cloud-http") {
+  if (resolved.transport !== "http") {
     throw new Error(
       `Hosted domains client was requested (${flip.urlSource} + ${flip.keySource}) but ` +
         `@hasna/contracts resolved transport '${resolved.transport}'. Refusing to read the wrong dataset.`,

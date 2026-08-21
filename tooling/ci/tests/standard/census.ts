@@ -178,7 +178,7 @@ export function membersIn(appsDir: string): Member[] {
       >;
       const bins = Object.keys((pkg.bin as Record<string, string> | undefined) ?? {});
       const exports = (pkg.exports as Record<string, unknown> | undefined) ?? {};
-      const allDeps = { ...((pkg.dependencies as Record<string, string>) ?? {}), ...((pkg.devDependencies as Record<string, string>) ?? {}) };
+      const allDeps = { ...((pkg.dependencies as Record<string, string>) ?? {}), ...((pkg.devDependencies as Record<string, string>) ?? {}), ...((pkg.peerDependencies as Record<string, string>) ?? {}) };
       let hasManifest = false;
       try {
         hasManifest = fs.statSync(path.join(appsDir, name, "hasna.contract.json")).isFile();
