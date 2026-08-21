@@ -66,6 +66,7 @@ Usage:
   router validate --config router.config.json
   router smoke --config router.config.json
   router serve --config router.config.json [--host 127.0.0.1] [--port 8797]
+  router version
   router help
 `;
 }
@@ -74,7 +75,12 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
   const parsed = parseArgs(argv);
   const configPath = flagString(parsed.flags, "config", "router.config.json");
 
-  if (parsed.command === "help" || parsed.flags.help) {
+  if (parsed.command === "version" || parsed.command === "--version" || parsed.flags.version) {
+    console.log(routerVersion);
+    return;
+  }
+
+  if (parsed.command === "help" || parsed.command === "--help" || parsed.flags.help) {
     console.log(help());
     return;
   }
