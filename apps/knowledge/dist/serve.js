@@ -9659,16 +9659,16 @@ async function startKnowledgeServe(options = {}) {
   };
 }
 export {
-  KNOWLEDGE_SERVE_APP,
-  MigrationLedger,
-  NoteRepo,
-  PG_MIGRATIONS,
-  VersionConflictError,
-  createKnowledgeDatabaseClient,
-  createServeHandler,
-  defineMigration,
-  knowledgeOpenApi,
-  normalizePostgresDatabaseUrl,
+  startKnowledgeServe,
   resolveKnowledgeGuardedAuthority,
-  startKnowledgeServe
+  normalizePostgresDatabaseUrl,
+  knowledgeOpenApi,
+  defineMigration,
+  createServeHandler,
+  createKnowledgeDatabaseClient,
+  VersionConflictError,
+  PG_MIGRATIONS,
+  NoteRepo,
+  MigrationLedger,
+  KNOWLEDGE_SERVE_APP
 };

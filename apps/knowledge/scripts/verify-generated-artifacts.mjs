@@ -33,7 +33,19 @@
  *      STALE_PATTERNS carries a fixture it MUST match; if it does not, this script fails
  *      instead of reporting success. That is the difference between a passing check and a
  *      check that measured nothing.
+ *
+ *   4. THE REGENERATION MUST BE BYTE-STABLE, NOT ONLY MATCH THE INDEX. The rebuild runs
+ *      TWICE, and the two outputs must be byte-identical before the index comparison means
+ *      anything. If a regeneration were order-nondeterministic — two builds of the same
+ *      source differing from each other — the index comparison could pass on one run and
+ *      fail on the next without any commit in between, which is the vacuous-check class
+ *      wearing a green gate. Measured at 745b73d6: the pinned bun 1.3.14 is deterministic
+ *      here; the drift this gate exists to catch is bun-version sensitivity (a regeneration
+ *      under a different bun changes minifier identifiers and export-list order), which the
+ *      `build` script's check-bun-version guard stops at the generator, and this two-pass
+ *      check would catch even if that guard were bypassed.
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -130,6 +142,28 @@ function fail(message) {
   process.exit(1);
 }
 
+/**
+ * sha256 of every generated file, keyed by repo-relative path. Snapshotting content rather
+ * than mtime means the two-pass comparison below is a byte comparison: a file whose bytes
+ * are identical reports no difference even though a rebuild rewrote it.
+ */
+export function hashGeneratedFiles(files, root = repoRoot) {
+  const hashes = new Map();
+  for (const file of files) {
+    hashes.set(file, createHash('sha256').update(readFileSync(join(root, file))).digest('hex'));
+  }
+  return hashes;
+}
+
+/**
+ * Names (sorted) whose hash differs between two snapshots, or that exist in only one. An
+ * empty list means the two regenerations were byte-identical.
+ */
+export function differingFiles(first, second) {
+  const names = [...new Set([...first.keys(), ...second.keys()])].sort();
+  return names.filter((name) => first.get(name) !== second.get(name));
+}
+
 function main() {
   // The patterns are checked BEFORE anything else, so a dead pattern cannot be masked by a
   // clean rebuild.
@@ -152,9 +186,28 @@ function main() {
   }
 
   // Rebuild through the package script rather than repeating its command here, so the two can
-  // never disagree.
-  const build = spawnSync('bun', ['run', 'build'], { cwd: repoRoot, stdio: 'inherit' });
-  if ((build.status ?? 1) !== 0) fail(`\`bun run build\` exited ${build.status ?? 'without a status'}`);
+  // never disagree. The build is guarded by scripts/check-bun-version.mjs, which refuses to
+  // run under a bun other than the pinned one — the generator-level half of the
+  // byte-reproducibility fix.
+  const build = (pass) => {
+    const run = spawnSync('bun', ['run', 'build'], { cwd: repoRoot, stdio: 'inherit' });
+    if ((run.status ?? 1) !== 0) fail(`\`bun run build\` (pass ${pass}) exited ${run.status ?? 'without a status'}`);
+  };
+
+  // Pass 1, snapshot, pass 2, compare: two regenerations of the same source must be
+  // byte-identical. Only then does comparing either against the index mean anything.
+  const filesBefore = generatedJsFiles();
+  build(1);
+  const first = hashGeneratedFiles(filesBefore);
+  build(2);
+  const second = hashGeneratedFiles(generatedJsFiles());
+  const unstable = differingFiles(first, second);
+  if (unstable.length > 0) {
+    fail(
+      `regeneration is NOT byte-stable: two consecutive \`bun run build\` runs of the same source produced different bytes for:\n${unstable.join('\n')}\n` +
+        `This bun is ${process.versions?.bun ?? 'unknown'}. A nondeterministic generator makes the byte gate vacuous — fix the generator (or the bun version) rather than committing either output.`,
+    );
+  }
 
   // The gate: whatever the rebuild produced must equal what is committed.
   const drift = spawnSync('git', ['diff', '--exit-code', '--', ...GENERATED_PATHS], {
@@ -192,7 +245,9 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`verify-generated-artifacts: ${files.length} generated bundles rebuild byte-identically and carry no stale generated code.`);
+  console.log(
+    `verify-generated-artifacts: two consecutive regenerations of ${files.length} generated bundles are byte-identical to each other and to the committed output, and carry no stale generated code.`,
+  );
 }
 
 // Run only when invoked directly, so the exports above are importable from tests. `process.argv[1]`
