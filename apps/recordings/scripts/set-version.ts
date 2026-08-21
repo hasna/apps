@@ -16,16 +16,16 @@ export type VersionSite = {
   pattern: RegExp;
 };
 
+// src/version.ts is deliberately NOT a site: it derives VERSION from
+// package.json at import time (see src/version.ts), so it holds no literal
+// this writer could keep in sync, and a monorepo changesets bump can no
+// longer leave it stale. The remaining sites are the native bundle surfaces,
+// which cannot derive and must be written here.
 export const versionSites: VersionSite[] = [
   {
     file: "package.json",
     label: "package.json version",
     pattern: /("version"\s*:\s*")([^"]+)(")/,
-  },
-  {
-    file: "src/version.ts",
-    label: "src/version.ts VERSION",
-    pattern: /(export const VERSION = ")([^"]+)(")/,
   },
   {
     file: "src/native/Recordings/RecordingsLib/Info.plist",

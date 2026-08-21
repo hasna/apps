@@ -40,9 +40,12 @@ describe("release version sites", () => {
     // every remaining site still agrees, and the stale plist key is exactly the defect this file
     // exists to prevent. A mutation that deletes the CFBundleVersion entry survived the length
     // form and is killed by this one.
+    // src/version.ts was REMOVED from this list deliberately (2026-08-21, I38-00553): it no
+    // longer holds a literal — VERSION derives from package.json at import time — so it cannot
+    // drift and the writer must not own it. The derivation itself is pinned by
+    // src/__tests__/version.test.ts (VERSION === packageJson.version).
     expect(readings.map((reading) => [reading.site.file, reading.site.label])).toEqual([
       ["package.json", "package.json version"],
-      ["src/version.ts", "src/version.ts VERSION"],
       ["src/native/Recordings/RecordingsLib/Info.plist", "Info.plist CFBundleShortVersionString"],
       ["src/native/Recordings/RecordingsLib/Info.plist", "Info.plist CFBundleVersion"],
     ]);
