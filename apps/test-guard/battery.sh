@@ -173,11 +173,15 @@ ck "limit parser rejects signed-64 max plus one" "$("$parser" 922337203685477580
 ck "limit parser rejects larger 19-digit overflow" "$("$parser" 9999999999999999999 >/dev/null 2>&1; echo $?)" "1"
 
 # 13 sentinel must reject a wrapper that keeps the marker but differs from
-# the installed source of truth.
+# the installed source of truth. With auto-rearm (row 7112181b) the sentinel
+# HEALS such a tamper when the rearm can complete (section 17) and FAILS
+# CLOSED when it cannot — this hermetic fixture proves the fail-closed half
+# (no pinned bun obtainable, download forced to fail via a file:// URL) and
+# that a battery run never writes into the live bin dir.
 cp "$B" "$W/marker-preserving-wrapper"
 printf '\n# marker-preserving tamper\n' >> "$W/marker-preserving-wrapper"
 chmod +x "$W/marker-preserving-wrapper"
-ck "sentinel detects marker-preserving tamper" "$(SENTINEL_DRY_RUN=1 "$SEN" "$W/marker-preserving-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
+ck "sentinel fails closed on unrepairable marker-preserving tamper" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-tamper" SENTINEL_REAL_BUN="$W/no-real" SENTINEL_PINNED_URL="file://$W/no-pin" "$SEN" "$W/marker-preserving-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 
 signature_probe="$W/sentinel-signature.sh"
 {
@@ -202,8 +206,18 @@ ck "queue-del recovery" "$(cat "$W/g5rc")" "0"
 
 # 15 sentinel: pass, cgroup removal, marker tamper, junk-name crash input, wedge alert
 ck "sentinel pass" "$("$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
-ck "sentinel detects unscoped wrapper" "$(SENTINEL_DRY_RUN=1 "$SEN" /home/hasna/.bun/bin/bun.pre-ce9c2402 "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
-ck "sentinel marker tamper" "$(SENTINEL_DRY_RUN=1 "$SEN" "$BR" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
+# The unscoped-wrapper and marker-tamper fixtures moved to hermetic temp
+# copies: with auto-rearm (row 7112181b) the sentinel HEALS a repairable
+# clobber (section 17), and the old fixtures pointed at LIVE paths
+# (/home/hasna/.bun/bin/bun.pre-ce9c2402 backup, bun-real) that a rearm would
+# now legitimately overwrite during a battery run. These variants force the
+# rearm to fail closed (all-zero pin, unobtainable file:// download).
+printf '#!/usr/bin/env bash\nexec /home/hasna/.bun/bin/bun-real "$@"\n' > "$W/unscoped-wrapper"
+chmod +x "$W/unscoped-wrapper"
+ck "sentinel fails closed on unscoped wrapper" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-unscoped" SENTINEL_REAL_BUN="$W/no-real" SENTINEL_PINNED_URL="file://$W/no-pin" "$SEN" "$W/unscoped-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
+cp "$BR" "$W/tamper-bun" 2>/dev/null || cp "$(command -v bun)" "$W/tamper-bun"
+chmod +x "$W/tamper-bun"
+ck "sentinel fails closed on marker-tamper ELF" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-tamper2" SENTINEL_REAL_BUN="$W/no-real2" SENTINEL_PINNED_URL="file://$W/no-pin2" SENTINEL_PINNED_SHA256="0000000000000000000000000000000000000000000000000000000000000000" "$SEN" "$W/tamper-bun" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 mkdir -p "$W/g6/slots" "$W/g6/queue"; : > "$W/g6/queue/not-a-ticket"
 ck "sentinel junk survives" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" "$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
 : > "$W/g6/queue/$(( $(date +%s%N) - 2200000000000 )).$$"
@@ -266,10 +280,40 @@ s_rc=$(run_sentinel_dry "$fake_starve_nolog")
 ck "s16 rc=124-no-acquired sentinel still fails" "$s_rc" "1"
 ck "s16 rc=124-no-acquired alert says UNVERIFIABLE" "$(grep -c 'engagement UNVERIFIABLE' "$S16/out")" "1"
 ck "s16 rc=124-no-acquired alert never says NOT ENGAGED" "$(grep -c 'NOT ENGAGED' "$S16/out")" "0"
-# wrapper-missing (marker gone) is the one state where NOT ENGAGED is correct
-s_rc=$(SENTINEL_DRY_RUN=1 "$SEN" /home/hasna/.bun/bin/bun.pre-ce9c2402 "$WRAPPER_SOURCE" > "$S16/out" 2> "$S16/err"; echo $?)
+# wrapper-missing (marker gone) is the one state where NOT ENGAGED is correct —
+# and with auto-rearm (row 7112181b) it is the state where rearm is ATTEMPTED.
+# This hermetic fixture (temp paths, pin download forced to fail via a file://
+# URL) proves the fail-closed half: a clobber that cannot be repaired keeps the
+# alert path and NEVER touches the live bin dir (the old fixture passed the
+# live bun.pre-ce9c2402 backup path, which a rearm would now overwrite).
+s_rc=$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$S16/g" SENTINEL_REAL_BUN="$S16/no-such-real" SENTINEL_PINNED_URL="file://$S16/no-such-pin" "$SEN" "$S16/no-such-wrapper" "$WRAPPER_SOURCE" > "$S16/out" 2> "$S16/err"; echo $?)
 ck "s16 wrapper-missing sentinel still fails" "$s_rc" "1"
 ck "s16 wrapper-missing alert says NOT ENGAGED" "$(grep -c 'NOT ENGAGED' "$S16/out")" "1"
+ck "s16 wrapper-missing rearm fails closed" "$(grep -c 'auto-rearm FAILED' "$S16/out")" "1"
+
+# 17 auto-rearm on a temp-dir COPY of the bin layout (row 7112181b): a
+# marker-absent bun ELF (the curl-installer clobber shape) is HEALED — the
+# wrapper is restored byte-identical from the package source, bun-real is
+# re-pinned to the pinned version (sha-verified) via mv-over-held-inode, and
+# the sentinel's own functional canary (rc=0, '1 pass', exact cgroup limits,
+# acquired argv=test) must pass before it may exit 0. Never run the simulated
+# clobber on the live path: everything here is a temp copy.
+W17="$W/s17"; BIN17="$W17/bin"; G17="$W17/guard"
+mkdir -p "$BIN17" "$G17/slots"
+if [ -x "$BR" ]; then ELF_SRC="$BR"; else ELF_SRC="$(command -v bun)"; fi
+cp "$ELF_SRC" "$BIN17/bun"
+cp "$ELF_SRC" "$BIN17/bun-real"
+printf '\n# simulated stale real\n' >> "$BIN17/bun-real"   # differs from the pinned build
+chmod +x "$BIN17/bun" "$BIN17/bun-real"
+PIN_SHA=$(sha256sum "$BIN17/bun" | awk '{print $1}')
+PIN_VER=$("$BIN17/bun" --version 2>/dev/null | head -1)
+s17_rc=$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$G17" SENTINEL_REAL_BUN="$BIN17/bun-real" SENTINEL_PINNED_SHA256="$PIN_SHA" SENTINEL_PINNED_VERSION="$PIN_VER" "$SEN" "$BIN17/bun" "$WRAPPER_SOURCE" > "$W17/out" 2>&1; echo $?)
+ck "s17 rearm clobbered bun exits 0" "$s17_rc" "0"
+ck "s17 rearm restores wrapper marker" "$(head -c 4096 "$BIN17/bun" | grep -c 'hasna-test-guard wrapper')" "1"
+ck "s17 rearm wrapper byte-identical to source" "$(cmp -s "$BIN17/bun" "$WRAPPER_SOURCE"; echo $?)" "0"
+ck "s17 rearm pins bun-real version" "$("$BIN17/bun-real" --version 2>/dev/null | head -1)" "$PIN_VER"
+ck "s17 rearm pins bun-real sha" "$(sha256sum "$BIN17/bun-real" | awk '{print $1}')" "$PIN_SHA"
+ck "s17 rearm logs to sentinel.log" "$(grep -c 'rearm:' "$G17/sentinel.log")" "1"
 
 echo "=== battery: $pass PASS, $failn FAIL"
 rm -rf "$W"

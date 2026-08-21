@@ -9,8 +9,8 @@
 # no real bun test, and no machine guard install — only bash, grep, sed,
 # mktemp, and the sentinel's static check against /home/hasna/.bun/bin/bun-real.
 #
-# The full battery (battery.sh) is the 53-check regression sweep for a station
-# with the guard installed; run it separately after any wrapper/sentinel change.
+# The full battery (battery.sh) is the regression sweep for a station with the
+# guard installed; run it separately after any wrapper/sentinel change.
 #
 # Runner compatibility (hasna/apps#630 remediation, cycle 1): the s16
 # classification assertions drive the sentinel's FUNCTIONAL PROBE, and the
@@ -18,11 +18,13 @@
 # (REAL=/home/hasna/.bun/bin/bun-real, sentinel.sh:55). On a host without
 # that layout — e.g. the GitHub Actions runner — the static chain fails before
 # the probe runs, probe_state stays '', and every classification collapses to
-# NOT ENGAGED, failing 8 of 13 assertions for a reason unrelated to the guard.
-# So when the fleet layout is absent the smoke SKIPS the classification
-# assertions with a documented skip line (keeping the layout-independent
-# rc!=0 and wrapper-missing NOT ENGAGED checks) and exits 0; on a
-# guard-installed host the full 13-check battery runs unchanged.
+# NOT ENGAGED, failing the assertions for a reason unrelated to the guard.
+# s17's rearm-canary exit-0 assertion has the same dependency (the restored
+# temp wrapper execs the fleet bun-real). So when the fleet layout is absent
+# the smoke SKIPS the classification assertions and the s17 exit-0 assertion
+# with a documented skip line, keeping the layout-independent checks (rc!=0,
+# wrapper-missing NOT ENGAGED + fail-closed rearm, s17 marker/pin restoration)
+# running; on a guard-installed host the full s16+s17 battery runs unchanged.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,12 +82,13 @@ trap 'rm -f "$RUNNER"' EXIT
 
 if [ ! -x "$FLEET_REAL" ]; then
   # Fleet install layout absent (runner): the sentinel's static chain fails
-  # before the functional probe runs, so the classification assertions are
-  # untestable here. Replace each with a documented SKIP line naming the
-  # assertion and the reason; the layout-independent checks (rc!=0 against
-  # broken wrappers, wrapper-missing NOT ENGAGED) still run.
-  echo "smoke: fleet install layout absent ($FLEET_REAL not executable) — s16 functional-probe classification assertions SKIPPED; rc!=0 and wrapper-missing NOT ENGAGED checks still run"
-  sed -E 's#^ck "((s16 rc=(78|124)[^"]*alert[^"]*))".*#echo "SKIP \1 — fleet install layout absent: sentinel functional probe untestable on this host"#' "$RUNNER" > "$RUNNER.skip"
+  # before the functional probe runs, so the classification assertions and the
+  # s17 rearm-canary exit-0 assertion are untestable here. Replace each with a
+  # documented SKIP line naming the assertion and the reason; the
+  # layout-independent checks (rc!=0 against broken wrappers, wrapper-missing
+  # NOT ENGAGED + fail-closed rearm, s17 marker/pin restoration) still run.
+  echo "smoke: fleet install layout absent ($FLEET_REAL not executable) — s16 functional-probe classification and s17 rearm-canary assertions SKIPPED; rc!=0, fail-closed rearm, and s17 marker/pin restoration checks still run"
+  sed -E 's#^ck "((s16 rc=(78|124)[^"]*alert[^"]*|s17 rearm clobbered bun exits 0))".*#echo "SKIP \1 — fleet install layout absent: sentinel functional probe untestable on this host"#' "$RUNNER" > "$RUNNER.skip"
   mv "$RUNNER.skip" "$RUNNER"
 fi
 

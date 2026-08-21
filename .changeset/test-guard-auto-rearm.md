@@ -1,0 +1,5 @@
+---
+"@hasna/test-guard": patch
+---
+
+fix: sentinel auto-rearm — when the bun curl installer clobbers the wrapper (marker missing / integrity mismatch), the sentinel now restores the wrapper from the package source (atomic .new + mv) and re-pins bun-real to the fleet-pinned 1.3.14 build (sha 37141662ebed915a, verified against the release SHASUMS256.txt and the pinned binary sha) instead of only alerting; it exits 0 only after the static chain and the functional canary pass, and fails closed into the alert path when the rearm cannot be verified. The download is arch-derived (the recorded sha is the aarch64 build the station01 installer installs) and cached in the guard dir's pinned/ store; pin constants are config-overridable. battery section 17 + hermetic smoke regress the rearm on a temp-dir copy of the bin layout; the marker-preserving-tamper, unscoped-wrapper and wrapper-missing fixtures were made rearm-aware (heal vs fail-closed) and hermetic so the battery never mutates the live install. Row 7112181b.
