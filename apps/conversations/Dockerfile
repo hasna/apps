@@ -38,9 +38,17 @@ ARG REQUIRE_BUILD_SHA=0
 LABEL org.opencontainers.image.revision="${BUILD_SHA}"
 RUN bun run scripts/ci/render-build-sha.ts "$BUILD_SHA" src/server/build-sha.generated.ts "$REQUIRE_BUILD_SHA"
 
+# Amazon RDS global CA bundle so TLS to the shared RDS succeeds: the vendored
+# storage kit verifies the server certificate under sslmode=require and falls
+# back to Node's default trust store when no CA is supplied — the RDS root is
+# not in it, so both serve and the one-shot migrate task fail the handshake
+# with "self signed certificate in certificate chain" (I38-00558).
+COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
     PORT=8080 \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
+    PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
 
 EXPOSE 8080
 

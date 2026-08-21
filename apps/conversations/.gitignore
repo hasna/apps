@@ -49,6 +49,9 @@ temp/
 *.pem
 *.key
 *.p12
+# The Amazon RDS global CA bundle is a public AWS artifact and is committed on
+# purpose (the image needs it at build time); keep it tracked despite *.pem.
+!docker/rds-global-bundle.pem
 
 # Logs
 *.log
