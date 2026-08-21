@@ -432,10 +432,15 @@ async function lookupStoredReceipt(
     time_budget_ms: input.time_budget_ms,
   });
   assertLookupControl(result, input);
-  if (canonicalJson(result.receipt) !== canonicalJson(receipt)) {
+  // Project the stored receipt through the same allowlist as the verification
+  // envelope so SDK-internal read-back fields (conversations 0.7.x adds
+  // `prior_state`, an audit/transition field not part of the envelope) cannot
+  // break the exact canonical comparison.
+  const stored = receiptValue(result.receipt, "lookup.receipt");
+  if (canonicalJson(stored) !== canonicalJson(receipt)) {
     throw new Error("stored producer receipt does not match the supplied verification envelope");
   }
-  return result.receipt;
+  return stored;
 }
 
 function opaqueTargetHandle(digest: string): ProjectRegistrationPathHandle {
