@@ -2,6 +2,7 @@
 
 ### Patch Changes
 
+- Wire the canonical data root (`~/.hasna/instructions`, overridable via `HASNA_CONFIGS_HOME`) into the shipped local storage paths: the SQLite store and the CLI's db-path and backup computations now derive from `getRawStoreRoot()` instead of a hardcoded `~/.hasna/instructions`, and the README documents the default (was stale `~/.hasna/configs`).
 - @hasna/contracts@0.13.1
 
 ## 0.4.38

@@ -169,7 +169,9 @@ concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
 
 ## Data Directory
 
-Local data is stored in `~/.hasna/configs/` (unchanged, for fleet continuity).
+Local data (the SQLite store and backups) lives under the canonical data root
+`~/.hasna/instructions/` by default. `HASNA_CONFIGS_HOME` remains a supported
+override of the root for legacy setups.
 
 ## Session Instruction Rendering
 
