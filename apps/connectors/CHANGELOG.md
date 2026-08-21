@@ -5,6 +5,10 @@
 ### Patch Changes
 
 - 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
+- Fix browser auto-open on Windows: the W2-12 browser-launch change hand-rolled `spawn("start", url)`, which fails on Windows because `start` is a `cmd.exe` built-in, not an executable. The OAuth flow and `serve` now delegate to the `open` package (the Windows-capable opener with safe argument handling) and report when the browser cannot be opened instead of claiming it was.
+- Harden the release gates: the package secret guard now applies token and credentialed-URL rules to every shipped text file (generated `bin/`/`dist`/`dashboard/dist` bundles included, scanned after the build), and the monorepo publish guard now scans packed file CONTENTS for internal-infra strings, not only entry names.
+- Fix connect-telegram: incoming media/images were not downloadable via the `updates` command (OPE-00106).
+- Fix split-io: correct segment key API paths and the dashboard auth field.
 
 All notable changes to this project will be documented in this file.
 

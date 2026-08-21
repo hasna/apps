@@ -17,6 +17,10 @@ const SENTINEL_TEMPLATE = "qzsyn-prod-zzkind-{name}";
 const SENTINEL_ARN = `arn:aws:ec2:eu-west-1:${"9".repeat(12)}:instance/x`;
 const SENTINEL_RESOURCE_ID = `i-${"0".repeat(17)}`;
 const SENTINEL_RDS_HOST = `qzsyn.${"a".repeat(12)}.eu-west-1.rds.amazonaws.com`;
+// Synthetic token-shaped sentinels for the widened all-text rules. Assembled so
+// the literal source never contains a value the guard would flag.
+const SENTINEL_NPM_TOKEN = `npm_${"x".repeat(40)}`;
+const SENTINEL_URL_PASSWORD = `${"y".repeat(12)}`;
 
 const roots: string[] = [];
 
@@ -301,6 +305,46 @@ describe("file selection — the gate is what was actually broken", () => {
     const { paths } = makeTree({ ".npmrc": `//registry.npmjs.org/:${"_auth" + "Token"}=literal-value-here\n` });
 
     expect(scanPaths(paths).findings.map((f) => f.rule)).toEqual(["npmrc-literal-auth"]);
+  });
+
+  test("token-shaped values are flagged in NON-package-manager text files", () => {
+    // P1 remediation: token rules used to run only on package-manager files, so
+    // a leaked value sitting in a README, a source file, or a GENERATED BUNDLE
+    // shipped untouched. The 1.4.1 changelog documents a real credential-adjacent
+    // leak that existed only in the compiled bin/index.js.
+    const { paths } = makeTree({
+      "README.md": `Install with: ${SENTINEL_NPM_TOKEN}\n`,
+      "dist/index.js": `const token = ${JSON.stringify(SENTINEL_NPM_TOKEN)};\n`,
+    });
+
+    const { findings, scanned } = scanPaths(paths);
+
+    expect(scanned).toBe(2);
+    expect(findings.map((f) => f.rule)).toEqual(["literal-npm-token", "literal-npm-token"]);
+  });
+
+  test("credentialed URLs are flagged in non-package-manager text files", () => {
+    const { paths } = makeTree({
+      "docs/install.md": `Clone via https://user:${SENTINEL_URL_PASSWORD}@example.com/repo.git\n`,
+    });
+
+    const { findings, scanned } = scanPaths(paths);
+
+    expect(scanned).toBe(1);
+    expect(findings.map((f) => f.rule)).toEqual(["package-manager-url-credentials"]);
+  });
+
+  test("ordinary prose and code stay silent under the widened rules", () => {
+    const { paths } = makeTree({
+      "README.md": "Install with bun install -g @hasna/connectors\n",
+      "src/index.ts": "const url = process.env.API_URL ?? 'http://localhost:3000';\n",
+      "dist/index.js": "var x=1;\n",
+    });
+
+    const { findings, scanned } = scanPaths(paths);
+
+    expect(findings).toEqual([]);
+    expect(scanned).toBe(3);
   });
 
   test("binary-by-extension files are not read", () => {
