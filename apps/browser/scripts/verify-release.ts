@@ -133,7 +133,7 @@ function assertExtensionVersions(): void {
 
 async function pack(destination: string): Promise<string> {
   const result = await run(["npm", "pack", "--json", "--pack-destination", destination, "--dry-run=false"], { quiet: true });
-  const parsed = JSON.parse(result.stdout) as Array<{ filename: string }>;
+  const parsed = JSON.parse(extractJsonArraySuffix(result.stdout)) as Array<{ filename: string }>;
   const filename = parsed[0]?.filename;
   assert(filename, "npm pack did not return a filename");
   return join(destination, filename);
