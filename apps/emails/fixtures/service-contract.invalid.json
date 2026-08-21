@@ -62,7 +62,7 @@
     }
   ],
   "storage": {
-    "mode": "mongodb",
+    "backend": "mongodb",
     "engines": [
       "mongodb"
     ],
