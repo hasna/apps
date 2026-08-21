@@ -1,5 +1,11 @@
 # @hasna/access
 
+## 0.1.5
+
+### Patch Changes
+
+- d7d615b: Align hasna.contract.json kitVersion to the declared contracts kit 0.13.1 (the pinned @hasna/contracts version). Todos d175d558.
+
 ## 0.1.4
 
 ### Patch Changes

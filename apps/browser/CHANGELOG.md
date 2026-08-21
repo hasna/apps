@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.20
+
+### Patch Changes
+
+- Updated dependencies [d7d615b]
+- Updated dependencies [d7d615b]
+- Updated dependencies [d7d615b]
+  - @hasna/conversations@0.7.3
+  - @hasna/secrets@0.3.4
+  - @hasna/sessions@0.12.17
+  - @hasna/todos@0.15.40
+
 ## 0.5.19
 
 ### Patch Changes

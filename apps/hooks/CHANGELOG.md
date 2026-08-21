@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.2
+
+### Patch Changes
+
+- Updated dependencies [d7d615b]
+  - @hasna/secrets@0.3.4
+  - @hasna/contracts@0.13.3
+
 ## 0.7.1
 
 ### Patch Changes
