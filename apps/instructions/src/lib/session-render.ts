@@ -1506,6 +1506,44 @@ function indexHeader(tool: SessionRenderTool, profile: string): string {
   ].join("\n");
 }
 
+function isCompiledClaudeGlobSource(
+  adapter: SessionToolAdapter,
+  source: OrderedSessionInstructionSource,
+): boolean {
+  if (adapter.tool !== "claude") return false;
+  const compiledBinding = source.provenance?.["profileBinding"];
+  if (!compiledBinding || typeof compiledBinding !== "object") return false;
+  const activation = source.metadata?.["activation"] as { mode?: string } | undefined;
+  return activation?.mode === "glob";
+}
+
+function claudeGlobRuleFile(
+  targetHome: string,
+  index: number,
+  source: OrderedSessionInstructionSource,
+): SessionRenderFile {
+  const globs = source.globs ?? [];
+  if (globs.length === 0) throw new Error(`Claude glob source ${source.id} has no paths.`);
+  const n = String(index + 1).padStart(2, "0");
+  const relativePath = posix.join("rules", `${n}-${source.normalizedId}.md`);
+  const content = [
+    "---",
+    "paths:",
+    ...globs.map((glob) => `  - ${yamlQuote(glob)}`),
+    "---",
+    "",
+    sectionForSource(source),
+    ...source.resolvedRules.flatMap((rule) => ["", sectionForRule(source, rule)]),
+  ].join("\n");
+  return makeFile(
+    targetHome,
+    relativePath,
+    "rule",
+    content,
+    [source.id, ...source.resolvedRules.map((rule) => rule.id)],
+  );
+}
+
 function buildNativeImportFiles(
   targetHome: string,
   adapter: SessionToolAdapter,
@@ -1513,12 +1551,18 @@ function buildNativeImportFiles(
   sources: OrderedSessionInstructionSource[],
 ): SessionRenderFile[] {
   const indexFile = adapter.indexFile!;
-  const fragments = sources.flatMap((source, index) => [
-    makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
-    ...source.resolvedRules.map((rule) =>
-      makeFile(targetHome, ruleFragmentPath(adapter, source, rule), "rule", sectionForRule(source, rule), [source.id, rule.id])
-    ),
-  ]);
+  const fragments = sources.flatMap((source, index) => {
+    if (isCompiledClaudeGlobSource(adapter, source)) return [];
+    return [
+      makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
+      ...source.resolvedRules.map((rule) =>
+        makeFile(targetHome, ruleFragmentPath(adapter, source, rule), "rule", sectionForRule(source, rule), [source.id, rule.id])
+      ),
+    ];
+  });
+  const conditionalRules = sources.flatMap((source, index) =>
+    isCompiledClaudeGlobSource(adapter, source) ? [claudeGlobRuleFile(targetHome, index, source)] : []
+  );
   const imports = fragments.map((file) => `@${importPath(indexFile, file.relativePath)}`);
   const index = makeFile(
     targetHome,
@@ -1527,7 +1571,7 @@ function buildNativeImportFiles(
     [indexHeader(adapter.tool, profile), ...imports].join("\n"),
     sources.map((source) => source.id),
   );
-  return [index, ...fragments];
+  return [index, ...fragments, ...conditionalRules];
 }
 
 function buildFlattenedMarkdownFiles(

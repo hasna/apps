@@ -5,6 +5,7 @@ import type { Config, ProfileConfigBinding, ProfileConfigBindingSpec } from "../
 import { applySessionRender, restoreSessionRenderSnapshot } from "./session-apply.js";
 import {
   InstructionGraphValidationError,
+  PROVIDER_CAPABILITIES,
   legacyProfileConfigBinding,
   planProfileSessionRender,
 } from "./instruction-graph.js";
@@ -58,6 +59,59 @@ function providerLoadedSentinelCount(plan: ReturnType<typeof planProfileSessionR
 }
 
 describe("versioned provider adapters", () => {
+  test("Claude renders glob bindings as path-gated rules while always bindings remain imported fragments", () => {
+    const root = tempRootPath("instructions-claude-capability-");
+    try {
+      const plan = planProfileSessionRender({
+        profile_id: "profile-1",
+        provider_version: "1.2.3",
+        tool: "claude",
+        profile: "profile-1",
+        targetHome: root,
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        configs: [config("always", "ALWAYS_ONLY"), config("typescript", "TS_ONLY")],
+        bindings: [
+          binding("always", spec(), 0),
+          binding("typescript", spec({ activation: { mode: "glob", globs: ["src/**/*.ts"] } }), 1),
+        ],
+      });
+
+      expect(PROVIDER_CAPABILITIES.claude.activation_modes).toEqual(["always", "glob"]);
+      expect(PROVIDER_CAPABILITIES.claude.conditional_artifacts).toBe(true);
+
+      const index = plan.files.find((file) => file.relativePath === "CLAUDE.md")!;
+      const alwaysFragment = plan.files.find((file) => file.content.includes("ALWAYS_ONLY"))!;
+      const globRule = plan.files.find((file) => file.content.includes("TS_ONLY"))!;
+
+      expect(alwaysFragment.role).toBe("fragment");
+      expect(alwaysFragment.relativePath).toBe(".hasna/instructions/01-always.md");
+      expect(index.content).toContain("@./.hasna/instructions/01-always.md");
+      expect(globRule.role).toBe("rule");
+      expect(globRule.relativePath).toBe("rules/02-typescript.md");
+      expect(globRule.content).toContain("---\npaths:\n  - \"src/**/*.ts\"\n---");
+      expect(index.content).not.toContain("typescript");
+      expect(index.content).not.toContain("rules/02-typescript.md");
+      expect(plan.files.filter((file) => file.role === "fragment").some((file) => file.content.includes("TS_ONLY"))).toBe(false);
+
+      applySessionRender(plan);
+      expect(existsSync(join(root, "rules/02-typescript.md"))).toBe(true);
+      const alwaysOnlyPlan = planProfileSessionRender({
+        profile_id: "profile-1",
+        provider_version: "1.2.3",
+        tool: "claude",
+        profile: "profile-1",
+        targetHome: root,
+        generatedAt: "2026-01-01T00:01:00.000Z",
+        configs: [config("always", "ALWAYS_ONLY")],
+        bindings: [binding("always", spec(), 0)],
+      });
+      applySessionRender(alwaysOnlyPlan);
+      expect(existsSync(join(root, "rules/02-typescript.md"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("Cursor compiled glob and always bindings retain distinct activation semantics", () => {
     const root = tempRootPath("instructions-cursor-capability-");
     try {
