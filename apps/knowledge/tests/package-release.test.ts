@@ -95,8 +95,6 @@ describe('public package release safety', () => {
   // published script still throwing, so they are listed individually.
   const knownUnresolvedImports = new Set([
     // task 1eb481d5 - src/ is not in `files`
-    // task 1eb481d5 - @hasna/contracts is a devDependency only
-    'scripts/apply-postgres-migrations.mjs -> @hasna/contracts/auth',
     // task 104f993d - bun:sqlite throws ERR_UNSUPPORTED_ESM_URL_SCHEME under node
     'scripts/smoke-files-installed-boundary.mjs -> bun:sqlite',
   ]);
@@ -322,7 +320,9 @@ describe('public package release safety', () => {
     // ...and each is genuinely unresolvable, not merely unfamiliar.
     expect(packageJson.files).not.toContain('src');
     const deps = (packageJson as unknown as { dependencies?: Record<string, string> }).dependencies ?? {};
-    expect(Object.keys(deps)).not.toContain('@hasna/contracts');
+    // The published scripts import @hasna/contracts/auth at runtime (serve/migrations),
+    // so it must be a declared runtime dependency, never a dev-only exemption.
+    expect(Object.keys(deps)).toContain('@hasna/contracts');
 
     // Derived from the Set, never restated. A hardcoded copy meant ADDING an exemption was
     // pinned by nothing: a genuinely broken import plus a matching entry left the file green.
