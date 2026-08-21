@@ -1,11 +1,16 @@
 # Changelog
 
-## 0.2.1
+## 0.3.0
+
+### Minor Changes
+
+- AppId normalization now derives bare slugs for npm names (`@hasna/todos` -> `todos`), completing the fleet-wide `open-` prefix retirement (repo-wide change #290). This is a consumer-visible change from 0.2.0, which normalized `@hasna/*` names to `open-<name>`: CLI `--app` filters, entry writes, `changelog publish --release` references, web site index appIds and `changelogRef` URIs all use the new ids. Entries stored under `open-*` appIds in 0.2.0-era stores keep their ids and are not matched by npm-name filters; re-tag them once with `changelog update <id> --app <new-appId>`.
+- The HTTP handler adds contract liveness endpoints `GET /ready` and `GET /version`, serves `GET /health`, `GET /ready` and `GET /version` without token auth even when an API token is configured (previously `/health` required the token), and renames the `/health` response field `service` from `open-changelog` to `changelog` (aligned with the `open-` prefix retirement).
 
 ### Patch Changes
 
 - 656faa6: publishChangelog no longer rewrites the target file when the generated markdown is unchanged. Previously every write-mode publish touched the file even when `changed` was false, churning mtime and defeating incremental sync; now an unchanged render writes nothing (the backup and content guarantees are unchanged for changed renders). Covered by a regression test that asserts mtime and byte preservation on an unchanged render.
-- @hasna/contracts@0.11.2
+- @hasna/contracts@0.11.1
 
 All notable changes to Hasna Changelog are documented in this file.
 
