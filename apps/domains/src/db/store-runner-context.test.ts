@@ -84,9 +84,9 @@ describe("production-write guard outside a test run", () => {
     expect(probe.vitest).toBe("<unset>");
     expect(probe.jestWorkerId).toBe("<unset>");
 
-    // And the probe is capable of reporting cloud-http, so a `local` result
-    // below is a real outcome rather than an instrument that cannot say cloud.
-    expect(probe.outcome).toBe("cloud-http");
+    // And the probe is capable of reporting the http transport, so a `local`
+    // result below is a real outcome rather than an instrument that cannot say http.
+    expect(probe.outcome).toBe("http");
   });
 
   test("BUG PINNED: DOMAINS_DB_PATH + cloud env outside a test run must NOT resolve cloud", () => {
@@ -94,7 +94,7 @@ describe("production-write guard outside a test run", () => {
     try {
       const probe = runUnprotected({ DOMAINS_DB_PATH: join(dir, "scratch.db") });
       expect(probe.nodeEnv).toBe("<unset>");
-      expect(probe.outcome).not.toBe("cloud-http");
+      expect(probe.outcome).not.toBe("http");
       expect(probe.outcome).toStartWith("THREW:");
       expect(probe.outcome).toContain("DOMAINS_DB_PATH");
     } finally {
@@ -106,7 +106,7 @@ describe("production-write guard outside a test run", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({ DOMAINS_DIR: dir });
-      expect(probe.outcome).not.toBe("cloud-http");
+      expect(probe.outcome).not.toBe("http");
       expect(probe.outcome).toStartWith("THREW:");
       expect(probe.outcome).toContain("DOMAINS_DIR");
     } finally {
@@ -135,7 +135,7 @@ describe("production-write guard outside a test run", () => {
         DOMAINS_DB_PATH: join(dir, "scratch.db"),
         HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH: "1",
       });
-      expect(probe.outcome).toBe("cloud-http");
+      expect(probe.outcome).toBe("http");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -156,7 +156,7 @@ describe("production-write guard outside a test run", () => {
     }
   });
 
-  test("NO REGRESSION: cloud env with no local path still resolves cloud outside a test run", () => {
-    expect(runUnprotected({ NODE_ENV: "production" }).outcome).toBe("cloud-http");
+  test("NO REGRESSION: cloud env with no local path still resolves http outside a test run", () => {
+    expect(runUnprotected({ NODE_ENV: "production" }).outcome).toBe("http");
   });
 });

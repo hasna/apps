@@ -32,10 +32,10 @@ describe("store isolation under test", () => {
     expect((getStore(env) as unknown as { transport: string }).transport).toBe("local");
   });
 
-  test("NO REGRESSION: outside a test run, hosted env still resolves cloud-http", () => {
+  test("NO REGRESSION: outside a test run, hosted env still resolves the http transport", () => {
     const env = { ...HOSTED_ENV, NODE_ENV: "production" };
     expect(isCloudStore(env)).toBe(true);
-    expect((getStore(env) as unknown as { transport: string }).transport).toBe("cloud-http");
+    expect((getStore(env) as unknown as { transport: string }).transport).toBe("http");
   });
 
   test("NEGATIVE CONTROL: no hosted env resolves local whether or not under test", () => {

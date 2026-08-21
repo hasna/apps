@@ -50,8 +50,8 @@ export function registerDoctorCommand(program: Command): void {
         const { getStore, explicitLocalPathVar } = await import("../../db/store.js");
         const transport = (getStore() as unknown as { transport: string }).transport;
         ok(
-          transport === "cloud-http"
-            ? "Resolved store: cloud-http — reads and writes go to the REMOTE portfolio"
+          transport === "http"
+            ? "Resolved store: http — reads and writes go to the REMOTE portfolio"
             : "Resolved store: local sqlite",
         );
         const pathVar = explicitLocalPathVar(process.env);
