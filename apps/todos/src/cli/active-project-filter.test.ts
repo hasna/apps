@@ -110,6 +110,32 @@ describe("active project filters", () => {
     expect((JSON.parse(result.stdout) as Array<{ id: string }>).map((task) => task.id)).toEqual([activeTaskId]);
   });
 
+  test("resolves a global filesystem-path project filter before listing active tasks", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+    const projectPath = join(home, "active-project");
+
+    const project = await runCli(
+      ["--json", "projects", "--add", projectPath, "--name", "Active Project"],
+      dbPath,
+      home,
+    );
+    expect(project.exitCode).toBe(0);
+    const projectId = (JSON.parse(project.stdout) as { id: string }).id;
+
+    const task = await runCli(
+      ["--json", "add", "Path active task", "--status", "in_progress", "--project", projectId, "--unassigned"],
+      dbPath,
+      home,
+    );
+    expect(task.exitCode).toBe(0);
+    const taskId = (JSON.parse(task.stdout) as { id: string }).id;
+
+    const result = await runCli(["--project", projectPath, "--json", "active"], dbPath, home);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as Array<{ id: string }>).map((item) => item.id)).toEqual([taskId]);
+  });
+
   test("reports an unsupported format option instead of exiting silently", async () => {
     const home = tempRoot();
     const dbPath = join(home, "todos.db");
@@ -132,5 +158,13 @@ describe("active project filters", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.trim()).not.toBe("");
     expect(result.stderr).toMatch(/unknown option|unsupported.*--format|--format.*not supported/i);
+  });
+
+  test("does not apply the active format guard to a nested roadmap command", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["roadmap", "show", "active", "--format", "json"], dbPath, home);
+    expect(result.stderr).not.toContain("ACTIVE_FORMAT_UNSUPPORTED");
   });
 });

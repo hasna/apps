@@ -113,7 +113,21 @@ async function registerOptionalEventsCommands(program: Command): Promise<void> {
   registerUnavailableEventsCommands(program);
 }
 
-function unsupportedActiveFormatOption(args: readonly string[]): string | null {
+function commandForArgs(root: Command, args: readonly string[]): Command {
+  let command = root;
+  for (const arg of args) {
+    if (arg.startsWith("-")) continue;
+    const child = command.commands.find((candidate) =>
+      candidate.name() === arg || candidate.aliases().includes(arg),
+    );
+    if (!child) break;
+    command = child;
+  }
+  return command;
+}
+
+function unsupportedActiveFormatOption(command: Command, args: readonly string[]): string | null {
+  if (command.name() !== "active") return null;
   const activeIndex = args.indexOf("active");
   if (activeIndex < 0) return null;
   return args
@@ -292,7 +306,10 @@ applyTodosCliHelpVisibility(program, authority.route, remoteCommandCapabilities)
 // mirror) surfaces as a clean red message + exit(1) instead of an unhandled
 // promise-rejection stack trace.
 try {
-  const activeFormat = unsupportedActiveFormatOption(process.argv.slice(2));
+  const activeFormat = unsupportedActiveFormatOption(
+    commandForArgs(program, process.argv.slice(2)),
+    process.argv.slice(2),
+  );
   if (activeFormat) {
     throw new Error(
       `ACTIVE_FORMAT_UNSUPPORTED: ${activeFormat} is not supported by todos active; ` +
