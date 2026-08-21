@@ -8811,7 +8811,7 @@ function validateDeploymentContractSet(schemas3, input) {
 // src/schemas.ts
 import { createHash as createHash2 } from "crypto";
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "0.13.4";
+var CONTRACTS_PACKAGE_VERSION = "0.13.3";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
