@@ -4,13 +4,15 @@
 
 ### Patch Changes
 
-- d7d615b: Align hasna.contract.json kitVersion to the declared contracts kit 0.13.1 (the pinned @hasna/contracts version). Todos d175d558.
+- d7d615b: Align hasna.contract.json kitVersion to the declared contracts kit 0.13.3 (the pinned @hasna/contracts version). Todos d175d558.
   - @hasna/contracts@0.13.3
 
 ## 0.7.2
 
 ### Patch Changes
 
+- 50810ae: Reject reserved historical channel aliases consistently — reads (readMessagePreviews, readMessages, searchMessages, exportMessages) now refuse a channel name that is a reserved alias exactly like writes and readDigest already did, instead of silently returning an empty result (PR #745).
+- d4d4e33: The Docker migrate image trusts the RDS CA bundle (I38-00558) (PR #740).
 - Updated dependencies [5e32853]
   - @hasna/contracts@0.13.2
 
