@@ -1,6 +1,6 @@
 {
   "name": "@hasna/machines",
-  "version": "0.2.32",
+  "version": "0.2.33",
   "description": "Machine fleet management CLI + MCP for developers",
   "type": "module",
   "license": "Apache-2.0",
@@ -89,7 +89,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@hasna/contracts": "0.13.1",
+    "@hasna/contracts": "0.13.2",
     "@hasna/events": "^0.1.7",
     "@hasna/mcp-harness": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",

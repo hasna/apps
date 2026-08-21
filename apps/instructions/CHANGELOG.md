@@ -1,3 +1,9 @@
+## 0.4.40
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
 ## 0.4.39
 
 ### Patch Changes

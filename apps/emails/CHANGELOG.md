@@ -1,3 +1,9 @@
+## 1.4.4
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
 ## 1.4.3
 
 ### Patch Changes

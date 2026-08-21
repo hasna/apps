@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.13
+
+### Patch Changes
+
+- Updated dependencies [5e32853]
+  - @hasna/contracts@0.13.2
+  - @hasna/projects@0.1.135
+
 ## 0.3.12
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.19
+
+### Patch Changes
+
+- @hasna/conversations@0.7.2
+  - @hasna/todos@0.15.39
+
 ## 0.5.18
 
 ### Patch Changes
