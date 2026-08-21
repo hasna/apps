@@ -369,15 +369,29 @@ describe("credential safety in reports", () => {
     expect(JSON.stringify(result)).not.toContain(FAKE_API_KEY);
   });
 
-  test("an unresolvable value in a retired mode variable is redacted rather than echoed", () => {
+  test("a key-shaped env value is never echoed in the store description", () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
     const description = describeActiveStore(makeConfig(dbPath), {
-      HASNA_RECORDINGS_STORAGE_MODE: "sk-not-a-mode-but-key-shaped-abcdef123456",
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
+      HASNA_RECORDINGS_API_KEY: "fixture-value-not-a-secret-abcdef123456",
     });
 
-    expect(description.mode_source).toBe("unresolved");
-    expect(description.warning).toContain("[redacted]");
+    expect(description.transport).toBe("http");
+    expect(description.base_url).toBe("https://api.example.com/v1");
+    expect(description.warning ?? "").not.toContain("fixture-value-not-a-secret");
+  });
+
+  test("a partial hosted configuration fails closed and names variables, never values", () => {
+    const dbPath = join(makeTempDir(), "recordings.db");
+
+    const description = describeActiveStore(makeConfig(dbPath), {
+      HASNA_RECORDINGS_API_URL: "fixture-value-not-a-secret-abcdef123456",
+    });
+
+    expect(description.transport).toBe("sqlite");
+    expect(description.warning).toContain("HASNA_RECORDINGS_API_KEY");
+    expect(description.warning ?? "").not.toContain("fixture-value-not-a-secret");
   });
 
   test("safeBaseUrl leaves a clean URL untouched", () => {

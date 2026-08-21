@@ -33,8 +33,6 @@ function isolatedCliEnv(home: string, overrides: Record<string, string> = {}) {
   return {
     HOME: home,
     PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
-    HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
-    RECORDINGS_CLIENT_STORE: "sqlite",
     HASNA_RECORDINGS_API_URL: "",
     HASNA_RECORDINGS_API_KEY: "",
     RECORDINGS_API_URL: "",
@@ -56,7 +54,7 @@ afterEach(() => {
 
 describe("recordings CLI", () => {
   test("command failures print a clean ERROR line instead of a stack trace", async () => {
-    const home = join(tmpdir(), `recordings-cli-err-${Date.now()}`);
+    const home = join(tmpdir(), `open-recordings-cli-err-${Date.now()}`);
     tempDirs.push(home);
 
     const proc = Bun.spawn(
@@ -66,7 +64,7 @@ describe("recordings CLI", () => {
         env: {
           ...process.env,
           HOME: home,
-          OPENAI_API_KEY: "test-key-invalid",
+          OPENAI_API_KEY: "test-invalid-key",
           RECORDINGS_API_KEY: "",
         },
         stdout: "pipe",
@@ -116,7 +114,7 @@ describe("recordings CLI", () => {
   });
 
   test("agents lists via the local store (no DSN) as JSON", async () => {
-    const home = join(tmpdir(), `recordings-cli-agents-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-agents-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
 
@@ -143,7 +141,7 @@ describe("recordings CLI", () => {
   });
 
   test("project register returns a canonical local Store id", async () => {
-    const home = join(tmpdir(), `recordings-cli-project-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-project-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
     const proc = Bun.spawn(
@@ -179,7 +177,7 @@ describe("recordings CLI", () => {
   });
 
   test("--json app status reports package installer paths", async () => {
-    const home = join(tmpdir(), `recordings-cli-app-status-${Date.now()}`);
+    const home = join(tmpdir(), `open-recordings-cli-app-status-${Date.now()}`);
     tempDirs.push(home);
     const proc = Bun.spawn(
       [process.execPath, "src/cli/index.ts", "--json", "app", "status"],
@@ -219,7 +217,7 @@ describe("recordings CLI", () => {
     expect(status.package_root).toBe(process.cwd());
     expect(status.installer_available).toBe(true);
     expect(status.native_sources_available).toBe(true);
-    expect(status.installed_app_path).toBe(join(home, "Applications", "HasnaRecordings.app"));
+    expect(status.installed_app_path).toBe(join(home, "Applications", "Recordings.app"));
     expect(status.legacy_install_paths).toEqual([]);
     expect(typeof status.ad_hoc_signed).toBe("boolean");
     expect(status.app_code_hash === null || typeof status.app_code_hash === "string").toBe(true);
@@ -272,7 +270,7 @@ describe("recordings CLI", () => {
   });
 
   test("release install authenticates and snapshots exact manifest provenance before mutation", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-release-policy-"));
+    const root = mkdtempSync(join(tmpdir(), "open-recordings-release-policy-"));
     tempDirs.push(root);
     const sourceSha = "b".repeat(40);
     const manifest = {
@@ -335,7 +333,7 @@ describe("recordings CLI", () => {
   });
 
   test("release install rejects every operator constraint mismatch before snapshot creation", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-release-policy-reject-"));
+    const root = mkdtempSync(join(tmpdir(), "open-recordings-release-policy-reject-"));
     tempDirs.push(root);
     const sourceSha = "b".repeat(40);
     const manifest = {
@@ -582,7 +580,7 @@ describe("recordings CLI", () => {
   });
 
   test("installer environment cannot execute ambient Bun or Node preload controls", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-installer-preload-"));
+    const root = mkdtempSync(join(tmpdir(), "open-recordings-installer-preload-"));
     tempDirs.push(root);
     const marker = join(root, "hostile-preload-ran");
     const preload = join(root, "hostile-preload.ts");
@@ -615,7 +613,7 @@ describe("recordings CLI", () => {
   });
 
   test("compiled app install rejects itself as Bun and ignores a hostile PATH", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-compiled-bun-"));
+    const root = mkdtempSync(join(tmpdir(), "open-recordings-compiled-bun-"));
     tempDirs.push(root);
     const compiledCli = join(root, "recordings");
     const compile = Bun.spawnSync(
@@ -707,11 +705,11 @@ describe("recordings CLI", () => {
   });
 
   test("app status inspects the canonical app and reports legacy duplicates", async () => {
-    const home = join(tmpdir(), `recordings-cli-app-layout-${Date.now()}`);
+    const home = join(tmpdir(), `open-recordings-cli-app-layout-${Date.now()}`);
     tempDirs.push(home);
-    const canonical = join(home, "Applications", "HasnaRecordings.app");
-    const hiddenLegacy = join(home, ".hasna", "recordings", "HasnaRecordings.app");
-    const rollbackLegacy = join(home, "Applications", "HasnaRecordings.app.rollback-pre-test");
+    const canonical = join(home, "Applications", "Recordings.app");
+    const hiddenLegacy = join(home, ".hasna", "recordings", "Recordings.app");
+    const rollbackLegacy = join(home, "Applications", "Recordings.app.rollback-pre-test");
     mkdirSync(join(canonical, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(canonical, "Contents", "MacOS", "Recordings"), "fixture");
     mkdirSync(hiddenLegacy, { recursive: true });
@@ -762,12 +760,12 @@ describe("recordings CLI", () => {
   });
 
   test("duplicate installs are still flagged when the canonical path is absent", async () => {
-    const home = join(tmpdir(), `recordings-cli-app-ambiguous-${Date.now()}`);
+    const home = join(tmpdir(), `open-recordings-cli-app-ambiguous-${Date.now()}`);
     tempDirs.push(home);
     // No canonical bundle at all — the case that previously suppressed the flag, letting a
     // bundle nobody named answer for the grant holder in silence.
-    const hiddenLegacy = join(home, ".hasna", "recordings", "HasnaRecordings.app");
-    const rollbackLegacy = join(home, "Applications", "HasnaRecordings.app.prev");
+    const hiddenLegacy = join(home, ".hasna", "recordings", "Recordings.app");
+    const rollbackLegacy = join(home, "Applications", "Recordings.app.prev");
     mkdirSync(join(hiddenLegacy, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(hiddenLegacy, "Contents", "MacOS", "Recordings"), "fixture");
     mkdirSync(rollbackLegacy, { recursive: true });
@@ -797,7 +795,7 @@ describe("recordings CLI", () => {
   });
 
   test("with nothing installed no permission state reads as allowed and --json carries the warnings", async () => {
-    const home = join(tmpdir(), `recordings-cli-app-empty-${Date.now()}`);
+    const home = join(tmpdir(), `open-recordings-cli-app-empty-${Date.now()}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
 
@@ -916,7 +914,7 @@ describe("recordings CLI", () => {
     ]);
     expect(compactExit).toBe(0);
     expect(compactStderr).toBe("");
-    expect(compactStdout).toContain("Hasna Recordings.app");
+    expect(compactStdout).toContain("Recordings.app");
     expect(compactStdout).toContain("Use --verbose");
     expect(compactStdout).not.toContain(`Package: ${process.cwd()}`);
 
@@ -1017,7 +1015,7 @@ describe("recordings CLI", () => {
   });
 
   test("--json check emits machine-readable dependency status", async () => {
-    const home = join(tmpdir(), `recordings-cli-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
 
     const proc = Bun.spawn(
@@ -1063,7 +1061,7 @@ describe("recordings CLI", () => {
   });
 
   test("--json transcribe emits only one JSON payload on stdout", async () => {
-    const home = join(tmpdir(), `recordings-cli-json-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-json-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
     const audioPath = join(home, "sample.wav");
@@ -1122,7 +1120,7 @@ describe("recordings CLI", () => {
   });
 
   test("--json transcribe always post-processes and emits safe metadata", async () => {
-    const home = join(tmpdir(), `recordings-cli-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
     const audioPath = join(home, "sample.wav");
@@ -1210,7 +1208,7 @@ describe("recordings CLI", () => {
   });
 
   test("--json save-text persists degraded-sync text without an unsafe project id", async () => {
-    const home = join(tmpdir(), `recordings-cli-save-text-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-save-text-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
     const audioPath = join(home, "sample.wav");
@@ -1291,7 +1289,7 @@ describe("recordings CLI", () => {
   });
 
   test("explicit empty --recording-id is validated instead of treated as absent", async () => {
-    const home = join(tmpdir(), `recordings-cli-empty-recording-id-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-empty-recording-id-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
 
@@ -1355,7 +1353,7 @@ describe("recordings CLI", () => {
   });
 
   test("list is compact by default while JSON and detail preserve full text", async () => {
-    const home = join(tmpdir(), `recordings-cli-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
     const longText = `First compact transcript ${"middle words ".repeat(30)}hidden-tail-token`;
@@ -1480,7 +1478,7 @@ describe("recordings CLI", () => {
   });
 
   test("list prints cursor hints and caps oversized human limits", async () => {
-    const home = join(tmpdir(), `recordings-cli-cursor-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-cursor-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
     const env = isolatedCliEnv(home, {
@@ -1513,7 +1511,7 @@ describe("recordings CLI", () => {
   });
 
   test("mcp installer configures stdio args for Codex and Gemini", async () => {
-    const home = join(tmpdir(), `recordings-cli-mcp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const home = join(tmpdir(), `open-recordings-cli-mcp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
     const codexDir = join(home, ".codex");
     const geminiDir = join(home, ".gemini");

@@ -22,7 +22,6 @@ services:
     build: .
     command: ["bun", "dist/server/index.js", "migrate"]
     environment:
-      HASNA_RECORDINGS_STORAGE_MODE: postgresql
       HASNA_RECORDINGS_DATABASE_URL: postgres://recordings:recordings@postgres:5432/recordings?sslmode=disable
       HASNA_RECORDINGS_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:
@@ -36,7 +35,6 @@ services:
     environment:
       PORT: "8874"
       HOST: 0.0.0.0
-      HASNA_RECORDINGS_STORAGE_MODE: postgresql
       HASNA_RECORDINGS_DATABASE_URL: postgres://recordings:recordings@postgres:5432/recordings?sslmode=disable
       HASNA_RECORDINGS_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:

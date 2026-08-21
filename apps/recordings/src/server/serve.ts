@@ -10,9 +10,10 @@
  *   ANY /mcp      → MCP Streamable HTTP (same API-key auth as /v1)
  *
  * `mode` on the probe endpoints reports the server's DATA BACKEND — `sqlite` or
- * `postgresql`. It is not a deployment mode; those are removed. When the backend
- * is `postgresql` the `/v1` handlers read/write that database directly with
- * @hasna/contracts API-key auth, and no on-box sync/cache lives in the service.
+ * `postgresql` — selected by the environment (a PostgreSQL DSN is present, or
+ * not). When the backend is `postgresql` the `/v1` handlers read/write that
+ * database directly with @hasna/contracts API-key auth, and no on-box sync/cache
+ * lives in the service.
  */
 import { VERSION } from "../version.js";
 import { resolveDataBackend } from "./cloud-config.js";

@@ -198,7 +198,7 @@ export function describeActiveStore(
   if (resolution.transport === "http" && resolution.modeSource === AUTO_FLIP_MODE_SOURCE) {
     warnings.push(
       "the API transport was selected by the mere PRESENCE of " +
-        "HASNA_RECORDINGS_API_URL + HASNA_RECORDINGS_API_KEY, with no store variable set. " +
+        "HASNA_RECORDINGS_API_URL + HASNA_RECORDINGS_API_KEY. " +
         "Check `launchctl getenv HASNA_RECORDINGS_API_URL` too: a launchd session variable " +
         "is inherited by the GUI app as well as by shells, and is invisible in a login profile."
     );

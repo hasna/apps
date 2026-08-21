@@ -152,9 +152,11 @@ describe("recordings MCP HTTP transport", () => {
   });
 
   test("MCP agent/project pages and model stats enforce output caps", async () => {
-    const tempDir = join(tmpdir(), `recordings-mcp-caps-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    const previousStore = process.env.HASNA_RECORDINGS_CLIENT_STORE;
-    process.env.HASNA_RECORDINGS_CLIENT_STORE = "sqlite";
+    const tempDir = join(tmpdir(), `open-recordings-mcp-caps-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const previousApiUrl = process.env.HASNA_RECORDINGS_API_URL;
+    const previousApiKey = process.env.HASNA_RECORDINGS_API_KEY;
+    delete process.env.HASNA_RECORDINGS_API_URL;
+    delete process.env.HASNA_RECORDINGS_API_KEY;
     __resetStore();
     mkdirSync(tempDir, { recursive: true });
     resetDatabase();
@@ -238,19 +240,20 @@ describe("recordings MCP HTTP transport", () => {
       closeDatabase();
       resetDatabase();
       __resetStore();
-      if (previousStore === undefined) {
-        delete process.env.HASNA_RECORDINGS_CLIENT_STORE;
-      } else {
-        process.env.HASNA_RECORDINGS_CLIENT_STORE = previousStore;
-      }
+      if (previousApiUrl === undefined) delete process.env.HASNA_RECORDINGS_API_URL;
+      else process.env.HASNA_RECORDINGS_API_URL = previousApiUrl;
+      if (previousApiKey === undefined) delete process.env.HASNA_RECORDINGS_API_KEY;
+      else process.env.HASNA_RECORDINGS_API_KEY = previousApiKey;
       if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   test("MCP list/search keep full rows bounded and direct detail complete", async () => {
-    const tempDir = join(tmpdir(), `recordings-mcp-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    const previousStore = process.env.HASNA_RECORDINGS_CLIENT_STORE;
-    process.env.HASNA_RECORDINGS_CLIENT_STORE = "sqlite";
+    const tempDir = join(tmpdir(), `open-recordings-mcp-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const previousApiUrl = process.env.HASNA_RECORDINGS_API_URL;
+    const previousApiKey = process.env.HASNA_RECORDINGS_API_KEY;
+    delete process.env.HASNA_RECORDINGS_API_URL;
+    delete process.env.HASNA_RECORDINGS_API_KEY;
     __resetStore();
     mkdirSync(tempDir, { recursive: true });
     resetDatabase();
@@ -306,11 +309,10 @@ describe("recordings MCP HTTP transport", () => {
       closeDatabase();
       resetDatabase();
       __resetStore();
-      if (previousStore === undefined) {
-        delete process.env.HASNA_RECORDINGS_CLIENT_STORE;
-      } else {
-        process.env.HASNA_RECORDINGS_CLIENT_STORE = previousStore;
-      }
+      if (previousApiUrl === undefined) delete process.env.HASNA_RECORDINGS_API_URL;
+      else process.env.HASNA_RECORDINGS_API_URL = previousApiUrl;
+      if (previousApiKey === undefined) delete process.env.HASNA_RECORDINGS_API_KEY;
+      else process.env.HASNA_RECORDINGS_API_KEY = previousApiKey;
       if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
     }
   });
