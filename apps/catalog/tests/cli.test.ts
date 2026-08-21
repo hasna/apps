@@ -193,7 +193,7 @@ describe("catalog CLI as a real process", () => {
   it("exits zero with exact stdout for --version and no stderr", () => {
     const result = runCli(["--version"]);
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("0.2.0");
+    expect(result.stdout.trim()).toBe("0.2.1");
     expect(result.stderr).toBe("");
   });
 });
