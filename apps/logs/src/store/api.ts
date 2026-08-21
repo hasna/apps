@@ -491,17 +491,73 @@ export class ApiStore implements Store {
     query.order = "asc";
 
     let events = await this.listEvents(query);
-    // `service` lives in metadata/message on both tiers; the hosted tier has no
-    // service column, so the filter is applied client-side over the window.
+    // `service` lives in metadata/message on both tiers (the hosted tier has no
+    // service predicate on the event window), so the filter runs client-side.
+    // Page the hosted stream (after_time/after_id cursors) until `limit + 1`
+    // matching events are collected or the stream is exhausted — otherwise
+    // matches beyond the first window are silently truncated and has_more is
+    // computed over the UNFILTERED window. A safety bound never reports a
+    // silent false: on exhaustion it returns has_more=true with the last
+    // processed cursor so the caller continues instead of stopping early.
     const service = args.service;
-    if (service) events = events.filter((e) => matchesEventService(e, service));
+    let truncated = false;
+    let lastProcessedEventId: string | null = null;
+    if (service) {
+      const collected: EventCatalogEntry[] = [];
+      let page = events;
+      let collectedMatches = 0;
+      let anchor: { after_time: string; after_id: string } | null = null;
+      let guard = 0;
+      const PAGING_SAFETY_BOUND = 500;
+      while (collectedMatches <= limit && !truncated) {
+        const pageLast = page.at(-1);
+        if (pageLast) lastProcessedEventId = pageLast.event_id;
+        for (const entry of page) {
+          if (matchesEventService(entry, service)) {
+            collected.push(entry);
+            collectedMatches += 1;
+          }
+        }
+        if (collectedMatches > limit || page.length < (query.limit ?? 0)) break;
+        if (!pageLast) break;
+        const next = {
+          after_time: pageLast.event_time,
+          after_id: pageLast.event_id,
+        };
+        if (
+          anchor &&
+          next.after_time === anchor.after_time &&
+          next.after_id === anchor.after_id
+        ) {
+          // Non-advancing cursor: the stream cannot progress past this anchor.
+          break;
+        }
+        anchor = next;
+        query.after_time = next.after_time;
+        query.after_id = next.after_id;
+        guard += 1;
+        if (guard >= PAGING_SAFETY_BOUND) {
+          // Safety bound reached with matches still possibly beyond the
+          // window: report has_more=true with the last processed cursor so
+          // the caller continues from here — never a silent false.
+          truncated = true;
+          break;
+        }
+        page = await this.listEvents(query);
+      }
+      events = collected;
+    }
 
-    const hasMore = events.length > limit;
+    const hasMore = events.length > limit || truncated;
     const visible = events.slice(0, limit);
     const last = visible.at(-1);
     return {
       events: visible,
-      cursor: last?.event_id ?? (args.last_event_id ?? null),
+      cursor:
+        last?.event_id ??
+        (truncated
+          ? (lastProcessedEventId ?? args.last_event_id ?? null)
+          : (args.last_event_id ?? null)),
       has_more: hasMore,
       overflow: null,
     };

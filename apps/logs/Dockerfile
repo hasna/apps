@@ -18,7 +18,6 @@ RUN rm -rf node_modules && bun install --production --frozen-lockfile
 FROM --platform=linux/arm64 oven/bun:1.3.13-slim AS runtime
 ENV NODE_ENV=production \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-    HASNA_LOGS_STORAGE_MODE=cloud \
     PORT=8080
 WORKDIR /app
 

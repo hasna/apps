@@ -1546,6 +1546,12 @@ async function watchEventCatalog(
       // The store resets the cursor to the latest event; resume from there so
       // an unknown anchor never replays history.
       if (result.cursor) lastEventId = result.cursor;
+    } else if (result.events.length === 0 && result.cursor) {
+      // Empty baseline poll (no anchor, not from_start): the store reports the
+      // latest cursor and emits nothing. Adopt it so the next poll anchors
+      // after it — otherwise every poll repeats the baseline and events
+      // ingested after the first poll are never emitted.
+      lastEventId = result.cursor;
     }
     const rows = result.events;
     if (opts.once && opts.format === "json") {

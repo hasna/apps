@@ -225,6 +225,112 @@ describe("ApiStore.watchEvents (hosted event-catalog watch)", () => {
       "w1",
     ]);
   });
+
+  test("event inserted after the initial baseline poll is emitted on the anchored poll", async () => {
+    const { api } = buildApiStore();
+    await ingestWatchEvent(api, "b1", "2026-08-18T00:00:00.000Z", "baseline one");
+    await ingestWatchEvent(api, "b2", "2026-08-18T00:00:01.000Z", "baseline two");
+
+    const baseline = await api.watchEvents({ limit: 10 });
+    expect(baseline.events).toEqual([]);
+    expect(baseline.has_more).toBe(false);
+    expect(baseline.cursor).toBe("b2");
+
+    // The CLI watch loop adopts baseline.cursor as its next anchor; the event
+    // ingested after the first poll must then be emitted on the anchored poll.
+    await ingestWatchEvent(api, "b3", "2026-08-18T00:00:02.000Z", "after baseline");
+
+    const next = await api.watchEvents({
+      last_event_id: baseline.cursor ?? undefined,
+      limit: 10,
+    });
+    expect(next.overflow).toBeNull();
+    expect(next.events.map((e) => e.event_id)).toEqual(["b3"]);
+    expect(next.cursor).toBe("b3");
+  });
+
+  test("service filter pages past non-matching events instead of truncating", async () => {
+    const { api } = buildApiStore();
+    const messages = [
+      "alpha log 1",
+      "alpha log 2",
+      "alpha log 3",
+      "svc-a event 1",
+      "svc-a event 2",
+      "alpha log 4",
+      "svc-a event 3",
+      "alpha log 5",
+    ];
+    for (let i = 0; i < messages.length; i++) {
+      await ingestWatchEvent(
+        api,
+        `s${i + 1}`,
+        `2026-08-18T00:00:0${i}.000Z`,
+        messages[i],
+      );
+    }
+
+    const first = await api.watchEvents({
+      from_start: true,
+      service: "svc-a",
+      limit: 2,
+    });
+    expect(first.overflow).toBeNull();
+    expect(first.events.map((e) => e.event_id)).toEqual(["s4", "s5"]);
+    expect(first.has_more).toBe(true);
+    expect(first.cursor).toBe("s5");
+
+    const second = await api.watchEvents({
+      last_event_id: "s5",
+      service: "svc-a",
+      limit: 2,
+    });
+    expect(second.events.map((e) => e.event_id)).toEqual(["s7"]);
+    expect(second.has_more).toBe(false);
+  });
+
+  test("service filter safety bound never reports a silent false (has_more with last processed cursor)", async () => {
+    const { api } = buildApiStore();
+    // > PAGING_SAFETY_BOUND pages of non-matching events (page size limit+1=2,
+    // bound 500 => 1000 processed events) followed by one matching event, so
+    // the paging guard trips before the match is reached. The caller must
+    // learn has_more=true with the last processed cursor and then reach the
+    // match on the anchored poll — never a silent has_more=false.
+    for (let i = 1; i <= 1002; i++) {
+      const minutes = String(Math.floor((i - 1) / 60)).padStart(2, "0");
+      const seconds = String((i - 1) % 60).padStart(2, "0");
+      await ingestWatchEvent(
+        api,
+        `s${i}`,
+        `2026-08-18T00:${minutes}:${seconds}.000Z`,
+        `alpha log ${i}`,
+      );
+    }
+    await ingestWatchEvent(
+      api,
+      "s1003",
+      "2026-08-18T00:16:42.000Z",
+      "svc-a final",
+    );
+
+    const first = await api.watchEvents({
+      from_start: true,
+      service: "svc-a",
+      limit: 1,
+    });
+    expect(first.events.map((e) => e.event_id)).toEqual([]);
+    expect(first.has_more).toBe(true);
+    // 500 pages x 2 events processed before the safety bound trips.
+    expect(first.cursor).toBe("s1000");
+
+    const second = await api.watchEvents({
+      last_event_id: first.cursor ?? undefined,
+      service: "svc-a",
+      limit: 1,
+    });
+    expect(second.events.map((e) => e.event_id)).toEqual(["s1003"]);
+    expect(second.has_more).toBe(false);
+  });
 });
 
 describe("ApiStore scan port (hosted scan-run surface)", () => {
