@@ -84,7 +84,7 @@
 
     "@electric-sql/pglite": ["@electric-sql/pglite@0.5.4", "", {}, "sha512-yYZUyyXrHU7tPlCjwZQJ6hIG9DscdCCn7Uk0mYKwC1FeHX286AbcmFveMiRBEak8e9iPupjsoVImN3yJZVed2g=="],
 
-    "@hasna/contracts": ["@hasna/contracts@0.13.3", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-TiT1xqf4+DeWg3nvuLFSL6b/MW6IwZp5tyzTTb+BpHaSthEUQADK+/5p4/Nid9o00QqyL/ZUKIV+26gmi8CxrA=="],
+    "@hasna/contracts": ["@hasna/contracts@0.13.3", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" }, "peerDependencies": { "@hasna/secrets": "0.3.4" } }, "sha512-TiT1xqf4+DeWg3nvuLFSL6b/MW6IwZp5tyzTTb+BpHaSthEUQADK+/5p4/Nid9o00QqyL/ZUKIV+26gmi8CxrA=="],
 
     "@hasna/events": ["@hasna/events@0.1.14", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-UXzEM6/8XUeysIUHspe7U3lottNZ7Ir6zwEJn5wH3MCtTXHuh+Vva+uPCowf6RAVnhxZic3xrfYk5atVBRFyLA=="],
 
