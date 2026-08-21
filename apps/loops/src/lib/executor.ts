@@ -18,7 +18,14 @@ import type {
   LoopRun,
   PersistGuardOptions,
 } from "../types.js";
-import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
+import {
+  ACCOUNTS_ENV_TIMEOUT_MS,
+  accountDirEnvVar,
+  accountToolForProvider,
+  parseAccountExportLines,
+  resolveAccountEnv,
+  resolveAccountEnvSync,
+} from "./accounts.js";
 import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentInvocation } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, hasnaClientEnv, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
@@ -151,6 +158,9 @@ const AUTH_ENV_KEYS = [
   "XDG_STATE_HOME",
   "XDG_CACHE_HOME",
 ];
+
+/** Agent CLIs the accounts CLI can resolve an active profile for. */
+const AGENT_TOOL_NAMES = new Set(["claude", "cursor", "codewith", "codex", "opencode", "aicopilot"]);
 
 const TRANSPORT_ENV_KEYS = new Set([
   "BUN_INSTALL",
@@ -587,11 +597,56 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
   };
 }
 
+/**
+ * The agent CLI a target resolves to: a declared provider for agent targets, or
+ * the first command token for command targets (the headless-claude case that
+ * row e84f3956 measured). Unknown commands resolve to no tool and are untouched.
+ */
+function agentToolForSpec(spec: CommandSpec): string | undefined {
+  if (spec.agentProvider) return accountToolForProvider(spec.agentProvider);
+  const first = spec.command.trim().split(/\s+/, 1)[0];
+  return first && AGENT_TOOL_NAMES.has(first) ? first : undefined;
+}
+
+/**
+ * Fill-if-absent config-selecting env for a target whose tool is a configured
+ * agent CLI but which carries no explicit account. Regression row
+ * e84f3956-1083-4b4a-bb73-59f901b054b7 (measured 2026-07-30, runner-origin):
+ * the runner's own process.env lacks CLAUDE_CONFIG_DIR under systemd/launchd
+ * launchers, and neither ~/.hasna/cloud/*.env nor an explicit account supplies
+ * it, so headless claude resolved to the DEFAULT account profile — a silent
+ * identity switch (429 on the exhausted default, exit 1, zero cost, ~3s) while
+ * the configured profile sat idle. `accounts env --tool <tool>` with no name
+ * resolves the machine's ACTIVE profile — the same source interactive shells
+ * get — and this applies only its config-selecting DIR var (the measured proof
+ * of fix), never the API-key values. Any resolution failure degrades to the
+ * current behaviour (the tool falls back to its own default) rather than
+ * failing the run.
+ */
+async function activeProfileConfigEnv(
+  spec: CommandSpec,
+  opts: ExecuteOptions,
+): Promise<Record<string, string> | undefined> {
+  const tool = agentToolForSpec(spec);
+  const key = tool ? accountDirEnvVar(tool) : undefined;
+  if (!tool || !key) return undefined;
+  const base = { ...(opts.env ?? process.env) };
+  const result = await spawnCapture("accounts", ["env", "--tool", tool], {
+    env: base,
+    timeoutMs: ACCOUNTS_ENV_TIMEOUT_MS,
+  });
+  if (result.error || (result.status ?? 1) !== 0) return undefined;
+  const parsed = parseAccountExportLines(result.stdout);
+  const value = parsed[key];
+  return value ? { [key]: value } : undefined;
+}
+
 function composeExecutionEnv(
   spec: CommandSpec,
   metadata: ExecutionMetadata,
   opts: ExecuteOptions,
   accountEnv: Record<string, string> | undefined,
+  activeConfigEnv: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env) };
   // Machine-wide Hasna client config the runner's own process.env may be missing.
@@ -601,6 +656,14 @@ function composeExecutionEnv(
   // per-target `spec.env` both still win over machine config.
   for (const [key, value] of Object.entries(hasnaClientEnv(env))) {
     if (!env[key]) env[key] = value;
+  }
+  // Active-profile config-selecting var, fill-if-absent, same precedence tier as
+  // machine client config: explicit runner env, an explicit account, and
+  // per-target `spec.env` all still win over it.
+  if (activeConfigEnv) {
+    for (const [key, value] of Object.entries(activeConfigEnv)) {
+      if (!env[key]) env[key] = value;
+    }
   }
   if (accountEnv) {
     for (const key of AUTH_ENV_KEYS) delete env[key];
@@ -622,7 +685,8 @@ async function executionEnv(
   const accountEnv = spec.account
     ? await resolveAccountEnv(spec.account, spec.accountTool, { ...(opts.env ?? process.env) })
     : undefined;
-  return composeExecutionEnv(spec, metadata, opts, accountEnv);
+  const activeConfigEnv = accountEnv ? undefined : await activeProfileConfigEnv(spec, opts);
+  return composeExecutionEnv(spec, metadata, opts, accountEnv, activeConfigEnv);
 }
 
 function executionEnvSync(
@@ -633,7 +697,9 @@ function executionEnvSync(
   const accountEnv = spec.account
     ? resolveAccountEnvSync(spec.account, spec.accountTool, { ...(opts.env ?? process.env) })
     : undefined;
-  return composeExecutionEnv(spec, metadata, opts, accountEnv);
+  // The sync path is the preflight probe: it never executes the child, so the
+  // active-profile fill (an async accounts spawn) is deliberately not applied.
+  return composeExecutionEnv(spec, metadata, opts, accountEnv, undefined);
 }
 
 function resolvedMachine(opts: ExecuteOptions): LoopMachineRef | undefined {
