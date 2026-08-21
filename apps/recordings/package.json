@@ -47,7 +47,7 @@
     "verify:ci-suite": "bun scripts/ci-linux-suite.ts --check",
     "verify:ci-suite:run": "bun scripts/ci-linux-suite.ts --verify-run",
     "verify:ci-native": "bun scripts/ci-native-build.ts",
-    "test:gated": "bun scripts/ci-linux-suite.ts --check && RECORDINGS_TEST_TIMEOUT_MS=\"${RECORDINGS_TEST_TIMEOUT_MS:-120000}\" bun test --timeout \"$RECORDINGS_TEST_TIMEOUT_MS\" $(bun scripts/ci-linux-suite.ts --gated)",
+    "test:gated": "bun scripts/ci-linux-suite.ts --check && RECORDINGS_TEST_TIMEOUT_MS=\"${RECORDINGS_TEST_TIMEOUT_MS:-120000}\" bun test --timeout \"${RECORDINGS_TEST_TIMEOUT_MS:-120000}\" $(bun scripts/ci-linux-suite.ts --gated)",
     "test:vacuity-battery": "bun scripts/vacuity-manifest-gen.ts > \"${TMPDIR:-/tmp}/vacuity-corrupt-sites.tsv\" && bun scripts/vacuity-mutation-battery.ts \"${TMPDIR:-/tmp}/vacuity-corrupt-sites.tsv\"",
     "test:vacuity-battery:source": "bun scripts/vacuity-mutation-battery.ts scripts/vacuity-manifests/source-side.tsv",
     "test:vacuity-battery:chain": "bun scripts/vacuity-mutation-battery.ts scripts/vacuity-manifests/install-chain.tsv",
@@ -63,7 +63,7 @@
     "version:check": "bun run scripts/set-version.ts --check",
     "prepack": "bun run prepack:platform-gate && bun run version:check && bun run build && bun run verify:release && bun run scan:artifact",
     "prepack:platform-gate": "bash -c 'if [ \"$(uname -s)\" = Darwin ]; then bun run build:native-fs-guard; else echo \"WARN: native fs-guard build skipped on $(uname -s) — dry-run/CI pack; publish recordings from macOS\"; fi'",
-    "prepublishOnly": "bun run typecheck && bun run test",
+    "prepublishOnly": "bun run typecheck && bun run test:gated",
     "typecheck:shortcut-contract": "tsc --noEmit -p tsconfig.test.json"
   },
   "files": [
