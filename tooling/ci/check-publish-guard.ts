@@ -72,6 +72,48 @@ function scanNames(names: string[]): Array<{ name: string; pattern: string }> {
   return hits;
 }
 
+// Entry-name scanning alone is not enough: a generated bundle or dashboard
+// asset whose NAME is clean can still carry `*.hasna.xyz`, ARNs, AWS account
+// ids or internal-scope strings in its BYTES. `packFileNames` runs `npm pack
+// --dry-run --json`, which executes the member's `prepack` — so the packed
+// files exist on disk, post-build, when this runs. Read each packed path and
+// scan its text with the same pattern set, keeping the filename checks as an
+// additional control. Binary and oversize files cannot be scanned textually;
+// they are counted and reported rather than silently dropped.
+const MAX_CONTENT_BYTES = 4 * 1024 * 1024;
+
+function scanContents(
+  pkgDir: string,
+  names: string[],
+): { hits: Array<{ name: string; pattern: string }>; scanned: number; skipped: number } {
+  const hits: Array<{ name: string; pattern: string }> = [];
+  let scanned = 0;
+  let skipped = 0;
+  for (const name of names) {
+    const full = path.join(pkgDir, name);
+    let buf: Buffer;
+    try {
+      buf = fs.readFileSync(full);
+    } catch {
+      // npm pack --dry-run can enumerate allowlisted paths that are absent on
+      // disk (clean-checkout enumeration). Counted, never silently dropped.
+      skipped++;
+      continue;
+    }
+    if (buf.length === 0) continue;
+    if (buf.length > MAX_CONTENT_BYTES || buf.includes(0)) {
+      skipped++;
+      continue;
+    }
+    const text = buf.toString("utf-8");
+    for (const p of INTERNAL_PATTERNS) {
+      if (p.re.test(text)) hits.push({ name, pattern: p.name });
+    }
+    scanned++;
+  }
+  return { hits, scanned, skipped };
+}
+
 /**
  * npm writes the `--json` pack document (a JSON array) as the LAST thing on
  * stdout, after the prepack script's forwarded logs. Walk backward from the
@@ -202,19 +244,30 @@ function run(root: string): number {
       console.error(`PUBLISH-GUARD FAILED in ${pkg}: ${e.message}`);
       continue;
     }
-    const hits = scanNames(names);
+    const nameHits = scanNames(names);
+    const content = scanContents(pkg, names);
+    const hits = [...nameHits, ...content.hits];
+    const skippedNote = content.skipped > 0 ? `, ${content.skipped} binary/oversize/absent skipped` : "";
     if (hits.length > 0) {
       failed = true;
       console.error(`PUBLISH-GUARD VIOLATION in ${pkg} (${hits.length}):`);
       for (const h of hits) console.error(`  ${h.name} — pattern ${h.pattern}`);
     } else {
-      console.log(`publish guard: ${path.basename(pkg)} — ${names.length} tarball entries, 0 internal-infra strings`);
+      console.log(
+        `publish guard: ${path.basename(pkg)} — ${names.length} tarball entries, ${content.scanned} contents scanned, 0 internal-infra strings${skippedNote}`,
+      );
     }
   }
   return failed ? 1 : 0;
 }
 
-function fixturePackage(appsRoot: string, name: string, files: string[], broken: boolean): void {
+function fixturePackage(
+  appsRoot: string,
+  name: string,
+  files: string[],
+  broken: boolean,
+  contents?: Record<string, string>,
+): void {
   const dir = path.join(appsRoot, name);
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(path.join(dir, "data"), { recursive: true });
@@ -234,7 +287,7 @@ function fixturePackage(appsRoot: string, name: string, files: string[], broken:
   }
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
   for (const f of files) {
-    fs.writeFileSync(path.join(dir, "data", f), "fixture content\n");
+    fs.writeFileSync(path.join(dir, "data", f), contents?.[f] ?? "fixture content\n");
   }
 }
 
@@ -336,6 +389,35 @@ function selfTest(): number {
     check(
       "clean pack PASSES and is non-vacuous (rc=0, >=1 real tarball entry)",
       clean.rc === 0 && entries >= 1,
+    );
+
+    // Content-scan checks: a pack entry whose NAME is clean but whose BYTES
+    // carry an internal-infra string must FAIL the guard (the defect the
+    // previous name-only scan could not see), and the content census must be
+    // on the pass line so a content scan that silently read nothing is
+    // distinguishable from one that read the files.
+    const contentRoot = path.join(root, "content-root");
+    fs.mkdirSync(contentRoot, { recursive: true });
+    fixturePackage(
+      path.join(contentRoot, "apps"),
+      "self-test-content",
+      ["notes.txt"],
+      false,
+      { "notes.txt": `deploy endpoint: https://api.${"hasna" + "." + "xyz"}\n` },
+    );
+    const content = capture(() => run(contentRoot));
+    const contentOut = content.lines.join("\n");
+    check(
+      "internal-infra string in a pack entry's CONTENT FIRES even with a clean name (rc=1, pattern named)",
+      content.rc === 1 &&
+        contentOut.includes("PUBLISH-GUARD VIOLATION") &&
+        contentOut.includes("notes.txt") &&
+        contentOut.includes("hasna-xyz-domain"),
+    );
+    check(
+      "clean pack reports the content scan census (entries + contents scanned)",
+      clean.rc === 0 &&
+        /\d+ tarball entries, \d+ contents scanned, 0 internal-infra strings/.test(cleanOut),
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

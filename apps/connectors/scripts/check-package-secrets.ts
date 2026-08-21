@@ -221,8 +221,8 @@ function scanNpmrc(path: string, lines: string[]): Finding[] {
         });
       }
     }
-    findings.push(...scanCredentialedUrl(path, i + 1, line));
-    findings.push(...scanTokenPatterns(path, i + 1, line));
+    // Token and credentialed-URL rules are NOT duplicated here: scanPaths
+    // applies scanLineRules exactly once to every scanned text file.
   }
   return findings;
 }
@@ -265,7 +265,8 @@ function scanBunConfig(path: string, lines: string[]): Finding[] {
     inReleaseAgeExcludes = startsReleaseAgeExcludes
       ? line.includes("[") && !line.includes("]")
       : inReleaseAgeExcludes && !line.includes("]");
-    findings.push(...scanTokenPatterns(path, i + 1, line));
+    // Token and credentialed-URL rules are NOT duplicated here: scanPaths
+    // applies scanLineRules exactly once to every scanned text file.
   }
   if (!hasMinimumReleaseAge) {
     findings.push({
@@ -303,6 +304,19 @@ function scanTokenPatterns(path: string, line: number, text: string): Finding[] 
     }
   }
   return findings;
+}
+
+// Credential-bearing text is not confined to package-manager files. A value
+// that survives minification is still a value, and the previous release
+// documented a real credential-adjacent leak that existed only in the
+// COMPILED bin/index.js (see CHANGELOG 1.4.1). Token and credentialed-URL
+// rules therefore run on EVERY scanned text file — source, docs, generated
+// bundles alike — while npmrc/bunfig keep their richer format rules.
+function scanLineRules(path: string, lines: string[]): Finding[] {
+  return lines.flatMap((line, index) => [
+    ...scanTokenPatterns(path, index + 1, line),
+    ...scanCredentialedUrl(path, index + 1, line),
+  ]);
 }
 
 export function scanDeploymentIdentifiers(path: string, lines: string[]): Finding[] {
@@ -361,11 +375,17 @@ export function scanPaths(paths: string[]): ScanResult {
     if (text === null) continue;
     scanned++;
     const lines = text.split(/\r?\n/);
-    if (packageManagerFile) {
-      if (isNpmrcName(basename(path))) findings.push(...scanNpmrc(path, lines));
-      else if (basename(path) === "bunfig.toml" || basename(path) === ".bunfig.toml") findings.push(...scanBunConfig(path, lines));
-      else findings.push(...lines.flatMap((line, index) => scanTokenPatterns(path, index + 1, line)));
+    if (isNpmrcName(basename(path))) {
+      findings.push(...scanNpmrc(path, lines));
+    } else if (basename(path) === "bunfig.toml" || basename(path) === ".bunfig.toml") {
+      findings.push(...scanBunConfig(path, lines));
     }
+    // Token and credentialed-URL rules apply EXACTLY ONCE to every scanned
+    // text file — lockfiles, source, docs, generated bundles (bin/, dist/,
+    // dashboard/dist/) once the scan runs after the build, and npmrc/bunfig
+    // alike. A value that survived bundling or config formatting is still a
+    // value. Format-specific checks live in the parsers above.
+    findings.push(...scanLineRules(path, lines));
     findings.push(...scanDeploymentIdentifiers(path, lines));
   }
   return { findings, scanned, symlinks, absent };

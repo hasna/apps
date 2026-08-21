@@ -333,16 +333,11 @@ export function registerCommands(program: Command): void {
           console.log(`  ${chalk.cyan(oauthUrl)}\n`);
 
           // Try to open the browser
-          try {
-            const { spawn } = await import("child_process");
-            const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-            const p = spawn(openCmd, [oauthUrl], { stdio: "ignore", detached: true });
-            // An 'error' listener is required: without one, a missing opener binary
-            // emits an async 'error' event that escapes the try/catch and kills the process.
-            p.on("error", () => {});
-            p.unref();
+          const { openBrowser } = await import("../../lib/open-browser.js");
+          const opened = await openBrowser(oauthUrl);
+          if (opened.ok) {
             console.log(chalk.dim("Browser opened. Complete the OAuth flow, then press Ctrl+C to stop the server."));
-          } catch {
+          } else {
             console.log(chalk.dim("Open the URL above in your browser to complete authentication."));
           }
 
