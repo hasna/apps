@@ -4,7 +4,7 @@
 // src/serve.ts
 import { readFileSync as readFileSync2 } from "fs";
 
-// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/auth/index.js
+// ../contracts/dist/auth/index.js
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 var MAX_TENANT_ID_LENGTH = 64;
 var TENANT_ID_PATTERN = new RegExp(`^[A-Za-z0-9][A-Za-z0-9._-]{0,${MAX_TENANT_ID_LENGTH - 1}}$`);
@@ -972,53 +972,6 @@ class PostgresProjectLinksSql {
     if (!this.transactionClient)
       return fn(this);
     return this.transactionClient.transaction((tx) => fn(new PostgresProjectLinksSql(tx)));
-  }
-}
-
-class SqliteProjectLinksSql {
-  db;
-  kind = "sqlite";
-  tail = Promise.resolve();
-  closed = false;
-  constructor(db) {
-    this.db = db;
-  }
-  async close() {
-    await this.tail;
-    if (this.closed)
-      return;
-    this.closed = true;
-    this.db.close();
-  }
-  async get(sql, params = []) {
-    return this.db.query(sql).get(...params) ?? null;
-  }
-  async many(sql, params = []) {
-    return this.db.query(sql).all(...params);
-  }
-  async run(sql, params = []) {
-    const result = this.db.query(sql).run(...params);
-    return { changes: Number(result.changes) };
-  }
-  async lock(_key) {}
-  transaction(fn) {
-    const run = this.tail.then(async () => {
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
-        const result = await fn(this);
-        this.db.exec("COMMIT");
-        return result;
-      } catch (error) {
-        this.db.exec("ROLLBACK");
-        throw error;
-      }
-    });
-    this.tail = run.then(() => {
-      return;
-    }, () => {
-      return;
-    });
-    return run;
   }
 }
 function postgresKnowledgeProjectLinksSchemaStatements() {

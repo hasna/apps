@@ -2227,6 +2227,6 @@ function spoolFileName(event) {
   return `${createHash("sha256").update(identity, "utf8").digest("hex")}.json`;
 }
 export {
-  defaultWebhookSecretResolver,
-  DurableEventsBroker
+  DurableEventsBroker,
+  defaultWebhookSecretResolver
 };

@@ -57,7 +57,7 @@ function fakeStore() {
 }
 
 function handler(store = fakeStore()) {
-  const verifier = verifyApiKey({ app: "secrets", signingSecret: SIGNING });
+  const verifier = verifyApiKey({ app: "secrets", signingSecret: SIGNING, allowUnregisteredKeys: true });
   return createHandler({ client: fakeClient(), store, verifier });
 }
 

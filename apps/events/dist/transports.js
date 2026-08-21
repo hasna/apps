@@ -214,9 +214,9 @@ function createDeliveryResult(event, channel, attempts) {
   };
 }
 export {
-  dispatchWebhook,
-  dispatchCommand,
-  dispatchChannel,
+  buildWebhookRequest,
   createDeliveryResult,
-  buildWebhookRequest
+  dispatchChannel,
+  dispatchCommand,
+  dispatchWebhook
 };

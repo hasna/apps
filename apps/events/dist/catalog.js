@@ -175,17 +175,17 @@ function registerDistributionEventTypes(catalog = defaultEventTypeCatalog) {
   return catalog;
 }
 export {
-  validateRolloutData,
-  validateReleasePublishedData,
-  validateFeedbackTriagedData,
-  validateFeedbackCreatedData,
-  validateAppInstalledData,
-  validateAnnouncementSentData,
-  registerDistributionEventTypes,
-  defaultEventTypeCatalog,
-  createDistributionEventDefinitions,
-  EventValidationError,
-  EventTypeCatalog,
+  DISTRIBUTION_EVENT_CONTRACT_SCHEMAS,
   DISTRIBUTION_EVENT_TYPES,
-  DISTRIBUTION_EVENT_CONTRACT_SCHEMAS
+  EventTypeCatalog,
+  EventValidationError,
+  createDistributionEventDefinitions,
+  defaultEventTypeCatalog,
+  registerDistributionEventTypes,
+  validateAnnouncementSentData,
+  validateAppInstalledData,
+  validateFeedbackCreatedData,
+  validateFeedbackTriagedData,
+  validateReleasePublishedData,
+  validateRolloutData
 };
