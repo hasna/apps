@@ -203,7 +203,12 @@ export function getCloudVerifier(): ApiKeyVerifier {
   cachedVerifier = verifyApiKey({
     app: TODOS_APP_SLUG,
     signingSecret,
-    isRevoked: store.isRevoked,
+    // Strict key-status hook: anything other than "active" (unknown, revoked,
+    // expired) denies. The contract refuses the deprecated `isRevoked`-only
+    // wiring eagerly at construction (contracts #62, 0.8.7+) — the 0.15.38
+    // /v1 503 incident (row ae34a051, incident 720366) was exactly that throw
+    // surfacing as 503 on every business route.
+    keyStatus: store.keyStatus,
   });
   return cachedVerifier;
 }
