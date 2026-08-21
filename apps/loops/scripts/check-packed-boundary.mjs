@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { scanPackedContent } from "./packed-content-scan.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -97,20 +98,14 @@ try {
   ]);
   process.stdout.write(scan.stdout);
 
-  // Content-level credential scan over the extracted package. Fail closed on
-  // any finding (rc=1) and on a scan that could not run (rc=2).
-  const secretScan = spawnSync(
-    "secrets",
-    ["scan", "workspace", packageRoot, "--json"],
-    { encoding: "utf8" },
+  // Content-level credential scan over the extracted package. `secrets scan
+  // workspace` reports findings in its JSON payload and still exits 0, so
+  // scanPackedContent parses the payload and fails closed on any finding, any
+  // scan error, or any unparseable output (see packed-content-scan.mjs).
+  const scanResult = scanPackedContent(packageRoot);
+  process.stdout.write(
+    `Loops packed artifact secrets scan passed (${scanResult.stats?.filesScanned ?? "-"} files scanned)\n`,
   );
-  if (secretScan.status !== 0) {
-    throw new Error(
-      `packed content secrets scan failed (rc=${secretScan.status})\n` +
-        [secretScan.stdout, secretScan.stderr].filter(Boolean).join("\n"),
-    );
-  }
-  process.stdout.write("Loops packed artifact secrets scan passed\n");
   console.log("Loops packed artifact boundary and loops-api export smoke passed");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });

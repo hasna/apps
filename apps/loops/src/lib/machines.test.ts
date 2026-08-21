@@ -7,6 +7,7 @@ import { listOpenMachines, refreshLoopMachine, resolveLoopMachine, resolveMachin
 const LOCAL_ID = "openloops-test-local-a71";
 const REMOTE_ID = "openloops-test-remote-b82";
 const REMOTE_HOSTNAME = "openloops-test-remote-host";
+const REMOTE_SSH = "tester@openloops-remote.example";
 
 describe("machines", () => {
   let root: string;
@@ -16,22 +17,36 @@ describe("machines", () => {
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "loops-machines-"));
     home = mkdtempSync(join(tmpdir(), "loops-machines-home-"));
-    for (const key of ["HASNA_MACHINES_DIR", "HASNA_MACHINES_MACHINE_ID"]) savedEnv[key] = process.env[key];
+    for (const key of [
+      "HASNA_MACHINES_DIR",
+      "HASNA_MACHINES_MACHINE_ID",
+      "HASNA_MACHINES_REACHABLE_HOSTS",
+    ]) {
+      savedEnv[key] = process.env[key];
+    }
     process.env.HASNA_MACHINES_DIR = root;
     process.env.HASNA_MACHINES_MACHINE_ID = LOCAL_ID;
+    // The machines consumer default-denies manifest ssh routes: an ssh hint is
+    // selected only when its host is allowlisted via HASNA_MACHINES_REACHABLE_HOSTS.
+    process.env.HASNA_MACHINES_REACHABLE_HOSTS = REMOTE_SSH;
+    // Fixture machines carry a fresh updatedAt so the consumer's newest-first
+    // topology page (default limit 10) includes them on boxes whose live
+    // tailscale fleet would otherwise crowd the fixture off the first page.
+    const now = new Date().toISOString();
     writeFileSync(
       join(root, "machines.json"),
       JSON.stringify({
         version: 1,
         machines: [
-          { id: LOCAL_ID, platform: "linux", workspacePath: "/workspace/local", connection: "local" },
+          { id: LOCAL_ID, platform: "linux", workspacePath: "/workspace/local", connection: "local", updatedAt: now },
           {
             id: REMOTE_ID,
             hostname: REMOTE_HOSTNAME,
             platform: "linux",
             workspacePath: "/workspace/remote",
-            sshAddress: "tester@openloops-remote.example",
+            sshAddress: REMOTE_SSH,
             tags: ["test"],
+            updatedAt: now,
           },
         ],
       }),

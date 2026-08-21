@@ -697,12 +697,21 @@ describe("Loops MCP server", () => {
     roots.push(root);
     const machinesDir = mkdtempSync(join(tmpdir(), "loops-mcp-machines-"));
     const PIN_ID = "mcp-pin-test-machine";
+    // updatedAt: the machines consumer's topology page is newest-first with a
+    // default limit of 10, so a fixture entry needs a fresh timestamp to
+    // survive on boxes whose live tailscale fleet fills the first page.
     writeFileSync(
       join(machinesDir, "machines.json"),
       JSON.stringify({
         version: 1,
         machines: [
-          { id: PIN_ID, platform: "linux", workspacePath: "/workspace/pin", connection: "local" },
+          {
+            id: PIN_ID,
+            platform: "linux",
+            workspacePath: "/workspace/pin",
+            connection: "local",
+            updatedAt: new Date().toISOString(),
+          },
         ],
       }),
     );
@@ -775,12 +784,21 @@ describe("Loops MCP server", () => {
     roots.push(root);
     const machinesDir = mkdtempSync(join(tmpdir(), "loops-mcp-workflow-machines-"));
     const PIN_ID = "mcp-pin-workflow-machine";
+    // updatedAt: see the loops_create_command twin above — newest-first
+    // topology pagination (default limit 10) crowds fixture entries without a
+    // fresh timestamp off the first page on fleet boxes.
     writeFileSync(
       join(machinesDir, "machines.json"),
       JSON.stringify({
         version: 1,
         machines: [
-          { id: PIN_ID, platform: "linux", workspacePath: "/workspace/pin", connection: "local" },
+          {
+            id: PIN_ID,
+            platform: "linux",
+            workspacePath: "/workspace/pin",
+            connection: "local",
+            updatedAt: new Date().toISOString(),
+          },
         ],
       }),
     );

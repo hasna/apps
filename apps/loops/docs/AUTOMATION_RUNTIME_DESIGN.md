@@ -584,7 +584,7 @@ Planned flags:
 loops workflows upsert-one-shot ./workflow.json \
   --execution-mode strict \
   --env-allow PATH,HOME,TMPDIR \
-  --secret-ref OPENROUTER_API_KEY=hasna/openrouter/live/api-key \
+  --secret-ref OPENROUTER_API_KEY=<vault:openrouter/live/api-key> \
   --allow-command bun,test,git \
   --allow-tool functions.exec_command \
   --require-allowlist-enforcement \

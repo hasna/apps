@@ -261,12 +261,21 @@ describe("loops CLI machine assignment", () => {
     // Minimal OpenMachines topology on disk, same shape the machines lib's
     // own tests use: the CLI subprocess resolves --machine through it.
     const machinesDir = mkdtempSync(join(tmpdir(), "loops-cli-machines-"));
+    // updatedAt: the machines consumer's topology page is newest-first with a
+    // default limit of 10, so a fixture entry needs a fresh timestamp to
+    // survive on boxes whose live tailscale fleet fills the first page.
     writeFileSync(
       join(machinesDir, "machines.json"),
       JSON.stringify({
         version: 1,
         machines: [
-          { id: PIN_ID, platform: "linux", workspacePath: "/workspace/pin", connection: "local" },
+          {
+            id: PIN_ID,
+            platform: "linux",
+            workspacePath: "/workspace/pin",
+            connection: "local",
+            updatedAt: new Date().toISOString(),
+          },
         ],
       }),
     );

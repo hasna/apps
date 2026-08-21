@@ -83,7 +83,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 120000",
     "check:branding": "bun test --timeout 120000 scripts/check-branding.test.mjs && bun run scripts/check-branding.mjs",
-    "test:boundary": "bun test --timeout 120000 scripts/no-private-cloud-boundary.test.mjs && bun run scripts/no-private-cloud-boundary.mjs",
+    "test:boundary": "bun test --timeout 120000 scripts/no-private-cloud-boundary.test.mjs scripts/packed-content-scan.test.mjs && bun run scripts/no-private-cloud-boundary.mjs",
     "check:contracts": "bun run scripts/check-storage-kit.mjs && bun run scripts/check-contract-conformance.mjs",
     "check:supply-chain:audit": "bun run ../../tooling/ci/check-audit-packed.mjs",
     "check:supply-chain:artifacts": "bun run check:contracts && bun run check:branding && bun pm pack --dry-run --ignore-scripts && bun run test:boundary && bun run scripts/check-packed-boundary.mjs",
