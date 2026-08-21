@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - d0ad3a7: fix: generate:sdk passes again at @hasna/contracts 0.13.1 — the query serializer now emits array-aware serialization natively (per-item append, null/undefined skipped), so the script asserts the measured 0.13.1 shape instead of patching the retired 0.8.4 scalar-only output, and v1.generated.ts is regenerated from the current API.
+- release-gate remediation (adversarial review of the 0.3.6 candidate): all version sites (src/version.ts, Info.plist) synced to 0.3.6 so the prepack version:check passes and the CLI reports the published version; apps/recordings/bun.lock regenerated to resolve @hasna/contracts 0.13.1 (frozen-lockfile installs in Dockerfile.package and build_companion_cli.sh now accept the tarball); the macOS initial-bootstrap artifact basename is derived from the canonical HasnaRecordings.app identity instead of the retired Recordings-* form; the release install resolves the root-owned update client from the installed app path so legacy 0.3.2-era /Applications/Recordings.app installs upgrade in place, and the preinstall cohort validation accepts the legacy bundle path.
 
 ## 0.3.5
 

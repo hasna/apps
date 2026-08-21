@@ -62,10 +62,10 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": [
       "sqlite",
-      "postgres"
+      "postgresql"
     ],
     "envPrefix": "HASNA_RECORDINGS_",
     "aliasEnvPrefix": "RECORDINGS_",

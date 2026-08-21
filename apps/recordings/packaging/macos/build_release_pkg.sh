@@ -222,8 +222,14 @@ done
 case "$VERSION" in
   ''|*[!0-9A-Za-z._+-]*) echo "Package version is missing or invalid." >&2; exit 2 ;;
 esac
-[ "$ARTIFACT_BASENAME" = "Recordings-${VERSION}-macos-initial-bootstrap" ] || {
-  echo "Initial-bootstrap package artifact basename is missing or mode-incompatible." >&2
+# The artifact basename is derived from the canonical bundle identity, never hardcoded:
+# build.sh emits ${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE} with APP_BASENAME
+# taken from the bundle name (currently HasnaRecordings.app). The legacy
+# Recordings-* form was dropped with the bundle rename and must not be re-required.
+[ -n "$APP" ] && [ -d "$APP" ] || { echo "Package app bundle path is missing or invalid." >&2; exit 2; }
+expected_basename="$(/usr/bin/basename "$APP" .app)-${VERSION}-macos-initial-bootstrap"
+[ "$ARTIFACT_BASENAME" = "$expected_basename" ] || {
+  echo "Initial-bootstrap package artifact basename is missing or mode-incompatible (expected ${expected_basename})." >&2
   exit 2
 }
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Package source SHA must be an exact commit." >&2; exit 2; }
