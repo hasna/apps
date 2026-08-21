@@ -42,12 +42,14 @@ describe("resolveSessionStore flip", () => {
     expect(resolveSessionStore({}).mode).toBe("local");
   });
 
-  test("cloud when self_hosted + URL + key set", () => {
+  test("cloud when URL + key set (the retired mode var is inert)", () => {
     expect(resolveSessionStore(CLOUD_ENV).mode).toBe("cloud");
   });
 
-  test("throws (no silent local drift) when cloud requested but misconfigured", () => {
-    expect(() => resolveSessionStore({ HASNA_SESSIONS_MODE: "self_hosted" })).toThrow();
+  test("a mode-only env is local — the retired mode vars are ignored", () => {
+    // HASNA_SESSIONS_MODE is retired deployment-mode vocabulary (owner directive
+    // 2026-07-29); the contracts client reads the API URL + key pair only.
+    expect(resolveSessionStore({ HASNA_SESSIONS_MODE: "self_hosted" }).mode).toBe("local");
   });
 });
 
