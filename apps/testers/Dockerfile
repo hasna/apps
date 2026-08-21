@@ -11,8 +11,18 @@ WORKDIR /app
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PUPPETEER_SKIP_DOWNLOAD=1
 
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# I38-00566: there is NO committed apps/testers/bun.lock (verified at
+# origin/main), so `COPY package.json bun.lock ./` failed every build with
+# "COPY failed: /bun.lock not found". The lockfile cannot be generated while
+# the manifest pins @hasna/browser@0.5.18, which is not on the npm registry
+# (measured E404 2026-08-21; latest published is 0.5.16 — the frozen-lock gate
+# carries testers on its UNRESOLVABLE_PINS list for exactly this reason). So
+# the deps stage follows the telephony sibling pattern (non-frozen install,
+# globbed lockfile copy): `bun.lock*` copies the lockfile when one exists and
+# resolves from the manifest otherwise. The build can only leave this state
+# when the owning release lane publishes @hasna/browser@0.5.18 (or repins).
+COPY package.json bun.lock* ./
+RUN bun install
 
 COPY . .
 # Build only the runtime surfaces (dashboard/types not needed to serve /v1).
