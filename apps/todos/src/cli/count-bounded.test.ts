@@ -19,6 +19,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 setDefaultTimeout(30_000);
 
@@ -84,7 +85,7 @@ async function runRemote(args: string[]): Promise<RemoteResult> {
   try {
     const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
       cwd: REPO_ROOT,
-      env: {
+      env: deliverTodosApiKeyViaDisk({
         PATH: process.env.PATH ?? "",
         HOME: join(root, "home"),
         TMPDIR: root,
@@ -93,7 +94,7 @@ async function runRemote(args: string[]): Promise<RemoteResult> {
         TODOS_AUTO_PROJECT: "false",
         HASNA_TODOS_API_URL: server.url.origin,
         HASNA_TODOS_API_KEY: TEST_AUTHORITY,
-      },
+}),
       stdout: "pipe",
       stderr: "pipe",
     });

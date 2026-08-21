@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 // End-to-end proof that a task can be re-parented across projects/task-lists
 // against the remote /v1 authority: the task keeps its id, lands in project B
@@ -32,7 +33,7 @@ afterEach(() => {
 async function runCli(args: string[], root: string, baseUrl: string) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -41,7 +42,7 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

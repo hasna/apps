@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 /**
  * Regression: `show`/`inspect` emitted `comments_page.next_cursor` and
@@ -41,7 +42,7 @@ function stderrWithoutAttributionWarning(stderr: string): string {
 async function runCli(args: string[], root: string, baseUrl: string) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -50,7 +51,7 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

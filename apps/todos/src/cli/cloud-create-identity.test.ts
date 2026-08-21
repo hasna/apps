@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const FETCH_FIXTURE = join(import.meta.dir, "fixtures/cloud-create-identity-fetch.ts");
@@ -19,7 +20,7 @@ async function runCli(args: string[], root: string, requestLog: string, extraEnv
     "bun", "run", "--preload", FETCH_FIXTURE, "src/cli/index.tsx", ...args,
   ], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -31,7 +32,7 @@ async function runCli(args: string[], root: string, requestLog: string, extraEnv
       HASNA_TODOS_API_KEY: "fixture-key-not-a-secret",
       TODOS_CREATE_IDENTITY_REQUEST_LOG: requestLog,
       ...extraEnv,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

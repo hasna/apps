@@ -6,6 +6,7 @@ import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask, addDependency, completeTask, updateTask, getTaskWithRelations } from "../db/tasks.js";
 import { getTaskDependencyEdges, buildTaskDependencyEdges } from "../lib/dependency-graph.js";
 import type { Task } from "../types/index.js";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 /**
  * REGRESSION — inverted dependency semantics in the machine-readable reads
@@ -272,7 +273,7 @@ function startServer(options: {
 async function runCloud(args: string[], root: string, baseUrl: string) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -281,7 +282,7 @@ async function runCloud(args: string[], root: string, baseUrl: string) {
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

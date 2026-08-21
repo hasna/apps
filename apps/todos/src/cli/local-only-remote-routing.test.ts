@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectExternalBunDuplicatePackageWarning } from "../test/bun-fixture-isolation.js";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const tempRoots: string[] = [];
@@ -69,7 +70,7 @@ describe("local-only commands with hosted routing configured", () => {
     writeFileSync(positiveFixture, "+SAFE-REDACTION-FIXTURE-1234\n");
     writeFileSync(negativeFixture, "+ordinary staged diff text\n");
 
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -79,7 +80,7 @@ describe("local-only commands with hosted routing configured", () => {
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "[REDACTED_SECRET]",
-    };
+});
 
     try {
       const configured = await runCli([

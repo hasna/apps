@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 /** `todos add` warns on stderr when a task ends up both unassigned and unattributed.
  *  That warning is the fix, not incidental noise, so it is stripped here rather than
@@ -56,7 +57,7 @@ afterEach(() => {
 async function runCli(args: string[], root: string, baseUrl: string, env: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -67,7 +68,7 @@ async function runCli(args: string[], root: string, baseUrl: string, env: Record
       HASNA_TODOS_API_KEY: TEST_API_KEY,
       TODOS_LIST_SCAN_LIMIT: SCAN_LIMIT,
       ...env,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

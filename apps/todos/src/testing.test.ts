@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   applyLocalTodosTestEnv,
   assertLocalTodosTestEnv,
@@ -90,5 +91,49 @@ describe("scrub coverage against the resolver", () => {
     ]);
     const uncovered = [...read].filter((key) => !covered.has(key)).sort();
     expect(uncovered).toEqual([]);
+  });
+
+  test("a no-HOME caller cannot touch the machine credential file", () => {
+    // Negative control (hasna/apps#719 review P1): disk delivery of a fixture
+    // key must happen only under a DELIBERATELY supplied HOME. A caller that
+    // does not override HOME inherits the machine home through process.env and
+    // must never receive a write to ~/.hasna/cloud/todos.env — doing so would
+    // replace the machine's configured credential with the fixture value.
+    const machineFile = join(
+      process.env.HOME ?? "/nonexistent",
+      ".hasna",
+      "cloud",
+      "todos.env",
+    );
+    const before = existsSync(machineFile)
+      ? { size: statSync(machineFile).size, mtimeNs: statSync(machineFile).mtimeNs }
+      : null;
+
+    localTodosTestEnv({
+      HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
+      HASNA_TODOS_API_KEY: "throwaway",
+    });
+
+    const after = existsSync(machineFile)
+      ? { size: statSync(machineFile).size, mtimeNs: statSync(machineFile).mtimeNs }
+      : null;
+    expect(after).toEqual(before);
+  });
+
+  test("a HOME-overriding caller delivers the key to that home only", () => {
+    // Positive control: with HOME deliberately supplied, the fixture key lands
+    // in the override home's credential file and nowhere else.
+    const home = mkdtempSync(join(tmpdir(), "todos-fixture-delivery-"));
+    try {
+      localTodosTestEnv({
+        HOME: home,
+        HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
+        HASNA_TODOS_API_KEY: "throwaway",
+      });
+      const written = readFileSync(join(home, ".hasna", "cloud", "todos.env"), "utf8");
+      expect(written).toContain("HASNA_TODOS_API_KEY=throwaway");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

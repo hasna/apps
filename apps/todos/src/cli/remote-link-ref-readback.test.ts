@@ -12,6 +12,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 setDefaultTimeout(60_000);
 
@@ -149,7 +150,7 @@ async function spawnCli(
 
 async function runRemote(args: string[], port: number, root: string): Promise<CliResult> {
   const localDbPath = join(root, "local-must-not-exist", "todos.db");
-  const result = await spawnCli(args, {
+  const result = await spawnCli(args, deliverTodosApiKeyViaDisk({
     PATH: process.env.PATH ?? "",
     BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
     HOME: join(root, "home"),
@@ -159,7 +160,7 @@ async function runRemote(args: string[], port: number, root: string): Promise<Cl
     TODOS_DB_PATH: localDbPath,
     HASNA_TODOS_API_URL: `http://127.0.0.1:${port}`,
     HASNA_TODOS_API_KEY: TEST_AUTH_VALUE,
-  });
+  }));
   expect(existsSync(join(root, "local-must-not-exist"))).toBe(false);
   return result;
 }

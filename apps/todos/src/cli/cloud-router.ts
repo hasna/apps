@@ -540,12 +540,14 @@ export function getTodosCloudClient(
   });
   // `cloud-http` is the pinned @hasna/contracts generation's transport name;
   // `http` is the post-removal generation's. Both mean "authenticated /v1".
-  if (resolved.transport === "cloud-http") return protectRemoteClient(resolved.client, requestTimeoutMs);
-  // The installed 0.5.2 typings declare only `cloud-http | local`, so the
-  // forward-compat arm is compared via a widened string; both generations
-  // construct the client alongside the http transport name.
+  // The installed typings declare one transport name or the other depending on
+  // which @hasna/contracts generation is resolved (workspace vs published), so
+  // both arms compare a widened string; either generation constructs the
+  // client alongside its http transport name.
   const transportName: string = resolved.transport;
-  if (transportName === "http") return protectRemoteClient(resolved.client!, requestTimeoutMs);
+  if (transportName === "cloud-http" || transportName === "http") {
+    return protectRemoteClient(resolved.client!, requestTimeoutMs);
+  }
   return null;
 }
 

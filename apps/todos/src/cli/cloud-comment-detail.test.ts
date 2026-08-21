@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 
 /** `todos add` warns on stderr when a task ends up both unassigned and unattributed,
  *  and again when it ends up with no project — each warning is the point of the fix
@@ -32,7 +33,7 @@ afterEach(() => {
 async function runCli(args: string[], root: string, baseUrl: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: {
+    env: deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       HOME: root,
       TMPDIR: root,
@@ -42,7 +43,7 @@ async function runCli(args: string[], root: string, baseUrl: string, extraEnv: R
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
       ...extraEnv,
-    },
+}),
     stdout: "pipe",
     stderr: "pipe",
   });

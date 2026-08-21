@@ -10,6 +10,7 @@ import {
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
 import { getTodosCloudClient, resetTodosCloudClient } from "./cloud-router.js";
+import { deliverTodosApiKeyViaDisk } from "../testing.js";
 import {
   createBunPackageIsolatedTempDir,
   projectExternalBunDuplicatePackageWarning,
@@ -293,7 +294,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -302,7 +303,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       const result = await runCli(executable, [
@@ -385,7 +386,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -394,7 +395,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       const result = await runCli(executable, [
@@ -616,7 +617,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       plan: manifestBase.plan,
       tasks: manifestBase.tasks,
     }));
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -625,7 +626,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: remoteKey,
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       const capability = await runCli(executable, ["--json", "task-manifest", "capability"], env, cwd);
@@ -902,7 +903,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -911,7 +912,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       for (const args of [
@@ -985,7 +986,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const cwd = join(root, "cwd");
     mkdirSync(cwd);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: root,
@@ -995,7 +996,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       const dryRun = await runCli(executable, [
@@ -1085,14 +1086,14 @@ describe("remote CLI entrypoint authority boundary", () => {
   });
 
   test("built help and manual advertise only remote-executable commands", async () => {
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: createBunPackageIsolatedTempDir("todos-remote-help-"),
       LANG: "C.UTF-8",
       HASNA_TODOS_API_URL: "https://authority.invalid",
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     tempRoots.push(env.HOME);
 
     const localOnly = [...getTodosCliCommandCapabilityMatrix()]
@@ -1222,7 +1223,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const localDbPath = join(root, "local-adapter-must-not-open", "todos.db");
 
     try {
-      const result = await runCli(executable, ["--json", "status"], {
+      const result = await runCli(executable, ["--json", "status"], deliverTodosApiKeyViaDisk({
           PATH: process.env.PATH ?? "",
           BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
           HOME: root,
@@ -1232,7 +1233,7 @@ describe("remote CLI entrypoint authority boundary", () => {
           TODOS_DB_PATH: localDbPath,
           HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
           HASNA_TODOS_API_KEY: "fixture-remote-key",
-      });
+      }));
 
       expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect(JSON.parse(result.stdout)).toMatchObject({
@@ -1364,7 +1365,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -1374,7 +1375,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       for (const args of [
@@ -1574,7 +1575,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -1585,7 +1586,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
       TODOS_AGENT_ID: "fixture-agent",
-    };
+});
     try {
       const shown = await runCli(executable, ["--json", "show", TASK_ID], env, cwd);
       expect({ exitCode: shown.exitCode, stderr: shown.stderr }).toEqual({ exitCode: 0, stderr: "" });
@@ -1681,7 +1682,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -1691,7 +1692,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       for (const args of [
@@ -1791,7 +1792,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -1800,7 +1801,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
     try {
       const unsupported = await runCli(executable, [
@@ -1932,7 +1933,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: home,
@@ -1942,7 +1943,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
 
     try {
@@ -2212,7 +2213,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     mkdirSync(readOnlyParent);
     chmodSync(readOnlyParent, 0o555);
     const localDbPath = join(readOnlyParent, "todos.db");
-    const env = {
+    const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: root,
@@ -2222,7 +2223,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       TODOS_DB_PATH: localDbPath,
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
+});
     const before = recursiveInventory(cwd);
 
     try {
