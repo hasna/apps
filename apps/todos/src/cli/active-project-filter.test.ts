@@ -160,6 +160,20 @@ describe("active project filters", () => {
     expect(result.stderr).toMatch(/unknown option|unsupported.*--format|--format.*not supported/i);
   });
 
+  test("reports an unsupported format when a global project path precedes the command", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(
+      ["--project", join(home, "active-project"), "active", "--format", "json"],
+      dbPath,
+      home,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  });
+
   test("does not apply the active format guard to a nested roadmap command", async () => {
     const home = tempRoot();
     const dbPath = join(home, "todos.db");
