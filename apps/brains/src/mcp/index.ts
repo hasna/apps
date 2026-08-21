@@ -31,12 +31,14 @@ import {
   truncateText,
 } from "../lib/compact-output.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { normalizeProviderName } from "../lib/providers/provider-name.js";
 
 // --- helpers ---
 
 export function getProvider(provider: string) {
-  if (provider === "openai") return new OpenAIProvider();
-  if (provider === "tinker") return new TinkerProvider();
+  const normalized = normalizeProviderName(provider);
+  if (normalized === "openai") return new OpenAIProvider();
+  if (normalized === "tinker") return new TinkerProvider();
   throw new Error(`Unknown provider: ${provider}`);
 }
 
@@ -115,8 +117,8 @@ export function buildServer() {
           properties: {
             provider: {
               type: "string",
-              enum: ["openai", "tinker"],
-              description: "Provider to use for fine-tuning",
+              enum: ["openai", "tinker", "thinker-labs"],
+              description: "Provider to use for fine-tuning (legacy spelling thinker-labs is accepted)",
             },
             base_model: {
               type: "string",
@@ -143,8 +145,8 @@ export function buildServer() {
             job_id: { type: "string", description: "Fine-tune job ID" },
             provider: {
               type: "string",
-              enum: ["openai", "tinker"],
-              description: "Provider that owns the job",
+              enum: ["openai", "tinker", "thinker-labs"],
+              description: "Provider that owns the job (legacy spelling thinker-labs is accepted)",
             },
           },
           required: ["job_id", "provider"],

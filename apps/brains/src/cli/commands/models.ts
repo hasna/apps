@@ -5,6 +5,7 @@ import { getDb, fineTunedModels, trainingJobs } from "../../db/index.js";
 import { parseTagList } from "../../lib/gatherers/tags.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
 import { TinkerProvider } from "../../lib/providers/tinker.js";
+import { normalizeProviderName } from "../../lib/providers/provider-name.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo, printHint } from "../ui.js";
 import {
   DEFAULT_LIST_LIMIT,
@@ -47,7 +48,7 @@ function parseListFilters(opts: ListModelsOptions): { provider?: Provider; statu
   const providerRaw = opts.provider?.trim();
   const statusRaw = opts.status?.trim();
 
-  if (providerRaw && providerRaw !== "openai" && providerRaw !== "tinker") {
+  if (providerRaw && providerRaw !== "openai" && providerRaw !== "tinker" && providerRaw !== "thinker-labs") {
     throw new Error(`Invalid --provider value: ${providerRaw}. Use openai or tinker.`);
   }
 
@@ -56,7 +57,7 @@ function parseListFilters(opts: ListModelsOptions): { provider?: Provider; statu
   }
 
   const limit = parseListLimit(opts.limit);
-  const provider = providerRaw as Provider | undefined;
+  const provider = (providerRaw ? normalizeProviderName(providerRaw) : undefined) as Provider | undefined;
   const status = statusRaw as ModelStatus | undefined;
 
   return { provider, status, limit };

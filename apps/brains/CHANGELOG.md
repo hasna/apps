@@ -5,6 +5,10 @@
 ### Patch Changes
 
 - 0d4f749: Add `prepack: bun run build` so `npm pack` and `npm publish` ship the built `dist` that each package's `main` points to. Previously only `prepublishOnly` built, so a clean-clone `npm pack` shipped a tarball with no code. Also add a repo-root `.editorconfig` with the member-standard style (2-space indent, LF, final newline).
+- c59f2bf: Rename the fine-tuning provider from "thinker-labs" to "tinker" (provider value, `TINKER_API_KEY` / `TINKER_BASE_URL` env vars). The legacy provider spelling and legacy env vars remain accepted and are normalized at the CLI, MCP, and schema boundaries, so existing configurations and persisted rows keep working.
+- 6766fec: Fix a models read-after-write race. `getDb()` now shares one connection per resolved `BRAINS_DB_PATH`, so a write and a follow-up read resolve to the same database instead of separate in-memory stores (fixes a recurring CI flake and a 404-after-insert on the server path).
+- 70f274984: Remove the deployment-mode storage vocabulary. Retired `HASNA_BRAINS_STORAGE_MODE` / `BRAINS_STORAGE_MODE` variables now fail loud instead of selecting a mode; the server backend is selected solely by `HASNA_BRAINS_DATABASE_URL` presence (`postgresql`) or its absence (`sqlite`). `brains storage status` reports `Backend:` instead of `Mode:`.
+- eeb08ff0: Display name "Hasna Brains" (open- prefix retired); provider docs and comments updated to the canonical `@hasna/*` naming.
 
 ## Unreleased
 

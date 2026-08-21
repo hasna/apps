@@ -5,6 +5,7 @@ import { existsSync } from "fs";
 import { getDb, fineTunedModels, trainingJobs, trainingDatasets } from "../../db/index.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
 import { TinkerProvider } from "../../lib/providers/tinker.js";
+import { normalizeProviderName } from "../../lib/providers/provider-name.js";
 import { printStatus, printJson, printError, printSuccess, printInfo, printTable, printHint } from "../ui.js";
 import {
   DEFAULT_LIST_LIMIT,
@@ -27,7 +28,8 @@ export function registerFinetuneCommands(program: Command): void {
     .requiredOption("--name <name>", "Human-readable name for this fine-tuned model")
     .action(async (opts: { provider: string; baseModel: string; dataset?: string; name: string }) => {
       try {
-        if (opts.provider !== "openai" && opts.provider !== "tinker") {
+        const provider = normalizeProviderName(opts.provider);
+        if (provider !== "openai" && provider !== "tinker") {
           printError(`Unknown provider: ${opts.provider}. Use 'openai' or 'tinker'.`);
           process.exit(1);
         }
@@ -58,7 +60,7 @@ export function registerFinetuneCommands(program: Command): void {
         let jobId: string;
         let jobStatus: string;
 
-        if (opts.provider === "openai") {
+        if (provider === "openai") {
           ({ fileId } = await openaiProvider.uploadTrainingFile(datasetPath));
           printSuccess(`File uploaded. fileId = ${fileId}`);
           printInfo(`Creating fine-tune job on OpenAI …`);
@@ -85,7 +87,7 @@ export function registerFinetuneCommands(program: Command): void {
         await db.insert(fineTunedModels).values({
           id: modelId,
           name: opts.name,
-          provider: opts.provider as "openai" | "tinker",
+          provider: provider as "openai" | "tinker",
           baseModel: opts.baseModel,
           status: "running",
           fineTuneJobId: jobId,
@@ -97,7 +99,7 @@ export function registerFinetuneCommands(program: Command): void {
         await db.insert(trainingJobs).values({
           id: trainingJobId,
           modelId,
-          provider: opts.provider,
+          provider,
           status: jobStatus,
           startedAt: now,
         });
@@ -123,9 +125,10 @@ export function registerFinetuneCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action(async (jobId: string, opts: { provider: string; verbose?: boolean; json?: boolean }) => {
       try {
+        const provider = normalizeProviderName(opts.provider);
         let result: { jobId: string; status: string; fineTunedModel?: string; baseModel?: string; error?: string };
 
-        if (opts.provider === "openai") {
+        if (provider === "openai") {
           result = await openaiProvider.getFineTuneStatus(jobId);
         } else {
           const tinker = new TinkerProvider();
