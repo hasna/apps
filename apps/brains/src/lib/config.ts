@@ -21,6 +21,15 @@ import { homedir } from "os";
 export const CONFIG_KEYS = ["OPENAI_API_KEY", "TINKER_API_KEY", "TINKER_BASE_URL"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
+// Pre-0.0.36 env names for the tinker provider. The provider was renamed from
+// "Thinker Labs" to "Tinker" (c59f2bfad); existing 0.0.35 configurations that
+// set THINKER_LABS_API_KEY / THINKER_LABS_BASE_URL keep working through these
+// fallbacks (canonical TINKER_* always wins).
+const LEGACY_CONFIG_ALIASES: Partial<Record<ConfigKey, string>> = {
+  TINKER_API_KEY: "THINKER_LABS_API_KEY",
+  TINKER_BASE_URL: "THINKER_LABS_BASE_URL",
+};
+
 const CONFIG_FILE_NAME = "config.json";
 
 function restrictConfigFilePermissions(configPath: string): void {
@@ -107,9 +116,17 @@ function writeConfigFile(data: Record<string, string>): void {
 }
 
 export function getConfigValue(key: ConfigKey): string | undefined {
-  // Env var takes precedence
+  // Precedence: canonical env > canonical file > legacy env > legacy file.
+  // The canonical spelling wins at any level: a migrated canonical file
+  // setting must not be shadowed by a stale legacy THINKER_LABS_* env var
+  // left behind by an old shell profile.
   if (process.env[key]) return process.env[key];
-  return readConfigFile()[key];
+  const file = readConfigFile();
+  if (file[key]) return file[key];
+  const legacyKey = LEGACY_CONFIG_ALIASES[key];
+  if (legacyKey && process.env[legacyKey]) return process.env[legacyKey];
+  if (legacyKey && file[legacyKey]) return file[legacyKey];
+  return undefined;
 }
 
 export function setConfigValue(key: ConfigKey, value: string): void {
@@ -123,6 +140,9 @@ export function listConfig(): Array<{ key: ConfigKey; value: string; source: "en
   return CONFIG_KEYS.map((key) => {
     if (process.env[key]) return { key, value: process.env[key]!, source: "env" as const };
     if (file[key]) return { key, value: file[key]!, source: "file" as const };
+    const legacyKey = LEGACY_CONFIG_ALIASES[key];
+    if (legacyKey && process.env[legacyKey]) return { key, value: process.env[legacyKey]!, source: "env" as const };
+    if (legacyKey && file[legacyKey]) return { key, value: file[legacyKey]!, source: "file" as const };
     return { key, value: "", source: "unset" as const };
   });
 }

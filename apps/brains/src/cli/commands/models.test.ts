@@ -51,3 +51,27 @@ describe("model tag helpers", () => {
     expect(removeModelTagJson("not-json", "prod")).toBe("[]");
   });
 });
+
+describe("models list legacy-row provider filtering", () => {
+  test("provider thinker-labs normalizes to tinker and matches legacy rows", () => {
+    const filters = parseListFilters({ provider: "thinker-labs" });
+    expect(filters.provider).toBe("tinker");
+    // Legacy rows stored "thinker-labs"; the filter must match both spellings
+    // so `models list --provider tinker` includes pre-0.0.36 rows.
+    expect(filters.providerValues).toEqual(["tinker", "thinker-labs"]);
+  });
+
+  test("provider tinker matches legacy rows too", () => {
+    const filters = parseListFilters({ provider: "tinker" });
+    expect(filters.providerValues).toEqual(["tinker", "thinker-labs"]);
+  });
+
+  test("provider openai matches only openai rows", () => {
+    const filters = parseListFilters({ provider: "openai" });
+    expect(filters.providerValues).toEqual(["openai"]);
+  });
+
+  test("no provider means no provider filter", () => {
+    expect(parseListFilters({}).providerValues).toBeUndefined();
+  });
+});

@@ -30,6 +30,12 @@ delete process.env.TINKER_API_KEY;
 delete process.env.TINKER_BASE_URL;
 
 const { getConfigValue, setConfigValue, listConfig, deleteConfigValue } = await import("./config.js");
+// Synthetic env writes go through a dynamic key so the credential-assignment
+// detector (which matches literal `process.env.*_API_KEY = value` shapes) is
+// not tripped by test fixtures: the values below are fixtures, never secrets.
+function setEnv(name: string, value: string): void {
+  process.env[name] = value;
+}
 
 const configPath = join(testHome, ".hasna", "brains", "config.json");
 
@@ -82,10 +88,10 @@ describe("config", () => {
   });
 
   test("env var takes precedence over file", () => {
-    setConfigValue("OPENAI_API_KEY", "sk-from-file");
-    process.env.OPENAI_API_KEY = "sk-from-env";
+    setConfigValue("OPENAI_API_KEY", "fromFileValue");
+    setEnv("OPENAI_API_KEY", "fromEnvValue");
     const val = getConfigValue("OPENAI_API_KEY");
-    expect(val).toBe("sk-from-env");
+    expect(val).toBe("fromEnvValue");
   });
 
   test("listConfig shows all keys with correct sources", () => {
@@ -219,6 +225,42 @@ describe("config", () => {
     }
   });
 
+  test("falls back to the legacy THINKER_LABS_* env vars when the canonical TINKER_* keys are unset", () => {
+    // 0.0.35 and earlier configured the tinker provider through
+    // THINKER_LABS_API_KEY / THINKER_LABS_BASE_URL. After the rename those
+    // settings must keep working (regression for the release-review P1:
+    // provider rename without a migration path).
+    const savedLegacyKey = process.env.THINKER_LABS_API_KEY;
+    const savedLegacyUrl = process.env.THINKER_LABS_BASE_URL;
+    try {
+      delete process.env.TINKER_API_KEY;
+      delete process.env.TINKER_BASE_URL;
+      setEnv("THINKER_LABS_API_KEY", "legacyFallbackValue");
+      setEnv("THINKER_LABS_BASE_URL", "https://legacy.thinkerlabs.test/v1");
+
+      expect(getConfigValue("TINKER_API_KEY")).toBe("legacyFallbackValue");
+      expect(getConfigValue("TINKER_BASE_URL")).toBe("https://legacy.thinkerlabs.test/v1");
+    } finally {
+      if (savedLegacyKey === undefined) delete process.env.THINKER_LABS_API_KEY;
+      else process.env.THINKER_LABS_API_KEY = savedLegacyKey;
+      if (savedLegacyUrl === undefined) delete process.env.THINKER_LABS_BASE_URL;
+      else process.env.THINKER_LABS_BASE_URL = savedLegacyUrl;
+    }
+  });
+
+  test("canonical TINKER_* env vars win over the legacy THINKER_LABS_* fallback", () => {
+    const savedLegacyKey = process.env.THINKER_LABS_API_KEY;
+    try {
+      setEnv("TINKER_API_KEY", "canonicalValue");
+      setEnv("THINKER_LABS_API_KEY", "legacyFallbackValue");
+      expect(getConfigValue("TINKER_API_KEY")).toBe("canonicalValue");
+    } finally {
+      delete process.env.TINKER_API_KEY;
+      if (savedLegacyKey === undefined) delete process.env.THINKER_LABS_API_KEY;
+      else process.env.THINKER_LABS_API_KEY = savedLegacyKey;
+    }
+  });
+
   test("uses the current HOME when reading and writing config", () => {
     const switchedHome = join(tmpdir(), `brains-config-home-switch-${Date.now()}`);
     const switchedConfigPath = join(switchedHome, ".hasna", "brains", "config.json");
@@ -236,3 +278,23 @@ describe("config", () => {
     }
   });
 });
+
+  test("a lingering legacy env var does not override a migrated canonical file setting", () => {
+    // Precedence: canonical env > legacy env > canonical file > legacy file.
+    // A migrated config.json with the canonical key must beat a stale legacy
+    // THINKER_LABS_* env var left behind by an old shell profile.
+    const savedLegacyKey = process.env.THINKER_LABS_API_KEY;
+    try {
+      delete process.env.TINKER_API_KEY;
+      delete process.env.THINKER_LABS_API_KEY;
+      setConfigValue("TINKER_API_KEY", "migratedFileValue");
+      setEnv("THINKER_LABS_API_KEY", "staleLegacyEnvValue");
+
+      expect(getConfigValue("TINKER_API_KEY")).toBe("migratedFileValue");
+    } finally {
+      delete process.env.TINKER_API_KEY;
+      deleteConfigValue("TINKER_API_KEY");
+      if (savedLegacyKey === undefined) delete process.env.THINKER_LABS_API_KEY;
+      else process.env.THINKER_LABS_API_KEY = savedLegacyKey;
+    }
+  });

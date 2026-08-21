@@ -1,6 +1,6 @@
 # @hasna/brains
 
-Fine-tuned model tracker and trainer — wraps OpenAI + Thinker Labs, gathers training data from todos/mementos/conversations/sessions
+Fine-tuned model tracker and trainer — wraps OpenAI + Tinker, gathers training data from todos/mementos/conversations/sessions
 
 [![npm](https://img.shields.io/npm/v/@hasna/brains)](https://www.npmjs.com/package/@hasna/brains)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -16,6 +16,21 @@ npm install -g @hasna/brains
 ```bash
 brains --help
 ```
+
+### Provider rename migration
+
+The fine-tuning provider formerly named "Thinker Labs" is now "Tinker". To
+migrate an existing configuration:
+
+- `brains config set TINKER_API_KEY <key>` (previously `THINKER_LABS_API_KEY`)
+- `brains config set TINKER_BASE_URL <url>` (previously `THINKER_LABS_BASE_URL`)
+- use `--provider tinker` (previously `thinker-labs`)
+
+The legacy provider spelling `thinker-labs` and the legacy
+`THINKER_LABS_API_KEY` / `THINKER_LABS_BASE_URL` env vars remain accepted for
+backwards compatibility and are normalized to `tinker` / `TINKER_*` at the
+CLI, MCP, and schema boundaries; persisted rows that stored `thinker-labs`
+keep working.
 
 - `brains models list`
 - `brains models show`

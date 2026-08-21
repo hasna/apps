@@ -81,15 +81,17 @@ describe("MCP schema validation", () => {
     }
   });
 
-  test("tinker is the only Tinker provider name across schemas and dispatch", async () => {
+  test("the legacy thinker-labs provider name is normalized to tinker across schemas and dispatch", async () => {
     const {
       McpFinetuneStartSchema,
       McpFinetuneStatusSchema,
       ProviderSchema,
     } = await import("../lib/schemas.js");
 
-    expect(ProviderSchema.options).toEqual(["openai", "tinker"]);
-    expect(ProviderSchema.safeParse("thinker-labs").success).toBe(false);
+    // 0.0.35 and earlier used "thinker-labs"; the rename to "tinker" keeps the
+    // legacy spelling working as a migration path (release-review P1).
+    expect(ProviderSchema.parse("thinker-labs")).toBe("tinker");
+    expect(ProviderSchema.safeParse("mystery-provider").success).toBe(false);
 
     const start = McpFinetuneStartSchema.parse({
       provider: "tinker",
@@ -102,6 +104,28 @@ describe("MCP schema validation", () => {
 
     expect(getProvider(start.provider)).toBeInstanceOf(TinkerProvider);
     expect(getProvider(status.provider)).toBeInstanceOf(TinkerProvider);
-    expect(() => getProvider("thinker-labs")).toThrow("Unknown provider: thinker-labs");
+    expect(getProvider("thinker-labs")).toBeInstanceOf(TinkerProvider);
+    expect(() => getProvider("mystery-provider")).toThrow(/Unknown provider/);
+  });
+});
+
+describe("getProvider legacy-name dispatch", () => {
+  test("normalizes the pre-0.0.36 legacy provider name thinker-labs to the TinkerProvider", () => {
+    // 0.0.35 and earlier dispatched provider value "thinker-labs". Existing
+    // MCP callers passing the legacy name must not fail dispatch.
+    const provider = getProvider("thinker-labs");
+    expect(provider).toBeInstanceOf(TinkerProvider);
+  });
+
+  test("still rejects an unknown provider", () => {
+    expect(() => getProvider("mystery-provider")).toThrow(/Unknown provider/);
+  });
+});
+
+describe("fineTunedModelIdCandidates legacy-row lookup", () => {
+  test("tinker candidates include the legacy thinker-labs id form", async () => {
+    const { fineTunedModelIdCandidates } = await import("./index.js");
+    expect(fineTunedModelIdCandidates("tinker", "job-1")).toEqual(["tinker-job-1", "thinker-labs-job-1"]);
+    expect(fineTunedModelIdCandidates("openai", "job-1")).toEqual(["openai-job-1"]);
   });
 });

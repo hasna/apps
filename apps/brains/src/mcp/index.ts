@@ -8,7 +8,7 @@ import {
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { homedir } from "os";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray } from "drizzle-orm";
 import { getDb, getRawDb, fineTunedModels, trainingDatasets } from "../db/index.js";
 import { OpenAIProvider } from "../lib/providers/openai.js";
 import { TinkerProvider } from "../lib/providers/tinker.js";
@@ -31,13 +31,28 @@ import {
   truncateText,
 } from "../lib/compact-output.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { normalizeProviderName } from "../lib/providers/provider-name.js";
 
 // --- helpers ---
 
 export function getProvider(provider: string) {
-  if (provider === "openai") return new OpenAIProvider();
-  if (provider === "tinker") return new TinkerProvider();
+  const normalized = normalizeProviderName(provider);
+  if (normalized === "openai") return new OpenAIProvider();
+  if (normalized === "tinker") return new TinkerProvider();
   throw new Error(`Unknown provider: ${provider}`);
+}
+
+/**
+ * Local fine_tuned_models rows are keyed `${provider}-${job_id}`. Pre-0.0.36
+ * rows stored the provider as "thinker-labs", so a tinker lookup must also
+ * probe the legacy id form or it can never update those rows.
+ */
+export function fineTunedModelIdCandidates(provider: string, jobId: string): string[] {
+  const normalized = normalizeProviderName(provider);
+  if (normalized === "tinker") {
+    return [`tinker-${jobId}`, `thinker-labs-${jobId}`];
+  }
+  return [`${normalized}-${jobId}`];
 }
 
 function defaultOutputDir() {
@@ -115,8 +130,8 @@ export function buildServer() {
           properties: {
             provider: {
               type: "string",
-              enum: ["openai", "tinker"],
-              description: "Provider to use for fine-tuning",
+              enum: ["openai", "tinker", "thinker-labs"],
+              description: "Provider to use for fine-tuning (legacy spelling thinker-labs is accepted)",
             },
             base_model: {
               type: "string",
@@ -143,8 +158,8 @@ export function buildServer() {
             job_id: { type: "string", description: "Fine-tune job ID" },
             provider: {
               type: "string",
-              enum: ["openai", "tinker"],
-              description: "Provider that owns the job",
+              enum: ["openai", "tinker", "thinker-labs"],
+              description: "Provider that owns the job (legacy spelling thinker-labs is accepted)",
             },
           },
           required: ["job_id", "provider"],
@@ -425,15 +440,17 @@ export function buildServer() {
         const p = getProvider(provider);
         const result = await p.getFineTuneStatus(job_id);
 
-        // Update local DB if we have a record
+        // Update local DB if we have a record (probe both the canonical and
+        // the legacy thinker-labs id form so pre-0.0.36 rows update too).
         const db = getDb();
-        const dbId = `${provider}-${job_id}`;
+        const candidateIds = fineTunedModelIdCandidates(provider, job_id);
         const existing = await db
           .select()
           .from(fineTunedModels)
-          .where(eq(fineTunedModels.id, dbId));
+          .where(inArray(fineTunedModels.id, candidateIds));
 
-        if (existing.length > 0) {
+        const existingRow = existing[0];
+        if (existingRow) {
           const mappedStatus = (() => {
             if (result.status === "succeeded") return "succeeded" as const;
             if (result.status === "failed") return "failed" as const;
@@ -448,7 +465,7 @@ export function buildServer() {
               status: mappedStatus,
               updatedAt: Date.now(),
             })
-            .where(eq(fineTunedModels.id, dbId));
+            .where(eq(fineTunedModels.id, existingRow.id));
         }
 
         return {

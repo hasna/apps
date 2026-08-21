@@ -1,10 +1,11 @@
 import type { Command } from "commander";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb, fineTunedModels, trainingJobs } from "../../db/index.js";
 import { parseTagList } from "../../lib/gatherers/tags.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
 import { TinkerProvider } from "../../lib/providers/tinker.js";
+import { normalizeProviderName } from "../../lib/providers/provider-name.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo, printHint } from "../ui.js";
 import {
   DEFAULT_LIST_LIMIT,
@@ -43,11 +44,11 @@ function parseListLimit(rawLimit: string | undefined): number | undefined {
   return parsed;
 }
 
-function parseListFilters(opts: ListModelsOptions): { provider?: Provider; status?: ModelStatus; limit?: number } {
+function parseListFilters(opts: ListModelsOptions): { provider?: Provider; providerValues?: string[]; status?: ModelStatus; limit?: number } {
   const providerRaw = opts.provider?.trim();
   const statusRaw = opts.status?.trim();
 
-  if (providerRaw && providerRaw !== "openai" && providerRaw !== "tinker") {
+  if (providerRaw && providerRaw !== "openai" && providerRaw !== "tinker" && providerRaw !== "thinker-labs") {
     throw new Error(`Invalid --provider value: ${providerRaw}. Use openai or tinker.`);
   }
 
@@ -56,10 +57,14 @@ function parseListFilters(opts: ListModelsOptions): { provider?: Provider; statu
   }
 
   const limit = parseListLimit(opts.limit);
-  const provider = providerRaw as Provider | undefined;
+  const provider = (providerRaw ? normalizeProviderName(providerRaw) : undefined) as Provider | undefined;
   const status = statusRaw as ModelStatus | undefined;
 
-  return { provider, status, limit };
+  // Legacy pre-0.0.36 rows stored the provider as "thinker-labs"; a tinker
+  // filter must match both spellings or existing rows become invisible.
+  const providerValues = provider === "tinker" ? ["tinker", "thinker-labs"] : provider ? [provider] : undefined;
+
+  return { provider, providerValues, status, limit };
 }
 
 function formatModelTags(tags: string | null | undefined): string {
@@ -105,10 +110,14 @@ export function registerModelsCommands(program: Command): void {
         const db = getDb();
         const filters = parseListFilters(opts);
 
-        const whereClause = filters.provider && filters.status
-          ? and(eq(fineTunedModels.provider, filters.provider), eq(fineTunedModels.status, filters.status))
-          : filters.provider
-            ? eq(fineTunedModels.provider, filters.provider)
+        // The provider column's TS type is the canonical enum, but pre-0.0.36
+        // rows physically store "thinker-labs"; the filter values include it
+        // deliberately, so cast past the column type at this one boundary.
+        const providerValues = filters.providerValues as Provider[] | undefined;
+        const whereClause = providerValues && filters.status
+          ? and(inArray(fineTunedModels.provider, providerValues), eq(fineTunedModels.status, filters.status))
+          : providerValues
+            ? inArray(fineTunedModels.provider, providerValues)
             : filters.status
               ? eq(fineTunedModels.status, filters.status)
               : undefined;
@@ -304,8 +313,11 @@ export function registerModelsCommands(program: Command): void {
     .option("--name <name>", "Display name for the model")
     .action(async (jobId: string, opts: { provider: string; name?: string }) => {
       try {
+        // Normalize before dispatch AND persistence so a legacy
+        // --provider thinker-labs never stores the old spelling.
+        const provider = normalizeProviderName(opts.provider);
         let result: { jobId: string; status: string; fineTunedModel?: string; baseModel?: string; error?: string };
-        if (opts.provider === "openai") {
+        if (provider === "openai") {
           result = await openaiProvider.getFineTuneStatus(jobId);
         } else {
           const tinker = new TinkerProvider();
@@ -329,7 +341,7 @@ export function registerModelsCommands(program: Command): void {
         await db.insert(fineTunedModels).values({
           id: modelId,
           name,
-          provider: opts.provider as Provider,
+          provider: provider as Provider,
           baseModel: result.baseModel ?? "unknown",
           status: result.status as ModelStatus,
           fineTuneJobId: jobId,
@@ -340,7 +352,7 @@ export function registerModelsCommands(program: Command): void {
         await db.insert(trainingJobs).values({
           id: randomUUID(),
           modelId,
-          provider: opts.provider,
+          provider,
           status: result.status,
           startedAt: now,
         });
