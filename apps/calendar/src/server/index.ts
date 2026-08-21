@@ -56,8 +56,38 @@ async function runMigrate(): Promise<void> {
   process.exit(0);
 }
 
+/**
+ * Classify early-exit arguments before any port parse, serve import, or bind.
+ * --help/--version must answer with rc=0 and the server never started
+ * (binds-before-help class; calendar-serve --help previously fell through to
+ * the bind path and refused without a serve credential instead of answering,
+ * BUG row dd27cac0).
+ */
+export function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
+  if (argv.includes("--help") || argv.includes("-h")) return "help";
+  if (argv.includes("--version") || argv.includes("-V")) return "version";
+  return "start";
+}
+
+export function printHelp(): void {
+  console.log(`usage: calendar-serve [--port <n>] [--host <h>]   Start the HTTP API
+              [--api-key <k>] [--allow-anonymous]
+  calendar-serve migrate                     Apply the cloud (RDS) schema then exit
+  calendar-serve --version                   Print the version
+
+options:
+  --help              show this help and exit
+  --version           print the package version and exit
+`);
+}
+
 async function main() {
-  if (process.argv.includes("--version") || process.argv.includes("-V")) {
+  const early = handleEarlyArgs(process.argv.slice(2));
+  if (early === "help") {
+    printHelp();
+    return;
+  }
+  if (early === "version") {
     console.log(getPackageVersion());
     return;
   }
