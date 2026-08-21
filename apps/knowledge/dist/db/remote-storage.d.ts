@@ -9,7 +9,7 @@ export declare const KNOWLEDGE_APP_NAME = "knowledge";
  * the RDS DSN injected from Secrets Manager. It is intentionally NOT exported
  * from the CLI/MCP/SDK client surface: the raw RDS DSN is never distributed to
  * fleet machines, and clients reach the shared store only through the HTTP
- * ApiStore (`https://<app>.hasna.xyz/v1` + bearer key). The previous
+ * ApiStore (a user-hosted server's `/v1` route + bearer key). The previous
  * `PgAdapterAsync` client adapter — a DSN-on-client sync engine — has been
  * removed to eliminate that forbidden path.
  *

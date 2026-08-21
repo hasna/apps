@@ -87,8 +87,8 @@ export interface KnowledgeHttpSearchOptions {
 
 /**
  * One row of the deployed unified search envelope
- * (`GET /v1/search` — knowledge server 1.0.0-rc.6). Measured against
- * knowledge.hasna.xyz on 2026-08-18; the OpenAPI contract declares exactly
+ * (`GET /v1/search` — knowledge server 1.0.0-rc.6). Measured against the
+ * deployed contract on 2026-08-18; the OpenAPI contract declares exactly
  * these fields.
  */
 export interface KnowledgeUnifiedSearchHit {
