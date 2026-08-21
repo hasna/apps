@@ -623,9 +623,13 @@ export function registerQueryCommands(program: Command) {
       if (typeof projectRef === "string" && projectRef.trim() === "") {
         handleError(new Error("--project requires a non-empty project reference"));
       }
-      if (projectRef) filters.project_id = projectRef;
-      const cloud = getTodosCloudClient();
-      const work = cloud
+       const cloud = getTodosCloudClient();
+       if (projectRef) {
+         filters.project_id = cloud
+           ? await cloudResolveProjectRef(cloud, projectRef)
+           : resolveExplicitProject(projectRef).id;
+       }
+       const work = cloud
         ? await cloudActiveWork(cloud, Object.keys(filters).length ? (filters as never) : {})
         : getActiveWork(Object.keys(filters).length ? filters : undefined, getDatabase());
       if (json) { console.log(JSON.stringify(work, null, 2)); return; }
