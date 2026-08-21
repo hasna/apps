@@ -17,8 +17,7 @@ FROM --platform=linux/arm64 oven/bun:1.2-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8080 \
-    HOST=0.0.0.0 \
-    HASNA_MACHINES_STORAGE_MODE=cloud
+    HOST=0.0.0.0
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/schemas ./schemas
