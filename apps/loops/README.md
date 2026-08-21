@@ -1192,12 +1192,22 @@ one when the plane recovers.
 - **Open**: after 3 consecutive claim/poll failures whose streak spans at least
   120s. Further failures update the counts silently — no repeated events, no
   duplicates, ever.
-- **Close**: after 2 consecutive successful polls, with one recovery event.
+- **Close**: after 2 consecutive successful polls, with one recovery event. A
+  recovery is never emitted before its still-undelivered open event.
+- **Exactly-once events**: the episode id is deterministic (derived from the
+  streak's persisted `firstFailureAt` and the runner id), outbox appends are
+  idempotent per `(event, episodeId)`, and each state update runs under a
+  short-lived lock file — so a crash between append and state write re-derives
+  the same episode id and skips the duplicate append. Lock contention (a second
+  runner process on the same data dir) skips that update rather than waiting:
+  episode tracking never delays a poll.
 - **Failure classes** are `connectivity | http_5xx | auth | contract | refusal`,
   derived only from safe signals (this package's own error types and the numeric
   HTTP status). Episode state and events never contain error text, request
   bodies, URLs, or credentials — foreign errors stay opaque here exactly as
-  they do in the journal logger.
+  they do in the journal logger, and the runner id is validated against a
+  conservative identifier shape before it reaches any durable surface
+  (anything else is recorded as `unknown` in full, never partially masked).
 
 ### Escalation binding contract (delivery is not a package dependency)
 
@@ -1212,8 +1222,8 @@ network call of its own. A deployment binds delivery through:
 2. **Notifier command** (optional): when `LOOPS_RUNNER_NOTIFIER_CMD` is set, the
    runner spawns it detached (`sh -c <command>`) with one event JSON object on
    **stdin** and ignores everything about the result — exit code, stderr, even
-   whether it exists. A notifier that fails, hangs, or is unconfigured never
-   blocks, slows, or fails a poll.
+   whether it exists. A notifier that fails, hangs (killed after 30s), or is
+   unconfigured never blocks, slows, or fails a poll.
 
 Event shapes (one JSON object per line):
 

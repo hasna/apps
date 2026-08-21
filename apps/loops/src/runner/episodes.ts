@@ -1,5 +1,5 @@
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { appendFileSync, chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { dirname } from "node:path";
 import { join } from "node:path";
@@ -20,16 +20,25 @@ import { LoopsApiError, RunnerRefusalError } from "./errors.js";
  *
  * OPACITY (binding): episode state and events carry NO error text — only a
  * normalized failure class derived from safe signals (instanceof against this
- * package's own error types, numeric HTTP status). Foreign error messages are
- * exactly where credentials have been observed to live, so they are never
- * interpolated, logged, or persisted here.
+ * package's own error types, numeric HTTP status), and a sanitized runnerId.
+ * Foreign error messages are exactly where credentials have been observed to
+ * live, so they are never interpolated, logged, or persisted here.
  *
  * DELIVERY BOUNDARY (binding): this package owns detection plus a generic
  * outbox/notifier hook. There is NO hardcoded destination (no #incidents, no
  * conversations dependency): fleet deployment binds
  * `LOOPS_RUNNER_NOTIFIER_CMD` and reads the outbox file. The runner never
  * blocks on escalation: notifier and state I/O failures are swallowed and
- * retried on the next poll.
+ * retried on the next poll, and lock contention SKIPS an update rather than
+ * waiting — a poll is never delayed by episode tracking.
+ *
+ * EXACTLY-ONCE EVENTS: the episodeId is deterministic (derived from the
+ * streak's persisted firstFailureAt and the runnerId), outbox appends are
+ * idempotent per (event, episodeId), and each update runs inside a
+ * short-lived lock file. Every crash window converges to one open event and
+ * one recovery event per episode: a crash after the append but before the
+ * state write re-derives the SAME episodeId and the deduplicated append skips;
+ * a crash before the append is retried from the persisted pending state.
  */
 
 /** Episode opens after this many consecutive claim/poll failures… */
@@ -41,6 +50,9 @@ export const EPISODE_CLOSE_SUCCESSES = 2;
 
 /** Environment variable holding the optional notifier command (fleet binding surface). */
 export const LOOPS_RUNNER_NOTIFIER_CMD_ENV = "LOOPS_RUNNER_NOTIFIER_CMD";
+
+/** A notifier that has not exited by this point is killed; escalation must not accumulate orphans. */
+export const NOTIFIER_KILL_MS = 30_000;
 
 export type RunnerFailureClass = "connectivity" | "http_5xx" | "auth" | "contract" | "refusal";
 
@@ -133,16 +145,52 @@ export function runnerEventsOutboxPath(dataDirValue: string): string {
   return join(dataDirValue, "runner-events.outbox.jsonl");
 }
 
+/**
+ * Runner ids reach state files, journal lines, and escalation events, so a
+ * caller-controlled `--runner-id` is validated BEFORE it is ever persisted or
+ * emitted: an id matching the conservative identifier shape passes unchanged,
+ * and anything else (URLs, connection strings, free text) is replaced with
+ * `unknown` in full — partial masking would leave attacker-chosen readable
+ * text embedded in durable surfaces.
+ */
+function sanitizeRunnerId(value: string | undefined): string {
+  const candidate = (value ?? "").trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(candidate) ? candidate : "unknown";
+}
+
 function defaultRunnerId(env: NodeJS.ProcessEnv = process.env): string {
   return env.LOOPS_RUNNER_ID?.trim() || env.LOOPS_RUNNER_MACHINE_ID?.trim() || env.HASNA_MACHINE_ID?.trim() || hostname();
 }
 
-function defaultSpawnNotifier(command: string, payload: string): void {
+/**
+ * Deterministic per-episode identity: derived from the streak's persisted
+ * firstFailureAt plus a hash of the runnerId. Two outages never collide (they
+ * start at different instants); a crash-and-restart during the SAME outage
+ * re-derives the SAME id, which is what makes outbox appends idempotent and
+ * the exactly-one-event-per-episode property hold across lost state writes.
+ */
+function episodeIdFor(firstFailureAt: string, runnerId: string): string {
+  const stamp = firstFailureAt.replace(/[^0-9A-Za-z]/g, "");
+  const digest = createHash("sha256").update(runnerId).digest("hex").slice(0, 8);
+  return `ep_${stamp}_${digest}`;
+}
+
+function defaultSpawnNotifier(command: string, payload: string, killMs: number = NOTIFIER_KILL_MS): void {
   const child = spawn(command, { shell: true, stdio: ["pipe", "ignore", "ignore"], detached: true });
   // Escalation is best-effort by contract: a dead notifier command must never
-  // fail, block, or zombie the run. Every error path is swallowed.
+  // fail, block, or zombie the run. Every error path is swallowed, and a
+  // notifier that never exits is killed so events cannot accumulate orphans.
   child.on("error", () => {});
   child.stdin?.on("error", () => {});
+  const killer = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // already gone
+    }
+  }, killMs);
+  killer.unref?.();
+  child.once("exit", () => clearTimeout(killer));
   try {
     child.stdin?.end(`${payload}\n`);
   } catch {
@@ -151,15 +199,55 @@ function defaultSpawnNotifier(command: string, payload: string): void {
   child.unref();
 }
 
+/**
+ * Single-writer guard around each read-modify-write cycle. Acquire is one
+ * non-blocking attempt: contention means another runner process on this data
+ * dir is mid-update, and the correct move is to SKIP this update (never
+ * throw, never wait — a poll must not be delayed) and let the next poll catch
+ * up. A lock older than STALE_MS is a crashed holder's residue and is taken
+ * over.
+ */
+const LOCK_STALE_MS = 10_000;
+
+function withLock<T>(lockPath: string, fn: () => T): T | undefined {
+  try {
+    openSync(lockPath, "wx");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") return undefined; // unexpected failure: skip silently
+    try {
+      if (Date.now() - statSync(lockPath).mtimeMs < LOCK_STALE_MS) return undefined; // live holder
+    } catch {
+      return undefined; // lock vanished mid-check: skip this update
+    }
+    // Stale lock from a crashed holder: take it over.
+    try {
+      rmSync(lockPath, { force: true });
+      openSync(lockPath, "wx");
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      // best effort; stale takeover recovers it
+    }
+  }
+}
+
 export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions = {}): RunnerEpisodeRecorder {
-  // resolve() per call so tests (and LOOPS_DATA_DIR redeployment) are honored;
-  // a construction failure here must degrade to a no-op recorder, not break the run.
+  // A construction failure here must degrade to a no-op recorder, not break the run.
   try {
     const dataDirValue = opts.dataDir ?? defaultDataDir();
     const statePath = opts.statePath ?? runnerEpisodesStatePath(dataDirValue);
     const outboxPath = opts.outboxPath ?? runnerEventsOutboxPath(dataDirValue);
+    const lockPath = `${statePath}.lock`;
     const notifierCommand = opts.notifierCommand ?? (process.env[LOOPS_RUNNER_NOTIFIER_CMD_ENV]?.trim() || undefined);
-    const runnerId = opts.runnerId ?? defaultRunnerId();
+    const runnerId = sanitizeRunnerId(opts.runnerId ?? defaultRunnerId());
     const now = opts.now ?? (() => new Date());
     const journal = opts.journal ?? ((line: string) => console.error(line));
     const spawnNotifier = opts.spawnNotifier ?? defaultSpawnNotifier;
@@ -182,6 +270,33 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
       renameSync(tmpPath, statePath);
     }
 
+    /**
+     * Idempotent outbox append: an event already present for this episodeId is
+     * treated as delivered, which is what keeps exactly-once semantics across
+     * a crash between append and state write. Returns true when the event is
+     * in the outbox (freshly appended or already there).
+     */
+    function appendEventOnce(event: RunnerEpisodeEvent): boolean {
+      mkdirSync(dirname(outboxPath), { recursive: true, mode: 0o700 });
+      let existing = "";
+      try {
+        existing = readFileSync(outboxPath, "utf8");
+      } catch {
+        // fresh outbox
+      }
+      for (const prior of existing.split("\n")) {
+        if (!prior.trim()) continue;
+        try {
+          const parsed = JSON.parse(prior) as Record<string, unknown>;
+          if (parsed.evt === event.evt && parsed.episodeId === event.episodeId) return true;
+        } catch {
+          // tolerate a torn historical line
+        }
+      }
+      appendFileSync(outboxPath, `${JSON.stringify(event)}\n`);
+      return true;
+    }
+
     /** Journal + outbox + notifier. Returns true once the event is in the outbox. */
     function emitEvent(event: RunnerEpisodeEvent): boolean {
       const line = JSON.stringify(event);
@@ -192,9 +307,7 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
       }
       let delivered = false;
       try {
-        mkdirSync(dirname(outboxPath), { recursive: true, mode: 0o700 });
-        appendFileSync(outboxPath, `${line}\n`);
-        delivered = true;
+        delivered = appendEventOnce(event);
       } catch {
         // outbox unwritable (read-only fs, full disk): stay pending, retry next poll
       }
@@ -239,41 +352,43 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
 
     function recordFailure(error: unknown): void {
       try {
-        const nowIso = now().toISOString();
-        const state = readState();
-        let streak = state.streak;
-        // If the plane flapped back down before a pending recovery event could
-        // be delivered, finish that delivery first — the episode genuinely
-        // recovered (2 successes landed) before this new failure.
-        if (streak?.episodeId && streak.deliveryState === "recovery_pending") {
-          if (emitRecovery(streak, nowIso)) streak = undefined;
-        }
-        const failureClass = classifyRunnerFailure(error);
-        if (!streak) {
-          streak = {
-            firstFailureAt: nowIso,
-            lastFailureAt: nowIso,
-            consecutiveCount: 0,
-            failureClass,
-            deliveryState: "counting",
-          };
-        }
-        streak.consecutiveCount += 1;
-        streak.lastFailureAt = nowIso;
-        streak.failureClass = failureClass;
-        streak.consecutiveSuccesses = 0;
-        if (!streak.episodeId) {
-          const spanMs = Date.parse(streak.lastFailureAt) - Date.parse(streak.firstFailureAt);
-          if (streak.consecutiveCount >= EPISODE_OPEN_CONSECUTIVE_FAILURES && spanMs >= EPISODE_OPEN_SPAN_MS) {
-            streak.episodeId = `ep_${randomUUID()}`;
-            streak.openedAt = nowIso;
+        withLock(lockPath, () => {
+          const nowIso = now().toISOString();
+          const state = readState();
+          let streak = state.streak;
+          // If the plane flapped back down before a pending recovery event
+          // could be delivered, finish that delivery first — the episode
+          // genuinely recovered (2 successes landed) before this new failure.
+          if (streak?.episodeId && streak.deliveryState === "recovery_pending") {
+            if (emitRecovery(streak, nowIso)) streak = undefined;
+          }
+          const failureClass = classifyRunnerFailure(error);
+          if (!streak) {
+            streak = {
+              firstFailureAt: nowIso,
+              lastFailureAt: nowIso,
+              consecutiveCount: 0,
+              failureClass,
+              deliveryState: "counting",
+            };
+          }
+          streak.consecutiveCount += 1;
+          streak.lastFailureAt = nowIso;
+          streak.failureClass = failureClass;
+          streak.consecutiveSuccesses = 0;
+          if (!streak.episodeId) {
+            const spanMs = Date.parse(streak.lastFailureAt) - Date.parse(streak.firstFailureAt);
+            if (streak.consecutiveCount >= EPISODE_OPEN_CONSECUTIVE_FAILURES && spanMs >= EPISODE_OPEN_SPAN_MS) {
+              streak.episodeId = episodeIdFor(streak.firstFailureAt, runnerId);
+              streak.openedAt = nowIso;
+              streak.deliveryState = emitOpen(streak, state.lastSuccessAt, nowIso) ? "open" : "open_pending";
+            }
+          } else if (streak.deliveryState === "open_pending") {
+            // Retry the undelivered open event (counts updated silently since).
             streak.deliveryState = emitOpen(streak, state.lastSuccessAt, nowIso) ? "open" : "open_pending";
           }
-        } else if (streak.deliveryState === "open_pending") {
-          // Retry the undelivered open event (counts updated silently since).
-          streak.deliveryState = emitOpen(streak, state.lastSuccessAt, nowIso) ? "open" : "open_pending";
-        }
-        writeState({ version: 1, runnerId, streak, lastSuccessAt: state.lastSuccessAt });
+          writeState({ version: 1, runnerId, streak, lastSuccessAt: state.lastSuccessAt });
+        });
       } catch {
         // Episode tracking must never fail the run.
       }
@@ -281,28 +396,40 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
 
     function recordSuccess(): void {
       try {
-        const nowIso = now().toISOString();
-        const state = readState();
-        const next: RunnerEpisodesFile = { version: 1, runnerId, lastSuccessAt: nowIso };
-        const streak = state.streak;
-        if (!streak) {
-          writeState(next);
-          return;
-        }
-        if (!streak.episodeId) {
-          // Failures never became an episode; the streak is broken.
-          writeState(next);
-          return;
-        }
-        streak.consecutiveSuccesses = (streak.consecutiveSuccesses ?? 0) + 1;
-        if (streak.consecutiveSuccesses >= EPISODE_CLOSE_SUCCESSES) {
-          if (emitRecovery(streak, nowIso)) {
-            writeState(next); // episode closed
+        withLock(lockPath, () => {
+          const nowIso = now().toISOString();
+          const state = readState();
+          const streak = state.streak;
+          const next: RunnerEpisodesFile = { version: 1, runnerId, lastSuccessAt: nowIso };
+          if (!streak) {
+            writeState(next);
             return;
           }
-          streak.deliveryState = "recovery_pending"; // retried on the next poll
-        }
-        writeState({ ...next, streak });
+          if (!streak.episodeId) {
+            // Failures never became an episode; the streak is broken.
+            writeState(next);
+            return;
+          }
+          // Deliver the open event BEFORE any recovery can be observed: a
+          // recovery line without its open is a permanently skipped event.
+          // Recovery counting waits until the open has actually landed.
+          if (streak.deliveryState === "open_pending") {
+            if (emitOpen(streak, state.lastSuccessAt, nowIso)) streak.deliveryState = "open";
+            else {
+              writeState({ ...next, streak });
+              return;
+            }
+          }
+          streak.consecutiveSuccesses = (streak.consecutiveSuccesses ?? 0) + 1;
+          if (streak.consecutiveSuccesses >= EPISODE_CLOSE_SUCCESSES) {
+            if (emitRecovery(streak, nowIso)) {
+              writeState(next); // episode closed
+              return;
+            }
+            streak.deliveryState = "recovery_pending"; // retried on the next poll
+          }
+          writeState({ ...next, streak });
+        });
       } catch {
         // Episode tracking must never fail the run.
       }

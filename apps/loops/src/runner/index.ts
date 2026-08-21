@@ -768,8 +768,10 @@ program
   .action(async (opts) => {
     // Persisted failure episodes: a oneshot timer exits after every poll, so
     // the streak must live on disk to survive it. Detection is always on;
-    // delivery binds through the outbox + optional notifier command.
-    const episodeRecorder = createRunnerEpisodeRecorder();
+    // delivery binds through the outbox + optional notifier command. The
+    // recorder uses the same runner id as the claim so events attribute
+    // correctly; the recorder sanitizes it before persisting anything.
+    const episodeRecorder = createRunnerEpisodeRecorder(opts.runnerId ? { runnerId: opts.runnerId } : {});
     try {
       const result = await runRunnerOnce({
         apiUrl: opts.apiUrl,
@@ -817,7 +819,7 @@ program
       onError: (error) => logRunnerCommandFailure(error),
       // Persisted failure episodes: open ONE episode per outage, emit ONE
       // structured event, close with ONE recovery event. Never blocks a poll.
-      episodeRecorder: createRunnerEpisodeRecorder(),
+      episodeRecorder: createRunnerEpisodeRecorder(opts.runnerId ? { runnerId: opts.runnerId } : {}),
     });
     if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
     else {

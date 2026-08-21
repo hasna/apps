@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
@@ -327,6 +327,118 @@ describe("runner failure episodes", () => {
     const state = readStateFile(h.dir) as { streak?: Record<string, unknown> };
     expect(state.streak?.consecutiveCount).toBe(1);
     rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("a crash after the open append but before the state write emits no duplicate (deterministic episodeId)", () => {
+    // Simulate the exact crash window: the open event reached the outbox but
+    // the state write was lost, so on disk the streak is still pre-open.
+    const h = harness();
+    for (let i = 0; i < 3; i++) {
+      h.nowMs();
+      h.recorder.recordFailure(foreignError());
+    }
+    const original = outboxLines(h.dir);
+    expect(original).toHaveLength(1);
+    // Roll the state file back to its pre-open shape (counting, count=3, same
+    // firstFailureAt) — what a lost rename leaves behind.
+    writeFileSync(runnerEpisodesStatePath(h.dir), `${JSON.stringify({
+      version: 1,
+      runnerId: "station02-test",
+      streak: {
+        firstFailureAt: "2026-08-20T21:08:26.000Z",
+        lastFailureAt: "2026-08-20T21:10:26.000Z",
+        consecutiveCount: 3,
+        failureClass: "connectivity",
+        deliveryState: "counting",
+      },
+    }, null, 2)}\n`, { mode: 0o600 });
+    h.nowMs();
+    h.recorder.recordFailure(foreignError());
+    const events = outboxLines(h.dir);
+    expect(events).toHaveLength(1); // idempotent append: same episodeId, skipped
+    expect(events[0].episodeId).toBe(original[0].episodeId);
+    const state = readStateFile(h.dir) as { streak?: Record<string, unknown> };
+    expect(state.streak?.deliveryState).toBe("open");
+    expect(state.streak?.episodeId).toBe(original[0].episodeId);
+    expect(state.streak?.consecutiveCount).toBe(4);
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("a recovery never lands before its still-pending open event", () => {
+    const h = harness({ notifierCommand: undefined });
+    const outboxPath = runnerEventsOutboxPath(h.dir);
+    mkdirSync(outboxPath, { recursive: true }); // obstruct the open append
+    for (let i = 0; i < 3; i++) {
+      h.nowMs();
+      h.recorder.recordFailure(foreignError());
+    }
+    let state = readStateFile(h.dir) as { streak?: Record<string, unknown> };
+    expect(state.streak?.deliveryState).toBe("open_pending");
+    rmSync(outboxPath, { recursive: true, force: true }); // obstruction clears
+    h.recorder.recordSuccess(); // retries the open delivery
+    h.recorder.recordSuccess(); // closes the episode
+    const events = outboxLines(h.dir);
+    expect(events).toHaveLength(2);
+    expect(events[0].evt).toBe("loops_runner_control_plane_unreachable");
+    expect(events[1].evt).toBe("loops_runner_control_plane_recovered");
+    const closedState = readStateFile(h.dir) as { streak?: Record<string, unknown> };
+    expect(closedState.streak).toBeUndefined();
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("a caller-controlled runnerId is sanitized before any state, event, or journal write", () => {
+    const h = harness({ runnerId: "postgres://user:secret@db.internal/loops\nx" });
+    for (let i = 0; i < 3; i++) {
+      h.nowMs();
+      h.recorder.recordFailure(foreignError());
+    }
+    const outboxRaw = readFileSync(runnerEventsOutboxPath(h.dir), "utf8");
+    const stateRaw = readFileSync(runnerEpisodesStatePath(h.dir), "utf8");
+    for (const surface of [outboxRaw, stateRaw, ...h.journal]) {
+      expect(surface).not.toContain("postgres://");
+      expect(surface).not.toContain("secret");
+      expect(surface).not.toContain("db.internal");
+    }
+    const event = outboxLines(h.dir)[0];
+    expect(event.runnerId).toBe("unknown");
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("the default notifier spawn delivers the event JSON on stdin to an env-pointed command", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loops-episodes-"));
+    const sink = join(dir, "notified.jsonl");
+    let clock = Date.parse("2026-08-20T21:07:26.000Z");
+    // Real defaultSpawnNotifier path: shell command, stdin payload, detached.
+    const recorder = createRunnerEpisodeRecorder({
+      dataDir: dir,
+      runnerId: "station02-test",
+      notifierCommand: `cat >> ${JSON.stringify(sink)}`,
+      now: () => new Date(clock),
+      journal: () => {},
+    });
+    for (let i = 0; i < 3; i++) {
+      clock += 60_000;
+      recorder.recordFailure(foreignError());
+    }
+    // The detached child needs a moment; poll until the sink actually holds a
+    // line (the shell append-opens the file before cat writes, so existence
+    // alone races).
+    const sinkLines = (): string[] => {
+      try {
+        return readFileSync(sink, "utf8").trim().split("\n").filter(Boolean);
+      } catch {
+        return [];
+      }
+    };
+    for (let attempt = 0; attempt < 40 && sinkLines().length === 0; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const delivered = sinkLines();
+    expect(delivered).toHaveLength(1);
+    const parsed = JSON.parse(delivered[0]) as Record<string, unknown>;
+    expect(parsed.evt).toBe("loops_runner_control_plane_unreachable");
+    expect(parsed.failureClass).toBe("connectivity");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
