@@ -1619,39 +1619,6 @@
         "typescript": "^5.7.3",
       },
     },
-    "apps/signatures": {
-      "name": "@hasna/signatures",
-      "version": "0.1.15",
-      "bin": {
-        "signatures": "dist/cli/launcher.js",
-        "signatures-mcp": "dist/mcp/index.js",
-        "signatures-serve": "dist/server/index.js",
-      },
-      "dependencies": {
-        "@hasna/connectors-sdk": "^0.1.5",
-        "@modelcontextprotocol/sdk": "^1.29.0",
-        "@pdf-lib/fontkit": "^1.1.1",
-        "chalk": "^5.6.2",
-        "commander": "^12.1.0",
-        "marked": "^18.0.5",
-        "nanoid": "^5.1.11",
-        "pdf-lib": "^1.17.1",
-        "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@hasna/contracts": "0.8.5",
-        "@types/bun": "^1.3.14",
-        "@types/node": "^25.9.2",
-        "bun-types": "1.3.14",
-        "typescript": "^5.9.3",
-      },
-      "peerDependencies": {
-        "@hasna/attachments": ">=1.1.6",
-      },
-      "optionalPeers": [
-        "@hasna/attachments",
-      ],
-    },
     "apps/skills": {
       "name": "@hasna/skills",
       "version": "0.1.64",
@@ -2404,8 +2371,6 @@
 
     "@hasna/connectors": ["@hasna/connectors@workspace:apps/connectors"],
 
-    "@hasna/connectors-sdk": ["@hasna/connectors-sdk@0.1.5", "", {}, "sha512-dD+qkrPNfngTMNcSxxo6Y6K8KhsEhOWPB7TqwKMdUStw0dv2L+qXkq/thW79vZUlAxHWa1jtAhvFAahKmW6Anw=="],
-
     "@hasna/consolidations": ["@hasna/consolidations@workspace:apps/consolidations"],
 
     "@hasna/context": ["@hasna/context@workspace:apps/context"],
@@ -2499,8 +2464,6 @@
     "@hasna/shield": ["@hasna/shield@workspace:apps/shield"],
 
     "@hasna/shortlinks": ["@hasna/shortlinks@workspace:apps/shortlinks"],
-
-    "@hasna/signatures": ["@hasna/signatures@workspace:apps/signatures"],
 
     "@hasna/skills": ["@hasna/skills@workspace:apps/skills"],
 
@@ -2669,8 +2632,6 @@
     "@opentui/solid": ["@opentui/solid@0.4.1", "", { "dependencies": { "@babel/core": "7.28.0", "@babel/preset-typescript": "7.27.1", "@opentui/core": "0.4.1", "babel-plugin-module-resolver": "5.0.2", "babel-preset-solid": "1.9.12", "entities": "7.0.1", "s-js": "^0.4.9" }, "peerDependencies": { "solid-js": "1.9.12" } }, "sha512-CD3M3mlUFwy2r8fd43MFY8kR7bFO+CfL1LHjV6+adp7T4jpadb9zuhfKKJpMzSdgAqQof+F5ifGMx6RljiCmwQ=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.133.0", "", {}, "sha512-KzkdCd6Uxqnf6l3HOw1xfatAlUURA0g14cvBYFyJ5SaNOQbOUvBr9PKArcPcrNIeRsBdgcUzOGrhKveVpvOIGA=="],
-
-    "@pdf-lib/fontkit": ["@pdf-lib/fontkit@1.1.1", "", { "dependencies": { "pako": "^1.0.6" } }, "sha512-KjMd7grNapIWS/Dm0gvfHEilSyAmeLvrEGVcqLGi0VYebuqqzTbgF29efCx7tvx+IEbG3zQciRSWl3GkUSvjZg=="],
 
     "@pdf-lib/standard-fonts": ["@pdf-lib/standard-fonts@1.0.0", "", { "dependencies": { "pako": "^1.0.6" } }, "sha512-hU30BK9IUN/su0Mn9VdlVKsWBS6GyhVfqjwl1FjZN4TxP6cCw0jP2w7V3Hf5uX7M0AZJ16vey9yE0ny7Sa59ZA=="],
 
@@ -4798,12 +4759,6 @@
 
     "@hasna/shortlinks/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "@hasna/signatures/@hasna/contracts": ["@hasna/contracts@0.8.5", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-Iyk5srD6J3R7ci2g0gkyt+MCa6Da/lghPosGtgWBRgtJeGYCIAAnHF1yweoXnnqGAWZajFuDgJEWDVH11qpUhA=="],
-
-    "@hasna/signatures/commander": ["commander@12.1.0", "", {}, "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA=="],
-
-    "@hasna/signatures/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
     "@hasna/skills/commander": ["commander@12.1.0", "", {}, "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA=="],
 
     "@hasna/skills/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
@@ -5213,8 +5168,6 @@
     "@hasna/servers/ink/wrap-ansi": ["wrap-ansi@10.0.0", "", { "dependencies": { "ansi-styles": "^6.2.3", "string-width": "^8.2.0", "strip-ansi": "^7.1.2" } }, "sha512-SGcvg80f0wUy2/fXES19feHMz8E0JoXv2uNgHOu4Dgi2OrCy1lqwFYEJz1BLbDI0exjPMe/ZdzZ/YpGECBG/aQ=="],
 
     "@hasna/servers/ink/ws": ["ws@8.21.3", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="],
-
-    "@hasna/signatures/@hasna/contracts/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
     "@hasna/statusline/@modelcontextprotocol/sdk/ajv": ["ajv@6.15.0", "", { "dependencies": { "fast-deep-equal": "^3.1.1", "fast-json-stable-stringify": "^2.0.0", "json-schema-traverse": "^0.4.1", "uri-js": "^4.2.2" } }, "sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw=="],
 
