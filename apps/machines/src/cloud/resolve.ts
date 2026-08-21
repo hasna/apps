@@ -16,6 +16,7 @@
 
 import { clientTransportEnvKeys, createClientTransport } from "./transport.js";
 import { createHasnaStorageClient, type HasnaStorageClient } from "./storage.js";
+import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
 import type { Env } from "./mode.js";
 
 export type CloudStorageResolution =
@@ -29,6 +30,7 @@ export type CloudStorageResolution =
  * set storage-mode variable.
  */
 export function resolveCloudStorage(name: string, env: Env = process.env): CloudStorageResolution {
+  assertNoLegacyStorageMode(env as NodeJS.ProcessEnv);
   const wired = createClientTransport(name, env);
   if (wired.transport === "http") {
     return {

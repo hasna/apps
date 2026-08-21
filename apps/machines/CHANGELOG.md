@@ -6,6 +6,7 @@
 
 - d7d615b: Align hasna.contract.json kitVersion to the pinned @hasna/contracts version 0.13.3 (the pin moved to 0.13.3 in the ship-latest wave). Todos d175d558.
 - Release-review P1 remediation: the shipped station template floors @hasna/machines at 0.2.34, the version this template ships with.
+- Release-gate remediation: resolveCloudStorage now calls the retired storage-mode guard (assertNoLegacyStorageMode) on the env it is given, so a set HASNA_MACHINES_STORAGE_MODE / MACHINES_MODE variable throws naming the variable instead of being silently ignored — the guard existed but was never wired into the client resolver.
   - @hasna/contracts@0.13.3
 
 ## 0.2.33
