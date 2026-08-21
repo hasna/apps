@@ -12,7 +12,7 @@ import { nanoid } from "nanoid";
 import { Readable } from "stream";
 import { createCipheriv, randomBytes, scryptSync } from "crypto";
 import { lookup as mimeLookup } from "mime-types";
-import { verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
+import { verifyApiKey, type ApiKeyVerifier, type KeyStatusResolver } from "@hasna/contracts/auth";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 import { checkHealth, checkReady } from "../generated/storage-kit/health.js";
 import { PgAttachmentsStore } from "../db/pg-store.js";
@@ -51,9 +51,9 @@ export interface ServeAppDeps {
   store: PgAttachmentsStore;
   config: AttachmentsConfig;
   version: string;
-  mode: string;
   signingSecret: string;
-  isRevoked?: (kid: string) => boolean | Promise<boolean>;
+  /** 0.11.1 key-status hook; required so an unregistered kid is refuseable. */
+  keyStatus?: KeyStatusResolver;
   audit?: (event: unknown) => void;
   /**
    * Email sender for email-gated share links. When undefined, the public
@@ -274,13 +274,13 @@ function encryptBuffer(
 
 export function createServeApp(deps: ServeAppDeps): Hono {
   const app = new Hono();
-  const { store, client, config, version, mode } = deps;
+  const { store, client, config, version } = deps;
   const publicBaseUrl = getPublicBaseUrl(config);
 
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: APP_SLUG,
     signingSecret: deps.signingSecret,
-    ...(deps.isRevoked ? { isRevoked: deps.isRevoked } : {}),
+    ...(deps.keyStatus ? { keyStatus: deps.keyStatus } : {}),
     ...(deps.audit ? { audit: deps.audit as never } : {}),
   });
 
@@ -330,7 +330,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
   app.get("/health", async (c) => {
     const health = await checkHealth(client);
     return c.json(
-      { status: health.ok ? "ok" : "degraded", version, mode, db_latency_ms: health.latencyMs },
+      { status: health.ok ? "ok" : "degraded", version, db_latency_ms: health.latencyMs },
       health.ok ? 200 : 503,
     );
   });
@@ -341,7 +341,6 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       {
         status: ready.ok ? "ready" : "not_ready",
         version,
-        mode,
         pending_migrations: ready.pendingMigrations,
         ...(ready.error ? { error: ready.error } : {}),
       },
@@ -349,7 +348,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     );
   });
 
-  app.get("/version", (c) => c.json({ status: "ok", version, mode, name: `@hasna/${APP_SLUG}` }));
+  app.get("/version", (c) => c.json({ status: "ok", version, name: `@hasna/${APP_SLUG}` }));
 
   app.get("/openapi.json", (c) => c.json(buildOpenApiDocument(version)));
 

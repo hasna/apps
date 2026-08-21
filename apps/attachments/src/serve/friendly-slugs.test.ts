@@ -31,6 +31,7 @@ function auth(scopes: string[]): Record<string, string> {
     app: "attachments",
     scopes,
     signingSecret: SIGNING_SECRET,
+    keyStatus: async () => "active",
   });
   return {
     "content-type": "application/json",
@@ -49,8 +50,8 @@ function makeApp() {
       server: { baseUrl: "https://has.na", publicPath: "/a" },
     }),
     version: "test",
-    mode: "self_hosted",
     signingSecret: SIGNING_SECRET,
+    keyStatus: async () => "active",
   });
   return { app, store };
 }
