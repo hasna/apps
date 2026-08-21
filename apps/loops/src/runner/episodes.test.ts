@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import {
   runnerEventsOutboxPath,
   runnerEpisodeLockKindForTest,
   __episodeTestFlock,
+  __episodeTestForcePathLock,
   type RunnerEpisodeRecorder,
 } from "./episodes.js";
 import { LoopsApiError, RunnerRefusalError } from "./errors.js";
@@ -857,6 +858,64 @@ describe("state-file delivery confirmation (verdict-3 findings 1-5 remediation)"
     expect(state.streak?.consecutiveCount).toBe(4);
     expect(state.streak?.delivery?.deliveredAt).toBeDefined();
     rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("two recorder instances sharing a state dir never collide on intent files (cycle-4 finding 1)", () => {
+    // The reviewer probe: two recorders in ONE process, same injectable
+    // timestamp, both contended -> previously one atomic rename replaced the
+    // other's intent, dropping a transition. The intent sequence is now
+    // process-global, so both survive.
+    const h = harness();
+    const shared = {
+      dataDir: h.dir,
+      runnerId: "same",
+      now: () => new Date("2026-08-20T21:07:26.000Z"),
+      journal: () => {},
+      spawnNotifier: () => {},
+    };
+    const a = createRunnerEpisodeRecorder(shared);
+    const b = createRunnerEpisodeRecorder(shared);
+    const lockFd = __episodeTestFlock.hold(`${runnerEpisodesStatePath(h.dir)}.lock`);
+    expect(lockFd).toBeDefined();
+    a.recordFailure(foreignError());
+    b.recordFailure(foreignError());
+    const intents = readdirSync(h.dir).filter((n) => n.includes(".intent-"));
+    expect(intents).toHaveLength(2); // both deferred transitions survived
+    __episodeTestFlock.release(lockFd!);
+    // A third failure through a fresh lock: the drain replays BOTH intents
+    // first, so the observable count is 3 — with the collision it was 2.
+    h.nowMs();
+    h.recorder.recordFailure(foreignError());
+    const state = readStateFile(h.dir) as { streak?: Record<string, unknown> };
+    expect(state.streak?.consecutiveCount).toBe(3);
+    expect(readdirSync(h.dir).filter((n) => n.includes(".intent-"))).toHaveLength(0);
+    rmSync(h.dir, { recursive: true, force: true });
+  });
+
+  test("the pathname-lock fallback releases its lock file and stays live across repeated recordings (cycle-4 finding 2)", () => {
+    // The guarded release previously fstat'ed an ALREADY-CLOSED fd (throws),
+    // leaving the pathname behind; every later call then retried, deferred to
+    // intents, and could not acquire normally. Forcing the fallback must
+    // leave no lock file and lose no transitions.
+    __episodeTestForcePathLock.force();
+    try {
+      expect(runnerEpisodeLockKindForTest()).toBe("path");
+      const h = harness();
+      for (let i = 0; i < 5; i++) {
+        h.nowMs();
+        h.recorder.recordFailure(foreignError());
+        expect(() => h.recorder.recordSuccess()).not.toThrow();
+      }
+      expect(existsSync(`${runnerEpisodesStatePath(h.dir)}.lock`)).toBe(false); // released every time
+      expect(readdirSync(h.dir).filter((n) => n.includes(".intent-"))).toHaveLength(0); // no deferrals needed
+      const state = readStateFile(h.dir) as { streak?: Record<string, unknown>; lastSuccessAt?: string };
+      expect(state.streak).toBeUndefined(); // every streak was success-reset
+      expect(typeof state.lastSuccessAt).toBe("string");
+      rmSync(h.dir, { recursive: true, force: true });
+    } finally {
+      __episodeTestForcePathLock.restore();
+    }
+    expect(runnerEpisodeLockKindForTest()).toBe("flock"); // memo re-resolved for later tests
   });
 
   test("a hanging notifier command never blocks the recording call (acceptance e)", () => {

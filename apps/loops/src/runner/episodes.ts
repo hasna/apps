@@ -270,6 +270,7 @@ type FlockFn = (fd: number, operation: number) => number;
 let flockBinding: FlockFn | undefined | null = null; // null = load attempted and failed
 
 function loadFlock(): FlockFn | undefined {
+  if (flockForced) return undefined;
   if (flockBinding !== null) return flockBinding;
   flockBinding = undefined;
   try {
@@ -385,6 +386,15 @@ function withPathLock(lockPath: string, fn: () => void): boolean {
     fn();
     return true;
   } finally {
+    // Capture OUR lock's identity BEFORE closing the descriptor — fstatSync
+    // on a closed fd throws, which previously made the guarded release below
+    // unreachable and left the pathname behind (review cycle 4 finding 2).
+    let held: { ino: number; dev: number } | undefined;
+    try {
+      held = fstatSync(fd);
+    } catch {
+      held = undefined;
+    }
     try {
       closeSync(fd);
     } catch {
@@ -392,9 +402,8 @@ function withPathLock(lockPath: string, fn: () => void): boolean {
     }
     try {
       // Inode guard: only remove OUR lock, never a successor's.
-      const held = fstatSync(fd);
       const current = statSync(lockPath);
-      if (held.ino === current.ino && held.dev === current.dev) rmSync(lockPath, { force: true });
+      if (held && held.ino === current.ino && held.dev === current.dev) rmSync(lockPath, { force: true });
     } catch {
       // replaced or gone: nothing of ours to remove
     }
@@ -425,9 +434,32 @@ export const __episodeTestFlock = {
   },
 };
 
+/** Distinguishes "forced off for tests" from "not yet loaded" in the memo below. */
+let flockForced = false;
+
+/** @internal Test seam: force the degraded pathname-lock fallback (null memo + force flag); restore re-resolves the real binding. */
+export const __episodeTestForcePathLock = {
+  force(): void {
+    flockForced = true;
+    flockBinding = null;
+  },
+  restore(): void {
+    flockForced = false;
+    flockBinding = null;
+  },
+};
 // ---------------------------------------------------------------------------
 // Recorder
 // ---------------------------------------------------------------------------
+
+/**
+ * Process-global intent sequence: intent names must be unique across EVERY
+ * recorder instance in this process sharing a state dir (two recorders with
+ * the same injectable timestamp), not just within one recorder — a colliding
+ * atomic rename silently REPLACES the earlier intent and drops its transition
+ * (review cycle 4 finding 1).
+ */
+let processIntentSeq = 0;
 
 export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions = {}): RunnerEpisodeRecorder {
   // A construction failure here must degrade to a no-op recorder, not break the run.
@@ -649,8 +681,6 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
 
     type EpisodeOp = { kind: "failure"; failureClass: RunnerFailureClass; at: string } | { kind: "success"; at: string };
 
-    let intentSeq = 0;
-
     function intentFileBase(): string {
       return `${basename(statePath)}.intent-`;
     }
@@ -659,14 +689,17 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
      * Persist an operation that could not run under the lock. Unique atomic
      * file (tmp+rename), name-ordered chronologically so the drain replays
      * intents in the order the polls actually happened — preserving the
-     * open-span and close-count semantics across deferral.
+     * open-span and close-count semantics across deferral. Uniqueness spans
+     * the whole PROCESS (process-global sequence + pid), so two recorder
+     * instances sharing a state dir and an identical injectable timestamp can
+     * never rename onto each other's final name.
      */
     function persistIntent(op: EpisodeOp): void {
       try {
         mkdirSync(dirname(statePath), { recursive: true, mode: 0o700 });
-        intentSeq += 1;
+        processIntentSeq += 1;
         const atMs = String(Date.parse(op.at)).padStart(16, "0");
-        const final = join(dirname(statePath), `${intentFileBase()}${atMs}-${process.pid}-${intentSeq}.json`);
+        const final = join(dirname(statePath), `${intentFileBase()}${atMs}-${process.pid}-${processIntentSeq}.json`);
         const tmp = `${final}.tmp`;
         writeFileSync(tmp, `${JSON.stringify({ version: 1, ...op })}\n`, { mode: 0o600 });
         renameSync(tmp, final);
