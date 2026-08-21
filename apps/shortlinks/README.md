@@ -160,8 +160,8 @@ Create a dry-run plan:
 
 ```bash
 shortlinks cloudflare plan has.na \
-  --target shortlinks.hasna.xyz \
-  --origin https://shortlinks.hasna.xyz
+  --target shortlinks.example.com \
+  --origin https://shortlinks.example.com
 ```
 
 Write a Cloudflare Worker that forwards requests to the redirect server while preserving the original host:
@@ -169,13 +169,13 @@ Write a Cloudflare Worker that forwards requests to the redirect server while pr
 ```bash
 shortlinks cloudflare worker \
   --worker shortlinks \
-  --origin https://shortlinks.hasna.xyz
+  --origin https://shortlinks.example.com
 ```
 
 Upsert DNS when `CLOUDFLARE_API_TOKEN` is available. Global API key auth is also supported with `CLOUDFLARE_API_KEY` plus `CLOUDFLARE_EMAIL`.
 
 ```bash
-shortlinks cloudflare dns has.na --target shortlinks.hasna.xyz
+shortlinks cloudflare dns has.na --target shortlinks.example.com
 ```
 
 ## Buying Domains
@@ -201,7 +201,7 @@ The client resolves ONE `Store` from the environment — there is no DSN on any 
 
 ```bash
 # Route the client to the hosted API (bearer key, never a DSN):
-export HASNA_SHORTLINKS_API_URL=https://shortlinks.hasna.xyz
+export HASNA_SHORTLINKS_API_URL=https://shortlinks.example.com
 export HASNA_SHORTLINKS_API_KEY=hsk_...
 shortlinks doctor
 ```
