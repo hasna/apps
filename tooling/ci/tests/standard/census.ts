@@ -460,7 +460,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "signatures",
-    cause: "manifest_valid: storage.engines must declare both sqlite and postgres unless a metadata.conformance.waivedStorageEngines waiver exists; postgres missing.",
+    cause: "surface_matrix/service_api_topology: api and sdk surfaces declared deferred truthfully (signatures-serve has no GET /ready, GET /version, /v1 base, or /openapi.json), so no supported API surface exists; the kit requires one for a service-capable cli-with-store. storage.engines postgresql is validator-forced (kit refuses the waiver for service-capable cli-with-store) and disclosed in metadata.conformance.notes; pgTestGate wired per kit convention.",
     task: "todos 7001d8d7 (contracts task — signatures)",
   },
   {

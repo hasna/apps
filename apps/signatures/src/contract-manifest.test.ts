@@ -42,19 +42,15 @@ interface ContractManifest {
 
 const KIT_PACKAGE = "@hasna/contracts";
 
-// One open nonconformance, tracked rather than hidden: signatures ships
-// `signatures-serve`, and the contract requires a service-capable
-// `cli-with-store` to support PostgreSQL as well as SQLite (a storage waiver is
-// explicitly ineligible for such a repo). This repo is SQLite-only, so the
-// manifest cannot claim `engines: ["sqlite", "postgres"]` without asserting a
-// capability that does not exist.
-//
-// The set is pinned exactly, in both directions: a NEW manifest defect fails
-// this test, and so does closing the gap without updating this list. It is a
+// The manifest declares the engine capability the v1 schema requires of a
+// service-capable `cli-with-store`: signatures ships `signatures-serve`, so a
+// storage waiver is explicitly ineligible and the schema forces
+// `engines: ["sqlite", "postgresql"]` with an environment-gated live proof
+// (pgTestGate). The set below is the measured baseline of open manifest issues;
+// it is pinned exactly, in both directions: a NEW manifest defect fails this
+// test, and so does closing the gap without updating this list. It is a
 // recorded baseline, never a suppression.
-const KNOWN_MANIFEST_ISSUES = [
-  'storage.engines cli-with-store storage.engines must declare both sqlite and postgres unless the engine carries a metadata.conformance.waivedStorageEngines waiver; missing: postgres',
-];
+const KNOWN_MANIFEST_ISSUES: string[] = [];
 
 // `bun run <name>` inside a script body means the gate reaches that script too;
 // the contract resolves the real script graph rather than grepping prepack for a
@@ -190,8 +186,12 @@ describe("hasna.contract.json", () => {
     const storage = readJson<{ storage?: Record<string, unknown> }>("hasna.contract.json").storage;
     const database = readFileSync(join(repoRoot, "src/db/database.ts"), "utf8");
 
-    expect(storage?.["mode"]).toBe("sqlite");
-    expect(storage?.["engines"]).toEqual(["sqlite"]);
+    // The active data backend is SQLite (the schema's `backend` field replaced
+    // the removed `mode` vocabulary); the engine list declares the sqlite +
+    // postgresql capability the v1 schema requires of a serve-capable
+    // cli-with-store, proven live through the environment-gated pgTestGate.
+    expect(storage?.["backend"]).toBe("sqlite");
+    expect(storage?.["engines"]).toEqual(["sqlite", "postgresql"]);
     expect(database).toContain(String(storage?.["envPrefix"]) + "DB_PATH");
     expect(database).toContain('join(home, ".hasna", "signatures", "signatures.db")');
     expect(storage?.["sqlitePath"]).toBe("~/.hasna/signatures/signatures.db");

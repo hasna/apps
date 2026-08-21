@@ -1,0 +1,11 @@
+services:
+  serve:
+    image: oven/bun:1
+    command: ["bunx", "--package", "@hasna/signatures", "signatures-serve"]
+    ports: ["19440:19440"]
+    environment:
+      PORT: "19440"
+    volumes:
+      - signatures-data:/root/.hasna/signatures
+volumes:
+  signatures-data:
