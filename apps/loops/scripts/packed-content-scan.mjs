@@ -3,10 +3,11 @@
 // artifact content.
 //
 // `secrets scan workspace` exits 0 EVEN WHEN IT FINDS CREDENTIALS (measured
-// 2026-08-21 on station01: a planted sk-ant- key in a .ts file returned
-// rc=0 with a populated findings array), so the subprocess status alone
-// cannot be the gate. The JSON payload must be parsed and validated, and any
-// finding, any scan error, or any unparseable output must fail closed.
+// 2026-08-21 on station01: a planted Anthropic key literal in a .ts file
+// returned rc=0 with a populated findings array), so the subprocess status
+// alone cannot be the gate. The JSON payload must be parsed and validated,
+// and any finding, any scan error, or any unparseable output must fail
+// closed.
 import { spawnSync } from "node:child_process";
 
 export function parseExposureScanOutput(stdout) {
