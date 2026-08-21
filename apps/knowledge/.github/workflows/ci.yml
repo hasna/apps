@@ -22,14 +22,19 @@ jobs:
           # LOAD-BEARING for `Verify generated artifacts`, not just a test-runtime choice.
           # That step rebuilds bin/ and dist/ and compares the result BYTE-FOR-BYTE against
           # what is committed, so it passes only when this version equals the bun that built
-          # the committed bundles. Measured: at 19738de the committed bundles are bun 1.3.14
-          # output, and rebuilding them under bun 1.3.13 drifts by 4 lines in
-          # bin/knowledge-mcp.js and dist/index.js — bun 1.3.13 keeps the empty `else {}`
-          # blocks that 1.3.14's dead-code elimination collapses. Same shape both directions,
-          # so this is a bun minifier/DCE difference between patch releases, NOT zod codegen
-          # drift, and bun.lock cannot pin it (a lockfile pins dependencies, not the bun
-          # binary). Bumping or lowering this line without rebuilding bin/ and dist/ in the
-          # same commit turns the gate red. Keep both jobs on the same version.
+          # the committed bundles. Measured: bun patch releases emit different bytes for the
+          # same source — minifier-assigned identifier names in the minified bundles, and the
+          # order of the trailing `export { ... }` identifier list / the `__export` key map in
+          # the bundled zod v3 CJS interop in the non-minified dist/ files (1.3.13 also keeps
+          # the empty `else {}` blocks that 1.3.14's dead-code elimination collapses). Same
+          # shape both directions, so this is a bun minifier/DCE difference between patch
+          # releases, NOT zod codegen drift, and bun.lock cannot pin it (a lockfile pins
+          # dependencies, not the bun binary). THIS pin is the single source of truth: the
+          # build script's `scripts/check-bun-version.mjs` guard reads it and refuses to build
+          # under any other bun, so a regeneration committed from a wrong bun fails at the
+          # generator instead of turning this gate red later. Bumping or lowering this line
+          # without rebuilding bin/ and dist/ in the same commit still turns the gate red.
+          # Keep both jobs on the same version.
           bun-version: 1.3.14
 
       - name: Setup Node

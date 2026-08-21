@@ -1905,10 +1905,10 @@ function ensureSyncMetaTable(db) {
   `);
 }
 export {
-  KNOWLEDGE_STORAGE_TABLES,
-  STORAGE_TABLES,
-  getStorageStatus,
-  getSyncMetaAll,
+  resolveTables,
   parseStorageTables,
-  resolveTables
+  getSyncMetaAll,
+  getStorageStatus,
+  STORAGE_TABLES,
+  KNOWLEDGE_STORAGE_TABLES
 };

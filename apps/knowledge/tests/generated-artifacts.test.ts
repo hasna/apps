@@ -11,13 +11,16 @@ import { fileURLToPath } from 'node:url';
 import {
   GENERATED_PATHS,
   STALE_PATTERNS,
+  differingFiles,
   generatedJsFiles,
+  hashGeneratedFiles,
   patternSelfCheck,
   scanForStalePatterns,
   // Untyped .mjs build script, intentionally so — not part of the public API. The import
   // resolves as `any`. No @ts-expect-error here: this tsconfig has `strict: false`, so the
   // TS7016 that directive was written for never fires, and tsc flags it unused (TS2578).
 } from '../scripts/verify-generated-artifacts.mjs';
+import { extractPinnedBunVersion } from '../scripts/check-bun-version.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -148,6 +151,62 @@ describe('generated artifact verification', () => {
     expect(script).not.toContain('&&');
     expect(script).not.toContain(';');
     expect(script).not.toContain('|');
+  });
+
+  // The byte gate failed at every head because a regeneration ran under a bun other than the
+  // pinned one and was committed. The generator must therefore refuse to build under a
+  // non-pinned bun BEFORE any artifact is written — a guard appended after the builds would
+  // only report the damage.
+  test('the build script refuses to run under an un-pinned bun, before building anything', () => {
+    const build = packageJson.scripts.build;
+    expect(build, 'build script must exist').toBeDefined();
+    expect(build, 'build must carry the bun-version guard').toContain('scripts/check-bun-version.mjs');
+    expect(
+      build.startsWith('bun scripts/check-bun-version.mjs && '),
+      'the guard must be the FIRST command in the build script, so nothing is built under a wrong bun',
+    ).toBe(true);
+  });
+
+  // Two-sided control for the pin parser: it must extract the pin from a workflow that has
+  // one, and must refuse a workflow that cannot establish a single exact patch pin. A parser
+  // that always returned "1.3.14" would make the build guard vacuous.
+  test('the bun pin parser accepts one exact pin and refuses ambiguous or floating pins', () => {
+    expect(extractPinnedBunVersion('steps:\n  - uses: oven-sh/setup-bun@v2\n    with:\n      bun-version: 1.3.14\n      bun-version: 1.3.14\n')).toBe('1.3.14');
+    expect(() => extractPinnedBunVersion('bun-version: 1.3.14\nbun-version: 1.4.0\n')).toThrow(/conflicting/);
+    expect(() => extractPinnedBunVersion('with:\n  something-else: 1.3.14\n')).toThrow(/no `bun-version:` pin/);
+    expect(() => extractPinnedBunVersion('bun-version: 1.3\n')).toThrow(/exact patch/);
+  });
+
+  // Two-sided control for the byte-stability helper: identical bytes must report no
+  // difference, one mutated byte must name exactly that file. A helper that always returned
+  // [] would let a nondeterministic generator pass the two-pass check.
+  test('the byte-stability helper detects a differing regeneration and stays silent on an identical one', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kn-stability-'));
+    mkdirSync(join(root, 'bin'));
+    writeFileSync(join(root, 'bin', 'a.js'), 'export const a = 1;\n');
+    writeFileSync(join(root, 'bin', 'b.js'), 'export const b = 2;\n');
+    const files = ['bin/a.js', 'bin/b.js'];
+    const first = hashGeneratedFiles(files, root);
+    const second = hashGeneratedFiles(files, root);
+    expect(differingFiles(first, second)).toEqual([]);
+    writeFileSync(join(root, 'bin', 'b.js'), 'export const b = 3;\n');
+    const mutated = hashGeneratedFiles(files, root);
+    expect(differingFiles(first, mutated)).toEqual(['bin/b.js']);
+    // And a file present in only one snapshot is a difference too, so a build that drops a
+    // bundle cannot hide it.
+    expect(differingFiles(first, new Map([['bin/a.js', first.get('bin/a.js')]]))).toEqual(['bin/b.js']);
+  });
+
+  // The two-pass check lives inside verify:generated so the CI job exercises it without a new
+  // step — but the suite cannot run a build (see the trade documented at the bottom of this
+  // file), so this pins the wiring instead: the helpers must be invoked in main(), and the
+  // failure path must be reachable.
+  test('verify:generated rebuilds twice and compares the two regenerations byte-for-byte', () => {
+    const source = readFileSync(join(repoRoot, 'scripts', 'verify-generated-artifacts.mjs'), 'utf8');
+    expect(source).toContain('hashGeneratedFiles(filesBefore)');
+    expect(source).toContain('hashGeneratedFiles(generatedJsFiles())');
+    expect(source).toContain('differingFiles(first, second)');
+    expect(source).toContain('regeneration is NOT byte-stable');
   });
 
   test('CI runs the single entry point rather than reassembling it', () => {
