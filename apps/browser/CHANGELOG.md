@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.21
+
+### Patch Changes
+
+- Updated dependencies [e6134c1]
+  - @hasna/todos@0.15.41
+
 ## 0.5.20
 
 ### Patch Changes
