@@ -57,7 +57,7 @@ describe("@hasna/banking state layout", () => {
     expect(existsSync(join(root, "scripts", "postinstall.ts"))).toBe(false);
   });
 
-  test("keeps the default dev store in memory without creating a project dotdir", () => {
+  test("an explicit :memory: dev store creates no files under the fake home", () => {
     const home = mkdtempSync(join(tmpdir(), "banking-state-layout-"));
     tempDirs.push(home);
     const previousHome = process.env.HOME;
