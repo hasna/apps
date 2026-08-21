@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -7,6 +7,7 @@ import {
   JSON_STORE_LOCK_OWNER_FILE,
   JsonActionsStore,
   releaseJsonStoreLockIfOwned,
+  vacateStaleJsonStoreLock,
 } from "./storage.js";
 
 /**
@@ -19,6 +20,12 @@ import {
  * 3. Release removes a lock only while the releasing process still owns it, so a stale
  *    holder whose lock was taken over can never delete the successor's live lock.
  */
+function readOwner(lockPath: string): { token: string } {
+  return JSON.parse(
+    readFileSync(join(lockPath, JSON_STORE_LOCK_OWNER_FILE), "utf8"),
+  ) as { token: string };
+}
+
 function sampleEvent(id: string) {
   return {
     id,
@@ -81,6 +88,51 @@ describe("JsonActionsStore write-lock ownership", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 25_000);
+
+  test("a delayed takeover that validated a stale lock cannot delete a successor's fresh lock", async () => {
+    // Interleaving under test: waiter B validated the stale dead-owner lock, then was
+    // preempted. Waiter A took over and installed its fresh live lock. B's delayed
+    // takeover must move A's fresh lock aside, recognize it is NOT the validated stale
+    // lock, and restore it — never delete it.
+    const root = mkdtempSync(join(tmpdir(), "actions-json-lock-race-"));
+    const lockPath = join(root, JSON_STORE_LOCK_DIRNAME);
+    const quarantine = join(root, `${JSON_STORE_LOCK_DIRNAME}.quarantine-test`);
+    const validated = { token: "stale-holder", pid: 99999999, host: "test", startedAt: new Date().toISOString() };
+    try {
+      // B's validated stale lock is already gone; the lock now holds A's fresh owner.
+      mkdirSync(lockPath, { recursive: true });
+      writeFileSync(
+        join(lockPath, JSON_STORE_LOCK_OWNER_FILE),
+        JSON.stringify({ token: "successor-a", pid: process.pid, host: "test", startedAt: new Date().toISOString() }),
+      );
+      const staleMtime = new Date(Date.now() - 60_000);
+      utimesSync(lockPath, staleMtime, staleMtime);
+
+      const vacated = await vacateStaleJsonStoreLock(lockPath, validated, quarantine);
+
+      // The successor's lock must be back in place, still owned by successor-a.
+      expect(vacated).toBe(false);
+      expect(existsSync(lockPath)).toBe(true);
+      expect(readOwner(lockPath).token).toBe("successor-a");
+      expect(existsSync(quarantine)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a takeover of an already-vacated stale lock is a no-op", async () => {
+    const root = mkdtempSync(join(tmpdir(), "actions-json-lock-vacated-"));
+    const lockPath = join(root, JSON_STORE_LOCK_DIRNAME);
+    const quarantine = join(root, `${JSON_STORE_LOCK_DIRNAME}.quarantine-test`);
+    const validated = { token: "stale-holder", pid: 99999999, host: "test", startedAt: new Date().toISOString() };
+    try {
+      const vacated = await vacateStaleJsonStoreLock(lockPath, validated, quarantine);
+      expect(vacated).toBe(false);
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test("release removes only a lock this process still owns", async () => {
     const root = mkdtempSync(join(tmpdir(), "actions-json-lock-release-"));

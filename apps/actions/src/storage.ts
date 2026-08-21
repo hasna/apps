@@ -418,6 +418,55 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
+ * Atomically vacates a stale lock so a successor can acquire it. POSIX offers no
+ * conditional delete, so a plain `rm` after a stale check has a check-then-act
+ * window: a waiter preempted between its validation and its removal can delete a
+ * successor's FRESH lock. Rename is atomic — only one waiter can win the move
+ * (losers see ENOENT and retry) — and the caller then re-verifies what it actually
+ * moved: if it is not the validated dead-owner lock, the moved lock is restored by
+ * an atomic rename back, never deleted.
+ *
+ * @returns true when the validated stale lock was moved (and deleted) and the
+ *          caller may retry its acquire; false when the lock vanished first
+ *          (another waiter took over — the caller just retries).
+ */
+export async function vacateStaleJsonStoreLock(
+  lockPath: string,
+  validatedOwner: JsonStoreLockOwner,
+  quarantinePath: string,
+): Promise<boolean> {
+  try {
+    await rename(lockPath, quarantinePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  const moved = await readLockOwner(quarantinePath);
+  if (moved !== null && moved.token === validatedOwner.token) {
+    // The lock we moved is exactly the validated stale lock: dispose of it.
+    await rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
+    return true;
+  }
+  // We moved something else — a successor's fresh lock, or a lock with no readable
+  // owner. Restore it atomically; never delete a lock we cannot prove dead.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await rename(quarantinePath, lockPath);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY"
+        && (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // lockPath was re-occupied in the interim; give the occupant a moment and retry.
+      await new Promise((resolve) => setTimeout(resolve, 5 + attempt * 5));
+    }
+  }
+  // Restore could not land within the retry budget; the moved lock stays at the
+  // quarantine path rather than being deleted. This requires a third waiter to
+  // install inside a sub-millisecond window; it fails closed (no deletion).
+  return false;
+}
+
+/**
  * Removes the lock directory only while it is still owned by `token`. A holder whose
  * lock was broken and re-acquired by a successor must never delete the successor's
  * lock — that would recreate concurrent writers.
@@ -465,9 +514,13 @@ async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Prom
         const info = await stat(lockPath);
         if (Date.now() - info.mtimeMs > JSON_STORE_LOCK_STALE_MS) {
           const existing = await readLockOwner(lockPath);
-          if (existing === null || !isProcessAlive(existing.pid)) {
-            await rm(lockPath, { recursive: true, force: true });
-            continue;
+          if (existing !== null && !isProcessAlive(existing.pid)) {
+            const vacated = await vacateStaleJsonStoreLock(
+              lockPath,
+              existing,
+              join(dataDir, `${JSON_STORE_LOCK_DIRNAME}.quarantine-${token}`),
+            );
+            if (vacated) continue;
           }
         }
       } catch {
