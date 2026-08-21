@@ -68,38 +68,53 @@ for (const token of forbidden) {
 if (!backendCode.includes('SERVER_DATA_BACKENDS = ["sqlite", "postgresql"]')) {
   fail("backend.ts does not declare the sqlite | postgresql backend enum");
 }
-if (!backendSource.includes("assertNoLegacyStorageMode")) {
-  fail("backend.ts does not reject legacy STORAGE_MODE env vars");
+if (backendSource.includes("assertNoLegacyStorageMode") || backendSource.includes("legacyModeKeys")) {
+  fail("backend.ts still carries the removed kit-level legacy-mode machinery");
 }
-if (!backendSource.includes("was removed")) {
-  fail("backend.ts does not state the STORAGE_MODE removal guidance");
+if (backendSource.includes("STORAGE_MODE")) {
+  fail("backend.ts contains STORAGE_MODE (kit 0.13.3 carries no mode vocabulary)");
 }
 
-// STORAGE_MODE may exist in the kit ONLY inside backend.ts's legacyModeKeys
-// rejection list; anywhere else it is dead mode vocabulary.
-const backendLines = backendSource.split("\n");
-const blockStart = backendSource.indexOf("function legacyModeKeys(");
-if (blockStart === -1) {
-  fail("backend.ts does not define the legacyModeKeys rejection list");
+// Legacy STORAGE_MODE rejection moved to the app layer when the kit contract
+// evolved (kit 0.13.3 emits backend.ts with no mode vocabulary at all): the
+// app's runtime-config.ts hard-rejects HASNA_LOOPS_STORAGE_MODE. Assert the
+// doctrine where it lives now, and forbid STORAGE_MODE anywhere else in
+// runtime-config.ts.
+const runtimeConfigSource = readFileSync(join(repoRoot, "src/lib/runtime-config.ts"), "utf8");
+if (!runtimeConfigSource.includes("assertNoRetiredStorageMode")) {
+  fail("runtime-config.ts does not reject the retired HASNA_LOOPS_STORAGE_MODE env");
 }
-const blockEnd = backendSource.indexOf("\n}", blockStart);
-let offset = 0;
-const lineStarts = [];
-for (const line of backendLines) {
-  lineStarts.push(offset);
-  offset += line.length + 1;
+if (!runtimeConfigSource.includes("is retired and must be removed")) {
+  fail("runtime-config.ts does not state the STORAGE_MODE removal guidance");
 }
-for (let index = 0; index < backendLines.length; index += 1) {
-  if (!backendLines[index].includes("STORAGE_MODE")) continue;
-  const start = lineStarts[index];
-  if (start < blockStart || start > blockEnd) {
-    fail(`backend.ts:${index + 1} carries STORAGE_MODE outside the legacyModeKeys rejection list`);
+const runtimeConfigCode = codeOnly(runtimeConfigSource);
+const modeBlockStart = runtimeConfigCode.indexOf("const STORAGE_MODE_ENV_KEYS");
+if (modeBlockStart === -1) {
+  fail("runtime-config.ts does not define the retired STORAGE_MODE env-keys list");
+}
+const modeFnStart = runtimeConfigCode.indexOf("export function assertNoRetiredStorageMode");
+const modeBlockEnd = modeFnStart === -1 ? -1 : runtimeConfigCode.indexOf("\n}", modeFnStart);
+const rcLineStarts = [];
+{
+  let rcOffset = 0;
+  for (const line of runtimeConfigCode.split("\n")) {
+    rcLineStarts.push(rcOffset);
+    rcOffset += line.length + 1;
+  }
+}
+for (let index = 0; index < rcLineStarts.length; index += 1) {
+  const start = rcLineStarts[index];
+  const end = start + (index < rcLineStarts.length - 1 ? rcLineStarts[index + 1] - start : runtimeConfigCode.length - start);
+  const line = runtimeConfigCode.slice(start, end);
+  if (!line.includes("STORAGE_MODE")) continue;
+  if (start < modeBlockStart || start > modeBlockEnd) {
+    fail(`runtime-config.ts:${index + 1} carries STORAGE_MODE outside the retired-keys rejection list`);
   }
 }
 for (const file of ["tls.ts", "query.ts", "pool.ts", "migrations.ts", "health.ts", "index.ts", "own.ts"]) {
   const source = readFileSync(join(kitDir, file), "utf8");
   if (source.includes("STORAGE_MODE")) {
-    fail(`${file} contains STORAGE_MODE (backend.ts rejection list only)`);
+    fail(`${file} contains STORAGE_MODE (the kit carries no mode vocabulary)`);
   }
 }
 
