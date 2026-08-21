@@ -505,7 +505,6 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
   });
   const {
     profile_id: _profileId,
-    provider_version: _providerVersion,
     configs: _configs,
     bindings: _bindings,
     asset_configs: _assetConfigs,
