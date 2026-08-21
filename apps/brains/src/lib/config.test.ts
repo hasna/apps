@@ -278,3 +278,23 @@ describe("config", () => {
     }
   });
 });
+
+  test("a lingering legacy env var does not override a migrated canonical file setting", () => {
+    // Precedence: canonical env > legacy env > canonical file > legacy file.
+    // A migrated config.json with the canonical key must beat a stale legacy
+    // THINKER_LABS_* env var left behind by an old shell profile.
+    const savedLegacyKey = process.env.THINKER_LABS_API_KEY;
+    try {
+      delete process.env.TINKER_API_KEY;
+      delete process.env.THINKER_LABS_API_KEY;
+      setConfigValue("TINKER_API_KEY", "migratedFileValue");
+      setEnv("THINKER_LABS_API_KEY", "staleLegacyEnvValue");
+
+      expect(getConfigValue("TINKER_API_KEY")).toBe("migratedFileValue");
+    } finally {
+      delete process.env.TINKER_API_KEY;
+      deleteConfigValue("TINKER_API_KEY");
+      if (savedLegacyKey === undefined) delete process.env.THINKER_LABS_API_KEY;
+      else process.env.THINKER_LABS_API_KEY = savedLegacyKey;
+    }
+  });

@@ -121,3 +121,11 @@ describe("getProvider legacy-name dispatch", () => {
     expect(() => getProvider("mystery-provider")).toThrow(/Unknown provider/);
   });
 });
+
+describe("fineTunedModelIdCandidates legacy-row lookup", () => {
+  test("tinker candidates include the legacy thinker-labs id form", async () => {
+    const { fineTunedModelIdCandidates } = await import("./index.js");
+    expect(fineTunedModelIdCandidates("tinker", "job-1")).toEqual(["tinker-job-1", "thinker-labs-job-1"]);
+    expect(fineTunedModelIdCandidates("openai", "job-1")).toEqual(["openai-job-1"]);
+  });
+});

@@ -116,16 +116,17 @@ function writeConfigFile(data: Record<string, string>): void {
 }
 
 export function getConfigValue(key: ConfigKey): string | undefined {
-  // Env var takes precedence
+  // Precedence: canonical env > canonical file > legacy env > legacy file.
+  // The canonical spelling wins at any level: a migrated canonical file
+  // setting must not be shadowed by a stale legacy THINKER_LABS_* env var
+  // left behind by an old shell profile.
   if (process.env[key]) return process.env[key];
   const file = readConfigFile();
-  // Legacy pre-0.0.36 env/file names fall back for the renamed tinker keys.
+  if (file[key]) return file[key];
   const legacyKey = LEGACY_CONFIG_ALIASES[key];
-  if (legacyKey) {
-    if (process.env[legacyKey]) return process.env[legacyKey];
-    if (file[legacyKey]) return file[legacyKey];
-  }
-  return file[key];
+  if (legacyKey && process.env[legacyKey]) return process.env[legacyKey];
+  if (legacyKey && file[legacyKey]) return file[legacyKey];
+  return undefined;
 }
 
 export function setConfigValue(key: ConfigKey, value: string): void {
@@ -140,10 +141,8 @@ export function listConfig(): Array<{ key: ConfigKey; value: string; source: "en
     if (process.env[key]) return { key, value: process.env[key]!, source: "env" as const };
     if (file[key]) return { key, value: file[key]!, source: "file" as const };
     const legacyKey = LEGACY_CONFIG_ALIASES[key];
-    if (legacyKey) {
-      if (process.env[legacyKey]) return { key, value: process.env[legacyKey]!, source: "env" as const };
-      if (file[legacyKey]) return { key, value: file[legacyKey]!, source: "file" as const };
-    }
+    if (legacyKey && process.env[legacyKey]) return { key, value: process.env[legacyKey]!, source: "env" as const };
+    if (legacyKey && file[legacyKey]) return { key, value: file[legacyKey]!, source: "file" as const };
     return { key, value: "", source: "unset" as const };
   });
 }
