@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     db: client,
     signingSecret,
     version,
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.error(JSON.stringify({ level: "warn", event: "api_auth_deny", ...e }));

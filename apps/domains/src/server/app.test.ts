@@ -78,7 +78,15 @@ function fakeDb(): TypedQueryClient {
 }
 
 function appWithKey(scopes: string[]) {
-  const app = createServeApp({ db: fakeDb(), signingSecret: SIGNING, version: "9.9.9" });
+  // The contracts auth verifier fails closed at construction without a
+  // key-status hook. Tests wire a stub resolver reporting every minted key
+  // active; the revoked-key regression below proves the hook is consulted.
+  const app = createServeApp({
+    db: fakeDb(),
+    signingSecret: SIGNING,
+    version: "9.9.9",
+    keyStatus: async () => "active",
+  });
   const { token } = mintApiKey({ app: "domains", scopes, signingSecret: SIGNING });
   return { app, token };
 }
@@ -197,8 +205,30 @@ describe("domains-serve app", () => {
   });
 
   test("a key for another app is rejected", async () => {
-    const app = createServeApp({ db: fakeDb(), signingSecret: SIGNING, version: "9.9.9" });
+    const app = createServeApp({
+      db: fakeDb(),
+      signingSecret: SIGNING,
+      version: "9.9.9",
+      keyStatus: async () => "active",
+    });
     const { token } = mintApiKey({ app: "todos", scopes: ["todos:*"], signingSecret: SIGNING });
+    const res = await app.handle(new Request("http://x/v1/domains", { headers: { "x-api-key": token } }));
+    expect(res.status).toBe(401);
+  });
+
+  // Regression: the key-status hook must be wired into the auth path, not dead
+  // code. A verifier that ignores the hook would ALLOW a minted token whose key
+  // the resolver reports revoked — this test denies, proving the hook runs.
+  // At the pre-fix baseline this test (like every app.test.ts case) fails at
+  // construction, because the contracts verifier throws without any hook.
+  test("a revoked key is denied by the key-status hook (401)", async () => {
+    const app = createServeApp({
+      db: fakeDb(),
+      signingSecret: SIGNING,
+      version: "9.9.9",
+      keyStatus: async () => "revoked",
+    });
+    const { token } = mintApiKey({ app: "domains", scopes: ["domains:*"], signingSecret: SIGNING });
     const res = await app.handle(new Request("http://x/v1/domains", { headers: { "x-api-key": token } }));
     expect(res.status).toBe(401);
   });
