@@ -1,11 +1,11 @@
 # Domain readiness
 
-Emails supports two deployment modes:
+Emails supports two deployment configurations:
 
 - `local`: SQLite and local files are authoritative.
-- `self_hosted`: the operator's Postgres, S3, queues and provider accounts are authoritative.
+- `self-hosted`: the operator's Postgres, S3, queues and provider accounts are authoritative.
 
-Provider integrations are capabilities, not deployment modes. AWS SES/S3/SNS/SQS,
+Provider integrations are capabilities, not deployment configurations. AWS SES/S3/SNS/SQS,
 Route53, Cloudflare and Resend always use credentials supplied by the operator
 and communicate directly with those providers. Additional mailbox providers are
 not supported as provider backends.
@@ -34,7 +34,7 @@ emails domain check example.com                       # what is actually publish
 `emails provision *` are NOT implemented in this build. Running any of them
 prints what is missing and which command to use instead.
 
-Self-hosted API clients must explicitly configure `EMAILS_MODE=self_hosted`,
-`EMAILS_SELF_HOSTED_URL`, and one of `EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`,
-or `EMAILS_SELF_HOSTED_API_KEY`. No endpoint, account, database, bucket or secret
+API clients must configure
+`HASNA_EMAILS_API_URL` and one of `EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`,
+or `HASNA_EMAILS_API_KEY`. No endpoint, account, database, bucket or secret
 path is supplied by the package.

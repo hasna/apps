@@ -21,7 +21,7 @@ import {
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
 } from "../../store-resolution.js";
-import { registerInboxCommands } from "./inbox.local.js";
+import { registerInboxCommands } from "./inbox.sqlite.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 let db: Database;

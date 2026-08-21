@@ -69,7 +69,7 @@ function mailboxSourceCliFlags(source: MailboxSource | undefined): string {
 }
 
 // Resolve a possibly-short id to a full id through the seam: local SQLite partial-id
-// resolution, or a bounded self_hosted prefix match (so a truncated id works in self_hosted too,
+// resolution, or a bounded self-hosted prefix match (so a truncated id works in self-hosted too,
 // matching the CLI).
 function resolveMailId(ds: MailDataSource, id: string): Promise<string> {
   return ds.resolveId(id);
@@ -90,7 +90,7 @@ function folderForListFlags(flags: { unread?: boolean; starred?: boolean; archiv
 }
 
 // The read/detail projection shared by get_inbound_email (and returned by the mail
-// mutation tools). Built from the seam's TuiMessage + MessageBody so self_hosted and local
+// mutation tools). Built from the seam's TuiMessage + MessageBody so self-hosted and local
 // yield the same shape.
 function messageDetail(msg: TuiMessage, body: MessageBody | null): Record<string, unknown> {
   return {
@@ -135,9 +135,9 @@ async function seamMessageOrThrow(ds: MailDataSource, id: string): Promise<TuiMe
 
 export function registerInboxTools(server: McpServer): void {
   // ─── INBOUND EMAILS ─────────────────────────────────────────────────────────
-  // The latest inbound email for an address, body-free, via the seam so self_hosted mode
+  // The latest inbound email for an address, body-free, via the seam so API-client configuration
   // reads the API (not the empty local store). verificationCandidates already scopes
-  // to recipient (client-side in self_hosted), excludes sent, and orders newest-first.
+  // to recipient (client-side in self-hosted), excludes sent, and orders newest-first.
   const getLatestInboundEmailForAddress = async (
     address: string,
     filters: { since?: string; from?: string; subject?: string },
@@ -574,14 +574,14 @@ export function registerInboxTools(server: McpServer): void {
 
   server.tool(
   "clear_inbound_emails",
-  "Delete all inbound emails, optionally filtered by provider. In self-hosted mode a provider-scoped clear is REFUSED (messages carry no provider provenance) rather than widened to the whole store.",
+  "Delete all inbound emails, optionally filtered by provider. In API-client configuration a provider-scoped clear is REFUSED (messages carry no provider provenance) rather than widened to the whole store.",
   {
     provider_id: z.string().optional().describe("Only clear emails for this provider"),
   },
   async ({ provider_id }) => {
     try {
       // local: wipes the inbound store, scoped by provider when provider_id is
-      // given. self_hosted: drains a server-side bulk delete over the inbox
+      // given. self-hosted: drains a server-side bulk delete over the inbox
       // folder, and REFUSES a provider_id outright (a /v1 message carries no
       // provider dimension, so honouring the scope is impossible and dropping it
       // would silently widen "clear one provider" to "clear the whole store").

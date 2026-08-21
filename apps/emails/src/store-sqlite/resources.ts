@@ -6,7 +6,7 @@
 // read out of SQLite with `PRAGMA table_info`, which IS the source of truth for
 // what a table holds. Copying the server's spec would have created a second
 // source of truth for a different physical schema — the server's `groups` live in
-// `contact_groups` and its providers in `self_hosted_providers` — and a hand
+// `contact_groups` and its providers in `server_providers` — and a hand
 // written list here would go stale silently the first time a migration adds a
 // column.
 //

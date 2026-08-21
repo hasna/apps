@@ -160,7 +160,7 @@ function humanBytes(bytes: number): string {
  */
 export function describeUncheckedSendPolicy(selfHosted: boolean): string {
   if (!selfHosted) {
-    return "Local mode has no outbound policy gate; a real send depends on provider credentials and acceptance, "
+    return "The local SQLite client has no outbound policy gate; a real send depends on provider credentials and acceptance, "
       + "which this preview does not test.";
   }
   return "NOT checked here (server-side state this preview cannot read): send-key authority, daily quota, "

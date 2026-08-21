@@ -84,7 +84,7 @@ async function columnType(table: string, column: string): Promise<string | null>
  * The writes the self-hosted server actually makes, one per drift class, each
  * chosen to stress a reconcile: legacy CHECK enums (provider='external',
  * mode='redirect', new triage/digest/source enums), dropped legacy FKs
- * (ids that live in messages / self_hosted_providers / are external), relaxed
+ * (ids that live in messages / server_providers / are external), relaxed
  * NOT NULL (domains/addresses provider_id, send_keys key_hash, in-progress
  * agent runs), added columns (updated_at, group_members.id), restored defaults
  * (omitted since/until/subject/type/target_daily_volume), and jsonb->text.
@@ -245,7 +245,7 @@ describe("self-hosted Postgres integration", () => {
       [tenantB],
     );
     await client!.execute(
-      `INSERT INTO self_hosted_providers (id, tenant_id, name, type, active) VALUES
+      `INSERT INTO server_providers (id, tenant_id, name, type, active) VALUES
          ('provider-a-one', $1, 'Provider A One', 'smtp', true),
          ('provider-a-two', $1, 'Provider A Two', 'smtp', true),
          ('provider-b-one', $2, 'Provider B One', 'smtp', true)`,
@@ -1070,7 +1070,7 @@ describe("self-hosted Postgres integration", () => {
   // uniques are gone), the identity tables are unreachable via the resource layer,
   // and a 2nd full run is a clean no-op.
   const TENANT_DATA_TABLES = [
-    "domains", "addresses", "messages", "contacts", "self_hosted_providers", "templates",
+    "domains", "addresses", "messages", "contacts", "server_providers", "templates",
     "contact_groups", "sequences", "owners", "send_keys", "scheduled_emails", "aliases",
     "forwarding_rules", "warming_schedules", "email_triage", "provisioning_events",
     "mailbox_sources", "events", "email_agent_settings", "email_agent_runs", "email_digests",

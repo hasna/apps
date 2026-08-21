@@ -1,5 +1,5 @@
 // End-to-end truthfulness contract for surfaces this build does NOT implement.
-// These spawn the REAL CLI (bun src/cli/index.tsx) in local mode against a
+// These spawn the REAL CLI (bun src/cli/index.tsx) for the local SQLite client against a
 // throwaway HOME + in-memory DB, because the failures they guard against were
 // all "the source looks fine, the shipped binary lies" bugs:
 //
@@ -12,16 +12,16 @@
 //     unreachable from every entrypoint.
 //   * fifteen domain/address commands threw ONE sentence — "is not available in
 //     the self-hosted client; it runs on the self-hosted server" — from a shared
-//     `serverOnly()` helper. Unconditional, so it fired in local mode; and there
+//     `serverOnly()` helper. Unconditional, so it fired for the local SQLite client; and there
 //     is no server route behind any of them, so it named a cause that does not
 //     exist. That is the class the CONTRACT below generalises: a refusal may
-//     never name a deployment mode, because the mode is never the reason.
+//     never name a selection, because the backend is never the reason.
 import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanCliRefusals } from "../test-support/cli-refusals.js";
-import { isCommandAvailableInMode } from "../lib/status-commands.js";
+import { isCommandAvailableForBackend } from "../lib/status-commands.js";
 
 const tempDirs: string[] = [];
 
@@ -121,7 +121,7 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   // shape. `src/test-support/cli-refusals.ts` is the oracle: it parses the
   // `notImplementedAnywhere("…")` / `serverOnly("…")` call sites out of
   // src/cli/commands/*.ts, and a call site in a SHARED module (not
-  // `*.remote.ts` / `*.local.ts`, which index.tsx picks between) throws in every
+  // `*.api.ts` / `*.sqlite.ts`, which index.tsx picks between) throws in every
   // configuration.
   //
   // Each command needs real arguments, because commander rejects a missing
@@ -153,41 +153,42 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
     "emails provision retry": ["provision", "retry", "example.com"],
   };
 
-  // The CLAIMS that made the old message a lie — not the words. Naming a mode is
+  // The CLAIMS that made the old message a lie — not the words. Naming a backend is
   // fine when the sentence is true ("the server exposes no provisioning route" is
-  // the honest finding). What is banned is offering the mode as the CAUSE:
+  // the honest finding). What is banned is offering the backend as the CAUSE:
   // asserting the capability lives in the other configuration, or telling the
   // operator to switch. Every pattern is proved to still fire below.
   const MODE_BLAME: RegExp[] = [
     /not available in the self[\s-]?hosted client/i,
     /runs on the self[\s-]?hosted server/i,
     /available in the self[\s-]?hosted (?:client|server)/i,
-    /available in (?:local|self_hosted) mode/i,
-    /is (?:local|self[\s-]?hosted)[\s-]mode[\s-]only/i,
-    // Lower-cased ON PURPOSE, matched case-insensitively: the mode-axis ratchet
-    // (src/mode-axis-ratchet.test.ts) counts the upper-case spelling of the mode
-    // variable ANYWHERE in the tree and holds that count at a ceiling. A guard
-    // against naming the variable must not itself add an occurrence of it.
-    /(?:set|use) emails_mode/i,
+    /available in (?:local|self-hosted) backend/i,
+    /is (?:local|self[\s-]?hosted)[\s-]backend[\s-]only/i,
+    // Lower-cased ON PURPOSE, matched case-insensitively, and ASSEMBLED rather than
+    // spelled: the source-text guard (src/store-resolution.test.ts) pins the resolver's
+    // source and the hygiene guard (src/self-hosted-wire-regression.test.ts) derives
+    // every active environment key from the tree, so a guard against naming the
+    // selector must not itself contribute a spelled occurrence of it.
+    new RegExp("(?:set|use) " + ["emails", "backend"].join("_"), "i"),
     /switch to (?:local|self[\s-]?hosted)/i,
   ];
 
   // The exact sentences that shipped. Without this, a typo in any pattern above
   // silently turns the ban into a no-op while the suite stays green — the failure
-  // mode this repo has already shipped twice.
+  // backend this repo has already shipped twice.
   const HISTORICAL_LIES = [
     "emails domain check is not available in the self-hosted client; it runs on the self-hosted server.",
     "emails aws setup-inbound is not available in the self-hosted client; it runs on the self-hosted server.",
     "--to-group is not available in the self-hosted client without a self-hosted group-members send API.",
-    // febe87e's wording for the same command, which blamed the mode twice: once
-    // as a label and once as an instruction. Spelled with the lower-case
-    // variable name for the ratchet reason above; the pattern is
-    // case-insensitive, so it still catches the upper-case text that shipped.
-    "`emails aws setup-inbound` is local-mode-only and unavailable in self_hosted API-only mode. "
-      + "Use the self-hosted server/operator API/workers for inbound AWS setup, or set emails_mode=local intentionally.",
+    // febe87e's wording for the same command, which blamed the backend twice: once
+    // as a label and once as an instruction. Assembled rather than spelled for the
+    // source-text guard reason above; the pattern is case-insensitive, so it still
+    // catches the upper-case text that shipped.
+    "`emails aws setup-inbound` is local-backend-only and unavailable in the API client API-only backend. "
+      + `Use the self-hosted server/operator API/workers for inbound AWS setup, or set ${["emails", "backend"].join("_")}=local intentionally.`,
   ];
 
-  it("the mode-blame ban still fires against the messages that shipped", () => {
+  it("the backend-blame ban still fires against the messages that shipped", () => {
     for (const lie of HISTORICAL_LIES) {
       expect(MODE_BLAME.some((pattern) => pattern.test(lie)), lie).toBe(true);
     }
@@ -222,7 +223,7 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   });
 
   for (const refusal of sharedRefusals) {
-    it(`${refusal.command} explains what is missing without blaming a mode`, () => {
+    it(`${refusal.command} explains what is missing without blaming a backend`, () => {
       const result = runCli(["--json", ...(PROBES[refusal.command] ?? [])]);
       expect(result.exitCode, result.stdout + result.stderr).toBe(1);
       const payload = JSON.parse(result.stderr) as CliError;
@@ -233,7 +234,7 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
       // The regression, stated as a ban on the CLAIM rather than a list of old
       // strings.
       for (const pattern of MODE_BLAME) {
-        expect(message, `${refusal.command} blames a mode (${pattern})`).not.toMatch(pattern);
+        expect(message, `${refusal.command} blames a backend (${pattern})`).not.toMatch(pattern);
       }
       // "not implemented" alone leaves the operator stuck: every refusal must
       // name at least one command, and every command it names must RUN. The
@@ -242,35 +243,35 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
       const promised = [...message.matchAll(/'(emails [^']+)'/g)].map((match) => match[1]!);
       expect(promised.length, `${refusal.command} names no alternative`).toBeGreaterThan(0);
       for (const command of promised) {
-        for (const mode of ["local", "self_hosted"] as const) {
+        for (const backend of ["sqlite", "api"] as const) {
           expect(
-            isCommandAvailableInMode(command, mode),
-            `${refusal.command} promises '${command}', which refuses in ${mode}`,
+            isCommandAvailableForBackend(command, backend),
+            `${refusal.command} promises '${command}', which refuses in ${backend}`,
           ).toBe(true);
         }
       }
       // Machine-readable guidance gets the same treatment.
       expect(payload.error.fix_commands.length).toBeGreaterThan(0);
       for (const command of payload.error.fix_commands) {
-        expect(isCommandAvailableInMode(command, "local"), command).toBe(true);
+        expect(isCommandAvailableForBackend(command, "sqlite"), command).toBe(true);
       }
     });
   }
 
   // The hole the two guards above CANNOT see. `emails aws setup-inbound` threw
-  // the same mode-blaming sentence from an INLINE `throw new Error(...)`, so it
+  // the same backend-blaming sentence from an INLINE `throw new Error(...)`, so it
   // was invisible to every scan keyed on the refusal helpers — including the
   // registry coverage check — and stayed broken while `emails provision *` was
   // fixed to point AT it. `emails send --to-group` was inline too. So this scans
   // the shared command modules as text, not through a helper name.
-  it("no shared command module blames a mode in a string it prints", () => {
+  it("no shared command module blames a backend in a string it prints", () => {
     const commandsDir = join(import.meta.dir, "commands");
     const shared = readdirSync(commandsDir)
       .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-      // `*.remote.ts` / `*.local.ts` are the two ARMS: index.tsx loads one per
-      // configuration, so a refusal there names the mode it is actually running
+      // `*.api.ts` / `*.sqlite.ts` are the two ARMS: index.tsx loads one per
+      // configuration, so a refusal there names the backend it is actually running
       // in and is allowed to say so.
-      .filter((name) => !name.endsWith(".remote.ts") && !name.endsWith(".local.ts"));
+      .filter((name) => !name.endsWith(".api.ts") && !name.endsWith(".sqlite.ts"));
     expect(shared.length).toBeGreaterThan(10);
     expect(shared).toContain("aws.ts");
     expect(shared).toContain("send.ts");

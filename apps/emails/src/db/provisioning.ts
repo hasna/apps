@@ -33,7 +33,7 @@
 //     SQLite resource path clamps to 500 as well. So above 500 rows that arm reported a
 //     domain as "not provisioned", an address as having no provisioning row, a due-work
 //     queue missing its tail, and a `ready` count that stopped at the page boundary — the
-//     `daemon.remote.ts` header records the observed shape of it: "600 due domains rendered
+//     `daemon.api.ts` header records the observed shape of it: "600 due domains rendered
 //     as `Due work: 500 domain(s)`". Every read below enumerates to an EMPTY page and
 //     refuses to answer if it could not finish. The SQLite arm, which used SQL predicates
 //     and had no bound, is the stronger arm and is what the behaviour is resolved to.
@@ -146,9 +146,9 @@
 //     the enumeration never reached. There is no honest value to return, so these throw.
 //   * `getProvisioningWorkSummary` REPORTS A BOUND, because it CAN. Its four counts are
 //     `number | null` and it carries a `StatusAvailability` record, which is the vocabulary
-//     `emails status` and `daemon.remote.ts` already use: `renderStatusCount` prints `≥N`
+//     `emails status` and `daemon.api.ts` already use: `renderStatusCount` prints `≥N`
 //     for an incomplete read and `unavailable` for one that did not happen.
-//     `src/cli/commands/daemon.local.ts` — its only consumer — renders it that way, and
+//     `src/cli/commands/daemon.sqlite.ts` — its only consumer — renders it that way, and
 //     turning `emails daemon status` into an exception would take away the operator's only
 //     view of the queue at exactly the moment it is largest.
 //
@@ -1317,10 +1317,10 @@ function combineQueueAvailability(domains: DueSide, addresses: DueSide): StatusA
  *
  * THE ONE AGGREGATE THAT REPORTS A BOUND INSTEAD OF REFUSING, because it is the only one
  * whose shape can carry it and the only one with a human-facing renderer. Its four counts are
- * `number | null` and `availability` says which; `src/cli/commands/daemon.local.ts` prints
+ * `number | null` and `availability` says which; `src/cli/commands/daemon.sqlite.ts` prints
  * them through `renderStatusCount`, so an incomplete read shows `≥N` and a read that did not
  * happen shows the reason rather than a zero. That is what its self-hosted sibling
- * (`daemon.remote.ts`) already does, and the defect it was written to fix — four counts taken
+ * (`daemon.api.ts`) already does, and the defect it was written to fix — four counts taken
  * from one clamped page and printed as bare integers — is divergence 1 on this side of the
  * fence.
  */

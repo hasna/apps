@@ -26,10 +26,11 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "version": {
           "type": "string"
         },
-        "mode": {
+        "backend": {
           "type": "string",
           "enum": [
-            "self_hosted"
+            "sqlite",
+            "postgresql"
           ]
         },
         "name": {
@@ -58,7 +59,7 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
       "required": [
         "status",
         "version",
-        "mode",
+        "backend",
         "name",
         "db"
       ]
@@ -134,10 +135,11 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "version": {
           "type": "string"
         },
-        "mode": {
+        "backend": {
           "type": "string",
           "enum": [
-            "self_hosted"
+            "sqlite",
+            "postgresql"
           ]
         },
         "db": {
@@ -175,7 +177,7 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
       "required": [
         "status",
         "version",
-        "mode",
+        "backend",
         "db",
         "pendingMigrations",
         "migrationIssues"
@@ -199,10 +201,11 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "version": {
           "type": "string"
         },
-        "mode": {
+        "backend": {
           "type": "string",
           "enum": [
-            "self_hosted"
+            "sqlite",
+            "postgresql"
           ]
         },
         "db": {
@@ -240,7 +243,7 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
       "required": [
         "status",
         "version",
-        "mode",
+        "backend",
         "db",
         "pendingMigrations",
         "migrationIssues"
@@ -37948,10 +37951,11 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "version": {
           "type": "string"
         },
-        "mode": {
+        "backend": {
           "type": "string",
           "enum": [
-            "self_hosted"
+            "sqlite",
+            "postgresql"
           ]
         },
         "name": {
@@ -37964,7 +37968,7 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
       "required": [
         "status",
         "version",
-        "mode",
+        "backend",
         "name"
       ]
     }

@@ -2,7 +2,7 @@
 //
 // WHAT THIS FILE USED TO BE. A 30-line facade whose dispatch helper read the process-wide
 // deployment word and handed each of SEVEN exports to one of two sibling modules —
-// `forwarding.local.ts` (209 lines, SQLite) and `forwarding.remote.ts` (158 lines, the
+// `forwarding.sqlite.ts` (209 lines, SQLite) and `forwarding.api.ts` (158 lines, the
 // `curl` bridge). It also carried a `localCompat` shim, because the two arms did not even
 // agree on the SHAPE of `listPendingForwarding`: local took `(limit, db, opts)` and the
 // HTTP arm took `(limit, opts)`, so the facade re-ordered arguments on the way through and
@@ -123,7 +123,7 @@
 //
 // IT IS PRESERVED, NOT FIXED, and the reason is scope rather than doubt. Changing what a
 // published write does with an already-successful delivery is a product decision, not a
-// mode-axis refactor — the line `src/db/address-lifecycle.ts` drew for the unregistered-sender
+// selector-removal refactor — the line `src/db/address-lifecycle.ts` drew for the unregistered-sender
 // case — and the correct fix is not a tweak here: it is the idempotency-fenced ledger the seam
 // widening described above would bring, where `sent` is TERMINAL for a pair. The wrong local
 // fix would be to widen the join to exclude `failed` rows too, which would strand every

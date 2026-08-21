@@ -27,7 +27,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./db/database.js";
 import { uuid } from "./db/runtime.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
+import { HASNA_EMAILS_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_RESOURCES } from "./server/self-hosted/resources.js";
 import { CAPABILITY_KEYS, capabilityRefusal, isCapabilityRefusal } from "./store/capabilities.js";
@@ -578,7 +578,7 @@ describe("the HTTP transport's bounds", () => {
       credential: "session-token-placeholder",
       credentialSetting: EMAILS_SESSION_TOKEN_ENV,
       credentialFallbacks: [
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: HASNA_EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });

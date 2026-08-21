@@ -2,6 +2,9 @@ import { spawnSync } from "node:child_process";
 
 export const EMAILS_CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 
+/** The setting that names an Emails API origin. The canonical client contract name. */
+export const EMAILS_API_URL_ENV = "HASNA_EMAILS_API_URL";
+
 /** The bearer credential a user session persists (see multi-tenancy design §7). */
 export const EMAILS_SESSION_TOKEN_ENV = "EMAILS_SESSION_TOKEN";
 
@@ -14,8 +17,12 @@ export const EMAILS_SESSION_TOKEN_ENV = "EMAILS_SESSION_TOKEN";
  */
 export const EMAILS_IDP_TOKEN_ENV = "EMAILS_IDP_TOKEN";
 
-/** The operator or tenant API key used by self-hosted clients. */
-export const EMAILS_SELF_HOSTED_API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
+/**
+ * The operator or tenant API key for the hosted API client. The canonical
+ * client contract name — the old API-key spelling carried the retired selector
+ * word and is gone with it.
+ */
+export const HASNA_EMAILS_API_KEY_ENV = "HASNA_EMAILS_API_KEY";
 
 /**
  * Credential selection order for self-hosted clients. A live user session wins
@@ -26,7 +33,7 @@ export const EMAILS_SELF_HOSTED_API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
 export const CLIENT_ENV_CREDENTIAL_SELECTION_KEYS = Object.freeze([
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  HASNA_EMAILS_API_KEY_ENV,
 ] as const);
 
 export type EmailsClientCredentialSetting = (typeof CLIENT_ENV_CREDENTIAL_SELECTION_KEYS)[number];
@@ -46,15 +53,17 @@ export function resolveEmailsClientCredentialCandidates(
     .filter((candidate) => candidate.value !== "");
 }
 
-// Structural keys the vault entry MUST carry (endpoint + mode). A credential is
+// Structural keys the vault entry MUST carry (the API endpoint). A credential is
 // required too, but a session token OR the API key satisfies it — see
 // CLIENT_ENV_CREDENTIAL_KEYS — so neither credential is individually mandatory.
 // Exported as the single source of truth for the client-env vault contract, so a
 // caller that has to construct a vault entry (e.g. an emulated `secrets` store in
 // a test) names these keys from here rather than restating them.
+//
+// The selector key the entry used to require is gone: the entry now
+// names the API endpoint and a credential, and nothing else selects a client.
 export const CLIENT_ENV_REQUIRED_KEYS = [
-  "EMAILS_MODE",
-  "EMAILS_SELF_HOSTED_URL",
+  "HASNA_EMAILS_API_URL",
 ] as const;
 
 // At least one of these must be present — ANY one is a complete credential: a
@@ -63,7 +72,7 @@ export const CLIENT_ENV_REQUIRED_KEYS = [
 // session first, then identity, then key (see src/store-resolution.ts and the
 // legacy client). An operator with only the API key keeps working unchanged.
 const CLIENT_ENV_CREDENTIAL_KEYS = [
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  HASNA_EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
 ] as const;
@@ -73,8 +82,6 @@ const CLIENT_ENV_KEYS = [
   ...CLIENT_ENV_REQUIRED_KEYS,
   ...CLIENT_ENV_CREDENTIAL_KEYS,
 ] as const;
-
-const MODE_ENV_KEYS = ["EMAILS_MODE", "HASNA_EMAILS_MODE"] as const;
 
 const SECRETS_COMMAND_ENV_ALLOWLIST = [
   "PATH",
@@ -144,10 +151,6 @@ function hasCompleteCanonicalClientEnv(env: NodeJS.ProcessEnv): boolean {
   return CLIENT_ENV_REQUIRED_KEYS.every((key) => Boolean(env[key]?.trim())) && hasClientEnvCredential(env);
 }
 
-function hasExplicitLocalMode(env: NodeJS.ProcessEnv): boolean {
-  return MODE_ENV_KEYS.some((key) => env[key]?.trim().toLowerCase() === "local");
-}
-
 // The `secrets` CLI needs its OWN backend configuration to resolve a vault path.
 // In a cloud-vault setup that means HASNA_SECRETS_STORAGE_MODE / HASNA_SECRETS_API_URL
 // / HASNA_SECRETS_API_KEY; other backends use similarly-prefixed vars. Stripping
@@ -181,7 +184,6 @@ function secretsCommandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export function loadEmailsClientEnvSecret(env: NodeJS.ProcessEnv = process.env): EmailsClientEnvSecretLoad {
   const secretPath = env[EMAILS_CLIENT_ENV_SECRET_ENV]?.trim() ?? null;
   if (!secretPath) return { secretPath: null, loaded: false, ready: false };
-  if (hasExplicitLocalMode(env)) return { secretPath, loaded: false, ready: false };
 
   if (hasCompleteCanonicalClientEnv(env)) {
     return {

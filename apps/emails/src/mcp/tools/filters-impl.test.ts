@@ -4,7 +4,7 @@ import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import { runMailboxFilterTool } from "./filters-impl.js";
 
 // The store-selection env names are built from parts rather than spelled out:
-// the deployment-mode axis ratchet counts the literal env variable name in the
+// the selector hygiene guard counts the literal env variable name in the
 // corpus, and this suite must contribute zero to it (it only selects the local
 // SQLite store). Same convention as src/mcp/tools/email-ops.test.ts.
 const STORE_MODE_ENV = ["EMAILS", "MODE"].join("_");
@@ -15,8 +15,8 @@ const STORE_ENV_KEYS = [
   STORE_DB_ENV,
   `HASNA_${STORE_DB_ENV}`,
   "EMAILS_CLIENT_ENV_SECRET",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SESSION_TOKEN",
   "EMAILS_IDP_TOKEN",
 ] as const;

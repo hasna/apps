@@ -29,9 +29,9 @@ import type { EmailStore } from "../store/email-store.js";
 import type { Outcome, Refusal } from "../store/outcome.js";
 import type { DomainRecord, ResourceRow } from "../store/records.js";
 import {
-  LOCAL_REFUSED_COMMANDS,
+  SQLITE_REFUSED_COMMANDS,
   NEVER_AVAILABLE_COMMANDS,
-  SELF_HOSTED_REFUSED_COMMANDS,
+  API_REFUSED_COMMANDS,
 } from "./status-commands.js";
 import { runDiagnostics, formatDiagnostics } from "./doctor.js";
 import type { DoctorCheck } from "./doctor.js";
@@ -59,8 +59,8 @@ function restoreInheritedProcessEnv(): void {
 const CONTROLLED_ENV = [
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
   "EMAILS_SESSION_TOKEN",
   "AWS_ACCESS_KEY_ID",
@@ -227,8 +227,8 @@ function providerRows(count: number): ResourceRow[] {
  * The second-implementation arms of one family, given a directory listing.
  *
  * The predicate RESOLVES THE FACADE SIBLING rather than pattern-matching the suffix, which
- * is the finding the batch collapse recorded: `sent-ledger.local.ts` has no facade and no
- * sibling arm, so a guard that flagged every `.local.` file would have to be relaxed by
+ * is the finding the batch collapse recorded: `sent-ledger.sqlite.ts` has no facade and no
+ * sibling arm, so a guard that flagged every `.sqlite.` file would have to be relaxed by
  * name — and a guard relaxed by name stops guarding. A `.local` module is an ARM only when
  * an `x.ts` facade exists beside it.
  */
@@ -259,51 +259,51 @@ describe("the doctor family's structure", () => {
     // POSITIVE CONTROL, both directions, against fixtures rather than repo content — the
     // repo count is supposed to be zero, so a "this predicate found something" assertion
     // over the tree would have to be deleted exactly when it starts mattering.
-    const withArms = ["doctor.ts", "doctor.local.ts", "doctor.remote.ts", "doctor.test.ts"];
-    expect(armModulesFor("doctor", withArms)).toEqual(["doctor.local.ts", "doctor.remote.ts"]);
+    const withArms = ["doctor.ts", "doctor.sqlite.ts", "doctor.api.ts", "doctor.test.ts"];
+    expect(armModulesFor("doctor", withArms)).toEqual(["doctor.api.ts", "doctor.sqlite.ts"]);
 
     // A `.local` module with NO facade sibling is not an arm.
-    expect(armModulesFor("sent-ledger", ["sent-ledger.local.ts"])).toEqual([]);
+    expect(armModulesFor("sent-ledger", ["sent-ledger.sqlite.ts"])).toEqual([]);
 
     // Another family's arms are not this family's, however similar the name looks.
-    const neighbour = ["doctor.ts", "delivery-doctor.ts", "delivery-doctor.local.ts", "delivery-doctor.remote.ts"];
+    const neighbour = ["doctor.ts", "delivery-doctor.ts", "delivery-doctor.sqlite.ts", "delivery-doctor.api.ts"];
     expect(armModulesFor("doctor", neighbour)).toEqual([]);
     expect(armModulesFor("delivery-doctor", neighbour)).toEqual([
-      "delivery-doctor.local.ts",
-      "delivery-doctor.remote.ts",
+      "delivery-doctor.api.ts",
+      "delivery-doctor.sqlite.ts",
     ]);
 
     // A test file beside a facade is not an arm.
     expect(armModulesFor("doctor", ["doctor.ts", "doctor.test.ts"])).toEqual([]);
   });
 
-  it("reaches past no facade into an arm, and reads no deployment-mode module", () => {
+  it("reaches past no facade into an arm, and reads no selector module", () => {
     const source = readFileSync(join(libDir, "doctor.ts"), "utf8");
     const specifiers = [...source.matchAll(/from\s+"([^"]+)"|import\("([^"]+)"\)/g)]
       .map((match) => match[1] ?? match[2])
       .filter((specifier): specifier is string => specifier !== undefined);
 
     expect(specifiers.length).toBeGreaterThan(5);
-    expect(specifiers.filter((specifier) => /\.(local|remote)\.js$/.test(specifier))).toEqual([]);
-    // The process-wide deployment-mode module, named by path so this file contributes
-    // nothing to the axis ratchet's own counters.
+    expect(specifiers.filter((specifier) => /\.(sqlite|api)\.js$/.test(specifier))).toEqual([]);
+    // The process-wide selector module, named by path so this file contributes
+    // nothing to the hygiene guard's own counters.
     expect(specifiers.filter((specifier) => /(^|\/)mode\.js$/.test(specifier))).toEqual([]);
   });
 
   it("is no longer reached through an arm by the CLI or the dashboard route", () => {
     const consumers = [
-      join(repoRoot, "src", "cli", "commands", "misc.local.ts"),
-      join(repoRoot, "src", "cli", "commands", "misc.remote.ts"),
+      join(repoRoot, "src", "cli", "commands", "misc.sqlite.ts"),
+      join(repoRoot, "src", "cli", "commands", "misc.api.ts"),
       join(repoRoot, "src", "server", "routes", "inbound-sequences.ts"),
       join(repoRoot, "src", "mcp", "tools", "misc-ops.ts"),
       join(repoRoot, "src", "index.ts"),
     ];
     for (const consumer of consumers) {
       const source = readFileSync(consumer, "utf8");
-      expect(source, `${consumer} must not import a doctor arm`).not.toMatch(/lib\/doctor\.(local|remote)\.js/);
+      expect(source, `${consumer} must not import a doctor arm`).not.toMatch(/lib\/doctor\.(sqlite|api)\.js/);
       // Positive control for the assertion above: the pattern it uses does match the
       // specifier it is looking for, so a green run is not a broken regex.
-      expect('await import("../../lib/doctor.local.js")').toMatch(/lib\/doctor\.(local|remote)\.js/);
+      expect('await import("../../lib/doctor.sqlite.js")').toMatch(/lib\/doctor\.(sqlite|api)\.js/);
     }
   });
 });
@@ -545,8 +545,8 @@ describe("runDiagnostics and the storage configuration", () => {
     // A doctor is the tool an operator runs BECAUSE the configuration is broken, so the
     // resolver's boot error has to become part of the report rather than replace it.
     process.env["EMAILS_DB_PATH"] = join(tempHome, "emails.db");
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://mail.example.test";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://mail.example.test";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
 
     const checks = await runDiagnostics();
     const store = named(checks, "Store");
@@ -554,7 +554,7 @@ describe("runDiagnostics and the storage configuration", () => {
     expect(store.status).toBe("fail");
     expect(store.message).toContain("no way to tell which one you meant");
     expect(store.message).toContain("EMAILS_DB_PATH");
-    expect(store.message).toContain("EMAILS_SELF_HOSTED_URL");
+    expect(store.message).toContain("HASNA_EMAILS_API_URL");
 
     // And every subject the store would have answered says so, rather than vanishing from
     // the report or reporting a zero.
@@ -617,7 +617,7 @@ describe("runDiagnostics and the facts the seam does not carry", () => {
     expect(named(checks, "Provider credentials").message).toContain(recommended);
     // Recommending a command that refuses is the same defect class as reporting a count
     // nobody measured — see the header of status-commands.test.ts.
-    for (const refused of [...LOCAL_REFUSED_COMMANDS, ...SELF_HOSTED_REFUSED_COMMANDS, ...NEVER_AVAILABLE_COMMANDS]) {
+    for (const refused of [...SQLITE_REFUSED_COMMANDS, ...API_REFUSED_COMMANDS, ...NEVER_AVAILABLE_COMMANDS]) {
       expect(recommended.startsWith(refused), `${recommended} must not be refused by ${refused}`).toBe(false);
     }
   });
@@ -841,8 +841,8 @@ describe("formatDiagnostics", () => {
 describe("provisioning credentials on an API-backed installation", () => {
   function configureApiStorage(): void {
     delete process.env["EMAILS_DB_PATH"];
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://mail.example.test";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://mail.example.test";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
   }
 
   it("reports absent local cloudflare/resend credentials as unknown, never fail", async () => {

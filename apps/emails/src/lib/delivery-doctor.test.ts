@@ -472,7 +472,7 @@ describe("the delivery-doctor family has one implementation", () => {
     // entrypoints while carrying a byte-for-byte copy of the report formatter.
     const dir = import.meta.dir;
     expect(existsSync(join(dir, "delivery-doctor.ts"))).toBe(true);
-    expect(existsSync(join(dir, "delivery-doctor.local.ts"))).toBe(false);
-    expect(existsSync(join(dir, "delivery-doctor.remote.ts"))).toBe(false);
+    expect(existsSync(join(dir, "delivery-doctor.sqlite.ts"))).toBe(false);
+    expect(existsSync(join(dir, "delivery-doctor.api.ts"))).toBe(false);
   });
 });

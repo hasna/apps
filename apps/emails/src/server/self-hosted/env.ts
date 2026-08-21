@@ -1,5 +1,4 @@
 import { createPgPool, createQueryClient, type PoolQueryClient } from "../../storage-kit/index.js";
-import { assertNoLegacyHostedEnvironment } from "../../lib/mode.js";
 import {
   SERVER_DATABASE_URL_SETTING,
   resolveServerStorageBackend,
@@ -23,34 +22,14 @@ export const SELF_HOSTED_APP_ALIASES = ["mailery"] as const;
 export const SELF_HOSTED_DATABASE_ENV = SERVER_DATABASE_URL_SETTING;
 export const SELF_HOSTED_SIGNING_ENV = "EMAILS_API_SIGNING_KEY";
 
-// Removed hosted-runtime vars kept rejected.
-const REMOVED_ENV_KEYS = [
-  "MAILERY_MODE",
-  "HASNA_MAILERY_MODE",
-  "MAILERY_STORAGE_MODE",
-  "HASNA_MAILERY_STORAGE_MODE",
-  "HASNA_MAILERY_DATABASE_URL",
-  "HASNA_MAILERY_API_SIGNING_KEY",
-] as const;
-
 export interface SelfHostedPool {
   client: PoolQueryClient;
   connectionSource: string;
 }
 
 export function assertSelfHostedEnvironment(env: NodeJS.ProcessEnv = process.env): void {
-  assertNoLegacyHostedEnvironment(env);
-  for (const key of REMOVED_ENV_KEYS) {
-    if (env[key]?.trim()) {
-      throw new Error(
-        `${key} belongs to the removed Mailery/cloud runtime. ` +
-          `Use ${SELF_HOSTED_DATABASE_ENV} and ${SELF_HOSTED_SIGNING_ENV}.`,
-      );
-    }
-  }
-  // The deployment word is REFUSED here rather than merely unread, and the refusal comes
-  // from the one module that owns the decision — so an operator who carried the retired
-  // variable forward is told to delete it instead of watching it do nothing.
+  // The server's internal store follows HASNA_EMAILS_DATABASE_URL alone. A leftover
+  // selector variable selects nothing and is never read here.
   if (resolveServerStorageBackend(env) !== "postgresql") {
     throw new Error(
       `Emails operator API requires ${SELF_HOSTED_DATABASE_ENV}. ` +

@@ -9,7 +9,7 @@ import type { MxAssessment } from "../../lib/mx-ownership.js";
 // route and its container runs no reconciler. The commands stay registered so
 // scripts and `--help` get a truthful, actionable answer instead of a bare
 // "unknown command" — but the previous "it runs on the self-hosted server" text
-// was false in BOTH local and self_hosted mode and is gone.
+// was false in BOTH local and API-client configuration and is gone.
 //
 // The supported path is manual: `emails domain adopt` registers an
 // already-verified domain and wires SES inbound, and `emails aws setup-inbound`

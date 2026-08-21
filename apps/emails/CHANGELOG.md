@@ -1,3 +1,7 @@
+# Changelog
+
+All notable changes to `@hasna/emails` are documented here.
+
 ## 1.4.5
 
 ### Patch Changes

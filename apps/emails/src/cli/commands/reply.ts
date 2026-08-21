@@ -9,7 +9,7 @@ import { formatThreadLabel } from "../tui/format.js";
  * Refuse a send whose recipients include a suppressed contact.
  *
  * `forward` and `reply` reach `ds.send` exactly like `emails send` does, and in
- * local mode nothing further down the chain consults `contacts` — so without
+ * local SQLite client nothing further down the chain consults `contacts` — so without
  * this they mail a hard-bounced/complained/unsubscribed address. `reply --all`
  * is the sharpest case: it fans out to every recipient on the parent, so a
  * suppressed address is mailed without the operator ever typing it.
@@ -106,7 +106,7 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
           replyToId: id,
         });
         const threadId = msg.thread_id ?? null;
-        // Not a fixed 8-char slice: in self_hosted mode the thread id is the
+        // Not a fixed 8-char slice: when the API client is configured the thread id is the
         // server's conversation key (a normalized subject), not a uuid.
         const suffix = threadId ? ` (thread${formatThreadLabel(threadId)})` : "";
         output({ id: result.id, thread_id: threadId, to: toArr, subject: defaults.subject },

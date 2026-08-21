@@ -31,7 +31,7 @@ export async function assertServingRoleCannotBypassRls(client: TypedQueryClient)
       `RLS boot assertion FAILED: serving DB role '${row.rolname}' can bypass Row-Level Security ` +
         `(rolsuper=${row.rolsuper}, rolbypassrls=${row.rolbypassrls}). FORCE ROW LEVEL SECURITY is a ` +
         `silent no-op for such a role, so tenant isolation Layer 2 would be OFF. Refusing to start. ` +
-        `Point EMAILS_DATABASE_URL at a NOSUPERUSER, NOBYPASSRLS serving role (design §6 Layer 2 / H1).`,
+        `Point HASNA_EMAILS_DATABASE_URL at a NOSUPERUSER, NOBYPASSRLS serving role (design §6 Layer 2 / H1).`,
     );
   }
 }

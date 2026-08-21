@@ -1,7 +1,7 @@
 /**
  * Where provider credentials may live, and what to say when they may not.
  *
- * Local mode keeps per-provider credentials in its own SQLite row and uses them
+ * The local SQLite client keeps per-provider credentials in its own SQLite row and uses them
  * to send. The self-hosted `/v1/providers` resource has NO credential columns —
  * the server signs with credentials from its own environment. Passing
  * `--api-key`/`--access-key`/`--secret-key` at a self-hosted client therefore

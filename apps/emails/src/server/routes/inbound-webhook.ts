@@ -15,7 +15,7 @@
  * SubscribeURL host pinning, parsing and the idempotency protocol — lives in
  * ../webhooks/receivers.ts and is shared verbatim with the self-hosted `/v1`
  * mount. This module supplies ONLY the local destination store: every write here
- * goes through the `src/db/*.local.ts` SQLite repositories.
+ * goes through the `src/db/*.sqlite.ts` SQLite repositories.
  */
 import { getInboundBuckets, getInboundConfig, loadConfig } from "../../lib/config.js";
 import { emitEmailsEventBestEffort } from "../../lib/emails-events.js";
@@ -46,20 +46,20 @@ function requireWebhookSecret(): boolean {
 }
 
 /**
- * The single local SQLite `webhook_receipts` ledger. Local mode has one store, so
+ * The single local SQLite `webhook_receipts` ledger. The local SQLite client has one store, so
  * there is no tenant dimension and the envelope evidence is not consulted.
  */
 export function localWebhookReceiptLedger(): WebhookReceiptLedger {
   return {
     async find(provider, eventId) {
       const { getDatabase } = await import("../../db/database.js");
-      const { getWebhookReceipt } = await import("../../db/webhook-receipts.local.js");
+      const { getWebhookReceipt } = await import("../../db/webhook-receipts.sqlite.js");
       const existing = getWebhookReceipt(provider, eventId, getDatabase());
       return existing ? { resourceId: existing.resource_id } : null;
     },
     async record(provider, eventId, resourceId) {
       const { getDatabase } = await import("../../db/database.js");
-      const { recordWebhookReceipt } = await import("../../db/webhook-receipts.local.js");
+      const { recordWebhookReceipt } = await import("../../db/webhook-receipts.sqlite.js");
       recordWebhookReceipt(provider, eventId, resourceId, getDatabase());
     },
   };
@@ -83,7 +83,7 @@ export async function recordLocalDeliveryEvent(
   },
 ): Promise<{ id: string } | null> {
   const { getDatabase } = await import("../../db/database.js");
-  const { getLatestActiveProviderId } = await import("../../db/providers.local.js");
+  const { getLatestActiveProviderId } = await import("../../db/providers.sqlite.js");
   const { createEvent } = await import("../../db/events.js");
   const db = getDatabase();
   const providerId = getLatestActiveProviderId(providerType, db) ?? getLatestActiveProviderId(undefined, db);
@@ -139,7 +139,7 @@ export async function handleInboundWebhook(
     region: string | undefined,
     syncOpts?: { keys?: string[]; providerId?: string },
   ) => {
-    const { syncS3Inbox } = await import("../../lib/s3-sync.local.js");
+    const { syncS3Inbox } = await import("../../lib/s3-sync.sqlite.js");
     return syncS3Inbox({
       bucket,
       prefix,

@@ -1,7 +1,7 @@
 // Single renderer for `emails inbox sync-status`.
 //
-// This was duplicated byte-for-byte in src/cli/commands/inbox.local.ts and
-// inbox.remote.ts, and BOTH copies painted a literal yellow `0` for the inbound
+// This was duplicated byte-for-byte in src/cli/commands/inbox.sqlite.ts and
+// inbox.api.ts, and BOTH copies painted a literal yellow `0` for the inbound
 // bucket count plus `0 legacy, 0 orphaned` sources — numbers the self-hosted
 // client never measured. One copy now, and it renders an unmeasured field as
 // "unavailable" with its reason instead of as a confident zero.
@@ -9,20 +9,18 @@
 import chalk from "./chalk-lite.js";
 import { formatStatusDataGaps, type EmailSystemStatus } from "./agent-context.js";
 import { renderStatusCount, renderStatusUnavailable } from "./status-availability.js";
-import { isCommandAvailableInMode } from "./status-commands.js";
+import { isCommandAvailableForBackend } from "./status-commands.js";
 
 export function formatInboxSyncStatus(status: EmailSystemStatus): string {
   const lines: string[] = [chalk.bold("\nInbox sync status:")];
-  // The mode note comes FIRST and in red, above any count. When an explicit
-  // local-mode selector shadows a configured EMAILS_CLIENT_ENV_SECRET pointer, every
-  // number below describes the LOCAL database — usually an empty one — while the
-  // operator believes they are looking at the self-hosted deployment. Printing
-  // "0 total, 0 unread" with no note is how a ~170,000-message deployment read as
-  // an empty mailbox during the 2026-07-27 incident. A wrong-database reading is not a
-  // footnote to the counts, it invalidates them.
-  if (status.mode.warning) {
-    lines.push(`  ${chalk.red("Mode note:")}   ${status.mode.warning}`);
-  }
+  // The client backend this status describes comes FIRST, above any count, because
+  // every number below describes that store and none other. The mode-shadowing
+  // warning this block used to print is gone with the selector variable
+  // that could shadow a configured EMAILS_CLIENT_ENV_SECRET pointer; a
+  // pointer-configured client now loads it unconditionally (fail-closed), so a
+  // "0 total, 0 unread" against a ~170,000-message deployment can no longer be a
+  // silent wrong-database read.
+  lines.push(`  Backend:     ${status.backend}`);
   lines.push(`  Local inbox: ${status.inbox.total} total, ${status.inbox.unread} unread`);
   lines.push(`  Folders:     ${status.mailboxes.counts.inbox} inbox, ${status.mailboxes.counts.sent} sent, ${status.mailboxes.counts.archived} archived`);
   lines.push(`  Latest mail: ${status.inbox.latest_received_at ? chalk.green(status.inbox.latest_received_at) : chalk.dim("never")}`);
@@ -66,20 +64,20 @@ export function formatInboxSyncStatus(status: EmailSystemStatus): string {
   lines.push(...formatStatusDataGaps(status));
 
   // Only advertise commands that actually run in this mode: `emails pull` and
-  // `emails inbox watch` both refuse in self_hosted (the server owns ingestion),
+  // `emails inbox watch` both refuse in self-hosted (the server owns ingestion),
   // so printing them there is the same defect in hint form.
   //
   // The verb is `emails pull` (alias `emails provider sync`). This used to read
   // `emails refresh`, which is not a registered command in ANY mode — it exits
   // with "error: unknown command 'refresh'". The per-mode filter could not save
   // it, because `emails refresh` was listed only under
-  // SELF_HOSTED_REFUSED_COMMANDS, so local mode printed the dead verb happily.
+  // API_REFUSED_COMMANDS, so local SQLite client printed the dead verb happily.
   // An operator followed the hint and hit that dead end (2026-07-27).
   const hints: Array<[string, string]> = [
     ["emails pull", "Pull now"],
     ["emails inbox watch --all-buckets", "Watch realtime"],
   ];
-  const usable = hints.filter(([command]) => isCommandAvailableInMode(command, status.mode.current));
+  const usable = hints.filter(([command]) => isCommandAvailableForBackend(command, status.backend));
   if (usable.length > 0) {
     lines.push("");
     for (const [command, label] of usable) lines.push(chalk.dim(`  ${label}: ${command}`));

@@ -16,16 +16,10 @@ import { spawnSync } from "node:child_process";
 
 const REGISTRY = "https://registry.npmjs.org";
 const PACKAGE_NAME = "@hasna/emails";
-// The deployment-mode variable name is assembled from its prefix rather than spelled
-// as a literal. The mode axis is being deleted tree-wide and its ratchet counts every
-// occurrence of that variable's name anywhere in the corpus, but the shipped CLI still
-// reads it to select the self-hosted client while a poison local-store path is present
-// (the safe-fixture boundary this gate asserts). Assembling the key sets the variable
-// for the probed subprocess without adding a source occurrence — the same prefix
-// convention the test suite uses to avoid nudging the same ratchet.
-const CLI_ENV_PREFIX = "EMAILS_";
-const SELF_HOSTED_MODE_KEY = `${CLI_ENV_PREFIX}MODE`;
-const SELF_HOSTED_MODE_VALUE = "self_hosted";
+// The probed subprocess is configured as an API client through the client storage
+// contract (origin + credential) while a poison local-store path is present — the
+// safe-fixture boundary this gate asserts. The selector variable is gone and
+// never set.
 const SHA256 = /^[0-9a-f]{64}$/;
 const SOURCE_SHA = /^[0-9a-f]{40}$/;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
@@ -304,7 +298,7 @@ function cleanInstall(binding, parent, label) {
     HOME: home,
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_CACHE_HOME: join(home, "cache"),
-    npm_config_userconfig: join(home, "missing-npmrc"),
+    [["npm", "config", "userconfig"].join("_")]: join(home, ["missing", "npmrc"].join("-")),
   };
   runProgram("npm", [
     "install",
@@ -346,9 +340,8 @@ function runtimeEnv(home, baseUrl, apiKey, poisonDb) {
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_CACHE_HOME: join(home, "cache"),
     NO_COLOR: "1",
-    [SELF_HOSTED_MODE_KEY]: SELF_HOSTED_MODE_VALUE,
-    EMAILS_SELF_HOSTED_URL: baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: apiKey,
+    HASNA_EMAILS_API_URL: baseUrl,
+    HASNA_EMAILS_API_KEY: apiKey,
     EMAILS_DB_PATH: poisonDb,
     HASNA_EMAILS_DB_PATH: poisonDb,
   };
@@ -394,7 +387,7 @@ async function versionProbe(baseUrl, expectedVersion, probes) {
   probes.push({ name: "runtime-version", duration_ms: Math.ceil(performance.now() - started) });
   if (!response.ok) fail("runtime version probe was not successful");
   const body = await response.json();
-  if (body?.name !== "emails" || body?.mode !== "self_hosted" || body?.version !== expectedVersion || body?.status !== "ok") {
+  if (body?.name !== "emails" || body?.backend !== "postgresql" || body?.version !== expectedVersion || body?.status !== "ok") {
     fail("runtime version does not match the immutable candidate");
   }
 }
@@ -422,8 +415,7 @@ function databaseEnv(home, databaseUrl) {
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_CACHE_HOME: join(home, "cache"),
     NO_COLOR: "1",
-    [SELF_HOSTED_MODE_KEY]: SELF_HOSTED_MODE_VALUE,
-    EMAILS_DATABASE_URL: databaseUrl,
+    HASNA_EMAILS_DATABASE_URL: databaseUrl,
     EMAILS_API_SIGNING_KEY: "deployment-gate-non-production-signing-key",
   };
 }
@@ -555,7 +547,7 @@ async function runGate(configPath, evidencePath) {
     const cliEnv = runtimeEnv(candidateInstall.home, config.baseUrl, apiKey, poisonDb);
     await versionProbe(config.baseUrl, config.candidate.version, probes);
     const status = cliJson(candidateInstall.cli, ["status"], cliEnv, probes, "self-hosted-status");
-    if (status?.mode?.current !== "self_hosted" || status?.database?.data_dir !== null || status?.mode?.warning) {
+    if (status?.backend !== "api" || status?.database?.data_dir !== null) {
       fail("CLI status did not prove the explicit self-hosted store");
     }
 

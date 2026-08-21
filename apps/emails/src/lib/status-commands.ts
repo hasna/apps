@@ -4,11 +4,11 @@
 // fabricated count — the payload states something untrue about the system. Before
 // this registry existed, `emails status` proposed `emails provision status` and
 // every JSON error proposed `emails doctor --json`, both of which refuse in
-// self_hosted mode ("... runs on the self-hosted server"). An agent following the
+// API-client configuration ("... runs on the self-hosted server"). An agent following the
 // advice got a second failure and no closer to the truth.
 //
 // THE REGISTRY IS NOT THE SOURCE OF TRUTH — THE CLI IS. The first cut of this
-// module documented its source as `grep 'serverOnly(' src/cli/commands/*.remote.ts`,
+// module documented its source as `grep 'serverOnly(' src/cli/commands/*.api.ts`,
 // and that glob is wrong: `serverOnly()` is also defined and called in the SHARED
 // modules src/cli/commands/domain.ts and src/cli/commands/address.ts, which
 // src/cli/index.tsx loads in BOTH modes and whose helper throws unconditionally.
@@ -22,18 +22,17 @@
 //
 // A command that refuses in EVERY mode does not belong in a per-mode list. Put it
 // in NEVER_AVAILABLE_COMMANDS: a per-mode entry only removes the suggestion from
-// the mode it is listed under, so `emails provision` sitting in the self_hosted
+// the mode it is listed under, so `emails provision` sitting in the self-hosted
 // list alone still let `emails status` propose it in LOCAL mode, where it refuses
 // just as hard.
 
-import type { EmailsMode } from "./mode.js";
 
 /**
  * Command prefixes that refuse in EVERY mode because the feature does not ship in
  * this build at all — neither the local orchestrator nor a `/v1` route exists.
  *
  * Source of truth: every `notImplementedAnywhere(...)` and `serverOnly(...)` call
- * site in a SHARED command module (one that is not `*.remote.ts` / `*.local.ts`),
+ * site in a SHARED command module (one that is not `*.api.ts` / `*.sqlite.ts`),
  * because those helpers throw regardless of mode. Enforced by
  * src/lib/status-commands-coverage.test.ts — do not hand-maintain this list
  * against a remembered grep.
@@ -71,18 +70,18 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // (`error: unknown command 'refresh'`; the verb is `emails pull`, alias
   // `emails provider sync`). It belongs here rather than in a per-mode list for
   // exactly the reason this file documents above: it sat in
-  // SELF_HOSTED_REFUSED_COMMANDS alone, so local mode still proposed it, and
+  // API_REFUSED_COMMANDS alone, so local SQLite client still proposed it, and
   // `emails inbox status` printed "Pull now: emails refresh" to every local
   // operator. A command that exists in NO mode must be unavailable in every mode.
   "emails refresh",
 ];
 
 /**
- * Command prefixes that refuse in self_hosted mode because they need
+ * Command prefixes that refuse when the client is the hosted API because they need
  * server-side state, local SQLite, or a local daemon.
- * Source of truth: `grep -n 'serverOnly(' src/cli/commands/*.remote.ts`.
+ * Source of truth: `grep -n 'serverOnly(' src/cli/commands/*.api.ts`.
  */
-export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
+export const API_REFUSED_COMMANDS: readonly string[] = [
   "emails analytics",
   "emails batch",
   // Only the delivery sub-diagnosis refuses; `emails doctor` itself reads through
@@ -110,14 +109,14 @@ export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
   // suppress a real remedy from every suggestion path, which is the mirror image of
   // the defect this registry exists to prevent. Verify before adding.
   // `emails inbox unread-count --by-address` is deliberately NOT here either:
-  // it used to refuse in self_hosted and is now served by the /v1 server
+  // it used to refuse in self-hosted and is now served by the /v1 server
   // endpoint (GET /v1/messages/unread-by-address), so it RUNS in both modes.
   "emails inbox clear --provider",
   "emails monitor",
   "emails provider sync",
   "emails pull",
   // `emails refresh` moved to NEVER_AVAILABLE_COMMANDS — it is not a command in
-  // any mode, and a per-mode entry only suppressed it in self_hosted.
+  // any mode, and a per-mode entry only suppressed it in self-hosted.
   // The scheduler LOOP refuses (it needs the local send pipeline); reading and
   // cancelling the schedule over /v1/scheduled does not.
   "emails schedule run",
@@ -127,30 +126,30 @@ export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
   "emails webhook listen",
 ];
 
-/** Command prefixes that refuse in local mode (server/API-only surfaces). */
-export const LOCAL_REFUSED_COMMANDS: readonly string[] = [
+/** Command prefixes that refuse when the client is the local SQLite file (server/API-only surfaces). */
+export const SQLITE_REFUSED_COMMANDS: readonly string[] = [
   "emails auth",
   "emails serve",
 ];
 
-function refusedFor(mode: EmailsMode): readonly string[] {
-  const modeSpecific = mode === "self_hosted" ? SELF_HOSTED_REFUSED_COMMANDS : LOCAL_REFUSED_COMMANDS;
-  return [...NEVER_AVAILABLE_COMMANDS, ...modeSpecific];
+function refusedFor(backend: "sqlite" | "api"): readonly string[] {
+  const backendSpecific = backend === "api" ? API_REFUSED_COMMANDS : SQLITE_REFUSED_COMMANDS;
+  return [...NEVER_AVAILABLE_COMMANDS, ...backendSpecific];
 }
 
 /**
  * True when `command` (a full command line, e.g. `emails provision status`) is
- * runnable in `mode`. Matching is prefix-on-word-boundary so
+ * runnable for that backend. Matching is prefix-on-word-boundary so
  * `emails provision status` matches the `emails provision` entry while
  * `emails provisioning-report` would not.
  */
-export function isCommandAvailableInMode(command: string, mode: EmailsMode): boolean {
+export function isCommandAvailableForBackend(command: string, backend: "sqlite" | "api"): boolean {
   const normalized = command.trim();
-  return !refusedFor(mode).some((prefix) =>
+  return !refusedFor(backend).some((prefix) =>
     normalized === prefix || normalized.startsWith(`${prefix} `));
 }
 
-/** Drop every suggestion that would refuse in `mode`, preserving order. */
-export function keepAvailableCommands(commands: string[], mode: EmailsMode): string[] {
-  return commands.filter((command) => isCommandAvailableInMode(command, mode));
+/** Drop every suggestion that would refuse for that backend, preserving order. */
+export function keepAvailableCommands(commands: string[], backend: "sqlite" | "api"): string[] {
+  return commands.filter((command) => isCommandAvailableForBackend(command, backend));
 }

@@ -8,7 +8,7 @@
  *
  * The receiver itself lives in ../webhooks/receivers.ts and is shared verbatim
  * with the self-hosted `/v1` mount. This module supplies ONLY the local
- * destination store: every write here goes through the `src/db/*.local.ts`
+ * destination store: every write here goes through the `src/db/*.sqlite.ts`
  * SQLite repositories.
  */
 import { emitEmailsEventBestEffort, inboundReceivedEventData } from "../../lib/emails-events.js";
@@ -21,9 +21,9 @@ import { localWebhookReceiptLedger, recordLocalDeliveryEvent } from "./inbound-w
 
 const storeInboundLocally: ResendInboundSink = async (parsed, _routing, eventId) => {
   const { getDatabase, runInTransaction } = await import("../../db/database.js");
-  const { storeInboundEmail } = await import("../../db/inbound.local.js");
-  const { getLatestActiveProvider } = await import("../../db/providers.local.js");
-  const { recordWebhookReceipt } = await import("../../db/webhook-receipts.local.js");
+  const { storeInboundEmail } = await import("../../db/inbound.sqlite.js");
+  const { getLatestActiveProvider } = await import("../../db/providers.sqlite.js");
+  const { recordWebhookReceipt } = await import("../../db/webhook-receipts.sqlite.js");
   const db = getDatabase();
   const resend = getLatestActiveProvider("resend", db);
 

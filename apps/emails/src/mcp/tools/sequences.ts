@@ -13,19 +13,21 @@ async function toolError(error: unknown): Promise<ToolResult> {
   return { content: [{ type: "text", text: `Error: ${formatError(error)}` }], isError: true };
 }
 
-async function isSelfHostedRuntimeMode(): Promise<boolean> {
-  const { resolveEmailsMode } = await import("../../lib/mode.js");
-  return resolveEmailsMode().mode === "self_hosted";
+async function isApiClientRuntime(): Promise<boolean> {
+  const { isApiClientConfigured } = await import("../../store-resolution.js");
+  return isApiClientConfigured();
 }
 
 async function assertSelfHostedApiRouteReady(toolName: string): Promise<void> {
-  if (!(await isSelfHostedRuntimeMode())) return;
-  const { isSelfHostedMode } = await import("../../db/self-hosted-store.js");
-  if (!isSelfHostedMode()) {
-    throw new Error(
-      `MCP tool ${toolName} is API-backed in self_hosted mode and requires EMAILS_MODE=self_hosted with ` +
-        "EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY. Set EMAILS_MODE=local only for an explicit local sequence store.",
-    );
+  if (!(await isApiClientRuntime())) return;
+  // The API-backed route requires the API client's strict configuration
+  // (HASNA_EMAILS_API_URL plus a credential); resolveSelfHostedConfig refuses
+  // with the config-help message when it is missing.
+  try {
+    const { resolveSelfHostedConfig } = await import("../../db/self-hosted-store.js");
+    resolveSelfHostedConfig();
+  } catch (error) {
+    throw new Error(`MCP tool ${toolName} is API-backed: ${(error as Error).message}`);
   }
 }
 
@@ -72,7 +74,7 @@ export function registerSequenceTools(server: McpServer): void {
 
   // Sequence steps and enrollments are repository resources in every configuration
   // (local SQLite, `/v1/sequence-steps` and `/v1/sequence-enrollments` on the
-  // self-hosted server), and src/db/sequences.remote.ts is a complete client for
+  // self-hosted server), and src/db/sequences.api.ts is a complete client for
   // both. The four step/enrollment tools below therefore carry no mode guard — they
   // are the MCP twins of `emails sequence step add|enroll|unenroll|enrollments`,
   // which already perform the same operations over the same route.
@@ -194,12 +196,12 @@ export function registerSequenceTools(server: McpServer): void {
       // This refused unconditionally, in EVERY mode, claiming "inbound reply
       // tracking runs on the self-hosted server" and that no API-backed
       // implementation existed. Both halves were false: src/db/inbound.ts routes
-      // `listReplySummaries`/`getReplyCount` to inbound.remote.ts, which serves them
+      // `listReplySummaries`/`getReplyCount` to inbound.api.ts, which serves them
       // from the `/v1/messages` list+get routes, and the CLI twin
-      // `emails replies <id>` (src/cli/commands/email-log.remote.ts) has always run
-      // in self_hosted mode over the same data. A refusal in front of a working
+      // `emails replies <id>` (src/cli/commands/email-log.api.ts) has always run
+      // when the API client is configured over the same data. A refusal in front of a working
       // route in BOTH modes is strictly worse than the mode-conditional guards —
-      // those at least told the truth in local mode.
+      // those at least told the truth for the local SQLite client.
       const { listReplySummaries, getReplyCount } = await import("../../db/inbound.js");
       const effectiveLimit = limit ?? 20;
       const effectiveOffset = offset ?? 0;

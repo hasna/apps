@@ -334,7 +334,7 @@ export function enumerateSelfHostedRows<T = Record<string, unknown>>(
  *
  * The contract was established by the events family's deleted `/v1` arm (that
  * family has since collapsed onto the store seam and no longer reads through this
- * module; the remaining `*.remote.ts` arms below do):
+ * module; the remaining `*.api.ts` arms below do):
  *   UNBOUNDED ("give me everything") is answerable only by a complete enumeration.
  *   BOUNDED ("give me the first N") is answered when the window is FULL, or when
  *   the table ended first — then the short result is genuinely the whole tail.

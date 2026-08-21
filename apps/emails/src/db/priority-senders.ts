@@ -2,7 +2,7 @@
 //
 // WHAT THIS FILE USED TO BE. A 14-line facade that read the deployment word and
 // dispatched its three exports to one of two sibling modules: a SQLite arm
-// (`priority-senders.local.ts`) and a curl-bridge arm (`priority-senders.remote.ts`).
+// (`priority-senders.sqlite.ts`) and a curl-bridge arm (`priority-senders.api.ts`).
 // Both are gone. The SQLite and self-hosted implementations now live in this single
 // file, under distinct names (`*Local` / `*Remote`), and the published surface
 // (the plain names) chooses between them by the process-wide store selection at
@@ -13,7 +13,7 @@
 import { getDatabase, now, type Database } from "./database.js";
 import { selfHostedStoreFor } from "./self-hosted-store.js";
 import { ciso, cstr } from "./self-hosted-resource.js";
-import { getEmailsMode } from "../lib/mode.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 import {
   normalizePriorityRuleInput,
   prioritySenderRuleId,
@@ -115,7 +115,7 @@ export function removePrioritySenderRuleRemote(id: string): boolean {
 // the process-wide store selection, so a mode change mid-process is honored.
 
 function rulesAreRemote(): boolean {
-  return getEmailsMode() === "self_hosted";
+  return isApiClientConfigured();
 }
 
 export function listPrioritySenderRules(db?: Database): PrioritySenderRule[] {

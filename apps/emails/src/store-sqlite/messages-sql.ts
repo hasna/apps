@@ -92,7 +92,7 @@ export const UNIFIED_MESSAGES_SQL = `(
     e.sent_at AS received_at,
     -- The ledger has no read or star state, and is_read on the seam's record is a
     -- non-optional boolean, so there is no "unknown" to return. 1 is the answer
-    -- src/cli/tui/data.local.ts already gives for these same rows (you have read
+    -- src/cli/tui/data.sqlite.ts already gives for these same rows (you have read
     -- what you sent); agreeing with the other reader of this table beats inventing
     -- a second convention. Outbound rows are excluded from every unread predicate
     -- either way.

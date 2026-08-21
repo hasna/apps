@@ -175,7 +175,7 @@ export interface V1Stub {
   }): Promise<void>;
   /**
    * Make this stub the ONE store this test context is configured to use:
-   * EMAILS_MODE=self_hosted, EMAILS_SELF_HOSTED_URL, EMAILS_SELF_HOSTED_API_KEY, the
+   * HASNA_EMAILS_API_URL, HASNA_EMAILS_API_KEY, EMAILS_SESSION_TOKEN, the
    * database-path settings UNSET (see `MANAGED_ENV_KEYS`), then the config and
    * mail-data-source caches reset. Call in `beforeEach`.
    */
@@ -1531,9 +1531,8 @@ const server = Bun.serve({
 console.log("PORT=" + server.port);
 `;
 
-const MODE_ENV = "EMAILS_MODE";
-const URL_ENV = "EMAILS_SELF_HOSTED_URL";
-const KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
+const URL_ENV = "HASNA_EMAILS_API_URL";
+const KEY_ENV = "HASNA_EMAILS_API_KEY";
 const SESSION_ENV = "EMAILS_SESSION_TOKEN";
 const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 
@@ -1560,7 +1559,6 @@ const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
  * lower-precedence one (and left the higher-precedence one to win) is not expressible.
  */
 const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([
-  MODE_ENV,
   URL_ENV,
   KEY_ENV,
   SESSION_ENV,
@@ -1712,7 +1710,6 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
         for (const key of MANAGED_ENV_KEYS) snapshot[key] = process.env[key];
         priorEnv = snapshot;
       }
-      process.env[MODE_ENV] = "self_hosted";
       process.env[URL_ENV] = baseUrl;
       process.env[KEY_ENV] = apiKey;
       delete process.env[SESSION_ENV];

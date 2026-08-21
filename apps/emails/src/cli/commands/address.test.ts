@@ -298,7 +298,7 @@ describe("address server-only lifecycle commands still block", () => {
       expect(result.stderr).toContain(`${label} is not implemented in this build`);
       expect(result.stderr).toContain("emails address add <email> --provider <id>");
       // The message that shipped named a server route that does not exist, and
-      // named it unconditionally — so it lied in local mode too.
+      // named it unconditionally — so it lied for the local SQLite client too.
       expect(result.stderr).not.toContain("not available in the self-hosted client");
       expect(result.stderr).not.toContain("runs on the self-hosted server");
     });

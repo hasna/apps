@@ -140,7 +140,7 @@ function deps(
     closes,
     deps: {
       env: {
-        EMAILS_DATABASE_URL: "postgresql://redacted",
+        HASNA_EMAILS_DATABASE_URL: "postgresql://redacted",
         EMAILS_INGEST_S3_BUCKET: "canonical-inbound",
         ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/v4/example",
         [ATTACHMENT_REPAIR_IMAGE_REVISION_ENV]: IMAGE_REVISION,
@@ -454,7 +454,7 @@ describe("server maintenance command boundary", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
-        EMAILS_DATABASE_URL: "",
+        HASNA_EMAILS_DATABASE_URL: "",
         ECS_CONTAINER_METADATA_URI_V4: "",
       },
       stdout: "pipe",

@@ -80,12 +80,12 @@ export function startHttpServer(options: StartHttpServerOptions = {}): ReturnTyp
   let guard: McpHttpGuard | undefined;
 
   const server = Bun.serve({
-    // The self-hosted data source pages the self_hosted /v1 API client-side (no
+    // The self-hosted data source pages the self-hosted /v1 API client-side (no
     // server-side filter/count), so `inbox status`/`search_inbound` tool calls
     // can take tens of seconds against a large mailbox. Bun's default
     // idleTimeout is 10s, which silently closes the streamable-HTTP connection
     // mid-call ("socket connection closed unexpectedly"). Raise it to Bun's max
-    // (255s) so slow self_hosted-backed tool calls and the long-lived MCP event
+    // (255s) so slow self-hosted-backed tool calls and the long-lived MCP event
     // stream survive.
     idleTimeout: 255,
     port,

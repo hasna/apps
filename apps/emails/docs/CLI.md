@@ -1,7 +1,7 @@
 # CLI reference
 
 This page describes the command tree shipped by `@hasna/emails` 1.3.3. It was
-checked against the live `--help` output in both `local` and `self_hosted`
+checked against the live `--help` output in both `local` and `self-hosted`
 modes. Use `emails <command> --help` for every option and argument; Commander
 help is the option-level source of truth.
 
@@ -59,7 +59,7 @@ Standalone aliases are also shipped for common actions: `addresses`, `log`,
 
 Registration in help does not imply implementation. The following compatibility
 and design-target commands fail with an actionable "not implemented in this
-build" error in every deployment mode:
+build" error in every selection:
 
 - every `emails provision *` subcommand;
 - `emails domain connect`, `verify`, `status`, `setup-cloudflare`, and `setup`;
@@ -91,7 +91,7 @@ checks may refuse an operation that the selected store cannot perform.
 for the self-hosted client; `emails inbox attachment <email-id>` exists in both
 modes. `emails serve` defaults to the local dashboard at `127.0.0.1:3900` in
 local mode and the self-hosted `/v1` service at `0.0.0.0:8080` in
-`self_hosted` mode.
+`self-hosted` mode.
 
 ## Other shipped bins
 

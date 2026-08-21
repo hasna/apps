@@ -5,7 +5,7 @@
 // (see src/test-support/v1-stub.ts). The manual "Pull" affordance was LOCAL
 // S3→SQLite ingestion and no longer exists in the self-hosted-only client, so the
 // former local-Pull tests are gone and the self-hosted case simply asserts Pull is
-// absent. Local TUI settings writes throw in self_hosted mode, so the old
+// absent. Local TUI settings writes throw in self-hosted mode, so the old
 // setSetting() calls (and the autopull mock) are removed.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";

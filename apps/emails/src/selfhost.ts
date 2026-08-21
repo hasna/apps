@@ -219,7 +219,7 @@ export class EmailsSelfHostClient {
   }
 
     /** Liveness probe with database reachability */
-    async getHealth(init?: RequestInit): Promise<{ "status": "ok"; "version": string; "mode": "self_hosted"; "name": "emails"; "db": { "ok": boolean; "latencyMs": number } }> {
+    async getHealth(init?: RequestInit): Promise<{ "status": "ok"; "version": string; "backend": "sqlite" | "postgresql"; "name": "emails"; "db": { "ok": boolean; "latencyMs": number } }> {
       return this.request("GET", `/health`, {
         body: undefined,
         query: undefined,
@@ -237,7 +237,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Readiness probe (reachable and fully migrated) */
-    async getReady(init?: RequestInit): Promise<{ "status": "ready"; "version": string; "mode": "self_hosted"; "db": { "ok": true; "latencyMs": number }; "pendingMigrations": Array<string>; "migrationIssues": Array<string> }> {
+    async getReady(init?: RequestInit): Promise<{ "status": "ready"; "version": string; "backend": "sqlite" | "postgresql"; "db": { "ok": true; "latencyMs": number }; "pendingMigrations": Array<string>; "migrationIssues": Array<string> }> {
       return this.request("GET", `/ready`, {
         body: undefined,
         query: undefined,
@@ -2353,7 +2353,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Service version and mode */
-    async getVersion(init?: RequestInit): Promise<{ "status": "ok"; "version": string; "mode": "self_hosted"; "name": "emails" }> {
+    async getVersion(init?: RequestInit): Promise<{ "status": "ok"; "version": string; "backend": "sqlite" | "postgresql"; "name": "emails" }> {
       return this.request("GET", `/version`, {
         body: undefined,
         query: undefined,

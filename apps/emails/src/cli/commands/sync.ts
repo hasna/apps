@@ -1,8 +1,8 @@
 import type { Command } from "commander";
-import { getEmailsMode } from "../../lib/mode.js";
-import { registerSyncCommands as registerLocal } from "./sync.local.js";
-import { registerSyncCommands as registerRemote } from "./sync.remote.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
+import { registerSyncCommands as registerSqlite } from "./sync.sqlite.js";
+import { registerSyncCommands as registerApi } from "./sync.api.js";
 
 export function registerSyncCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  return (getEmailsMode() === "self_hosted" ? registerRemote : registerLocal)(program, output);
+  return (isApiClientConfigured() ? registerApi : registerSqlite)(program, output);
 }

@@ -7,7 +7,7 @@ export interface AttachmentMetaLike {
   size?: number;
   /**
    * Whether the backing store holds payload bytes for this entry. `undefined`
-   * means the source did not report availability (local mode, or a self-hosted
+   * means the source did not report availability (local SQLite client, or a self-hosted
    * serve older than the content_available contract) — treat as unknown.
    */
   content_available?: boolean;

@@ -12,17 +12,17 @@
 // naming the deployment word. Two absences are deliberate and are NOT gaps:
 //
 //   * there is no case that SETS the deployment word to prove it no longer decides. Writing it
-//     here — in any form, including through an exported constant, because the ratchet's env
+//     here — in any form, including through an exported constant, because the source-text guard's env
 //     metric is a substring match — would RAISE `emailsModeEnvReferences`, a counter that may
-//     only fall. The absence of that read is enforced by the ratchet
-//     (`src/mode-axis-ratchet.test.ts`) with zero slack, which is the guard designed for it.
+//     only fall. The absence of that read is enforced by the source-text guard
+//     (`src/store-resolution.test.ts`) with zero slack, which is the guard designed for it.
 //   * for the same reason there is no assertion that the module text no longer contains the
 //     dispatch helper or the mode read: naming either identifier here would raise its own
-//     counter. The ratchet counts them tree-wide, this file included.
+//     counter. The source-text guard counts them tree-wide, this file included.
 //
 // AND FOR THE SAME REASON THIS SUITE CANNOT SCRUB THE DEPLOYMENT WORD FROM ITS ENVIRONMENT,
 // which has one measured consequence worth recording rather than discovering. Every storage
-// setting IS scrubbed by name, but an ambient deployment word still reaches the `*.local.*`
+// setting IS scrubbed by name, but an ambient deployment word still reaches the `*.sqlite.*`
 // modules this pipeline calls into, and one of them refuses when it is set — so running this file
 // in the SAME process as another file that leaves that variable behind turns the two pinned-defect
 // cases red for a reason that is not in either file. Measured: all cases pass standalone, and
@@ -698,8 +698,8 @@ describe("the forwarding family has one implementation", () => {
   it("has no arm modules left", () => {
     // Checked by EXPLICIT NAME rather than by a glob, because `forwarding.*.ts` also matches
     // this file.
-    expect(existsSync(join(root, "src/lib/forwarding.local.ts"))).toBe(false);
-    expect(existsSync(join(root, "src/lib/forwarding.remote.ts"))).toBe(false);
+    expect(existsSync(join(root, "src/lib/forwarding.sqlite.ts"))).toBe(false);
+    expect(existsSync(join(root, "src/lib/forwarding.api.ts"))).toBe(false);
     expect(existsSync(join(root, "src/lib/forwarding.ts"))).toBe(true);
   });
 });

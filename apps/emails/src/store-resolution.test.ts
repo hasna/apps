@@ -213,7 +213,7 @@ describe("configured store resolution — the four quadrants", () => {
     expect([...API_CREDENTIAL_SETTINGS]).toEqual([
       "EMAILS_SESSION_TOKEN",
       "EMAILS_IDP_TOKEN",
-      "EMAILS_SELF_HOSTED_API_KEY",
+      "HASNA_EMAILS_API_KEY",
     ]);
     const keyOnly = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[2]]: "hasna_k" }));
     expect(keyOnly.store === "api" && keyOnly.credentialSetting).toBe(API_CREDENTIAL_SETTINGS[2]);
@@ -496,7 +496,7 @@ describe("the store the resolution actually hands back", () => {
 });
 
 describe("what the resolver is not allowed to read", () => {
-  it("reads storage configuration and never a deployment-mode word", () => {
+  it("reads storage configuration and never a selector word", () => {
     // STRUCTURAL, not conventional. The resolution has to follow from which storage
     // setting is present; a resolver that consulted a deployment word would rebuild the
     // coupling the store seam exists to remove, and would take a dependency on a module
@@ -505,7 +505,7 @@ describe("what the resolver is not allowed to read", () => {
     const source = readFileSync(join(import.meta.dir, "store-resolution.ts"), "utf8");
     expect(source).not.toContain("lib/mode");
     // The mode module's readers, spelled by construction so this file contributes
-    // nothing to the axis ratchet it sits inside.
+    // nothing to the hygiene guard it sits inside.
     for (const reader of ["getEmails", "resolveEmails", "normalizeEmails", "isSelfHosted"]) {
       expect(source, `${reader}… must not appear in the resolver`).not.toContain(`${reader}Mode`);
     }
@@ -515,7 +515,10 @@ describe("what the resolver is not allowed to read", () => {
     // mistyped path, which is how a guard in this repo once blessed an empty tarball.
     expect(source.length).toBeGreaterThan(4_000);
     expect(source).toContain("DATABASE_PATH_SETTINGS");
-    expect(source).toContain(["EMAILS", "SELF", "HOSTED", "URL"].join("_"));
+    // The API-origin role is defined here by re-export of the client-env constant;
+    // the positive control pins that the resolver names its URL setting at all.
+    expect(source).toContain("API_BASE_URL_SETTING");
+    expect(source).toContain("EMAILS_API_URL_ENV");
   });
 });
 

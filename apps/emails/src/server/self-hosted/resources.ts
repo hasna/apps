@@ -1,16 +1,16 @@
-// Generic /v1 resource registry for the Emails self_hosted self_hosted service.
+// Generic /v1 resource registry for the Emails self-hosted self-hosted service.
 //
 // The original service handled only domains/addresses/messages by hand. The
 // Self-hosted clients need the same resource CRUD vocabulary for the remaining
 // list-backed resources (contacts, providers, templates, groups, sequences,
 // owners, send-keys, scheduled) so a flipped client's `contact list`, `provider
-// list`, etc. read self_hosted data instead of the local SQLite island (the
+// list`, etc. read self-hosted data instead of the local SQLite island (the
 // split-brain the client-side routing fails-closed on until these exist).
 //
 // Every column here is a fixed, trusted identifier from THIS file (never user
 // input), so table/column names are safe to interpolate; all VALUES are bound
 // parameters. Secret material (provider credentials, send-key hashes) is
-// deliberately absent — the self_hosted resources carry only non-secret metadata.
+// deliberately absent — the self-hosted resources carry only non-secret metadata.
 
 export interface ResourceColumn {
   name: string;
@@ -143,7 +143,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   },
   {
     path: "providers",
-    table: "self_hosted_providers",
+    table: "server_providers",
     orderBy: "created_at DESC",
     filters: ["type"],
     columns: [
@@ -221,7 +221,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     table: "scheduled_emails",
     orderBy: "scheduled_at ASC",
     filters: ["status"],
-    foreignKeys: [{ column: "provider_id", table: "self_hosted_providers" }],
+    foreignKeys: [{ column: "provider_id", table: "server_providers" }],
     columns: [
       { name: "provider_id" },
       { name: "from_address" },
@@ -262,7 +262,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     table: "forwarding_rules",
     orderBy: "source_address ASC, target_address ASC",
     filters: ["source_address", "target_address", "mode"],
-    foreignKeys: [{ column: "provider_id", table: "self_hosted_providers" }],
+    foreignKeys: [{ column: "provider_id", table: "server_providers" }],
     columns: [
       { name: "source_address" },
       { name: "target_address" },
@@ -278,7 +278,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     table: "warming_schedules",
     orderBy: "created_at DESC",
     filters: ["status", "domain"],
-    foreignKeys: [{ column: "provider_id", table: "self_hosted_providers" }],
+    foreignKeys: [{ column: "provider_id", table: "server_providers" }],
     columns: [
       { name: "domain" },
       { name: "provider_id" },
@@ -328,7 +328,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     table: "mailbox_sources",
     orderBy: "status ASC, type ASC, created_at ASC",
     filters: ["mailbox_id", "provider_id", "type", "status"],
-    foreignKeys: [{ column: "provider_id", table: "self_hosted_providers" }],
+    foreignKeys: [{ column: "provider_id", table: "server_providers" }],
     columns: [
       { name: "mailbox_id" },
       { name: "provider_id" },
@@ -353,7 +353,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     // it here is what lets the HTTP store send it at all — its contract check
     // refuses undeclared filters rather than letting the service ignore them.
     filters: ["email_id", "provider_id", "type", "recipient", "provider_event_id"],
-    foreignKeys: [{ column: "provider_id", table: "self_hosted_providers" }],
+    foreignKeys: [{ column: "provider_id", table: "server_providers" }],
     columns: [
       { name: "email_id" },
       { name: "provider_id" },
@@ -486,7 +486,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     filters: ["sequence_id", "status"],
     foreignKeys: [
       { column: "sequence_id", table: "sequences" },
-      { column: "provider_id", table: "self_hosted_providers" },
+      { column: "provider_id", table: "server_providers" },
     ],
     columns: [
       { name: "sequence_id" },
@@ -559,7 +559,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     table: "sandbox_emails",
     orderBy: "created_at DESC",
     filters: ["provider_id"],
-    foreignKeys: [{ column: "provider_id", table: "self_hosted_providers" }],
+    foreignKeys: [{ column: "provider_id", table: "server_providers" }],
     columns: [
       { name: "provider_id" },
       { name: "from_address" },

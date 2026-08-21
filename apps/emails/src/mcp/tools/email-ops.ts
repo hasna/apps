@@ -1,11 +1,11 @@
 // The email-operation MCP tools. ONE implementation, one tool set.
 //
 // WHAT THIS FILE USED TO BE. Three modules: this facade, which read the
-// process-wide deployment-word helper (`src/lib/mode.ts`) and picked one of two
+// process-wide selector helper (`the deleted selector module`) and picked one of two
 // sibling arm modules, and the two arms themselves — 554 and 539 lines that
 // registered the SAME seventeen tool names with byte-identical input schemas.
 // Sixteen of those seventeen differed only in WHICH MODULE LAYER a handler
-// imported: one arm reached into the `*.local.*` arm of another family directly,
+// imported: one arm reached into the `*.sqlite.*` arm of another family directly,
 // the other called that family's facade. That is a difference about who runs the
 // code, not about what the operation means, and it is what this collapse deletes.
 //
@@ -75,7 +75,7 @@ function refusal(code: string, status: number, reason: string, remedy?: string):
  * shape declared at src/lib/mail-data-source.ts:125-152, which carries none of
  * these four. Passing them through would therefore mean IGNORING them, and for
  * `auth_token` that is not cosmetic: it is the scoped send-key check at
- * src/lib/send.local.ts:119-122, which decides whether the caller is allowed to
+ * src/lib/send.sqlite.ts:119-122, which decides whether the caller is allowed to
  * send from that address at all. A silently-ignored authorization check is worse
  * than a refused send, so this fails closed.
  *
@@ -197,7 +197,7 @@ export function registerEmailOpsTools(server: McpServer): void {
       // 4. Dispatch. ONE send path — the same one `emails send` uses
       //    (src/cli/commands/send.ts). Attachment caps, warming limits, sender
       //    readiness and provider failover are enforced inside it
-      //    (src/lib/send.local.ts:111-158) or by the service, so they are not
+      //    (src/lib/send.sqlite.ts:111-158) or by the service, so they are not
       //    re-implemented here where they could drift.
       //
       //    `markdown: false` is passed explicitly, matching `emails send`: the

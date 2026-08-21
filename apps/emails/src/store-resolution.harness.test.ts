@@ -3,26 +3,28 @@
 // src/store-resolution.test.ts covers the resolver by building its own environment
 // objects, and that is right for a unit test of `planEmailStore`. It also means that
 // suite could be entirely green while NO CALLER COULD ADOPT THE RESOLVER, which is
-// exactly what happened: `scripts/run-hermetic-tests.sh` sets a database path for the
-// whole suite, `V1Stub.applyEnv()` then added an API base URL and left the database
-// path in place, and every self-hosted test therefore ran with TWO configured places to
-// keep its mail. `planEmailStore` refuses that configuration — correctly, and that
-// refusal must never be softened into a precedence rule — so any product code that
-// called `createConfiguredEmailStore()` threw a boot error instead of running, in 73
-// test files.
+// exactly what happened before the harness was corrected: the harness pinned a
+// database path for the whole suite, `V1Stub.applyEnv()` then added an API base URL
+// and left the database path in place, and every API-client test therefore ran with
+// TWO configured places to keep its mail. `planEmailStore` refuses that configuration
+// — correctly, and that refusal must never be softened into a precedence rule — so
+// any product code that called `createConfiguredEmailStore()` threw a boot error
+// instead of running, in dozens of test files.
 //
-// The resolver was right; the HELPER was the thing configuring two stores. This file is
-// the test the fix has to satisfy, and it is deliberately written so it cannot pass
-// vacuously:
+// The resolver was right; the HARNESS was the thing configuring two stores. The
+// ambient environment of a hermetic run is now NEUTRAL: both database-path settings
+// are scrubbed (`-u HASNA_EMAILS_DB_PATH -u EMAILS_DB_PATH`) and no API settings are
+// injected, so the environment the store seam reads is exactly the unconfigured base
+// the two-backend contract starts from. This file is the test that fix has to
+// satisfy, and it is deliberately written so it cannot pass vacuously:
 //
-//   * the ambient database path is not assumed to be present — it is READ OUT OF THE
-//     HARNESS SCRIPT and installed by `beforeEach`, so this file reproduces the exact
-//     two-store condition whether it was launched by `bun run test` or by `bun test` on
-//     its own, and a harness that stopped configuring a local store fails the guard
-//     below rather than quietly making these tests trivial;
-//   * the FIRST test asserts the ambient configuration on its own resolves to SQLite.
-//     Without that positive control, "the API store came back" would also be satisfied
-//     by a harness that never configured a local store, and the fix would be unproven;
+//   * the scrub is not assumed — it is READ OUT OF THE HARNESS SCRIPT by
+//     `harnessScrubsDatabasePath()`, and a harness that stopped scrubbing either
+//     setting fails the guard below rather than quietly making these tests trivial;
+//   * the FIRST test asserts the ambient configuration on its own resolves to SQLite
+//     at the documented default path. Without that positive control, "the API store
+//     came back" would also be satisfied by a harness that never configured a local
+//     store, and the fix would be unproven;
 //   * the consumer test does a real round trip through the returned store to the stub
 //     and asserts the ROWS came from there, because a constructed HTTP store that never
 //     reached the service would satisfy a capabilities check alone.
@@ -41,41 +43,37 @@ import { SQLITE_STORE_CAPABILITIES } from "./store-sqlite/index.js";
 import {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
+  API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,
 } from "./store-resolution.js";
+import { defaultDatabasePath } from "./db/database.js";
 import { startV1Stub, type V1Stub } from "./test-support/v1-stub.js";
 
 /**
- * The database path the hermetic harness configures for the whole suite, read out of
- * the harness itself.
+ * The hermetic harness must scrub BOTH database-path settings for the whole suite,
+ * read out of the harness itself.
  *
- * NOT restated here on purpose. This value is the first half of the two-store
+ * NOT restated here on purpose. Each setting's name is the first half of the two-store
  * contradiction, so a copy of it in this file could drift from the harness and leave
  * these tests exercising a condition production runs no longer have. Reading it also
- * makes the guard below meaningful: if the harness ever stops configuring a local
- * store, `harnessDatabaseSetting()` throws and this file goes red, instead of every
- * test in it passing over a contradiction that no longer exists.
+ * makes the guard below meaningful: if the harness ever stops scrubbing either
+ * setting, `harnessScrubsDatabasePath()` throws and this file goes red, instead of
+ * every test in it passing over a contradiction that no longer exists.
  */
-function harnessDatabaseSetting(): { setting: string; value: string } {
+function harnessScrubsDatabasePath(): void {
   const harness = readFileSync(join(import.meta.dir, "..", "scripts", "run-hermetic-tests.sh"), "utf8");
-  const found: Array<{ setting: string; value: string }> = [];
-  for (const setting of DATABASE_PATH_SETTINGS) {
-    const assignment = new RegExp(String.raw`^\s*${setting}=(\S+?)\s*\\?$`, "m").exec(harness);
-    if (assignment?.[1]) found.push({ setting, value: assignment[1] });
-  }
-  if (found.length !== 1) {
+  const missing = DATABASE_PATH_SETTINGS.filter((setting) => !new RegExp(`-u ${setting}\\b`).test(harness));
+  if (missing.length > 0) {
     throw new Error(
-      `expected the hermetic harness to configure exactly one of ${DATABASE_PATH_SETTINGS.join("/")}, found ` +
-        `${found.length} (${found.map((entry) => entry.setting).join(", ") || "none"})`,
+      `expected the hermetic harness to scrub every database-path setting; missing -u for: ${missing.join(", ")}`,
     );
   }
-  return found[0]!;
 }
 
-const HARNESS_DATABASE = harnessDatabaseSetting();
+harnessScrubsDatabasePath();
 
 /** The higher-precedence setting, which a fix that handled only one of them would leave set. */
 const HIGHER_PRECEDENCE_SETTING = DATABASE_PATH_SETTINGS[0];
@@ -138,9 +136,18 @@ afterAll(async () => {
 beforeEach(async () => {
   inherited = { ...process.env };
   await stub.reset();
-  // Reproduce the harness's ambient local-store configuration exactly, so the
-  // contradiction under test is present however this file was launched.
-  process.env[HARNESS_DATABASE.setting] = HARNESS_DATABASE.value;
+  // Reproduce the harness's ambient neutrality exactly, so the two-store
+  // contradiction these tests build is the one being tested however this file
+  // was launched: no database-path setting, no API origin, no credential, no
+  // client-env pointer.
+  for (const setting of [
+    ...DATABASE_PATH_SETTINGS,
+    API_BASE_URL_SETTING,
+    ...API_CREDENTIAL_SETTINGS,
+    API_SETTINGS_POINTER,
+  ]) {
+    delete process.env[setting];
+  }
 });
 
 afterEach(() => {
@@ -152,26 +159,30 @@ afterEach(() => {
 });
 
 describe("the ambient test environment configures exactly one store", () => {
-  it("resolves to the local database before a stub points it anywhere else", () => {
-    // POSITIVE CONTROL for every test below. The ambient environment really does
-    // configure a local store; so "the API store came back after applyEnv()" is a fact
-    // about applyEnv() removing it, and not about it never having been there.
-    expect(process.env[HARNESS_DATABASE.setting]).toBe(HARNESS_DATABASE.value);
+  it("resolves to the local database at the default path before a stub points it anywhere else", () => {
+    // POSITIVE CONTROL for every test below. The ambient environment is NEUTRAL —
+    // no database path and no API settings — so "the API store came back after
+    // applyEnv()" is a fact about applyEnv() installing it, and not about it already
+    // being there.
+    noDatabasePathIsConfigured();
+    expect(process.env[API_BASE_URL_SETTING]).toBeUndefined();
     const plan = planEmailStore(process.env);
     expect(plan.store).toBe("sqlite");
     if (plan.store !== "sqlite") return;
-    expect(plan.setting).toBe(HARNESS_DATABASE.setting);
-    expect(plan.databasePath).toBe(HARNESS_DATABASE.value);
-    // ...and the API is genuinely not configured yet, so this is one store and not two.
-    expect(process.env[API_BASE_URL_SETTING]).toBeUndefined();
+    // Nothing named a path, so the resolution falls to the documented default —
+    // and the default is what it is by construction, not by this file's say-so.
+    expect(plan.setting).toBeNull();
+    expect(plan.databasePath).toBe(defaultDatabasePath());
   });
 
-  it("would refuse to boot if a stub added an API without removing the database path", () => {
-    // The blocker itself, stated as a test rather than as prose: this is what every
-    // self-hosted test looked like, and it is what `applyEnv()` must no longer produce.
-    // The refusal names the KEYS at fault and never a value.
+  it("would refuse to boot if a stub added an API while a database path stayed configured", () => {
+    // The blocker itself, stated as a test rather than as prose: this is what API
+    // tests looked like before the harness became neutral, and it is what the
+    // contract must keep refusing. The refusal names the KEYS at fault and never
+    // a value.
     const contradiction = {
       ...process.env,
+      [HIGHER_PRECEDENCE_SETTING]: HIGHER_PRECEDENCE_VALUE,
       [API_BASE_URL_SETTING]: stub.baseUrl,
       [API_CREDENTIAL_SETTINGS[2]]: stub.apiKey,
     };
@@ -182,7 +193,7 @@ describe("the ambient test environment configures exactly one store", () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(StoreConfigurationError);
-    expect((thrown as StoreConfigurationError).settings).toContain(HARNESS_DATABASE.setting);
+    expect((thrown as StoreConfigurationError).settings).toContain(HIGHER_PRECEDENCE_SETTING);
     expect((thrown as StoreConfigurationError).settings).toContain(API_BASE_URL_SETTING);
     expect(String((thrown as Error).message)).not.toContain(stub.apiKey);
   });
@@ -278,8 +289,11 @@ describe("the local-store configuration comes back exactly as it was", () => {
     const plan = planEmailStore(process.env);
     expect(plan.store).toBe("sqlite");
     if (plan.store !== "sqlite") return;
-    expect(plan.setting).toBe(HARNESS_DATABASE.setting);
-    expect(plan.databasePath).toBe(HARNESS_DATABASE.value);
+    // Absent before, absent after: the resolution falls back to the documented
+    // default path, which an empty-string restore would also produce — so the KEY
+    // assertion above, not the plan, is what discriminates the two.
+    expect(plan.setting).toBeNull();
+    expect(plan.databasePath).toBe(defaultDatabasePath());
   });
 
   it("does not re-snapshot on a second applyEnv, so clearEnv still restores the original", () => {
@@ -294,19 +308,19 @@ describe("the local-store configuration comes back exactly as it was", () => {
     stub.clearEnv();
 
     expect(comparableEnv()).toEqual(before);
-    expect(process.env[HARNESS_DATABASE.setting]).toBe(HARNESS_DATABASE.value);
+    noDatabasePathIsConfigured();
   });
 
   it("leaves the environment untouched when clearEnv runs without an applyEnv", () => {
     const before = comparableEnv();
 
     // Nothing was installed, so there is nothing to undo. Deleting the managed keys
-    // here would strip a database path this helper never set — the same leak from the
+    // here would strip configuration this helper never set — the same leak from the
     // other direction.
     stub.clearEnv();
 
     expect(comparableEnv()).toEqual(before);
-    expect(process.env[HARNESS_DATABASE.setting]).toBe(HARNESS_DATABASE.value);
+    noDatabasePathIsConfigured();
     expect(planEmailStore(process.env).store).toBe("sqlite");
   });
 });
