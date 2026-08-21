@@ -1083,6 +1083,16 @@ export function registerTaskCommands(program: Command) {
     .option("--limit <n>", "Max tasks to return")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      // Fail closed on an EMPTY project filter value (I38-00523): an
+      // explicitly supplied `--project ""` / `--project-name ""` used to be
+      // falsy and silently dropped, returning the FULL population with rc=0.
+      // An empty filter is a usage error, not a "no filter" signal.
+      if (typeof globalOpts.project === "string" && globalOpts.project.trim() === "") {
+        handleError(new Error("--project requires a non-empty project reference (id, path, slug, or name)"));
+      }
+      if (typeof opts.projectName === "string" && opts.projectName.trim() === "") {
+        handleError(new Error("--project-name requires a non-empty project name"));
+      }
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
       // http authority routing: skip local-store detection and resolve explicit
@@ -1628,6 +1638,13 @@ export function registerTaskCommands(program: Command) {
     .option("--comments-cursor <cursor>", "Read the next OLDER page; pass comments_page.next_cursor")
     .action(async (id: string, opts: CommentPageFlags) => {
       const globalOpts = program.opts();
+      // `todos show` resolves a task by id and never consumes the global
+      // --project option. Fail closed instead of silently ignoring it
+      // (I38-00523): the flag used to be dropped with rc=0, which read as a
+      // scoped lookup that never happened.
+      if (globalOpts.project !== undefined) {
+        handleError(new Error("`todos show` does not support a --project filter: it resolves a task by id. Scope a lookup with `todos list --project <ref>`."));
+      }
       const page = commentPageOptions(opts);
       const cloud = getTodosCloudClient();
       let task: any;

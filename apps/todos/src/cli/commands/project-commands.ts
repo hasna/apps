@@ -965,6 +965,12 @@ export function registerProjectCommands(program: Command) {
     .option("--receipt <id>", "Accepted ensure receipt for --rollback-task-list --apply")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      // The `projects` verb has no project filter: a project cannot scope the
+      // project list. The global --project option used to be silently ignored
+      // (rc=0, unfiltered output) — fail closed (I38-00523).
+      if (globalOpts.project !== undefined) {
+        handleError(new Error("`todos projects` does not support a --project filter: a project cannot scope the project list. Use `todos projects --show <ref>` or `todos list --project <ref>`."));
+      }
       const cloud = getTodosCloudClient();
 
       if (opts.ensureTaskList && opts.rollbackTaskList) {
