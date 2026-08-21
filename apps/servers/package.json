@@ -22,7 +22,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/index.ts --outdir dist --target bun && bun build src/tui/dashboard.tsx --outdir dist/tui --target bun --external ink --external react --external chalk && tsc --emitDeclarationOnly --outDir dist -p tsconfig.build.json",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --external zod --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --external zod --target bun && bun build src/index.ts --outdir dist --external zod --target bun && bun build src/tui/dashboard.tsx --outdir dist/tui --external zod --target bun --external ink --external react --external chalk && tsc --emitDeclarationOnly --outDir dist -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "contracts:check": "bun scripts/contracts-cli.mjs repo-conformance",

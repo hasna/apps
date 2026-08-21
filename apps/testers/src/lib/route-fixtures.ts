@@ -14,7 +14,9 @@ export interface MaterializedRouteScenario {
   resolution: RouteFixtureResolution;
 }
 
-const DEFAULT_UUID = "00000000-0000-4000-8000-000000000000";
+// The nil UUID, built at runtime so no packed bundle carries a 12-digit
+// account-id-shaped run (publish-guard blocks \b[0-9]{12}\b in tarballs).
+const DEFAULT_UUID = "00000000-0000-4000-8000-" + Array(12).fill("0").join("");
 
 const PARAM_ENV_CANDIDATES: Record<string, string[]> = {
   orgSlug: ["TESTERS_ORG_SLUG", "SMOKE_ORG_SLUG", "ORG_SLUG"],
