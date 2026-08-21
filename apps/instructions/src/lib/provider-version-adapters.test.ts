@@ -59,12 +59,12 @@ function providerLoadedSentinelCount(plan: ReturnType<typeof planProfileSessionR
 }
 
 describe("versioned provider adapters", () => {
-  test("Claude renders glob bindings as path-gated rules while always bindings remain imported fragments", () => {
+  test("Claude renders glob bindings as path-gated rules at provider_version >= 2.1.84 while always bindings remain imported fragments", () => {
     const root = tempRootPath("instructions-claude-capability-");
     try {
       const plan = planProfileSessionRender({
         profile_id: "profile-1",
-        provider_version: "1.2.3",
+        provider_version: "2.1.84",
         tool: "claude",
         profile: "profile-1",
         targetHome: root,
@@ -97,7 +97,7 @@ describe("versioned provider adapters", () => {
       expect(existsSync(join(root, "rules/02-typescript.md"))).toBe(true);
       const alwaysOnlyPlan = planProfileSessionRender({
         profile_id: "profile-1",
-        provider_version: "1.2.3",
+        provider_version: "2.1.84",
         tool: "claude",
         profile: "profile-1",
         targetHome: root,
@@ -109,6 +109,41 @@ describe("versioned provider adapters", () => {
       expect(existsSync(join(root, "rules/02-typescript.md"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude glob bindings below 2.1.84 render as always-on fragments, never silently-ignored rule files", () => {
+    for (const providerVersion of ["1.2.3", "2.1.83"]) {
+      const root = tempRootPath("instructions-claude-version-fallback-");
+      try {
+        const plan = planProfileSessionRender({
+          profile_id: "profile-1",
+          provider_version: providerVersion,
+          tool: "claude",
+          profile: "profile-1",
+          targetHome: root,
+          generatedAt: "2026-01-01T00:00:00.000Z",
+          configs: [config("always", "ALWAYS_ONLY"), config("typescript", "TS_ONLY")],
+          bindings: [
+            binding("always", spec(), 0),
+            binding("typescript", spec({ activation: { mode: "glob", globs: ["src/**/*.ts"] } }), 1),
+          ],
+        });
+
+        const index = plan.files.find((file) => file.relativePath === "CLAUDE.md")!;
+        const globFragment = plan.files.find((file) => file.content.includes("TS_ONLY"))!;
+
+        expect(globFragment.role).toBe("fragment");
+        expect(globFragment.relativePath).toBe(".hasna/instructions/02-typescript.md");
+        expect(index.content).toContain("@./.hasna/instructions/02-typescript.md");
+        expect(plan.files.some((file) => file.role === "rule" && file.relativePath === "rules/02-typescript.md")).toBe(false);
+
+        applySessionRender(plan);
+        expect(existsSync(join(root, "rules/02-typescript.md"))).toBe(false);
+        expect(existsSync(join(root, ".hasna/instructions/02-typescript.md"))).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     }
   });
 
