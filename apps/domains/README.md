@@ -33,7 +33,7 @@ Domain portfolio, registrar, marketplace, and DNS management for AI agents. The 
 npm install -g @hasna/domains
 ```
 
-Data is stored in the local domains data directory (`$XDG_DATA_HOME/open-domains` or `~/.local/share/open-domains` for new installs; existing legacy installs continue using their current directory). Override with `DOMAINS_DB_PATH`, `DOMAINS_DIR`, or the legacy `HASNA_DOMAINS_DB_PATH` / `HASNA_DOMAINS_DIR` names.
+Data is stored in the local domains data directory (`~/.hasna/domains`; existing legacy installs continue using their current directory). Override with `DOMAINS_DB_PATH`, `DOMAINS_DIR`, or the legacy `HASNA_DOMAINS_DB_PATH` / `HASNA_DOMAINS_DIR` names.
 
 ## Optional Command Groups
 

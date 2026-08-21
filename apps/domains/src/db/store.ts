@@ -26,6 +26,7 @@ import {
   resolveStorageClient,
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
+import { clientTransportEnvKeys } from "@hasna/contracts/client";
 
 import * as records from "./domain-records.js";
 import * as dns from "./dns-records.js";
@@ -746,8 +747,9 @@ export interface ClientFlip {
  * silently read the wrong dataset.
  */
 export function resolveClientFlip(env: Env): ClientFlip {
-  const urlKey = env.HASNA_DOMAINS_API_URL ? "HASNA_DOMAINS_API_URL" : env.DOMAINS_API_URL ? "DOMAINS_API_URL" : null;
-  const keyKey = env.HASNA_DOMAINS_API_KEY ? "HASNA_DOMAINS_API_KEY" : env.DOMAINS_API_KEY ? "DOMAINS_API_KEY" : null;
+  const { apiUrlKeys, apiKeyKeys } = clientTransportEnvKeys("domains");
+  const urlKey = apiUrlKeys.find((k) => env[k]) ?? null;
+  const keyKey = apiKeyKeys.find((k) => env[k]) ?? null;
   if (Boolean(urlKey) !== Boolean(keyKey)) {
     throw new Error(
       `Misconfigured domains client: ${urlKey ?? keyKey} is set without the other. ` +
