@@ -491,10 +491,35 @@ export class ApiStore implements Store {
     query.order = "asc";
 
     let events = await this.listEvents(query);
-    // `service` lives in metadata/message on both tiers; the hosted tier has no
-    // service column, so the filter is applied client-side over the window.
+    // `service` lives in metadata/message on both tiers (the hosted tier has no
+    // service predicate on the event window), so the filter runs client-side.
+    // Page the hosted stream (after_time/after_id cursors) until `limit + 1`
+    // matching events are collected or the stream is exhausted — otherwise
+    // matches beyond the first window are silently truncated and has_more is
+    // computed over the UNFILTERED window.
     const service = args.service;
-    if (service) events = events.filter((e) => matchesEventService(e, service));
+    if (service) {
+      const collected: EventCatalogEntry[] = [];
+      let page = events;
+      let collectedMatches = 0;
+      let guard = 0;
+      while (collectedMatches <= limit && guard < 50) {
+        for (const entry of page) {
+          if (matchesEventService(entry, service)) {
+            collected.push(entry);
+            collectedMatches += 1;
+          }
+        }
+        if (collectedMatches > limit || page.length < (query.limit ?? 0)) break;
+        const lastOfPage = page.at(-1);
+        if (!lastOfPage) break;
+        query.after_time = lastOfPage.event_time;
+        query.after_id = lastOfPage.event_id;
+        page = await this.listEvents(query);
+        guard += 1;
+      }
+      events = collected;
+    }
 
     const hasMore = events.length > limit;
     const visible = events.slice(0, limit);

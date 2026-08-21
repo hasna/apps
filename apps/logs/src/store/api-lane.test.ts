@@ -225,6 +225,69 @@ describe("ApiStore.watchEvents (hosted event-catalog watch)", () => {
       "w1",
     ]);
   });
+
+  test("event inserted after the initial baseline poll is emitted on the anchored poll", async () => {
+    const { api } = buildApiStore();
+    await ingestWatchEvent(api, "b1", "2026-08-18T00:00:00.000Z", "baseline one");
+    await ingestWatchEvent(api, "b2", "2026-08-18T00:00:01.000Z", "baseline two");
+
+    const baseline = await api.watchEvents({ limit: 10 });
+    expect(baseline.events).toEqual([]);
+    expect(baseline.has_more).toBe(false);
+    expect(baseline.cursor).toBe("b2");
+
+    // The CLI watch loop adopts baseline.cursor as its next anchor; the event
+    // ingested after the first poll must then be emitted on the anchored poll.
+    await ingestWatchEvent(api, "b3", "2026-08-18T00:00:02.000Z", "after baseline");
+
+    const next = await api.watchEvents({
+      last_event_id: baseline.cursor ?? undefined,
+      limit: 10,
+    });
+    expect(next.overflow).toBeNull();
+    expect(next.events.map((e) => e.event_id)).toEqual(["b3"]);
+    expect(next.cursor).toBe("b3");
+  });
+
+  test("service filter pages past non-matching events instead of truncating", async () => {
+    const { api } = buildApiStore();
+    const messages = [
+      "alpha log 1",
+      "alpha log 2",
+      "alpha log 3",
+      "svc-a event 1",
+      "svc-a event 2",
+      "alpha log 4",
+      "svc-a event 3",
+      "alpha log 5",
+    ];
+    for (let i = 0; i < messages.length; i++) {
+      await ingestWatchEvent(
+        api,
+        `s${i + 1}`,
+        `2026-08-18T00:00:0${i}.000Z`,
+        messages[i],
+      );
+    }
+
+    const first = await api.watchEvents({
+      from_start: true,
+      service: "svc-a",
+      limit: 2,
+    });
+    expect(first.overflow).toBeNull();
+    expect(first.events.map((e) => e.event_id)).toEqual(["s4", "s5"]);
+    expect(first.has_more).toBe(true);
+    expect(first.cursor).toBe("s5");
+
+    const second = await api.watchEvents({
+      last_event_id: "s5",
+      service: "svc-a",
+      limit: 2,
+    });
+    expect(second.events.map((e) => e.event_id)).toEqual(["s7"]);
+    expect(second.has_more).toBe(false);
+  });
 });
 
 describe("ApiStore scan port (hosted scan-run surface)", () => {
