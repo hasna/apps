@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- 44ccf2d7: fix(actions): make the JSON store write lock ownership-safe — a stale lock is only broken when its holder process is no longer alive, and release only removes a lock this process still owns, so a suspended writer can never be overlapped by a successor (release-review P1 remediation)
+- a10f2316: fix(actions): make the JSON store write lock ownership-safe — a stale lock is only broken when its holder process is no longer alive, and release only removes a lock this process still owns, so a suspended writer can never be overlapped by a successor (release-review P1 remediation)
 
 ## 0.2.1
 
