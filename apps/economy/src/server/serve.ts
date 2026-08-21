@@ -15,6 +15,7 @@ import {
   insertFeedback,
   openDatabase,
   bulkIngest,
+  rollupSession,
 } from '../db/database.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { AGENTS, isAgent } from '../lib/agents.js'
@@ -539,6 +540,23 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
       const body = await jsonBody(req)
       if (!body) return err('invalid JSON body')
       const result = bulkIngest(db, body)
+      // Session rows in the payload are client-computed aggregates over only
+      // the files that changed since that client's last sync (mtime delta).
+      // Trusting them overwrites the hosted session totals with partial
+      // aggregates (reproduced: two requests stored while the session reports
+      // request_count: 1). The server's requests table is the authoritative,
+      // idempotent store — recompute every session touched by this payload's
+      // requests from it.
+      const reqRows = Array.isArray(body?.['requests']) ? body['requests'] as Array<Record<string, unknown>> : []
+      const touchedSessions = new Set<string>()
+      for (const r of reqRows) {
+        const sid = r?.['session_id']
+        if (typeof sid === 'string' && sid) touchedSessions.add(sid)
+      }
+      for (const sid of touchedSessions) {
+        const hasReq = db.prepare(`SELECT COUNT(*) AS c FROM requests WHERE session_id = ?`).get(sid) as { c: number } | undefined
+        if (Number(hasReq?.c ?? 0) > 0) rollupSession(db, sid)
+      }
       // Parity with the /api/sync route: fire budget/spike webhooks from the
       // authoritative store after the data landed. Cloud-client syncs push via
       // this route, so the webhook side-effect must live here, not on the client.

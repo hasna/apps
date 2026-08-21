@@ -4,6 +4,10 @@
 
 ### Patch Changes
 
+- **Corrected release metadata.** The 0.3.11/0.3.12 wave entries previously recorded only dependency bumps. This release is the first publish from the hasna/apps monorepo and carries the functional delta since the last published 0.3.10; the entries below document it truthfully (the earlier "no functional changes" claim was written at import time and is superseded by the merged functional work).
+- feat(economy): port provider/billing ingest to the hosted backend — no local-only sync (#414). In cloud-client mode (`HASNA_ECONOMY_API_URL` + key set), `economy sync` and the MCP sync tool now read on-box provider files and push them to the shared API's `/v1/ingest` instead of refusing with "cloud mode: ingest is a local-only operation"; billing sync (`economy billing sync`) likewise pushes provider billing rows to the hosted backend.
+- chore(economy): display name "Hasna Economy" (open- prefix retired) (#311).
+- chore(economy): conform `hasna.contract.json` to the contracts kit — seam, storage, surfaces (#485, #541), publish-guard/standard-gate reconciliation (#503), contracts CLI resolution without shims (#579).
 - Updated dependencies [d5b64f8]
 - Updated dependencies [1da0550]
   - @hasna/contracts@0.13.0
@@ -12,7 +16,7 @@
 
 ### Patch Changes
 
-- 0df46e0: First release from the hasna/apps monorepo. The package was imported from hasna/economy with history preserved (import capsule 18b2aaf7d, import merge 7a3018a4f); there are no functional changes since 0.3.9 — the delta is the import itself plus the monorepo workspace wiring. This patch establishes version ownership under the monorepo.
+- 0df46e0: First release from the hasna/apps monorepo. The package was imported from hasna/economy with history preserved (import capsule 18b2aaf7d, import merge 7a3018a4f); the delta includes the import itself plus the monorepo workspace wiring, and the 0.3.12 entry above records the functional changes that landed after the import. This patch establishes version ownership under the monorepo.
 - Updated dependencies [b630c48]
 - Updated dependencies [139894d]
 - Updated dependencies [0efd36e]
