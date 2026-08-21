@@ -8,9 +8,21 @@ const DUPLICATE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
 // ─── Conversations SDK wrapper ────────────────────────────────────────────────
 
+// The conversations SDK is an OPTIONAL runtime integration: loaded dynamically
+// (if installed) and every use below is untyped (`as any`), so its static
+// resolution must not gate the prepack typecheck. In this monorepo
+// @hasna/conversations links to the workspace member apps/conversations,
+// whose dist/ (its types entry) only exists after that member's own build —
+// absent in a fresh checkout, and the publish-guard packs members
+// alphabetically (browser before conversations). A literal specifier makes
+// tsc demand the missing declarations (TS2307 at prepack, row 0cbbd621); the
+// non-literal form keeps the module resolved at runtime only, exactly like
+// src/engines/kernel.ts and src/lib/auth.ts already do.
+const CONVERSATIONS_MODULE = "@hasna/conversations";
+
 async function getConversationsSDK() {
   try {
-    const mod = await import("@hasna/conversations");
+    const mod = await import(CONVERSATIONS_MODULE);
     return mod;
   } catch {
     return null;
