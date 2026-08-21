@@ -1,5 +1,7 @@
+import pkg from "../package.json" with { type: "json" };
+
 export const PACKAGE_NAME = "@hasna/computers";
-export const VERSION = "0.1.0";
+export const VERSION = pkg.version;
 export const API_VERSION = "v1";
 export const SANDBOX_DISABLED_CODE = "sandbox_disabled";
 export const ALL_SCOPES = [
