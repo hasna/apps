@@ -10,22 +10,30 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 /**
  * CLI-level regression for the canonical data root (raw store root).
  *
- * The default with HASNA_CONFIGS_HOME unset must be ~/.hasna/instructions
- * (never ~/.hasna/configs, another app's home), and every shipped local
- * storage path (whoami's DB path, the SQLite store) must derive from it.
- * HASNA_CONFIGS_HOME must remain a working override.
+ * The default with HASNA_CONFIGS_HOME truly ABSENT (key deleted, never an
+ * empty string - an empty string is a present key) must be
+ * ~/.hasna/instructions (never ~/.hasna/configs, another app's home), and
+ * every shipped local storage path (whoami's DB path, the SQLite store)
+ * must derive from it. HASNA_CONFIGS_HOME must remain a working override.
  */
 function runCli(args: string[], env: Record<string, string | undefined> = {}) {
+  // Build the child environment from the parent, then DELETE the
+  // store-selecting variables: a child can only observe "HASNA_CONFIGS_HOME
+  // unset" when the key is absent. Setting it to "" would leave a present
+  // key and mask a default-root regression.
+  const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+  delete childEnv["HASNA_INSTRUCTIONS_API_URL"];
+  delete childEnv["HASNA_INSTRUCTIONS_API_KEY"];
+  delete childEnv["HASNA_INSTRUCTIONS_DB_PATH"];
+  delete childEnv["HASNA_CONFIGS_HOME"];
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) childEnv[key] = value;
+  }
   return spawnSync("bun", ["src/cli/index.tsx", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {
-      ...process.env,
-      HASNA_INSTRUCTIONS_API_URL: "",
-      HASNA_INSTRUCTIONS_API_KEY: "",
-      HASNA_INSTRUCTIONS_DB_PATH: "",
-      HASNA_CONFIGS_HOME: "",
-      ...env,
+      ...childEnv,
       NO_COLOR: "1",
       FORCE_COLOR: "0",
     },
@@ -33,9 +41,13 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
 }
 
 describe("canonical data root (raw store root)", () => {
-  test("whoami defaults to ~/.hasna/instructions with HASNA_CONFIGS_HOME unset", () => {
+  test("whoami defaults to ~/.hasna/instructions with HASNA_CONFIGS_HOME truly unset", () => {
     const home = makeTempRoot("ok-instructions-cli-root-");
+    const previousRawHome = process.env["HASNA_CONFIGS_HOME"];
+    delete process.env["HASNA_CONFIGS_HOME"];
     try {
+      // The key must be ABSENT before spawning the CLI, not merely empty.
+      expect(process.env["HASNA_CONFIGS_HOME"]).toBeUndefined();
       const result = runCli(["whoami"], { HOME: home });
       expect(result.status).toBe(0);
       const expected = join(home, ".hasna", "instructions", "instructions.db");
@@ -46,6 +58,8 @@ describe("canonical data root (raw store root)", () => {
       expect(existsSync(join(home, ".hasna", "configs"))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
+      if (previousRawHome === undefined) delete process.env["HASNA_CONFIGS_HOME"];
+      else process.env["HASNA_CONFIGS_HOME"] = previousRawHome;
     }
   });
 
