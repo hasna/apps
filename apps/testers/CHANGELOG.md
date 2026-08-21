@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.97
+
+### Patch Changes
+
+- Updated dependencies [f1b21aa]
+  - @hasna/browser@0.5.22
+
 ## 0.0.96
 
 ### Patch Changes

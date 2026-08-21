@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7
+
+### Patch Changes
+
+- 738590f: attachments-serve answers --help and --version before creating the DB pool; previously it died with `createCloudPoolFromEnv requires attachments storage mode 'cloud'` before printing either (BUG row 970d7c6f).
+
 ## 1.1.6
 
 ### Patch Changes
@@ -74,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.5] - 2026-03-14
 
 ### Fixed
+
 - SDK `Attachment` type was missing `tag` field (added in v0.2.0 but never reflected in types)
 - Default port changed from 3457 (conflict with @hasna/configs) to 3459
 - Server now binds to `localhost` by default instead of `0.0.0.0`
@@ -81,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `prepare` script ensures `dist/` is rebuilt before every `npm publish`
 
 ### Added (since v0.1.0)
+
 - **Dashboard** — React + Vite UI with dark/light mode for browsing and managing attachments
 - **CLI** — new commands: `health-check`, `watch`, `link-task`, `complete-task`, `snapshot-session`, `task-journal`, `status`, `clean`, `whoami`, `presign-upload`
 - **MCP** — expanded from 8 to 14 tools total; `ATTACHMENTS_PROFILE` env var for token optimization (`minimal`=3, `standard`=7, `full`=14)
@@ -101,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release of `@hasna/attachments` and `@hasna/attachments-sdk`.
 
 **CLI (`attachments`)**
+
 - `upload <file>` — upload a local file to S3 and print a shareable link; supports `--expiry`, `--link-type`, `--format`
 - `download <id-or-url>` — download an attachment by ID or `/d/:id` URL with `--output` option
 - `list` — list attachments with `--format` (compact/table/json), `--limit`, and `--expired` options
@@ -113,12 +122,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mcp` — install or uninstall the MCP server into Claude Code, Codex, and Gemini; supports `--all` and `--uninstall`
 
 **MCP server (`attachments-mcp`)**
+
 - 8 lean-stub tools to minimize token consumption: `upload_attachment`, `download_attachment`, `list_attachments`, `delete_attachment`, `get_link`, `configure_s3`, `describe_tools`, `search_tools`
 - `describe_tools` returns full verbose JSON Schema for any tool on demand
 - `search_tools` searches tool names by keyword
 - stdio transport compatible with all MCP-capable agents
 
 **REST API**
+
 - `POST /api/attachments` — multipart file upload
 - `GET /api/attachments` — list with `limit`, `fields`, `format`, `expired` query params
 - `GET /api/attachments/:id` — get attachment metadata
@@ -129,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /d/:id` — public shortlink that redirects to the file
 
 **`@hasna/attachments-sdk`**
+
 - Zero-dependency TypeScript client compatible with Node.js, Bun, Deno, and browsers
 - `upload(filePathOrBlob, opts?)` — upload from a file path or a `File`/`Blob`
 - `download(idOrUrl, destPath?)` — download attachment to disk (Node.js/Bun)
@@ -139,6 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `regenerateLink(id, opts?)` — regenerate link with optional new expiry
 
 **S3 / storage**
+
 - AWS S3 support with presigned URL generation via `@aws-sdk/s3-request-presigner`
 - S3-compatible endpoint support (Cloudflare R2, MinIO, LocalStack)
 - Configurable link expiry: minutes (`m`), hours (`h`), days (`d`), or `never`

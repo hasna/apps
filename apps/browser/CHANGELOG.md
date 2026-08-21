@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.22
+
+### Patch Changes
+
+- f1b21aa: fix: prepack typecheck resolves the optional @hasna/conversations SDK as a runtime-only module (non-literal dynamic import), so build:types no longer fails TS2307 against the unbuilt workspace member in a fresh checkout. Todos 0cbbd621.
+
 ## 0.5.21
 
 ### Patch Changes

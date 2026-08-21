@@ -1,6 +1,6 @@
 {
   "name": "@hasna/calendar",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Universal calendar management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
