@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.4
+
+### Patch Changes
+
+- fix: correct the `@hasna/secrets` peer dependency to the published `0.3.3`. The 0.13.3 release declared a peer on `@hasna/secrets@0.3.4`, which has never been published (npm registry versions end at 0.3.3) — an unsatisfiable peer that wedges bun 1.3.14's resolver in a workspace context (the internal-apps CI hang, I38-00610 / todos 1555d199) and blocks fresh installs of the package. The peer now points at the published `@hasna/secrets@0.3.3`.
+
 ## 0.13.3
 
 ### Patch Changes
