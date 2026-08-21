@@ -91,7 +91,10 @@ function machineFromRoute(route: MachineRouteResolution, topology: MachineTopolo
 }
 
 export function listOpenMachines(): OpenMachineSummary[] {
-  const topology = machinesConsumer().discoverMachineTopology();
+  // Same unpaginated-topology contract as resolveLoopMachine: the default
+  // page (10) silently drops manifest-declared machines beyond it on hosts
+  // with 10+ tailscale peers, making the census lie about what is routable.
+  const topology = machinesConsumer().discoverMachineTopology({ limit: null, offset: 0 });
   return topology.machines.map((entry) => entryToSummary(entry, topology));
 }
 
