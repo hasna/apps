@@ -147,9 +147,91 @@ BEGIN
 END;
 `;
 
+/**
+ * Legacy 0.1.0 upgrade: the reconciliation table shipped with
+ * `UNIQUE (source, source_id, event_type)`. The entity-scoped upsert
+ * (ON CONFLICT(entity_id, source, source_id, event_type)) has no matching
+ * unique index on such a database, so every reconciliation emit throws
+ * "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".
+ * Rebuild the table with the entity-scoped constraint, preserving rows.
+ * No-op when the table already carries the entity-scoped constraint (fresh
+ * schema, or already upgraded), so it is safe to run on every open.
+ */
+export function upgradeLegacyReconciliationConstraint(db: Database): void {
+  const row = db
+    .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounting_reconciliation_events'")
+    .get() as { sql: string } | null;
+  const sql = row?.sql;
+  if (!sql) {
+    return;
+  }
+  const entityScoped = /UNIQUE\s*\(\s*entity_id\s*,\s*source\s*,\s*source_id\s*,\s*event_type\s*\)/i.test(sql);
+  const legacyPresent =
+    db
+      .query("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'accounting_reconciliation_events_legacy'")
+      .get() != null;
+  if (entityScoped && !legacyPresent) {
+    return;
+  }
+
+  // Standard SQLite table-rebuild, ATOMIC: rename legacy, create the new
+  // shape, copy rows, drop the legacy table, recreate the entity index that
+  // dies with it. Any failure at a step rolls the whole rebuild back to the
+  // untouched legacy state (SQLite DDL is transactional), so a crash cannot
+  // leave the replacement empty with the rows orphaned in the _legacy table.
+  // When the _legacy table is already present — a rebuild interrupted before
+  // the copy completed — the copy is resumed rather than restarted, so rows
+  // orphaned by an interrupted rebuild are recovered on the next open. The
+  // copy keeps ids already present (an interrupted rebuild may have copied
+  // part of the rows) and aborts on a genuine cross-entity collision, which
+  // cannot be merged safely.
+  db.run("BEGIN");
+  try {
+    if (!legacyPresent) {
+      db.run("ALTER TABLE accounting_reconciliation_events RENAME TO accounting_reconciliation_events_legacy");
+    }
+    if (!entityScoped) {
+      db.run(`
+CREATE TABLE accounting_reconciliation_events (
+  id TEXT PRIMARY KEY,
+  entity_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  accounting_entry_ref TEXT,
+  amount INTEGER,
+  currency TEXT,
+  state TEXT NOT NULL DEFAULT 'pending',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (entity_id, source, source_id, event_type)
+)`);
+    }
+    db.run(`
+INSERT OR IGNORE INTO accounting_reconciliation_events
+  (id, entity_id, source, source_id, event_type, accounting_entry_ref, amount, currency, state, payload_json, created_at, updated_at)
+SELECT
+  id, entity_id, source, source_id, event_type, accounting_entry_ref, amount, currency, state, payload_json, created_at, updated_at
+FROM accounting_reconciliation_events_legacy`);
+    db.run("DROP TABLE accounting_reconciliation_events_legacy");
+    db.run("CREATE INDEX IF NOT EXISTS idx_accounting_reconciliation_entity ON accounting_reconciliation_events(entity_id)");
+    db.run("COMMIT");
+  } catch (err) {
+    try {
+      db.run("ROLLBACK");
+    } catch {
+      // No active transaction (BEGIN or COMMIT itself failed); the original
+      // error is the one that matters.
+    }
+    throw err;
+  }
+}
+
 /** Apply the idempotent schema. Safe to call on every open. */
 export function runMigrations(db: Database): void {
   db.run(SCHEMA);
+  upgradeLegacyReconciliationConstraint(db);
 }
 
 /** Count of applied ledger rows — surfaced in storage_status. */
