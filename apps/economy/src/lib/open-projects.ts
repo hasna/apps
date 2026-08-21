@@ -22,13 +22,25 @@ type ListOpenProjects = (options: { status: 'active'; limit: number }) => OpenPr
 
 const resolveProjectPath = (project: OpenProject): string => project.primary_path || project.path || ''
 
+// The projects SDK is an OPTIONAL runtime integration for the registry sync:
+// loaded dynamically and its use below is cast to the local OpenProject
+// shape, so its static resolution must not gate the prepack typecheck. In
+// this monorepo @hasna/projects links to the workspace member apps/projects
+// (pin 0.1.135 == member version), whose dist/ — its types entry — only
+// exists after that member's own build, and the publish-guard packs members
+// by readdir order (economy can precede projects in a fresh checkout). A
+// literal specifier makes tsc demand the missing declarations (TS2307 at
+// prepack, row 029ceb00, same class as 0cbbd621); the non-literal form keeps
+// the module resolved at runtime only.
+const PROJECTS_MODULE = '@hasna/projects'
+
 export async function syncOpenProjectsRegistry(
   db: Database,
   listActiveProjects?: ListOpenProjects,
 ): Promise<{ imported: number; skipped: number }> {
   let listProjects = listActiveProjects
   if (!listProjects) {
-    const projectsApi = await import('@hasna/projects')
+    const projectsApi = await import(PROJECTS_MODULE)
     listProjects = projectsApi.listProjects as ListOpenProjects
   }
   const projects = listProjects({ status: 'active', limit: 5000 })
