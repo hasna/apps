@@ -288,6 +288,49 @@ describe("ApiStore.watchEvents (hosted event-catalog watch)", () => {
     expect(second.events.map((e) => e.event_id)).toEqual(["s7"]);
     expect(second.has_more).toBe(false);
   });
+
+  test("service filter safety bound never reports a silent false (has_more with last processed cursor)", async () => {
+    const { api } = buildApiStore();
+    // > PAGING_SAFETY_BOUND pages of non-matching events (page size limit+1=2,
+    // bound 500 => 1000 processed events) followed by one matching event, so
+    // the paging guard trips before the match is reached. The caller must
+    // learn has_more=true with the last processed cursor and then reach the
+    // match on the anchored poll — never a silent has_more=false.
+    for (let i = 1; i <= 1002; i++) {
+      const minutes = String(Math.floor((i - 1) / 60)).padStart(2, "0");
+      const seconds = String((i - 1) % 60).padStart(2, "0");
+      await ingestWatchEvent(
+        api,
+        `s${i}`,
+        `2026-08-18T00:${minutes}:${seconds}.000Z`,
+        `alpha log ${i}`,
+      );
+    }
+    await ingestWatchEvent(
+      api,
+      "s1003",
+      "2026-08-18T00:16:42.000Z",
+      "svc-a final",
+    );
+
+    const first = await api.watchEvents({
+      from_start: true,
+      service: "svc-a",
+      limit: 1,
+    });
+    expect(first.events.map((e) => e.event_id)).toEqual([]);
+    expect(first.has_more).toBe(true);
+    // 500 pages x 2 events processed before the safety bound trips.
+    expect(first.cursor).toBe("s1000");
+
+    const second = await api.watchEvents({
+      last_event_id: first.cursor ?? undefined,
+      service: "svc-a",
+      limit: 1,
+    });
+    expect(second.events.map((e) => e.event_id)).toEqual(["s1003"]);
+    expect(second.has_more).toBe(false);
+  });
 });
 
 describe("ApiStore scan port (hosted scan-run surface)", () => {
