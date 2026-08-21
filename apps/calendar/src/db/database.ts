@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 function isInMemoryDb(path: string): boolean {
   return path === ":memory:" || path.startsWith("file::memory:");
@@ -53,10 +54,21 @@ function getDbPath(): string {
     }
   }
 
-  const newPath = join(home, ".hasna", "calendar", "calendar.db");
-  migrateLegacyData(cwd, home, newPath);
+  // Legacy nearest-ancestor databases are per-project datasets. Each one
+  // migrates to its own project-scoped canonical path, so one project's data
+  // is never silently routed into another project's database (the old code
+  // consolidated every project into whichever database migrated first).
+  const nearest = findNearestCalendarDb(cwd, home);
+  if (nearest) {
+    const target = legacyProjectTarget(nearest, home);
+    migrateLegacyData(cwd, home, target);
+    return target;
+  }
 
-  return newPath;
+  const canonical = join(home, ".hasna", "calendar", "calendar.db");
+  migrateLegacyData(cwd, home, canonical);
+
+  return canonical;
 }
 
 // ── One-time legacy-data migration ───────────────────────────────────────────
@@ -64,7 +76,12 @@ function getDbPath(): string {
 export interface LegacyDataScan {
   /** The legacy non-canonical database that would be migrated, if any. */
   readonly source: string | null;
-  /** The canonical target: ~/.hasna/calendar/calendar.db. */
+  /**
+   * The canonical target: the shared ~/.hasna/calendar/calendar.db for
+   * home-level legacy data, or a project-scoped
+   * ~/.hasna/calendar/projects/<project>-<hash>/calendar.db for legacy
+   * nearest-ancestor data.
+   */
   readonly target: string;
   readonly wouldMigrate: boolean;
   readonly reason: string;
@@ -73,49 +90,73 @@ export interface LegacyDataScan {
 /**
  * Reports whether legacy non-canonical calendar data exists and would be
  * migrated. Read-only — never writes. The dry-run surface for the one-time
- * migration.
+ * migration. The reported target matches the routing the default path uses:
+ * a legacy nearest-ancestor database migrates to a project-scoped canonical
+ * path, while the legacy home database migrates to the shared canonical path.
  */
 export function scanLegacyData(cwd = process.cwd(), home = process.env["HOME"] || homedir()): LegacyDataScan {
-  const newPath = join(home, ".hasna", "calendar", "calendar.db");
-  if (existsSync(newPath)) {
-    return { source: null, target: newPath, wouldMigrate: false, reason: "canonical database already exists" };
-  }
+  const canonical = join(home, ".hasna", "calendar", "calendar.db");
   const nearest = findNearestCalendarDb(cwd, home);
   if (nearest) {
-    return { source: nearest, target: newPath, wouldMigrate: true, reason: "legacy nearest-ancestor .calendar database found" };
+    const target = legacyProjectTarget(nearest, home);
+    return {
+      source: nearest,
+      target,
+      wouldMigrate: !existsSync(target),
+      reason: "legacy nearest-ancestor .calendar database found (project-scoped target)",
+    };
   }
   const legacyPath = join(home, ".calendar", "calendar.db");
   if (existsSync(legacyPath)) {
-    return { source: legacyPath, target: newPath, wouldMigrate: true, reason: "legacy home .calendar database found" };
+    return {
+      source: legacyPath,
+      target: canonical,
+      wouldMigrate: !existsSync(canonical),
+      reason: "legacy home .calendar database found",
+    };
   }
-  return { source: null, target: newPath, wouldMigrate: false, reason: "no legacy data found" };
+  return { source: null, target: canonical, wouldMigrate: false, reason: "no legacy data found" };
 }
 
 /**
  * One-time safe migration of legacy non-canonical calendar data into the
- * canonical root (~/.hasna/calendar). Runs only while the canonical database
- * does not exist, so it is idempotent and resumable: once the target exists it
+ * canonical root (~/.hasna/calendar). Runs only while the target database does
+ * not exist, so it is idempotent and resumable: once the target exists it
  * never runs again, and it never overwrites existing canonical data. The
  * source is COPIED (VACUUM INTO), never deleted, and a receipt records the
  * migration. The nearest-ancestor .calendar database (the old default) takes
  * precedence over the legacy home .calendar database, matching the old
- * selection order.
+ * selection order. The target is chosen by the caller (getDbPath or
+ * scanLegacyData) so that project-scoped legacy data keeps its own dataset.
  */
-export function migrateLegacyData(cwd: string, home: string, newPath: string): void {
-  if (existsSync(newPath)) return;
+export function migrateLegacyData(cwd: string, home: string, target: string): void {
+  if (existsSync(target)) return;
 
   const nearest = findNearestCalendarDb(cwd, home);
   if (nearest) {
-    copyDatabase(nearest, newPath);
-    writeMigrationReceipt(nearest, newPath);
+    copyDatabase(nearest, target);
+    writeMigrationReceipt(nearest, target);
     return;
   }
 
   const legacyPath = join(home, ".calendar", "calendar.db");
   if (existsSync(legacyPath)) {
-    copyDatabase(legacyPath, newPath);
-    writeMigrationReceipt(legacyPath, newPath);
+    copyDatabase(legacyPath, target);
+    writeMigrationReceipt(legacyPath, target);
   }
+}
+
+/**
+ * Stable, non-secret project-scoped canonical target for a legacy
+ * nearest-ancestor database. Keyed by the legacy database's project directory
+ * (the directory that contained .calendar), so two different projects always
+ * resolve to two different targets regardless of run order.
+ */
+function legacyProjectTarget(source: string, home: string): string {
+  const projectDir = dirname(dirname(resolve(source)));
+  const base = basename(projectDir).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+  const hash = createHash("sha1").update(resolve(projectDir)).digest("hex").slice(0, 8);
+  return join(home, ".hasna", "calendar", "projects", `${base}-${hash}`, "calendar.db");
 }
 
 interface MigrationReceipt {
