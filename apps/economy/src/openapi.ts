@@ -9,12 +9,8 @@ export const openApiSpec: Record<string, unknown> = {
   },
   "servers": [
     {
-      "url": "https://economy.hasna.xyz",
-      "description": "prod"
-    },
-    {
       "url": "http://localhost:3456",
-      "description": "local"
+      "description": "local (self-hosted default; set your own URL when deploying)"
     }
   ],
   "security": [
