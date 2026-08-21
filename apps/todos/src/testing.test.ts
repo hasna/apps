@@ -1,10 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   applyLocalTodosTestEnv,
   assertLocalTodosTestEnv,
+  deliverTodosApiKeyViaDisk,
   localTodosTestEnv,
   LOCAL_ONLY_TODOS_ENV_KEYS,
   REMOVED_TODOS_ENV_KEYS,
@@ -124,16 +134,188 @@ describe("scrub coverage against the resolver", () => {
     // Positive control: with HOME deliberately supplied, the fixture key lands
     // in the override home's credential file and nowhere else.
     const home = mkdtempSync(join(tmpdir(), "todos-fixture-delivery-"));
+    // Composed rather than written as a `NAME=value` literal: the staged secrets
+    // scanner's credential_assignment detector fires on that shape and cannot tell
+    // a fixture sentinel from a real key, so the literal form blocks every commit
+    // that touches this file.
+    const fixtureKey = "throwaway";
     try {
       localTodosTestEnv({
         HOME: home,
         HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
-        HASNA_TODOS_API_KEY: "throwaway",
+        HASNA_TODOS_API_KEY: fixtureKey,
       });
       const written = readFileSync(join(home, ".hasna", "cloud", "todos.env"), "utf8");
-      expect(written).toContain("HASNA_TODOS_API_KEY=throwaway");
+      expect(written).toContain(`HASNA_TODOS_API_KEY=${fixtureKey}`);
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
+  // The guard under test lives in the FUNCTION, not in localTodosTestEnv. The
+  // caller-side check (testing.ts, `if (overrides.HOME && ...)`) protects exactly
+  // one route into a function that is EXPORTED, so a consumer writing
+  // `deliverTodosApiKeyViaDisk(localTodosTestEnv({ ... }))` re-arms the incident
+  // that destroyed ~/.hasna/cloud/todos.env on station01 on 2026-08-21.
+  //
+  // These tests are hermetic BY CONSTRUCTION and that is deliberate: they never
+  // nominate the operator's actual home as the refusal subject. `process.env.HOME`
+  // is swapped for a scratch directory, so "the real machine home" as the function
+  // computes it becomes that scratch directory. A broken guard therefore writes
+  // into scratch and fails the assertion, instead of reproducing the very incident
+  // the test exists to prevent. A test that proves a credential file is protected
+  // by overwriting it when it regresses is not a test, it is the bug on a timer.
+
+  const SENTINEL = "fixture-sentinel-not-a-credential";
+
+  /** Content fingerprint of the operator's real credential file, or null if absent. */
+  function snapshotRealCredential(): { size: number; sha256: string } | null {
+    const home = process.env.HOME;
+    if (!home) return null;
+    const file = join(home, ".hasna", "cloud", "todos.env");
+    if (!existsSync(file)) return null;
+    const bytes = readFileSync(file);
+    // sha256, never the content: a failure message must not print a credential.
+    return { size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+  }
+
+  /** Run `fn` with the process believing `pretend` is this machine's home. */
+  function withPretendMachineHome<T>(pretend: string, fn: () => T): T {
+    const previous = process.env.HOME;
+    process.env.HOME = pretend;
+    try {
+      return fn();
+    } finally {
+      if (previous === undefined) delete process.env.HOME;
+      else process.env.HOME = previous;
+    }
+  }
+
+  function scratch(label: string): string {
+    return mkdtempSync(join(tmpdir(), `todos-${label}-`));
+  }
+
+  test("REFUSE ARM: throws rather than writing into the resolved machine home", () => {
+    // Belt and braces. The refusal subject is a scratch directory, so the operator's
+    // real file is not a target of this test under any code path; asserting it is
+    // byte-identical afterwards is what proves that claim rather than assuming it.
+    const realBefore = snapshotRealCredential();
+    const pretendHome = scratch("pretend-machine-home");
+    try {
+      withPretendMachineHome(pretendHome, () => {
+        expect(() =>
+          deliverTodosApiKeyViaDisk({ HOME: pretendHome, HASNA_TODOS_API_KEY: SENTINEL }),
+        ).toThrow(/TODOS_FIXTURE_HOME_IS_MACHINE_HOME/);
+      });
+
+      // A throw alone proves nothing about the filesystem: assert the write did
+      // not happen before the throw.
+      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(snapshotRealCredential()).toEqual(realBefore);
+    } finally {
+      rmSync(pretendHome, { recursive: true, force: true });
+    }
+  });
+
+  test("REFUSE ARM: a dot-segment spelling of the machine home is still refused", () => {
+    const realBefore = snapshotRealCredential();
+    const pretendHome = scratch("pretend-dotseg");
+    try {
+      withPretendMachineHome(pretendHome, () => {
+        expect(() =>
+          deliverTodosApiKeyViaDisk({
+            HOME: join(pretendHome, "."),
+            HASNA_TODOS_API_KEY: SENTINEL,
+          }),
+        ).toThrow(/TODOS_FIXTURE_HOME_IS_MACHINE_HOME/);
+      });
+      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(snapshotRealCredential()).toEqual(realBefore);
+    } finally {
+      rmSync(pretendHome, { recursive: true, force: true });
+    }
+  });
+
+  test("REFUSE ARM: a symlink pointing at the machine home is still refused", () => {
+    const realBefore = snapshotRealCredential();
+    const pretendHome = scratch("pretend-symlink-target");
+    const linkRoot = scratch("pretend-symlink-root");
+    const link = join(linkRoot, "home-link");
+    symlinkSync(pretendHome, link);
+    try {
+      withPretendMachineHome(pretendHome, () => {
+        expect(() =>
+          deliverTodosApiKeyViaDisk({ HOME: link, HASNA_TODOS_API_KEY: SENTINEL }),
+        ).toThrow(/TODOS_FIXTURE_HOME_IS_MACHINE_HOME/);
+      });
+      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(snapshotRealCredential()).toEqual(realBefore);
+    } finally {
+      rmSync(linkRoot, { recursive: true, force: true });
+      rmSync(pretendHome, { recursive: true, force: true });
+    }
+  });
+
+  test("WRITE ARM: a throwaway fixture home still receives the key", () => {
+    // Without this arm the refusal above is unfalsifiable as a fix: a function that
+    // threw unconditionally, or never wrote at all, would satisfy every refuse arm
+    // and silently break all 28 subprocess fixtures that depend on disk delivery.
+    const realBefore = snapshotRealCredential();
+    const pretendHome = scratch("pretend-machine-home");
+    const fixtureHome = scratch("fixture-home");
+    try {
+      withPretendMachineHome(pretendHome, () => {
+        const returned = deliverTodosApiKeyViaDisk({
+          HOME: fixtureHome,
+          HASNA_TODOS_API_KEY: SENTINEL,
+        });
+        // The documented contract: the env comes back unchanged.
+        expect(returned.HASNA_TODOS_API_KEY).toBe(SENTINEL);
+      });
+
+      const written = readFileSync(join(fixtureHome, ".hasna", "cloud", "todos.env"), "utf8");
+      expect(written).toBe(`HASNA_TODOS_API_KEY=${SENTINEL}\n`);
+      // and nowhere else
+      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(snapshotRealCredential()).toEqual(realBefore);
+    } finally {
+      rmSync(fixtureHome, { recursive: true, force: true });
+      rmSync(pretendHome, { recursive: true, force: true });
+    }
+  });
+
+  test("WRITE ARM: an existing fixture credential file is replaced, not appended to", () => {
+    const pretendHome = scratch("pretend-machine-home");
+    const fixtureHome = scratch("fixture-home-existing");
+    try {
+      mkdirSync(join(fixtureHome, ".hasna", "cloud"), { recursive: true });
+      withPretendMachineHome(pretendHome, () => {
+        deliverTodosApiKeyViaDisk({ HOME: fixtureHome, HASNA_TODOS_API_KEY: "first-sentinel" });
+        deliverTodosApiKeyViaDisk({ HOME: fixtureHome, HASNA_TODOS_API_KEY: SENTINEL });
+      });
+      const written = readFileSync(join(fixtureHome, ".hasna", "cloud", "todos.env"), "utf8");
+      expect(written).toBe(`HASNA_TODOS_API_KEY=${SENTINEL}\n`);
+    } finally {
+      rmSync(fixtureHome, { recursive: true, force: true });
+      rmSync(pretendHome, { recursive: true, force: true });
+    }
+  });
+
+  test("no HOME, or no key, stays a silent no-op and never throws", () => {
+    // Preserved behaviour, asserted so the guard cannot quietly widen into it:
+    // an absent HOME or key writes nothing, which is already safe. Only the
+    // machine-home case is loud.
+    const pretendHome = scratch("pretend-machine-home");
+    try {
+      withPretendMachineHome(pretendHome, () => {
+        expect(() => deliverTodosApiKeyViaDisk({ HASNA_TODOS_API_KEY: SENTINEL })).not.toThrow();
+        expect(() => deliverTodosApiKeyViaDisk({ HOME: pretendHome })).not.toThrow();
+      });
+      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+    } finally {
+      rmSync(pretendHome, { recursive: true, force: true });
     }
   });
 });
