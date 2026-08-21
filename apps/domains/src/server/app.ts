@@ -16,7 +16,12 @@
  * local mirror.
  */
 
-import { verifyApiKey, type ApiKeyVerifier, type AuthAuditEvent } from "@hasna/contracts/auth";
+import {
+  verifyApiKey,
+  type ApiKeyVerifier,
+  type AuthAuditEvent,
+  type KeyStatusResolver,
+} from "@hasna/contracts/auth";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
 import { checkHealth } from "../generated/storage-kit/index.js";
 import { DomainsRepo, HttpError } from "./repo.js";
@@ -54,8 +59,13 @@ export interface ServeAppOptions {
   db: TypedQueryClient;
   signingSecret: string;
   version: string;
-  /** Revocation predicate (return true to DENY). Typically store.isRevoked. */
-  isRevoked?: (kid: string) => boolean | Promise<boolean>;
+  /**
+   * Lifecycle lookup for presented API keys — the strict, recommended hook from
+   * `@hasna/contracts/auth` (`ApiKeyStore.keyStatus`). Anything other than
+   * "active" denies. Required: the contracts verifier fails closed at
+   * construction without it, so a service cannot boot with no revocation check.
+   */
+  keyStatus: KeyStatusResolver;
   audit?: (e: AuthAuditEvent) => void;
 }
 
@@ -85,7 +95,7 @@ export function createServeApp(options: ServeAppOptions): ServeApp {
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: "domains",
     signingSecret: options.signingSecret,
-    ...(options.isRevoked ? { isRevoked: options.isRevoked } : {}),
+    keyStatus: options.keyStatus,
     ...(options.audit ? { audit: options.audit } : {}),
   });
 
