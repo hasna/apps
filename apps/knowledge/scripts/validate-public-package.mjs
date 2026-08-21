@@ -23,7 +23,7 @@ const publicScripts = [
   'scripts/lib/remote-temp-dir.mjs',
   'scripts/live-private-query.mjs',
   'scripts/smoke-machine-sync-release.mjs',
-  'scripts/smoke-machines-adapter.mjs',
+  'scripts/smoke-stations-adapter.mjs',
   'scripts/smoke-files-installed-boundary.mjs',
   'scripts/strip-generated-trailing-whitespace.mjs',
   'scripts/verify-generated-artifacts.mjs',

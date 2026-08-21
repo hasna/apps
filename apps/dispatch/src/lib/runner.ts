@@ -76,7 +76,7 @@ export function fallbackSshCommand(id: string, command: string): string {
 }
 
 /**
- * Runs commands on a remote machine via @hasna/machines (`resolveMachineCommand`),
+ * Runs commands on a remote machine via @hasna/stations (`resolveMachineCommand`),
  * falling back to a plain `ssh <machine>` when the package or a route is absent.
  *
  * Construct via {@link createRemoteRunner} so the optional dependency can be
@@ -127,7 +127,7 @@ export function isLocalMachine(machine: string | undefined): boolean {
 
 /**
  * Build a Runner for the given machine. Local machines get a {@link LocalRunner};
- * remote machines load `@hasna/machines/consumer` dynamically for route
+ * remote machines load `@hasna/stations/consumer` dynamically for route
  * resolution and fall back to plain `ssh <machine> <cmd>` if unavailable.
  */
 export async function createRunner(machine?: string): Promise<Runner> {
@@ -136,7 +136,7 @@ export async function createRunner(machine?: string): Promise<Runner> {
   try {
     // Non-literal specifier: keeps this optional peer out of compile-time module
     // resolution while still loading it at runtime when installed.
-    const specifier = "@hasna/machines/consumer";
+    const specifier = "@hasna/stations/consumer";
     const mod = (await import(specifier)) as {
       resolveMachineCommand: (id: string, command: string) => { source: RunResult["source"]; shellCommand: string };
     };

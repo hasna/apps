@@ -11,7 +11,8 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.6.2",
     "commander": "^13.1.0",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "@hasna/stations": "^0.2.30"
   },
   "devDependencies": {
     "@hasna/contracts": "0.11.1",
@@ -41,7 +42,7 @@
   "bugs": {
     "url": "https://github.com/hasna/dispatch/issues"
   },
-  "description": "Dispatch prompts to coding agents in tmux windows — reliable auto-submit, long-prompt support, delivery confirmation, scheduled + cross-machine dispatch. CLI + MCP + SDK + daemon.",
+  "description": "Dispatch prompts to coding agents in tmux windows \u2014 reliable auto-submit, long-prompt support, delivery confirmation, scheduled + cross-machine dispatch. CLI + MCP + SDK + daemon.",
   "engines": {
     "bun": ">=1.0.0"
   },
@@ -71,7 +72,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external @hasna/machines && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/machines && bun build src/daemon/index.ts --outdir dist/daemon --target bun --external @hasna/machines && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/machines && bun build src/index.ts --outdir dist --target bun --external @hasna/machines && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external @hasna/stations && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/stations && bun build src/daemon/index.ts --outdir dist/daemon --target bun --external @hasna/stations && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/stations && bun build src/index.ts --outdir dist --target bun --external @hasna/stations && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check:contracts": "bun scripts/contracts-cli.mjs repo-conformance .",
@@ -86,6 +87,6 @@
   "type": "module",
   "types": "dist/index.d.ts",
   "optionalDependencies": {
-    "@hasna/machines": "^0.2.30"
+    "@hasna/stations": "^0.2.27"
   }
 }

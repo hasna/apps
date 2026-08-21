@@ -22,13 +22,13 @@ describe("doctor", () => {
     home = mkdtempSync(join(tmpdir(), "loops-doctor-home-"));
     for (const key of [
       "LOOPS_DATA_DIR",
-      "HASNA_MACHINES_DIR",
+      "HASNA_STATIONS_DIR",
       "HASNA_LOOPS_API_URL",
       "HASNA_LOOPS_API_KEY",
       "HASNA_LOOPS_DATABASE_URL",
     ]) savedEnv[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
-    process.env.HASNA_MACHINES_DIR = machinesDir;
+    process.env.HASNA_STATIONS_DIR = machinesDir;
     process.env.HASNA_LOOPS_API_URL = "";
     process.env.HASNA_LOOPS_API_KEY = "";
     process.env.HASNA_LOOPS_DATABASE_URL = "";

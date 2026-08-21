@@ -949,7 +949,7 @@ export function buildServer() {
         ],
         packages: [
           { name: pkg.name, command: 'knowledge', expectedVersion: pkg.version, required: true },
-          { name: '@hasna/machines', command: 'machines', required: false },
+          { name: '@hasna/stations', command: 'machines', required: false },
         ],
         workspaces: [
           {

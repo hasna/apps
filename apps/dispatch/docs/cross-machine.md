@@ -15,17 +15,17 @@ The `Runner` abstraction is the only thing that changes between local and remote
 - **Local** (`--machine` omitted, `local`, `localhost`, or this hostname) → `LocalRunner`
   runs tmux via `spawnSync`.
 - **Remote** → `RemoteRunner` quotes the tmux argv into a single shell command and resolves
-  how to reach the host through the optional [`@hasna/machines`](https://github.com/hasna/machines)
+  how to reach the host through the optional [`@hasna/stations`](https://github.com/hasna/machines)
   consumer SDK:
 
   ```ts
-  import { resolveMachineCommand } from "@hasna/machines/consumer";
+  import { resolveMachineCommand } from "@hasna/stations/consumer";
   resolveMachineCommand("spark01", "tmux send-keys ...");
   // → { source: "tailscale", shellCommand: "ssh spark01.<tailnet>.ts.net 'tmux send-keys ...'" }
   ```
 
   It picks the best live route (LAN address or Tailscale MagicDNS name), so it keeps
-  working even when DHCP rotates an IP. If `@hasna/machines` isn't installed, `dispatch`
+  working even when DHCP rotates an IP. If `@hasna/stations` isn't installed, `dispatch`
   falls back to plain `ssh <machine> '<cmd>'` (resolved by your SSH config / DNS).
 
 Because tmux text payloads travel as a properly-quoted single argument and large prompts
@@ -41,7 +41,7 @@ bulk runs against machines that may be down.
 
 - Passwordless SSH to the target host (key/agent), reachable over LAN or Tailscale.
 - `tmux` installed on the target host.
-- For Tailscale/LAN route resolution: `@hasna/machines` available (optional dependency).
+- For Tailscale/LAN route resolution: `@hasna/stations` available (optional dependency).
   Without it, name resolution falls to your SSH config.
 
 ## Scheduling + cross-machine

@@ -23,11 +23,11 @@ file bucket.
 Machine discovery is an optional integration:
 
 - `knowledge` uses the `KnowledgeMachinesAdapter` boundary in `auto` mode by
-  default: `@hasna/machines/consumer` SDK, then installed `machines --json`
+  default: `@hasna/stations/consumer` SDK, then installed `machines --json`
   CLI, then local OS identity and optional Tailscale status probing.
 - The adapter also supports explicit `sdk`, `cli`, and `disabled` modes for
   installed-package smoke tests, hosted/SaaS wrappers, and offline operation.
-- `@hasna/knowledge` must not import `@hasna/machines` as a required runtime
+- `@hasna/knowledge` must not import `@hasna/stations` as a required runtime
   dependency.
 - Topology, preflight, route, and workspace outputs include adapter
   diagnostics with package, entrypoint, mode, implementation, contract version,
@@ -270,7 +270,7 @@ managed vector store. CLI, SDK, and MCP keep the same result contracts.
 
 ## Acceptance Criteria
 
-- `knowledge machines topology --json` works with and without `@hasna/machines`.
+- `knowledge machines topology --json` works with and without `@hasna/stations`.
 - CLI, SDK, and MCP expose the same read-only topology and sync-status shapes.
 - Machine registry tables and sync ledgers are idempotent migrations.
 - `knowledge sync snapshot --json` records machine registry rows, a snapshot

@@ -930,7 +930,7 @@ const routes = program.command("routes").alias("route").description("create, ins
 
 const events = program.command("events").description("(deprecated) Hasna event envelope aliases for 'routes create' and 'routes drain'");
 
-const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
+const stations = program.command("stations").description("inspect OpenMachines topology for loop assignment");
 
 const goal = program.command("goal").description("inspect goal runs");
 
@@ -1564,10 +1564,10 @@ goal
   .description("(deprecated: merged into 'goal show') show goal status for a goal, goal event, loop run, or workflow run")
   .action(runAction(showGoal));
 
-machines
+stations
   .command("list")
   .alias("ls")
-  .description("list known machines")
+  .description("list known stations")
   .action(runAction(() => {
     const values = listOpenMachines();
     if (isJson()) print(values);
@@ -1579,7 +1579,7 @@ machines
     }
   }));
 
-machines.command("show <id>").description("resolve a machine assignment").action(runAction((id) => {
+stations.command("show <id>").description("resolve a station assignment").action(runAction((id) => {
   print(resolveLoopMachine(id));
 }));
 

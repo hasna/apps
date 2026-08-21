@@ -7,8 +7,8 @@ export type KnowledgeMachineCommandRunner = (command: string) => KnowledgeMachin
 export type KnowledgeMachinePreflightSource = 'open-machines' | 'local' | 'ssh';
 export type KnowledgeMachinePreflightStatus = 'ok' | 'warn' | 'fail';
 export declare const KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
-export declare const KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = "@hasna/machines";
-export declare const KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = "@hasna/machines/consumer";
+export declare const KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = "@hasna/stations";
+export declare const KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = "@hasna/stations/consumer";
 export type KnowledgeMachinesAdapterMode = 'auto' | 'sdk' | 'cli' | 'disabled';
 export type KnowledgeMachinesAdapterImplementation = 'sdk' | 'cli' | 'disabled';
 export interface KnowledgeMachinesAdapterStatus {
@@ -208,7 +208,7 @@ export interface KnowledgeMachineTopology {
     machines: KnowledgeMachineEntry[];
     warnings: string[];
     adapter: {
-        package: '@hasna/machines';
+        package: '@hasna/stations';
         available: boolean;
         error: string | null;
     } & KnowledgeMachinesAdapterStatus;
@@ -241,7 +241,7 @@ export interface KnowledgeMachinePreflightReport {
         fail: number;
     };
     adapter: {
-        package: '@hasna/machines';
+        package: '@hasna/stations';
         available: boolean;
         error: string | null;
     } & KnowledgeMachinesAdapterStatus;

@@ -3,16 +3,16 @@ import type {
   MachineRouteResolution,
   MachineTopology,
   MachineTopologyEntry,
-} from "@hasna/machines/consumer";
+} from "@hasna/stations/consumer";
 import type { LoopMachineRef } from "../types.js";
 import { ValidationError } from "./errors.js";
 
-type MachinesConsumer = typeof import("@hasna/machines/consumer");
+type MachinesConsumer = typeof import("@hasna/stations/consumer");
 
 let consumerModule: MachinesConsumer | undefined;
 
 /**
- * `@hasna/machines` is an optional dependency: loops without machine
+ * `@hasna/stations` is an optional dependency: loops without machine
  * assignment must keep working when it is not installed. Loading is deferred
  * to first machine-routing use so module import never fails. The package's
  * exports map only declares the `import` condition, so resolve with Bun's
@@ -21,12 +21,12 @@ let consumerModule: MachinesConsumer | undefined;
 function machinesConsumer(): MachinesConsumer {
   if (!consumerModule) {
     try {
-      const resolved = Bun.resolveSync("@hasna/machines/consumer", import.meta.dir);
+      const resolved = Bun.resolveSync("@hasna/stations/consumer", import.meta.dir);
       consumerModule = createRequire(import.meta.url)(resolved) as MachinesConsumer;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `@hasna/machines is not available; install the optional dependency to use machine-assigned loops: ${detail}`,
+        `@hasna/stations is not available; install the optional dependency to use machine-assigned loops: ${detail}`,
       );
     }
   }
@@ -76,7 +76,7 @@ function machineFromRoute(route: MachineRouteResolution, topology: MachineTopolo
   if (!route.ok || !route.machine_id) {
     throw new Error(`OpenMachines route not found for machine: ${route.requested_machine_id}`);
   }
-  const entry = topology.machines.find((machine) => machine.machine_id === route.machine_id);
+  const entry = topology.stations.find((machine) => machine.machine_id === route.machine_id);
   return {
     id: route.machine_id,
     requestedId: route.requested_machine_id !== route.machine_id ? route.requested_machine_id : undefined,
@@ -91,13 +91,13 @@ function machineFromRoute(route: MachineRouteResolution, topology: MachineTopolo
 }
 
 export function listOpenMachines(): OpenMachineSummary[] {
-  const topology = machinesConsumer().discoverMachineTopology();
-  return topology.machines.map((entry) => entryToSummary(entry, topology));
+  const topology = machinesConsumer().discoverMachineTopology({ limit: null, offset: 0 });
+  return topology.stations.map((entry) => entryToSummary(entry, topology));
 }
 
 export function resolveLoopMachine(machineId: string): LoopMachineRef {
   const consumer = machinesConsumer();
-  const topology = consumer.discoverMachineTopology();
+  const topology = consumer.discoverMachineTopology({ limit: null, offset: 0 });
   const route = consumer.resolveMachineRoute(machineId, { topology });
   return machineFromRoute(route, topology);
 }

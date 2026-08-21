@@ -16,14 +16,14 @@ describe("machines", () => {
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "loops-machines-"));
     home = mkdtempSync(join(tmpdir(), "loops-machines-home-"));
-    for (const key of ["HASNA_MACHINES_DIR", "HASNA_MACHINES_MACHINE_ID"]) savedEnv[key] = process.env[key];
-    process.env.HASNA_MACHINES_DIR = root;
-    process.env.HASNA_MACHINES_MACHINE_ID = LOCAL_ID;
+    for (const key of ["HASNA_STATIONS_DIR", "HASNA_STATIONS_MACHINE_ID"]) savedEnv[key] = process.env[key];
+    process.env.HASNA_STATIONS_DIR = root;
+    process.env.HASNA_STATIONS_MACHINE_ID = LOCAL_ID;
     writeFileSync(
-      join(root, "machines.json"),
+      join(root, "stations.json"),
       JSON.stringify({
         version: 1,
-        machines: [
+        stations: [
           { id: LOCAL_ID, platform: "linux", workspacePath: "/workspace/local", connection: "local" },
           {
             id: REMOTE_ID,

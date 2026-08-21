@@ -2378,7 +2378,7 @@ describe('knowledge cli', () => {
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(true);
     expect(['local', 'open-machines']).toContain(out.source);
-    expect(out.adapter.package).toBe('@hasna/machines');
+    expect(out.adapter.package).toBe('@hasna/stations');
     expect(typeof out.adapter.available).toBe('boolean');
     expect(out.knowledge.app_path).toBe(join('.hasna', 'knowledge'));
     expect(normalizeDarwinPath(out.knowledge.workspace_home)).toBe(expectedProjectKnowledgeHome(dir, home));
