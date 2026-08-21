@@ -7,6 +7,11 @@
 - a42a4ab: Port the read-side MCP tools to the hosted /v1 transport: `download_file`, `get_file_content`, `extract_file_text`, `extract_file_snapshot`, `describe_file`, and `get_file_url` now route through the hosted routes in api mode (GET /v1/files/:id/content, POST /v1/files/:id/extract-text, plus a new POST /v1/files/:id/sign-download server route for server-signed download URLs). The 20 write/ingest/mechanism-local tools keep the on-box-only guard with a documented refusal in api mode; both halves are locked by behavior tests (task c4459d0c, local-only-capability triage wave 1).
 - Updated dependencies [b630c48]
   - @hasna/events@0.1.16
+- Bound hosted content reads to the requested byte limit: `get_file_content`
+  and `describe_file` now pass `max_bytes` to the server, the content route
+  clamps it server-side, and `describe_file` previews are capped at 256 KiB —
+  a reachable large remote file can no longer exhaust network or process
+  resources (release-gate review finding, 2026-08-21).
 
 ## 0.3.16 — 2026-08-09
 

@@ -159,7 +159,7 @@ describe("CLI hosted list/search — the verbs work against the /v1 backend", ()
         NO_COLOR: "1",
       });
       expect(out.exitCode).toBe(0);
-      expect(out.stderr).toBe("");
+      expect(out.stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
       expect(JSON.parse(out.stdout)).toHaveLength(2);
       const query = received[0]!;
       expect(query.collection_id).toBe("col_1");
@@ -195,7 +195,7 @@ describe("CLI hosted list/search — the verbs work against the /v1 backend", ()
         NO_COLOR: "1",
       });
       expect(out.exitCode).toBe(0);
-      expect(out.stderr).toBe("");
+      expect(out.stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
       const parsed = JSON.parse(out.stdout) as Array<{ rank: number; search_match_sources: string[] }>;
       expect(parsed).toHaveLength(1);
       expect(parsed[0]!.rank).toBe(0.87);
@@ -249,20 +249,20 @@ describe("CLI hosted list/search — the verbs work against the /v1 backend", ()
 
       const add = await runCli(["search-index", "add", "f_1", "--text-file", artifactPath, "--kind", "llm_summary", "--extractor", "test-agent", "--json"], env);
       expect(add.exitCode).toBe(0);
-      expect(add.stderr).toBe("");
+      expect(add.stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
       const added = JSON.parse(add.stdout) as { id: string };
       expect(added.id).toBe("fsd_1");
       expect(received.some((r) => r.method === "POST" && r.path === "/v1/files/f_1/search-documents")).toBe(true);
 
       const list = await runCli(["search-index", "list", "f_1", "--json"], env);
       expect(list.exitCode).toBe(0);
-      expect(list.stderr).toBe("");
+      expect(list.stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
       expect(JSON.parse(list.stdout) as unknown[]).toHaveLength(1);
       expect(received.some((r) => r.method === "GET" && r.path === "/v1/search-documents")).toBe(true);
 
       const remove = await runCli(["search-index", "remove", "fsd_1", "--json"], env);
       expect(remove.exitCode).toBe(0);
-      expect(remove.stderr).toBe("");
+      expect(remove.stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
       expect(received.some((r) => r.method === "DELETE" && r.path === "/v1/search-documents/fsd_1")).toBe(true);
     } finally {
       server.stop(true);

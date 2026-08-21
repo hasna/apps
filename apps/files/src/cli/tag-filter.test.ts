@@ -79,6 +79,7 @@ describe("files list --tag", () => {
 
     const env = {
       ...localEnv(testDir),
+      HOME: testDir,
       HASNA_FILES_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_FILES_API_KEY: API_KEY,
     };

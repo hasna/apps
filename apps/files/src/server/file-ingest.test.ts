@@ -162,9 +162,14 @@ function fakeClient(options: FakeClientOptions = {}): { client: TypedQueryClient
 
 function handler(options: { keyTenants?: Record<string, string | undefined>; tags?: string[] } = {}) {
   const { client, executed } = fakeClient(options);
+  const keyTenants = options.keyTenants ?? { "kid-write": TENANT };
   const h = createV1Handler({
     getClient: () => client,
-    verifier: verifyApiKey({ app: "files", signingSecret: SIGNING_SECRET }),
+    verifier: verifyApiKey({
+      app: "files",
+      signingSecret: SIGNING_SECRET,
+      keyStatus: async (kid) => (keyTenants[kid] !== undefined ? "active" : "unknown"),
+    }),
     // Server-owned object verification is DI'd so the route is testable
     // without live S3; the default production implementation does a HEAD.
     verifyUploadedObject: async () => ({ ok: true }),

@@ -88,7 +88,7 @@ export function resolveFilesCloudStorage(
     );
   }
   const resolved = resolveStorageClient(FILES_APP, env, overrides);
-  if (resolved.transport !== "cloud-http") {
+  if (resolved.transport !== "http") {
     throw new Error(
       "Files client decided to use the hosted API (API URL + key set) but the storage client " +
         "resolved to a different transport; refusing to silently use the wrong dataset.",

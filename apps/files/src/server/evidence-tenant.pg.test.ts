@@ -177,7 +177,11 @@ function tenantFixture() {
 
   const handler = createV1Handler({
     getClient: () => wrapExecutor(executor),
-    verifier: verifyApiKey({ app: "files", signingSecret: SIGNING_MATERIAL }),
+    verifier: verifyApiKey({
+    app: "files",
+    signingSecret: SIGNING_MATERIAL,
+    keyStatus: async (kid) => (kid === "kid-tenant-a" ? "active" : "unknown"),
+  }),
   });
   const token = mintApiKey({
     app: "files",

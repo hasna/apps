@@ -87,6 +87,9 @@ const MCP_TOOL_CAPABILITIES: Record<string, McpCapability[]> = {
 
 const DEFAULT_MCP_READ_BYTES = 100 * 1024;
 const MAX_MCP_READ_BYTES = 10 * 1024 * 1024;
+/** Byte cap for the describe_file preview read: enough for a 50-line text
+ *  preview, bounded regardless of the requested line count. */
+const DESCRIBE_PREVIEW_MAX_BYTES = 256 * 1024;
 const DEFAULT_MCP_IMPORT_BYTES = 100 * 1024 * 1024;
 const MAX_MCP_IMPORT_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -902,7 +905,7 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
           chunks.push(chunk);
           total += chunk.byteLength;
         }
-      });
+      }, { max_bytes: limit });
       const text = Buffer.concat(chunks).toString("utf8");
       const suffix = truncated
         ? `\n\n[truncated - ${total} bytes read, max ${limit} bytes]`
@@ -1231,7 +1234,7 @@ registerTool("describe_file", "Get file metadata + first lines of content in one
       let preview = "(binary or unreadable)";
       try {
         const chunks: Uint8Array[] = [];
-        await api.downloadFileContent(id, (chunk) => { chunks.push(chunk); });
+        await api.downloadFileContent(id, (chunk) => { chunks.push(chunk); }, { max_bytes: DESCRIBE_PREVIEW_MAX_BYTES });
         preview = Buffer.concat(chunks).toString("utf8").split("\n").slice(0, lines ?? 50).join("\n");
       } catch {
         // Unreadable content keeps the "(binary or unreadable)" preview.

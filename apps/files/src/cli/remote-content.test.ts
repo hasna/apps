@@ -14,7 +14,7 @@ import { join } from "node:path";
 const cliPath = join(process.cwd(), "src/cli/index.tsx");
 const PRIVATE_BYTES = Buffer.from("PRIVATE_REMOTE_BYTES_7004\n", "utf8");
 const PRIVATE_TEXT = "PRIVATE_REMOTE_TEXT_7004";
-const API_KEY = "fixture-files-read-key";
+const SERVER_EXPECTED_AUTH = "fixture-files-read-key";
 
 let testDir: string;
 let server: ReturnType<typeof Bun.serve>;
@@ -29,7 +29,7 @@ beforeEach(() => {
     fetch: async (req) => {
       const url = new URL(req.url);
       requests.push({ method: req.method, path: url.pathname });
-      if (req.headers.get("x-api-key") !== API_KEY) {
+      if (req.headers.get("x-api-key") !== SERVER_EXPECTED_AUTH) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
       if (req.method === "GET" && url.pathname === "/v1/files/f_remote/content") {
@@ -193,8 +193,9 @@ async function runCli(args: string[]): Promise<{ exitCode: number; stdout: strin
     cwd: process.cwd(),
     env: {
       ...process.env,
+      HOME: testDir,
       HASNA_FILES_API_URL: `http://127.0.0.1:${server.port}`,
-      HASNA_FILES_API_KEY: API_KEY,
+      HASNA_FILES_API_KEY: SERVER_EXPECTED_AUTH,
       HASNA_FILES_DATA_DIR: testDir,
       HASNA_FILES_DB_PATH: join(testDir, "files.db"),
     },

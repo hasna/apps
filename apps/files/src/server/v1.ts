@@ -23,6 +23,7 @@ import type { FileAssetStatus } from "../types/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import {
   extractRemoteFileText,
+  normalizeContentReadLimit,
   readRemoteObject,
   signRemoteFileDownload,
   type RemoteFileLocator,
@@ -99,7 +100,7 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
       verifier = verifyApiKey({
         app: "files",
         signingSecret: options.signingSecret ?? signingSecret(),
-        isRevoked: (kid) => ks.isRevoked(kid),
+        keyStatus: (kid) => ks.keyStatus(kid),
         audit: (e) => { if (e.outcome === "deny") console.warn(`[auth] deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`); },
       });
     }
@@ -334,7 +335,9 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
             const locator = await authorizedFileLocator(client, decision.principal.kid, seg[1]!);
             if (!locator) return err("File not found", 404);
             try {
-              const object = await objectReader(locator);
+              const object = await objectReader(locator, {
+                max_bytes: normalizeContentReadLimit(url.searchParams.get("max_bytes")),
+              });
               if (!object) return err("File not found", 404);
               return new Response(object.body, {
                 status: 200,

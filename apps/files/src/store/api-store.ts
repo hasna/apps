@@ -299,10 +299,12 @@ export class ApiStore implements FilesStore {
   async downloadFileContent(
     fileId: string,
     write: (chunk: Uint8Array) => void | Promise<void>,
+    options: { max_bytes?: number } = {},
   ): Promise<void> {
     if (!this.fetchContent) throw new Error("Authenticated file-content transport is unavailable.");
     const path = `/files/${seg(fileId)}/content`;
-    const response = await this.fetchContent(path, { method: "GET" });
+    const query = options.max_bytes !== undefined ? `?max_bytes=${Math.max(1, Math.floor(options.max_bytes))}` : "";
+    const response = await this.fetchContent(path + query, { method: "GET" });
     if (!response.ok) throw await remoteContentError("GET", path, response);
     if (!response.body) throw new Error("The file-content response was empty.");
 
