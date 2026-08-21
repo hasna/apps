@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { ApiError, errorBody, mapError, bearer, parseLimit } from './http.mjs';
 import { DEFAULT_DB_PATH } from './paths.mjs';
 import { getMeta, setMeta } from './db.mjs';
@@ -18,7 +19,13 @@ import {
 } from './auth.mjs';
 import { createNote, deleteNote, exportNotes, getNote, listNotes, updateNote } from './notes.mjs';
 
-export const VERSION = '0.1.0';
+// I38-00565: the server's version was a hardcoded constant that drifted from
+// the app manifest (reported 0.1.0 while the source was 0.3.0), so the live
+// /version lied about the deployed image. The version now comes from the app
+// manifest — the same file the version wave bumps and the same file the
+// Docker image ships as /app/package.json — so it cannot drift again.
+const MANIFEST = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+export const VERSION = MANIFEST.version;
 export const SERVICE = 'notes-server';
 export const DEFAULT_PORT = 8788;
 export { DEFAULT_DB_PATH };

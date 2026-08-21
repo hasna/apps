@@ -6,11 +6,11 @@
 // Run: cd server && bun test
 
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from './db.mjs';
-import { createApp, resolveConfig } from './app.mjs';
+import { createApp, resolveConfig, SERVICE, VERSION } from './app.mjs';
 
 const LOOPBACK = { ip: '127.0.0.1' };
 
@@ -243,6 +243,21 @@ describe('notes CRUD', () => {
     const exported = await (await call(app, 'POST', '/api/v1/export', { token: apiKey, body: {} })).json();
     expect(exported.exportId).toBeTruthy();
     expect(exported.notes.map((n) => n.clientId)).toEqual(['e1']);
+  });
+});
+
+describe('version label', () => {
+  // I38-00565: /version reported the hardcoded server constant (0.1.0) while
+  // the source app manifest is at 0.3.0 — the deployed notes.hasna.xyz
+  // /version lied about the running image. The version must track the app
+  // manifest that ships in the image (/app/package.json in the Docker build).
+  test('VERSION matches the app manifest version and /version reports it', async () => {
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    expect(VERSION).toBe(manifest.version);
+    const { app } = await makeApp();
+    const res = await call(app, 'GET', '/version');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ version: manifest.version, service: SERVICE });
   });
 });
 
