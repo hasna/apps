@@ -26,7 +26,8 @@
     "check:deploy-lanes": "bun tooling/ci/check-deploy-lanes.ts && bun tooling/ci/check-todos-deploy.ts --self-test && bun tooling/ci/check-todos-deploy.ts",
     "test:standard": "bun test tooling/ci/tests/standard",
     "test:versioning": "bun test test/versioning",
-    "test:suites": "bun run test:versioning && bun run test:standard"
+    "test:suites": "bun run test:versioning && bun run test:standard",
+    "prepare:ordered": "bun run --filter @hasna/contracts build && bun run --filter @hasna/attachments build && bun run --filter @hasna/datasets build && bun run --filter @hasna/loops build && bun run --filter @hasna/machines build && bun run --filter @hasna/mementos build"
   },
   "devDependencies": {
     "@changesets/cli": "2.27.9",
