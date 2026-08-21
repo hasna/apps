@@ -5,7 +5,7 @@
     "": {
       "name": "@hasna/todos",
       "dependencies": {
-        "@hasna/contracts": "0.13.1",
+        "@hasna/contracts": "0.13.3",
         "@hasna/events": "^0.1.11",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -219,7 +219,7 @@
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
 
-    "@hasna/contracts": ["@hasna/contracts@0.13.1", "", { "dependencies": { "@hasna/secrets": "0.3.3", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-tAldWprvaxthxmANtKm9jG7mFo+H8N8PvGUjoCijf0axDzInLmxH2g+OJ9ViMcd2jiGLRDJAlI5yKDUVX6Yfuw=="],
+    "@hasna/contracts": ["@hasna/contracts@0.13.3", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.4" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-TiT1xqf4+DeWg3nvuLFSL6b/MW6IwZp5tyzTTb+BpHaSthEUQADK+/5p4/Nid9o00QqyL/ZUKIV+26gmi8CxrA=="],
 
     "@hasna/events": ["@hasna/events@0.1.11", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-X36W9TB8mKxtS5UeW1n2IlvW6nPUcoYCQWNMMV+/JM4YNzlnnk1FRm8Aay02tt1LjQOGICCHF3hz/l//EHEe+Q=="],
 
