@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
 // @bun
 
+// src/serve-entry.ts
+import { readFileSync as readFileSync3 } from "fs";
+
 // src/serve.ts
 import { readFileSync as readFileSync2 } from "fs";
 
@@ -8174,11 +8177,61 @@ async function startKnowledgeServe(options = {}) {
 }
 
 // src/serve-entry.ts
-var running = await startKnowledgeServe();
-var shutdown = async (signal) => {
-  console.log(`[knowledge-serve] received ${signal}, shutting down`);
-  await running.stop();
-  process.exit(0);
+function handleEarlyArgs(argv) {
+  if (argv.includes("--help"))
+    return "help";
+  if (argv.includes("--version"))
+    return "version";
+  return "start";
+}
+function getPackageVersion() {
+  try {
+    const url = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync3(url, "utf8"));
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+function printHelp() {
+  console.log(`usage: knowledge-serve [--port <n>]
+
+knowledge-serve \u2014 self-hosted HTTP API for @hasna/knowledge.
+
+options:
+  --help                show this help and exit
+  --version             print the package version and exit
+  --port <n>            listen port (default: 8080, or $PORT / HASNA_KNOWLEDGE_SERVE_PORT)
+`);
+}
+async function main(argv = process.argv.slice(2)) {
+  const early = handleEarlyArgs(argv);
+  if (early === "help") {
+    printHelp();
+    return;
+  }
+  if (early === "version") {
+    console.log(getPackageVersion());
+    return;
+  }
+  const running = await startKnowledgeServe();
+  const shutdown = async (signal) => {
+    console.log(`[knowledge-serve] received ${signal}, shutting down`);
+    await running.stop();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+}
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error("knowledge-serve fatal:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}
+export {
+  getPackageVersion,
+  handleEarlyArgs,
+  main,
+  printHelp
 };
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
-process.on("SIGINT", () => void shutdown("SIGINT"));
