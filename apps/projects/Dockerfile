@@ -32,8 +32,7 @@ RUN bun build src/serve/index.ts --outdir dist/serve --target bun --external pg 
 FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS runtime
 ENV NODE_ENV=production \
     PORT=8080 \
-    HOST=0.0.0.0 \
-    HASNA_PROJECTS_STORAGE_MODE=cloud
+    HOST=0.0.0.0
 WORKDIR /app
 
 # Amazon RDS global CA bundle so TLS to the shared RDS validates (no
