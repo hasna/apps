@@ -335,18 +335,22 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
             const locator = await authorizedFileLocator(client, decision.principal.kid, seg[1]!);
             if (!locator) return err("File not found", 404);
             try {
-              const object = await objectReader(locator, {
-                max_bytes: normalizeContentReadLimit(url.searchParams.get("max_bytes")),
-              });
+              const bound = normalizeContentReadLimit(url.searchParams.get("max_bytes"));
+              const object = await objectReader(locator, { max_bytes: bound });
               if (!object) return err("File not found", 404);
-              return new Response(object.body, {
-                status: 200,
-                headers: {
-                  "Content-Type": locator.mime || "application/octet-stream",
-                  "Cache-Control": "private, no-store",
-                  "X-Content-Type-Options": "nosniff",
-                },
+              const headers = new Headers({
+                "Content-Type": locator.mime || "application/octet-stream",
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
               });
+              if (bound !== undefined && locator.size > bound) {
+                // The body is capped at `bound` bytes while the object is larger;
+                // tell the client so it can emit its truncation marker even when
+                // the Range response is exactly `bound` bytes long.
+                headers.set("x-files-truncated", "1");
+                headers.set("x-files-size", String(locator.size));
+              }
+              return new Response(object.body, { status: 200, headers });
             } catch {
               return err("File content unavailable", 502);
             }

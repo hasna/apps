@@ -136,6 +136,19 @@ describe("authenticated hosted file content", () => {
     expect(seen[0]?.max_bytes).toBeLessThanOrEqual(10 * 1024 * 1024);
   });
 
+  test("content route signals truncation when the bound is below the object size", async () => {
+    const h = handler(async (_locator, options) => {
+      const bound = options?.max_bytes ?? PRIVATE_BYTES.byteLength;
+      return new Response(PRIVATE_BYTES.subarray(0, bound));
+    });
+    const req = request("/v1/files/f_remote/content?max_bytes=4", token("kid-a"));
+    const response = await h.handle(req, new URL(req.url));
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("x-files-truncated")).toBe("1");
+    expect(response?.headers.get("x-files-size")).toBe(String(PRIVATE_BYTES.byteLength));
+  });
+
   test("returns exact derived extraction to the authorized tenant", async () => {
     const h = handler(async (_locator, options) => {
       expect(options?.max_bytes).toBe(128);

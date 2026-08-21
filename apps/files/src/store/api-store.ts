@@ -300,7 +300,7 @@ export class ApiStore implements FilesStore {
     fileId: string,
     write: (chunk: Uint8Array) => void | Promise<void>,
     options: { max_bytes?: number } = {},
-  ): Promise<void> {
+  ): Promise<{ truncated: boolean; totalBytes?: number }> {
     if (!this.fetchContent) throw new Error("Authenticated file-content transport is unavailable.");
     const path = `/files/${seg(fileId)}/content`;
     const query = options.max_bytes !== undefined ? `?max_bytes=${Math.max(1, Math.floor(options.max_bytes))}` : "";
@@ -314,6 +314,12 @@ export class ApiStore implements FilesStore {
       if (next.done) break;
       await write(next.value);
     }
+
+    const sizeHeader = response.headers?.get("x-files-size");
+    return {
+      truncated: response.headers?.get("x-files-truncated") === "1",
+      totalBytes: sizeHeader !== null ? Number(sizeHeader) : undefined,
+    };
   }
 
   async extractFileText(

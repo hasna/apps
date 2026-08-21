@@ -894,7 +894,7 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
       const chunks: Uint8Array[] = [];
       let total = 0;
       let truncated = false;
-      await api.downloadFileContent(id, (chunk) => {
+      const result = await api.downloadFileContent(id, (chunk) => {
         if (truncated || total >= limit) return;
         const remaining = limit - total;
         if (chunk.byteLength > remaining) {
@@ -906,6 +906,10 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
           total += chunk.byteLength;
         }
       }, { max_bytes: limit });
+      // A server that honors max_bytes returns exactly `limit` bytes, so the
+      // chunk loop above cannot detect an oversized object; trust the server's
+      // truncation signal (x-files-truncated) when present.
+      if (result.truncated && !truncated) truncated = true;
       const text = Buffer.concat(chunks).toString("utf8");
       const suffix = truncated
         ? `\n\n[truncated - ${total} bytes read, max ${limit} bytes]`
