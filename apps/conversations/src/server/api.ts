@@ -16,8 +16,9 @@
  */
 
 import { randomUUID } from "crypto";
-import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv, resolveDatabaseUrl } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient, PoolQueryClient } from "../generated/storage-kit/query.js";
+import { assertDbTlsContract } from "./db-tls-contract.js";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import { version as pkgVersion } from "../../package.json";
@@ -185,6 +186,11 @@ function incidentProjectorContextFromEnv(): IncidentProjectorContext | null {
 
 /** Build the request-handling deps from the environment (cloud Postgres). */
 export function buildDeps(): ApiServerDeps {
+  // Fail loud before a fleet-wide 503: a DSN that verifies the server
+  // certificate with no resolvable CA makes every key-status lookup throw and
+  // every authenticated /v1 request answer 503 status_unavailable while
+  // /health reports ok (I38-00559, incident 719261). Refuse to boot instead.
+  assertDbTlsContract(resolveDatabaseUrl(APP));
   const { client } = createServerPoolFromEnv(APP, { applicationName: "conversations-serve" });
   const keys = new ApiKeyStore(client);
   const verifier = verifyApiKey({
