@@ -4,7 +4,7 @@
 # The service talks to PostgreSQL directly: a HASNA_SHORTLINKS_DATABASE_URL
 # (provided by the ECS task) selects the postgresql server data backend.
 # ---------------------------------------------------------------------------
-FROM --platform=linux/amd64 oven/bun:1 AS build
+FROM --platform=linux/amd64 oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f AS build
 WORKDIR /app
 
 # Install dependencies against the committed lockfile. --ignore-scripts because
@@ -22,7 +22,7 @@ RUN bun run build
 RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-scripts
 
 # ---------------------------------------------------------------------------
-FROM --platform=linux/amd64 oven/bun:1-slim AS runtime
+FROM --platform=linux/amd64 oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f AS runtime
 WORKDIR /app
 # The Amazon RDS certs chain to a PRIVATE "Amazon RDS <region> Root CA" that is
 # not in the public/system trust store. Bundle the RDS global CA and trust it so
