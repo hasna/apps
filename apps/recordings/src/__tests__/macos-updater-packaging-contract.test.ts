@@ -213,7 +213,7 @@ describe("root-owned macOS updater packaging contract", () => {
     expect(preinstall).toContain("/var/db/com.hasna.recordings.updater");
     expect(preinstall).not.toContain("bootout system/com.hasna.recordings.updater");
     expect(cli).toContain(
-      'const updateClientPath = "/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client"',
+      'const updateClientPath = pathJoin(installedAppPath, "Contents", "Helpers", "recordings-update-client")',
     );
     expect(cli).toContain('"--envelope"');
     expect(cli).not.toContain("RECORDINGS_TEST_UPDATE_CLIENT");
@@ -803,5 +803,27 @@ describe("root-owned macOS updater packaging contract", () => {
     expect(cli).not.toContain("--archive-fd");
     expect(readFileSync("scripts/macos_artifact.ts", "utf8")).toContain("verifyAndExtractArchiveDescriptors");
     expect(postinstall).toContain("artifact-verifier.sb");
+  });
+
+  test("derives the initial-bootstrap artifact basename from the canonical bundle identity", () => {
+    // Regression for the 0.3.6 release-review P1: build_release_pkg.sh hardcoded the legacy
+    // "Recordings-${VERSION}-macos-initial-bootstrap" basename while build.sh emits the
+    // canonical APP_BASENAME-derived form, so every initial-bootstrap package exited 2.
+    expect(pkg).toMatch(/expected_basename="\$\(\/usr\/bin\/basename "\$APP" \.app\)-/);
+    expect(pkg).not.toContain('"Recordings-${VERSION}-macos-initial-bootstrap"');
+    expect(pkg).toContain("expected ${expected_basename}");
+    expect(build).toContain('ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"');
+    expect(build).toContain('APP_BASENAME="${APP_BUNDLE_NAME%.app}"');
+  });
+
+  test("validates the legacy Recordings.app cohort and upgrades it through its own update client", () => {
+    // Regression for the 0.3.6 release-review P1: the release install resolved the update
+    // client only at the canonical path, and the preinstall cohort list omitted the legacy
+    // bundle, so 0.3.2-era installs at /Applications/Recordings.app could not be upgraded.
+    expect(preinstall).toContain('"/Applications/Recordings.app:755"');
+    expect(preinstall).toContain('"/Applications/Recordings.app/Contents/Helpers/recordings-update-client:755"');
+    expect(cli).toContain("const legacyInstallPaths = findLegacyMacOSAppPaths(home, canonicalAppPath);");
+    expect(cli).toContain("const installedAppPath = resolveInstalledAppPath(home, canonicalAppPath, legacyInstallPaths);");
+    expect(cli).toContain('pathJoin(installedAppPath, "Contents", "Helpers", "recordings-update-client")');
   });
 });

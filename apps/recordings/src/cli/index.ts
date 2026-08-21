@@ -932,10 +932,23 @@ appCommand
         console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       }
-      const updateClientPath = "/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client";
+      // Resolve the installed bundle the same way status/permission reporting does, so a
+      // legacy 0.3.2-era install at /Applications/Recordings.app (or the canonical name at a
+      // non-default location) is upgraded through its own root-owned update client instead of
+      // failing with "broker client is not installed". The update client owns the cohort and
+      // rollback state, so upgrading the resolved bundle in place preserves anti-rollback.
+      const home = process.env.HOME || process.env.USERPROFILE || "";
+      const canonicalAppPath = pathJoin(home, "Applications", "HasnaRecordings.app");
+      const legacyInstallPaths = findLegacyMacOSAppPaths(home, canonicalAppPath);
+      const installedAppPath = resolveInstalledAppPath(home, canonicalAppPath, legacyInstallPaths);
+      const updateClientPath = pathJoin(installedAppPath, "Contents", "Helpers", "recordings-update-client");
       if (!existsSync(updateClientPath)) {
         preparedInputs.cleanup();
-        console.error(chalk.red("Root-owned Recordings update broker client is not installed."));
+        console.error(
+          chalk.red(
+            `Root-owned Recordings update broker client is not installed at ${updateClientPath}.`,
+          ),
+        );
         process.exit(1);
       }
       const result = (() => {
