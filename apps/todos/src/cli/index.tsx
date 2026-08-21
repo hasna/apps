@@ -115,8 +115,17 @@ async function registerOptionalEventsCommands(program: Command): Promise<void> {
 
 function commandForArgs(root: Command, args: readonly string[]): Command {
   let command = root;
-  for (const arg of args) {
-    if (arg.startsWith("-")) continue;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg.startsWith("-")) {
+      const option = command.options.find((candidate) =>
+        candidate.long === arg || candidate.short === arg ||
+        (candidate.long !== undefined && arg.startsWith(`${candidate.long}=`)) ||
+        (candidate.short !== undefined && arg.startsWith(`${candidate.short}=`)),
+      );
+      if (option?.required || option?.optional) index += 1;
+      continue;
+    }
     const child = command.commands.find((candidate) =>
       candidate.name() === arg || candidate.aliases().includes(arg),
     );
