@@ -2598,6 +2598,28 @@ describe("conversations-serve", () => {
       .toEqual(["agent-chief-research"]);
   });
 
+  test("reserved channel aliases reject pinned and for-agent reads before querying", async () => {
+    const fake = activeFakeClient!;
+    fake.__debug.channelAliases["chief-research"] = "agent-chief-research";
+    const aliasError = "Channel #chief-research is a reserved historical alias for #agent-chief-research.";
+
+    const pinnedQueryMark = fake.__debug.manyCalls.length;
+    const pinned = await fetch(`${base}/v1/messages/pinned?channel=chief-research`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(pinned.status).toBe(409);
+    expect(await pinned.json()).toEqual({ error: aliasError });
+    expect(fake.__debug.manyCalls.slice(pinnedQueryMark).filter((call: any) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+
+    const mentionQueryMark = fake.__debug.manyCalls.length;
+    const mentions = await fetch(`${base}/v1/messages/for-agent?agent=reader&channel=chief-research`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(mentions.status).toBe(409);
+    expect(await mentions.json()).toEqual({ error: aliasError });
+    expect(fake.__debug.manyCalls.slice(mentionQueryMark).filter((call: any) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+  });
+
   test("POST /v1/channels reports rejected project_id with field and reason", async () => {
     const created = await fetch(`${base}/v1/channels`, {
       method: "POST",

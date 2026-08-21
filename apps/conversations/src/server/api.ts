@@ -2056,6 +2056,13 @@ async function handleV1(
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
+    if (channel) {
+      channel = normalizeChannelName(channel);
+      const currentChannel = await readReservedHistoricalChannelAlias(client, channel);
+      if (currentChannel) {
+        return json({ error: reservedHistoricalChannelMessage(channel, currentChannel) }, 409);
+      }
+    }
     const collection = collectionReadOptions(url);
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
@@ -2161,6 +2168,13 @@ async function handleV1(
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
     if (!who) return json({ error: "agent is required" }, 400);
+    if (channel) {
+      channel = normalizeChannelName(channel);
+      const currentChannel = await readReservedHistoricalChannelAlias(client, channel);
+      if (currentChannel) {
+        return json({ error: reservedHistoricalChannelMessage(channel, currentChannel) }, 409);
+      }
+    }
     const clauses = ["mm.mentioned_agent = $1"];
     const params: unknown[] = [who.toLowerCase()];
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
