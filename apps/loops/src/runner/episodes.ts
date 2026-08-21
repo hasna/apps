@@ -176,10 +176,31 @@ function episodeIdFor(firstFailureAt: string, runnerId: string): string {
 }
 
 function defaultSpawnNotifier(command: string, payload: string, killMs: number = NOTIFIER_KILL_MS): void {
-  const child = spawn(command, { shell: true, stdio: ["pipe", "ignore", "ignore"], detached: true });
   // Escalation is best-effort by contract: a dead notifier command must never
   // fail, block, or zombie the run. Every error path is swallowed, and a
   // notifier that never exits is killed so events cannot accumulate orphans.
+  const launch = (shell: boolean): ReturnType<typeof spawn> =>
+    spawn(command, { shell, stdio: ["pipe", "ignore", "ignore"], detached: true });
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = launch(true);
+  } catch {
+    return;
+  }
+  child.on("error", () => {
+    // `sh -c` itself unavailable (minimal/sandboxed environments): one retry
+    // with a plain argv split, still fully detached and still best-effort.
+    try {
+      const direct = launch(false);
+      wireNotifier(direct, payload, killMs);
+    } catch {
+      // no notifier lane at all — the outbox remains the durable surface
+    }
+  });
+  wireNotifier(child, payload, killMs);
+}
+
+function wireNotifier(child: ReturnType<typeof spawn>, payload: string, killMs: number): void {
   child.on("error", () => {});
   child.stdin?.on("error", () => {});
   const killer = setTimeout(() => {
@@ -200,37 +221,85 @@ function defaultSpawnNotifier(command: string, payload: string, killMs: number =
 }
 
 /**
- * Single-writer guard around each read-modify-write cycle. Acquire is one
- * non-blocking attempt: contention means another runner process on this data
- * dir is mid-update, and the correct move is to SKIP this update (never
- * throw, never wait — a poll must not be delayed) and let the next poll catch
- * up. A lock older than STALE_MS is a crashed holder's residue and is taken
- * over.
+ * Single-writer guard around each read-modify-write cycle. The critical
+ * section is µs-scale (bounded state read, bounded outbox scan, one rename),
+ * so acquisition is a short bounded retry: contention means another runner
+ * process is mid-update, and after the retries the update is SKIPPED — never
+ * an exception, never an unbounded wait, so a poll is never meaningfully
+ * delayed. A lock older than LOCK_STALE_MS is a crashed holder's residue;
+ * takeover uses an atomic RENAME (exactly one contender's rename succeeds) so
+ * a live holder's lock is never blindly deleted by a contender.
  */
 const LOCK_STALE_MS = 10_000;
+const LOCK_ATTEMPTS = 8;
+const LOCK_SPIN_ATTEMPTS = 4;
+const LOCK_RETRY_MS = 15;
+
+function sleepSync(ms: number): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    // no sync sleep available: spin without it
+  }
+}
+
+/** Atomic stale takeover: rename the stale lock aside (one winner), then create ours. */
+function takeOverStaleLock(lockPath: string): boolean {
+  const mine = `${lockPath}.${process.pid}.${Date.now()}.takeover`;
+  try {
+    renameSync(lockPath, mine);
+  } catch {
+    return false; // another contender won the rename, or it already vanished
+  }
+  try {
+    rmSync(mine, { force: true });
+  } catch {
+    // residue from a crashed takeover attempt; harmless, the next takeover clears it
+  }
+  return true;
+}
+
+function acquireLock(lockPath: string): number | undefined {
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+    // Ownership of a successful fd passes to the caller (withLock closes it);
+    // a failed openSync never yields an fd, so failure paths need no cleanup.
+    try {
+      return openSync(lockPath, "wx");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") return undefined; // unexpected failure: skip silently
+    }
+    if (attempt >= LOCK_SPIN_ATTEMPTS) {
+      let stale = false;
+      try {
+        stale = Date.now() - statSync(lockPath).mtimeMs >= LOCK_STALE_MS;
+      } catch {
+        // lock vanished between open and stat: plain retry
+      }
+      if (stale && takeOverStaleLock(lockPath)) {
+        try {
+          return openSync(lockPath, "wx");
+        } catch {
+          return undefined;
+        }
+      }
+    }
+    if (attempt < LOCK_ATTEMPTS - 1) sleepSync(LOCK_RETRY_MS);
+  }
+  return undefined;
+}
 
 function withLock<T>(lockPath: string, fn: () => T): T | undefined {
-  try {
-    openSync(lockPath, "wx");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EEXIST") return undefined; // unexpected failure: skip silently
-    try {
-      if (Date.now() - statSync(lockPath).mtimeMs < LOCK_STALE_MS) return undefined; // live holder
-    } catch {
-      return undefined; // lock vanished mid-check: skip this update
-    }
-    // Stale lock from a crashed holder: take it over.
-    try {
-      rmSync(lockPath, { force: true });
-      openSync(lockPath, "wx");
-    } catch {
-      return undefined;
-    }
-  }
+  const fd = acquireLock(lockPath);
+  if (fd === undefined) return undefined;
   try {
     return fn();
   } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // already closed — ignore
+    }
     try {
       rmSync(lockPath, { force: true });
     } catch {
@@ -270,6 +339,12 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
       renameSync(tmpPath, statePath);
     }
 
+    /** Dedup window for appendEventOnce: the newest lines. An episode's open
+     *  and recovery events are adjacent in the outbox modulo a handful of other
+     *  runners' episodes, so a bounded tail scan is sufficient — and it keeps
+     *  the lock-held critical section µs-scale even as the outbox grows. */
+    const OUTBOX_DEDUP_TAIL = 256;
+
     /**
      * Idempotent outbox append: an event already present for this episodeId is
      * treated as delivered, which is what keeps exactly-once semantics across
@@ -278,14 +353,13 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
      */
     function appendEventOnce(event: RunnerEpisodeEvent): boolean {
       mkdirSync(dirname(outboxPath), { recursive: true, mode: 0o700 });
-      let existing = "";
+      let tail: string[] = [];
       try {
-        existing = readFileSync(outboxPath, "utf8");
+        tail = readFileSync(outboxPath, "utf8").split("\n").filter((line) => line.trim()).slice(-OUTBOX_DEDUP_TAIL);
       } catch {
         // fresh outbox
       }
-      for (const prior of existing.split("\n")) {
-        if (!prior.trim()) continue;
+      for (const prior of tail) {
         try {
           const parsed = JSON.parse(prior) as Record<string, unknown>;
           if (parsed.evt === event.evt && parsed.episodeId === event.episodeId) return true;
@@ -359,6 +433,8 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
           // If the plane flapped back down before a pending recovery event
           // could be delivered, finish that delivery first — the episode
           // genuinely recovered (2 successes landed) before this new failure.
+          // STATE-FIRST: recovery_pending is already durable in the state
+          // file, so this retry survives crashes; emitRecovery dedupes.
           if (streak?.episodeId && streak.deliveryState === "recovery_pending") {
             if (emitRecovery(streak, nowIso)) streak = undefined;
           }
@@ -381,11 +457,20 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
             if (streak.consecutiveCount >= EPISODE_OPEN_CONSECUTIVE_FAILURES && spanMs >= EPISODE_OPEN_SPAN_MS) {
               streak.episodeId = episodeIdFor(streak.firstFailureAt, runnerId);
               streak.openedAt = nowIso;
-              streak.deliveryState = emitOpen(streak, state.lastSuccessAt, nowIso) ? "open" : "open_pending";
+              // STATE-FIRST: persist the pending episode BEFORE any append, so
+              // the outbox can never hold an open event the state file does not
+              // know about. A crash between this write and the append leaves
+              // open_pending — retried below on the next poll; a crash between
+              // the append and the confirm-write is healed by the dedup.
+              streak.deliveryState = "open_pending";
+              writeState({ version: 1, runnerId, streak, lastSuccessAt: state.lastSuccessAt });
+              if (emitOpen(streak, state.lastSuccessAt, nowIso)) {
+                streak.deliveryState = "open";
+              }
             }
           } else if (streak.deliveryState === "open_pending") {
             // Retry the undelivered open event (counts updated silently since).
-            streak.deliveryState = emitOpen(streak, state.lastSuccessAt, nowIso) ? "open" : "open_pending";
+            if (emitOpen(streak, state.lastSuccessAt, nowIso)) streak.deliveryState = "open";
           }
           writeState({ version: 1, runnerId, streak, lastSuccessAt: state.lastSuccessAt });
         });
@@ -406,8 +491,20 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
             return;
           }
           if (!streak.episodeId) {
-            // Failures never became an episode; the streak is broken.
+            // Failures never became an episode; the streak is broken. The
+            // state-first ordering guarantees an open event in the outbox
+            // always has a matching open_pending/open episode in the state
+            // file, so clearing here can never orphan a delivered open.
             writeState(next);
+            return;
+          }
+          // A still-undelivered recovery (crash between the pending write and
+          // the append): finish it before anything else — this success cannot
+          // belong to the closed episode.
+          if (streak.deliveryState === "recovery_pending") {
+            if (emitRecovery(streak, nowIso)) {
+              writeState(next); // episode closed
+            }
             return;
           }
           // Deliver the open event BEFORE any recovery can be observed: a
@@ -422,11 +519,15 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
           }
           streak.consecutiveSuccesses = (streak.consecutiveSuccesses ?? 0) + 1;
           if (streak.consecutiveSuccesses >= EPISODE_CLOSE_SUCCESSES) {
+            // STATE-FIRST: persist recovery_pending BEFORE the append, so a
+            // crash between them leaves a retryable state rather than a lost
+            // recovery event.
+            streak.deliveryState = "recovery_pending";
+            writeState({ ...next, streak });
             if (emitRecovery(streak, nowIso)) {
               writeState(next); // episode closed
               return;
             }
-            streak.deliveryState = "recovery_pending"; // retried on the next poll
           }
           writeState({ ...next, streak });
         });

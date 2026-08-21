@@ -1196,11 +1196,16 @@ one when the plane recovers.
   recovery is never emitted before its still-undelivered open event.
 - **Exactly-once events**: the episode id is deterministic (derived from the
   streak's persisted `firstFailureAt` and the runner id), outbox appends are
-  idempotent per `(event, episodeId)`, and each state update runs under a
-  short-lived lock file — so a crash between append and state write re-derives
-  the same episode id and skips the duplicate append. Lock contention (a second
-  runner process on the same data dir) skips that update rather than waiting:
-  episode tracking never delays a poll.
+  idempotent per `(event, episodeId)` (bounded tail scan), and each state
+  update runs under a short-lived lock file. Delivery is **state-first**: the
+  pending episode (and pending recovery) is persisted BEFORE the outbox
+  append, so the outbox can never hold an event the state file does not know
+  about — every crash window converges to one open + one recovery event, with
+  the pending delivery retried on the next poll. Stale-lock takeover uses an
+  atomic rename (exactly one contender wins; a live holder's lock is never
+  deleted), and lock contention is a short bounded retry (µs-scale critical
+  sections) followed by skipping that update — episode tracking never
+  meaningfully delays a poll.
 - **Failure classes** are `connectivity | http_5xx | auth | contract | refusal`,
   derived only from safe signals (this package's own error types and the numeric
   HTTP status). Episode state and events never contain error text, request
