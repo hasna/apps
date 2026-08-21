@@ -127,6 +127,21 @@ jobs:
       - name: Deploy-lane gate (discoverable root, path-scoped, single-sourced)
         run: bun tooling/ci/check-deploy-lanes.ts
 
+      # Frozen-lockfile gate: the version wave (hasna/apps#717) and later
+      # release commits bumped manifests WITHOUT regenerating the per-app and
+      # root lockfiles, breaking every Docker deploy lane with "lockfile had
+      # changes, but lockfile is frozen" and leaving the root lockfile stale.
+      # bun's own frozen check does not flag workspace-package version/dep
+      # drift (measured on bun 1.2/1.3.14/1.4.0), so this gate compares the
+      # lockfiles against the manifests structurally. Self-test first: a gate
+      # whose patterns cannot fire reports a clean tree, and a clean tree is
+      # what success looks like.
+      - name: Frozen-lockfile gate self-test
+        run: bun tooling/ci/check-frozen-locks.ts --self-test
+
+      - name: Frozen-lockfile gate (root + per-app lockfiles match manifests)
+        run: bun tooling/ci/check-frozen-locks.ts
+
   # ---------------------------------------------------------------------------------
   # test-suites: the versioning + standard-adherence suites, wired as a HARD gate.
   #   test:versioning — hermetic versioning-integrity suite (test/versioning): package

@@ -129,6 +129,7 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   "data.iana.org", // provenance of the TLD snapshot in `src/tlds.ts`
   "json-schema.org", // the JSON Schema meta-schema every `$schema` declares
   "registry.npmjs.org", // the registry `publishConfig` publishes to
+  "www.postgresql.org", // the pg driver's documentation URL, bundled into dist/cli via the driver's error text
   // The one entry whose apex would have been the widest hole, which is why it is
   // pinned to the single host: the public CA bundle a generated app downloads to
   // verify a managed database's TLS certificate.

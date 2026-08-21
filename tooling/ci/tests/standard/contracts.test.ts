@@ -55,7 +55,7 @@ export interface ConformanceEntry {
  * the gate validate at the same effective version with the same invocation. */
 
 function buildReport(): { entries: ConformanceEntry[]; known: Set<string>; kitByMember: Map<string, string>; pinnedByMember: Map<string, string | undefined> } {
-  const known = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6"]);
+  const known = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6", "0.13.1"]);
   const entries: ConformanceEntry[] = [];
   const kitByMember = new Map<string, string>();
   const pinnedByMember = new Map<string, string | undefined>();
@@ -78,6 +78,22 @@ const report = buildReport();
 const byMember = new Map(report.entries.map((e) => [e.member, e]));
 
 describe("standard-adherence: contracts conformance", () => {
+  test("caret-ranged @hasna/contracts pins resolve to the pinned validator, not a caret-stripped exact version", () => {
+    // Regression (2026-08-21): members pinned ^0.13.0, the caret-strip turned
+    // the pin into the exact never-published 0.13.0, and bunx E404'd — the
+    // manifest gate refused 9 members ("cannot-run"). The raw pin must flow
+    // through so bunx resolves the range (0.13.1) against the registry.
+    expect(versionAtLeast("^0.13.0", "0.4.1")).toBe(true);
+    expect(versionAtLeast("~0.8.2", "0.4.1")).toBe(true);
+    expect(versionAtLeast("0.13.0", "0.4.1")).toBe(true);
+    expect(versionAtLeast("0.2.2", "0.4.1")).toBe(false);
+    const known = new Set(["0.4.1", "0.8.4", "0.13.1"]);
+    expect(resolveValidatorVersion("^0.13.0", "0.8.4", known)).toBe("^0.13.0");
+    expect(resolveValidatorVersion("0.13.1", "0.8.4", known)).toBe("0.13.1");
+    expect(resolveValidatorVersion(undefined, "0.8.4", known)).toBe("0.8.4");
+    expect(resolveValidatorVersion(undefined, "0.1.0", known)).toBe("latest");
+  });
+
   test("every publishable member carries hasna.contract.json (recorded exceptions allowed)", () => {
     const missing = publishableMembers()
       .filter((m) => !m.hasManifest)

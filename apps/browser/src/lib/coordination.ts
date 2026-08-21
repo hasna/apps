@@ -46,10 +46,10 @@ export async function announceNavigation(
   const hostname = (() => { try { return new URL(url).hostname; } catch { return url; } })();
 
   // Try conversations SDK
-  const sdk = await getConversationsSDK();
+  const sdk = (await getConversationsSDK()) as any;
   if (sdk?.sendMessage) {
     try {
-      await (sdk.sendMessage as any)(SPACE_NAME, `🌐 Navigating to ${hostname} (session: ${sessionId.slice(0, 8)})`);
+      await sdk.sendMessage(SPACE_NAME, `🌐 Navigating to ${hostname} (session: ${sessionId.slice(0, 8)})`);
     } catch {}
   }
 
@@ -76,10 +76,10 @@ export async function checkDuplicate(url: string): Promise<DuplicateCheck> {
   }
 
   // Try conversations SDK to check recent messages
-  const sdk = await getConversationsSDK();
+  const sdk = (await getConversationsSDK()) as any;
   if (sdk?.readMessages) {
     try {
-      const messages = await (sdk.readMessages as any)(SPACE_NAME, { limit: 20 });
+      const messages = await sdk.readMessages(SPACE_NAME, { limit: 20 });
       const recent = ((messages as any)?.messages ?? messages ?? []).filter((m: any) =>
         m.content?.includes(hostname) &&
         new Date(m.created_at).getTime() > cutoff
