@@ -140,30 +140,34 @@ describe("release bin artifacts", () => {
     requireSuccess(run("bun", ["run", "build"]), "bun run build");
   }, 120_000);
 
-  test("build emits executable bun bin files and package metadata preserves them", () => {
-    const pkg = readPackageJson();
-    const binEntries = Object.entries(pkg.bin ?? {});
-    expect(binEntries.length).toBeGreaterThan(0);
+  test(
+    "build emits executable bun bin files and package metadata preserves them",
+    () => {
+      const pkg = readPackageJson();
+      const binEntries = Object.entries(pkg.bin ?? {});
+      expect(binEntries.length).toBeGreaterThan(0);
 
-    for (const entry of pkg.files ?? []) {
-      expect(existsSync(join(repoRoot, entry))).toBe(true);
-    }
+      for (const entry of pkg.files ?? []) {
+        expect(existsSync(join(repoRoot, entry))).toBe(true);
+      }
 
-    const packResult = run("npm", ["pack", "--dry-run", "--json"]);
-    requireSuccess(packResult, "npm pack --dry-run --json");
-    const [pack] = JSON.parse(extractJsonArraySuffix(packResult.stdout)) as PackResult[];
-    const packedFiles = new Map(pack.files.map((file) => [file.path, file]));
+      const packResult = run("npm", ["pack", "--dry-run", "--json"]);
+      requireSuccess(packResult, "npm pack --dry-run --json");
+      const [pack] = JSON.parse(extractJsonArraySuffix(packResult.stdout)) as PackResult[];
+      const packedFiles = new Map(pack.files.map((file) => [file.path, file]));
 
-    for (const [, relativePath] of binEntries) {
-      const binPath = join(repoRoot, relativePath);
-      expect(readFileSync(binPath, "utf8").split("\n")[0]).toBe("#!/usr/bin/env bun");
-      expect(statSync(binPath).mode & 0o111).not.toBe(0);
+      for (const [, relativePath] of binEntries) {
+        const binPath = join(repoRoot, relativePath);
+        expect(readFileSync(binPath, "utf8").split("\n")[0]).toBe("#!/usr/bin/env bun");
+        expect(statSync(binPath).mode & 0o111).not.toBe(0);
 
-      const packedFile = packedFiles.get(relativePath);
-      expect(packedFile).toBeDefined();
-      expect(packedFile!.mode & 0o111).not.toBe(0);
-    }
-  });
+        const packedFile = packedFiles.get(relativePath);
+        expect(packedFile).toBeDefined();
+        expect(packedFile!.mode & 0o111).not.toBe(0);
+      }
+    },
+    120_000,
+  );
 
   test("calendar bin runs through its shebang", () => {
     const pkg = readPackageJson();

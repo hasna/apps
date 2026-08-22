@@ -404,7 +404,41 @@ function compactMembership(membership: OrgMembership) {
   return { id: membership.id, org_id: membership.org_id, agent_id: membership.agent_id, role: membership.role };
 }
 
+/**
+ * Classify early-exit arguments before any http-mode parse, server build, or
+ * stdio bind. --help/--version must answer with rc=0 and the MCP server never
+ * starts (binds-before-version class; calendar-mcp --version previously fell
+ * through to the stdio JSON-RPC loop and hung — BUG row 06003b88, same defect
+ * class as the serve bin's dd27cac0, which was fixed for calendar-serve only).
+ */
+function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
+  if (argv.includes("--help") || argv.includes("-h")) return "help";
+  if (argv.includes("--version") || argv.includes("-V")) return "version";
+  return "start";
+}
+
+function printHelp(): void {
+  console.log(`usage: calendar-mcp                       MCP server over stdio (default)
+       calendar-mcp --http [--port <n>]   Streamable-HTTP dev server (loopback)
+       calendar-mcp --version             Print the version
+
+options:
+  --help              show this help and exit
+  --version           print the package version and exit
+`);
+}
+
 async function main() {
+  const early = handleEarlyArgs(process.argv.slice(2));
+  if (early === "help") {
+    printHelp();
+    return;
+  }
+  if (early === "version") {
+    console.log(packageJson.version);
+    return;
+  }
+
   const { http, port } = parseHttpArgv();
   if (http) {
     const { serve } = await import("../server/serve.js");
