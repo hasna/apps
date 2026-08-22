@@ -35,6 +35,7 @@ import type {
 } from "../types/index.js";
 import { normalizeAgentNameInput } from "../lib/agent-name-normalize.js";
 import { canonicalAgentRef } from "../lib/creator-identity.js";
+import { changedSinceStampNewer } from "../lib/instant-compare.js";
 import type {
   ActiveWorkItem,
   TodosActiveWorkFilter,
@@ -2844,7 +2845,7 @@ async function getActiveWork(filters: TodosActiveWorkFilter | undefined, store: 
 }
 
 async function getChangedSince(since: string, filters: TodosActiveWorkFilter | undefined, store: PostgresJsonRecordStore): Promise<Task[]> {
-  return (await listTasks(filters ?? {}, store)).filter((task) => task.updated_at > since);
+  return (await listTasks(filters ?? {}, store)).filter((task) => changedSinceStampNewer(task.updated_at ?? "", since));
 }
 
 async function createProject(input: CreateProjectInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Project> {
