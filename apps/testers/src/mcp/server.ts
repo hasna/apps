@@ -2000,12 +2000,20 @@ server.tool(
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
 
       // Detect changed files from git diff
-      const { execSync } = await import("child_process");
+      const { execFileSync } = await import("child_process");
+      const ref = baseRef ?? "HEAD";
+      // baseRef is MCP-caller-supplied. Allowlist it so it can never carry shell
+      // metacharacters (`;`, `|`, backticks, `$()`) into a command — previously
+      // interpolated into execSync, which runs via /bin/sh (command injection,
+      // todos 970bf61f).
+      if (!/^[A-Za-z0-9._\-\/]+$/.test(ref)) {
+        return errorResponse(new Error(`Invalid baseRef: must match /^[A-Za-z0-9._\\-\\/]+$/ (got ${JSON.stringify(ref)})`));
+      }
       let diffOutput = "";
       try {
-        const ref = baseRef ?? "HEAD";
-        const stagedOut = execSync(`git diff --cached --name-only`, { cwd: process.cwd(), encoding: "utf-8" }).trim();
-        const unstagedOut = execSync(`git diff --name-only ${ref}`, { cwd: process.cwd(), encoding: "utf-8" }).trim();
+        // shell:false — ref reaches git as one literal argv entry, never a shell string.
+        const stagedOut = execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: process.cwd(), encoding: "utf-8" }).trim();
+        const unstagedOut = execFileSync("git", ["diff", "--name-only", ref], { cwd: process.cwd(), encoding: "utf-8" }).trim();
         diffOutput = [stagedOut, unstagedOut].filter(Boolean).join("\n");
       } catch {
         return json({ skipped: true, reason: "git diff failed — not a git repository or git not available" });
