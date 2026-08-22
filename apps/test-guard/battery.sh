@@ -233,14 +233,15 @@ ck "queue-del recovery" "$(cat "$W/g5rc")" "0"
 # guard-dir sentinel.log, and a clobbered install would have auto-rearmed the
 # LIVE wrapper and bun-real mid-battery. Every sentinel invocation below
 # drives the temp wrapper copy $W/pass-bun-wrapper and the temp real-bun copy
-# $W/pass-bun-real plus a temp guard dir; the canary probe execs the real bun
-# through the wrapper (read-only, as in sections 16/17).
+# $W/pass-bun-real plus a temp guard dir; HASNA_TEST_GUARD_REAL redirects the
+# temp wrapper's own REAL (bun-wrapper.sh test-only override) so even the
+# canary probe execs the temp copy, never the live bun-real.
 mkdir -p "$W/g-pass/slots"
 cp "$WRAPPER_SOURCE" "$W/pass-bun-wrapper"
 chmod +x "$W/pass-bun-wrapper"
 cp "$BR" "$W/pass-bun-real" 2>/dev/null || cp "$(command -v bun)" "$W/pass-bun-real"
 chmod +x "$W/pass-bun-real"
-ck "sentinel pass" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-pass" SENTINEL_REAL_BUN="$W/pass-bun-real" SENTINEL_PINNED_URL="file://$W/no-pin-pass" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
+ck "sentinel pass" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-pass" SENTINEL_REAL_BUN="$W/pass-bun-real" HASNA_TEST_GUARD_REAL="$W/pass-bun-real" SENTINEL_PINNED_URL="file://$W/no-pin-pass" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
 # The unscoped-wrapper and marker-tamper fixtures moved to hermetic temp
 # copies: with auto-rearm (row 7112181b) the sentinel HEALS a repairable
 # clobber (section 17), and the old fixtures pointed at LIVE paths
@@ -254,9 +255,9 @@ cp "$BR" "$W/tamper-bun" 2>/dev/null || cp "$(command -v bun)" "$W/tamper-bun"
 chmod +x "$W/tamper-bun"
 ck "sentinel fails closed on marker-tamper ELF" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-tamper2" SENTINEL_REAL_BUN="$W/no-real2" SENTINEL_PINNED_URL="file://$W/no-pin2" SENTINEL_PINNED_SHA256="0000000000000000000000000000000000000000000000000000000000000000" "$SEN" "$W/tamper-bun" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 mkdir -p "$W/g6/slots" "$W/g6/queue"; : > "$W/g6/queue/not-a-ticket"
-ck "sentinel junk survives" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
+ck "sentinel junk survives" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" HASNA_TEST_GUARD_REAL="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
 : > "$W/g6/queue/$(( $(date +%s%N) - 2200000000000 )).$$"
-ck "sentinel wedge alerts" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
+ck "sentinel wedge alerts" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" HASNA_TEST_GUARD_REAL="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 
 # 16 sentinel classifies canary failures per state (ac4558ab). The probe's
 # exit code has THREE causes that previously collapsed into one 'NOT ENGAGED'

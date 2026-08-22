@@ -126,6 +126,26 @@ fi
 rm -rf "$SYMLINK_DIR"
 [ "$SYMLINK_FAIL" = "0" ] && echo "PASS cli-version-symlink: --version resolves through a bin symlink to the package.json beside the real script"
 
+# Regression (review cycle 2): the wrapper's REAL must honor the TEST-ONLY
+# HASNA_TEST_GUARD_REAL override, so hermetic battery runs never exec the
+# live bun-real; the production default is unchanged. Red-before: hardcoded
+# REAL ignores the env; green-after: the override is honored. Skipped on a
+# host without the fleet layout, like the s16/s17 assertions.
+REAL_OVERRIDE_FAIL=0
+REALOVR=$(mktemp -d /tmp/tg-realovr.XXXXXX)
+if cp "$FLEET_REAL" "$REALOVR/bun-real" 2>/dev/null && chmod +x "$REALOVR/bun-real"; then
+  OVR_VERSION=$(HASNA_TEST_GUARD_REAL="$REALOVR/bun-real" "$HERE/bun-wrapper.sh" --version 2>/dev/null | head -1)
+  EXPECTED_VERSION=$("$REALOVR/bun-real" --version 2>/dev/null | head -1)
+  if [ "$OVR_VERSION" != "$EXPECTED_VERSION" ]; then
+    echo "FAIL wrapper-real-override: HASNA_TEST_GUARD_REAL not honored — wrapper reported '$OVR_VERSION', expected '$EXPECTED_VERSION'" >&2
+    REAL_OVERRIDE_FAIL=1
+  fi
+else
+  echo "SKIP wrapper-real-override: no real bun to copy ($FLEET_REAL missing or not executable)"
+fi
+rm -rf "$REALOVR"
+[ "$REAL_OVERRIDE_FAIL" = "0" ] && echo "PASS wrapper-real-override: HASNA_TEST_GUARD_REAL honored; production default unchanged"
+
 RUNNER="$(mktemp /tmp/tg-smoke.XXXXXX)"
 trap 'rm -f "$RUNNER"' EXIT
 
@@ -155,7 +175,7 @@ export BUN_TEST_GUARD_WRAPPER_SOURCE="$HERE/bun-wrapper.sh"
 
 bash "$RUNNER"
 RC=$?
-if [ "$CLOUD_GUARD_FAIL" = "1" ] || [ "$CLI_FAIL" = "1" ] || [ "$DERIVE_FAIL" = "1" ] || [ "$SYMLINK_FAIL" = "1" ]; then
+if [ "$CLOUD_GUARD_FAIL" = "1" ] || [ "$CLI_FAIL" = "1" ] || [ "$DERIVE_FAIL" = "1" ] || [ "$SYMLINK_FAIL" = "1" ] || [ "$REAL_OVERRIDE_FAIL" = "1" ]; then
   exit 1
 fi
 exit "$RC"
