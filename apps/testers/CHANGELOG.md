@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.103
+
+### Patch Changes
+
+- @hasna/browser@0.5.28
+- @hasna/projects@0.1.144
+
 ## 0.0.102
 
 ### Patch Changes
@@ -25,7 +32,7 @@
 - 87a1d23: fix: signPayload emits real HMAC-SHA256, not a forgeable rolling hash (bug 36580bf2)
 - 2c933a8: fix: run_for_diff passes caller baseRef as literal argv, never a shell string (bug 970bf61f)
 - 166a154: fix: hosted personas listPersonas honors limit/offset on the pg path (bug e920ef6a)
-- da762a0: fix: gate legacy /api/* with API-key auth in cloud mode; loopback bind by default (bug edec8757)
+- da762a0: fix: gate legacy /api/\* with API-key auth in cloud mode; loopback bind by default (bug edec8757)
 - 933cbe9: fix: bake RDS global CA bundle so sslmode=require TLS to shared RDS verifies
 - 5989eed: fix: pin @hasna/browser to published 0.5.16
 - 4bc89b3: fix: Dockerfile no longer requires a nonexistent bun.lock
