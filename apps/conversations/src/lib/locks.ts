@@ -57,7 +57,7 @@ export function acquireLock(
       WHERE resource_type = ? AND resource_id = ?
       ORDER BY CASE WHEN lock_type = ? THEN 0 ELSE 1 END, locked_at ASC
     `).all(resourceType, resourceId, lockType) as ResourceLock[];
-    const conflicting = existingLocks.find((lock) => lock.agent_id !== agentId);
+    const conflicting = existingLocks.find((lock) => lock.agent_id.toLowerCase() !== agentId.toLowerCase());
 
     if (conflicting) {
       return { acquired: false, lock: null, held_by: conflicting.agent_id };
@@ -105,7 +105,7 @@ export function bulkAcquireLock(
         WHERE resource_type = ? AND resource_id = ?
         ORDER BY CASE WHEN lock_type = ? THEN 0 ELSE 1 END, locked_at ASC
       `).all(resource_type, resource_id, lock_type) as ResourceLock[];
-      const conflicting = existingLocks.find((lock) => lock.agent_id !== agentId);
+      const conflicting = existingLocks.find((lock) => lock.agent_id.toLowerCase() !== agentId.toLowerCase());
 
       if (conflicting) {
         // Conflict — abort the entire transaction by throwing (SQLite rolls back)
@@ -166,7 +166,7 @@ export function releaseLock(
   const db = getDb();
   const result = db.prepare(`
     DELETE FROM resource_locks
-    WHERE resource_type = ? AND resource_id = ? AND agent_id = ?
+    WHERE resource_type = ? AND resource_id = ? AND LOWER(agent_id) = LOWER(?)
   `).run(resourceType, resourceId, agentId);
   return result.changes > 0;
 }
@@ -220,7 +220,7 @@ export function listLocks(opts?: { resource_type?: string; agent_id?: string }):
     params.push(opts.resource_type);
   }
   if (opts?.agent_id) {
-    query += " AND agent_id = ?";
+    query += " AND LOWER(agent_id) = LOWER(?)";
     params.push(opts.agent_id);
   }
 

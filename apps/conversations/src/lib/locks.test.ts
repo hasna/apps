@@ -49,6 +49,14 @@ describe("acquireLock", () => {
     expect(result.held_by).toBeUndefined();
   });
 
+  test("same agent with casing drift re-acquiring refreshes (case-insensitive holder identity)", () => {
+    acquireLock("channel", "casing-room", "Silvanus");
+    const result = acquireLock("channel", "casing-room", "silvanus");
+    expect(result.acquired).toBe(true);
+    expect(result.held_by).toBeUndefined();
+    expect(checkLock("channel", "casing-room")!.agent_id).toBe("Silvanus");
+  });
+
   test("different agent blocked by existing lock", () => {
     acquireLock("channel", "general", "agent-1");
     const result = acquireLock("channel", "general", "agent-2");
@@ -101,6 +109,13 @@ describe("releaseLock", () => {
     const released = releaseLock("channel", "general", "agent-1");
     expect(released).toBe(true);
     expect(checkLock("channel", "general")).toBeNull();
+  });
+
+  test("releases lock when agent casing drifts", () => {
+    acquireLock("channel", "casing-release", "Silvanus");
+    const released = releaseLock("channel", "casing-release", "silvanus");
+    expect(released).toBe(true);
+    expect(checkLock("channel", "casing-release")).toBeNull();
   });
 
   test("returns false if agent doesn't hold the lock", () => {
@@ -285,6 +300,13 @@ describe("listLocks", () => {
     expect(agentLocks).toHaveLength(1);
     expect(agentLocks[0].agent_id).toBe("agent-1");
   });
+
+  test("filters by agent_id case-insensitively", () => {
+    acquireLock("channel", "casing-list", "Silvanus");
+    const agentLocks = listLocks({ agent_id: "silvanus" });
+    expect(agentLocks).toHaveLength(1);
+    expect(agentLocks[0].agent_id).toBe("Silvanus");
+  });
 });
 
 describe("listLocksEnriched", () => {
@@ -394,6 +416,18 @@ describe("tryBulkAcquireLock", () => {
       { resource_type: "channel", resource_id: "bulk-owned-a" },
       { resource_type: "channel", resource_id: "bulk-owned-b" },
     ], "self-agent");
+
+    expect(result.acquired).toBe(true);
+    expect(result.locks).toHaveLength(2);
+  });
+
+  test("same agent with casing drift re-acquiring owned locks succeeds", () => {
+    acquireLock("channel", "bulk-casing-a", "BulkAgent");
+
+    const result = tryBulkAcquireLock([
+      { resource_type: "channel", resource_id: "bulk-casing-a" },
+      { resource_type: "channel", resource_id: "bulk-casing-b" },
+    ], "bulkagent");
 
     expect(result.acquired).toBe(true);
     expect(result.locks).toHaveLength(2);

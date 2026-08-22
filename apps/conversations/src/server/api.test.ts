@@ -70,10 +70,19 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         let rows = resourceLocks.slice();
         const resourceTypeParam = sql.match(/(?:l\.)?resource_type = \$(\d+)/i);
         const resourceIdParam = sql.match(/(?:l\.)?resource_id = \$(\d+)/i);
-        const agentIdParam = sql.match(/(?:l\.)?agent_id = \$(\d+)/i);
+        // Holder-identity filters mirror the SQL shape: LOWER() comparisons are
+        // case-insensitive (the server's canonical form since 13425e5c), the
+        // bare `agent_id = $n` form is case-sensitive like Postgres.
+        const lowerAgentIdParam = sql.match(/LOWER\((?:l\.)?agent_id\)\s*=\s*LOWER\(\$(\d+)\)/i);
+        const exactAgentIdParam = sql.match(/(?:l\.)?agent_id = \$(\d+)/i);
         if (resourceTypeParam) rows = rows.filter((row) => row.resource_type === _p[Number(resourceTypeParam[1]) - 1]);
         if (resourceIdParam) rows = rows.filter((row) => row.resource_id === _p[Number(resourceIdParam[1]) - 1]);
-        if (agentIdParam) rows = rows.filter((row) => row.agent_id === _p[Number(agentIdParam[1]) - 1]);
+        if (lowerAgentIdParam) {
+          const agentParam = String(_p[Number(lowerAgentIdParam[1]) - 1]).toLowerCase();
+          rows = rows.filter((row) => String(row.agent_id).toLowerCase() === agentParam);
+        } else if (exactAgentIdParam) {
+          rows = rows.filter((row) => row.agent_id === _p[Number(exactAgentIdParam[1]) - 1]);
+        }
         rows.sort((a, b) => String(a.locked_at).localeCompare(String(b.locked_at)));
         if (/LEFT JOIN agent_presence/i.test(sql)) {
           const now = Date.now();
@@ -220,6 +229,21 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
         }
         return { rows: [], rowCount: before - resourceLocks.length };
       }
+      // Canonical release SQL since 13425e5c: LOWER() holder compare (case-insensitive).
+      if (/DELETE FROM resource_locks WHERE resource_type = \$1 AND resource_id = \$2 AND LOWER\(agent_id\) = LOWER\(\$3\)/i.test(sql)) {
+        const [resourceType, resourceId, agentId] = p as any[];
+        const before = resourceLocks.length;
+        const agentParam = String(agentId).toLowerCase();
+        for (let index = resourceLocks.length - 1; index >= 0; index--) {
+          const row = resourceLocks[index];
+          if (row.resource_type === resourceType && row.resource_id === resourceId && String(row.agent_id).toLowerCase() === agentParam) {
+            resourceLocks.splice(index, 1);
+          }
+        }
+        return { rows: [], rowCount: before - resourceLocks.length };
+      }
+      // Pre-13425e5c exact-match shape, kept as a mirror: Postgres `agent_id = $3`
+      // is case-sensitive, so this branch filters case-sensitively.
       if (/DELETE FROM resource_locks WHERE resource_type = \$1 AND resource_id = \$2 AND agent_id = \$3/i.test(sql)) {
         const [resourceType, resourceId, agentId] = p as any[];
         const before = resourceLocks.length;
@@ -1446,6 +1470,71 @@ describe("conversations-serve", () => {
 
       expect(await store.checkLock(resourceType, oldResourceId)).toBeNull();
       expect(await store.listLocksEnriched({ agent_id: "another-agent" })).toEqual([]);
+    } finally {
+      lockServer.stop(true);
+    }
+  });
+
+  // Regression cover for todos 13425e5c: the cycle-0 fix normalized holder
+  // identity in the local SQLite store only. The hosted path compared holder
+  // identity case-sensitively on the fleet's DEFAULT lock route — release
+  // (`AND agent_id = $3`), bulk/single acquire conflict (`l.agent_id !== aid`),
+  // and the GET /locks agent filter (`l.agent_id = $n`) — so one agent whose
+  // --from casing drifts conflicted with itself (acquired:false), could not
+  // release its own lock, and was invisible to its own list filter. The server
+  // already normalizes with LOWER() in releaseStaleLocks and the enriched
+  // agent_presence join; these cases must behave identically on both backends.
+  test("hosted locks treat holder identity case-insensitively across acquire refresh, list filter, and release", async () => {
+    const lockClient = makeFakeClient();
+    const lockKeys = new ApiKeyStore(lockClient as any);
+    const lockVerifier = verifyApiKey({
+      app: "conversations",
+      signingSecret: SIGNING,
+      keyStatus: async (): Promise<ApiKeyStatus> => "active",
+    });
+    const lockServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: { client: lockClient as any, keys: lockKeys, verifier: lockVerifier },
+    });
+    const lockBase = `http://127.0.0.1:${lockServer.port}`;
+    const lockKey = mintApiKey({
+      app: "conversations",
+      agent: "severianus",
+      scopes: ["conversations:read", "conversations:write"],
+      signingSecret: SIGNING,
+    }).token;
+    const store = new ApiStore(createHasnaStorageClient("conversations", createHasnaHttpTransport({
+      name: "conversations",
+      baseUrl: `${lockBase}/v1`,
+      apiKey: lockKey,
+      retry: false,
+    })));
+    const resourceType = "pull_request";
+    const resourceId = "github/hasnaxyz/iapp-infra/pull/casing-drift";
+
+    try {
+      // Acquire refresh: same agent with casing drift re-acquiring refreshes
+      // instead of conflicting with itself; the holder keeps its original casing.
+      const first = await store.acquireLock(resourceType, resourceId, "Silvanus", "exclusive", 20 * 60 * 1000);
+      expect(first).toMatchObject({ acquired: true });
+      const second = await store.acquireLock(resourceType, resourceId, "silvanus", "exclusive", 20 * 60 * 1000);
+      expect(second).toMatchObject({ acquired: true });
+      expect((second as any).lock?.agent_id).toBe("Silvanus");
+
+      // List filter: agent_id matches the holder regardless of casing — and the
+      // filter is proven to apply by the negative control (another agent sees nothing).
+      const listed = await store.listLocks({ agent_id: "silvanus" });
+      expect(listed.map((lock: any) => lock.resource_id)).toEqual([resourceId]);
+      const listedEnriched = await store.listLocksEnriched({ agent_id: "SILVANUS" });
+      expect(listedEnriched.map((lock: any) => lock.resource_id)).toEqual([resourceId]);
+      expect(await store.listLocks({ agent_id: "another-agent" })).toEqual([]);
+      expect(await store.listLocksEnriched({ agent_id: "another-agent" })).toEqual([]);
+
+      // Release: a casing-drifted agent releases its own lock.
+      const released = await store.releaseLock(resourceType, resourceId, "silvanus");
+      expect(released).toBe(true);
+      expect(await store.checkLock(resourceType, resourceId)).toBeNull();
     } finally {
       lockServer.stop(true);
     }
