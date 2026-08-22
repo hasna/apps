@@ -51,7 +51,7 @@ function getAuth(): ApiKeyVerifier {
   verifierSingleton = verifyApiKey({
     app: APP_NAME,
     signingSecret: secret,
-    isRevoked: (kid) => storeSingleton!.isRevoked(kid),
+    keyStatus: (kid) => storeSingleton!.keyStatus(kid),
     audit: (e) => {
       if (e.outcome === "deny") {
         console.warn(`[testers-serve] auth deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`);
@@ -71,7 +71,7 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
 }
 
 /** Authenticate; returns null on success, or a Response to short-circuit. */
-async function authenticate(
+export async function authenticate(
   req: Request,
   method: string,
   pathname: string,

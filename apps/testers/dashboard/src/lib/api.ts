@@ -1,11 +1,27 @@
 import type { Scenario, Run, Result, Screenshot, Schedule, ApiCheck, ApiCheckResult, Project, Environment, Persona, TestingWorkflow } from "../types";
 
 const BASE = "/api";
+const API_KEY_STORAGE_KEY = "testers-api-key";
+
+// In cloud mode the legacy /api/* surface requires the same API key as /v1.
+// The operator stores the key in localStorage (the dashboard prompts for it
+// when the server injects window.__TESTERS_CONFIG__.authRequired); when a key
+// is present it is sent as `x-api-key` and `Authorization: Bearer`, the two
+// forms the contracts verifier accepts.
+function storedApiKey(): string | null {
+  if (typeof localStorage === "undefined") return null;
+  return localStorage.getItem(API_KEY_STORAGE_KEY);
+}
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const key = storedApiKey();
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(key ? { "x-api-key": key, Authorization: `Bearer ${key}` } : {}),
+      ...init?.headers,
+    },
   });
   if (!res.ok) {
     const text = await res.text();

@@ -23,7 +23,8 @@ import { PersonaNotFoundError } from "../types/index.js";
 import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
-import { handleV1 } from "./v1.js";
+import { handleV1, authenticate } from "./v1.js";
+import { databaseUrlPresent } from "../db/cloud.js";
 
 const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
@@ -93,6 +94,25 @@ const CONTENT_TYPES: Record<string, string> = {
 function getContentType(filePath: string): string {
   const ext = filePath.slice(filePath.lastIndexOf("."));
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
+
+/**
+ * Marker injected into the served dashboard HTML so the SPA knows the legacy
+ * /api/* surface requires an API key in cloud (Postgres) mode. Carries no
+ * secret — the key itself is operator-supplied (stored in the browser).
+ */
+function dashboardAuthMarker(): string {
+  return databaseUrlPresent()
+    ? '<script>window.__TESTERS_CONFIG__={authRequired:true}</script>'
+    : "";
+}
+
+function injectDashboardConfig(html: string): string {
+  const marker = dashboardAuthMarker();
+  if (!marker || html.includes("__TESTERS_CONFIG__")) return html;
+  return html.includes("</head>")
+    ? html.replace("</head>", `${marker}</head>`)
+    : `${marker}${html}`;
 }
 
 // ─── Zod schemas ────────────────────────────────────────────────────────────
@@ -272,6 +292,18 @@ async function handleRequest(req: Request): Promise<Response> {
   // Takes precedence over the legacy SQLite dashboard routes below.
   const v1Response = await handleV1(req, pathname, method, searchParams);
   if (v1Response) return v1Response;
+
+  // ── Legacy /api/* requires the same API-key auth in cloud (Postgres) mode ─
+  // In cloud mode the legacy surface previously dispatched with NO auth, so an
+  // unauthenticated remote attacker could POST /api/workflows with an
+  // `execution.setupCommand` that runs verbatim in the e2b/docker sandbox that
+  // receives the dataset API key. Local SQLite mode stays open because the
+  // server binds loopback by default (TESTERS_HOST); a deployed service sets
+  // TESTERS_HOST=0.0.0.0 and is protected by this gate.
+  if (pathname.startsWith("/api/") && databaseUrlPresent()) {
+    const authError = await authenticate(req, method, pathname);
+    if (authError) return authError;
+  }
 
   // ── API Routes ──────────────────────────────────────────────────────────
 
@@ -1199,7 +1231,8 @@ async function handleRequest(req: Request): Promise<Response> {
 
     if (!existsSync(dashboardDir)) {
       return new Response(
-        `<!DOCTYPE html>
+        injectDashboardConfig(
+          `<!DOCTYPE html>
 <html>
 <head><title>Hasna Testers</title></head>
 <body style="font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0a0a0a; color: #fafafa;">
@@ -1209,6 +1242,7 @@ async function handleRequest(req: Request): Promise<Response> {
   </div>
 </body>
 </html>`,
+        ),
         {
           status: 200,
           headers: {
@@ -1222,6 +1256,15 @@ async function handleRequest(req: Request): Promise<Response> {
     // Try to serve the requested file
     const filePath = join(dashboardDir, pathname === "/" ? "index.html" : pathname);
     if (existsSync(filePath)) {
+      if (getContentType(filePath) === "text/html") {
+        const html = injectDashboardConfig(await Bun.file(filePath).text());
+        return new Response(html, {
+          headers: {
+            "Content-Type": "text/html",
+            "Access-Control-Allow-Origin": "*",
+          },
+        });
+      }
       const file = Bun.file(filePath);
       return new Response(file, {
         headers: {
@@ -1234,8 +1277,8 @@ async function handleRequest(req: Request): Promise<Response> {
     // SPA fallback — serve index.html for any unmatched route
     const indexPath = join(dashboardDir, "index.html");
     if (existsSync(indexPath)) {
-      const file = Bun.file(indexPath);
-      return new Response(file, {
+      const html = injectDashboardConfig(await Bun.file(indexPath).text());
+      return new Response(html, {
         headers: {
           "Content-Type": "text/html",
           "Access-Control-Allow-Origin": "*",
@@ -1261,7 +1304,13 @@ process.on("uncaughtException", (err) => {
   console.error(`[testers-serve] Uncaught exception: ${err.stack ?? err.message}`);
 });
 
+// Loopback by default: local SQLite dashboard use stays open without a key
+// while the all-interfaces exposure closes. A deployed service (docker-compose,
+// ECS) sets TESTERS_HOST=0.0.0.0 and is protected by the /api/* auth gate.
+const hostname = process.env.TESTERS_HOST ?? "127.0.0.1";
+
 const server = Bun.serve({
+  hostname,
   port,
   fetch: handleRequest,
   error(err: Error) {
@@ -1270,4 +1319,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Hasna Testers server running at http://localhost:${server.port}`);
+console.log(`Hasna Testers server running at http://${hostname}:${server.port}`);
