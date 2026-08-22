@@ -842,11 +842,22 @@ export function logRunnerCommandFailure(error: unknown): void {
     evt: "loops_runner_command_failed",
     errorType: error instanceof Error ? "error" : typeof error,
   };
-  // Refusals this package raises itself carry static, safe-by-construction
-  // messages (no provider detail, no credentials), so the reason is surfaced:
-  // a runner that fails every poll with only errorType is an undiagnosable
-  // monitor. Foreign errors keep the opaque line — their message field is
-  // exactly where credentials have been observed to live (connection strings).
-  if (error instanceof RunnerRefusalError) line.message = error.message.slice(0, 500);
+  // Messages surface for every error class — a runner that fails every poll
+  // with only errorType is an undiagnosable monitor, and foreign errors are
+  // exactly where the diagnosable reason lives (e.g. a wrong_token_kind 403
+  // from the API via postJson). Credential safety is preserved by the
+  // redactor below: URL userinfo — the place connection-string credentials
+  // have been observed to live — is stripped while the host survives.
+  // Non-Error throws fall back to String(). Bounded to 500.
+  const raw = error instanceof Error ? error.message : String(error);
+  line.message = redactUrlCredentials(raw).slice(0, 500);
   console.error(JSON.stringify(line));
+}
+
+/** Strip scheme://user:pass@host userinfo so the host survives and the
+ *  credential span is dropped: postgres://user:secret@db.internal/loops →
+ *  postgres://db.internal/loops. A raw @ inside userinfo must be
+ *  percent-encoded per RFC 3986, so the first literal @ is the delimiter. */
+function redactUrlCredentials(value: string): string {
+  return value.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1");
 }
