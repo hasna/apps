@@ -135,7 +135,14 @@ function buildLocalServe() {
     `@hasna/logs server running on http://localhost:${PORT} (api auth: ${apiAuthMode})`,
   );
 
-  return { port: PORT, fetch: app.fetch };
+  const serveExport: { port: number; hostname?: string; fetch: typeof app.fetch } = {
+    port: PORT,
+    fetch: app.fetch,
+  };
+  // Local-open trusts only loopback peers (see auth.ts); binding the socket to
+  // loopback is defense in depth so the server is unreachable from the LAN.
+  if (apiAuthMode === "local-open") serveExport.hostname = "127.0.0.1";
+  return serveExport;
 }
 
 const serveExport = cloudMode ? buildCloudServe(PORT) : buildLocalServe();

@@ -113,12 +113,14 @@ export function isLocalOpenModeEnabled(): boolean {
 }
 
 export function isTrustedLocalRequest(c: Context): boolean {
+  // The socket peer is the trust gate: "trusted local" means the connection
+  // itself arrived over loopback. Host headers are client-supplied and must
+  // never be the basis for the decision.
+  if (!hasLoopbackPeer(c)) return false;
   const url = new URL(c.req.url);
-  const hosts = [
-    hostWithoutPort(c.req.header("host")),
-    url.hostname,
-    ...forwardedHosts(c.req.header("x-forwarded-host")),
-  ].filter((host): host is string => Boolean(host));
+  const hosts = [hostWithoutPort(c.req.header("host")), url.hostname].filter(
+    (host): host is string => Boolean(host),
+  );
 
   return (
     hosts.length > 0 &&
@@ -127,19 +129,35 @@ export function isTrustedLocalRequest(c: Context): boolean {
   );
 }
 
+/**
+ * Resolve the socket peer of the request from the Bun server (the second
+ * fetch argument, exposed as `c.env` by the Bun adapter). A null/undefined
+ * peer — no evidence — fails closed.
+ */
+function hasLoopbackPeer(c: Context): boolean {
+  const env = c.env as Record<string, unknown> | undefined;
+  if (!env) return false;
+  const candidate = "server" in env ? env.server : env;
+  if (typeof candidate !== "object" || candidate === null) return false;
+  const server = candidate as {
+    requestIP?: (req: Request) => { address: string } | null;
+  };
+  // Bun's Server.requestIP is a bound method (throws ERR_INVALID_THIS when
+  // detached), so call it on the server object.
+  if (typeof server.requestIP !== "function") return false;
+  const peer = server.requestIP(c.req.raw);
+  if (!peer) return false;
+  return (
+    peer.address === "127.0.0.1" ||
+    peer.address === "::1" ||
+    peer.address === "::ffff:127.0.0.1"
+  );
+}
+
 function hostWithoutPort(value: string | undefined): string | null {
   if (!value) return null;
   if (value.startsWith("[")) return value.slice(1, value.indexOf("]"));
   return value.split(":")[0] || null;
-}
-
-function forwardedHosts(value: string | undefined): string[] {
-  return (
-    value
-      ?.split(",")
-      .map((host) => hostWithoutPort(host.trim()))
-      .filter((host): host is string => Boolean(host)) ?? []
-  );
 }
 
 function isLocalOrigin(origin: string | undefined): boolean {

@@ -54,6 +54,23 @@ function probeHarness(
   return app;
 }
 
+/** Mock Bun server carrying the socket peer of a request (requestIP contract). */
+type MockPeer = { address: string; port: number; family: string };
+function peerServer(peer: MockPeer | null) {
+  return { requestIP: () => peer };
+}
+
+const LOOPBACK_ENV = {
+  server: peerServer({ address: "127.0.0.1", port: 51234, family: "IPv4" }),
+};
+const MAPPED_LOOPBACK_ENV = {
+  server: peerServer({ address: "::ffff:127.0.0.1", port: 51234, family: "IPv6" }),
+};
+const REMOTE_ENV = {
+  server: peerServer({ address: "192.168.50.230", port: 51234, family: "IPv4" }),
+};
+const NO_PEER_ENV = { server: peerServer(null) };
+
 const REQUEST_OPTS = {
   method: "GET",
   headers: { host: "localhost:3000" },
@@ -75,7 +92,7 @@ describe("getConfiguredApiToken", () => {
 describe("isApiRequestAuthorized", () => {
   it("rejects without a token when local-open is off, even on loopback", async () => {
     const app = probeHarness((c) => isApiRequestAuthorized(c));
-    const res = await app.request("/probe", REQUEST_OPTS);
+    const res = await app.request("/probe", REQUEST_OPTS, LOOPBACK_ENV);
     expect(((await res.json()) as { verdict: unknown }).verdict).toBe(false);
   });
 
@@ -108,72 +125,116 @@ describe("isApiRequestAuthorized", () => {
   it("allows loopback only when local-open mode is explicitly enabled", async () => {
     const app = probeHarness((c) => isApiRequestAuthorized(c));
     process.env.HASNA_LOGS_LOCAL_OPEN = "1";
-    const res = await app.request("/probe", REQUEST_OPTS);
+    const res = await app.request("/probe", REQUEST_OPTS, LOOPBACK_ENV);
     expect(((await res.json()) as { verdict: unknown }).verdict).toBe(true);
     process.env.HASNA_LOGS_LOCAL_OPEN = "0";
-    const off = await app.request("/probe", REQUEST_OPTS);
+    const off = await app.request("/probe", REQUEST_OPTS, LOOPBACK_ENV);
     expect(((await off.json()) as { verdict: unknown }).verdict).toBe(false);
+  });
+
+  it("rejects a spoofed-Host request from a non-loopback peer even with local-open", async () => {
+    const app = probeHarness((c) => isApiRequestAuthorized(c));
+    process.env.HASNA_LOGS_LOCAL_OPEN = "1";
+    const res = await app.request("/probe", REQUEST_OPTS, REMOTE_ENV);
+    expect(((await res.json()) as { verdict: unknown }).verdict).toBe(false);
   });
 });
 
 describe("isTrustedLocalRequest", () => {
-  it("accepts localhost, 127.0.0.1, and ::1 hosts", async () => {
+  it("accepts localhost, 127.0.0.1, and ::1 hosts from a loopback peer", async () => {
     const app = probeHarness((c) => isTrustedLocalRequest(c));
     for (const host of ["localhost", "127.0.0.1", "::1", "localhost:3000"]) {
-      const res = await app.request("/probe", {
-        method: "GET",
-        headers: { host },
-      });
+      const res = await app.request(
+        "/probe",
+        { method: "GET", headers: { host } },
+        LOOPBACK_ENV,
+      );
       expect(((await res.json()) as { verdict: unknown }).verdict).toBe(true);
     }
   });
 
-  it("rejects remote hosts and any non-local member of the x-forwarded-host chain", async () => {
+  it("rejects remote hosts even from a loopback peer", async () => {
     const app = probeHarness((c) => isTrustedLocalRequest(c));
-    const remote = await app.request("/probe", {
-      method: "GET",
-      headers: { host: "logs.example.com" },
-    });
+    const remote = await app.request(
+      "/probe",
+      { method: "GET", headers: { host: "logs.example.com" } },
+      LOOPBACK_ENV,
+    );
     expect(((await remote.json()) as { verdict: unknown }).verdict).toBe(false);
+  });
 
-    const chain = await app.request("/probe", {
-      method: "GET",
-      headers: {
-        host: "localhost",
-        "x-forwarded-host": "localhost, logs.example.com",
+  it("no longer consults the client-supplied x-forwarded-host chain", async () => {
+    const app = probeHarness((c) => isTrustedLocalRequest(c));
+    const chain = await app.request(
+      "/probe",
+      {
+        method: "GET",
+        headers: {
+          host: "localhost",
+          "x-forwarded-host": "localhost, logs.example.com",
+        },
       },
-    });
-    expect(((await chain.json()) as { verdict: unknown }).verdict).toBe(false);
+      LOOPBACK_ENV,
+    );
+    expect(((await chain.json()) as { verdict: unknown }).verdict).toBe(true);
 
-    const allLocal = await app.request("/probe", {
-      method: "GET",
-      headers: { host: "localhost", "x-forwarded-host": "127.0.0.1, [::1]" },
-    });
+    const allLocal = await app.request(
+      "/probe",
+      {
+        method: "GET",
+        headers: { host: "localhost", "x-forwarded-host": "127.0.0.1, [::1]" },
+      },
+      LOOPBACK_ENV,
+    );
     expect(((await allLocal.json()) as { verdict: unknown }).verdict).toBe(true);
   });
 
   it("rejects a remote origin and accepts a local or missing origin", async () => {
     const app = probeHarness((c) => isTrustedLocalRequest(c));
-    const remoteOrigin = await app.request("/probe", {
-      method: "GET",
-      headers: { host: "localhost", origin: "https://logs.example.com" },
-    });
+    const remoteOrigin = await app.request(
+      "/probe",
+      { method: "GET", headers: { host: "localhost", origin: "https://logs.example.com" } },
+      LOOPBACK_ENV,
+    );
     expect(((await remoteOrigin.json()) as { verdict: unknown }).verdict).toBe(false);
-    const localOrigin = await app.request("/probe", {
-      method: "GET",
-      headers: { host: "localhost", origin: "http://localhost:5173" },
-    });
+    const localOrigin = await app.request(
+      "/probe",
+      { method: "GET", headers: { host: "localhost", origin: "http://localhost:5173" } },
+      LOOPBACK_ENV,
+    );
     expect(((await localOrigin.json()) as { verdict: unknown }).verdict).toBe(true);
-    const noOrigin = await app.request("/probe", {
-      method: "GET",
-      headers: { host: "localhost" },
-    });
+    const noOrigin = await app.request(
+      "/probe",
+      { method: "GET", headers: { host: "localhost" } },
+      LOOPBACK_ENV,
+    );
     expect(((await noOrigin.json()) as { verdict: unknown }).verdict).toBe(true);
-    const badOrigin = await app.request("/probe", {
-      method: "GET",
-      headers: { host: "localhost", origin: "not a url" },
-    });
+    const badOrigin = await app.request(
+      "/probe",
+      { method: "GET", headers: { host: "localhost", origin: "not a url" } },
+      LOOPBACK_ENV,
+    );
     expect(((await badOrigin.json()) as { verdict: unknown }).verdict).toBe(false);
+  });
+
+  it("rejects a non-loopback peer even when the Host header claims localhost", async () => {
+    const app = probeHarness((c) => isTrustedLocalRequest(c));
+    const res = await app.request("/probe", REQUEST_OPTS, REMOTE_ENV);
+    expect(((await res.json()) as { verdict: unknown }).verdict).toBe(false);
+  });
+
+  it("fails closed when the socket peer cannot be determined", async () => {
+    const app = probeHarness((c) => isTrustedLocalRequest(c));
+    const noPeer = await app.request("/probe", REQUEST_OPTS, NO_PEER_ENV);
+    expect(((await noPeer.json()) as { verdict: unknown }).verdict).toBe(false);
+    const noServer = await app.request("/probe", REQUEST_OPTS);
+    expect(((await noServer.json()) as { verdict: unknown }).verdict).toBe(false);
+  });
+
+  it("accepts IPv4-mapped loopback peers (::ffff:127.0.0.1)", async () => {
+    const app = probeHarness((c) => isTrustedLocalRequest(c));
+    const res = await app.request("/probe", REQUEST_OPTS, MAPPED_LOOPBACK_ENV);
+    expect(((await res.json()) as { verdict: unknown }).verdict).toBe(true);
   });
 });
 
@@ -198,10 +259,10 @@ describe("authorizeLogIngest", () => {
   it("grants trusted-local only on loopback with local-open, else null without a token", async () => {
     const db = createTestDb();
     const app = probeHarness((c) => authorizeLogIngest(db, c));
-    const closed = await app.request("/probe", REQUEST_OPTS);
+    const closed = await app.request("/probe", REQUEST_OPTS, LOOPBACK_ENV);
     expect(((await closed.json()) as { verdict: unknown }).verdict).toBeNull();
     process.env.HASNA_LOGS_LOCAL_OPEN = "1";
-    const open = await app.request("/probe", REQUEST_OPTS);
+    const open = await app.request("/probe", REQUEST_OPTS, LOOPBACK_ENV);
     expect(((await open.json()) as { verdict: unknown }).verdict).toEqual({ kind: "trusted-local" });
   });
 
