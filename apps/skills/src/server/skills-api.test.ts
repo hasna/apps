@@ -19,7 +19,8 @@ import { resolveServerConfig } from "./config.js";
 import { SkillRequestError, parsePublishRequest, readPublishedBundle, storePublishedSkill } from "./skills-api.js";
 import { SqliteSkillsStore } from "./sqlite-store.js";
 import { ownBytes } from "../lib/skill-bundle.js";
-import type { ApiPrincipal } from "./types.js";
+import type { OwnedBytes } from "../lib/skill-bundle.js";
+import { SkillRevisionConflictError, type ApiPrincipal } from "./types.js";
 
 const PRINCIPAL: ApiPrincipal = publicPrincipal({
   orgId: "org_a", orgSlug: "org-a", orgName: "Org A", userId: "user_a", email: "a@example.com", apiKeyId: "key_a",
@@ -195,5 +196,86 @@ describe("publish request parsing", () => {
       expect((error as SkillRequestError).code).toBe("BUNDLE_TOO_LARGE");
       expect((error as SkillRequestError).status).toBe(413);
     }
+  });
+});
+
+describe("a refused publish discards the bundle object it just uploaded", () => {
+  /**
+   * Records put/delete without touching S3, so the orphan-object contract can be asserted
+   * in-process. The keys mirror the S3 path's shape; no real bucket is needed to prove
+   * whether deleteBundle is invoked for a digest.
+   */
+  class RecordingStorage extends ArtifactStorage {
+    putBundleCalls: string[] = [];
+    deleteBundleCalls: string[] = [];
+
+    async putBundle(orgId: string, sha256: string, _bytes: OwnedBytes, _contentType = "application/gzip") {
+      this.putBundleCalls.push(sha256);
+      return { storageKind: "s3" as const, storageKey: `skills/artifacts/${orgId}/${sha256}` };
+    }
+
+    async deleteBundle(_orgId: string, sha256: string) {
+      this.deleteBundleCalls.push(sha256);
+    }
+  }
+
+  const OTHER_BUNDLE = ownBytes(new TextEncoder().encode("a different bundle, so a different digest"));
+
+  function digestOf(bytes: Uint8Array): string {
+    return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+  }
+
+  async function publishWithStorage(
+    store: SqliteSkillsStore,
+    storage: ArtifactStorage,
+    manifest: Record<string, unknown>,
+    bundle: Uint8Array | undefined,
+    expectedRevisionId?: string,
+  ) {
+    const parsed = await parsePublishRequest(publishRequest(manifest, bundle), CONFIG);
+    return storePublishedSkill(store, storage, PRINCIPAL, parsed, expectedRevisionId);
+  }
+
+  test("a stale If-Match publish is refused and the uploaded object is discarded, leaving no row", async () => {
+    await withStore(async (store) => {
+      const storage = new RecordingStorage();
+      const first = await publishWithStorage(store, storage, { slug: "revisioned", description: "a skill" }, BUNDLE);
+      expect(first.bundleSha256).toBe(digestOf(BUNDLE));
+      expect(storage.deleteBundleCalls).toEqual([]);
+
+      // A conflicting push: same slug, NEW bundle bytes (a digest the store has never
+      // seen), stale If-Match. The bytes were uploaded before the store refused the
+      // write, so the object must be discarded - it has no row referencing it.
+      const conflicting = digestOf(OTHER_BUNDLE);
+      await expect(
+        publishWithStorage(store, storage, { slug: "revisioned", description: "a skill" }, OTHER_BUNDLE, "stale-revision"),
+      ).rejects.toThrow(SkillRevisionConflictError);
+
+      expect(storage.putBundleCalls).toContain(conflicting);
+      expect(storage.deleteBundleCalls).toEqual([conflicting]);
+      expect(await store.getSkillBundle(PRINCIPAL, conflicting)).toBeNull();
+    });
+  });
+
+  test("a refused publish does not delete an object whose digest another live skill still references", async () => {
+    await withStore(async (store) => {
+      const storage = new RecordingStorage();
+
+      // Digest of OTHER_BUNDLE is already live under another slug, so the conflicting
+      // push re-uploads a digest the store still tracks - content-addressed reuse.
+      const other = await publishWithStorage(store, storage, { slug: "other-skill", description: "other" }, OTHER_BUNDLE);
+      expect(other.bundleSha256).toBe(digestOf(OTHER_BUNDLE));
+      const shared = await publishWithStorage(store, storage, { slug: "shared-skill", description: "shared" }, BUNDLE);
+      expect(shared.bundleSha256).toBe(digestOf(BUNDLE));
+
+      const conflicting = digestOf(OTHER_BUNDLE);
+      await expect(
+        publishWithStorage(store, storage, { slug: "shared-skill", description: "shared" }, OTHER_BUNDLE, "stale-revision"),
+      ).rejects.toThrow(SkillRevisionConflictError);
+
+      // The reference guard saw a live row for the digest and kept the object.
+      expect(storage.deleteBundleCalls).toEqual([]);
+      expect(await store.getSkillBundle(PRINCIPAL, conflicting)).not.toBeNull();
+    });
   });
 });
