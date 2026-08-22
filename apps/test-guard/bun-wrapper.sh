@@ -160,6 +160,19 @@ limit_to_number() {
   printf '%s\n' "$((number * factor))"
 }
 
+# Container/sandbox detection (I38-00746). The machine-wide cap exists to
+# protect the shared fleet station; codewith sandboxes (e2b Docker
+# containers) carry the fleet wrapper install but have no systemd user scope
+# and a read-only guard dir (image layer), so the cap machinery cannot
+# operate there and refusing (78) or wedging the FIFO queue (75) blocks
+# legitimate independent-review test evidence. A container is bounded by its
+# own container cgroup, so a container invocation degrades to a direct,
+# logged exec of bun-real. Markers: the OCI container marker files and the
+# `container` env var set by container runtimes; absent on the fleet hosts.
+is_container() {
+  [ -f /.dockerenv ] || [ -f /run/.containerenv ] || [ "${container:-}" = "docker" ]
+}
+
 CALLER_XDG_RUNTIME_DIR_SET=${XDG_RUNTIME_DIR+x}
 CALLER_XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR-}
 CALLER_DBUS_SESSION_BUS_ADDRESS_SET=${DBUS_SESSION_BUS_ADDRESS+x}
@@ -257,6 +270,20 @@ if [ -n "${HASNA_TEST_GUARD_BYPASS:-}" ]; then
   exec -a "$0" "$REAL" "$@"
 fi
 
+# --- Container/sandbox degradation (I38-00746) ------------------------------
+# codewith sandboxes carry the fleet wrapper install but have no systemd user
+# scope and a read-only guard dir, so the semaphore machinery cannot operate
+# there: the scope preflight REFUSED (78) and the FIFO queue wedged to
+# MAX_WAIT (75) — every `bun test` inside a sandbox died and independent
+# review test evidence was blocked. A sandbox is disposable and already
+# bounded by its own container cgroup, so a container invocation degrades to
+# a direct, logged exec of bun-real. The fleet stations are bare hosts and
+# never match is_container, so the machine cap there is unchanged.
+if is_container; then
+  glog "SANDBOX direct-exec cwd=$PWD argv=$*"
+  exec -a "$0" "$REAL" "$@"
+fi
+
 # --- FIFO queue (added 2026-07-30 after production starvation was measured:
 # a suite waited 1330s while later arrivals took freed slots with waited=0s —
 # the bare probe loop favors whoever probes at the instant of release).
@@ -267,7 +294,17 @@ QUEUE_DIR="$GUARD_DIR/queue"
 mkdir -p "$QUEUE_DIR" 2>/dev/null
 
 TICKET="$(date +%s%N).$$"
-: > "$QUEUE_DIR/$TICKET"
+if ! : > "$QUEUE_DIR/$TICKET" 2>/dev/null; then
+  # The FIFO cannot function, so the cap cannot be enforced: fail closed
+  # IMMEDIATELY and loudly instead of the silent MAX_WAIT wedge (the old
+  # behavior spun 1800s and then exited 75 anyway). This branch is only
+  # reachable on a non-container host — a container invocation was already
+  # direct-execed by the SANDBOX path above — so it must never run a suite
+  # unbounded; the cap refusing to run is the machine-protection contract.
+  glog "REFUSED queue-unwritable cwd=$PWD argv=$*"
+  echo "hasna-test-guard: guard queue unwritable at $QUEUE_DIR — machine cap cannot enforce; refusing to run unbounded (fail-closed). Fix the guard dir permissions." >&2
+  exit 75
+fi
 trap 'rm -f "$QUEUE_DIR/$TICKET"' EXIT
 
 # try_slots must be CALLED WITH the script's "$@" — inside a bash function,

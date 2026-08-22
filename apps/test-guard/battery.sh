@@ -351,6 +351,74 @@ ck "s17 rearm pins bun-real version" "$("$BIN17/bun-real" --version 2>/dev/null 
 ck "s17 rearm pins bun-real sha" "$(sha256sum "$BIN17/bun-real" | awk '{print $1}')" "$PIN_SHA"
 ck "s17 rearm logs to sentinel.log" "$(grep -c 'rearm:' "$G17/sentinel.log")" "1"
 
+# 18 sandbox degradation (I38-00746): inside codewith sandboxes (e2b Docker
+# containers) the fleet wrapper install has no systemd user scope and a
+# read-only guard dir, so `bun test` REFUSED (78) or wedged the FIFO queue
+# (75) — blocking independent review test evidence. A container invocation
+# must degrade to a direct, logged exec of bun-real (the sandbox is already
+# bounded by its own container cgroup); an unwritable queue on a
+# NON-container host must fail closed immediately and loudly (never run
+# unbounded, never wedge). The station's fail-closed paths (sections 6/10)
+# are unchanged and re-proven by the non-container control below. Runs the
+# WRAPPER SOURCE against a temp copy of bun-real via the
+# HASNA_TEST_GUARD_REAL seam; on a host without a usable bun the section
+# skips like s16/s17. On a host that is ITSELF a container (CI runner), the
+# container-path assertions run against the real /.dockerenv marker and the
+# non-container control skips.
+W18="$W/s18"; G18="$W18/guard"; S18SUITE="$W18/suite"
+mkdir -p "$G18/slots" "$S18SUITE"
+cat > "$S18SUITE/sandbox.test.ts" <<'EOF'
+import { test, expect } from "bun:test";
+test("sandbox suite runs unscoped", () => { expect(1).toBe(1); });
+EOF
+if [ -x "$BR" ]; then ELF18="$BR"; else ELF18="$(command -v bun 2>/dev/null || true)"; fi
+if [ -n "$ELF18" ] && cp "$ELF18" "$W18/real-bun" 2>/dev/null && chmod +x "$W18/real-bun"; then
+  s18_out=$(cd "$S18SUITE" && container=docker \
+    HASNA_TEST_GUARD_DIR="$G18" HASNA_TEST_GUARD_REAL="$W18/real-bun" \
+    bash "$WRAPPER_SOURCE" test 2>&1); s18_rc=$?
+  ck "s18 container direct-exec rc" "$s18_rc" "0"
+  ck "s18 container direct-exec output" "$(printf '%s' "$s18_out" | grep -c '1 pass')" "1"
+  ck "s18 container logged SANDBOX" "$(grep -c 'SANDBOX .*argv=test' "$G18/guard.log")" "1"
+  if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && [ "${container:-}" != "docker" ]; then
+    s18_ctrl=$(cd "$S18SUITE" && env -u container \
+      HASNA_TEST_GUARD_DIR="$G18" HASNA_TEST_GUARD_REAL="$W18/real-bun" \
+      bash "$WRAPPER_SOURCE" test >/dev/null 2>&1; echo $?)
+    ck "s18 non-container still engages guard" "$s18_ctrl" "0"
+    ck "s18 non-container not logged SANDBOX" "$(grep -c 'SANDBOX .*argv=test' "$G18/guard.log")" "1"
+  else
+    echo "SKIP s18 non-container control — this host is itself a container (/.dockerenv|/run/.containerenv|container env)"
+  fi
+else
+  echo "SKIP s18 sandbox direct-exec — no bun binary to copy"
+fi
+G18Q="$W18/g-qro"
+mkdir -p "$G18Q" "$G18Q/slots" "$G18Q/queue" "$W18/qro-suite"
+cp "$S18SUITE/sandbox.test.ts" "$W18/qro-suite/sandbox.test.ts" 2>/dev/null || true
+printf 'MAX_WAIT_SECS=10\n' > "$G18Q/config"
+if [ -x "$W18/real-bun" ]; then
+  chmod 555 "$G18Q/queue"
+  s18q=$(cd "$W18/qro-suite" && HASNA_TEST_GUARD_DIR="$G18Q" HASNA_TEST_GUARD_REAL="$W18/real-bun" \
+    bash "$WRAPPER_SOURCE" test 2>&1); s18q_rc=$?
+  chmod 755 "$G18Q/queue"
+  if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && [ "${container:-}" != "docker" ]; then
+    # Non-container host (station): an unwritable queue must FAIL CLOSED
+    # immediately (rc=75, no suite run) — never run unbounded. Red-before:
+    # the old wrapper wedged MAX_WAIT then exited 75 without the REFUSED
+    # line; the first fix attempt wrongly degraded to an unscoped run.
+    ck "s18 read-only queue fails closed rc" "$s18q_rc" "75"
+    ck "s18 read-only queue did not run suite" "$(printf '%s' "$s18q" | grep -c '1 pass')" "0"
+    ck "s18 read-only queue logged REFUSED" "$(grep -c 'REFUSED queue-unwritable .*argv=test' "$G18Q/guard.log")" "1"
+  else
+    # Container host (CI runner): the SANDBOX direct-exec path fires before
+    # the queue is ever touched — the suite runs, rc=0.
+    ck "s18 container read-only queue direct-exec rc" "$s18q_rc" "0"
+    ck "s18 container read-only queue output" "$(printf '%s' "$s18q" | grep -c '1 pass')" "1"
+    ck "s18 container read-only queue logged SANDBOX" "$(grep -c 'SANDBOX .*argv=test' "$G18Q/guard.log")" "1"
+  fi
+else
+  echo "SKIP s18 read-only queue — no bun binary to copy"
+fi
+
 echo "=== battery: $pass PASS, $failn FAIL"
 rm -rf "$W"
 exit "$failn"

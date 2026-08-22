@@ -68,6 +68,38 @@ Config override: `config` in the guard dir (sourced), e.g. `MAX_SLOTS=6`.
 Evidence log: `guard.log` (every acquisition, wait, bypass, timeout) +
 journald tag `hasna-test-guard`.
 
+## Sandbox / container degradation (I38-00746)
+
+The cap exists to protect the shared fleet station, and the fleet stations
+are bare hosts. Codewith sandboxes (e2b Docker containers) carry the fleet
+wrapper install but have **no systemd user scope** (no `systemd-run`, no
+`/run/user/<uid>`) and a **read-only guard dir** (baked image layer), so
+before this fix every `bun test` inside a sandbox either REFUSED with exit 78
+("systemd user scopes are unavailable") or wedged the FIFO queue for
+`MAX_WAIT_SECS` and exited 75 — independent adversarial-review test evidence
+was blocked.
+
+- **Container invocation → direct exec.** A wrapper run inside a container
+  (`/.dockerenv`, `/run/.containerenv`, or the OCI `container=docker` env var)
+  skips the semaphore and scope layers entirely and execs bun-real directly,
+  logged `SANDBOX direct-exec` (best-effort: if the guard dir itself is
+  read-only the log line cannot be written, and the run still proceeds — a
+  disposable sandbox is already bounded by its own container cgroup). The
+  fleet stations never match the markers, so the machine cap there is
+  unchanged.
+- **Unwritable queue dir → immediate fail-closed.** If the FIFO ticket
+  cannot be created on a non-container host, the cap cannot enforce anything,
+  so the wrapper refuses immediately and loudly (logged `REFUSED
+  queue-unwritable` + a stderr line, exit 75) instead of the old silent
+  `MAX_WAIT` wedge. It never runs a suite unbounded on a station; the guard
+  refusing to run is the machine-protection contract. (A container
+  invocation never reaches this branch — the SANDBOX path above already
+  direct-execed.)
+
+The station fail-closed paths are unchanged and re-proven by battery
+section 18's non-container control and by section 10 (no systemd scope on a
+non-container host still exits 78).
+
 ## Why this layer
 
 - `CPUQuota` on `cron.service` was rejected: on the guard machine the ENTIRE agent
@@ -116,11 +148,11 @@ journald tag `hasna-test-guard`.
   todos/conversations/mementos routing variables back to production cloud
   values. Fixed with `#!/bin/bash --posix` (posix non-interactive bash sources
   nothing). The wrapper's contract is: **the caller's environment reaches
-  bun-real EXACTLY as given.** `battery.sh` is the 53-check regression sweep
+  bun-real EXACTLY as given.** `battery.sh` is the 68-check regression sweep
   (env fidelity, cgroup limits, HELD validation, scope/lock lifetime, FIFO,
-  fail-closed behavior, and sentinel coverage, including the ac4558ab
-  canary-state classification) — run it after ANY change to the wrapper or
-  sentinel, on both stations.
+  fail-closed behavior, sandbox/queue degradation, and sentinel coverage,
+  including the ac4558ab canary-state classification) — run it after ANY
+  change to the wrapper or sentinel, on both stations.
 
 ## Sentinel (the cap watching itself)
 
@@ -148,9 +180,10 @@ unverified binary).
 ## Tests
 
 - `bun run test` (in this package) runs the hermetic smoke: battery sections 16
-  (sentinel canary-state classification) and 17 (auto-rearm on a temp-dir COPY
-  of the bin layout) against the repo copies. No machine guard install needed.
-- `battery.sh` is the full regression sweep (sections 1-17, 60 checks) and
+  (sentinel canary-state classification), 17 (auto-rearm on a temp-dir COPY
+  of the bin layout) and 18 (sandbox/queue degradation) against the repo
+  copies. No machine guard install needed.
+- `battery.sh` is the full regression sweep (sections 1-18, 68 checks) and
   must run on a station with the guard installed:
 
   ```bash
