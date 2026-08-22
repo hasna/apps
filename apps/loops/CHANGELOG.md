@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.11
+
+### Patch Changes
+
+- 77b4808: fix(executor): propagate the active account profile's config-dir var (CLAUDE_CONFIG_DIR and sibling tool vars) into spawned agent and claude command targets when the runner's own env lacks it, so headless runs no longer silently fall back to the default account profile (row e84f3956)
+- Updated dependencies [554a5b9]
+  - @hasna/contracts@0.13.4
+
 ## 0.5.10
 
 ### Patch Changes

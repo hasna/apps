@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.98
+
+### Patch Changes
+
+- 2ea3b9a: fix: packed tarballs no longer carry account-id-shaped 12-digit runs (publish-guard pattern aws-account-id, row 27d2a7a2). The carries were bundled dependency constants — zod's nil-UUID regex (v4/core/regexes.js), pg-types' binary-parser date offset, and the workspace @hasna/contracts bundle — plus one own-source nil-UUID literal in testers. Fixes: externalize zod/pg/@hasna/contracts in the member builds (each remains a declared runtime dependency, so runtime behavior is unchanged), build testers' nil UUID at runtime, and add a per-member publish-guard regression that packs the tarball and scans it with the guard's pattern set (red before, green after).
+- Updated dependencies [554a5b9]
+- Updated dependencies [2ea3b9a]
+  - @hasna/contracts@0.13.4
+  - @hasna/browser@0.5.23
+  - @hasna/projects@0.1.138
+
 ## 0.0.97
 
 ### Patch Changes
