@@ -129,7 +129,15 @@ export async function ensureCloudSchema(): Promise<void> {
       await client.execute(sql);
     }
     await getApiKeyStore().ensureSchema();
-  })();
+  })().catch((e) => {
+    // One transient Postgres failure must not poison every later /v1 request:
+    // the serving process never calls closeCloud(), so a cached REJECTED
+    // promise would replay forever (503 on every request until restart).
+    // Clear the cache so the next call re-attempts; this caller still
+    // receives the rejection (surfaced as a 503 by the /v1 handler).
+    schemaEnsured = null;
+    throw e;
+  });
   return schemaEnsured;
 }
 
