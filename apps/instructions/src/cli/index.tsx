@@ -1640,6 +1640,27 @@ snapshotCmd.command("restore <config> <snapshot-id>").description("Restore a con
   } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
 });
 
+// The local store's only reclaim path. pruneSnapshots already exists on the
+// store interface and both backends (db/snapshots.ts, storage/cloud-store.ts);
+// its only caller was the server endpoint POST /v1/configs/:id/snapshots/prune,
+// so a local SQLite user had no way to reclaim the rows every apply used to
+// mint (todos 14f2ddd3).
+snapshotCmd.command("prune <config>").description("Delete old snapshots, keeping the N most recent")
+  .option("--keep <n>", "number of most-recent snapshots to keep (default 10)")
+  .action(async (configId, opts) => {
+  try {
+    const store = resolveConfigStore();
+    const c = await store.getConfig(configId);
+    const keep = opts.keep === undefined ? 10 : Number(opts.keep);
+    if (!Number.isInteger(keep) || keep < 1) {
+      console.error(chalk.red(`--keep must be a positive integer (got: ${opts.keep})`));
+      process.exit(1);
+    }
+    const removed = await store.pruneSnapshots(c.id, keep);
+    console.log(chalk.green("✓") + ` Pruned ${removed} snapshot(s), keeping the ${keep} most recent for ${c.slug}`);
+  } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+});
+
 // ── template ──────────────────────────────────────────────────────────────────
 const templateCmd = program.command("template").description("Work with template configs");
 

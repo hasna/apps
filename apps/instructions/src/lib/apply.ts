@@ -461,7 +461,14 @@ async function applyPreparedConfig(
     };
   }
 
-  if (!opts.dryRun) {
+  // Only a real change may touch the store row. updateConfig ALWAYS bumps
+  // "version = version + 1" and inserts a full-content snapshot inside its
+  // transaction (src/db/configs.ts), so calling it on a byte-identical apply
+  // grew the snapshot table by one row per config per run forever while the
+  // CLI printed "(unchanged)". `result.changed` is the config-wide aggregate —
+  // any primary or output target write — which is exactly the condition that
+  // warrants a new version and snapshot (todos 14f2ddd3).
+  if (!opts.dryRun && result.changed) {
     await store.updateConfig(config.id, { synced_at: new Date().toISOString() });
   }
 

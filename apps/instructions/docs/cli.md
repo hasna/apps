@@ -187,11 +187,13 @@ variables render target paths and content during apply.
 instructions snapshot list <config> [--limit <n>] [--cursor <n>]
 instructions snapshot show <id>
 instructions snapshot restore <config> <snapshot-id>
+instructions snapshot prune <config> [--keep <n>]
 ```
 
 Config snapshots are created automatically before a changed existing target is
 overwritten. Restore updates the stored config content; it does not write the
-target file.
+target file. `prune` deletes old snapshot rows, keeping the `--keep` most
+recent (default 10) — the local store's reclaim path for snapshot growth.
 
 ### `template`
 
