@@ -35,6 +35,7 @@ import {
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
 import { legacyProfileConfigBinding, normalizeProfileConfigBinding } from "../lib/instruction-graph.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
+import { normalizeOsFamily } from "../lib/machine.js";
 
 function slugify(name: string): string {
   return name
@@ -678,6 +679,7 @@ export async function resolveProfileForMachineRead(
   const { limit } = normalizeBoundedReadOptions(options);
   const host = (machine.hostname ?? "").trim().toLowerCase();
   const os = (machine.os ?? "").trim().toLowerCase();
+  const osFamily = normalizeOsFamily(machine.os);
   const arch = (machine.arch ?? "").trim().toLowerCase();
   let cursor = 0;
   let scanned = 0;
@@ -691,7 +693,10 @@ export async function resolveProfileForMachineRead(
     for (const p of page.items) {
       if (!profileHasSelectors(p.selectors)) continue;
       const s = p.selectors;
-      const osOk = !s.os?.length || s.os.some((c) => c.trim().toLowerCase() === os);
+      const osOk = !s.os?.length || s.os.some((c) => {
+        const value = c.trim().toLowerCase();
+        return value === os || normalizeOsFamily(c) === osFamily;
+      });
       const archOk = !s.arch?.length || s.arch.some((c) => c.trim().toLowerCase() === arch);
       const hostOk = !s.hostnames?.length || s.hostnames.some((c) => c.trim().toLowerCase() === host);
       if (!osOk || !archOk || !hostOk) continue;
