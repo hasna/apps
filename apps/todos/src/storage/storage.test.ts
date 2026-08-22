@@ -148,6 +148,31 @@ describe("storage adapter contracts", () => {
     expect(report.conditions.every((condition) => condition.verified)).toBe(true);
   });
 
+  test("REGRESSION: postgres sync changed-since compares the cursor as an INSTANT, not raw text", async () => {
+    // Release-review P1 (0.15.44 review): getChangedSince filtered
+    // `task.updated_at > since` as raw text. Space (0x20) sorts before 'T'
+    // (0x54), so a space-form stamp ("2026-08-20 23:00:00", the DDL default
+    // datetime('now') / snapshot import) that is genuinely NEWER than an ISO
+    // cursor was silently excluded from the changed-since feed.
+    const { client } = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client, service: "changed-since-instant-test" });
+    const service = "changed-since-instant-test";
+    const rows: Array<[string, string]> = [
+      ["t-space", "2026-08-20 23:00:00"], // space-form, NEWER than the cursor
+      ["t-iso", "2026-08-20T22:00:00.000Z"], // ISO, newer than the cursor
+      ["t-old", "2026-08-19T21:00:00.000Z"], // older
+      ["t-unparseable", "not-a-timestamp"], // cannot read -> KEPT, not older
+    ];
+    for (const [id, stamp] of rows) {
+      await client.query(
+        `INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at, deleted_at, version) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [service, "tasks", id, JSON.stringify({ id, updated_at: stamp, status: "pending", title: id }), stamp, null, 1],
+      );
+    }
+    const changed = await adapter.sync.getTasksChangedSince("2026-08-20T21:00:00.000Z", {});
+    expect(changed.map((t) => t.id).sort()).toEqual(["t-iso", "t-space", "t-unparseable"]);
+  });
+
   test("resolves agent names case-insensitively on BOTH storage engines", async () => {
     // Regression: todos task 0bf5d979. The Postgres/cloud roster compared agent
     // names with `===`, so registering a case-variant of an existing name minted
