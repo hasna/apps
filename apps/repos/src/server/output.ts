@@ -5,9 +5,6 @@ export function apiJsonResponse(data: unknown, status = 200): Response {
     status,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
     },
   });
 }

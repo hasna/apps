@@ -129,6 +129,9 @@ bootstrap can be disabled separately with `HASNA_REPOS_AUTO_BOOTSTRAP=0`.
 | `HASNA_REPOS_GITHUB_CACHE_PATH` | Default path for the GitHub catalog cache |
 | `LOOPS_TODOS_PROJECT` | Default todos project for loop-producer task upserts |
 | `REPOS_PORT` | `repos-serve` port; default `19450` |
+| `REPOS_HOST` | `repos-serve` bind hostname; default `127.0.0.1` (loopback only) |
+| `REPOS_SERVE_TOKEN` | Bearer token required on every `repos-serve` route when set; mandatory when `REPOS_HOST` is not loopback |
+| `REPOS_MCP_ALLOWED_ORIGINS` | Comma-separated Origin allowlist for the `/mcp` endpoint's DNS-rebinding protection |
 | `MCP_HTTP_PORT` | Standalone `repos-mcp` HTTP port; default `8874` |
 | `MCP_STDIO=1` | Select stdio transport for `repos-mcp` |
 | `MCP_HTTP=1` | Explicitly select the already-default HTTP mode |

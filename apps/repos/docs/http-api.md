@@ -48,10 +48,16 @@ The combined server mounts the stateless Streamable HTTP MCP transport at
 
 Workspace checkout health is the separate `GET /api/health` route.
 
-## CORS and static dashboard
+## Bind, CORS, and static dashboard
 
-API JSON responses allow any origin and advertise `GET`, `POST`, and `OPTIONS`
-with the `Content-Type` header. `OPTIONS` receives an empty preflight response.
+The server binds `127.0.0.1` by default (`REPOS_HOST` overrides). API JSON
+responses carry no `Access-Control-Allow-*` headers, so cross-origin browsers
+cannot read them; `OPTIONS` receives an empty `204` preflight response. When
+`REPOS_SERVE_TOKEN` is set, every route requires `Authorization: Bearer
+<token>`, and a non-loopback `REPOS_HOST` refuses to start without the token.
+The `/mcp` endpoint additionally validates the `Host` header against the
+server's own addresses (DNS-rebinding protection); `REPOS_MCP_ALLOWED_ORIGINS`
+optionally restricts `Origin` as well.
 
 When `dashboard/dist` is present, `/` and static asset paths serve the React
 dashboard. Non-API paths fall back to its `index.html`. The dashboard provides
