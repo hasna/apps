@@ -29,12 +29,33 @@ function firstEnv(env: Env, keys: readonly string[]): string | undefined {
   return undefined;
 }
 
+// Legacy storage-mode variables were removed with the deployment-modes
+// doctrine. The vendored kit no longer rejects them, so the app keeps the
+// migration guard itself: a set legacy variable is a stale configuration and
+// must not silently select a different backend.
+function assertNoLegacyStorageMode(env: Env): void {
+  const LEGACY_MODE_KEYS = [
+    `HASNA_${ENV_TOKEN}_STORAGE_MODE`,
+    `HASNA_${ENV_TOKEN}_MODE`,
+    `${ENV_TOKEN}_STORAGE_MODE`,
+    `${ENV_TOKEN}_MODE`,
+  ] as const;
+  const legacyKey = LEGACY_MODE_KEYS.find((key) => env[key] !== undefined && env[key] !== "");
+  if (!legacyKey) return;
+  throw new Error(
+    `${legacyKey} was removed. Delete the storage-mode variable; ` +
+      `set ${DB_URL_KEYS[0]} to select the postgresql server backend, ` +
+      `or leave it unset for sqlite.`,
+  );
+}
+
 /**
  * Resolve the active server data backend from the environment. A DATABASE_URL
  * (or *_FILE mount) selects `postgresql`; otherwise SQLite is authoritative.
  * Throws when a legacy storage-mode variable is set (the kit refuses them).
  */
 export function resolveDataBackend(env: Env = process.env): ServerDataBackend {
+  assertNoLegacyStorageMode(env);
   const resolution = resolveServerDataBackend(APP_NAME, env);
   if (resolution.backend === "postgresql") return "postgresql";
   // *_FILE mount variant: presence selects PostgreSQL just like the env var.

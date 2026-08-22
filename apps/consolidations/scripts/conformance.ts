@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // --- Gate 0: the installed contracts kit is EXACTLY the pinned version.
-const PINNED_CONTRACTS_VERSION = "0.10.6";
+const PINNED_CONTRACTS_VERSION = "0.13.4";
 const contractsPkgPath = join(process.cwd(), "node_modules", "@hasna", "contracts", "package.json");
 const installedContractsVersion = JSON.parse(readFileSync(contractsPkgPath, "utf8")).version as string;
 if (installedContractsVersion !== PINNED_CONTRACTS_VERSION) {
