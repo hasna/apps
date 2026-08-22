@@ -344,6 +344,56 @@ describe("github catalog SDK", () => {
     expect(resumed.repositories.map((repo) => repo.full_name)).toEqual(["hasna/one", "hasna/two"]);
   });
 
+  test("cursor-only sync preserves records from earlier pages", () => {
+    const dir = tempDir();
+    const cachePath = join(dir, "github-catalog.json");
+    const requestJson = (endpoint: string): unknown => {
+      if (endpoint === "rate_limit") {
+        return { resources: { core: { limit: 5000, remaining: 100, used: 10, reset: 1782288000 } } };
+      }
+      if (endpoint === "user") return { login: "hasna", type: "User" };
+      if (endpoint === "/user/orgs?per_page=100&page=1") return [];
+      if (isPage(endpoint, 1)) {
+        return [repoPayload({ name: "a", full_name: "hasna/a" }), repoPayload({ name: "b", full_name: "hasna/b" })];
+      }
+      if (isPage(endpoint, 2)) {
+        return [repoPayload({ name: "c", full_name: "hasna/c" }), repoPayload({ name: "d", full_name: "hasna/d" })];
+      }
+      if (isPage(endpoint, 3)) return [repoPayload({ name: "e", full_name: "hasna/e" })];
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    };
+
+    const full = syncGithubRepoCatalog({ cachePath, pageSize: 2, requestJson, includeLocal: false });
+    expect(full.completed).toBe(true);
+    expect(full.repositories.map((repo) => repo.full_name)).toEqual([
+      "hasna/a",
+      "hasna/b",
+      "hasna/c",
+      "hasna/d",
+      "hasna/e",
+    ]);
+
+    const cursorOnly = syncGithubRepoCatalog({ cachePath, pageSize: 2, cursor: "2", requestJson, includeLocal: false });
+    expect(cursorOnly.completed).toBe(true);
+    expect(cursorOnly.nextCursor).toBeNull();
+    expect(cursorOnly.repositories.map((repo) => repo.full_name)).toEqual([
+      "hasna/a",
+      "hasna/b",
+      "hasna/c",
+      "hasna/d",
+      "hasna/e",
+    ]);
+
+    const onDisk = loadGithubRepoCatalog(cachePath);
+    expect(onDisk?.repositories.map((repo) => repo.full_name)).toEqual([
+      "hasna/a",
+      "hasna/b",
+      "hasna/c",
+      "hasna/d",
+      "hasna/e",
+    ]);
+  });
+
   test("resume on a completed cache does not restart page one or mark it partial", () => {
     const dir = tempDir();
     const cachePath = join(dir, "github-catalog.json");

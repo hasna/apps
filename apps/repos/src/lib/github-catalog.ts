@@ -271,7 +271,7 @@ export function syncGithubRepoCatalog(opts: SyncGithubRepoCatalogOptions = {}): 
   const localIndex = buildLocalRepoIndex(localRepos);
   const recordsByFullName = new Map<string, GithubRepoCatalogRecord>();
 
-  if (opts.resume && existing) {
+  if (existing && (opts.resume || parseCursor(opts.cursor) !== null)) {
     for (const record of existing.repositories) {
       recordsByFullName.set(record.full_name.toLowerCase(), record);
     }
