@@ -20,6 +20,7 @@ describe("openapi document", () => {
     expect(doc.paths["/v1/scenarios"].post.operationId).toBe("createScenario");
     expect(doc.paths["/v1/scenarios/{id}"].get.operationId).toBe("getScenario");
     expect(doc.paths["/v1/scenarios/{id}"].put.operationId).toBe("updateScenario");
+    expect(doc.paths["/v1/scenarios/{id}"].patch.operationId).toBe("updateScenarioPassedCache");
     expect(doc.paths["/v1/scenarios/{id}"].delete.operationId).toBe("deleteScenario");
     // bulk migration surface (count + idempotent import)
     expect(doc.paths["/v1/scenarios/count"].get.operationId).toBe("countScenarios");
