@@ -181,7 +181,7 @@ export interface SyncSkillsOptions {
    * package root (which contains `skills/`). Takes precedence over
    * $SKILLS_SOURCE, which takes precedence over the installed corpus cache.
    * Agent-workflow skills are NOT part of the public repo corpus anymore — they
-   * moved to the private per-station store (hasna-internal/fleet-resources) and
+   * moved to the private per-station store (fleet-resources) and
    * reach sync through the installed cache — so a package root resolves to
    * `skills/` only.
    */
@@ -211,7 +211,7 @@ interface SyncSource {
  *      resolved through `resolveCorpusRoot` so a migrated owner layout
  *      (~/.hasna/skills/skills/) is read in preference to `installed/`. This cache is
  *      also where private agent-workflow skills arrive from the per-station store
- *      (hasna-internal/fleet-resources) and get synced into agent folders.
+ *      (fleet-resources) and get synced into agent folders.
  *
  * A missing explicit source is an error, not a fallback to "nothing": the whole point
  * of zero-corpus is that sync must not silently sync an empty corpus because the

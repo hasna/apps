@@ -33,7 +33,7 @@ describe("telephony Store resolver", () => {
   it("routes to the ApiStore when both API URL and API key are set", () => {
     clearEnv();
     const env = {
-      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+      HASNA_TELEPHONY_API_URL: "https://telephony.invalid",
       HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
     } as Record<string, string>;
     const store = getStore(env);
@@ -45,7 +45,7 @@ describe("telephony Store resolver", () => {
   it("routes to the ApiStore when the alias API pair is set", () => {
     clearEnv();
     const env = {
-      TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+      TELEPHONY_API_URL: "https://telephony.invalid",
       TELEPHONY_API_KEY: "hasna_telephony_test_key",
     } as Record<string, string>;
     expect(getStore(env).transport).toBe("cloud-http");
@@ -54,7 +54,7 @@ describe("telephony Store resolver", () => {
   it("throws naming the missing variable when exactly one side of the API pair is set", () => {
     clearEnv();
     const missingKey = {
-      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+      HASNA_TELEPHONY_API_URL: "https://telephony.invalid",
     } as Record<string, string>;
     expect(() => getStore(missingKey)).toThrow(/HASNA_TELEPHONY_API_KEY/);
     const missingUrl = {
@@ -75,7 +75,7 @@ describe("telephony Store resolver", () => {
     clearEnv();
     const env = {
       HASNA_TELEPHONY_STORAGE_MODE: "postgres",
-      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+      HASNA_TELEPHONY_API_URL: "https://telephony.invalid",
       HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
     } as Record<string, string>;
     // The ratchet names the retired var; it is never a hint, so the pair does
@@ -93,7 +93,7 @@ describe("telephony Store resolver", () => {
     for (const removed of ["local", "cloud", "self_hosted", "remote", "hybrid"]) {
       const env = {
         HASNA_TELEPHONY_STORAGE_MODE: removed,
-        HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+        HASNA_TELEPHONY_API_URL: "https://telephony.invalid",
         HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
       } as Record<string, string>;
       expect(() => getStore(env)).toThrow(/HASNA_TELEPHONY_STORAGE_MODE was removed/);
@@ -107,7 +107,7 @@ describe("ApiStore cloud filters (parity with LocalStore)", () => {
     const calls: { resource: string; query?: Record<string, unknown> }[] = [];
     const client = {
       name: "telephony",
-      baseUrl: "https://telephony.hasna.xyz/v1",
+      baseUrl: "https://telephony.invalid/v1",
       transport: {} as never,
       async list(resource: string, options?: { query?: Record<string, unknown> }) {
         calls.push({ resource, query: options?.query });
@@ -168,9 +168,9 @@ describe("ApiStore Twilio passthrough routes through the server /v1 proxy", () =
     const calls: { path: string; query?: Record<string, unknown> }[] = [];
     const client = {
       name: "telephony",
-      baseUrl: "https://telephony.hasna.xyz/v1",
+      baseUrl: "https://telephony.invalid/v1",
       transport: {
-        baseUrl: "https://telephony.hasna.xyz/v1",
+        baseUrl: "https://telephony.invalid/v1",
         async get(path: string, opts?: { query?: Record<string, unknown> }) {
           calls.push({ path, query: opts?.query });
           return { items, total: items.length };
@@ -243,7 +243,7 @@ describe("ApiStore.registerAgent (parity with LocalStore conflict semantics)", (
     };
     const client = {
       name: "telephony",
-      baseUrl: "https://telephony.hasna.xyz/v1",
+      baseUrl: "https://telephony.invalid/v1",
       transport: {} as never,
       async list() { return { items: [], total: 0, cursor: null, raw: {} }; },
       async get() { return null; },
@@ -262,7 +262,7 @@ describe("ApiStore.registerAgent (parity with LocalStore conflict semantics)", (
   it("re-throws non-409 HTTP errors (does not swallow real failures)", async () => {
     const client = {
       name: "telephony",
-      baseUrl: "https://telephony.hasna.xyz/v1",
+      baseUrl: "https://telephony.invalid/v1",
       transport: {} as never,
       async list() { return { items: [], total: 0, cursor: null, raw: {} }; },
       async get() { return null; },
@@ -279,7 +279,7 @@ describe("ApiStore.registerAgent (parity with LocalStore conflict semantics)", (
   it("matches agents by name case-insensitively (getAgentByName parity)", async () => {
     const client = {
       name: "telephony",
-      baseUrl: "https://telephony.hasna.xyz/v1",
+      baseUrl: "https://telephony.invalid/v1",
       transport: {} as never,
       async list() { return { items: [existing], total: 1, cursor: null, raw: {} }; },
       async get() { return null; },
