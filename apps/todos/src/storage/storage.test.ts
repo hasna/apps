@@ -277,6 +277,32 @@ describe("storage adapter contracts", () => {
     expect(await adapter.tasks.list({ query: "authentication", limit: 1 })).toHaveLength(1);
   });
 
+  test("tags on a query-bearing list/count match ANY tag, parity with the plain list path", async () => {
+    const adapter = createLocalSqliteTodosStorageAdapter({ db });
+    await adapter.tasks.create({ title: "login both task", tags: ["a", "b"] });
+    await adapter.tasks.create({ title: "login page task", tags: ["b"] });
+    await adapter.tasks.create({ title: "login flow task", tags: ["a"] });
+    await adapter.tasks.create({ title: "unrelated task", tags: ["c"] });
+
+    const byTags = await adapter.tasks.list({ tags: ["a", "b"] });
+    expect(byTags.map((t) => t.title).sort()).toEqual([
+      "login both task",
+      "login flow task",
+      "login page task",
+    ]);
+    expect(await adapter.tasks.count({ tags: ["a", "b"] })).toBe(3);
+
+    // A free-text query must not flip multi-tag matching to ALL-of: the same
+    // tags filter narrowed by q returns every task carrying ANY of a/b.
+    const byQueryAndTags = await adapter.tasks.list({ query: "login", tags: ["a", "b"] });
+    expect(byQueryAndTags.map((t) => t.title).sort()).toEqual([
+      "login both task",
+      "login flow task",
+      "login page task",
+    ]);
+    expect(await adapter.tasks.count({ query: "login", tags: ["a", "b"] })).toBe(3);
+  });
+
   test("delegates core task, project, plan, agent, template, audit, and sync operations", async () => {
     const adapter = createLocalSqliteTodosStorageAdapter({ db });
     const project = await adapter.projects.create({
