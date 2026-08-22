@@ -326,7 +326,10 @@ export function fakeClient(): {
       const p = params as unknown[];
       const row = {
         id: p[0],
-        timestamp: new Date().toISOString(),
+        // The store inserts COALESCE($2, NOW()::text); honour an explicit
+        // timestamp so tests can seed deterministic ORDER BY timestamp order.
+        timestamp:
+          p[1] != null ? String(p[1]) : new Date().toISOString(),
         project_id: p[2],
         level: p[3],
         source: p[4],
@@ -352,7 +355,64 @@ export function fakeClient(): {
       return row ? [row as unknown as T] : [];
     }
     if (s.startsWith("SELECT") && s.includes("FROM logs")) {
-      return [...state.logs.values()] as unknown as T[];
+      // Apply the logs WHERE clause (equality + ILIKE), ORDER BY timestamp and
+      // LIMIT/OFFSET like Postgres so paging tests can discriminate pages.
+      // Mirrors queryEventRows; unknown conditions stay unfiltered so
+      // aggregate shapes (COUNT/GROUP BY/summary) that route here keep their
+      // previous all-rows behaviour.
+      let rows = [...state.logs.values()];
+      const whereMatch = /WHERE (.+?)( ORDER BY| LIMIT|$)/.exec(s);
+      const orderMatch = /ORDER BY (\w+) (ASC|DESC)( LIMIT|$)/.exec(s);
+      const limitMatch = /LIMIT \$(\d+)( OFFSET \$(\d+))?/.exec(s);
+      if (whereMatch) {
+        const conds = splitAnd(whereMatch[1] ?? "");
+        rows = rows.filter((row) => {
+          for (const cond of conds) {
+            const eqMatch = /^(\w+) = \$(\d+)$/.exec(cond);
+            if (eqMatch) {
+              const col = eqMatch[1] as keyof FakeEventRow;
+              const want = String(params[Number(eqMatch[2]) - 1] ?? "");
+              if (String(row[col] ?? "") !== want) return false;
+              continue;
+            }
+            const likeMatch = /^(\w+) ILIKE \$(\d+)$/.exec(cond);
+            if (likeMatch) {
+              const col = likeMatch[1] as keyof FakeEventRow;
+              const needle = String(
+                params[Number(likeMatch[2]) - 1] ?? "",
+              ).replace(/%/g, "");
+              if (
+                !String(row[col] ?? "")
+                  .toLowerCase()
+                  .includes(needle.toLowerCase())
+              )
+                return false;
+              continue;
+            }
+            // Unhandled condition: keep the row (aggregate/other shapes).
+          }
+          return true;
+        });
+      }
+      if (orderMatch) {
+        const col = orderMatch[1] ?? "timestamp";
+        const dir = orderMatch[2] ?? "DESC";
+        const sign = dir === "ASC" ? 1 : -1;
+        rows = rows.sort((a, b) =>
+          sign *
+          String(a[col] ?? "").localeCompare(String(b[col] ?? "")),
+        );
+      }
+      if (limitMatch) {
+        const limitIdx = limitMatch[1] ?? "";
+        const offsetIdx = limitMatch[3];
+        const limit = Number(params[Number(limitIdx) - 1] ?? 0);
+        const offset = offsetIdx
+          ? Number(params[Number(offsetIdx) - 1] ?? 0)
+          : 0;
+        rows = rows.slice(offset, offset + limit);
+      }
+      return rows as unknown as T[];
     }
     if (s.startsWith("INSERT INTO event_records")) {
       const p = params as unknown[];
