@@ -4,7 +4,7 @@
   "name": "markdown",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.13.1",
+  "kitVersion": "0.13.3",
   "description": "Open Markdown Protocol (OMP): structured markdown as an intermediate representation between AI models, with validate/compile/inspect/lint/run server endpoints and an append-only feedback store that mirrors to an optional Postgres target.",
   "bins": [
     "markdown",
