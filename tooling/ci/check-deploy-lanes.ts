@@ -31,11 +31,22 @@
  *   A deletion is the same failure as a move to the wrong path: the trust
  *   points here, the lane must exist here.
  *
+ *   RULE 4 — every PORTED lane's root deploy workflow must be BOUND TO CI,
+ *   not merely present and path-scoped. It must carry NO push trigger of its
+ *   own (a push deploy races ci for the same commit and executes on raw
+ *   merges to main while ci is red or still running — the deploy-skills
+ *   defect, todos 56d3905c), must trigger from `on.workflow_run` on the
+ *   completed ci workflow on main, and must carry a `gate` job whose
+ *   job-level condition requires the successful-ci binding and whose
+ *   permissions never include id-token; the deploy job must depend on that
+ *   gate and run only when needs.gate.outputs.proceed == 'true'.
+ *
  * The gate carries its own two-sided self-test (prove-it-can-fail): a nested
- * deploy.yml fixture must FAIL the gate, a clean root workflow fixture must
- * PASS it, and a missing ported lane must FAIL it. A gate whose patterns
- * cannot fire reports a clean tree, and a clean tree is exactly what success
- * looks like.
+ * deploy.yml fixture must FAIL the gate, an unscoped root workflow fixture
+ * must FAIL it, a push-triggered ported lane must FAIL it, a clean gated root
+ * workflow fixture must PASS it, and a missing ported lane must FAIL it. A
+ * gate whose patterns cannot fire reports a clean tree, and a clean tree is
+ * exactly what success looks like.
  *
  * Usage:
  *   bun tooling/ci/check-deploy-lanes.ts
@@ -44,6 +55,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseYaml, asMap, asArray, asText } from "./yaml.ts";
 
 /**
  * Members whose nested deploy workflow is a KNOWN pre-existing unported lane.
@@ -104,6 +116,26 @@ function hasScopedPathsFilter(root: string, file: string, member: string): boole
   return content.includes(`"${expected}"`) || content.includes(`'${expected}'`);
 }
 
+/** The `name:` of .github/workflows/ci.yml — the workflow the gates bind to, or "" when absent. */
+function ciWorkflowName(root: string): string {
+  const file = path.join(root, ".github", "workflows", "ci.yml");
+  if (!fs.existsSync(file)) return "";
+  const document = asMap(parseYaml(fs.readFileSync(file, "utf8")));
+  return asText(document.name);
+}
+
+/**
+ * Rule 4: the gate job's condition must carry the successful-ci binding (and
+ * the manual route). These are the same conditions the todos/projects lanes
+ * carry; without them a "gate" job is a name, not a gate.
+ */
+const GATE_IF_REQUIREMENTS = [
+  "github.event.workflow_run.conclusion == 'success'",
+  "github.event.workflow_run.event == 'push'",
+  "github.event.workflow_run.head_branch == 'main'",
+  "github.event_name == 'workflow_dispatch'",
+];
+
 function checkDir(
   root: string,
   opts: { unported?: Set<string>; ported?: Set<string> } = {},
@@ -155,6 +187,77 @@ function checkDir(
       violations.push(
         `.github/workflows/deploy-${member}.yml: MISSING — ${member} is a ported deploy lane (infra-live OIDC trust points at hasna/apps), so its discoverable root workflow must exist here.`,
       );
+    }
+  }
+
+  // Rule 4: a ported lane's root workflow must be bound to a successful ci run.
+  const portedWithRoot = [...ported].filter((member) => rootByMember.has(member));
+  if (portedWithRoot.length > 0) {
+    const ciName = ciWorkflowName(root);
+    if (ciName === "") {
+      violations.push(
+        ".github/workflows/ci.yml: cannot verify the ci binding of ported deploy lanes — the ci workflow's name is unreadable",
+      );
+    }
+    for (const member of portedWithRoot) {
+      const file = rootByMember.get(member)!;
+      const document = asMap(parseYaml(fs.readFileSync(path.join(root, file), "utf8")));
+      const triggers = asMap(document.on);
+      if ("push" in triggers) {
+        violations.push(
+          `${file}: carries its own push trigger — a push deploy races ci for the same commit and executes on raw merges to main while ci is red or still running. Bind the lane to on.workflow_run on the ci workflow and gate the deploy job.`,
+        );
+      }
+      const workflowRun = asMap(triggers.workflow_run);
+      const upstream = asArray(workflowRun.workflows).map((entry) => asText(entry));
+      if (!upstream.includes(ciName)) {
+        violations.push(
+          `${file}: on.workflow_run.workflows must name the ci workflow "${ciName}", found [${upstream.join(", ")}]`,
+        );
+      }
+      if (!asArray(workflowRun.types).map(asText).includes("completed")) {
+        violations.push(`${file}: on.workflow_run.types must include completed`);
+      }
+      if (!asArray(workflowRun.branches).map(asText).includes("main")) {
+        violations.push(`${file}: on.workflow_run.branches must be restricted to main`);
+      }
+
+      const jobs = asMap(document.jobs);
+      const gate = asMap(jobs.gate);
+      const deploy = asMap(jobs.deploy);
+      if (Object.keys(gate).length === 0) {
+        violations.push(`${file}: must carry a gate job that binds the lane to a successful ci run`);
+      } else {
+        const gateIf = asText(gate.if);
+        for (const required of GATE_IF_REQUIREMENTS) {
+          if (!gateIf.includes(required)) {
+            violations.push(`${file}: the gate job condition must require ${required}`);
+          }
+        }
+        const gatePermissions = asMap(gate.permissions);
+        if (asText(gatePermissions.contents) !== "read") {
+          violations.push(`${file}: the gate job must narrow permissions.contents to read`);
+        }
+        if (asText(gatePermissions.actions) !== "read") {
+          violations.push(
+            `${file}: the gate job must hold permissions.actions: read so it can verify the ci run for the manual route`,
+          );
+        }
+        if ("id-token" in gatePermissions) {
+          violations.push(
+            `${file}: the gate job must not hold permissions.id-token — a job that can mint an OIDC assertion can reach production before any gate resolved`,
+          );
+        }
+      }
+      if (Object.keys(deploy).length === 0) {
+        violations.push(`${file}: the deploy job is missing`);
+      } else {
+        const needs = Array.isArray(deploy.needs) ? deploy.needs.map(asText) : [asText(deploy.needs)];
+        if (!needs.includes("gate")) violations.push(`${file}: the deploy job must depend on the gate job`);
+        if (!asText(deploy.if).includes("needs.gate.outputs.proceed == 'true'")) {
+          violations.push(`${file}: the deploy job must run only when needs.gate.outputs.proceed == 'true'`);
+        }
+      }
     }
   }
 
@@ -210,15 +313,78 @@ function selfTest(): boolean {
     return false;
   }
 
+  // Positive control D: a PORTED member whose root workflow still deploys off
+  // a raw push trigger — the exact deploy-skills defect (todos 56d3905c) —
+  // MUST be a violation: the lane fires on every merge to main while ci is red
+  // or still running.
+  const pushTmp = fs.mkdtempSync(path.join(os.tmpdir(), "check-deploy-lanes-push-"));
+  fs.mkdirSync(path.join(pushTmp, ".github", "workflows"), { recursive: true });
+  fs.mkdirSync(path.join(pushTmp, "apps", "theta"), { recursive: true });
+  fs.writeFileSync(path.join(pushTmp, "apps", "theta", "package.json"), "{}");
+  fs.writeFileSync(path.join(pushTmp, ".github", "workflows", "ci.yml"), "name: ci\n");
+  fs.writeFileSync(
+    path.join(pushTmp, ".github", "workflows", "deploy-theta.yml"),
+    'name: deploy-theta\non:\n  push:\n    branches: [main]\n    paths: ["apps/theta/**"]\n  workflow_dispatch: {}\n',
+  );
+  const pushPorted = checkDir(pushTmp, { unported: new Set(), ported: new Set(["theta"]) });
+  const firedCiGate = pushPorted.violations.some(
+    (v) => v.includes("deploy-theta.yml") && v.includes("push trigger"),
+  );
+  const firedGateJob = pushPorted.violations.some(
+    (v) => v.includes("deploy-theta.yml") && v.includes("gate job"),
+  );
+  if (!firedCiGate || !firedGateJob) {
+    console.error(
+      `self-test FAILED — push-triggered ported lane (ci-gate ${firedCiGate}) or missing gate job (${firedGateJob}) did not fire`,
+    );
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(portedTmp, { recursive: true, force: true });
+    fs.rmSync(pushTmp, { recursive: true, force: true });
+    return false;
+  }
+
   // Negative control: the exact Projects root lane, registered as ported and
-  // scoped to apps/projects/**, must stay silent.
+  // ci-gated with a gate job and a gated deploy job, must stay silent. The
+  // fixture mirrors the shape the ported lanes actually carry (workflow_run on
+  // ci, no push trigger, gate with contents+actions read and no id-token).
   const cleanTmp = fs.mkdtempSync(path.join(os.tmpdir(), "check-deploy-lanes-clean-"));
   fs.mkdirSync(path.join(cleanTmp, ".github", "workflows"), { recursive: true });
   fs.mkdirSync(path.join(cleanTmp, "apps", "projects"), { recursive: true });
   fs.writeFileSync(path.join(cleanTmp, "apps", "projects", "package.json"), "{}");
+  fs.writeFileSync(path.join(cleanTmp, ".github", "workflows", "ci.yml"), "name: ci\n");
   fs.writeFileSync(
     path.join(cleanTmp, ".github", "workflows", "deploy-projects.yml"),
-    'name: deploy-projects\non:\n  push:\n    branches: [main]\n    paths: ["apps/projects/**"]\n',
+    "name: deploy-projects\n" +
+      "on:\n" +
+      "  workflow_run:\n" +
+      "    workflows: [ci]\n" +
+      "    types: [completed]\n" +
+      "    branches: [main]\n" +
+      "  workflow_dispatch: {}\n" +
+      "permissions:\n" +
+      "  contents: read\n" +
+      "  id-token: write\n" +
+      "env:\n" +
+      '  DEPLOY_PATH_SCOPE: "apps/projects/**"\n' +
+      "jobs:\n" +
+      "  gate:\n" +
+      "    permissions:\n" +
+      "      contents: read\n" +
+      "      actions: read\n" +
+      "    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}\n" +
+      "    outputs:\n" +
+      "      proceed: ${{ steps.resolve.outputs.proceed }}\n" +
+      "      source_sha: ${{ steps.resolve.outputs.source_sha }}\n" +
+      "    steps:\n" +
+      "      - name: Resolve the deployable commit\n" +
+      "        id: resolve\n" +
+      "        run: echo ok\n" +
+      "  deploy:\n" +
+      "    needs: gate\n" +
+      "    if: ${{ needs.gate.outputs.proceed == 'true' }}\n" +
+      "    steps:\n" +
+      "      - name: noop\n" +
+      "        run: echo ok\n",
   );
   const negative = checkDir(cleanTmp, {
     unported: new Set(),
@@ -228,12 +394,14 @@ function selfTest(): boolean {
     console.error("self-test FAILED — clean root workflow did not stay silent");
     console.error(negative.violations.join("\n"));
     fs.rmSync(cleanTmp, { recursive: true, force: true });
+    fs.rmSync(pushTmp, { recursive: true, force: true });
     return false;
   }
 
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.rmSync(cleanTmp, { recursive: true, force: true });
   fs.rmSync(portedTmp, { recursive: true, force: true });
+  fs.rmSync(pushTmp, { recursive: true, force: true });
   return true;
 }
 
