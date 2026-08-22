@@ -46,6 +46,7 @@ export interface LogRecord {
   id: string;
   timestamp: string;
   project_id: string | null;
+  page_id: string | null;
   level: LogLevel;
   source: string;
   service: string | null;
@@ -56,6 +57,17 @@ export interface LogRecord {
   url: string | null;
   stack_trace: string | null;
   metadata: Record<string, unknown> | null;
+  source_event_id: string | null;
+  machine_id: string | null;
+  repo_id: string | null;
+  app_id: string | null;
+  process_id: string | null;
+  run_id: string | null;
+  span_id: string | null;
+  parent_span_id: string | null;
+  release_id: string | null;
+  environment: string | null;
+  privacy: string | null;
 }
 
 export interface CreateProjectInput {
@@ -66,9 +78,13 @@ export interface CreateProjectInput {
 }
 
 export interface CreateLogInput {
+  /** Client-chosen deterministic id. Honored when present (dedupe parity with
+   *  local ingest); a UUID is minted only when absent. */
+  id?: string;
   level: LogLevel;
   message: string;
   project_id?: string | null;
+  page_id?: string | null;
   source?: string | null;
   service?: string | null;
   trace_id?: string | null;
@@ -78,6 +94,17 @@ export interface CreateLogInput {
   stack_trace?: string | null;
   metadata?: Record<string, unknown> | null;
   timestamp?: string | null;
+  source_event_id?: string | null;
+  machine_id?: string | null;
+  repo_id?: string | null;
+  app_id?: string | null;
+  process_id?: string | null;
+  run_id?: string | null;
+  span_id?: string | null;
+  parent_span_id?: string | null;
+  release_id?: string | null;
+  environment?: string | null;
+  privacy?: string | null;
 }
 
 export interface ListLogsQuery {
@@ -144,11 +171,18 @@ function rowToProject(row: ProjectRow): ProjectRecord {
   };
 }
 
+/** Column list for `logs` reads — must cover every {@link LogRecord} field. */
+const LOG_SELECT_COLUMNS = `id, timestamp, project_id, page_id, level, source, service,
+       message, trace_id, session_id, agent, url, stack_trace, metadata,
+       source_event_id, machine_id, repo_id, app_id, process_id, run_id,
+       span_id, parent_span_id, release_id, environment, privacy`;
+
 function rowToLog(row: LogRow): LogRecord {
   return {
     id: row.id,
     timestamp: toIso(row.timestamp),
     project_id: row.project_id,
+    page_id: row.page_id,
     level: row.level,
     source: row.source,
     service: row.service,
@@ -159,6 +193,17 @@ function rowToLog(row: LogRow): LogRecord {
     url: row.url,
     stack_trace: row.stack_trace,
     metadata: parseMetadata(row.metadata),
+    source_event_id: row.source_event_id,
+    machine_id: row.machine_id,
+    repo_id: row.repo_id,
+    app_id: row.app_id,
+    process_id: row.process_id,
+    run_id: row.run_id,
+    span_id: row.span_id,
+    parent_span_id: row.parent_span_id,
+    release_id: row.release_id,
+    environment: row.environment,
+    privacy: row.privacy,
   };
 }
 
@@ -217,19 +262,26 @@ export class CloudLogStore {
   // --- logs ----------------------------------------------------------------
 
   async createLog(input: CreateLogInput): Promise<LogRecord> {
-    const id = randomUUID();
-    const row = await this.client.one<LogRow>(
+    // Honor the client's deterministic id (dedupe parity with local ingest at
+    // src/lib/ingest.ts): a retry with the same id returns the existing row
+    // instead of inserting a duplicate. A UUID is minted only when absent.
+    const id = input.id ?? randomUUID();
+    const row = await this.client.get<LogRow>(
       `INSERT INTO logs
-         (id, timestamp, project_id, level, source, service, message,
-          trace_id, session_id, agent, url, stack_trace, metadata)
-       VALUES ($1, COALESCE($2, NOW()::text), $3, $4, $5, $6, $7,
-               $8, $9, $10, $11, $12, $13)
-       RETURNING id, timestamp, project_id, level, source, service, message,
-                 trace_id, session_id, agent, url, stack_trace, metadata`,
+         (id, timestamp, project_id, page_id, level, source, service, message,
+          trace_id, session_id, agent, url, stack_trace, metadata,
+          source_event_id, machine_id, repo_id, app_id, process_id, run_id,
+          span_id, parent_span_id, release_id, environment, privacy)
+       VALUES ($1, COALESCE($2, NOW()::text), $3, $4, $5, $6, $7, $8,
+               $9, $10, $11, $12, $13, $14,
+               $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING ${LOG_SELECT_COLUMNS}`,
       [
         id,
         input.timestamp ?? null,
         input.project_id ?? null,
+        input.page_id ?? null,
         input.level,
         input.source ?? "sdk",
         input.service ?? null,
@@ -240,9 +292,26 @@ export class CloudLogStore {
         input.url ?? null,
         input.stack_trace ?? null,
         input.metadata ? JSON.stringify(input.metadata) : null,
+        input.source_event_id ?? null,
+        input.machine_id ?? null,
+        input.repo_id ?? null,
+        input.app_id ?? null,
+        input.process_id ?? null,
+        input.run_id ?? null,
+        input.span_id ?? null,
+        input.parent_span_id ?? null,
+        input.release_id ?? null,
+        input.environment ?? null,
+        input.privacy ?? null,
       ],
     );
-    return rowToLog(row);
+    if (row) return rowToLog(row);
+    // ON CONFLICT (id) DO NOTHING — the row already exists; return it.
+    const existing = await this.getLog(id);
+    if (!existing) {
+      throw new Error(`Log row disappeared after insert: ${id}`);
+    }
+    return existing;
   }
 
   async listLogs(query: ListLogsQuery = {}): Promise<LogRecord[]> {
@@ -271,8 +340,7 @@ export class CloudLogStore {
     );
     params.push(offset);
     const rows = await this.client.many<LogRow>(
-      `SELECT id, timestamp, project_id, level, source, service, message,
-              trace_id, session_id, agent, url, stack_trace, metadata
+      `SELECT ${LOG_SELECT_COLUMNS}
        FROM logs ${where}
        ORDER BY timestamp DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
@@ -282,8 +350,7 @@ export class CloudLogStore {
 
   async getLog(id: string): Promise<LogRecord | null> {
     const row = await this.client.get<LogRow>(
-      `SELECT id, timestamp, project_id, level, source, service, message,
-              trace_id, session_id, agent, url, stack_trace, metadata
+      `SELECT ${LOG_SELECT_COLUMNS}
        FROM logs WHERE id = $1`,
       [id],
     );
@@ -791,8 +858,7 @@ export class CloudLogStore {
 
   async sessionContext(sessionId: string): Promise<SessionContext> {
     const rows = await this.client.many<LogRow>(
-      `SELECT id, timestamp, project_id, level, source, service, message,
-              trace_id, session_id, agent, url, stack_trace, metadata
+      `SELECT ${LOG_SELECT_COLUMNS}
        FROM logs WHERE session_id = $1 ORDER BY timestamp ASC`,
       [sessionId],
     );
@@ -822,8 +888,7 @@ export class CloudLogStore {
     if (window <= 0) return trace;
     const before = await this.client
       .many<LogRow>(
-        `SELECT id, timestamp, project_id, level, source, service, message,
-                trace_id, session_id, agent, url, stack_trace, metadata
+        `SELECT ${LOG_SELECT_COLUMNS}
          FROM logs WHERE id != $1 AND timestamp <= $2
          ORDER BY timestamp DESC LIMIT $3`,
         [logId, log.timestamp, window],
@@ -831,8 +896,7 @@ export class CloudLogStore {
       .then((rows) => rows.map(rowToLog));
     const after = await this.client
       .many<LogRow>(
-        `SELECT id, timestamp, project_id, level, source, service, message,
-                trace_id, session_id, agent, url, stack_trace, metadata
+        `SELECT ${LOG_SELECT_COLUMNS}
          FROM logs WHERE id != $1 AND timestamp > $2
          ORDER BY timestamp ASC LIMIT $3`,
         [logId, log.timestamp, window],

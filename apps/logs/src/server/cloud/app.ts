@@ -209,10 +209,17 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
         400,
       );
     }
+    // Forward the FULL LogEntry shape (mirroring ApiStore.ingestLog's compact()
+    // field set at src/store/api.ts): the client's deterministic id and the
+    // run/process/privacy/page linkage must reach createLog, or every per-line
+    // log from `logs run` loses its id (a retry inserts a duplicate instead of
+    // deduping like local ingest) and its identity linkage on the hosted path.
     const log = await store.createLog({
+      id: typeof body.id === "string" ? body.id : undefined,
       level: body.level,
       message: body.message,
       project_id: body.project_id ?? null,
+      page_id: body.page_id ?? null,
       source: body.source ?? null,
       service: body.service ?? null,
       trace_id: body.trace_id ?? null,
@@ -222,6 +229,17 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
       stack_trace: body.stack_trace ?? null,
       metadata: body.metadata ?? null,
       timestamp: body.timestamp ?? null,
+      source_event_id: body.source_event_id ?? null,
+      machine_id: body.machine_id ?? null,
+      repo_id: body.repo_id ?? null,
+      app_id: body.app_id ?? null,
+      process_id: body.process_id ?? null,
+      run_id: body.run_id ?? null,
+      span_id: body.span_id ?? null,
+      parent_span_id: body.parent_span_id ?? null,
+      release_id: body.release_id ?? null,
+      environment: body.environment ?? null,
+      privacy: body.privacy ?? null,
     });
     return c.json(log, 201);
   });

@@ -323,6 +323,11 @@ export function fakeClient(): {
       return [...state.projects.values()] as unknown as T[];
     }
     if (s.startsWith("INSERT INTO logs")) {
+      // Column order mirrors CloudLogStore.createLog: id, timestamp,
+      // project_id, page_id, level, source, service, message, trace_id,
+      // session_id, agent, url, stack_trace, metadata, source_event_id,
+      // machine_id, repo_id, app_id, process_id, run_id, span_id,
+      // parent_span_id, release_id, environment, privacy.
       const p = params as unknown[];
       const row = {
         id: p[0],
@@ -331,16 +336,28 @@ export function fakeClient(): {
         timestamp:
           p[1] != null ? String(p[1]) : new Date().toISOString(),
         project_id: p[2],
-        level: p[3],
-        source: p[4],
-        service: p[5],
-        message: p[6],
-        trace_id: p[7],
-        session_id: p[8],
-        agent: p[9],
-        url: p[10],
-        stack_trace: p[11],
-        metadata: p[12],
+        page_id: p[3],
+        level: p[4],
+        source: p[5],
+        service: p[6],
+        message: p[7],
+        trace_id: p[8],
+        session_id: p[9],
+        agent: p[10],
+        url: p[11],
+        stack_trace: p[12],
+        metadata: p[13],
+        source_event_id: p[14],
+        machine_id: p[15],
+        repo_id: p[16],
+        app_id: p[17],
+        process_id: p[18],
+        run_id: p[19],
+        span_id: p[20],
+        parent_span_id: p[21],
+        release_id: p[22],
+        environment: p[23],
+        privacy: p[24],
       };
       state.logs.set(p[0] as string, row);
       return [row as unknown as T];
