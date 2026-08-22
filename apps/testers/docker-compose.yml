@@ -33,6 +33,10 @@ services:
     command: ["testers-serve"]
     environment:
       PORT: "8080"
+      # The server binds loopback by default; the container must accept the
+      # published port, and the legacy /api/* auth gate (active because the
+      # DATABASE_URL + signing key are set) is the protection on this surface.
+      TESTERS_HOST: "0.0.0.0"
       HASNA_TESTERS_DATABASE_URL: postgresql://testers:testers@db:5432/testers
       HASNA_TESTERS_API_SIGNING_KEY: ${HASNA_TESTERS_API_SIGNING_KEY:-dev-signing-secret-change-me}
     ports:

@@ -42,6 +42,49 @@ export const AppContext = createContext<{
   setOnCloseModal: () => {},
 });
 
+declare global {
+  interface Window {
+    __TESTERS_CONFIG__?: { authRequired?: boolean };
+  }
+}
+
+const API_KEY_STORAGE_KEY = "testers-api-key";
+
+// In cloud mode the legacy /api/* surface requires an API key (the server
+// injects window.__TESTERS_CONFIG__.authRequired into the served HTML). Prompt
+// for the key once and keep it in localStorage; lib/api.ts sends it as
+// `x-api-key` / `Authorization: Bearer` on every request.
+function ApiKeyPrompt() {
+  const [value, setValue] = useState(() => localStorage.getItem(API_KEY_STORAGE_KEY) ?? "");
+  const [saved, setSaved] = useState(() => Boolean(localStorage.getItem(API_KEY_STORAGE_KEY)));
+  if (saved) return null;
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = value.trim();
+    if (key) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, key);
+      setSaved(true);
+      window.location.reload();
+    }
+  };
+  return (
+    <div style={{ padding: "10px 16px", background: "var(--card-bg, #161622)", borderBottom: "1px solid var(--border)" }}>
+      <form onSubmit={submit} style={{ display: "flex", gap: 8, alignItems: "center", maxWidth: 1200, margin: "0 auto" }}>
+        <span style={{ fontSize: 13, whiteSpace: "nowrap" }}>This server requires an API key.</span>
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Paste testers API key"
+          style={{ flex: 1, padding: "5px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg, #0a0a0a)", color: "inherit", fontSize: 13 }}
+        />
+        <button type="submit" style={{ padding: "5px 12px", borderRadius: 4, border: "none", background: "#4a7ddb", color: "#fff", fontSize: 13, cursor: "pointer" }}>
+          Save
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export function App() {
   const [page, setPage] = useState<Page>({ type: "scenarios" });
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -154,6 +197,7 @@ export function App() {
 
   return (
     <AppContext.Provider value={{ selectedScenarioId, setSelectedScenarioId, searchInputRef, onCloseModal, setOnCloseModal }}>
+      {window.__TESTERS_CONFIG__?.authRequired ? <ApiKeyPrompt /> : null}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 16px", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
         <header style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 32, borderBottom: "1px solid var(--border)", paddingBottom: 16 }}>
           <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Testers</h1>
