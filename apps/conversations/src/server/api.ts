@@ -1764,6 +1764,17 @@ async function handleV1(
       }
       return parsed;
     };
+    // since_id is a cursor seeded at 0 by clients (poll.ts lastSeenId=0) and its
+    // OpenAPI contract is minimum: 0 — `id > 0` is exactly no filter since ids
+    // start at 1. It is the only id-shaped query param that admits 0.
+    const nonNegativeInteger = (value: string | undefined, name: string): number | undefined => {
+      if (value === undefined) return undefined;
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        throw new Error(`${name} must be a non-negative integer`);
+      }
+      return parsed;
+    };
 
     let to: string | undefined;
     let from: string | undefined;
@@ -1787,7 +1798,7 @@ async function handleV1(
       projectId = strictQueryString(url.searchParams, "project_id");
       since = strictIsoDateQuery(url.searchParams, "since");
       until = strictIsoDateQuery(url.searchParams, "until");
-      sinceId = strictPositiveInteger(strictQueryString(url.searchParams, "since_id"), "since_id");
+      sinceId = nonNegativeInteger(strictQueryString(url.searchParams, "since_id"), "since_id");
       id = strictPositiveInteger(strictQueryString(url.searchParams, "id"), "id");
       replyTo = strictPositiveInteger(strictQueryString(url.searchParams, "reply_to"), "reply_to");
       q = strictQueryString(url.searchParams, "q");

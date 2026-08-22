@@ -152,6 +152,29 @@ describe("ApiStore bounded message reads", () => {
     expect(calls.map((call) => call.path)).toEqual(["/messages", "/messages", "/messages"]);
   });
 
+  // Regression cover for todos 5229dec2: the poll cursor seeds at 0, so
+  // readDigest({ cursor: 0 }) must keep forwarding since_id=0 to the hosted API
+  // (whose GET /v1/messages contract declares since_id minimum: 0) rather than
+  // clamping it away or rejecting it client-side.
+  test("readDigest forwards cursor 0 as since_id=0 without clamping", async () => {
+    const queries: Array<Record<string, unknown>> = [];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (_path: string, options?: { query?: Record<string, unknown> }) => {
+          queries.push(options?.query ?? {});
+          return { messages: [], has_more: false, next_cursor: null };
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    await new ApiStore(client).readDigest({ channel: "cursor-zero", cursor: 0 });
+
+    expect(queries).toHaveLength(3);
+    for (const query of queries) expect(query.since_id).toBe(0);
+  });
+
   test("readDigest preserves the hosted reserved-alias error instead of returning an empty digest", async () => {
     const aliasError = Object.assign(
       new Error("Channel #chief-research is a reserved historical alias for #agent-chief-research."),

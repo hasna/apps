@@ -1481,6 +1481,46 @@ describe("conversations-serve", () => {
     expect(list.messages.length).toBeGreaterThan(0);
   });
 
+  // Regression cover for todos 5229dec2. The hosted GET /v1/messages handler
+  // rejected since_id=0 with a 400 ("must be a positive integer"), contradicting
+  // the OpenAPI contract (openapi.ts declares since_id minimum: 0), the local
+  // SQLite path (messages.ts validates since_id with allowZero=true), and the
+  // poll cursor (poll.ts seeds lastSeenId=0 and sends since_id=0 every tick).
+  // The SQL clause is `id > $n` and ids start at 1, so since_id=0 must behave
+  // exactly like no id filter.
+  test("GET /v1/messages accepts since_id=0 and returns the same page as no id filter", async () => {
+    const channelName = "since-zero-acceptance";
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: channelName, created_by: "test", description: "d" }),
+    });
+    expect(created.status).toBe(201);
+
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: "since-zero", channel: channelName }),
+    });
+    expect(sent.status).toBe(201);
+    expect((await sent.json()).message.id).toBeGreaterThan(0);
+
+    const zero = await fetch(`${base}/v1/messages?channel=${channelName}&since_id=0`, { headers: { "x-api-key": rwKey } });
+    expect(zero.status).toBe(200);
+
+    // Control: since_id=1 stays accepted.
+    const one = await fetch(`${base}/v1/messages?channel=${channelName}&since_id=1`, { headers: { "x-api-key": rwKey } });
+    expect(one.status).toBe(200);
+
+    // since_id=0 is the OpenAPI-declared minimum and must equal the unfiltered page.
+    const unfiltered = await fetch(`${base}/v1/messages?channel=${channelName}`, { headers: { "x-api-key": rwKey } });
+    expect(unfiltered.status).toBe(200);
+    const zeroPage = (await zero.json()).messages;
+    const unfilteredPage = (await unfiltered.json()).messages;
+    expect(zeroPage.length).toBeGreaterThan(0);
+    expect(zeroPage.map((m: any) => m.id)).toEqual(unfilteredPage.map((m: any) => m.id));
+  });
+
   test("POST /v1/messages persists metadata for direct and channel UUID readback", async () => {
     const channelName = "message-metadata-roundtrip";
     const created = await fetch(`${base}/v1/channels`, {
