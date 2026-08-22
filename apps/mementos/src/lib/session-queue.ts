@@ -5,7 +5,7 @@
  */
 
 import { getDatabase } from "../db/database.js";
-import { getNextPendingJob } from "../db/session-jobs.js";
+import { getNextPendingJob, recoverStaleProcessingJobs } from "../db/session-jobs.js";
 import { processSessionJob } from "./session-processor.js";
 
 // ============================================================================
@@ -90,6 +90,14 @@ export function startSessionQueueWorker(): void {
 
   // Poll for pending jobs every 5 seconds
   setInterval(() => {
+    // Requeue jobs stranded in `processing` by a crashed processor (claimed
+    // more than 30 minutes ago) so they re-enter the queue. Best-effort: a
+    // recovery failure must never stop the poll.
+    try {
+      recoverStaleProcessingJobs(30 * 60 * 1000);
+    } catch {
+      // Non-fatal
+    }
     void _processNext();
   }, 5000);
 }

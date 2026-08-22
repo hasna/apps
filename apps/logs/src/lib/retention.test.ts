@@ -1,8 +1,36 @@
 import { describe, expect, it } from "bun:test";
 import { createTestDb } from "../db/index.ts";
-import { getEventRecord, verifyEventStore } from "./event-store.ts";
+import {
+  getEventRecord,
+  rebuildEventStoreIndex,
+  verifyEventStore,
+} from "./event-store.ts";
 import { ingestBatch, ingestLog } from "./ingest.ts";
 import { runRetentionForProject, setRetentionPolicy } from "./retention.ts";
+
+function logsRowCount(
+  db: ReturnType<typeof createTestDb>,
+  id: string,
+): number {
+  return (
+    db.prepare("SELECT COUNT(*) AS count FROM logs WHERE id = ?").get(id) as {
+      count: number;
+    }
+  ).count;
+}
+
+function tombstoneCount(
+  db: ReturnType<typeof createTestDb>,
+  eventId: string,
+): number {
+  return (
+    db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM retention_evictions WHERE event_id = ?",
+      )
+      .get(eventId) as { count: number }
+  ).count;
+}
 
 function seedProject(db: ReturnType<typeof createTestDb>, name = "app") {
   return db
@@ -101,6 +129,66 @@ describe("retention", () => {
       ).count,
     ).toBe(2);
     expect(verifyEventStore(db).ok).toBe(true);
+  });
+
+  it("rebuild-index does not resurrect retention-evicted projection rows", () => {
+    const db = createTestDb();
+    const p = seedProject(db);
+    setRetentionPolicy(db, p.id, { max_rows: 1 });
+    // Recent timestamps: the info TTL (168h default) must not fire, so only
+    // max_rows evicts the oldest projection row.
+    const olderTimestamp = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const newerTimestamp = new Date().toISOString();
+    const older = ingestLog(db, {
+      id: "retention-rebuild-evt-older",
+      timestamp: olderTimestamp,
+      level: "info",
+      message: "evicted",
+      project_id: p.id,
+    });
+    const newer = ingestLog(db, {
+      id: "retention-rebuild-evt-newer",
+      timestamp: newerTimestamp,
+      level: "info",
+      message: "kept",
+      project_id: p.id,
+    });
+
+    // max_rows eviction deletes only the oldest logs projection row; the raw
+    // event and its event_records index row survive, and the eviction is
+    // recorded as a tombstone.
+    const result = runRetentionForProject(db, p.id);
+    expect(result.deleted).toBe(1);
+    expect(logsRowCount(db, older.id)).toBe(0);
+    expect(logsRowCount(db, newer.id)).toBe(1);
+    expect(getEventRecord(db, older.id)).toBeTruthy();
+    expect(tombstoneCount(db, older.id)).toBe(1);
+
+    // `logs doctor rebuild-index` clears every projection and replays the raw
+    // segments. The evicted id must NOT be resurrected, the kept id must.
+    const rebuild = rebuildEventStoreIndex(db);
+    expect(rebuild.errors).toEqual([]);
+    expect(logsRowCount(db, older.id)).toBe(0);
+    expect(logsRowCount(db, newer.id)).toBe(1);
+
+    // A deliberate SDK re-ingest of the evicted deterministic id clears the
+    // tombstone: the projection row is re-materialized and a later rebuild
+    // keeps it, preserving the documented retry contract.
+    const replayed = ingestLog(db, {
+      id: "retention-rebuild-evt-older",
+      timestamp: olderTimestamp,
+      level: "info",
+      message: "evicted",
+      project_id: p.id,
+    });
+    expect(replayed.id).toBe(older.id);
+    expect(logsRowCount(db, older.id)).toBe(1);
+    expect(tombstoneCount(db, older.id)).toBe(0);
+    expect(verifyEventStore(db).ok).toBe(true);
+    const rebuildAfterReingest = rebuildEventStoreIndex(db);
+    expect(rebuildAfterReingest.errors).toEqual([]);
+    expect(logsRowCount(db, older.id)).toBe(1);
+    expect(logsRowCount(db, newer.id)).toBe(1);
   });
 
   it("returns 0 for unknown project", () => {

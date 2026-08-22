@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 import { runMigrations } from "./migrate.js";
 import { MemorySkillsStore, PostgresSkillsStore } from "./store.js";
 import { SqliteSkillsStore } from "./sqlite-store.js";
+import { MemoryGovernanceStore, PostgresGovernanceStore, SqliteGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import type { ApiPrincipal, SkillsProductStore } from "./types.js";
 
 export const TEST_DATABASE_URL_ENV = "HASNA_SKILLS_TEST_DATABASE_URL";
@@ -40,6 +41,11 @@ export interface SeedApiKey {
 
 export interface StoreFixture {
   store: SkillsProductStore;
+  /**
+   * Governance store over the same database as `store`, for surfaces that need
+   * the append-only lifecycle ledger and ceiling reads (cancellation).
+   */
+  governanceStore: GovernanceStore;
   /** True when the server must be told it is allowed to run on this store. */
   allowEphemeralStore: boolean;
   close(): Promise<void>;
@@ -78,7 +84,12 @@ function memoryBackend(): StoreBackendFixture {
     async create(seed = []) {
       const store = new MemorySkillsStore();
       await seedStore(store, seed);
-      return { store, allowEphemeralStore: true, close: async () => {} };
+      return {
+        store,
+        governanceStore: new MemoryGovernanceStore(),
+        allowEphemeralStore: true,
+        close: async () => {},
+      };
     },
   };
 }
@@ -89,12 +100,15 @@ function sqliteBackend(): StoreBackendFixture {
     async create(seed = []) {
       const dir = mkdtempSync(join(tmpdir(), "skills-sqlite-store-"));
       const store = new SqliteSkillsStore(join(dir, "server.db"));
+      const governanceStore = new SqliteGovernanceStore(join(dir, "server.db"));
       await seedStore(store, seed);
       return {
         store,
+        governanceStore,
         allowEphemeralStore: false,
         close: async () => {
           await store.close();
+          await governanceStore.close();
           rmSync(dir, { recursive: true, force: true });
         },
       };
@@ -127,12 +141,15 @@ async function postgresBackendIfReachable(): Promise<StoreBackendFixture | null>
       const url = withDatabaseName(adminUrl, database);
       await runMigrations(url);
       const store = new PostgresSkillsStore(url);
+      const governanceStore = new PostgresGovernanceStore(url);
       await seedStore(store, seed);
       return {
         store,
+        governanceStore,
         allowEphemeralStore: false,
         close: async () => {
           await store.close();
+          await governanceStore.close();
           await withAdminSql(adminUrl, async (sql) => {
             await sql.unsafe(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
           });

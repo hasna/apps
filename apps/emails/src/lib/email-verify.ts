@@ -9,9 +9,9 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function verifyEmailAddress(
   email: string,
-  opts: { smtpProbe?: boolean; timeoutMs?: number } = {},
+  opts: { smtpProbe?: boolean; timeoutMs?: number; smtpProbePort?: number } = {},
 ): Promise<VerifyResult> {
-  const { smtpProbe = false, timeoutMs = 5000 } = opts;
+  const { smtpProbe = false, timeoutMs = 5000, smtpProbePort = 25 } = opts;
 
   // 1. Format check
   if (!EMAIL_REGEX.test(email)) {
@@ -43,7 +43,7 @@ export async function verifyEmailAddress(
   // 3. SMTP probe (RCPT TO without sending)
   const smtpHost = mxRecords[0]!;
   try {
-    const smtpResult = await smtpProbeCheck(email, smtpHost, timeoutMs);
+    const smtpResult = await smtpProbeCheck(email, smtpHost, timeoutMs, smtpProbePort);
     return {
       email,
       valid: smtpResult.valid,
@@ -60,11 +60,15 @@ async function smtpProbeCheck(
   email: string,
   host: string,
   timeoutMs: number,
+  port = 25,
 ): Promise<{ valid: boolean; reason: string }> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("SMTP timeout")), timeoutMs);
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("SMTP timeout"));
+    }, timeoutMs);
 
-    const socket = createConnection({ host, port: 25 });
+    const socket = createConnection({ host, port });
     let state = "connect";
     let buffer = "";
 

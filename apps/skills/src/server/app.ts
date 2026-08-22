@@ -1,5 +1,8 @@
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { signBundleBytes } from "../lib/skill-bundles.js";
+import { createCancelService } from "../sdk/cancel.js";
+import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
+import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { authenticateRequest } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
@@ -27,11 +30,13 @@ import {
   skillSummary,
 } from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
-import { SkillRevisionConflictError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
+import { SkillRevisionConflictError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
 export interface SkillsServerOptions {
   config?: Partial<SkillsServerConfig>;
   store?: SkillsProductStore;
+  /** Lifecycle ledger and ceiling reads for governance surfaces (cancellation). Defaults to the store's database. */
+  governanceStore?: GovernanceStore;
 }
 
 /**
@@ -76,6 +81,11 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
     bootstrapApiKey: config.bootstrapApiKey,
   });
   assertDurableStore(store, config);
+  // Governance surfaces (cancellation) need the append-only lifecycle ledger and
+  // the ceiling reads over the same database the product store writes. The
+  // dialect resolution mirrors createStore's: postgres:// URL -> Postgres, no
+  // URL -> the durable SQLite file in the data directory.
+  const governanceStore = options.governanceStore ?? (await createGovernanceStore(config.databaseUrl));
   const artifactStorage = new ArtifactStorage({
     bucket: config.artifactBucket,
     prefix: config.artifactPrefix,
@@ -103,7 +113,7 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
         }
 
         if (segments[0] === "api" && segments[1] === "v1") {
-          return await handleApiV1(store, principal, request, segments.slice(2), config, artifactStorage);
+          return await handleApiV1(store, governanceStore, principal, request, segments.slice(2), config, artifactStorage);
         }
       }
 
@@ -167,6 +177,7 @@ const BODY_LIMIT_HEADROOM_BYTES = 1_000_000;
 
 async function handleApiV1(
   store: SkillsProductStore,
+  governanceStore: GovernanceStore,
   principal: ApiPrincipal,
   request: Request,
   parts: string[],
@@ -382,8 +393,28 @@ async function handleApiV1(
     if (request.method === "POST" && id && subresource === "cancel") {
       const run = await store.getRun(principal, id);
       if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
-      const next = await store.updateRun(id, { status: "cancel_requested" });
-      return json(runPayload(next ?? run));
+      // The shipped cancel service fences the run's lease_generation in the same
+      // statement that moves it to cancel_requested, then transitions it to the
+      // terminal cancelled state, quarantines partial artifacts, and appends a
+      // cancellation receipt. An unfenced updateRun here let a worker that
+      // finished after the cancel overwrite the cancellation, and stranded
+      // queued runs in the non-terminal cancel_requested state forever (todos
+      // b72cc950).
+      try {
+        const outcome = await createCancelService({ store, governanceStore, storage: artifactStorage }).cancel(principal, id, principal.email);
+        return json(runPayload(outcome.run));
+      } catch (error) {
+        // A generation race while cancelling (the run moved between the read
+        // above and the fenced transition) is the caller's problem to re-read,
+        // not a server fault.
+        if (error instanceof GovernanceError && error.code === GOVERNANCE_ERROR_CODES.STALE_LEASE_GENERATION) {
+          return json({ error: error.message, code: error.code }, { status: 409 });
+        }
+        if (error instanceof StaleLeaseGenerationError) {
+          return json({ error: error.message, code: GOVERNANCE_ERROR_CODES.STALE_LEASE_GENERATION }, { status: 409 });
+        }
+        throw error;
+      }
     }
   }
 

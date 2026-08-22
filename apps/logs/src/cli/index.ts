@@ -1243,7 +1243,13 @@ program
       return;
     }
 
-    const interval = setInterval(() => void poll(), pollIntervalMs);
+    const interval = setInterval(() => {
+      void poll().catch((err) =>
+        console.error(
+          `[logs watch] poll failed, retrying in ${pollIntervalMs}ms: ${(err as Error).message}`,
+        ),
+      );
+    }, pollIntervalMs);
     process.on("SIGINT", () => {
       clearInterval(interval);
       console.log(`\n\nErrors: ${errorCount}  Warnings: ${warnCount}`);
@@ -1583,7 +1589,13 @@ async function watchEventCatalog(
   await poll();
   if (opts.once) return;
 
-  const interval = setInterval(() => void poll(), pollIntervalMs);
+  const interval = setInterval(() => {
+    void poll().catch((err) =>
+      console.error(
+        `[logs watch] poll failed, retrying in ${pollIntervalMs}ms: ${(err as Error).message}`,
+      ),
+    );
+  }, pollIntervalMs);
   process.on("SIGINT", () => {
     clearInterval(interval);
     console.log(

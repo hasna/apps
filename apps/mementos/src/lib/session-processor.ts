@@ -11,6 +11,7 @@ import { providerRegistry } from "./providers/registry.js";
 import {
   updateSessionJob,
   getSessionJob,
+  claimSessionJob,
   type SessionMemoryJob,
 } from "../db/session-jobs.js";
 import { extractToolLessons } from "./tool-lesson-extractor.js";
@@ -239,13 +240,14 @@ export async function processSessionJob(
     return result;
   }
 
-  // Mark as processing
+  // Mark as processing — atomically claim the pending job so concurrent
+  // workers (server poll, CLI, MCP, route) can never run the same job twice.
   try {
-    updateSessionJob(
-      jobId,
-      { status: "processing", started_at: new Date().toISOString() },
-      db
-    );
+    const changes = claimSessionJob(jobId, db);
+    if (changes === 0) {
+      result.errors.push(`Job already claimed or not pending: ${jobId}`);
+      return result;
+    }
   } catch (e) {
     result.errors.push(`Failed to mark job as processing: ${String(e)}`);
     return result;

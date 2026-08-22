@@ -9,6 +9,8 @@ import {
   listSessionJobs,
   updateSessionJob,
   getNextPendingJob,
+  claimSessionJob,
+  recoverStaleProcessingJobs,
 } from "./session-jobs.js";
 
 beforeEach(() => {
@@ -115,5 +117,91 @@ describe("updateSessionJob - edge cases", () => {
 
     expect(offsetJobs.length).toBe(3);
     expect(allJobs[2]!.id).toBe(offsetJobs[0]!.id);
+  });
+});
+
+// ============================================================================
+// claimSessionJob — atomic single-statement CAS claim
+// ============================================================================
+
+describe("claimSessionJob", () => {
+  it("claims a pending job: returns 1 and marks processing with started_at", () => {
+    const job = createSessionJob({ session_id: "s-claim", transcript: "pending" });
+
+    const changes = claimSessionJob(job.id);
+
+    expect(changes).toBe(1);
+    const claimed = getSessionJob(job.id);
+    expect(claimed!.status).toBe("processing");
+    expect(claimed!.started_at).toBeTruthy();
+  });
+
+  it("returns 0 when the job is already processing (second concurrent claim)", () => {
+    const job = createSessionJob({ session_id: "s-claim2", transcript: "pending" });
+    expect(claimSessionJob(job.id)).toBe(1);
+
+    const second = claimSessionJob(job.id);
+    expect(second).toBe(0);
+  });
+
+  it("returns 0 when the job is completed or failed", () => {
+    const done = createSessionJob({ session_id: "s-done", transcript: "done" });
+    updateSessionJob(done.id, { status: "completed" });
+    expect(claimSessionJob(done.id)).toBe(0);
+
+    const failed = createSessionJob({ session_id: "s-failed", transcript: "failed" });
+    updateSessionJob(failed.id, { status: "failed" });
+    expect(claimSessionJob(failed.id)).toBe(0);
+  });
+
+  it("returns 0 for a nonexistent job", () => {
+    expect(claimSessionJob("no-such-job")).toBe(0);
+  });
+});
+
+// ============================================================================
+// recoverStaleProcessingJobs — requeue crashed processors
+// ============================================================================
+
+describe("recoverStaleProcessingJobs", () => {
+  it("resets a stale processing row to pending", () => {
+    const job = createSessionJob({ session_id: "s-stale", transcript: "stale" });
+    claimSessionJob(job.id);
+    const staleStartedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    updateSessionJob(job.id, { started_at: staleStartedAt });
+
+    const recovered = recoverStaleProcessingJobs(60 * 1000);
+
+    expect(recovered).toBe(1);
+    const after = getSessionJob(job.id);
+    expect(after!.status).toBe("pending");
+    expect(getNextPendingJob()!.id).toBe(job.id);
+  });
+
+  it("leaves a fresh processing row alone", () => {
+    const job = createSessionJob({ session_id: "s-fresh", transcript: "fresh" });
+    claimSessionJob(job.id);
+
+    const recovered = recoverStaleProcessingJobs(60 * 1000);
+
+    expect(recovered).toBe(0);
+    expect(getSessionJob(job.id)!.status).toBe("processing");
+  });
+
+  it("returns the count of recovered rows only", () => {
+    const stale = createSessionJob({ session_id: "s-stale2", transcript: "stale" });
+    claimSessionJob(stale.id);
+    updateSessionJob(stale.id, {
+      started_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    });
+
+    const fresh = createSessionJob({ session_id: "s-fresh2", transcript: "fresh" });
+    claimSessionJob(fresh.id);
+
+    const recovered = recoverStaleProcessingJobs(60 * 1000);
+
+    expect(recovered).toBe(1);
+    expect(getSessionJob(stale.id)!.status).toBe("pending");
+    expect(getSessionJob(fresh.id)!.status).toBe("processing");
   });
 });

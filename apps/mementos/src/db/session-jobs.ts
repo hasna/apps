@@ -229,3 +229,39 @@ export function getNextPendingJob(db?: Database): SessionMemoryJob | null {
   if (!row) return null;
   return parseJobRow(row);
 }
+
+/**
+ * Atomically claim a pending job for processing.
+ * Single-statement compare-and-swap: only a `pending` row transitions to
+ * `processing`, so concurrent workers (server poll, CLI, MCP, route) can never
+ * claim the same job twice. Returns the number of rows changed (1 = claimed,
+ * 0 = already claimed, not pending, or missing).
+ */
+export function claimSessionJob(id: string, db?: Database): number {
+  const d = db || getDatabase();
+  const startedAt = now();
+  const result = d.run(
+    "UPDATE session_memory_jobs SET status = 'processing', started_at = ? WHERE id = ? AND status = 'pending'",
+    [startedAt, id]
+  );
+  return result.changes;
+}
+
+/**
+ * Requeue jobs stranded in `processing` by a crashed processor.
+ * Resets rows whose claim started before the cutoff back to `pending` so the
+ * poll re-picks them up. The cutoff is a JS-computed ISO-8601 timestamp
+ * (matching the `started_at` written by claimSessionJob / updateSessionJob);
+ * SQLite's `datetime('now')` must NOT be used here — its format differs from
+ * the ISO-8601 stored by `now()` and would compare lexically wrong. Returns
+ * the number of rows recovered.
+ */
+export function recoverStaleProcessingJobs(maxAgeMs: number, db?: Database): number {
+  const d = db || getDatabase();
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const result = d.run(
+    "UPDATE session_memory_jobs SET status = 'pending', started_at = NULL WHERE status = 'processing' AND started_at < ?",
+    [cutoff]
+  );
+  return result.changes;
+}

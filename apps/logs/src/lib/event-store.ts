@@ -546,6 +546,17 @@ function rebuildEventStoreIndexLocked(
   let indexedEvents = 0;
   let skippedEvents = 0;
   const errors: string[] = [];
+  // Retention eviction tombstones (lib/retention.ts): ids whose `logs`
+  // projection row retention deliberately removed. Replaying the raw segments
+  // must not resurrect them; the raw event stays indexed, only the projection
+  // replay is skipped.
+  const retentionEvicted = new Set(
+    (
+      db.prepare("SELECT event_id FROM retention_evictions").all() as {
+        event_id: string;
+      }[]
+    ).map((row) => row.event_id),
+  );
 
   db.transaction(() => {
     db.run("DELETE FROM event_records");
@@ -579,9 +590,18 @@ function rebuildEventStoreIndexLocked(
       for (const item of scan.events) {
         try {
           const index = eventIndexFromEnvelope(db, item.event);
-          if (item.event.type === "log")
-            replayLogProjection(db, item.event, index);
-          indexRawEvent(db, index, item.write);
+          const tombstoned =
+            item.event.type === "log" &&
+            retentionEvicted.has(item.event.event_id);
+          if (!tombstoned) replayLogProjection(db, item.event, index);
+          // event_records.log_id references logs(id): a tombstoned event has
+          // no projection row, so index its raw record with a null log_id
+          // instead of failing the foreign key.
+          indexRawEvent(
+            db,
+            tombstoned ? { ...index, log_id: null } : index,
+            item.write,
+          );
           applyReplayedCompatibilityProjections(db, item.event, index);
           indexedEvents += 1;
         } catch (error) {

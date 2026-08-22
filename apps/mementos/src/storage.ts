@@ -1178,15 +1178,29 @@ function transferRows(
   table: string,
   rows: Array<Record<string, any>>,
   options: IncrementalSyncOptions
-): { written: number; skipped: number; errors: string[] } {
+): { written: number; skipped: number; errors: string[]; maxSyncedAt: string | null } {
   const primaryKey = options.primaryKey ?? "id";
   const conflictColumn = options.conflictColumn ?? "updated_at";
   let written = 0;
   let skipped = 0;
+  let maxSyncedAt: string | null = null;
   const errors: string[] = [];
 
+  // Tracks the newest conflictColumn value over rows this call actually
+  // processed (written or skipped because the target already holds a newer
+  // version). Errored rows are excluded so the caller's cursor never advances
+  // past a row that still needs retrying. String comparison mirrors the
+  // `WHERE "${conflictColumn}" > ?` selection, so the returned value is the
+  // exact high-water mark of the result set.
+  const bumpMaxSyncedAt = (row: Record<string, any>): void => {
+    const value = row[conflictColumn];
+    if (typeof value === "string" && (maxSyncedAt === null || value > maxSyncedAt)) {
+      maxSyncedAt = value;
+    }
+  };
+
   if (rows.length === 0) {
-    return { written, skipped, errors };
+    return { written, skipped, errors, maxSyncedAt };
   }
 
   const columns = Object.keys(rows[0] ?? {});
@@ -1195,6 +1209,7 @@ function transferRows(
       written,
       skipped,
       errors: [`Table "${table}" has no "${primaryKey}" column; skipping`],
+      maxSyncedAt,
     };
   }
 
@@ -1213,6 +1228,7 @@ function transferRows(
           const incomingTime = Date.parse(String(row[conflictColumn]));
           if (Number.isFinite(existingTime) && Number.isFinite(incomingTime) && existingTime >= incomingTime) {
             skipped++;
+            bumpMaxSyncedAt(row);
             continue;
           }
         }
@@ -1233,12 +1249,13 @@ function transferRows(
         );
       }
       written++;
+      bumpMaxSyncedAt(row);
     } catch (error) {
       errors.push(`Row ${String(row[primaryKey] ?? "unknown")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  return { written, skipped, errors };
+  return { written, skipped, errors, maxSyncedAt };
 }
 
 export function incrementalSyncPush(
@@ -1304,24 +1321,39 @@ function runIncrementalSync(
         stat.first_sync = true;
       }
 
+      let maxSyncedAt: string | null = null;
+
       for (let offset = 0; offset < rows.length; offset += batchSize) {
         const batch = rows.slice(offset, offset + batchSize);
         const result = transferRows(target, table, batch, options);
         stat.synced_rows += result.written;
         stat.skipped_rows += result.skipped;
         stat.errors.push(...result.errors);
+        if (result.maxSyncedAt !== null && (maxSyncedAt === null || result.maxSyncedAt > maxSyncedAt)) {
+          maxSyncedAt = result.maxSyncedAt;
+        }
       }
 
       if (rows.length === 0) {
         stat.skipped_rows = stat.total_rows;
       }
 
-      upsertSyncMeta(metaDb, {
-        table_name: table,
-        last_synced_at: new Date().toISOString(),
-        last_synced_row_count: stat.synced_rows,
-        direction,
-      });
+      // The cursor is the high-water mark of what THIS run actually processed
+      // (max updated_at over rows written or skipped) — never the wall clock,
+      // which silently dropped any source row mutated between the SELECT above
+      // and the cursor write (its updated_at landed inside (old, now] and the
+      // strict `>` excluded it forever). When a row errored, the cursor stays
+      // in place so the errored row remains eligible for retry, and an empty
+      // selection never advances the cursor (converges, no busy-loop).
+      const nextCursor = maxSyncedAt ?? meta?.last_synced_at ?? null;
+      if (rows.length > 0 && stat.errors.length === 0 && nextCursor !== null) {
+        upsertSyncMeta(metaDb, {
+          table_name: table,
+          last_synced_at: nextCursor,
+          last_synced_row_count: stat.synced_rows,
+          direction,
+        });
+      }
     } catch (error) {
       stat.errors.push(`Table "${table}": ${error instanceof Error ? error.message : String(error)}`);
     }

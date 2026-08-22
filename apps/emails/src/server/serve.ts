@@ -222,7 +222,11 @@ export function resolveDashboardStaticPath(dashboardDir: string, requestPath: st
   return filePath;
 }
 
-export async function handleDashboardRequest(req: Request, dashboardDir = resolveDashboardDir()): Promise<Response> {
+export async function handleDashboardRequest(
+  req: Request,
+  dashboardDir = resolveDashboardDir(),
+  socketAddress?: string | null,
+): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
@@ -237,7 +241,7 @@ export async function handleDashboardRequest(req: Request, dashboardDir = resolv
   if (path.startsWith("/api/") || path.startsWith("/track/") || path.startsWith("/webhook/") || path.startsWith("/open/") || path.startsWith("/click/")) {
     const apiOriginAccess = isDashboardApiPath(path) ? dashboardApiOriginAccess(req, url) : null;
     if (apiOriginAccess && !apiOriginAccess.allowed) return dashboardApiForbiddenResponse(apiOriginAccess);
-    const apiResponse = await handleApiRequest(req, url, path, method);
+    const apiResponse = await handleApiRequest(req, url, path, method, socketAddress);
     if (apiResponse !== null) {
       return apiOriginAccess ? withDashboardApiCors(apiResponse, apiOriginAccess, req) : apiResponse;
     }
@@ -286,7 +290,7 @@ export async function startServer(port = 3900, hostname = "127.0.0.1"): Promise<
   const server = Bun.serve({
     port,
     hostname,
-    fetch: (req) => handleDashboardRequest(req, dashboardDir),
+    fetch: (req, server) => handleDashboardRequest(req, dashboardDir, server.requestIP(req)?.address),
   });
 
   console.log(`\nEmails dashboard running at http://${hostname}:${server.port}`);

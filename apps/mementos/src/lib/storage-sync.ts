@@ -466,6 +466,8 @@ function syncMemoriesTable(
         ) as RawMemoryRow[])
       : (source.all(`SELECT * FROM "${MEMORY_TABLE}"`) as RawMemoryRow[]);
 
+    const erroredRowIds = new Set<string>();
+
     for (const row of rows) {
       try {
         const sourceMachine = sourceMachineRef(row, currentMachineId);
@@ -545,6 +547,7 @@ function syncMemoriesTable(
         clearMemoryEmbedding(winnerDb, String(winner["id"]));
         stat.synced_rows++;
       } catch (error) {
+        erroredRowIds.add(String(row["id"] ?? "unknown"));
         stat.errors.push(
           `Memory ${String(row["id"] ?? "unknown")}: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -555,12 +558,34 @@ function syncMemoriesTable(
       stat.skipped_rows = stat.total_rows;
     }
 
-    upsertMemorySyncMeta(local, {
-      table_name: MEMORY_TABLE,
-      direction,
-      last_synced_at: new Date().toISOString(),
-      last_synced_row_count: stat.synced_rows,
-    });
+    // The cursor is the high-water mark of what THIS run actually processed
+    // (max updated_at over rows written or skipped) — never the wall clock,
+    // which silently dropped any memory mutated between the SELECT above and
+    // the cursor write (its updated_at landed inside (old, now] and the strict
+    // `>` excluded it forever). When a row errored, the cursor stays in place
+    // so the errored row remains eligible for retry, and an empty selection
+    // never advances the cursor (converges, no busy-loop).
+    if (rows.length > 0 && stat.errors.length === 0) {
+      let maxSyncedAt: string | null = null;
+      for (const row of rows) {
+        if (erroredRowIds.has(String(row["id"] ?? "unknown"))) {
+          continue;
+        }
+        const value = row["updated_at"];
+        if (typeof value === "string" && (maxSyncedAt === null || value > maxSyncedAt)) {
+          maxSyncedAt = value;
+        }
+      }
+      const nextCursor = maxSyncedAt ?? syncMeta?.last_synced_at ?? null;
+      if (nextCursor !== null) {
+        upsertMemorySyncMeta(local, {
+          table_name: MEMORY_TABLE,
+          direction,
+          last_synced_at: nextCursor,
+          last_synced_row_count: stat.synced_rows,
+        });
+      }
+    }
   } catch (error) {
     stat.errors.push(error instanceof Error ? error.message : String(error));
   }
