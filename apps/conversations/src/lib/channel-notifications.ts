@@ -324,14 +324,40 @@ export function baselineChannelNotifications(agent: string): number {
   return result.changes;
 }
 
+/**
+ * Acknowledge every currently unread channel notification for one identity,
+ * optionally scoped to one channel.
+ *
+ * The INSERT ... SELECT is one database statement, so it reads one fixed
+ * snapshot and marks the whole set in one round. A paging loop cannot do this:
+ * it reads the unread-only filter with an OFFSET cursor and marks each returned
+ * page before fetching the next, so every round removes rows from the filtered
+ * set and the OFFSET silently skips one page per round.
+ */
 export function markAllChannelNotificationsRead(agent: string, channel?: string): number {
-  let cursor = 0;
-  let total = 0;
-  for (;;) {
-    const page = readChannelNotifications({ agent, channel, unread_only: true, limit: 100, cursor, max_bytes: 65_536 });
-    if (page.notifications.length === 0 && page.next_cursor === null) return total;
-    total += markChannelNotificationsRead(agent, page.notifications.map((row) => row.message_id));
-    if (page.next_cursor === null) return total;
-    cursor = page.next_cursor;
+  const db = getDb();
+  const selfSenderId = resolveSelfSenderId(agent, getPresence(agent));
+  const conditions: string[] = [
+    "s.agent = ?",
+    "m.channel IS NOT NULL",
+    "m.from_agent != ?",
+    "m.id > s.since_message_id",
+    "snr.message_id IS NULL",
+  ];
+  const params: (string | number)[] = [agent, agent, selfSenderId];
+  if (channel) {
+    conditions.push("m.channel = ?");
+    params.push(normalizeChannelName(channel));
   }
+  const result = db.prepare(`
+    INSERT OR IGNORE INTO channel_notification_reads (agent, message_id)
+    SELECT ?, m.id
+    FROM messages m
+    INNER JOIN channel_subscriptions s
+      ON s.channel = m.channel
+    LEFT JOIN channel_notification_reads snr
+      ON snr.message_id = m.id AND snr.agent = ?
+    WHERE ${conditions.join(" AND ")}
+  `).run(agent, ...params);
+  return result.changes;
 }

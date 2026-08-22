@@ -176,6 +176,30 @@ describe("channel notifications", () => {
     expect(unread).toHaveLength(0);
   });
 
+  test("marks ALL unread notifications read across multiple pages", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+
+    // 300 unread notifications exceed the 100-notification page cap, so the
+    // legacy paging loop had to cross page boundaries while mutating the
+    // unread filter — each round silently skipped one page (ids 101..200
+    // stayed unread forever). The set-based replacement must mark all 300.
+    for (let index = 0; index < 300; index++) {
+      sendMessage({
+        from: index % 2 === 0 ? "alice" : "bob",
+        to: "ops",
+        channel: "ops",
+        session_id: "channel:ops",
+        content: `notification ${index}`,
+      });
+    }
+    expect(readChannelNotifications({ agent: "agent-a", limit: 100, max_bytes: 65_536 })).toHaveLength(100);
+
+    expect(markAllChannelNotificationsRead("agent-a", "ops")).toBe(300);
+    expect(readChannelNotifications({ agent: "agent-a" })).toHaveLength(0);
+    expect(readChannelNotifications({ agent: "agent-a", channel: "ops" })).toHaveLength(0);
+  });
+
   test("mark_read option clears unread state on read", () => {
     createChannel("ops", "creator");
     subscribeToChannelNotifications("ops", "agent-a");
