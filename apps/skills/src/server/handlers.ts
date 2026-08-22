@@ -93,7 +93,18 @@ async function failRun(
   code: string,
   message: string,
 ): Promise<ServerRunRecord> {
-  await store.appendLog(run.id, run.orgId, "error", message);
+  // Best-effort: the error log must never abort the terminal transition. The
+  // failure that lands us here can itself be a log-write failure (SQLITE_BUSY
+  // past the finite busy_timeout, a Postgres log-sequence conflict past
+  // LOG_SEQUENCE_ATTEMPTS), and a second appendLog rejecting inside this catch
+  // would propagate out of executeRun before fencedTransition runs - the run
+  // then stays 'running' with locked_by set and is never reclaimed, because
+  // claimNextRun selects only queued/retrying rows.
+  try {
+    await store.appendLog(run.id, run.orgId, "error", message);
+  } catch {
+    // The run's terminal state is the invariant; the log line is not.
+  }
   const next = await fencedTransition(store, run, {
     status: "failed",
     errorCode: code,
@@ -120,7 +131,13 @@ async function fencedTransition(
   if (!store.transitionRun) return store.updateRun(run.id, patch);
   const next = await store.transitionRun(run.id, patch, run.leaseGeneration);
   if (!next) {
-    await store.appendLog(run.id, run.orgId, "warn", `late write rejected: run no longer owned at lease_generation ${run.leaseGeneration}`);
+    try {
+      await store.appendLog(run.id, run.orgId, "warn", `late write rejected: run no longer owned at lease_generation ${run.leaseGeneration}`);
+    } catch {
+      // Best-effort, same class as failRun: the refusal is already the terminal
+      // fact, and a failing warning log must not turn it into a rejection that
+      // escapes completeRun/failRun.
+    }
   }
   return next;
 }
