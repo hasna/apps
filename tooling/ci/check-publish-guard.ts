@@ -41,10 +41,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp }> = [
+const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }> = [
   { name: "hasna-xyz-domain", re: /[.]hasna[.]xyz/ },
   { name: "aws-arn", re: /arn[:]aws[:]/ },
-  { name: "aws-account-id", re: /\b[0-9]{12}\b/ },
+  // The content form of the account-id detector drops two measured benign
+  // classes that a bare word-boundary 12-digit run fires on in generated
+  // bundles (measured on @hasna/conversations 0.7.4): the trailing segment of
+  // a UUID (always preceded by "-") and epoch-millis numeric literals in
+  // bundled dependency code (followed by ")"). Real leak shapes — ARNs,
+  // quoted/coloned config values, env-style assignments — never carry either
+  // context, and the name scan keeps the strict catch-all for filenames.
+  { name: "aws-account-id", re: /\b[0-9]{12}\b/, contentRe: /(?<!-)\b[0-9]{12}\b(?!\))/ },
   { name: "hasna-internal-org", re: /hasna[-]internal/ },
   { name: "internal-apps", re: /internal[-]apps/ },
   { name: "hasna-internal-scope", re: /@hasna[-]internal/ },
@@ -107,7 +114,7 @@ function scanContents(
     }
     const text = buf.toString("utf-8");
     for (const p of INTERNAL_PATTERNS) {
-      if (p.re.test(text)) hits.push({ name, pattern: p.name });
+      if ((p.contentRe ?? p.re).test(text)) hits.push({ name, pattern: p.name });
     }
     scanned++;
   }

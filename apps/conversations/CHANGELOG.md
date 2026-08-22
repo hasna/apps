@@ -4,6 +4,8 @@
 
 ### Patch Changes
 
+- 225fbae: Accept since_id=0 in GET /v1/messages (hosted API) — a since_id of 0 now returns messages from the start instead of being treated as absent (PR #864).
+- db0bb75: Mark all channel notifications read in one set-based INSERT (no OFFSET page skip) — the legacy paging loop removed rows from the filtered set each round and silently skipped one page per round, leaving up to 100 notifications unread (PR #877).
 - Updated dependencies [554a5b9]
   - @hasna/contracts@0.13.4
 

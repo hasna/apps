@@ -335,6 +335,14 @@ export function baselineChannelNotifications(agent: string): number {
  * set and the OFFSET silently skips one page per round.
  */
 export function markAllChannelNotificationsRead(agent: string, channel?: string): number {
+  // An explicit empty channel is a scoped request with no valid scope — never
+  // a request to mark every channel. `if (channel)` above would silently widen
+  // "" (or whitespace) to "all channels", which the pre-0.7.4 paging loop
+  // refused via readChannelNotifications ("channel must be a non-empty
+  // string"). Keep that contract: undefined means all channels, "" throws.
+  if (channel !== undefined && !channel.trim()) {
+    throw new Error("channel must be a non-empty string");
+  }
   const db = getDb();
   const selfSenderId = resolveSelfSenderId(agent, getPresence(agent));
   const conditions: string[] = [
