@@ -71,6 +71,7 @@ import {
   RepoIdentityMismatchError,
   getRepo,
   isDerivedCheckoutPath,
+  resolveIdOrName,
 } from "../db/repos.js";
 import type { Repo } from "../types/index.js";
 import { resolveTrustedAccountHome } from "./account-home.js";
@@ -401,14 +402,13 @@ export function computeClonePath(org: string, repoName: string): string {
 
 function exactRepoLookup(input: string): string | number {
   // Commander supplies every positional argument as a string, while getRepo's
-  // exact registry-id branch deliberately accepts a number. Convert only the
-  // canonical positive-decimal form: "713" is an id, while "0713", "+713"
-  // and other string shapes remain available to exact path/name resolution.
-  if (/^[1-9]\d*$/.test(input)) {
-    const id = Number(input);
-    if (Number.isSafeInteger(id)) return id;
-  }
-  return input;
+  // exact registry-id branch deliberately accepts a number. The shared
+  // resolver gives an all-numeric NAME precedence over the id it resembles
+  // (todos 12ed8c6d-910b-4824-891d-ea5d7edc9c25): "2048" resolves the repo
+  // literally named "2048", falling back to the registry id 2048 only when
+  // no such name row exists. "0713", "+713" and other string shapes remain
+  // available to exact path/name resolution.
+  return resolveIdOrName(input);
 }
 
 function resolveRepo(input: string): Repo {

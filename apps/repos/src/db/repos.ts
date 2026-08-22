@@ -377,6 +377,31 @@ export function getRepo(idOrPath: string | number): Repo | null {
   return null;
 }
 
+/**
+ * Resolve a caller-supplied lookup string the way getRepo should read it.
+ *
+ * GitHub permits all-numeric repository names (see lib/github.ts), so a string
+ * like "2048" is ambiguous between a registry id and a repo NAME. The id is
+ * reachable on its own terms via getRepo(number); a name row must win the
+ * string — silently coercing it to an id resolves a different repo (or
+ * nothing) with no ambiguity error.
+ *
+ * Contract: only the canonical positive-decimal form ("2048") is ever an id
+ * candidate. For that shape the exact name is resolved FIRST — the name's own
+ * loud failures (AmbiguousRepoNameError, RepoIdentityMismatchError) propagate
+ * unchanged — and the safe-integer id is the fallback only when no name row
+ * matches. Every other string shape ("0713", "+713", paths, remotes, bare
+ * names) passes through untouched.
+ */
+export function resolveIdOrName(input: string): string | number {
+  if (!/^[1-9]\d*$/.test(input)) return input;
+  // Name precedence: a row literally named "2048" is the repo the caller
+  // asked for. Ambiguity and identity-mismatch raise loudly from getRepo.
+  if (getRepo(input) !== null) return input;
+  const id = Number(input);
+  return Number.isSafeInteger(id) ? id : input;
+}
+
 export class AmbiguousRemoteError extends Error {
   constructor(public readonly remote: string, public readonly paths: string[]) {
     super(
