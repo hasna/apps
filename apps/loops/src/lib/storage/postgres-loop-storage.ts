@@ -36,6 +36,8 @@ import { Store } from "../store.js";
 import {
   GATE_DEATH_CEILING,
   GENERATED_ROUTE_KEYS,
+  LIVE_EXPIRED_RUN_GRACE_MS,
+  MAX_LIVE_EXPIRED_RUN_DEFERRALS,
   classifyNonProductiveStepFailure,
   isGeneratedRouteTemplate,
   persistedJson,
@@ -1481,6 +1483,33 @@ export class PostgresLoopStorage implements LoopStorageContract {
   }
 
   /**
+   * Remote-safe liveness proxy shared by claimRun and
+   * recoverExpiredRunLeasesDetailed. The Postgres backend cannot inspect the
+   * original runner's process (it may be a different machine), so a run whose
+   * LEASE lapsed within the expired-run grace window — MAX x GRACE (10 min),
+   * the same post-expiry budget the sqlite path allows via its live-process
+   * deferral ceiling — is treated as possibly-still-executing: steal and
+   * abandon are both deferred until the window passes, bounding the
+   * duplicate-execution window to the original runner's 3-heartbeat abort
+   * (~1.5 lease periods) instead of stealing the instant the lease lapses.
+   *
+   * The anchor is lease expiry, deliberately not process start: a run executing
+   * longer than the grace window at the moment its lease lapses (a transient
+   * heartbeat outage, a machine suspend, a long-running loop) would otherwise
+   * receive zero post-expiry protection and have its slot stolen mid-execution
+   * while the original runner keeps running. Anchoring on the recorded process
+   * start consumes the whole budget up front and defeats the fix for exactly
+   * those runs. Time-bounded by construction, so a genuinely dead runner is
+   * still reclaimed once the window passes — the "expired lease is reclaimable"
+   * fence stays intact without a defer counter column.
+   */
+  private static expiredLeaseWithinGrace(leaseExpiresAt: string | null | undefined, nowIso: string): boolean {
+    if (!leaseExpiresAt) return false;
+    const budgetMs = MAX_LIVE_EXPIRED_RUN_DEFERRALS * LIVE_EXPIRED_RUN_GRACE_MS;
+    return Date.parse(leaseExpiresAt) + budgetMs > Date.parse(nowIso);
+  }
+
+  /**
    * Claim a specific loop slot for a runner.
    *
    * Divergence from the sqlite Store (documented, not accidental): the sqlite
@@ -1489,9 +1518,14 @@ export class PostgresLoopStorage implements LoopStorageContract {
    * because the daemon and the run's child process share a host. On the
    * Postgres/remote backend the claiming runner may be a different machine than
    * the one that holds the (possibly still-live) process, so local pid checks
-   * are meaningless. Ownership here is governed purely by lease expiry: an
-   * expired lease is reclaimable, a live lease is not. The lease/heartbeat
-   * contract (plus `FOR UPDATE` row locks) is the remote correctness boundary.
+   * are meaningless. Ownership here is governed by lease expiry plus a bounded
+   * grace window: an expired lease whose lapse is older than the expired-run
+   * grace window is reclaimable, and an expired lease whose lapse is still
+   * inside that window is deferred (see
+   * {@link PostgresLoopStorage.expiredLeaseWithinGrace}) so a runner hit by a
+   * transient heartbeat outage cannot have its slot stolen mid-execution. The
+   * lease/heartbeat contract (plus `FOR UPDATE` row locks) is the remote
+   * correctness boundary.
    */
   async claimRun(...args: M<"claimRun">["args"]): Promise<M<"claimRun">["result"]> {
     const [loopArg, scheduledFor, runnerId, now = new Date(), opts = {}] = args;
@@ -1525,6 +1559,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
         if (existing.status === "running") {
           if (existing.lease_expires_at && (existing.lease_expires_at as string) > startedAt) {
             return undefined; // live lease, cannot steal
+          }
+          // Expired lease whose lapse is still inside the expired-run grace
+          // window: the original runner may still be executing (transient
+          // heartbeat outage, machine suspend, a long-running loop — the anchor
+          // is the lease lapse, so runs executing longer than the window are
+          // protected too). Stealing now would run the slot twice with
+          // conflicting side effects. Leave the slot to recovery, which applies
+          // the same window, and only reclaim once it passes — a genuinely dead
+          // runner is still reclaimed.
+          if (PostgresLoopStorage.expiredLeaseWithinGrace(existing.lease_expires_at, startedAt)) {
+            return undefined;
           }
           const res = await c.query(
             `UPDATE loop_runs SET status='running', started_at=$2, finished_at=NULL, claimed_by=$3, claim_token=$4,
@@ -1892,9 +1937,13 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   /**
    * Recover expired run leases. Divergence from sqlite (documented): the remote
-   * backend cannot inspect local process liveness, so an expired lease is always
-   * abandoned (never "deferred because the local process is still alive"). The
-   * `deferred` array is therefore always empty here.
+   * backend cannot inspect local process liveness, so an expired lease is
+   * abandoned unless its lapse is still inside the expired-run grace window
+   * (`expiredLeaseWithinGrace`) — such runs are deferred, not abandoned, because
+   * the original runner may still be executing on another machine. Abandoning
+   * within the window would let the next claim pass mint a new attempt while the
+   * original runner is live. The window is time-bounded (MAX x GRACE = 10 min),
+   * so a genuinely dead runner is still abandoned once it passes.
    */
   async recoverExpiredRunLeasesDetailed(
     ...args: M<"recoverExpiredRunLeasesDetailed">["args"]
@@ -1974,8 +2023,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
       ],
     );
     const recovered: LoopRun[] = [];
+    const deferred: LoopRun[] = [];
     for (const row of rows) {
       if (recovered.length >= limit) break;
+      // Lease lapsed within the expired-run grace window: the original runner
+      // may still be executing on its own machine. Defer instead of abandoning —
+      // see the method doc.
+      if (PostgresLoopStorage.expiredLeaseWithinGrace(row.lease_expires_at, finished)) {
+        const deferredRun = await this.getRun(row.id);
+        if (deferredRun) deferred.push(deferredRun);
+        continue;
+      }
       const run = await this.client.transaction(async (c) => {
         const res = await c.query(
           `UPDATE loop_runs SET status='abandoned', finished_at=$2, lease_expires_at=NULL,
@@ -2072,7 +2130,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         }
       }
     }
-    return { abandoned: recovered, deferred: [], operationReconciliationRequired };
+    return { abandoned: recovered, deferred, operationReconciliationRequired };
   }
 
   async pruneHistory(...args: M<"pruneHistory">["args"]): Promise<M<"pruneHistory">["result"]> {

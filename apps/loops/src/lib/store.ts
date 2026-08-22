@@ -108,7 +108,7 @@ export interface CircuitBreakerTransitionResult {
 
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
-const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
+export const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
 /**
  * Ceiling on CONSECUTIVE lease-recovery deferrals for a single run. Past it the
  * run is abandoned regardless of how alive its process still looks.
@@ -125,7 +125,7 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  * total grace at MAX x GRACE (10 min), after which a wedged or
  * recycled-pid run is released instead of wedging the queue.
  */
-const MAX_LIVE_EXPIRED_RUN_DEFERRALS = 10;
+export const MAX_LIVE_EXPIRED_RUN_DEFERRALS = 10;
 /**
  * Highest schema version this binary understands. Bump alongside every new
  * numbered migration so older binaries refuse to open newer databases instead
