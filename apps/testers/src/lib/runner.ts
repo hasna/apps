@@ -841,6 +841,41 @@ export async function runByFilter(
 }
 
 /**
+ * Execute a set of scenarios in this process, writing results into the given
+ * run record. Shared by startRunAsync and the CLI's army-worker mode
+ * (`run --run-id`), so a coordinator-spawned worker and a foreground run
+ * execute scenarios through the same code path.
+ */
+export async function executeScenariosIntoRun(
+  runId: string,
+  scenarios: Scenario[],
+  options: RunOptions,
+): Promise<Result[]> {
+  const results: Result[] = [];
+  const parallel = options.parallel ?? 1;
+  if (parallel <= 1) {
+    for (const scenario of scenarios) {
+      results.push(await runSingleScenario(scenario, runId, options));
+    }
+  } else {
+    const queue = [...scenarios];
+    const running: Promise<void>[] = [];
+    const processNext = async (): Promise<void> => {
+      const scenario = queue.shift();
+      if (!scenario) return;
+      results.push(await runSingleScenario(scenario, runId, options));
+      await processNext();
+    };
+    const workers = Math.min(parallel, scenarios.length);
+    for (let i = 0; i < workers; i++) {
+      running.push(processNext());
+    }
+    await Promise.all(running);
+  }
+  return results;
+}
+
+/**
  * Start a run asynchronously — creates the run record immediately and returns it,
  * then executes scenarios in the background. Poll getRun(id) to check progress.
  */
@@ -882,29 +917,8 @@ export async function startRunAsync(
 
   // Fire and forget — execute in background
   (async () => {
-    const results: Result[] = [];
     try {
-      if (parallel <= 1) {
-        for (const scenario of scenarios) {
-          const result = await runSingleScenario(scenario, run.id, options);
-          results.push(result);
-        }
-      } else {
-        const queue = [...scenarios];
-        const running: Promise<void>[] = [];
-        const processNext = async (): Promise<void> => {
-          const scenario = queue.shift();
-          if (!scenario) return;
-          const result = await runSingleScenario(scenario, run.id, options);
-          results.push(result);
-          await processNext();
-        };
-        const workers = Math.min(parallel, scenarios.length);
-        for (let i = 0; i < workers; i++) {
-          running.push(processNext());
-        }
-        await Promise.all(running);
-      }
+      const results = await executeScenariosIntoRun(run.id, scenarios, options);
 
       const passed = results.filter((r) => r.status === "passed").length;
       const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;

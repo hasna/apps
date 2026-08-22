@@ -8,7 +8,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 
-import { runByFilter, startRunAsync, onRunEvent } from "../lib/runner.js";
+import { runByFilter, startRunAsync, onRunEvent, resolveScenariosForRun, executeScenariosIntoRun } from "../lib/runner.js";
 import {
   formatTerminal,
   formatJSON,
@@ -1474,6 +1474,10 @@ program
     "0",
   )
   .option(
+    "--run-id <id>",
+    "Army worker mode: attach results to an existing run created by a runWithArmy coordinator, then exit without finalizing it (the coordinator finalizes once all workers finish)",
+  )
+  .option(
     "--diff",
     "Auto-detect changed files from git diff and run only relevant scenarios",
     false,
@@ -1639,8 +1643,10 @@ program
               .filter(Boolean)
           : undefined;
 
-        // Budget warning check (OPE9-00080)
-        if (!opts.dryRun && !opts.background) {
+        // Budget warning check (OPE9-00080). Army workers are spawned by a
+        // coordinator with stdout/stderr ignored — never let the interactive
+        // budget prompt kill them silently.
+        if (!opts.dryRun && !opts.background && !opts.runId) {
           const budgetResult = await checkBudget(0); // 0 = just check daily threshold
           if (budgetResult.warning) {
             log(chalk.yellow(`  ⚠️  Budget warning: ${budgetResult.warning}`));
@@ -1733,6 +1739,52 @@ program
           log(chalk.dim(`  Total: ${dryScenarios.length} scenarios`));
           log("");
           process.exit(0);
+        }
+
+        // Army worker mode — a runWithArmy coordinator spawned this process to
+        // execute a chunk of scenarios and write results into the shared run
+        // record it created. The worker never finalizes the run: the
+        // coordinator finalizes once every worker has exited, using the
+        // results rows written here. Exit non-zero when any scenario failed so
+        // the coordinator can distinguish a genuine failure from a silent
+        // death.
+        if (opts.runId) {
+          const run = await getRun(opts.runId);
+          if (!run) {
+            logError(chalk.red(`Run not found: ${opts.runId}`));
+            process.exit(2);
+          }
+          const scenarios = await resolveScenariosForRun({
+            url,
+            scenarioIds,
+            priority: opts.priority,
+            projectId,
+          });
+          if (scenarios.length === 0) {
+            logError(chalk.red("No matching scenarios found."));
+            process.exit(2);
+          }
+          const results = await executeScenariosIntoRun(run.id, scenarios, {
+            url,
+            model: opts.model,
+            parallel: parseInt(opts.parallel, 10),
+            timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+            maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
+            projectId,
+            engine: opts.browser,
+            headed: opts.headed,
+            personaId: personaIdList?.[0],
+            personaIds:
+              personaIdList && personaIdList.length > 1
+                ? personaIdList
+                : undefined,
+            retry: parseInt(opts.retry, 10),
+            samples: parseInt(opts.samples, 10),
+          });
+          const failedCount = results.filter(
+            (r) => r.status === "failed" || r.status === "error",
+          ).length;
+          process.exit(failedCount > 0 ? 1 : 0);
         }
 
         // Background mode — start async and return immediately

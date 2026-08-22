@@ -10,6 +10,7 @@
  *   // Poll getRun(runId) to check progress
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createRun, getRun, updateRun } from "../store/index.js";
 import { listScenarios } from "../store/index.js";
@@ -52,12 +53,62 @@ function chunkArray<T>(arr: T[], n: number): T[][] {
 }
 
 /**
- * Resolve the path to the testers CLI binary.
+ * Resolve the testers CLI entrypoint relative to the directory hosting the
+ * runner code. The only caller of runWithArmy is the MCP server, which runs
+ * from <pkg>/src/mcp in the dev tree and from the <pkg>/dist/mcp bundle in a
+ * built package — so the CLI entrypoint is always one level up under cli/.
+ *
+ * Built package: <pkg>/dist/cli/index.js (the "testers" bin; build:cli emits
+ * this — a built tarball ships dist/ only, never src/). Dev source:
+ * <pkg>/src/cli/index.tsx. Prefer the built artifact when present.
  */
-function getCliPath(): string {
-  // In development: run source directly
-  const srcPath = join(import.meta.dir, "../cli/index.tsx");
-  return srcPath;
+export function resolveCliPath(hostDir: string): string {
+  const built = join(hostDir, "../cli/index.js");
+  if (existsSync(built)) return built;
+  return join(hostDir, "../cli/index.tsx");
+}
+
+/**
+ * Resolve the path to the testers CLI binary for army worker processes.
+ */
+export function getCliPath(): string {
+  return resolveCliPath(import.meta.dir);
+}
+
+/**
+ * Build the argv for one army worker subprocess. The `run` command takes the
+ * URL positionally and accepts scenario ids as a CSV via --scenario; the
+ * worker attaches its results to the coordinator's shared run record via
+ * --run-id (the CLI's army-worker mode never finalizes the run — the
+ * coordinator does once every worker has exited).
+ */
+export function buildWorkerArgs(
+  cliPath: string,
+  url: string,
+  model: string,
+  parallel: number,
+  runId: string,
+  chunkIds: string[],
+  extra?: { timeout?: number; personaId?: string },
+): string[] {
+  const args = [
+    "bun",
+    "run",
+    cliPath,
+    "run",
+    url,
+    "--model",
+    model,
+    "--parallel",
+    String(parallel),
+    "--run-id",
+    runId,
+    "--scenario",
+    chunkIds.join(","),
+  ];
+  if (extra?.timeout) args.push("--timeout", String(extra.timeout));
+  if (extra?.personaId) args.push("--persona", extra.personaId);
+  return args;
 }
 
 /**
@@ -107,18 +158,10 @@ export async function runWithArmy(options: ArmyRunOptions): Promise<ArmyRunResul
 
   // Spawn one worker process per chunk
   const workerPromises = chunks.map((chunkIds) => {
-    const args = [
-      "bun", "run", cliPath,
-      "run",
-      "--url", options.url,
-      "--model", model,
-      "--parallel", String(options.parallel ?? 2),
-      "--run-id", run.id,
-      "--scenario-ids", chunkIds.join(","),
-    ];
-
-    if (options.timeout) args.push("--timeout", String(options.timeout));
-    if (options.personaId) args.push("--persona", options.personaId);
+    const args = buildWorkerArgs(cliPath, options.url, model, options.parallel ?? 2, run.id, chunkIds, {
+      timeout: options.timeout,
+      personaId: options.personaId,
+    });
 
     const proc = Bun.spawn(args, {
       env,
@@ -129,13 +172,18 @@ export async function runWithArmy(options: ArmyRunOptions): Promise<ArmyRunResul
     return proc.exited;
   });
 
-  // Monitor in background — update run status when all workers finish
-  Promise.all(workerPromises).then(async () => {
+  // Monitor in background — update run status when all workers finish.
+  // Worker stdout/stderr is ignored, so a worker that died without recording
+  // any result (e.g. preflight failure before scenario execution) would
+  // otherwise finalize the run as "passed" having executed nothing. Treat a
+  // non-zero worker exit with zero recorded results as a failed run.
+  Promise.all(workerPromises).then(async (exitCodes) => {
     const results = await getResultsByRun(run.id);
     const passed = results.filter((r) => r.status === "passed").length;
     const failed = results.filter((r) => r.status !== "passed" && r.status !== "skipped").length;
+    const workerDiedSilently = exitCodes.some((code) => code !== 0) && results.length === 0;
     await updateRun(run.id, {
-      status: failed > 0 ? "failed" : "passed",
+      status: failed > 0 || workerDiedSilently ? "failed" : "passed",
       passed,
       failed,
       total: scenarios.length,
