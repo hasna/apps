@@ -1,7 +1,7 @@
 // Repo conformance gate for the Hasna Service Contract v1.
 //
-// Two gates, both driven by @hasna/contracts PINNED to EXACTLY 0.10.6 (registry
-// devDependency "0.10.6", no caret) so a concurrent publish of 0.10.7 cannot
+// Two gates, both driven by @hasna/contracts PINNED to EXACTLY 0.13.4 (registry
+// devDependency "0.13.4", no caret) so a concurrent publish of 0.13.5 cannot
 // re-break this app:
 //   1. vendor-kit --check : the vendored src/generated/storage-kit/* still
 //      matches the canonical generator output (sha256 per file) — no drift.
@@ -9,8 +9,8 @@
 //      bins_allowlisted, bins_match_package, mode_enum_compliance,
 //      health_shape, no_cloud_guard).
 //
-// The package `exports` map only exposes ".", so internal modules are loaded by
-// direct file path from the installed dist dir.
+// The package `exports` map exposes "." and "./sdk" (the SDK barrel build);
+// internal modules are loaded by direct file path from the installed dist dir.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";

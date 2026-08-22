@@ -40,7 +40,7 @@ function assertNoLegacyStorageMode(env: Env): void {
     `${ENV_TOKEN}_STORAGE_MODE`,
     `${ENV_TOKEN}_MODE`,
   ] as const;
-  const legacyKey = LEGACY_MODE_KEYS.find((key) => env[key] !== undefined && env[key] !== "");
+  const legacyKey = LEGACY_MODE_KEYS.find((key) => Object.hasOwn(env, key) && env[key] !== undefined);
   if (!legacyKey) return;
   throw new Error(
     `${legacyKey} was removed. Delete the storage-mode variable; ` +
