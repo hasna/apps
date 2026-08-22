@@ -228,12 +228,13 @@ wait
 ck "queue-del recovery" "$(cat "$W/g5rc")" "0"
 
 # 15 sentinel: pass, cgroup removal, marker tamper, junk-name crash input, wedge alert
-# "sentinel pass" is hermetic (release review P1): the previous form invoked
-# the sentinel with LIVE defaults — a healthy run wrote the live guard-dir
-# sentinel.log, and a clobbered install would have auto-rearmed the LIVE
-# wrapper and bun-real mid-battery. Drive temp copies of the wrapper and the
-# real bun plus a temp guard dir; the canary probe execs the real bun through
-# the wrapper (read-only, as in sections 16/17).
+# Section 15 is fully hermetic (release review P1, cycles 1-2): the previous
+# forms invoked the sentinel with LIVE defaults — a healthy run wrote the live
+# guard-dir sentinel.log, and a clobbered install would have auto-rearmed the
+# LIVE wrapper and bun-real mid-battery. Every sentinel invocation below
+# drives the temp wrapper copy $W/pass-bun-wrapper and the temp real-bun copy
+# $W/pass-bun-real plus a temp guard dir; the canary probe execs the real bun
+# through the wrapper (read-only, as in sections 16/17).
 mkdir -p "$W/g-pass/slots"
 cp "$WRAPPER_SOURCE" "$W/pass-bun-wrapper"
 chmod +x "$W/pass-bun-wrapper"
@@ -253,9 +254,9 @@ cp "$BR" "$W/tamper-bun" 2>/dev/null || cp "$(command -v bun)" "$W/tamper-bun"
 chmod +x "$W/tamper-bun"
 ck "sentinel fails closed on marker-tamper ELF" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-tamper2" SENTINEL_REAL_BUN="$W/no-real2" SENTINEL_PINNED_URL="file://$W/no-pin2" SENTINEL_PINNED_SHA256="0000000000000000000000000000000000000000000000000000000000000000" "$SEN" "$W/tamper-bun" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 mkdir -p "$W/g6/slots" "$W/g6/queue"; : > "$W/g6/queue/not-a-ticket"
-ck "sentinel junk survives" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" "$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
+ck "sentinel junk survives" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
 : > "$W/g6/queue/$(( $(date +%s%N) - 2200000000000 )).$$"
-ck "sentinel wedge alerts" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" "$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
+ck "sentinel wedge alerts" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 
 # 16 sentinel classifies canary failures per state (ac4558ab). The probe's
 # exit code has THREE causes that previously collapsed into one 'NOT ENGAGED'
