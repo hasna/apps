@@ -987,6 +987,116 @@ describe("loops CLI", () => {
     expect(value.runNow.advancesLoop).toBe(false);
   });
 
+  test("run-now records a skipped run instead of erroring when the previous overlap-skip run is still executing at an older slot", () => {
+    // Regression for todos 37bd2512: an overdue overlap:"skip" loop whose
+    // previous run is still executing (live lease) at an OLDER slot made
+    // claimRun return undefined before inspecting the requested due slot, so
+    // runLoopNow threw "could not claim manual run". The daemon tick handles
+    // this state with createSkippedRun + advanceLoop; run-now must mirror it.
+    const dataDir = freshDataDir("loops-cli-overlap-skip-older-");
+    const store = new Store(join(dataDir, "loops.db"));
+    let loopId = "";
+    let dueSlot = "";
+    try {
+      const t0 = new Date();
+      const loop = store.createLoop(
+        {
+          name: "overlap-skip-inflight-older",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "skip",
+        },
+        t0,
+      );
+      loopId = loop.id;
+      // Previous run claimed at the OLDER slot t0 and still executing with a
+      // live 30-min lease.
+      const claim = store.claimRun(loop, t0.toISOString(), "seed:1", new Date());
+      expect(claim).toBeDefined();
+      // The daemon already skipped the intervening slot; the loop is now overdue
+      // at a free due slot (t0 - 1min).
+      dueSlot = new Date(t0.getTime() - 60_000).toISOString();
+      store.updateLoop(loop.id, { nextRunAt: dueSlot });
+    } finally {
+      store.close();
+    }
+
+    const run = runCli(dataDir, ["--json", "run-now", "overlap-skip-inflight-older"]);
+    expect(run.status).toBe(0);
+    const value = JSON.parse(run.stdout);
+    expect(value.status).toBe("skipped");
+    expect(value.scheduledFor).toBe(dueSlot);
+    expect(value.error).toContain("previous run still active");
+    expect(value.runNow.source).toBe("due_slot");
+    expect(value.runNow.advancesLoop).toBe(true);
+    // The skip consumed the due slot: the cursor moved past it.
+    expect(storedLoop(dataDir, loopId)?.nextRunAt).not.toBe(dueSlot);
+  });
+
+  test("run-now records a skipped run instead of erroring when the previous overlap-skip run occupies the due slot itself", () => {
+    // Regression for todos 37bd2512 variant A: the running row sits AT the
+    // requested due slot with a live lease, so claimRun returns undefined and
+    // the terminal-run fallback refuses (the row is running). run-now must
+    // record the skip at an ad hoc slot and exit 0, not throw.
+    const dataDir = freshDataDir("loops-cli-overlap-skip-due-");
+    const store = new Store(join(dataDir, "loops.db"));
+    let dueSlot = "";
+    try {
+      const t0 = new Date();
+      const loop = store.createLoop(
+        {
+          name: "overlap-skip-inflight-due",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "skip",
+        },
+        new Date(t0.getTime() - 60_000),
+      );
+      dueSlot = loop.nextRunAt!; // the requested due slot (t0)
+      const claim = store.claimRun(loop, dueSlot, "seed:1", new Date());
+      expect(claim).toBeDefined();
+    } finally {
+      store.close();
+    }
+
+    const run = runCli(dataDir, ["--json", "run-now", "overlap-skip-inflight-due"]);
+    expect(run.status).toBe(0);
+    const value = JSON.parse(run.stdout);
+    expect(value.status).toBe("skipped");
+    expect(value.scheduledFor).not.toBe(dueSlot);
+    expect(value.error).toContain("previous run still active");
+    expect(value.runNow.source).toBe("ad_hoc");
+    expect(value.runNow.advancesLoop).toBe(true);
+  });
+
+  test("run-now still errors on an unclaimable slot when overlap is not skip", () => {
+    // Negative control: the graceful skip is scoped strictly to overlap:"skip".
+    // A live running row at the due slot of an overlap:"allow" loop is a genuine
+    // claim collision and must still throw.
+    const dataDir = freshDataDir("loops-cli-overlap-allow-");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const t0 = new Date();
+      const loop = store.createLoop(
+        {
+          name: "overlap-allow-inflight-due",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "allow",
+        },
+        new Date(t0.getTime() - 60_000),
+      );
+      const claim = store.claimRun(loop, loop.nextRunAt!, "seed:1", new Date());
+      expect(claim).toBeDefined();
+    } finally {
+      store.close();
+    }
+
+    const run = runCli(dataDir, ["--json", "run-now", "overlap-allow-inflight-due"]);
+    expect(run.status).toBe(1);
+    expect(JSON.parse(run.stdout).error.message).toContain("could not claim manual run");
+  });
+
   test("archives loops without deleting them and blocks run-now until unarchived", () => {
     const dataDir = freshDataDir("loops-cli-archive-");
     const create = runCli(dataDir, ["create", "command", "archivable", "--at", futureAt(), "--cmd", "true"]);

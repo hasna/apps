@@ -146,10 +146,28 @@ export interface RunLoopNowExecuted {
   advancedLoop: boolean;
 }
 
-export type RunLoopNowResult = RunLoopNowScheduled | RunLoopNowExecuted;
+/**
+ * An overlap:"skip" run-now that could not claim its slot because the
+ * previous run is still executing. The run field carries the bookkeeping
+ * "skipped" row recorded instead of an executed run; the CLI/SDK treat it
+ * like any other skipped run (exit 0, status "skipped").
+ */
+export interface RunLoopNowSkipped {
+  mode: "inline";
+  loop: Loop;
+  run: LoopRun;
+  source: ManualRunSource;
+  advancedLoop: boolean;
+  /** Distinguishes a recorded skip from an executed inline run. */
+  skipped: true;
+}
+
+export type RunLoopNowResult = RunLoopNowScheduled | RunLoopNowExecuted | RunLoopNowSkipped;
 
 export async function runLoopNow(deps: RunLoopNowDeps & { mode: "schedule" }): Promise<RunLoopNowScheduled>;
-export async function runLoopNow(deps: RunLoopNowDeps & { mode?: "inline" }): Promise<RunLoopNowExecuted>;
+export async function runLoopNow(
+  deps: RunLoopNowDeps & { mode?: "inline" },
+): Promise<RunLoopNowExecuted | RunLoopNowSkipped>;
 /**
  * Single manual "run now" entry point shared by the CLI, SDK, and MCP server
  * so slot selection, the archived-loop guard, and advance semantics cannot
@@ -180,7 +198,30 @@ export async function runLoopNow(deps: RunLoopNowDeps): Promise<RunLoopNowResult
       claim = store.claimRun(loop, scheduledFor, runnerId, now);
     }
   }
-  if (!claim) throw new Error(`could not claim manual run for ${deps.idOrName}`);
+  if (!claim) {
+    // Graceful overlap-skip: with overlap:"skip", a still-executing previous
+    // run makes claimRun return undefined (either its live lease blocks the
+    // requested slot, or the running row itself occupies it). Mirror the
+    // daemon tick's skip semantics (createSkippedRun + advanceLoop) instead
+    // of failing the manual run, so `run-now` exits 0 with the skip recorded.
+    // When the running row occupies the requested slot, the skip cannot be
+    // recorded there (one run per slot), so it lands on an ad hoc slot.
+    // Genuine claim collisions on non-skip loops still throw below.
+    if (loop.overlap === "skip" && store.hasRunningRun(loop.id)) {
+      const skipSlot = store.hasRunningRunForSlot(loop.id, scheduledFor) ? now.toISOString() : scheduledFor;
+      const skipped = store.createSkippedRun(loop, skipSlot, "previous run still active");
+      advanceLoop(store, loop, skipped, new Date(skipped.updatedAt), true);
+      return {
+        mode: "inline",
+        loop,
+        run: skipped,
+        source: skipSlot === scheduledFor ? source : "ad_hoc",
+        advancedLoop: true,
+        skipped: true,
+      };
+    }
+    throw new Error(`could not claim manual run for ${deps.idOrName}`);
+  }
   const run = await executeClaimedRun({
     store,
     runnerId,
