@@ -763,7 +763,7 @@ export interface CreatePersonaBody {
 
 export async function listPersonas(
   db: TypedQueryClient,
-  filter: { projectId?: string; limit?: number } = {},
+  filter: { projectId?: string; limit?: number; offset?: number } = {},
 ): Promise<Persona[]> {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -773,7 +773,14 @@ export async function listPersonas(
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
-  const rows = await db.many(`SELECT * FROM personas ${where} ORDER BY created_at DESC LIMIT ${limit}`, params);
+  const offset = Math.max(filter.offset ?? 0, 0);
+  // Pagination MUST be honored: aggregate clients (countPersonas,
+  // getGlobalPersonas, listAuthenticatedPersonas) page the full set via
+  // limit+offset; ignoring offset would silently cap results at the first page.
+  const rows = await db.many(
+    `SELECT * FROM personas ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+    params,
+  );
   return rows.map(personaRow);
 }
 export async function getPersona(db: TypedQueryClient, id: string): Promise<Persona | null> {

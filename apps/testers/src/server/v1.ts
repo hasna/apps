@@ -261,7 +261,13 @@ async function route(
   if (resource === "personas") {
     if (!id) {
       if (method === "GET")
-        return json(await store.listPersonas(db, { projectId: searchParams.get("projectId") ?? undefined }));
+        return json(
+          await store.listPersonas(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
+          }),
+        );
       if (method === "POST") return json(await store.createPersona(db, (await readJson(req)) as never), 201);
     } else {
       if (method === "GET") return notNull(await store.getPersona(db, id), "persona");

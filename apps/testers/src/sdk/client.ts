@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Testers API 0.0.91
+// Source: Testers API 0.0.98
 
 export interface Health { "status": string; "version": string }
 
@@ -119,7 +119,7 @@ export class TestersClient {
     }
 
     /** List personas */
-    async listPersonas(query?: { "projectId"?: string }, init?: RequestInit): Promise<Array<Persona>> {
+    async listPersonas(query?: { "projectId"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<Persona>> {
       return this.request("GET", `/v1/personas`, {
         body: undefined,
         query,
