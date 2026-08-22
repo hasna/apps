@@ -4409,7 +4409,7 @@ async function handleLocks(
     const body = await readJson(req);
     const rt = str(body.resource_type); const rid = str(body.resource_id); const aid = str(body.agent_id);
     if (!rt || !rid || !aid) return json({ error: "resource_type, resource_id, agent_id are required" }, 400);
-    const res = await client.query(`DELETE FROM resource_locks WHERE resource_type = $1 AND resource_id = $2 AND agent_id = $3`, [rt, rid, aid]);
+    const res = await client.query(`DELETE FROM resource_locks WHERE resource_type = $1 AND resource_id = $2 AND LOWER(agent_id) = LOWER($3)`, [rt, rid, aid]);
     return json({ released: res.rowCount > 0 });
   }
   if (sub === "locks/check" && method === "GET") {
@@ -4441,7 +4441,7 @@ async function handleLocks(
             `SELECT * FROM resource_locks WHERE resource_type = $1 AND resource_id = $2 ORDER BY CASE WHEN lock_type = $3 THEN 0 ELSE 1 END, locked_at ASC`,
             [rt, rid, lockType],
           );
-          const conflicting = existing.find((l) => l.agent_id !== agentId);
+          const conflicting = existing.find((l) => l.agent_id.toLowerCase() !== agentId.toLowerCase());
           if (conflicting) {
             blockedBy = { resource_type: rt, resource_id: rid, held_by: conflicting.agent_id };
             throw new Error("__bulk_conflict");
@@ -4487,7 +4487,7 @@ async function handleLocks(
         `SELECT * FROM resource_locks WHERE resource_type = $1 AND resource_id = $2 ORDER BY CASE WHEN lock_type = $3 THEN 0 ELSE 1 END, locked_at ASC`,
         [rt, rid, lockType],
       );
-      const conflicting = existing.find((l) => l.agent_id !== aid);
+      const conflicting = existing.find((l) => l.agent_id.toLowerCase() !== aid.toLowerCase());
       if (conflicting) return { acquired: false, lock: null, held_by: conflicting.agent_id };
       const expiresAt = new Date(Date.now() + expiryMs).toISOString();
       if (existing.some((l) => l.lock_type === lockType)) {
@@ -4516,7 +4516,7 @@ async function handleLocks(
     const rt = str(url.searchParams.get("resource_type"));
     const aid = str(url.searchParams.get("agent_id"));
     if (rt) { params.push(rt); clauses.push(`l.resource_type = $${params.length}`); }
-    if (aid) { params.push(aid); clauses.push(`l.agent_id = $${params.length}`); }
+    if (aid) { params.push(aid); clauses.push(`LOWER(l.agent_id) = LOWER($${params.length})`); }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     if (isTrue(url.searchParams.get("enriched"))) {
       const rows = await client.many<Record<string, unknown>>(
