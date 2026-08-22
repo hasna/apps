@@ -15,6 +15,7 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import type { LogRow } from "../types/index.ts";
 import { upsertIssue } from "./issues.ts";
 import {
   sanitizeSourceMapArtifactRecord,
@@ -341,6 +342,33 @@ function matchesRawEventIndex(
     existing.byte_length === write.byte_length &&
     existing.record_hash === write.record_hash
   );
+}
+
+/**
+ * Re-materializes the `logs` compatibility projection for an event whose raw
+ * event is still indexed but whose projection row is missing — e.g. deleted by
+ * `logs delete` (store/local.ts) or evicted by retention (lib/retention.ts).
+ * Mirrors rebuildEventStoreIndexLocked's replay semantics so that re-ingest of
+ * the same deterministic id stays first-write-wins instead of appending a
+ * duplicate raw line and throwing "Event record already indexed with different
+ * raw pointer". Returns the restored row, or null when no indexed log event
+ * exists for the id.
+ */
+export function replayLogProjectionFromStore(
+  db: Database,
+  eventId: string,
+): LogRow | null {
+  const record = getEventRecord(db, eventId);
+  if (!record || record.event_type !== "log") return null;
+  const event = readRawEvent(db, record);
+  if (!event) return null;
+  const index = eventIndexFromEnvelope(db, event);
+  replayLogProjection(db, event, index);
+  replayIssueProjection(db, event, index);
+  const row = db.prepare("SELECT * FROM logs WHERE id = ?").get(eventId) as
+    | LogRow
+    | undefined;
+  return row ?? null;
 }
 
 export function getEventRecord(

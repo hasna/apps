@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { createTestDb } from "../db/index.ts";
-import { getEventRecord, readRawEvent } from "./event-store.ts";
+import {
+  getEventRecord,
+  readRawEvent,
+  verifyEventStore,
+} from "./event-store.ts";
 import { ingestBatch, ingestLog } from "./ingest.ts";
 import { REDACTED } from "./redaction.ts";
 
@@ -292,6 +296,57 @@ describe("ingest", () => {
           .get() as { count: number }
       ).count,
     ).toBe(1);
+  });
+
+  it("re-materializes the projection when the logs row was deleted but the raw event is still indexed", () => {
+    const db = createTestDb();
+    const first = ingestLog(db, {
+      id: "deleted-retry-evt-1",
+      level: "error",
+      message: "first write",
+    });
+
+    // Same SQL as LocalStore.deleteLog (store/local.ts) and the retention
+    // deletes (lib/retention.ts): only the logs projection row goes away.
+    const del = db.run("DELETE FROM logs WHERE id = ?", [first.id]);
+    expect(del.changes).toBeGreaterThan(0);
+    expect(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS count FROM logs WHERE id = ?")
+          .get(first.id) as { count: number }
+      ).count,
+    ).toBe(0);
+    // The raw event and its index row survive the projection delete.
+    expect(getEventRecord(db, first.id)).toBeTruthy();
+
+    // SDK retry of the same deterministic id must not throw and must not
+    // append a second raw line (which would trip the "different raw pointer"
+    // error and grow event_count / byte_length with orphans).
+    const second = ingestLog(db, {
+      id: "deleted-retry-evt-1",
+      level: "error",
+      message: "first write",
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(second.message).toBe(first.message);
+    expect(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM event_records WHERE event_id = ?",
+          )
+          .get(first.id) as { count: number }
+      ).count,
+    ).toBe(1);
+    expect(
+      (
+        db.prepare("SELECT SUM(event_count) AS count FROM event_segments")
+          .get() as { count: number }
+      ).count,
+    ).toBe(1);
+    expect(verifyEventStore(db).ok).toBe(true);
   });
 
   it("indexes identity fields from metadata", () => {

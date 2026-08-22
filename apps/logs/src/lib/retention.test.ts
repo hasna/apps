@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { createTestDb } from "../db/index.ts";
-import { ingestBatch } from "./ingest.ts";
+import { getEventRecord, verifyEventStore } from "./event-store.ts";
+import { ingestBatch, ingestLog } from "./ingest.ts";
 import { runRetentionForProject, setRetentionPolicy } from "./retention.ts";
 
 function seedProject(db: ReturnType<typeof createTestDb>, name = "app") {
@@ -44,6 +45,62 @@ describe("retention", () => {
         .get(p.id) as { c: number }
     ).c;
     expect(count).toBeLessThanOrEqual(3);
+  });
+
+  it("re-ingest after max_rows eviction re-materializes without growing the event store", () => {
+    const db = createTestDb();
+    const p = seedProject(db);
+    setRetentionPolicy(db, p.id, { max_rows: 1 });
+    // Recent timestamps: the info TTL (168h default) must not fire, so only
+    // max_rows evicts the oldest projection row.
+    const olderTimestamp = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const newerTimestamp = new Date().toISOString();
+    const older = ingestLog(db, {
+      id: "retention-retry-evt-older",
+      timestamp: olderTimestamp,
+      level: "info",
+      message: "evicted",
+      project_id: p.id,
+    });
+    ingestLog(db, {
+      id: "retention-retry-evt-newer",
+      timestamp: newerTimestamp,
+      level: "info",
+      message: "kept",
+      project_id: p.id,
+    });
+
+    // max_rows eviction deletes only the oldest logs projection row; the raw
+    // event and its event_records index row survive.
+    const result = runRetentionForProject(db, p.id);
+    expect(result.deleted).toBe(1);
+    expect(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS count FROM logs WHERE id = ?")
+          .get(older.id) as { count: number }
+      ).count,
+    ).toBe(0);
+    expect(getEventRecord(db, older.id)).toBeTruthy();
+
+    // SDK retry of the evicted deterministic id must not throw and must not
+    // append a duplicate raw line.
+    const replayed = ingestLog(db, {
+      id: "retention-retry-evt-older",
+      timestamp: olderTimestamp,
+      level: "info",
+      message: "evicted",
+      project_id: p.id,
+    });
+    expect(replayed.id).toBe(older.id);
+    expect(replayed.message).toBe("evicted");
+    expect(
+      (
+        db.prepare("SELECT SUM(event_count) AS count FROM event_segments")
+          .get() as { count: number }
+      ).count,
+    ).toBe(2);
+    expect(verifyEventStore(db).ok).toBe(true);
   });
 
   it("returns 0 for unknown project", () => {
