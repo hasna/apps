@@ -216,6 +216,34 @@ describe("loops sdk", () => {
     }
   });
 
+  test("resume of a stopped once-loop binds schedule.at so dueLoops picks it up again", async () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const at = new Date(Date.now() - 60_000).toISOString();
+      const loop = await client.create({
+        name: "sdk-resume-once-stopped",
+        schedule: { type: "once", at },
+        target: { type: "command", command: "true" },
+      });
+      const stopped = await client.stop(loop.id);
+      expect(stopped.status).toBe("stopped");
+      expect(stopped.nextRunAt).toBeUndefined();
+
+      const resumed = await client.resume(loop.id);
+      expect(resumed.status).toBe("active");
+      // Regression: the file-transport resume branch recomputed the slot with
+      // computeNextAfter, which returns undefined for schedule.type "once", so
+      // next_run_at was stored NULL and the active once-loop stayed permanently
+      // dormant (dueLoops requires next_run_at IS NOT NULL). initialNextRun
+      // binds schedule.at, converging with the CLI and contract resume paths.
+      expect(resumed.nextRunAt).toBe(at);
+      expect(store.dueLoops(new Date()).map((entry) => entry.id)).toContain(loop.id);
+    } finally {
+      client.close();
+    }
+  });
+
   test("mutation paths reject ambiguous loop names instead of touching the newest match", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });

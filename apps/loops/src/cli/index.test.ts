@@ -1151,6 +1151,36 @@ describe("loops CLI", () => {
     expect(value.nextRunAt).toBeString();
   });
 
+  test("resume of a stopped once-loop binds schedule.at so dueLoops picks it up again", () => {
+    const dataDir = freshDataDir("loops-cli-resume-once-");
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const create = runCli(dataDir, ["create", "command", "once-resumable", "--at", at, "--cmd", "true"]);
+    expect(create.status).toBe(0);
+
+    const stopped = runCli(dataDir, ["--json", "stop", "once-resumable"]);
+    expect(stopped.status).toBe(0);
+    expect(JSON.parse(stopped.stdout).status).toBe("stopped");
+    expect(JSON.parse(stopped.stdout).nextRunAt).toBeUndefined();
+
+    const resumed = runCli(dataDir, ["--json", "resume", "once-resumable"]);
+    expect(resumed.status).toBe(0);
+    const value = JSON.parse(resumed.stdout);
+    expect(value.status).toBe("active");
+    // Regression: the local resume branch recomputed the slot with
+    // computeNextAfter, which returns undefined for schedule.type "once", so
+    // next_run_at was stored NULL and the active once-loop stayed permanently
+    // dormant (dueLoops requires next_run_at IS NOT NULL).
+    expect(value.nextRunAt).toBe(at);
+
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const due = store.dueLoops(new Date());
+      expect(due.map((loop) => loop.id)).toContain(value.id);
+    } finally {
+      store.close();
+    }
+  });
+
   test("daemon logs honors --tail and rejects a non-numeric count", () => {
     const dataDir = freshDataDir("loops-cli-daemon-logs-tail-");
     writeFileSync(join(dataDir, "daemon.log"), ["l1", "l2", "l3", "l4", "l5"].join("\n"));

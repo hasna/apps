@@ -39,7 +39,7 @@ import {
 } from "../lib/format.js";
 import { classifyLoopExecutionStaleness } from "../lib/execution-staleness.js";
 import { publicCommandDescriptor } from "../lib/command-target.js";
-import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
+import { initialNextRun, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
 import { CloudUnsupportedError, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
@@ -2883,8 +2883,11 @@ function updateStatus(
       // Resuming a stopped loop leaves next_run_at NULL, so dueLoops (which
       // requires next_run_at IS NOT NULL) would never pick it up: the loop is
       // "active" but permanently dormant. Recompute the next slot from now.
+      // initialNextRun (not computeNextAfter) so schedule.type "once" binds
+      // schedule.at instead of undefined, converging with the contract
+      // mutateLoop resume path.
       const now = new Date();
-      nextRunAt = computeNextAfter(loop.schedule, now, now);
+      nextRunAt = initialNextRun(loop.schedule, now);
     }
     const updated = await store.updateLoop(loop.id, { status, nextRunAt });
     print(publicLoop(updated), `${updated.id} ${updated.status}`);
