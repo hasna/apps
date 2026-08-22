@@ -338,11 +338,22 @@ class PostgresJsonRecordStore {
   }
 
   async ensureSchema(): Promise<void> {
-    this.schemaReady ??= (async () => {
-      for (const sql of postgresTodosSyncSchemaSql(this.tableName, this.cursorTableName)) {
-        await this.options.client.query(sql);
-      }
-    })();
+    if (!this.schemaReady) {
+      this.schemaReady = (async () => {
+        for (const sql of postgresTodosSyncSchemaSql(this.tableName, this.cursorTableName)) {
+          await this.options.client.query(sql);
+        }
+      })().catch((error) => {
+        // Same retry-on-transient-failure discipline as ensureCloudSchema
+        // (server/cloud.ts, incident 724397): a DDL lock timeout (55P03) must
+        // not poison the memoized schema-ensure promise for the life of the
+        // process — every later store operation would fail before reaching
+        // its route. Clear the memo so the next call retries the idempotent
+        // schema DDL.
+        this.schemaReady = null;
+        throw error;
+      });
+    }
     await this.schemaReady;
   }
 
