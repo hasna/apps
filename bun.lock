@@ -691,7 +691,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.16",
+      "version": "0.3.17",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -704,7 +704,7 @@
         "@hasna/contracts": "0.13.4",
         "@hasna/events": "^0.1.16",
         "@hasna/mcp-harness": "^0.1.0",
-        "@hasna/projects": "0.1.138",
+        "@hasna/projects": "0.1.139",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
@@ -1061,7 +1061,7 @@
         "typescript": "^5.7.3",
       },
       "optionalDependencies": {
-        "@hasna/machines": "0.2.35",
+        "@hasna/machines": "0.2.34",
       },
     },
     "apps/machines": {
@@ -1300,7 +1300,7 @@
     },
     "apps/projects": {
       "name": "@hasna/projects",
-      "version": "0.1.138",
+      "version": "0.1.139",
       "bin": {
         "projects": "dist/cli/index.js",
         "projects-mcp": "dist/mcp/index.js",
@@ -4659,6 +4659,8 @@
 
     "@hasna/logs/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
+    "@hasna/loops/@hasna/machines": ["@hasna/machines@0.2.34", "", { "dependencies": { "@hasna/contracts": "0.13.3", "@hasna/events": "^0.1.7", "@hasna/mcp-harness": "^0.1.0", "@modelcontextprotocol/sdk": "^1.26.0", "chalk": "^5.6.2", "commander": "^13.1.0", "pg": "^8.16.3", "zod": "^3.24.2" }, "bin": { "machines": "dist/cli/index.js", "machines-mcp": "dist/mcp/index.js", "machines-daemon": "dist/agent/index.js", "machines-serve": "dist/server/index.js" } }, "sha512-HtdZ7n0KqXb02bDT8DwllEBwwfdhbtMwZKJtn3rdF2DonmQ6D9WnZw2TAznrBWtOQknU5z1Em4mpbrDrtGak6g=="],
+
     "@hasna/loops/ai": ["ai@6.0.204", "", { "dependencies": { "@ai-sdk/gateway": "3.0.130", "@ai-sdk/provider": "3.0.10", "@ai-sdk/provider-utils": "4.0.29", "@opentelemetry/api": "^1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-SudB8rUwaVhpWF8+qTJcxUptXPIdN9rWMknzTT3WbKa2QwiGRshyepFKNkDILWm882LgqlEyRZgKhNT14j0jpQ=="],
 
     "@hasna/loops/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
@@ -5102,6 +5104,8 @@
     "@hasna/logs/@hasna/contracts/@hasna/secrets": ["@hasna/secrets@0.3.0", "", { "dependencies": { "@aws-sdk/client-secrets-manager": "^3.1008.0", "@aws-sdk/credential-providers": "^3.1008.0", "@hasna/events": "^0.1.13", "@modelcontextprotocol/sdk": "^1.27.1", "@smithy/core": "^3.25.1", "commander": "^13.1.0", "pg": "^8.20.0" }, "bin": { "secrets": "dist/index.js", "secrets-mcp": "dist/mcp-server.js", "secrets-serve": "dist/server/index.js" } }, "sha512-JSKHmoyx1+8He2wr1N1Hj91OtMggmVzL+W5ehbQE/QzqpTauciwhNrOf1LkrOnoIkAA4DYXDYD2Vd0BDvy0Jbg=="],
 
     "@hasna/logs/@hasna/contracts/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
+
+    "@hasna/loops/@hasna/machines/@hasna/contracts": ["@hasna/contracts@0.13.3", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.4" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-TiT1xqf4+DeWg3nvuLFSL6b/MW6IwZp5tyzTTb+BpHaSthEUQADK+/5p4/Nid9o00QqyL/ZUKIV+26gmi8CxrA=="],
 
     "@hasna/loops/ai/@ai-sdk/gateway": ["@ai-sdk/gateway@3.0.130", "", { "dependencies": { "@ai-sdk/provider": "3.0.10", "@ai-sdk/provider-utils": "4.0.29", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-qenRdpoYM+2y8Ibj3Y7XngvfcG4NIpejaM+YqAKWXi3/N1qZYeIelrm19jxhIwQW0W/g7WUz0L2Agl7+FnwrQA=="],
 

@@ -6,7 +6,7 @@
       "name": "@hasna/loops",
       "dependencies": {
         "@aws-sdk/client-secrets-manager": "^3.1083.0",
-        "@hasna/contracts": "0.13.3",
+        "@hasna/contracts": "0.13.4",
         "@hasna/events": "^0.1.16",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@openrouter/ai-sdk-provider": "2.9.1",
@@ -75,7 +75,7 @@
 
     "@aws/lambda-invoke-store": ["@aws/lambda-invoke-store@0.3.0", "", {}, "sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ=="],
 
-    "@hasna/contracts": ["@hasna/contracts@0.13.3", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.4" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-TiT1xqf4+DeWg3nvuLFSL6b/MW6IwZp5tyzTTb+BpHaSthEUQADK+/5p4/Nid9o00QqyL/ZUKIV+26gmi8CxrA=="],
+    "@hasna/contracts": ["@hasna/contracts@0.13.4", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.3" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-2vafT1dQM4GJR9yd0Do9KTpA4/R1Rkkgnl2AQ3oR4n81nojcyvNyErsv7iMXEQauKduBpdkNTRLkyCcLDRPBhw=="],
 
     "@hasna/events": ["@hasna/events@0.1.16", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-HX66T8JljVOoE/Li8WKLUFVozg0GIdZmgBalScfBFW5Vru4IcVSTNs07TmYH3kIJUe5tylItTqwzc02nvjqbfw=="],
 
@@ -376,6 +376,8 @@
     "@aws-sdk/credential-providers/@smithy/types": ["@smithy/types@4.16.1", "", { "dependencies": { "tslib": "^2.6.2" } }, "sha512-0JFs3V2y2M9tKW5na/qxe69Zv+uxLMO7QBbhxF/FHu/Gp2NFZAAL9tWl9PU02xxo07pb3G9FTyjNc6D5uZrJIg=="],
 
     "@hasna/contracts/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
+
+    "@hasna/machines/@hasna/contracts": ["@hasna/contracts@0.13.3", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.4" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-TiT1xqf4+DeWg3nvuLFSL6b/MW6IwZp5tyzTTb+BpHaSthEUQADK+/5p4/Nid9o00QqyL/ZUKIV+26gmi8CxrA=="],
 
     "@hasna/machines/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 

@@ -24,14 +24,18 @@
  *
  * RULE 2 — APP lockfiles: every top-level app with its own
  *   `apps/<name>/bun.lock` must have the lockfile's root workspace entry
- *   `dependencies` match the manifest. This is the Docker deploy lane's exact
- *   firing surface: measured on bun 1.2 / 1.3.14 / 1.4.0, the lane's
- *   `bun install --frozen-lockfile` fires on dependency-range drift (the wave
- *   class) while TOLERATING name drift (apps/ui's lockfile records
- *   `@hasnaxyz/ui-local` vs manifest `@hasna/ui` — lane passes) and missing
- *   devDependencies (apps/billing, apps/router, apps/skills and others carry
- *   manifest devDeps the lockfile root entry does not record — lane passes).
- *   So RULE 2 compares dependencies only, exactly as strict as the lane.
+ *   `dependencies` and `optionalDependencies` match the manifest. This is the
+ *   Docker deploy lane's exact firing surface: measured on bun 1.2 / 1.3.14 /
+ *   1.4.0, the lane's `bun install --frozen-lockfile` fires on dependency-range
+ *   drift (the wave class) while TOLERATING name drift (apps/ui's lockfile
+ *   records `@hasnaxyz/ui-local` vs manifest `@hasna/ui` — lane passes) and
+ *   missing devDependencies (apps/billing, apps/router, apps/skills and others
+ *   carry manifest devDeps the lockfile root entry does not record — lane
+ *   passes). optionalDependencies drift fires the lane too, measured on bun
+ *   1.3.14 with the apps/loops 0.5.11 wave pin: manifest `@hasna/machines`
+ *   0.2.35 (E404 on the registry) against lockfile 0.2.34 → rc=1
+ *   "lockfile had changes, but lockfile is frozen". So RULE 2 compares
+ *   dependencies plus optionalDependencies, exactly as strict as the lane.
  *
  * EXCEPTIONS — deliberate and attributable. Each names a manifest pin to a
  * version that is NOT on the npm registry (measured E404 2026-08-21); the
@@ -122,6 +126,7 @@ function checkRootLockfile(root: string): string[] {
     const problemsFor = compareEntry(`root bun.lock apps/${member}`, entry, manifestOf(root, member), [
       "dependencies",
       "devDependencies",
+      "optionalDependencies",
     ]);
     problems.push(...problemsFor);
     if (entry) {
@@ -161,6 +166,7 @@ function checkAppLockfiles(root: string): string[] {
     const entry = doc.workspaces?.[""];
     const problemsFor = compareEntry(`apps/${member}/bun.lock (root entry)`, entry, manifestOf(root, member), [
       "dependencies",
+      "optionalDependencies",
     ]);
     problems.push(...problemsFor);
   }
@@ -182,6 +188,7 @@ function selfTest(): void {
       version: "1.2.0",
       dependencies: { "@hasna/beta": "^0.9.0", lodash: "^4.0.0" },
       devDependencies: { typescript: "^5.0.0" },
+      optionalDependencies: { "@hasna/machines": "0.2.34" },
     };
     const betaManifest = {
       name: "@hasna/beta",
@@ -202,6 +209,7 @@ function selfTest(): void {
           version: "1.2.0",
           dependencies: { "@hasna/beta": "^0.9.0", lodash: "^4.0.0" },
           devDependencies: { typescript: "^5.0.0" },
+          optionalDependencies: { "@hasna/machines": "0.2.34" },
         },
         "apps/beta": { name: "@hasna/beta", version: "0.9.0", dependencies: {}, devDependencies: {} },
       },
@@ -216,6 +224,7 @@ function selfTest(): void {
           name: "@hasna/alpha",
           dependencies: { "@hasna/beta": "^0.9.0", lodash: "^4.0.0" },
           devDependencies: { typescript: "^5.0.0" },
+          optionalDependencies: { "@hasna/machines": "0.2.34" },
         },
       },
       packages: {},
@@ -249,6 +258,18 @@ function selfTest(): void {
     const appFired = appHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("lodash"));
     if (!appFired) {
       throw new Error(`negative control 2 failed — stale app lockfile not reported: ${appHits.join("; ")}`);
+    }
+
+    // Optional-dependency drift must also be caught: the apps/loops 0.5.11
+    // wave pinned @hasna/machines 0.2.35 (E404) in optionalDependencies while
+    // the app lockfile recorded 0.2.34, and the lane's frozen install fired.
+    const optDepLock = JSON.parse(JSON.stringify(alphaLock));
+    optDepLock.workspaces[""].optionalDependencies = { "@hasna/machines": "0.2.35" };
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(optDepLock, null, 2));
+    const optDepHits = runCheck(dir);
+    const optDepFired = optDepHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("@hasna/machines"));
+    if (!optDepFired) {
+      throw new Error(`negative control 3 failed — stale optionalDependencies not reported: ${optDepHits.join("; ")}`);
     }
 
     // A member in the exception registry with a stale app lockfile must NOT
