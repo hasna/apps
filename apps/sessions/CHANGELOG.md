@@ -1,5 +1,13 @@
 # @hasna/sessions
 
+## 0.12.18
+
+### Patch Changes
+
+- fix(cloud-embeddings-schema): add migration 0008 so the shipped schema matches the /v1 code path. 0007 declared `embedding FLOAT8[]` / `synced_to_s3 INTEGER` but ran as a no-op on every database where 0001 had already created `embeddings` (BYTEA / BOOLEAN), so the cloud embed/semantic/hybrid/recall paths failed or misread against the shipped schema. 0008 ALTERs both columns and adds the two search indexes 0007 also no-oped on; a real-Postgres regression test asserts the applied schema and a vector round-trip (fails without 0008).
+- fix(auth): wire the /v1 verifier to the @hasna/contracts 0.13.x API. `verifyApiKey` no longer accepts the boolean `isRevoked` hook alone: cloud mode now uses `keyStatus` (strict: unknown/revoked/expired keys are refused), and local mode declares `allowUnregisteredKeys: true` (the documented intent — local mode skips revocation). /v1 returned 500 in local mode before this fix.
+- fix(tests): make CLI-spawning tests robust to fleet-machine environment contamination. BASH_ENV sources ~/.hasna/cloud/agent-env.sh into every non-interactive bash (re-exporting the real sessions cloud env), and the @hasna/contracts disk credential tier (~/.hasna/cloud/sessions.env) outranks legacy env keys; the test helpers now re-assert their local/mock environment in-command and deliver keys via the `HASNA_SESSIONS_API_KEY_OVERRIDE` tier.
+
 ## 0.12.17
 
 ### Patch Changes

@@ -47,7 +47,13 @@ export function getVerifier(auditLog?: (e: AuthAuditEvent) => void): ApiKeyVerif
   _verifier = verifyApiKey({
     app: APP,
     signingSecret,
-    ...(store ? { isRevoked: store.isRevoked } : {}),
+    // @hasna/contracts 0.13.3 rejects the old boolean `isRevoked` wiring: it
+    // cannot refuse a key this service has no record of, so a verifier must
+    // wire `keyStatus` (strict, distinguishes unknown/revoked/expired) or
+    // declare `allowUnregisteredKeys: true` (skip revocation explicitly).
+    // Cloud mode owns the api_keys table -> strict keyStatus. Local mode has
+    // no key store by design (see the module docstring) -> declare it.
+    ...(store ? { keyStatus: store.keyStatus } : { allowUnregisteredKeys: true }),
     ...(auditLog ? { audit: auditLog } : {}),
   });
   return _verifier;

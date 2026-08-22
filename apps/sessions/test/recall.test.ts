@@ -395,7 +395,11 @@ describe("sessions recall CLI", () => {
           HASNA_SESSIONS_STORAGE_MODE: "self_hosted",
           HASNA_SESSIONS_MODE: "self_hosted",
           HASNA_SESSIONS_API_URL: base,
-          HASNA_SESSIONS_API_KEY: apiKey,
+          // The override tier outranks the disk credential tier
+          // (~/.hasna/cloud/sessions.env on fleet machines) and the deprecated
+          // env tier, and emits no deprecation warning on stderr — the test
+          // asserts clean stderr.
+          HASNA_SESSIONS_API_KEY_OVERRIDE: apiKey,
           SESSIONS_STORAGE_MODE: "self_hosted",
           SESSIONS_MODE: "self_hosted",
           SESSIONS_API_URL: base,
