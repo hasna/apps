@@ -71,12 +71,14 @@ async function testServer(backend: StoreBackendFixture, configOverrides: Record<
   const fixture = await backend.create(SEED);
   const fetch = await createSkillsFetchHandler({
     store: fixture.store,
+    governanceStore: fixture.governanceStore,
     config: { inlineWorker: false, allowEphemeralStore: fixture.allowEphemeralStore, ...configOverrides },
   });
   const server = Bun.serve({ port: 0, fetch });
   return {
     server,
     store: fixture.store,
+    governanceStore: fixture.governanceStore,
     baseUrl: `http://127.0.0.1:${server.port}`,
     async stop() {
       server.stop(true);
@@ -307,6 +309,77 @@ for (const backend of backends) {
         expect(crossArtifacts.status).toBe(404);
         expect(await crossArtifacts.json()).toMatchObject({ code: "RUN_NOT_FOUND" });
         expect((await orgB.listRuns()).map((run: { id: string }) => run.id)).not.toContain(submitted.id);
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("cancelling a queued run through the API makes it terminal: unclaimable and uncounted", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const submitted = await client.submitRun("video-highlight-pack", { text: "never run" }, []);
+        expect(submitted.status).toBe("queued");
+
+        // On the table-backed governance stores (sqlite/postgres) the active-run
+        // count reads the same skills_runs table the product store writes, so the
+        // queued run is counted before the cancel. The memory governance store is
+        // a separate in-memory ledger this API path never seeds, so its count
+        // cannot observe the run and the ceiling half of the assertion does not
+        // apply there.
+        const tableBacked = ctx.governanceStore.backend !== "memory";
+        if (tableBacked) {
+          expect(await ctx.governanceStore.activeRunCount("org_a")).toBe(1);
+        }
+
+        const res = await fetch(`${ctx.baseUrl}/api/v1/runs/${submitted.id}/cancel`, {
+          method: "POST",
+          headers: { authorization: "Bearer sk_test_org_a" },
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({ id: submitted.id, status: "cancelled" });
+
+        // Terminal: no worker pass can claim it again, and it no longer counts
+        // toward the org's concurrency ceiling.
+        expect(await ctx.store.claimNextRun({ workerId: "worker_test" })).toBeNull();
+        expect((await client.getRun(submitted.id!))?.status).toBe("cancelled");
+        if (tableBacked) {
+          expect(await ctx.governanceStore.activeRunCount("org_a")).toBe(0);
+        }
+
+        // Org isolation is preserved: another org cannot cancel this org's run.
+        const denied = await fetch(`${ctx.baseUrl}/api/v1/runs/${submitted.id}/cancel`, {
+          method: "POST",
+          headers: { authorization: "Bearer sk_test_org_b" },
+        });
+        expect(denied.status).toBe(404);
+        expect((await client.getRun(submitted.id!))?.status).toBe("cancelled");
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("cancelling a claimed run fences the worker's generation so its late finish is refused", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const submitted = await client.submitRun("video-highlight-pack", { text: "claimed" }, []);
+        const claimed = await ctx.store.claimNextRun({ workerId: "worker_fenced" });
+        expect(claimed?.id).toBe(submitted.id);
+        expect(claimed?.leaseGeneration).toBeGreaterThan(0);
+        const workerGeneration = claimed!.leaseGeneration;
+
+        const res = await fetch(`${ctx.baseUrl}/api/v1/runs/${submitted.id}/cancel`, {
+          method: "POST",
+          headers: { authorization: "Bearer sk_test_org_a" },
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({ id: submitted.id, status: "cancelled" });
+
+        // The worker's late terminal write is refused by the generation fence
+        // the cancellation raised; the run stays cancelled.
+        await expect(ctx.store.transitionRun!(submitted.id!, { status: "succeeded" }, workerGeneration)).rejects.toThrow(/lease_generation/);
+        expect((await client.getRun(submitted.id!))?.status).toBe("cancelled");
       } finally {
         await ctx.stop();
       }
