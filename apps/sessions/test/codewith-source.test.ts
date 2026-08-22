@@ -56,7 +56,9 @@ describe("codewith is a first-class session source", () => {
     expect(listParsers().map((p) => p.source)).toContain("codewith");
   });
 
-  it("is watched by the ingest-watch/daemon roots when its dir exists", () => {
+  // This test does real filesystem probing (ingest-watch daemon roots) and
+  // measured ~6-7s on fleet machines, over the 5s default per-test timeout.
+  it("is watched by the ingest-watch/daemon roots when its dir exists", { timeout: 20000 }, () => {
     const prev = process.env.CODEWITH_PATH;
     const dir = mkdtempSync(join(tmpdir(), "codewith-watch-"));
     try {
