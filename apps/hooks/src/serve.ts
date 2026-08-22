@@ -248,6 +248,23 @@ export function startServeServer(options: {
 // an ephemeral port without colliding with the default.
 if (import.meta.main) {
   const argv = process.argv.slice(2);
+  // Binds-before-help class: --help/--version must answer BEFORE any bind.
+  // They previously fell through to startServeServer(), which bound the
+  // listener at 127.0.0.1:39428 and never exited (todos row dc92977d).
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`usage: hooks-serve [--port <n>] [--host <h>]   Start the local registry HTTP API
+  hooks-serve --version                   Print the package version
+
+options:
+  --help              show this help and exit
+  --version           print the package version and exit
+`);
+    process.exit(0);
+  }
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(packageVersion());
+    process.exit(0);
+  }
   const flagValue = (name: string): string | undefined => {
     const idx = argv.indexOf(name);
     return idx >= 0 && argv[idx + 1] ? argv[idx + 1] : undefined;
