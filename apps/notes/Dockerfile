@@ -14,7 +14,6 @@ WORKDIR /app
 # lockfile), so this build resolves from the manifests — the same choice the
 # knowledge image makes.
 COPY package.json ./
-COPY ai-sidecar/package.json ./ai-sidecar/package.json
 COPY server/package.json ./server/package.json
 RUN bun install --ignore-scripts
 

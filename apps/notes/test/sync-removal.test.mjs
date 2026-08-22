@@ -1,8 +1,10 @@
 // Regression tests for the multi-machine sync removal (notes cloud-transition
 // workflow, task 5b2d66b4-0b5f-4680-8144-022b8a548e57). Every assertion below
 // describes the single-server target state: the client is a plain HTTP API
-// client, no sync machinery or machine-manifest surface ships in the CLI, the
-// macOS app, the server, or the web UI. Written FIRST, before the removal.
+// client, and no sync machinery or machine-manifest surface ships in the CLI or
+// the server. Written FIRST, before the removal. The macOS-app and web-UI
+// sections were dropped with the desktop app itself (now owned by
+// hasna-products/personalnotes).
 import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
@@ -137,54 +139,5 @@ describe('sync removal — server', () => {
     const text = await readText(join(repoRoot, 'server', 'env.mjs'));
     expect(text).not.toMatch(/RETIRED_PREFIX/);
     expect(text).not.toMatch(/'PERSONAL'/);
-  });
-});
-
-describe('sync removal — macOS app', () => {
-  test('app main.swift has no SyncScheduler, machine manifest, or sync status', async () => {
-    const text = await readText(join(repoRoot, 'Sources', 'HasnaNotesApp', 'main.swift'));
-    expect(text).not.toContain('SyncScheduler');
-    expect(text).not.toContain('FleetManifest');
-    expect(text).not.toContain('FleetMachine');
-    expect(text).not.toContain('sync-status');
-    expect(text).not.toContain('syncIntervalMinutes');
-  });
-
-  test('MachineManifest.swift is removed from Core', async () => {
-    await expect(stat(join(repoRoot, 'Sources', 'HasnaNotesCore', 'MachineManifest.swift'))).rejects.toThrow();
-  });
-
-  test('smoke harness has no machine manifest parsing section', async () => {
-    const text = await readText(join(repoRoot, 'Sources', 'HasnaNotesSmoke', 'main.swift'));
-    expect(text).not.toContain('FleetManifest');
-    expect(text).not.toContain('machine manifest parsing');
-  });
-
-  test('build script no longer bundles sync engine files', async () => {
-    const text = await readText(join(repoRoot, 'scripts', 'build_notes.sh'));
-    expect(text).not.toMatch(/Resources\/sync/);
-    expect(text).not.toContain('CLI + sync engine');
-  });
-});
-
-describe('sync removal — web UI', () => {
-  test('index.html has no machines or sync surface', async () => {
-    const html = await readText(join(repoRoot, 'web', 'index.html'));
-    for (const id of ['machines-dd', 'machines-page', 'machine-pop', 'sync-status-row']) {
-      expect(html).not.toContain(id);
-    }
-    expect(html).not.toContain('Move to machine');
-    expect(html).not.toContain('All Machines');
-  });
-
-  test('app.js has no machines dropdown, machine filter, or sync status', async () => {
-    const app = await readText(join(repoRoot, 'web', 'app.js'));
-    expect(app).not.toContain('machines-dd');
-    expect(app).not.toContain('machines-page');
-    expect(app).not.toContain('machine-pop');
-    expect(app).not.toContain('syncStatusLine');
-    expect(app).not.toContain('state.sync');
-    expect(app).not.toContain('machineFilter');
-    expect(app).not.toContain('thisMachine');
   });
 });

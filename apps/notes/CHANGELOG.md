@@ -1,5 +1,52 @@
 # @hasna/notes
 
+## Unreleased
+
+### Major Changes
+
+- **BREAKING: the macOS desktop app is removed from `@hasna/notes` and now lives in
+  `hasna-products/personalnotes` (repo `hasna-products/personalnotes`).** Owner
+  directive 2026-08-22: `@hasna/notes` will not ship a macOS app. This package is
+  headless — a local-first notes CLI, an MCP server, an importable SDK, and a
+  self-hosted HTTP server (SQLite or PostgreSQL).
+
+  Removed from this package: the SwiftPM manifest (`Package.swift`), the native
+  WKWebView shell and store library (`Sources/HasnaNotesApp`,
+  `Sources/HasnaNotesCore`, `Sources/HasnaNotesSmoke`), the bundled browser UI
+  (`web/`), the AI sidecar server (`ai-sidecar/`), the brand/app-icon assets
+  (`assets/`), and the app build and deploy scripts (`scripts/build_notes.sh`,
+  `scripts/deploy_notes.sh`, `scripts/notes-deploy-lib.sh`). The app-only tooling
+  went with them: the web-UI screenshot harness (`tools/shoot.mjs`, which rendered
+  the deleted `web/index.html`) and the app-icon rasterizer
+  (`tools/render-appicon.mjs`, which read and rewrote the deleted `assets/brand`
+  tree), plus the `tools/shots/` ignore entry that only existed for the harness's
+  output. So did the app and web-UI documentation: `docs/design-rules-macos26.md`
+  (macOS 26 design rules), `docs/ui-contracts.md` (the `window.HasnaNotes` bridge
+  and boot-payload contract for the deleted web UI), and
+  `docs/brand-visual-system.md` (the app-icon and menu-bar asset system).
+  `docs/storage.md` and `docs/sync.md` stay — they document the headless package.
+  The app-surface tests went with them, and `test/app-removal.test.mjs` now guards
+  every removed path against reintroduction. The final upstream commits carrying
+  the app in this repo are **da9764f4 (#638)** and **5a449b417**.
+
+  **No published surface changed.** The `bin` entries (`notes`, `notes-mcp`,
+  `notes-serve`), the `exports` map (`.`, `./sdk`, `./events`), and the `files`
+  array are byte-identical, so the npm payload is unchanged. Voice capture,
+  realtime transcription, and the chat UI were app surfaces and moved with the app;
+  the `--sidecar <url>` title client remains and now points at any endpoint
+  exposing `POST /title` (this package ships the client, not the server).
+
+  Two manifest edits were required and are not payload changes: `"ai-sidecar"` was
+  dropped from `workspaces` in this package and from `apps/notes/ai-sidecar` in the
+  monorepo root `package.json` — without them `bun install` fails with
+  `Workspace not found "ai-sidecar"`. Dropping the sidecar's exact `ws@8.18.3` pin
+  lets the root lockfile resolve `ws@8.21.3`, which other monorepo members already
+  required (`^8.20.0`, `^8.21.0`).
+
+  Interoperability is unchanged: the `personalnotes/v1` wire dialect and the
+  Markdown-with-YAML-frontmatter on-disk format are the shared contract between this
+  package and the desktop app.
+
 ## 0.3.0
 
 ### Minor Changes
