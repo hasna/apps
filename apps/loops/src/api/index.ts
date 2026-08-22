@@ -470,30 +470,38 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
         });
         continue;
       }
-      const recovered = await storage.recoverExpiredRunLeasesDetailed(now, {
-        runId: candidate.runId,
-        limit: 1,
-        scanLimit: 1,
-        expectedLeaseExpiresAt: current.leaseExpiresAt,
-        expectedUpdatedAt: current.updatedAt,
-        refuseAdmittedPrivateOperations: true,
-      });
-      if (recovered.operationReconciliationRequired.some((run) => run.id === candidate.runId)) {
-        outcomes.push({
+      try {
+        const recovered = await storage.recoverExpiredRunLeasesDetailed(now, {
           runId: candidate.runId,
-          outcome: "operation_reconciliation_required",
-          reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          limit: 1,
+          scanLimit: 1,
+          expectedLeaseExpiresAt: current.leaseExpiresAt,
+          expectedUpdatedAt: current.updatedAt,
+          refuseAdmittedPrivateOperations: true,
         });
+        if (recovered.operationReconciliationRequired.some((run) => run.id === candidate.runId)) {
+          outcomes.push({
+            runId: candidate.runId,
+            outcome: "operation_reconciliation_required",
+            reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          });
+          continue;
+        }
+        if (recovered.abandoned.length !== 1) {
+          outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "candidate_changed_during_recovery" });
+          continue;
+        }
+        await advanceRecoveredRuns(storage, recovered.abandoned, {
+          random: ctx.random,
+          circuitBreakerThreshold: ctx.circuitBreakerThreshold,
+        });
+      } catch {
+        // One candidate's recovery/advancement must not abort the whole batch:
+        // report the per-run conflict and let the remaining candidates proceed.
+        // The run stays recovered/abandoned and is retryable on a later pass.
+        outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "advancement_failed" });
         continue;
       }
-      if (recovered.abandoned.length !== 1) {
-        outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "candidate_changed_during_recovery" });
-        continue;
-      }
-      await advanceRecoveredRuns(storage, recovered.abandoned, {
-        random: ctx.random,
-        circuitBreakerThreshold: ctx.circuitBreakerThreshold,
-      });
       outcomes.push({ runId: candidate.runId, outcome: "recovered" });
     }
     return ok({ reconciliation: { outcomes } });
@@ -2090,7 +2098,12 @@ async function advanceRecoveredLeaseRunPages(
   for (;;) {
     const page = await storage.listRecoveredLeaseRunsPage({ snapshot, offset, limit: MAX_PAGE_LIMIT });
     snapshot = page.snapshot;
-    advancementDeferred.push(...await advanceRecoveredRuns(storage, page.runs, opts));
+    try {
+      advancementDeferred.push(...await advanceRecoveredRuns(storage, page.runs, opts));
+    } catch {
+      // One page's recovery advancement must not abort the whole pass: the
+      // page's runs stay recovered and are retried on the next invocation.
+    }
     if (page.nextOffset === undefined) break;
     if (page.nextOffset <= offset) throw new Error("recovered lease replay offset did not advance");
     offset = page.nextOffset;
