@@ -4,6 +4,7 @@
 
 ### Patch Changes
 
+- Release-gate remediation: the per-package bun.lock is synced to the pinned @hasna/contracts 0.13.4 (frozen install in the Docker deps stage), and the shipped station template floors @hasna/machines at 0.2.35, the version this template ships with.
 - Updated dependencies [554a5b9]
   - @hasna/contracts@0.13.4
 
