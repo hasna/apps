@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
+import { ApiKeyStore, mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createHandler } from "../src/server/serve.js";
 import {
   VaultDecryptionError,
@@ -19,6 +19,26 @@ function fakeClient() {
       if (sql.includes("SELECT tenant_id FROM api_keys")) {
         const tenantId = persistedTenantByKid.get(String(params?.[0]));
         return tenantId ? { tenant_id: tenantId } : null;
+      }
+      if (sql.includes("SELECT * FROM api_keys")) {
+        // ApiKeyStore.findByKid — the keyStatus lookup. A persisted kid is a
+        // REGISTERED key: active (never revoked, never expired). An unpersisted
+        // kid is "unknown" and is refused by the strict keyStatus contract.
+        const kid = String(params?.[0]);
+        if (!persistedTenantByKid.has(kid)) return null;
+        return {
+          kid,
+          app: "secrets",
+          agent: null,
+          scopes: JSON.stringify(["secrets:*"]),
+          token_hash: "unused-hash",
+          issued_at: new Date(0).toISOString(),
+          expires_at: null,
+          revoked_at: null,
+          revoked_reason: null,
+          last_used_at: null,
+          created_by: null,
+        };
       }
       return { ok: 1 };
     },
@@ -57,7 +77,15 @@ function fakeStore() {
 }
 
 function handler(store = fakeStore()) {
-  const verifier = verifyApiKey({ app: "secrets", signingSecret: SIGNING });
+  // Strict key-status hook (contracts >= 0.8.7 refuses the deprecated
+  // isRevoked-only wiring at construction): a key must be REGISTERED and
+  // active in the api_keys table — unknown, revoked or expired denies.
+  const keyStore = new ApiKeyStore(fakeClient());
+  const verifier = verifyApiKey({
+    app: "secrets",
+    signingSecret: SIGNING,
+    keyStatus: keyStore.keyStatus,
+  });
   return createHandler({ client: fakeClient(), store, verifier });
 }
 
@@ -153,8 +181,10 @@ describe("secrets serve", () => {
       }),
     );
 
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "API key has no tenant assignment" });
+    // Strict keyStatus contract: an unregistered kid is "unknown" and is
+    // refused AT AUTH (401), before the tenant check or any store write.
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "API key is not registered with this service.", reason: "unknown_key" });
     expect(store.tenantWrites).toHaveLength(0);
   });
 

@@ -353,6 +353,29 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
   };
 }
 
+/**
+ * Build the API-key verifier with the STRICT key-status hook.
+ *
+ * `keyStatus: keyStore.keyStatus` is the recommended wiring: anything other
+ * than "active" (unknown, revoked, expired) denies, and a key this service
+ * has no record of is refused. The deprecated `isRevoked`-only wiring is
+ * refused eagerly at construction by @hasna/contracts >= 0.8.7 (contracts
+ * #62) — the 0.3.4 boot-crash (todos row 0650cc5e) was exactly that throw
+ * surfacing as a container boot failure. Same migration shape as hasna/apps#769
+ * (todos' cloud.ts).
+ */
+export function getCloudVerifier(keyStore: ApiKeyStore, signingSecret: string): ApiKeyVerifier {
+  return verifyApiKey({
+    app: APP_NAME,
+    signingSecret,
+    keyStatus: keyStore.keyStatus,
+    audit: (e) => {
+      // Structured, value-free audit line (never logs the token or secret).
+      console.log(JSON.stringify({ evt: "api_auth", ...e }));
+    },
+  });
+}
+
 /** Boot the cloud service: resolve env, open the pool, build auth + routes. */
 export async function startCloudServer(): Promise<void> {
   bootstrapCloudEnv();
@@ -369,15 +392,7 @@ export async function startCloudServer(): Promise<void> {
   const backfilled = await store.runVersionBackfill();
   if (backfilled > 0) console.log(`secrets-serve: version baseline backfilled ${backfilled} key(s)`);
   const keyStore = new ApiKeyStore(client);
-  const verifier = verifyApiKey({
-    app: APP_NAME,
-    signingSecret,
-    isRevoked: keyStore.isRevoked,
-    audit: (e) => {
-      // Structured, value-free audit line (never logs the token or secret).
-      console.log(JSON.stringify({ evt: "api_auth", ...e }));
-    },
-  });
+  const verifier = getCloudVerifier(keyStore, signingSecret);
 
   const handle = createHandler({ client, store, verifier });
 
