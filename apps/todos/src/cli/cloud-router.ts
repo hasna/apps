@@ -15,6 +15,7 @@ import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, 
 import { isBlockingDependencyStatus } from "../types/index.js";
 import type { TodosTaskFailureResult, UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { changedSinceStampNewer } from "../lib/instant-compare.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
 import {
   PLAN_PROJECT_LINK_SCHEMA_VERSION,
@@ -3407,7 +3408,7 @@ export async function cloudEscalatedTasks(
 export async function cloudChangedSince(client: HasnaStorageClient, since: string, filter: TaskFilter = {}): Promise<Task[]> {
   const tasks = await cloudListTasks(client, filter);
   return tasks
-    .filter((t) => (t.updated_at ?? "") > since)
+    .filter((t) => changedSinceStampNewer(t.updated_at ?? "", since))
     .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
 }
 

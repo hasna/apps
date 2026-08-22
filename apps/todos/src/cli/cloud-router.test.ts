@@ -1737,6 +1737,28 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
     expect(tasks.map((t) => t.id)).toEqual(["new"]);
   });
 
+  test("REGRESSION: changed-since compares the cursor as an INSTANT, not raw text", async () => {
+    // Release-review P1 (0.15.44 review): cloudChangedSince filtered
+    // `(t.updated_at ?? "") > since` as raw text. Space (0x20) sorts before
+    // 'T' (0x54), so a space-form stamp ("2026-08-20 23:00:00") that is
+    // genuinely NEWER than an ISO cursor was silently excluded from CLI
+    // summaries and activity reports; an unparseable stamp was dropped too.
+    installFetch(() => ({
+      body: {
+        tasks: [
+          { id: "space-new", updated_at: "2026-08-20 23:00:00" }, // newer than cursor, previously excluded
+          { id: "iso-new", updated_at: "2026-08-20T22:00:00.000Z" },
+          { id: "old", updated_at: "2026-08-19T21:00:00.000Z" },
+          { id: "unparseable", updated_at: "not-a-timestamp" }, // cannot read -> KEPT, not older
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const since = "2026-08-20T21:00:00.000Z";
+    const tasks = await cloudChangedSince(client, since);
+    expect(tasks.map((t) => t.id).sort()).toEqual(["iso-new", "space-new", "unparseable"]);
+  });
+
   test("task stats -> counts by status/priority/agent from cloud", async () => {
     installFetch(() => ({
       body: {
