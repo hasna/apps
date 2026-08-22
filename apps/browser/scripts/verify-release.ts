@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } f
 import { tmpdir } from "node:os";
 import { basename, extname, join, relative } from "node:path";
 import packageJson from "../package.json" assert { type: "json" };
+import { maybeNpmVersions } from "./registry-versions.ts";
 
 const PACKAGE_NAME = "@hasna/browser";
 const MAX_PACKAGE_BYTES = 10 * 1024 * 1024;
@@ -112,7 +113,7 @@ async function main(): Promise<void> {
 }
 
 async function assertVersionIsPublishable(): Promise<void> {
-  const publishedVersions = await maybeNpmVersions(PACKAGE_NAME);
+  const publishedVersions = await maybeNpmVersions(PACKAGE_NAME, (cmd) => run(cmd, { quiet: true, allowFailure: true }));
   if (publishedVersions.length === 0) return;
   assert(!publishedVersions.includes(packageJson.version), `${PACKAGE_NAME}@${packageJson.version} is already published`);
   const maxPublished = publishedVersions.reduce((max, version) => compareSemver(version, max) > 0 ? version : max, publishedVersions[0]!);
@@ -297,12 +298,6 @@ async function waitForHealth(port: number): Promise<Response> {
   throw lastError instanceof Error ? lastError : new Error("browser-serve health check timed out");
 }
 
-async function maybeNpmVersions(pkg: string): Promise<string[]> {
-  const result = await run(["npm", "view", pkg, "versions", "--json"], { quiet: true, allowFailure: true });
-  if (result.exitCode !== 0) return [];
-  const parsed = JSON.parse(result.stdout) as string[] | string;
-  return Array.isArray(parsed) ? parsed : [parsed];
-}
 
 async function run(
   cmd: string[],
