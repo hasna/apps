@@ -15,6 +15,8 @@ import { createTemplate } from "../../db/templates.js";
 import { createWarmingSchedule, updateWarmingStatus } from "../../db/warming.js";
 import { seedEmailAgentRun, seedTriage } from "../../test-support/legacy-mail-seed.js";
 import { handleApiRequest } from "../api-routes.js";
+import { TRUSTED_PROXY_HOPS_ENV } from "../self-hosted/auth/client-ip.js";
+import { resetRateLimitWindows } from "./helpers.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -1072,5 +1074,30 @@ describe("emails serve REST parity smoke", () => {
       contact_email: "alice@example.com",
       sequence_id: sequence.id,
     }));
+  });
+});
+
+describe("dashboard API rate limiting", () => {
+  it("throttles /api/domains/:id/verify on the socket peer, never the forgeable header", async () => {
+    resetRateLimitWindows();
+    // The ambient machine may configure EMAILS_TRUSTED_PROXY_HOPS; this test
+    // keys on the socket peer (hops = 0), so the forging header must be ignored.
+    delete process.env[TRUSTED_PROXY_HOPS_ENV];
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const req = new Request("http://127.0.0.1:3900/api/domains/does-not-exist/verify", {
+        method: "POST",
+        headers: { "x-forwarded-for": `203.0.113.${i}` },
+      });
+      const url = new URL(req.url);
+      const response = await handleApiRequest(req, url, url.pathname, req.method, "198.51.100.9");
+      statuses.push(response?.status ?? 0);
+    }
+
+    // Rotating the attacker-controlled header must not buy a fresh bucket: the
+    // socket peer is fixed, so the 11th request is throttled.
+    expect(statuses.slice(0, 10)).not.toContain(429);
+    expect(statuses[10]).toBe(429);
   });
 });

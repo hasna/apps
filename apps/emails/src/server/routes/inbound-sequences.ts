@@ -11,6 +11,7 @@ import { getDatabase } from '../../db/database.js';
 import { getLatestEmailDigest, normalizeEmailDigestPeriod } from '../../db/email-digests.js';
 import { addPrioritySenderRuleLocal, listPrioritySenderRulesLocal, removePrioritySenderRuleLocal } from '../../db/priority-senders.js';
 import { json, notFound, badRequest, internalError, resolveId, resolveIdStrict, resolveOptionalId, parseBody, checkRateLimit, tooManyRequests, queryInteger, queryPage } from './helpers.js';
+import { resolveClientIp } from '../self-hosted/auth/client-ip.js';
 import {
   MAILBOXES,
   listMailbox,
@@ -139,7 +140,7 @@ async function mailboxListPayload(mailbox: Mailbox, url: URL, source?: MailboxSo
   };
 }
 
-export async function handle(req: Request, url: URL, path: string, method: string): Promise<Response | null> {
+export async function handle(req: Request, url: URL, path: string, method: string, socketAddress?: string | null): Promise<Response | null> {
 // GET/POST /api/priority-sender-rules and DELETE /api/priority-sender-rules/:id
 if (path === "/api/priority-sender-rules" && method === "GET") {
   try { return json({ items: listPrioritySenderRulesLocal() }); } catch (e) { return internalError(e); }
@@ -365,7 +366,7 @@ if (path === "/api/doctor" && method === "GET") {
 
 // POST /api/pull
 if (path === "/api/pull" && method === "POST") {
-  const ip = req.headers.get("x-forwarded-for") ?? "local";
+  const ip = resolveClientIp({ headers: req.headers, socketAddress }) ?? "local";
   if (!checkRateLimit(ip, "pull", 5)) return tooManyRequests();
   try {
     const body = await parseBody(req) as Record<string, unknown>;

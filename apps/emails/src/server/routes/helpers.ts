@@ -123,15 +123,58 @@ export function sanitizeProvider(provider: Record<string, unknown>): Record<stri
   return sanitized;
 }
 
+const RATE_LIMIT_WINDOW_MS = 60_000;
+/** Upper bound on distinct tracked rate-limit keys. */
+const RATE_LIMIT_MAX_KEYS = 10_000;
+/** Sweep target with hysteresis: an attacked map is not rescanned per request. */
+const RATE_LIMIT_SWEEP_TARGET = 9_000;
+
 const rateLimitWindows = new Map<string, number[]>();
 export function checkRateLimit(ip: string, key: string, maxPerMinute: number): boolean {
   const mapKey = `${ip}:${key}`;
   const now = Date.now();
-  const hits = (rateLimitWindows.get(mapKey) ?? []).filter(t => now - t < 60_000);
+  const hits = (rateLimitWindows.get(mapKey) ?? []).filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+  // A key whose window has fully expired leaves no trace behind.
+  if (hits.length === 0) rateLimitWindows.delete(mapKey);
   if (hits.length >= maxPerMinute) return false;
   hits.push(now);
   rateLimitWindows.set(mapKey, hits);
+  sweepRateLimitWindows(now);
   return true;
+}
+
+/**
+ * Keep the window map bounded. Every distinct ip:key pair ever seen used to
+ * live for the process lifetime; the dashboard routes are keyed on the socket
+ * peer, so a remote caller rotating IPs could grow the map without limit.
+ */
+function sweepRateLimitWindows(now: number): void {
+  if (rateLimitWindows.size < RATE_LIMIT_MAX_KEYS) return;
+  for (const [key, hits] of rateLimitWindows) {
+    if (now - (hits[hits.length - 1] ?? 0) >= RATE_LIMIT_WINDOW_MS) {
+      rateLimitWindows.delete(key);
+    }
+  }
+  if (rateLimitWindows.size <= RATE_LIMIT_SWEEP_TARGET) return;
+  // Every surviving key is still inside its window — a fast key-rotation attack
+  // can outrun the window, so evict the stalest entries until the map fits.
+  const stalestFirst = [...rateLimitWindows.entries()].sort(
+    (a, b) => (a[1][a[1].length - 1] ?? 0) - (b[1][b[1].length - 1] ?? 0),
+  );
+  for (const [key] of stalestFirst) {
+    rateLimitWindows.delete(key);
+    if (rateLimitWindows.size <= RATE_LIMIT_SWEEP_TARGET) break;
+  }
+}
+
+/** Number of distinct rate-limit keys currently tracked (bounded). Test accessor. */
+export function rateLimitWindowCount(): number {
+  return rateLimitWindows.size;
+}
+
+/** Test accessor: drop all tracked rate-limit windows. */
+export function resetRateLimitWindows(): void {
+  rateLimitWindows.clear();
 }
 
 export function tooManyRequests(): Response {
