@@ -1323,7 +1323,7 @@ export async function createSchedule(
   const ts = nowIso();
   const row = await db.get(
     `INSERT INTO schedules (id, project_id, name, cron_expression, url, scenario_filter, model, headed, parallel, timeout_ms, enabled, next_run_at, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$11,$11) RETURNING *`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13) RETURNING *`,
     [uuid(), body.projectId ?? null, body.name, body.cronExpression, body.url, j(body.scenarioFilter ?? {}), body.model ?? null, Boolean(body.headed), body.parallel ?? 1, body.timeoutMs ?? null, nextRunAt, ts, ts],
   );
   return scheduleRow(row);

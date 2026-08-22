@@ -4,6 +4,17 @@
 
 ### Patch Changes
 
+- a918f20: fix: army runner resolves the built dist/cli/index.js and falls back to dev source (bug 21969ee6)
+- 4f71dc4: fix: persist next_run_at so the daemon fires and advances schedules (bug e16fb1b3)
+- 45dcfe3: fix: hosted PATCH /v1/scenarios/:id persists the pass cache (bug ff19ac0f)
+- 7a51ff9: fix: ApiStore.findStaleScenarios measures last run (any status), not last pass (bug 6dc878ef)
+- 87a1d23: fix: signPayload emits real HMAC-SHA256, not a forgeable rolling hash (bug 36580bf2)
+- 2c933a8: fix: run_for_diff passes caller baseRef as literal argv, never a shell string (bug 970bf61f)
+- 166a154: fix: hosted personas listPersonas honors limit/offset on the pg path (bug e920ef6a)
+- da762a0: fix: gate legacy /api/* with API-key auth in cloud mode; loopback bind by default (bug edec8757)
+- 933cbe9: fix: bake RDS global CA bundle so sslmode=require TLS to shared RDS verifies
+- 5989eed: fix: pin @hasna/browser to published 0.5.16
+- 4bc89b3: fix: Dockerfile no longer requires a nonexistent bun.lock
 - @hasna/browser@0.5.25
   - @hasna/projects@0.1.141
 
