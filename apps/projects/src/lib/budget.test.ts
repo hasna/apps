@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDatabase } from "../db/database.js";
+import { closeDatabase, getDatabase } from "../db/database.js";
 import { createWorkspace } from "../db/workspaces.js";
 import {
   BudgetExceededError,
@@ -110,5 +110,41 @@ describe("project budgets", () => {
     expect(status?.spent.unknown_cost_events).toBe(1);
     expect(status?.warnings.join("\n")).toContain("USD budget cannot be verified");
     expect(() => assertProjectBudgetsAfterSpend({ workspace_id: project.id })).toThrow(BudgetExceededError);
+  });
+
+  test("window start parses reset_at as the zoneless UTC instant it was stored as", () => {
+    const prevTz = process.env["TZ"];
+    process.env["TZ"] = "Europe/Bucharest";
+    try {
+      const root = mkdtempSync(join(tmpdir(), "projects-budget-window-"));
+      process.env["HASNA_PROJECTS_DB_PATH"] = join(root, "projects.db");
+      const project = createWorkspace({ name: "Windowed App", slug: "windowed-app", kind: "project" });
+      const budget = createProjectBudget({
+        scope_type: "project",
+        scope_id: project.id,
+        window: "lifetime",
+        mode: "hard",
+        max_total_tokens: 100,
+      });
+      const db = getDatabase();
+      db.run("UPDATE project_budgets SET reset_at = ? WHERE id = ?", ["2026-08-22 15:00:00.123", budget.id]);
+      const insertSpend = (id: string, createdAt: string, totalTokens: number) => {
+        db.run(
+          `INSERT INTO project_budget_spend (id, workspace_id, run_id, provider, model, usd, input_tokens, output_tokens, total_tokens, metadata, created_at)
+           VALUES (?, ?, ?, NULL, NULL, 0, 0, 0, ?, '{}', ?)`,
+          [id, project.id, "run_window", totalTokens, createdAt],
+        );
+      };
+      insertSpend("spend_pre_reset", "2026-08-22 14:00:00.000", 10);
+      insertSpend("spend_same_second_pre_millis", "2026-08-22 15:00:00.000", 20);
+      insertSpend("spend_post_reset", "2026-08-22 16:00:00.000", 30);
+
+      const [status] = getProjectBudgetStatuses({ workspace_id: project.id });
+      expect(status?.window_start).toBe("2026-08-22T15:00:00.123Z");
+      expect(status?.spent.total_tokens).toBe(30);
+    } finally {
+      if (prevTz === undefined) delete process.env["TZ"];
+      else process.env["TZ"] = prevTz;
+    }
   });
 });
