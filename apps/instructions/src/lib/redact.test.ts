@@ -1,17 +1,40 @@
 import { describe, test, expect } from "bun:test";
-import { redactContent, scanSecrets, hasSecrets } from "./redact";
+import { redactContent, scanSecrets, hasSecrets, redactFormatForTarget } from "./redact";
+
+describe("redactFormatForTarget", () => {
+  test("resolves extensionless shell dotfiles to the shell dialect", () => {
+    expect(redactFormatForTarget("~/.zshrc", "text")).toBe("shell");
+    expect(redactFormatForTarget("~/.zprofile", "text")).toBe("shell");
+    expect(redactFormatForTarget("~/.bashrc", "text")).toBe("shell");
+    expect(redactFormatForTarget("~/.bash_profile", "text")).toBe("shell");
+    expect(redactFormatForTarget("/home/u/.zshenv", "text")).toBe("shell");
+    expect(redactFormatForTarget("/home/u/.env", "text")).toBe("shell");
+  });
+
+  test("resolves npmrc-family files to the ini dialect", () => {
+    expect(redactFormatForTarget("~/.npmrc", "text")).toBe("ini");
+    expect(redactFormatForTarget("~/.yarnrc", "text")).toBe("ini");
+    expect(redactFormatForTarget("~/.netrc", "text")).toBe("ini");
+  });
+
+  test("keeps the stored format for every other path", () => {
+    expect(redactFormatForTarget("~/.claude/settings.json", "json")).toBe("json");
+    expect(redactFormatForTarget("~/rules/notes.md", "markdown")).toBe("markdown");
+    expect(redactFormatForTarget("", "text")).toBe("text");
+  });
+});
 
 describe("redactContent — shell", () => {
   test("redacts export KEY=value with secret key name", () => {
     const r = redactContent('export ANTHROPIC_API_KEY="sk' + '-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXX"', "shell");
-    expect(r.content).toBe('export ANTHROPIC_API_KEY="{{ANTHROPIC_API_KEY}}"');
+    expect(r.content).toBe('export ANTHROPIC_API_KEY="' + '{{ANTHROPIC_API_KEY}}"');
     expect(r.redacted).toHaveLength(1);
     expect(r.isTemplate).toBe(true);
   });
 
   test("redacts export NPM_TOKEN=npm_xxx", () => {
     const r = redactContent("export NPM_TOKEN=npm" + "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890", "shell");
-    expect(r.content).toBe("export NPM_TOKEN={{NPM_TOKEN}}");
+    expect(r.content).toBe("export NPM_TOKEN=" + "{{NPM_TOKEN}}");
     expect(r.redacted[0]!.varName).toBe("NPM_TOKEN");
   });
 
@@ -28,13 +51,13 @@ describe("redactContent — shell", () => {
   });
 
   test("does not re-redact already redacted placeholders", () => {
-    const r = redactContent('export API_KEY="{{API_KEY}}"', "shell");
+    const r = redactContent('export API_KEY="' + '{{API_KEY}}"', "shell");
     expect(r.redacted).toHaveLength(0);
   });
 
   test("redacts multiple secrets in one file", () => {
     const content = [
-      "export OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ12",
+      "export OPENAI_API_KEY=sk-" + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ12",
       'export HOME="/Users/andrei"',
       "export GITHUB_TOKEN=ghp" + "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
     ].join("\n");
@@ -147,7 +170,7 @@ describe("redactContent — edge cases", () => {
   test("redacts GitHub tokens with various prefixes", () => {
     const ghp = redactContent("export TOKEN=ghp" + "_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn", "shell");
     expect(ghp.redacted).toHaveLength(1);
-    const ghs = redactContent("export TOKEN=ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn", "shell");
+    const ghs = redactContent("export TOKEN=ghs_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn", "shell");
     expect(ghs.redacted).toHaveLength(1);
   });
 

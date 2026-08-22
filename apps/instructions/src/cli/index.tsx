@@ -9,7 +9,7 @@ import { applyConfigsWithReport, expandPath } from "../lib/apply.js";
 import { findConfigsByTargetPath, findDuplicateTargetPathGroups, findReferenceConfigsByName, findDuplicateReferenceNameGroups } from "../lib/config-target-identity.js";
 import { diffConfig, syncKnown, syncToDisk, syncProject, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
 import { syncFromDir } from "../lib/sync-dir.js";
-import { redactContent, scanSecrets } from "../lib/redact.js";
+import { redactContent, scanSecrets, redactFormatForTarget } from "../lib/redact.js";
 import { exportConfigs } from "../lib/export.js";
 import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
@@ -649,8 +649,13 @@ program
       process.exit(1);
     }
     const rawContent = readFileSync(abs, "utf-8");
-    const fmt = detectFormat(abs);
-    const { content, redacted, isTemplate } = redactContent(rawContent, fmt as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+    // The row stores the coarse extname-derived format; the redaction DIALECT
+    // comes from the path (redactFormatForTarget) so extensionless shell
+    // dotfiles (~/.zshrc) are redacted as shell, not as text — the coarse
+    // dialect never checks secret key names (todos 452cb9d6).
+    const storedFmt = detectFormat(abs);
+    const fmt = redactFormatForTarget(abs, storedFmt);
+    const { content, redacted, isTemplate } = redactContent(rawContent, fmt);
     const targetPath = abs.startsWith(homedir()) ? abs.replace(homedir(), "~") : abs;
     const name = opts.name || filePath.split("/").pop()!;
     const store = resolveConfigStore();
@@ -731,7 +736,7 @@ program
       }
       config = await store.updateConfig(target!.id, {
         content,
-        format: fmt,
+        format: storedFmt,
         is_template: (opts.template ?? false) || isTemplate,
         ...(opts.category ? { category: opts.category as ConfigCategory } : {}),
         ...(opts.agent ? { agent: opts.agent as ConfigAgent } : {}),
@@ -753,7 +758,7 @@ program
       category: (opts.category as ConfigCategory) ?? detectCategory(abs),
       agent: (opts.agent as ConfigAgent) ?? detectAgent(abs),
       target_path: opts.kind === "reference" ? null : targetPath,
-      format: fmt,
+      format: storedFmt,
       content,
       is_template: (opts.template ?? false) || isTemplate,
     });
@@ -1752,7 +1757,10 @@ program
     for (let i = 0; i < configs.length; i += BATCH) {
       const batch = configs.slice(i, i + BATCH);
       for (const c of batch) {
-        const fmt = c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text";
+        // Dialect from the path: stored shell rows keep the coarse "text"
+        // format, so rescans must re-derive the shell dialect or stored
+        // literals stay invisible (todos 452cb9d6).
+        const fmt = redactFormatForTarget(c.target_path ?? "", c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
         const secrets = scanSecrets(c.content, fmt);
         if (secrets.length === 0) continue;
         total += secrets.length;
@@ -2104,7 +2112,10 @@ program
     // Secrets check
     let secretCount = 0;
     for (const c of allConfigs) {
-      const found = scanSecrets(c.content, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      // Dialect from the path: stored shell rows keep the coarse "text"
+      // format, so rescans must re-derive the shell dialect or stored
+      // literals stay invisible (todos 452cb9d6).
+      const found = scanSecrets(c.content, redactFormatForTarget(c.target_path ?? "", c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text"));
       secretCount += found.length;
     }
     secretCount === 0 ? pass("No unredacted secrets") : fail(`${secretCount} unredacted secret(s) — run \`configs scan --fix\``);
@@ -2336,7 +2347,10 @@ program
       const abs = expandPath(c.target_path);
       if (!existsSync(abs)) { missing++; continue; }
       const disk = readFileSync(abs, "utf-8");
-      const { content: redactedDisk } = redactContent(disk, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      // Dialect from the path: stored shell rows keep the coarse "text"
+      // format, and redacting disk with "text" leaves literals in place —
+      // false drift against shell-redacted stored content (todos 452cb9d6).
+      const { content: redactedDisk } = redactContent(disk, redactFormatForTarget(c.target_path, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text"));
       if (redactedDisk !== c.content) drifted++;
     }
 
