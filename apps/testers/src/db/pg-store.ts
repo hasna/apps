@@ -725,6 +725,7 @@ export async function getResult(db: TypedQueryClient, id: string): Promise<Resul
 
 export interface ScenarioResultStats {
   lastStatus: string | null;
+  lastRunAt: string | null;
   total: number;
   passed: number;
 }
@@ -734,8 +735,8 @@ export async function getScenarioResultStats(
   db: TypedQueryClient,
   scenarioId: string,
 ): Promise<ScenarioResultStats> {
-  const last = await db.get<{ status: string }>(
-    "SELECT status FROM results WHERE scenario_id = $1 ORDER BY created_at DESC LIMIT 1",
+  const last = await db.get<{ status: string; created_at: string }>(
+    "SELECT status, created_at FROM results WHERE scenario_id = $1 ORDER BY created_at DESC LIMIT 1",
     [scenarioId],
   );
   const stats = await db.get<{ total: string; passed: string }>(
@@ -744,6 +745,7 @@ export async function getScenarioResultStats(
   );
   return {
     lastStatus: last?.status ?? null,
+    lastRunAt: last?.created_at ?? null,
     total: Number(stats?.total ?? 0),
     passed: Number(stats?.passed ?? 0),
   };

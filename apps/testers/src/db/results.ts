@@ -144,6 +144,8 @@ export function countResultsByRun(runId: string): number {
 export interface ScenarioResultStats {
   /** Status of the most recent result for the scenario (null if never run). */
   lastStatus: ResultStatus | null;
+  /** created_at of the most recent result for the scenario (null if never run). */
+  lastRunAt: string | null;
   /** All-time total result count for the scenario. */
   total: number;
   /** All-time count of passed results for the scenario. */
@@ -155,8 +157,8 @@ export function getScenarioResultStats(scenarioId: string): ScenarioResultStats 
   const db = getDatabase();
 
   const lastRow = db
-    .query("SELECT status FROM results WHERE scenario_id = ? ORDER BY created_at DESC LIMIT 1")
-    .get(scenarioId) as { status: string } | null;
+    .query("SELECT status, created_at FROM results WHERE scenario_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(scenarioId) as { status: string; created_at: string } | null;
 
   const statsRow = db
     .query(
@@ -166,6 +168,7 @@ export function getScenarioResultStats(scenarioId: string): ScenarioResultStats 
 
   return {
     lastStatus: lastRow ? (lastRow.status as ResultStatus) : null,
+    lastRunAt: lastRow?.created_at ?? null,
     total: statsRow?.total ?? 0,
     passed: statsRow?.passed ?? 0,
   };

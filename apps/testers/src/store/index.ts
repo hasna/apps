@@ -21,6 +21,7 @@ import { resolveStorageClient, resolveClientTransport, type HasnaStorageClient }
 import { getDatabase } from "../db/database.js";
 
 import * as dbScenarios from "../db/scenarios.js";
+import type { StaleScenario } from "../db/scenarios.js";
 import * as dbProjects from "../db/projects.js";
 import * as dbPersonas from "../db/personas.js";
 import * as dbRuns from "../db/runs.js";
@@ -474,12 +475,20 @@ export class ApiStore implements Store {
   }
   async findStaleScenarios(days: number) {
     const cutoff = Date.now() - days * 86_400_000;
-    return (await this.all<Scenario>("scenarios"))
-      .map((s) => ({ ...s, lastRunAt: s.lastPassedAt ?? null }))
-      .filter((s) => {
-        const last = s.lastRunAt ? Date.parse(s.lastRunAt) : NaN;
-        return !Number.isFinite(last) || last < cutoff;
-      });
+    // lastRunAt comes from the server-side per-scenario result aggregate (the
+    // last RESULT of any status), never from the scenario row's lastPassedAt —
+    // the hosted server never writes last_passed_at from results, so a
+    // scenario that recently ran and failed would otherwise read as stale.
+    const scenarios = await this.all<Scenario>("scenarios");
+    const withRuns: StaleScenario[] = [];
+    for (const s of scenarios) {
+      const stats = await this.getScenarioResultStats(s.id);
+      withRuns.push({ ...s, lastRunAt: stats.lastRunAt });
+    }
+    return withRuns.filter((s) => {
+      const last = s.lastRunAt ? Date.parse(s.lastRunAt) : NaN;
+      return !Number.isFinite(last) || last < cutoff;
+    });
   }
   async updateScenarioPassedCache(id: string, url: string) {
     await this.c.update<Scenario>("scenarios", id, { lastPassedUrl: url }, { method: "PATCH" });
@@ -598,6 +607,7 @@ export class ApiStore implements Store {
     );
     return {
       lastStatus: stats?.lastStatus ?? null,
+      lastRunAt: stats?.lastRunAt ?? null,
       total: stats?.total ?? 0,
       passed: stats?.passed ?? 0,
     };
