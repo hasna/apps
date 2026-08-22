@@ -1,0 +1,19 @@
+[Unit]
+Description=Hasna station roster reconciler
+After=default.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+OnFailure=hasna-unit-failure-notify@%n.service
+ConditionPathExists=%h/.hasna/stations/roster.json
+
+[Service]
+Type=simple
+# Local mutation authority is scoped to this controller. roster.json remains
+# manual until the first kill drill passes; only then may applyMode become auto.
+Environment=HASNA_STATIONS_ALLOW_MUTATIONS=1
+ExecStart=/home/hasna/.bun/bin/stations-daemon roster daemon --config %h/.hasna/stations/roster.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1064,9 +1064,9 @@
         "@hasna/machines": "0.2.34",
       },
     },
-    "apps/machines": {
-      "name": "@hasna/machines",
-      "version": "0.2.34",
+    "apps/stations": {
+      "name": "@hasna/stations",
+      "version": "0.2.30",
       "bin": {
         "machines": "dist/cli/index.js",
         "machines-mcp": "dist/mcp/index.js",
@@ -2419,7 +2419,7 @@
 
     "@hasna/loops": ["@hasna/loops@workspace:apps/loops"],
 
-    "@hasna/machines": ["@hasna/machines@workspace:apps/machines"],
+    "@hasna/stations": ["@hasna/stations@workspace:apps/stations"],
 
     "@hasna/markdown": ["@hasna/markdown@workspace:apps/markdown"],
 
@@ -4671,7 +4671,7 @@
 
     "@hasna/loops/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "@hasna/machines/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+    "@hasna/stations/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/markdown/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
