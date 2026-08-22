@@ -511,7 +511,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       if (method === "GET" && path === "/v1/locks") {
         return { locks: [{ id: "lk1", lock_key: "k", workspace_id: "p", agent_id: "a1", reason: null, created_at: "2026-08-01 00:00:00", expires_at: null }] };
       }
-      if (method === "DELETE" && path === "/v1/locks/k") return { released: true };
+      if (method === "DELETE" && path === "/v1/locks/k?lock_id=lk1") return { released: true };
       return {};
     });
     expect(await store.getProjectAgents("p")).toEqual([{
@@ -520,11 +520,23 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(await store.listLocks()).toEqual([{
       id: "lk1", lock_key: "k", workspace_id: "p", agent_id: "a1", reason: null, created_at: "2026-08-01 00:00:00", expires_at: null,
     }]);
-    expect(await store.releaseLock("k")).toBe(true);
+    // Holder-scoped release (regression 6692dc56): the caller's lock id is sent
+    // as the lock_id query parameter so the server deletes only that row.
+    expect(await store.releaseLock("k", "lk1")).toBe(true);
     expect(calls).toHaveLength(3);
     expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/projects/p/agents", auth: "Bearer secret-key" });
     expect(calls[1]).toMatchObject({ method: "GET", path: "/v1/locks", auth: "Bearer secret-key" });
-    expect(calls[2]).toMatchObject({ method: "DELETE", path: "/v1/locks/k", auth: "Bearer secret-key" });
+    expect(calls[2]).toMatchObject({ method: "DELETE", path: "/v1/locks/k?lock_id=lk1", auth: "Bearer secret-key" });
+  });
+
+  test("forceReleaseLock DELETEs by key alone (admin force path) in api mode", async () => {
+    const { store, calls } = stubStore((method, path) => {
+      if (method === "DELETE" && path === "/v1/locks/k") return { released: true };
+      return {};
+    });
+    expect(await store.forceReleaseLock("k")).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: "DELETE", path: "/v1/locks/k", auth: "Bearer secret-key" });
   });
 
   test("project agent assignment writes POST to the api in api mode", async () => {

@@ -900,7 +900,24 @@ export class ProjectsPgStore {
     return rowToWorkspaceLock(row);
   }
 
-  async releaseLock(lockKey: string): Promise<boolean> {
+  // Holder-scoped release (regression 6692dc56): predicated on the row's unique
+  // `id` as well as the key, so a stale holder cannot delete a successor's live
+  // lock. Returns whether THIS holder's row was removed.
+  async releaseLock(lockKey: string, lockId: string): Promise<boolean> {
+    const existing = await this.db.get<WorkspaceLockRow>(
+      "SELECT * FROM workspace_locks WHERE lock_key = $1 AND id = $2",
+      [lockKey, lockId],
+    );
+    if (!existing) return false;
+    await this.db.execute("DELETE FROM workspace_locks WHERE lock_key = $1 AND id = $2", [lockKey, lockId]);
+    return true;
+  }
+
+  // Deliberate administrative release by key alone (CLI `unlock`, MCP
+  // projects_unlock, DELETE /v1/locks/:key without lock_id). By-key release is
+  // exactly the unsafe shape when used automatically, so only these named
+  // admin paths route here.
+  async forceReleaseLock(lockKey: string): Promise<boolean> {
     const existing = await this.db.get<WorkspaceLockRow>("SELECT * FROM workspace_locks WHERE lock_key = $1", [lockKey]);
     if (!existing) return false;
     await this.db.execute("DELETE FROM workspace_locks WHERE lock_key = $1", [lockKey]);

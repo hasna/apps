@@ -605,7 +605,16 @@ async function route(
       return jsonResponse({ lock }, 201);
     }
     if (method === "DELETE" && id) {
-      const released = await store.releaseLock(decodeURIComponent(id));
+      const lockKey = decodeURIComponent(id);
+      // Holder-scoped release (regression 6692dc56): the automatic path always
+      // carries the acquired lock's unique id (`?lock_id=...`), so a stale
+      // holder can never delete a successor's live lock. A DELETE WITHOUT
+      // lock_id is the explicitly named force-release path for the admin
+      // unlock verbs (CLI `unlock`, MCP projects_unlock).
+      const lockId = url.searchParams.get("lock_id");
+      const released = lockId
+        ? await store.releaseLock(lockKey, lockId)
+        : await store.forceReleaseLock(lockKey);
       return jsonResponse({ released });
     }
     return errorResponse("Method not allowed", 405);

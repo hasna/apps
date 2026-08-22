@@ -236,7 +236,9 @@ async function acquireImportLocks(
 }
 
 async function releaseImportLocks(store: ProjectStore, locks: WorkspaceLock[]): Promise<void> {
-  for (const lock of locks.slice().reverse()) await store.releaseLock(lock.lock_key);
+  // Holder-scoped release (regression 6692dc56): pass the acquired row's
+  // unique id so a stale holder cannot delete a successor's live lock.
+  for (const lock of locks.slice().reverse()) await store.releaseLock(lock.lock_key, lock.id);
 }
 
 function githubImportLocks(plan: WorkspaceGitHubImportResult): Array<{ key: string; reason: string }> {

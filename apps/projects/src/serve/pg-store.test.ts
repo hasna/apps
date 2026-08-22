@@ -1612,6 +1612,10 @@ describe("pg-store hosted sub-resource writes", () => {
         const row = rows.find((r) => r.id === params[0]);
         return (row ?? null) as T | null;
       }
+      if (sql.includes("FROM workspace_locks WHERE lock_key = $1 AND id = $2")) {
+        const row = rows.find((r) => r.lock_key === params[0] && r.id === params[1]);
+        return (row ?? null) as T | null;
+      }
       if (sql.includes("FROM workspace_locks WHERE lock_key = $1")) {
         const row = rows.find((r) => r.lock_key === params[0]);
         return (row ?? null) as T | null;
@@ -1755,6 +1759,11 @@ describe("pg-store hosted sub-resource writes", () => {
         }
         return;
       }
+      if (sql.includes("DELETE FROM workspace_locks WHERE lock_key = $1 AND id = $2")) {
+        const index = rows.findIndex((r) => r.lock_key === params[0] && r.id === params[1]);
+        if (index >= 0) rows.splice(index, 1);
+        return;
+      }
       if (sql.includes("DELETE FROM workspace_locks")) {
         const index = rows.findIndex((r) => r.lock_key === params[0]);
         if (index >= 0) rows.splice(index, 1);
@@ -1808,9 +1817,22 @@ describe("pg-store hosted sub-resource writes", () => {
     expect(lock.expires_at).not.toBeNull();
     await expect(store.acquireLock({ lock_key: "workspace:wks_hosted2", workspace_id: "wks_hosted2", reason: "again", ttl_seconds: 600, created_at: "2026-08-08 00:00:00" }))
       .rejects.toThrow(/lock already held/i);
-    expect(await store.releaseLock("workspace:wks_hosted2")).toBe(true);
+    // Holder-scoped release (regression 6692dc56): release by the acquired id.
+    expect(await store.releaseLock("workspace:wks_hosted2", lock.id)).toBe(true);
     expect(rows.filter((r) => r.lock_key === "workspace:wks_hosted2")).toHaveLength(0);
-    expect(await store.releaseLock("workspace:wks_hosted2")).toBe(false);
+    expect(await store.releaseLock("workspace:wks_hosted2", lock.id)).toBe(false);
+  });
+
+  test("a stale holder's release cannot delete a successor's live lock (pg mirror)", async () => {
+    const { store } = fixture();
+    const holderA = await store.acquireLock({ lock_key: "workspace:wks_hosted3", workspace_id: "wks_hosted3", reason: "guarded update", ttl_seconds: 600, created_at: "2026-08-08 00:00:00" });
+    // Simulate TTL expiry pruning: the row is removed, then B legitimately
+    // re-acquires the same key.
+    expect(await store.forceReleaseLock("workspace:wks_hosted3")).toBe(true);
+    const holderB = await store.acquireLock({ lock_key: "workspace:wks_hosted3", workspace_id: "wks_hosted3", reason: "guarded update", ttl_seconds: 600, created_at: "2026-08-08 00:00:00" });
+    // A's stale holder-scoped release must NOT delete B's live lock.
+    expect(await store.releaseLock("workspace:wks_hosted3", holderA.id)).toBe(false);
+    expect(await store.releaseLock("workspace:wks_hosted3", holderB.id)).toBe(true);
   });
 
   test("listLocks prunes expired locks", async () => {

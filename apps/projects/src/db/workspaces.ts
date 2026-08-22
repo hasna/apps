@@ -3562,7 +3562,21 @@ export function acquireWorkspaceLock(
   return rowToWorkspaceLock(row);
 }
 
-export function releaseWorkspaceLock(lockKey: string, db?: Database): boolean {
+// Holder-scoped release (regression 6692dc56): the DELETE is predicated on the
+// lock row's unique `id` as well as the key, so a holder whose guarded mutation
+// outlived the TTL — its row pruned and the key re-acquired by a successor —
+// cannot delete the successor's LIVE lock from a finally block. Returns whether
+// THIS holder's row was removed.
+export function releaseWorkspaceLock(lockKey: string, lockId: string, db?: Database): boolean {
+  const d = db || getDatabase();
+  const result = d.run("DELETE FROM workspace_locks WHERE lock_key = ? AND id = ?", [lockKey, lockId]);
+  return result.changes > 0;
+}
+
+// Deliberate administrative release by key alone. Only the named admin verbs
+// (CLI `unlock`, MCP projects_unlock, DELETE /v1/locks/:key without lock_id)
+// route here: by-key release is exactly the unsafe shape when used automatically.
+export function forceReleaseWorkspaceLock(lockKey: string, db?: Database): boolean {
   const d = db || getDatabase();
   const result = d.run("DELETE FROM workspace_locks WHERE lock_key = ?", [lockKey]);
   return result.changes > 0;
