@@ -120,6 +120,7 @@ export type WorktreeErrorCode =
   | "WORKTREE_UNPUSHED"
   | "WORKTREE_UNLANDED"
   | "WORKTREE_DEAD_GITDIR"
+  | "WORKTREE_BASE_MISMATCH"
   | "TRUSTED_HOME_UNAVAILABLE"
   | "LAYOUT_INVARIANT_VIOLATED"
   | "GIT_FAILED";
@@ -839,9 +840,40 @@ export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
         hint: "dispose of it with `repos worktree remove --allow-dead-gitdir`, which archives the working tree first",
       });
     }
-    // Idempotent by design. A second `add` for the same claim is a caller
-    // re-entering, not a caller asking for a clean slate — the destroy-then-
-    // create reading of this is the factory hazard.
+    // Idempotent by design — but only for the SAME claim. `existing` may have
+    // been found by `leaseByPath`, whose WHERE matches only the worktree path:
+    // a changed `--base` misses `leaseByClaim` (its WHERE includes base_ref)
+    // while task-derived names compute the same path, so without this
+    // comparison the reuse branch would return the OLD lease's base_ref at exit
+    // 0, standing the caller silently on a base they did not ask for — the
+    // stale-base hazard resolveBase exists to prevent. A different base or
+    // explicitly requested branch is a different claim; the reuse path never
+    // destroys a live worktree to satisfy it, and never refreshes the lease's
+    // claimed refs behind the caller's back.
+    if (baseRef !== existing.base_ref) {
+      fail(
+        "WORKTREE_BASE_MISMATCH",
+        `refusing to reuse a worktree claimed on base '${existing.base_ref}' when base '${baseRef}' was requested`,
+        {
+          path: existing.worktree_path,
+          lease_id: existing.lease_id,
+          base_ref: baseRef,
+          hint: `the existing lease records base '${existing.base_ref}' at sha '${existing.base_sha}'; dispose of it deliberately with \`repos worktree remove\`, or re-issue the call with the same base — nothing is destroyed to make room`,
+        },
+      );
+    }
+    if (request.branch !== undefined && branch !== existing.branch) {
+      fail(
+        "WORKTREE_BASE_MISMATCH",
+        `refusing to reuse a worktree claimed on branch '${existing.branch}' when branch '${branch}' was requested`,
+        {
+          path: existing.worktree_path,
+          lease_id: existing.lease_id,
+          branch,
+          hint: "dispose of the existing worktree deliberately with `repos worktree remove`, or re-issue the call with the same branch — nothing is destroyed to make room",
+        },
+      );
+    }
     db.query("UPDATE worktree_leases SET verified_at = ?, updated_at = ? WHERE lease_id = ?")
       .run(nowIso(), nowIso(), existing.lease_id);
     return {
