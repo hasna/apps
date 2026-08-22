@@ -13,9 +13,17 @@ import {
 // local route. Local-only commands stay out of `todos --help`, `todos manual`,
 // and completions rendered for the remote authority.
 
-const NAMED_REPRO_COMMANDS = [
+// Ported to the /v1 route by the local-only capability removal (2026-08-18):
+// their command modules carry a complete cloud branch, so they are now
+// authority-served and advertised on the remote route.
+const PORTED_TO_REMOTE_COMMANDS = [
   "ready", "blocked", "overdue", "sla", "priorities", "today", "yesterday",
   "week", "burndown", "stale", "summary", "report", "sprint", "log",
+];
+
+// Still refused on the /v1 route: no server-side surface today (or machine-local
+// by nature). They stay out of the remote catalog until their own port lands.
+const STILL_LOCAL_ONLY_COMMANDS = [
   "org", "machines", "context", "search", "export", "board", "runs",
   "knowledge", "risks", "roadmaps", "reviews", "findings", "views", "calendar",
   "events", "usage", "backup", "scale", "audit-ledger", "policies",
@@ -45,9 +53,13 @@ describe("remote help/runtime command gap", () => {
     const leaked = advertised.filter((name) => matrix.get(name) === "local-only");
     expect(leaked).toEqual([]);
 
-    // Every command the repro flagged is gone from the advertised catalog.
-    for (const name of NAMED_REPRO_COMMANDS) {
+    // Every command the repro flagged that is STILL local-only is gone from the
+    // advertised catalog; the ported-to-remote commands are now advertised.
+    for (const name of STILL_LOCAL_ONLY_COMMANDS) {
       expect(advertised).not.toContain(name);
+    }
+    for (const name of PORTED_TO_REMOTE_COMMANDS) {
+      expect(advertised).toContain(name);
     }
 
     // Remote-executable commands remain advertised.
@@ -63,7 +75,10 @@ describe("remote help/runtime command gap", () => {
       isCommandVisible: (command) => isTodosCliCommandVisibleForRoute(command, "remote-http"),
       localOnly: false,
     });
-    expect(manual.examples.some((example) => example.startsWith("todos ready"))).toBe(false);
+    // `todos ready` was ported to the /v1 route (2026-08-18), so its example is
+    // now a correct remote example; the still-local-only `usage report` stays
+    // out of the remote manual.
+    expect(manual.examples.some((example) => example.startsWith("todos ready"))).toBe(true);
     expect(manual.examples.some((example) => example.startsWith("todos usage report"))).toBe(false);
     // A remote-executable example survives so the section is not empty.
     expect(manual.examples.some((example) => example.startsWith("todos add"))).toBe(true);
@@ -84,7 +99,8 @@ describe("remote help/runtime command gap", () => {
     const remoteProgram = buildProgramFromMatrix();
     applyTodosCliHelpVisibility(remoteProgram, "remote-http");
     const remoteHelp = remoteProgram.helpInformation();
-    expect(remoteHelp).not.toMatch(/\bburndown\b/);
+    // Ported to the /v1 route (2026-08-18): authority-served, so visible.
+    expect(remoteHelp).toMatch(/\bburndown\b/);
     expect(remoteHelp).not.toMatch(/\bverify-providers\b/);
     expect(remoteHelp).toMatch(/\bstatus\b/);
 
@@ -111,7 +127,8 @@ describe("remote help/runtime command gap", () => {
     const remote = generateCompletionScript(program, "bash", (command) =>
       isTodosCliCommandVisibleForRoute(command, "remote-http"),
     );
-    expect(remote).not.toMatch(/\bburndown\b/);
+    // Ported to the /v1 route (2026-08-18): authority-served, so suggested.
+    expect(remote).toMatch(/\bburndown\b/);
     expect(remote).not.toMatch(/\bverify-providers\b/);
     expect(remote).toMatch(/\bstatus\b/);
     // Default (local) completions still suggest the full catalog.
@@ -123,8 +140,11 @@ describe("remote help/runtime command gap", () => {
     expect(isTodosCliCommandVisibleForRoute("status", "remote-http")).toBe(true); // remote-http
     expect(isTodosCliCommandVisibleForRoute("manual", "remote-http")).toBe(true); // diagnostic
     expect(isTodosCliCommandVisibleForRoute("fail", "remote-http")).toBe(true); // remote-http
-    expect(isTodosCliCommandVisibleForRoute("burndown", "remote-http")).toBe(false); // local-only
+    // Ported to the /v1 route (2026-08-18): remote-http owner, visible.
+    expect(isTodosCliCommandVisibleForRoute("burndown", "remote-http")).toBe(true);
     expect(isTodosCliCommandVisibleForRoute("burndown", "local")).toBe(true); // local route shows all
+    // Still local-only (no server-side surface): hidden on the remote route.
+    expect(isTodosCliCommandVisibleForRoute("verify-providers", "remote-http")).toBe(false);
     expect(isTodosCliCommandVisibleForRoute("stale-lock-handoff", "remote-http")).toBe(false);
     expect(isTodosCliCommandVisibleForRoute(
       "stale-lock-handoff",
