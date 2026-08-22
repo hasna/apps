@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -376,43 +377,174 @@ export class SQLiteActionsStore implements ActionsStore {
 export const JSON_STORE_LOCK_DIRNAME = ".actions-write.lock";
 const JSON_STORE_LOCK_TIMEOUT_MS = 15_000;
 const JSON_STORE_LOCK_STALE_MS = 30_000;
+const JSON_STORE_LOCK_HEARTBEAT_MS = 5_000;
+
+/** Owner token written inside the lock directory; `nonce` identifies the holder. */
+interface JsonStoreLockToken {
+  pid: number;
+  nonce: string;
+  ts: number;
+}
+
+export interface JsonStoreLockOptions {
+  timeoutMs?: number;
+  staleMs?: number;
+  heartbeatMs?: number;
+}
 
 /**
- * Serializes a read-modify-write cycle with an atomic `mkdir` lock. The JSON store
+ * Serializes a read-modify-write cycle with an ownership-safe lock. The JSON store
  * writes whole files, so two processes appending disjoint records without a lock
  * both read the old file and the later rename silently drops the earlier writer's
- * records. A stale lock (holder died mid-cycle) is broken on age rather than
- * blocking the next writer forever.
+ * records.
+ *
+ * The lock is a directory whose single `owner.json` token names the current holder.
+ * A contender takes over only a token older than `staleMs`, and the takeover is a
+ * two-step atomic move: the old token is first renamed aside (only one contender's
+ * rename can win; the losers retry) and the moved token is then re-validated — if
+ * it is still stale the contender writes its own token, and if it is fresh (a live
+ * holder resumed mid-takeover) it is restored. Every contender verifies its own
+ * token is the current content before entering the critical section, so a takeover
+ * can never admit two holders of a dead lock. The holder heartbeats the token while
+ * working, so a live but slow writer is never ejected on age; release removes the
+ * lock only when the token is still its own, so a release never deletes a
+ * successor's lock. A crashed holder (no heartbeat) is recovered within the stale
+ * window; a directory left without a token (holder crashed between mkdir and its
+ * token write) is recovered on age by atomically moving the ownerless directory
+ * aside, which cannot disturb any holder.
  */
-async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
+export async function withJsonStoreLock<T>(
+  dataDir: string,
+  fn: () => Promise<T>,
+  options: JsonStoreLockOptions = {},
+): Promise<T> {
   await mkdir(dataDir, { recursive: true });
   const lockPath = join(dataDir, JSON_STORE_LOCK_DIRNAME);
-  const deadline = Date.now() + JSON_STORE_LOCK_TIMEOUT_MS;
+  const tokenPath = join(lockPath, "owner.json");
+  const timeoutMs = options.timeoutMs ?? JSON_STORE_LOCK_TIMEOUT_MS;
+  const staleMs = options.staleMs ?? JSON_STORE_LOCK_STALE_MS;
+  const heartbeatMs = options.heartbeatMs ?? JSON_STORE_LOCK_HEARTBEAT_MS;
+  const token: JsonStoreLockToken = { pid: process.pid, nonce: randomUUID(), ts: Date.now() };
+  const deadline = Date.now() + timeoutMs;
+
+  const readTokenFrom = async (path: string): Promise<JsonStoreLockToken | null> => {
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as JsonStoreLockToken;
+    } catch {
+      // Missing or unparseable mid-write token: nobody is a verified holder.
+      return null;
+    }
+  };
+  const readToken = async (): Promise<JsonStoreLockToken | null> => readTokenFrom(tokenPath);
+  const writeToken = async (): Promise<void> => {
+    // temp + rename: atomic create of the token file, never a partial token.
+    const tmp = join(lockPath, `.owner-${randomUUID()}.tmp`);
+    await writeFile(tmp, JSON.stringify(token), { mode: 0o600 });
+    try {
+      await rename(tmp, tokenPath);
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  };
+  const ownsToken = async (): Promise<boolean> => (await readToken())?.nonce === token.nonce;
+
   for (;;) {
     try {
       await mkdir(lockPath);
-      break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > JSON_STORE_LOCK_STALE_MS) {
-          await rm(lockPath, { recursive: true, force: true });
+      const current = await readToken();
+      if (current?.nonce === token.nonce) break; // our takeover won; token is ours
+      if (current === null) {
+        // No token: the previous owner crashed between mkdir and its token write, so
+        // nobody can be inside the critical section (entry requires a verified
+        // token). Recover the ownerless directory on age by atomically moving it
+        // aside; only one contender's rename succeeds. The moved directory is
+        // re-validated: a fresh token inside means a live holder resumed, so the
+        // directory is put back.
+        let dirOld = false;
+        try {
+          dirOld = Date.now() - (await stat(lockPath)).mtimeMs > staleMs;
+        } catch {
+          // Released between stat and now; retry the acquire.
+        }
+        if (dirOld) {
+          const quarantineDir = join(dataDir, `.${JSON_STORE_LOCK_DIRNAME}.stale-${randomUUID()}`);
+          try {
+            await rename(lockPath, quarantineDir);
+          } catch (quarantineError) {
+            if ((quarantineError as NodeJS.ErrnoException).code === "ENOENT") continue;
+            throw quarantineError;
+          }
+          const inside = await readTokenFrom(join(quarantineDir, "owner.json"));
+          if (inside !== null && Date.now() - inside.ts <= staleMs) {
+            await rename(quarantineDir, lockPath).catch(() => undefined);
+            continue;
+          }
+          await rm(quarantineDir, { recursive: true, force: true });
           continue;
         }
-      } catch {
-        // The holder released between stat and now; retry the acquire.
+      } else if (Date.now() - current.ts > staleMs) {
+        // Stale token from a crashed holder: take over. First atomically move the
+        // old token aside — only one contender's rename can win, so concurrent
+        // takeovers of the same stale lock serialize. Then re-validate the moved
+        // token: if it is fresh (a live holder resumed mid-takeover) restore it;
+        // otherwise discard it and write ours.
+        const quarantineToken = join(lockPath, `.owner-${randomUUID()}.stale`);
+        try {
+          await rename(tokenPath, quarantineToken);
+        } catch (moveError) {
+          if ((moveError as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw moveError;
+        }
+        const moved = await readTokenFrom(quarantineToken);
+        if (moved !== null && Date.now() - moved.ts <= staleMs) {
+          await rename(quarantineToken, tokenPath).catch(() => undefined);
+          continue;
+        }
+        await rm(quarantineToken, { force: true }).catch(() => undefined);
+        try {
+          await writeToken();
+        } catch {
+          // Directory vanished mid-takeover; retry the acquire.
+          continue;
+        }
+        continue;
       }
       if (Date.now() > deadline) {
         throw new Error(`Timed out waiting for the actions JSON store write lock at ${lockPath}`);
       }
       await new Promise((resolve) => setTimeout(resolve, 10 + Math.floor(Math.random() * 20)));
+      continue;
     }
+    // Freshly created lock directory: write our token and confirm it is current.
+    try {
+      await writeToken();
+    } catch {
+      // Directory disappeared (another contender recovered it): retry the acquire.
+      continue;
+    }
+    if (await ownsToken()) break;
+    // Defensive: our token was replaced before the readback. We never entered the
+    // critical section, so retry the acquire.
   }
+
+  const heartbeat = setInterval(() => {
+    void (async () => {
+      if (await ownsToken()) {
+        token.ts = Date.now();
+        await writeToken().catch(() => undefined);
+      }
+    })();
+  }, heartbeatMs);
   try {
     return await fn();
   } finally {
-    await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    clearInterval(heartbeat);
+    if (await ownsToken()) {
+      await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
