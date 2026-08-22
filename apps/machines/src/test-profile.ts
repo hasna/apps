@@ -62,6 +62,17 @@ export type WorkstationTestControllerSnapshot = {
   sliceProperties?: Record<string, string | number | boolean>;
 };
 
+export type WorkstationTestScopeSnapshot = {
+  unitName: string;
+  sliceName: string;
+  loadState: string;
+  activeState: string;
+  subState: string;
+  controlGroup: string;
+  invocationId: string;
+  observedAtMs: number;
+};
+
 export type WorkstationTestProfilePaths = {
   profilePath: string;
   slicePath: string;
@@ -77,6 +88,7 @@ export interface WorkstationTestProfileStore {
 
 export interface WorkstationTestProfileController {
   inspect(sliceName?: string): WorkstationTestControllerSnapshot;
+  inspectScope(unitName: string): WorkstationTestScopeSnapshot | null;
   activate(sliceName: string): WorkstationTestControllerSnapshot;
   reload(): WorkstationTestControllerSnapshot;
   restore(sliceName: string, active: boolean): WorkstationTestControllerSnapshot;
@@ -84,7 +96,8 @@ export interface WorkstationTestProfileController {
 
 export type WorkstationTestScopeClaim = {
   scopeId: string;
-  sliceName: string;
+  unitName: string;
+  invocationId: string;
   memoryMaxBytes: number;
   tasks: number;
   processes: number;
@@ -439,6 +452,7 @@ export function rollbackWorkstationTestProfile(input: {
 function evaluateWorkstationTestClaims(
   profile: WorkstationTestProfile,
   scopes: readonly WorkstationTestScopeClaim[],
+  controller: WorkstationTestProfileController,
 ): WorkstationTestVerification {
   const reasons = new Set<string>();
   for (const reason of profileReasons(profile)) reasons.add(reason);
@@ -453,9 +467,28 @@ function evaluateWorkstationTestClaims(
   };
   const seenScopeIds = new Set<string>();
   for (const scope of scopes) {
-    if (!scope.scopeId.trim() || seenScopeIds.has(scope.scopeId)) reasons.add("scope_identity_invalid");
+    const expectedUnitName = `${scope.scopeId}.scope`;
+    const identityValid = Boolean(
+      typeof scope.scopeId === "string"
+      && scope.scopeId
+      && SAFE_SCOPE_ID.test(scope.scopeId)
+      && scope.scopeId !== "."
+      && scope.scopeId !== ".."
+      && typeof scope.unitName === "string"
+      && scope.unitName === expectedUnitName
+      && typeof scope.invocationId === "string"
+      && SYSTEMD_INVOCATION_ID.test(scope.invocationId),
+    );
+    if (!identityValid || seenScopeIds.has(scope.scopeId)) reasons.add("scope_identity_invalid");
     seenScopeIds.add(scope.scopeId);
-    if (scope.sliceName !== profile.aggregate.sliceName) reasons.add("scope_outside_aggregate_slice");
+    if (identityValid) {
+      try {
+        const snapshot = controller.inspectScope(scope.unitName);
+        for (const reason of scopeObservationReasons(profile, scope, snapshot, Date.now())) reasons.add(reason);
+      } catch {
+        reasons.add("scope_observation_failed");
+      }
+    }
     for (const key of Object.keys(totals) as Array<keyof typeof totals>) {
       const value = scope[key];
       if (!Number.isSafeInteger(value) || value < 0 || (key === "memoryMaxBytes" && value === 0)) reasons.add("scope_bounds_invalid");
@@ -473,6 +506,10 @@ function evaluateWorkstationTestClaims(
   return { admission: reasonCodes.length === 0 ? "allowed" : "refused", reasonCodes };
 }
 
+/**
+ * Read-only leaf admission. The leaf-lifecycle owner must create and clean up
+ * the empty scope, and must not start its workload until this returns allowed.
+ */
 export function evaluateWorkstationTestAdmission(input: {
   authority: MachineTestAuthority;
   homeDir: string;
@@ -491,7 +528,7 @@ export function evaluateWorkstationTestAdmission(input: {
     controller: input.controller,
   });
   if (current.verification.admission === "refused") return current.verification;
-  return evaluateWorkstationTestClaims(current.profile, input.scopes);
+  return evaluateWorkstationTestClaims(current.profile, input.scopes, input.controller);
 }
 
 export function evaluateWorkstationTestPressure(
@@ -517,12 +554,51 @@ export function evaluateWorkstationTestPressure(
 }
 
 const SAFE_SCOPE_ID = /^[A-Za-z0-9_.:@-]+$/;
+const SYSTEMD_INVOCATION_ID = /^[0-9a-f]{32}$/i;
+const MAX_SCOPE_OBSERVATION_AGE_MS = 5_000;
+
+function scopeObservationReasons(
+  profile: WorkstationTestProfile,
+  claim: WorkstationTestScopeClaim,
+  snapshot: WorkstationTestScopeSnapshot | null,
+  nowMs: number,
+): string[] {
+  if (snapshot === null) return ["scope_observation_missing"];
+  const reasons: string[] = [];
+  if (
+    !Number.isSafeInteger(snapshot.observedAtMs)
+    || snapshot.observedAtMs > nowMs
+    || nowMs - snapshot.observedAtMs > MAX_SCOPE_OBSERVATION_AGE_MS
+  ) {
+    reasons.push("scope_observation_stale");
+  }
+  if (snapshot.unitName !== claim.unitName) reasons.push("scope_unit_mismatched");
+  if (snapshot.loadState !== "loaded") reasons.push("scope_unit_missing");
+  if (snapshot.activeState !== "active" || snapshot.subState !== "running") reasons.push("scope_unit_inactive");
+  if (snapshot.invocationId !== claim.invocationId) reasons.push("scope_invocation_mismatched");
+  if (snapshot.sliceName !== profile.aggregate.sliceName) reasons.push("scope_outside_aggregate_slice");
+
+  const cgroup = snapshot.controlGroup;
+  const components = cgroup.startsWith("/") ? cgroup.split("/").filter(Boolean) : [];
+  const aggregateIndexes = components.flatMap((component, index) => component === profile.aggregate.sliceName ? [index] : []);
+  if (
+    components.length < 2
+    || cgroup.includes("//")
+    || components.some((component) => component === "." || component === "..")
+    || components.at(-1) !== claim.unitName
+    || aggregateIndexes.length > 1
+  ) {
+    reasons.push("scope_cgroup_ambiguous");
+  } else if (aggregateIndexes.length !== 1 || aggregateIndexes[0] !== components.length - 2) {
+    reasons.push("scope_outside_aggregate_slice");
+  }
+  return reasons;
+}
 
 function exactPressureScopeUnit(profile: WorkstationTestProfile, scope: WorkstationTestPressureScope): string {
   if (!scope.scopeId || !SAFE_SCOPE_ID.test(scope.scopeId) || scope.scopeId === "." || scope.scopeId === "..") {
     throw new Error("pressure scope identity is not a safe systemd unit stem");
   }
-  if (scope.sliceName !== profile.aggregate.sliceName) throw new Error("pressure scope is outside the aggregate test slice");
   const unit = `${scope.scopeId}.scope`;
   const expectedSuffix = `/${profile.aggregate.sliceName}/${unit}`;
   if (!scope.cgroup.startsWith("/") || scope.cgroup.includes("/../") || !scope.cgroup.endsWith(expectedSuffix)) {
@@ -647,8 +723,30 @@ export function createSystemdUserTestProfileController(): WorkstationTestProfile
       return { sliceName, cgroupV2, controllers, userManager: false, delegated: false, sliceLoaded: false, sliceActive: false };
     }
   };
+  const inspectScope = (unitName: string): WorkstationTestScopeSnapshot | null => {
+    const scopeId = unitName.endsWith(".scope") ? unitName.slice(0, -".scope".length) : "";
+    if (!scopeId || !SAFE_SCOPE_ID.test(scopeId) || scopeId === "." || scopeId === "..") return null;
+    try {
+      const values = systemctlShow(unitName, [
+        "Id", "LoadState", "ActiveState", "SubState", "Slice", "ControlGroup", "InvocationID",
+      ]);
+      return {
+        unitName: values["Id"] ?? "",
+        sliceName: values["Slice"] ?? "",
+        loadState: values["LoadState"] ?? "",
+        activeState: values["ActiveState"] ?? "",
+        subState: values["SubState"] ?? "",
+        controlGroup: values["ControlGroup"] ?? "",
+        invocationId: values["InvocationID"] ?? "",
+        observedAtMs: Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  };
   return {
     inspect,
+    inspectScope,
     activate(sliceName): WorkstationTestControllerSnapshot {
       execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
       execFileSync("systemctl", ["--user", "start", sliceName], { stdio: "ignore" });
