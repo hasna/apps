@@ -322,6 +322,13 @@ interface SyncQueryResult {
  * against a SharedArrayBuffer until the worker writes the response. This is the
  * only way to expose a truly synchronous API (which the entire mementos data
  * layer requires) over async pg I/O without deadlocking the main event loop.
+ *
+ * Every query carries a monotonic generation that the worker echoes back in
+ * the status word when the response is ready. When a query times out it is
+ * ABANDONED, not cancelled — the worker still finishes it and writes its
+ * response later — and the generation is what lets the caller tell that late
+ * response apart from the response to the query currently waiting, so a stale
+ * payload can never be consumed by a newer query (todos 027d17e9).
  */
 export class PgSyncPool {
   private readonly worker: Worker;
@@ -329,8 +336,20 @@ export class PgSyncPool {
   private readonly data: Uint8Array;
   private closed = false;
   private lastError: Error | null = null;
+  private generation = 0;
   private static readonly DATA_BYTES = 128 * 1024 * 1024; // 128 MiB response ceiling
-  private static readonly QUERY_TIMEOUT_MS = 60_000;
+
+  /**
+   * Per-query timeout in milliseconds, overridable via
+   * `MEMENTOS_PGSYNC_QUERY_TIMEOUT_MS` (default 60_000). Read on every query()
+   * call so tests can shrink it without import-order games — the regression
+   * test in `pg-sync-race.test.ts` relies on this being a live read.
+   */
+  private static queryTimeoutMs(): number {
+    const raw = process.env["MEMENTOS_PGSYNC_QUERY_TIMEOUT_MS"]?.trim();
+    const parsed = raw ? Number(raw) : Number.NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 60_000;
+  }
 
   /**
    * Resolve the worker entry file. `storage` is bundled into several entry
@@ -351,13 +370,19 @@ export class PgSyncPool {
     return candidates[0]!;
   }
 
-  constructor(connectionString: string) {
-    const control = new SharedArrayBuffer(8); // 2 x Int32: [0]=status, [1]=byteLength
+  constructor(connectionString: string, workerPath?: string) {
+    // 3 x Int32: [0]=responding generation (0 idle), [1]=byteLength,
+    // [2]=status code (1 ok, 2 err). The generation is the response
+    // correlation token: a late response to an abandoned query carries a
+    // generation no caller is waiting for and is discarded, never consumed.
+    const control = new SharedArrayBuffer(12);
     const dataSab = new SharedArrayBuffer(PgSyncPool.DATA_BYTES);
     this.status = new Int32Array(control);
     this.data = new Uint8Array(dataSab);
 
-    this.worker = new Worker(PgSyncPool.resolveWorkerPath(), {
+    // `workerPath` is the test seam used by src/pg-sync-race.test.ts to run the
+    // pool against a stub worker speaking the same protocol.
+    this.worker = new Worker(workerPath ?? PgSyncPool.resolveWorkerPath(), {
       workerData: {
         dsn: stripSslParams(connectionString),
         ssl: sslConfigFor(connectionString),
@@ -376,21 +401,43 @@ export class PgSyncPool {
     if (this.closed) throw new Error("PgSyncPool is closed");
     if (this.lastError) throw this.lastError;
 
+    const timeoutMs = PgSyncPool.queryTimeoutMs();
+    const gen = ++this.generation;
     Atomics.store(this.status, 0, 0);
-    this.worker.postMessage({ sql, params });
-    const waitResult = Atomics.wait(this.status, 0, 0, PgSyncPool.QUERY_TIMEOUT_MS);
-    const code = Atomics.load(this.status, 0);
-    if (code === 0 || waitResult === "timed-out") {
-      if (this.lastError) throw this.lastError;
-      throw new Error("PostgreSQL query timed out after 60s");
-    }
+    Atomics.store(this.status, 2, 0);
+    this.worker.postMessage({ sql, params, gen });
 
-    const len = Atomics.load(this.status, 1);
-    const payload = JSON.parse(new TextDecoder().decode(this.data.subarray(0, len)));
-    if (code === 2) {
-      throw new Error(payload.message ?? "PostgreSQL error");
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      const responding = Atomics.load(this.status, 0);
+      if (responding === gen) {
+        // This query's response: the worker wrote the payload and the code
+        // word before it stored `gen`, so both are visible here.
+        const code = Atomics.load(this.status, 2);
+        const len = Atomics.load(this.status, 1);
+        const payload = JSON.parse(new TextDecoder().decode(this.data.subarray(0, len)));
+        if (code === 2) {
+          throw new Error(payload.message ?? "PostgreSQL error");
+        }
+        return payload as SyncQueryResult;
+      }
+      if (responding !== 0) {
+        // Response for an abandoned generation (a query that timed out while
+        // the worker was still running it). Discard it and re-arm the slot
+        // with compareExchange, which closes the lost-notify window: a notify
+        // for OUR generation that races the CAS either lands before it (the
+        // CAS fails and the loop reads our generation) or after it (the CAS
+        // succeeded, the slot is 0 again, and the wait below blocks on it).
+        Atomics.compareExchange(this.status, 0, responding, 0);
+        continue;
+      }
+      if (remaining <= 0) {
+        if (this.lastError) throw this.lastError;
+        throw new Error(`PostgreSQL query timed out after ${timeoutMs}ms`);
+      }
+      Atomics.wait(this.status, 0, 0, remaining);
     }
-    return payload as SyncQueryResult;
   }
 
   end(): void {
