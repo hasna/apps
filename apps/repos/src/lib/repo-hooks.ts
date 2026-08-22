@@ -195,7 +195,8 @@ export function describeDanglingCheckouts(summary: HookInstallSummary, limit = 5
  * (the empty-queue path returns before this) and the drain cadence is
  * seconds-scale.
  */
-const HOOK_QUEUE_TAKE_SETTLE_MS = 5;
+const hookQueueTakeSettleMs = Number(process.env["HASNA_REPOS_HOOK_QUEUE_SETTLE_MS"]);
+const HOOK_QUEUE_TAKE_SETTLE_MS = Number.isFinite(hookQueueTakeSettleMs) ? hookQueueTakeSettleMs : 5;
 function settleQueueTake(): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, HOOK_QUEUE_TAKE_SETTLE_MS);
 }
@@ -208,11 +209,19 @@ function settleQueueTake(): void {
  * the old inode before the rename writes into the consumed file the drain is
  * about to read; one that opens after creates a fresh queue file the next
  * drain takes. Every append lands in exactly one file and every file is
- * drained exactly once — two concurrent drainers cannot double-read (the
- * second rename hits ENOENT) and cannot wipe in-flight appends.
+ * drained exactly once.
+ *
+ * The consumed file is named per drainer pid, not at a shared slot: POSIX
+ * rename REPLACES the destination, so a shared `.consumed` path lets a
+ * second drainer's rename unlink the first drainer's taken-but-unread inode
+ * (its appends lost), makes the first drainer read the second's file
+ * (double-processing), and leaves the second drainer's read at ENOENT. With
+ * a pid-suffixed name every drainer renames into its own private slot: a
+ * drainer racing another drainer's take fails the rename with ENOENT and
+ * leaves the fresh queue file for the next drain.
  */
 export function drainHookQueue(queuePath = getHookQueuePath()): string[] {
-  const consumedPath = `${queuePath}.consumed`;
+  const consumedPath = `${queuePath}.consumed.${process.pid}`;
   try {
     renameSync(queuePath, consumedPath);
   } catch (error) {
@@ -225,6 +234,13 @@ export function drainHookQueue(queuePath = getHookQueuePath()): string[] {
   let raw = "";
   try {
     raw = readFileSync(consumedPath, "utf-8");
+  } catch (error) {
+    // The consumed file is this drainer's private take; nothing in the
+    // design removes it between the rename and the read. Tolerate a missing
+    // file anyway: a throw here would escape the auto-index worker's bare
+    // setInterval callback and terminate the worker process.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   } finally {
     rmSync(consumedPath, { force: true });
   }
