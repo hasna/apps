@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.140
+
+### Patch Changes
+
+- Updated dependencies [5275dde]
+- Updated dependencies [1c859c2]
+  - @hasna/mementos@0.14.86
+  - @hasna/todos@0.15.43
+
 ## 0.1.139
 
 ### Patch Changes
