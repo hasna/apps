@@ -113,7 +113,9 @@ async function acquireImportLocks(store: ProjectStore, specs: Array<{ key: strin
 }
 
 async function releaseImportLocks(store: ProjectStore, locks: WorkspaceLock[]): Promise<void> {
-  for (const lock of locks.slice().reverse()) await store.releaseLock(lock.lock_key);
+  // Holder-scoped release (regression 6692dc56): pass the acquired row's
+  // unique id so a stale holder cannot delete a successor's live lock.
+  for (const lock of locks.slice().reverse()) await store.releaseLock(lock.lock_key, lock.id);
 }
 
 export async function planWorkspaceImport(store: ProjectStore, path: string, options: ImportWorkspaceOptions = {}): Promise<WorkspaceImportPreview> {

@@ -628,8 +628,9 @@ async function withWorkspaceLock<T>(
 ): Promise<T> {
   if (store.mode !== "local") return fn();
   const key = `workspace:${workspace.id}`;
+  let lock: WorkspaceLock;
   try {
-    await store.acquireLock({ key, workspaceId: workspace.id, agentId, reason, ttlSeconds: 600 });
+    lock = await store.acquireLock({ key, workspaceId: workspace.id, agentId, reason, ttlSeconds: 600 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.startsWith("Workspace lock already held:")) {
@@ -640,7 +641,10 @@ async function withWorkspaceLock<T>(
   try {
     return await fn();
   } finally {
-    await store.releaseLock(key);
+    // Holder-scoped release (regression 6692dc56): release by the acquired
+    // row's unique id, never by key alone — a guarded mutation that outlives
+    // the TTL must not delete a successor's live lock.
+    await store.releaseLock(key, lock.id);
   }
 }
 
@@ -3925,7 +3929,10 @@ function registerProjectCommands(program: Command): void {
     .description("Release a project mutation lock")
     .option("-j, --json", "Output JSON")
     .action(async (key, opts) => {
-      const released = await resolveProjectStore().releaseLock(key);
+      // Deliberate administrative release by key alone (regression 6692dc56):
+      // only this named admin verb routes through the force path; automatic
+      // releases are holder-scoped by the acquired lock id.
+      const released = await resolveProjectStore().forceReleaseLock(key);
       if (wantsJson(opts)) { printObject({ released }, opts); return; }
       console.log(released ? chalk.green(`✓ Project lock released: ${key}`) : chalk.yellow(`No project lock found: ${key}`));
     });

@@ -351,11 +351,14 @@ async function withWorkspaceMutationLock<T>(
 ): Promise<T> {
   if (store.mode !== "local") return fn();
   const key = `workspace:${workspace.id}`;
-  await store.acquireLock({ key, workspaceId: workspace.id, agentId: owner, reason, ttlSeconds: 600 });
+  const lock = await store.acquireLock({ key, workspaceId: workspace.id, agentId: owner, reason, ttlSeconds: 600 });
   try {
     return await fn();
   } finally {
-    await store.releaseLock(key);
+    // Holder-scoped release (regression 6692dc56): release by the acquired
+    // row's unique id, never by key alone — a guarded mutation that outlives
+    // the TTL must not delete a successor's live lock.
+    await store.releaseLock(key, lock.id);
   }
 }
 
@@ -2080,9 +2083,9 @@ server.tool(
 
 server.tool(
   "projects_unlock",
-  "Release a project mutation lock.",
+  "Release a project mutation lock by key. Deliberate administrative force release (regression 6692dc56): automatic releases are holder-scoped by the acquired lock id; only this admin verb releases by key alone.",
   { key: z.string() },
-  async (input) => jsonText({ released: await resolveProjectStore().releaseLock(input.key) }),
+  async (input) => jsonText({ released: await resolveProjectStore().forceReleaseLock(input.key) }),
 );
 
 server.tool(

@@ -747,11 +747,14 @@ function cleanupTargetFromWorkspace(workspace: Workspace, rollbackActions?: Work
 
 function withAgentWorkspaceLock<T>(workspace: Workspace, agentId: string, reason: string, fn: () => T): T {
   const key = `workspace:${workspace.id}`;
-  acquireWorkspaceLock({ lock_key: key, workspace_id: workspace.id, agent_id: agentId, reason, ttl_seconds: 600 });
+  const lock = acquireWorkspaceLock({ lock_key: key, workspace_id: workspace.id, agent_id: agentId, reason, ttl_seconds: 600 });
   try {
     return fn();
   } finally {
-    releaseWorkspaceLock(key);
+    // Holder-scoped release (regression 6692dc56): release by the acquired
+    // row's unique id, never by key alone — a guarded mutation that outlives
+    // the TTL must not delete a successor's live lock.
+    releaseWorkspaceLock(key, lock.id);
   }
 }
 
@@ -2496,7 +2499,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     completeAgentRun(run.id, { status: "failed", error, result: { error } });
-    releaseWorkspaceLock(runLock.lock_key);
+    releaseWorkspaceLock(runLock.lock_key, runLock.id);
     throw err;
   }
 
@@ -2513,7 +2516,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         command,
       });
     } finally {
-      releaseWorkspaceLock(runLock.lock_key);
+      releaseWorkspaceLock(runLock.lock_key, runLock.id);
     }
   }
 
@@ -2521,7 +2524,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
   if (!apiKey) {
     const error = "Missing OpenRouter API key. Set OPENROUTER_API_KEY or store it in the local secrets vault.";
     completeAgentRun(run.id, { status: "failed", error, result: { error } });
-    releaseWorkspaceLock(runLock.lock_key);
+    releaseWorkspaceLock(runLock.lock_key, runLock.id);
     throw new Error(error);
   }
 
@@ -2667,7 +2670,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
     });
     throw err;
   } finally {
-    releaseWorkspaceLock(runLock.lock_key);
+    releaseWorkspaceLock(runLock.lock_key, runLock.id);
     ensureCliAgent();
   }
 }

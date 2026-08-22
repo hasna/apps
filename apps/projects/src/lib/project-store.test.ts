@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase } from "../db/database.js";
 import { acquireWorkspaceLock, releaseWorkspaceLock } from "../db/workspaces.js";
+import type { WorkspaceLock } from "../types/workspace.js";
 import type { ProjectStore } from "../store/project-store.js";
 import type {
   GuardedProjectMutationReceiptLookupInput,
@@ -329,13 +330,14 @@ describe("API-backed project store ensure", () => {
     closeDatabase();
     const id = "wks_hostedstorelocked001";
     const lockKey = `workspace:${id}`;
+    let lock: WorkspaceLock | undefined;
     try {
-      acquireWorkspaceLock({ lock_key: lockKey, reason: "concurrent ensure control", ttl_seconds: 600 });
+      lock = acquireWorkspaceLock({ lock_key: lockKey, reason: "concurrent ensure control", ttl_seconds: 600 });
       await expect(ensureProjectStoreForTarget(apiStore(workspace(id, null), []), id))
         .rejects.toThrow("Project lock already held");
       expect(existsSync(join(home, "data", id))).toBe(false);
     } finally {
-      releaseWorkspaceLock(lockKey);
+      if (lock) releaseWorkspaceLock(lockKey, lock.id);
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
       else process.env.HASNA_PROJECTS_HOME = previousHome;
       closeDatabase();

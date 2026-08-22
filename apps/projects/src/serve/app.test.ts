@@ -145,7 +145,10 @@ function fakeStore(): ProjectsPgStore {
         expires_at: input.ttl_seconds ? "2026-07-06 00:10:00" : null,
       };
     },
-    async releaseLock(_lockKey: string) {
+    async releaseLock(_lockKey: string, _lockId: string) {
+      return true;
+    },
+    async forceReleaseLock(_lockKey: string) {
       return true;
     },
   } as unknown as ProjectsPgStore;
@@ -1780,7 +1783,7 @@ describe("projects-serve hosted writes for on-box sub-resources", () => {
     expect(body.count).toBe(0);
   });
 
-  test("DELETE /v1/locks/:key releases a lock", async () => {
+  test("DELETE /v1/locks/:key without lock_id is the force-release path (admin unlock verbs)", async () => {
     const res = await handler()(
       new Request("http://x/v1/locks/workspace:wks_test1", {
         method: "DELETE",
@@ -1790,5 +1793,29 @@ describe("projects-serve hosted writes for on-box sub-resources", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { released: boolean };
     expect(body.released).toBe(true);
+  });
+
+  test("DELETE /v1/locks/:key?lock_id= releases holder-scoped (regression 6692dc56)", async () => {
+    const releaseArgs: Array<[string, string]> = [];
+    const store = {
+      ...fakeStore(),
+      releaseLock: async (key: string, lockId: string) => {
+        releaseArgs.push([key, lockId]);
+        return true;
+      },
+      forceReleaseLock: async () => {
+        throw new Error("forceReleaseLock must not be called when lock_id is present");
+      },
+    } as unknown as ProjectsPgStore;
+    const res = await handler(store)(
+      new Request("http://x/v1/locks/workspace:wks_test1?lock_id=lock_abc123", {
+        method: "DELETE",
+        headers: writeHeaders,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { released: boolean };
+    expect(body.released).toBe(true);
+    expect(releaseArgs).toEqual([["workspace:wks_test1", "lock_abc123"]]);
   });
 });

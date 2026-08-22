@@ -1508,7 +1508,7 @@ describe("workspace domain services", () => {
     const blockedImport = await importWorkspace(store, childDir, { tags: ["imported"] });
     expect(blockedImport.error).toMatch(/Workspace lock already held/);
     expect(listWorkspaceLocks(db).map((item) => item.lock_key)).not.toContain("workspace-slug:legacy-tooling");
-    expect(releaseWorkspaceLock(pathLock.lock_key, db)).toBe(true);
+    expect(releaseWorkspaceLock(pathLock.lock_key, pathLock.id, db)).toBe(true);
 
     const imported = await importWorkspace(store, childDir, { tags: ["imported"], metadata: { domain: "tools" } });
     expect(imported.workspace?.slug).toBe("legacy-tooling");
@@ -1526,10 +1526,48 @@ describe("workspace domain services", () => {
     const lock = acquireWorkspaceLock({ lock_key: "workspace:test", workspace_id: workspace.id, reason: "test" }, db);
     expect(lock.lock_key).toBe("workspace:test");
     expect(listWorkspaceLocks(db)).toHaveLength(1);
-    expect(releaseWorkspaceLock("workspace:test", db)).toBe(true);
+    expect(releaseWorkspaceLock(lock.lock_key, lock.id, db)).toBe(true);
     expect(listWorkspaceLocks(db)).toHaveLength(0);
 
     rmSync(rootDir, { recursive: true });
+    db.close();
+  });
+
+  // Regression 6692dc56: releaseWorkspaceLock used to DELETE by lock_key alone,
+  // so a holder whose guarded mutation outlived the 600s TTL had its row pruned
+  // and re-acquired by a successor, and the stale holder's finally-block release
+  // then deleted the successor's LIVE lock — mutual exclusion silently defeated.
+  // Release must be holder-scoped by the lock row's unique id.
+  test("a stale holder's release cannot delete a successor's lock (release is holder-scoped by lock id)", () => {
+    const db = makeDb();
+    const key = "workspace:regression-6692dc56";
+
+    // Holder A acquires exactly the way LocalProjectStore.withLock does (ttl 600).
+    const holderA = acquireWorkspaceLock({ lock_key: key, reason: "guarded update", ttl_seconds: 600 }, db);
+    expect(holderA.id).toBeTruthy();
+
+    // Time passes past the 600s TTL while A's guarded mutation is still running.
+    // The next acquire prunes the expired row internally (acquireWorkspaceLock
+    // calls its private clearExpiredLocks at entry — the same code path that
+    // makes the successor acquire legitimately succeed).
+    db.run("UPDATE workspace_locks SET expires_at = datetime('now', '-1 second') WHERE lock_key = ?", [key]);
+
+    // Holder B acquires the same key after the expiry — mutual exclusion
+    // legitimately re-opens.
+    const holderB = acquireWorkspaceLock({ lock_key: key, reason: "guarded update", ttl_seconds: 600 }, db);
+    expect(holderB.id).not.toBe(holderA.id);
+
+    // A's finally block runs the scoped release with A's own lock id. It must
+    // NOT delete B's live lock, and must report that it released nothing.
+    expect(releaseWorkspaceLock(key, holderA.id, db)).toBe(false);
+    const remaining = listWorkspaceLocks(db);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.id).toBe(holderB.id);
+
+    // B's own holder-scoped release still works.
+    expect(releaseWorkspaceLock(key, holderB.id, db)).toBe(true);
+    expect(listWorkspaceLocks(db)).toHaveLength(0);
+
     db.close();
   });
 

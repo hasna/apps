@@ -463,7 +463,9 @@ export function planWorkspaceCreation(input: WorkspaceCreationPlanInput, options
 function releaseLocks(acquired: WorkspaceLock[], db?: Database): string[] {
   const released: string[] = [];
   for (const lock of acquired.slice().reverse()) {
-    if (releaseWorkspaceLock(lock.lock_key, db)) released.push(lock.lock_key);
+    // Holder-scoped release (regression 6692dc56): pass the acquired row's
+    // unique id so a stale holder cannot delete a successor's live lock.
+    if (releaseWorkspaceLock(lock.lock_key, lock.id, db)) released.push(lock.lock_key);
   }
   return released;
 }

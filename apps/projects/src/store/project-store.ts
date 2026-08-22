@@ -65,6 +65,7 @@ import {
   rankRoots,
   recordWorkspaceEvent as dbRecordWorkspaceEvent,
   releaseWorkspaceLock,
+  forceReleaseWorkspaceLock,
   rollbackGuardedWorkspaceMutation as dbRollbackGuardedWorkspaceMutation,
   quarantineDuplicateProject as dbQuarantineDuplicateProject,
   readDuplicateProjectQuarantinePreimage as dbReadDuplicateProjectQuarantinePreimage,
@@ -400,7 +401,13 @@ export interface ProjectStore {
   // ---- Mutation locks (machine-local coordination) ----
   listLocks(): Promise<WorkspaceLock[]>;
   acquireLock(input: AcquireLockInput): Promise<WorkspaceLock>;
-  releaseLock(key: string): Promise<boolean>;
+  // Holder-scoped release (regression 6692dc56): the caller passes the acquired
+  // lock's unique id, so a stale holder cannot delete a successor's live lock.
+  releaseLock(key: string, lockId: string): Promise<boolean>;
+  // Deliberate administrative release by key alone (CLI `unlock`, MCP
+  // projects_unlock). By-key release is the unsafe shape when used
+  // automatically, so only these named admin verbs route here.
+  forceReleaseLock(key: string): Promise<boolean>;
 
   // ---- Roots (shared registry: /v1/roots) ----
   listRoots(): Promise<Root[]>;
@@ -483,8 +490,9 @@ function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reas
   // not on `workspace_id`, so omitting the id when no local row exists keeps the
   // locking semantics identical and only drops the row-to-row association.
   const hasLocalWorkspaceRow = dbGetWorkspace(workspaceId) !== null;
+  let lock: WorkspaceLock;
   try {
-    acquireWorkspaceLock({
+    lock = acquireWorkspaceLock({
       lock_key: key,
       workspace_id: hasLocalWorkspaceRow ? workspaceId : undefined,
       agent_id: ctx?.agentId,
@@ -501,7 +509,10 @@ function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reas
   try {
     return fn();
   } finally {
-    releaseWorkspaceLock(key);
+    // Holder-scoped release (regression 6692dc56): release by the acquired
+    // row's unique id, never by key alone — a guarded mutation that outlives
+    // the TTL must not delete a successor's live lock.
+    releaseWorkspaceLock(key, lock.id);
   }
 }
 
@@ -888,8 +899,12 @@ class LocalProjectStore implements ProjectStore {
     });
   }
 
-  async releaseLock(key: string): Promise<boolean> {
-    return releaseWorkspaceLock(key);
+  async releaseLock(key: string, lockId: string): Promise<boolean> {
+    return releaseWorkspaceLock(key, lockId);
+  }
+
+  async forceReleaseLock(key: string): Promise<boolean> {
+    return forceReleaseWorkspaceLock(key);
   }
 
   async listRoots(): Promise<Root[]> {
@@ -1563,7 +1578,16 @@ class ApiProjectStore implements ProjectStore {
     return lock;
   }
 
-  async releaseLock(key: string): Promise<boolean> {
+  async releaseLock(key: string, lockId: string): Promise<boolean> {
+    const raw = await this.client.transport.del<{ released?: boolean }>(
+      `/locks/${encodeURIComponent(key)}`,
+      undefined,
+      { query: { lock_id: lockId } },
+    );
+    return Boolean(raw?.released);
+  }
+
+  async forceReleaseLock(key: string): Promise<boolean> {
     const raw = await this.client.transport.del<{ released?: boolean }>(
       `/locks/${encodeURIComponent(key)}`,
     );

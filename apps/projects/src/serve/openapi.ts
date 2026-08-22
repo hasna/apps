@@ -1729,12 +1729,18 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
       "/v1/locks/{key}": {
         delete: {
           operationId: "releaseLock",
-          summary: "Release a project mutation lock by key",
+          summary: "Release a project mutation lock (holder-scoped by lock id; key-only DELETE is the force path)",
           parameters: [{
             name: "key",
             in: "path",
             required: true,
             description: "Lock key",
+            schema: { type: "string" },
+          } as const, {
+            name: "lock_id",
+            in: "query",
+            required: false,
+            description: "The acquired lock's unique id. When present, releases ONLY that holder's row (a stale holder cannot delete a successor's lock). When absent, the delete is the named force-release path used by the admin unlock verbs.",
             schema: { type: "string" },
           } as const],
           responses: { "200": jsonResp("LockRelease"), "404": jsonResp("Error", "Not found") },

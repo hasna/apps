@@ -8,7 +8,7 @@ import {
   releaseWorkspaceLock,
   resolveWorkspace,
 } from "../db/workspaces.js";
-import type { EventSource, JsonObject, Workspace, WorkspaceLocation } from "../types/workspace.js";
+import type { EventSource, JsonObject, Workspace, WorkspaceLocation, WorkspaceLock } from "../types/workspace.js";
 import type { GuardedProjectMutationResult } from "../types/workspace.js";
 import type { ProjectStore } from "../store/project-store.js";
 import {
@@ -472,8 +472,9 @@ export async function ensureProjectStoreForTarget(
 
   if (options.dryRun) return run();
   const lockKey = `workspace:${target}`;
+  let lock: WorkspaceLock;
   try {
-    acquireWorkspaceLock({
+    lock = acquireWorkspaceLock({
       lock_key: lockKey,
       workspace_id: resolveWorkspace(target) ? target : undefined,
       reason: "project store ensure",
@@ -489,7 +490,10 @@ export async function ensureProjectStoreForTarget(
   try {
     return await run();
   } finally {
-    releaseWorkspaceLock(lockKey);
+    // Holder-scoped release (regression 6692dc56): release by the acquired
+    // row's unique id, never by key alone — a guarded mutation that outlives
+    // the TTL must not delete a successor's live lock.
+    releaseWorkspaceLock(lockKey, lock.id);
   }
 }
 
