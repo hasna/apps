@@ -173,7 +173,9 @@ describe("knowledge source manifest export", () => {
     expect(new Set([...first.items, ...second.items].map((item) => item.kind === "file" ? item.file_id : item.asset_id))).toEqual(
       new Set(["f_page_a", "f_page_b", "f_page_c"]),
     );
-    expect(first.high_watermark).toBe(0);
+    // Freshly upserted rows are sync_version 1 (revision 1), so the manifest
+    // watermark advances to 1 rather than staying at the schema default 0.
+    expect(first.high_watermark).toBe(1);
     expect(first.delta_cursor).toBeDefined();
   });
 
@@ -271,7 +273,8 @@ describe("knowledge source manifest export", () => {
     });
 
     const baseline = await exportKnowledgeSourceManifest({ source_id: source.id });
-    expect(baseline.high_watermark).toBe(0);
+    // Both fresh rows are sync_version 1 (revision 1) after the upsert fix.
+    expect(baseline.high_watermark).toBe(1);
 
     upsertFile({
       id: "f_delta_changed",
@@ -297,13 +300,14 @@ describe("knowledge source manifest export", () => {
     expect(delta.delta).toBe(true);
     expect(delta.items).toHaveLength(2);
     expect(delta.tombstone_count).toBe(1);
-    expect(delta.high_watermark).toBe(1);
+    // Both changed and deleted rows bumped from revision 1 to 2.
+    expect(delta.high_watermark).toBe(2);
     const changed = delta.items.find((item) => item.kind === "file" && item.file_id === "f_delta_changed");
     const deleted = delta.items.find((item) => item.kind === "file" && item.file_id === "f_delta_deleted");
     expect(changed?.kind).toBe("file");
     expect(deleted?.kind).toBe("file");
     if (changed?.kind !== "file" || deleted?.kind !== "file") throw new Error("Expected file items");
-    expect(changed.sync_version).toBe(1);
+    expect(changed.sync_version).toBe(2);
     expect(changed.tombstone).toBeUndefined();
     expect(changed.source_revision_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(deleted.deleted).toBe(true);
