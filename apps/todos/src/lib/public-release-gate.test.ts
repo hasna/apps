@@ -133,6 +133,37 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("readme-install");
   });
 
+  test("exempts only the known-safe contracts sentinel in dist/server/index.js from the secret scan", () => {
+    // P1 from the @hasna/todos@0.15.41 release review (2026-08-22): the server build
+    // target inlines the @hasna/contracts graph, whose known-safe issuance-state
+    // constant API_KEY_ISSUANCE_PENDING_REASON = "credential_delivery_pending" matches
+    // the keyword-assignment secret detector by shape. Split-string spellings so this
+    // test file itself does not trip the assignment-shape detectors it exercises.
+    const sentinel = "API_KEY" + "_ISSUANCE_PENDING_REASON = " + '"credential_delivery_pending";';
+
+    // Positive control: the sentinel alone in the server bundle passes the scan.
+    const positive = validatePublicTextSurfaces([{ path: "package/dist/server/index.js", text: sentinel }]);
+    expect(positive.filter((failure) => failure.check === "secret-scan")).toEqual([]);
+
+    // Negative control A: a real secret-shaped assignment beside the sentinel in the
+    // same module still fails — the exemption strips the occurrence, not the pattern.
+    const withRealSecret = sentinel + "\n" + "SECRET" + "_API_TOKEN = " + '"real-looking-value-12345";';
+    const negativeA = validatePublicTextSurfaces([{ path: "package/dist/server/index.js", text: withRealSecret }]);
+    expect(negativeA.filter((failure) => failure.check === "secret-scan")).toHaveLength(1);
+
+    // Negative control B: the same sentinel literal in a DIFFERENT module is not
+    // exempted — the exemption names dist/server/index only.
+    const negativeB = validatePublicTextSurfaces([{ path: "package/dist/cli/index.js", text: sentinel }]);
+    expect(negativeB.filter((failure) => failure.check === "secret-scan")).toHaveLength(1);
+
+    // Negative control C: a second keyword-assignment shape with a different name in
+    // the exempt module survives the strip and still fails.
+    const negativeC = validatePublicTextSurfaces([
+      { path: "package/dist/server/index.js", text: sentinel + "\n" + "API_KEY" + "_ROTATION_TOKEN = " + '"another-value-123456";' },
+    ]);
+    expect(negativeC.filter((failure) => failure.check === "secret-scan")).toHaveLength(1);
+  });
+
   test("reads the root README for the install check whatever order the surfaces arrive in", () => {
     // Regression for @hasna/todos@0.15.0 publish run 30829940563, which failed
     // readme-install at a sha whose README.md contained the required line twice.

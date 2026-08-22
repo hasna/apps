@@ -197,6 +197,20 @@ const LEGACY_TODOS_API_URL_SCRUB = new RegExp(`env\\.${escapeRegExp(LEGACY_TODOS
 // stripped.
 const RUNBOOK_RETIREMENT_NOTE = new RegExp(`\`${escapeRegExp(LEGACY_TODOS_MODE)}\`\\) are RETIRED`, "g");
 
+/**
+ * Keyword-assignment secret shapes. Declared ABOVE TEXT_BOUNDARY_EXEMPTIONS on
+ * purpose: the exemptions array references SECRET_PATTERNS[3] for the
+ * contracts-sentinel exemption, and a reference below the declaration would
+ * hit the temporal dead zone at module evaluation (the same ReferenceError
+ * class #103 shipped once — a later const referenced at import time).
+ */
+const SECRET_PATTERNS: RegExp[] = [
+  /AKIA[0-9A-Z]{16}/,
+  /ASIA[0-9A-Z]{16}/,
+  /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/,
+  /\b[A-Za-z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"\r\n]{12,}/,
+];
+
 const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: RegExp; reason: string }[] = [
   {
     module: "dist/testing",
@@ -271,6 +285,29 @@ const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: R
       "retirement sentence: a bare mention elsewhere in the file is not stripped and still " +
       "fails.",
   },
+  // —————— known-safe contracts sentinel in the server bundle (release-review P1, 2026-08-22) ——————
+  // `bun build src/server/index.ts` is the one todos build target that carries NO
+  // --external flags, so it inlines the entire @hasna/contracts dependency graph.
+  // contracts/src/auth/store.ts exports API_KEY_ISSUANCE_PENDING_REASON =
+  // "credential_delivery_pending" — a known-safe issuance-state constant, not a
+  // credential — and its assignment shape (KEYWORD-name = quoted-12+-chars) is
+  // indistinguishable from SECRET_PATTERNS[3]'s keyword-assignment detector. This
+  // exemption strips ONLY that exact known-safe assignment from the built server
+  // bundle, then re-tests the pattern against what remains; a real secret-shaped
+  // assignment anywhere in the same file — a different name, a different value, a
+  // second occurrence — survives the strip and still fails the scan. The same
+  // literal in any other module is not exempted.
+  {
+    module: "dist/server/index",
+    pattern: SECRET_PATTERNS[3],
+    occurrence: /\bAPI_KEY_ISSUANCE_PENDING_REASON\s*=\s*"credential_delivery_pending"/g,
+    reason:
+      "the @hasna/contracts issuance-state sentinel (contracts/src/auth/store.ts) is inlined " +
+      "into the server bundle by the no-external build target and matches the keyword-assignment " +
+      "secret detector by shape while carrying no credential. The occurrence regex names the " +
+      "exact known-safe assignment emit, so a real `*_SECRET/TOKEN/PASSWORD/API_KEY = \"…12+…\"` " +
+      "anywhere in this file — including alongside the sentinel — still fails the scan.",
+  },
 ];
 
 /**
@@ -294,13 +331,6 @@ function stripExemptOccurrences(path: string, pattern: RegExp, text: string): st
   }
   return stripped;
 }
-
-const SECRET_PATTERNS: RegExp[] = [
-  /AKIA[0-9A-Z]{16}/,
-  /ASIA[0-9A-Z]{16}/,
-  /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/,
-  /\b[A-Za-z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"\r\n]{12,}/,
-];
 
 const INSTALL_SMOKE_COMMANDS: InstallSmokeCommand[] = [
   { command: "bun", args: ["add", "--cwd", "<install-root>", "<tarball>", "--minimum-release-age=0"] },
@@ -392,7 +422,8 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
       addIf(failures, pattern.test(textAfterExemptions), "public-text-boundary", `${file.path} matches forbidden pattern ${pattern}`);
     }
     for (const pattern of SECRET_PATTERNS) {
-      addIf(failures, pattern.test(file.text), "secret-scan", `${file.path} looks like it contains a secret`);
+      const textAfterExemptions = stripExemptOccurrences(file.path, pattern, file.text);
+      addIf(failures, pattern.test(textAfterExemptions), "secret-scan", `${file.path} looks like it contains a secret`);
     }
   }
 
