@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.3.19",
+  "version": "0.3.20",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, OpenCode, Cursor, Pi, and Hermes, with legacy Gemini CLI session and Gemini API billing ingestion",
   "repository": {
     "type": "git",
@@ -77,7 +77,7 @@
     "@hasna/contracts": "0.13.4",
     "@hasna/events": "^0.1.16",
     "@hasna/mcp-harness": "^0.1.0",
-    "@hasna/projects": "0.1.141",
+    "@hasna/projects": "0.1.142",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
