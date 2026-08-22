@@ -63,7 +63,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist dashboard/dist && cd dashboard && bun install --frozen-lockfile && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts src/testing.ts src/project-registration.ts src/task-manifest.ts src/task-subtree-transfer.ts --outdir dist --target bun --external '@hasna/contracts' --external '@hasna/contracts/*' && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist dashboard/dist && cd dashboard && bun install --frozen-lockfile && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts src/testing.ts src/project-registration.ts src/task-manifest.ts src/task-subtree-transfer.ts --outdir dist --root src --target bun --external '@hasna/contracts' --external '@hasna/contracts/*' && tsc --emitDeclarationOnly --outDir dist",
     "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts src/testing.ts src/project-registration.ts src/task-manifest.ts src/task-subtree-transfer.ts --outdir dist --target bun --external '@hasna/contracts' --external '@hasna/contracts/*'",
     "migrate": "bun run src/server/index.ts migrate",
     "backfill:comment-redaction": "bun run src/server/index.ts redact-comments",
@@ -84,8 +84,7 @@
     "test:attested-container-compatibility-vector": "bun test scripts/attested-container-compatibility-vector.test.ts",
     "issue:release-review": "bun run scripts/issue-npm-release-agent-review.ts",
     "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
-    "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true",
-    "prepack": "bun run build"
+    "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
   },
   "keywords": [
     "todos",
