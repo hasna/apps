@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.com/test-guard/execution-plan.v1.json",
+  "title": "Hasna Test Guard Resolved Execution Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "planId", "intent", "runner", "invocation", "maySpawn", "packages",
+    "targetIds", "selector", "packageWide", "workspaceWide", "recursive",
+    "localCi", "lifecycleHooks", "dynamicDiscovery", "fanout", "descendants", "limits"
+  ],
+  "properties": {
+    "schema": { "const": "hasna.test_guard.execution_plan.v1" },
+    "planId": { "type": "string", "minLength": 1 },
+    "intent": { "enum": ["execute", "diagnostic"] },
+    "runner": { "type": "string", "minLength": 1 },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable", "argv"],
+      "properties": {
+        "executable": { "type": "string", "minLength": 1 },
+        "argv": { "$ref": "#/$defs/nonEmptyStringList" }
+      }
+    },
+    "maySpawn": { "type": "boolean" },
+    "packages": { "$ref": "#/$defs/nonEmptyStringList" },
+    "targetIds": { "$ref": "#/$defs/stringList" },
+    "selector": { "enum": ["explicit", "omitted", "dynamic"] },
+    "packageWide": { "type": "boolean" },
+    "workspaceWide": { "type": "boolean" },
+    "recursive": { "type": "boolean" },
+    "localCi": { "type": "boolean" },
+    "lifecycleHooks": { "$ref": "#/$defs/stringList" },
+    "dynamicDiscovery": { "type": "boolean" },
+    "fanout": { "type": "integer", "minimum": 0 },
+    "descendants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["descendantId", "packageId", "targetIds", "resolved"],
+        "properties": {
+          "descendantId": { "type": "string", "minLength": 1 },
+          "packageId": { "type": "string", "minLength": 1 },
+          "targetIds": { "$ref": "#/$defs/stringList" },
+          "resolved": { "type": "boolean" }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memoryHighBytes", "memoryMaxBytes", "swapMaxBytes", "pidsMax", "wallTimeMs"],
+      "properties": {
+        "memoryHighBytes": { "type": "integer", "minimum": 1 },
+        "memoryMaxBytes": { "type": "integer", "minimum": 1 },
+        "swapMaxBytes": { "type": "integer", "minimum": 0 },
+        "pidsMax": { "type": "integer", "minimum": 1 },
+        "wallTimeMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "parent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admissionReceiptId", "allocationId", "leaseId", "cgroupId"],
+      "properties": {
+        "admissionReceiptId": { "type": "string", "minLength": 1 },
+        "allocationId": { "type": "string", "minLength": 1 },
+        "leaseId": { "type": "string", "minLength": 1 },
+        "cgroupId": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "nonEmptyStringList": {
+      "allOf": [
+        { "$ref": "#/$defs/stringList" },
+        { "minItems": 1 }
+      ]
+    }
+  }
+}

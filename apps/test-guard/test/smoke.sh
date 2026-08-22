@@ -48,12 +48,13 @@ FLEET_REAL="${TEST_GUARD_FLEET_REAL:-/home/hasna/.bun/bin/bun-real}"
 # station pattern). Release review P1 widened this to the COMPLETE shipped
 # file set: the scan previously covered only the three scripts and a
 # station-name reference rode into the packed README. The shipped set is the
-# package.json "files" list (battery.sh, bun-wrapper.sh, sentinel.sh,
-# README.md, LICENSE) — keep this list in sync when that field changes.
+# package.json "files" list — keep this explicit list in sync when that field
+# changes.
 CLOUD_GUARD_FAIL=0
 if grep -nE '\.hasna/cloud|hasna-cloud-env|station[0-9]+' \
     "$HERE/sentinel.sh" "$HERE/bun-wrapper.sh" "$HERE/battery.sh" \
-    "$HERE/README.md" "$HERE/LICENSE"; then
+    "$HERE/runtime.mjs" "$HERE/runtime.d.ts" \
+    "$HERE/execution-plan.schema.json" "$HERE/README.md" "$HERE/LICENSE"; then
   echo "FAIL no-cloud-guard: retired .hasna/cloud runtime config or station-name reference found in a shipped file" >&2
   CLOUD_GUARD_FAIL=1
 else
