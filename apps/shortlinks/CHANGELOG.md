@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.10
+
+### Patch Changes
+
+- fix: make the shortlinks tarball publish-guard-clean and align the contracts pin. README and the Cloudflare example config no longer reference the internal `shortlinks.hasna.xyz` domain (packed content must carry no `.hasna.xyz` strings per the repo publish guard); the `@hasna/contracts` devDependency is pinned to the published `0.13.1` (the registry `0.13.3` carries the unsatisfiable peer `@hasna/secrets@0.3.4`, and the manifest/kitVersion already declare 0.13.1), with the root lockfile regenerated.
+
 ## 0.2.9
 
 ### Patch Changes
