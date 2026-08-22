@@ -72,11 +72,18 @@ export async function handleV1Request(
   const requiredScopes = [isWrite ? "calendar:write" : "calendar:read"];
 
   // ── Auth (contracts API-key verifier) ──
+  // A construction failure is a SERVER misconfiguration — a missing signing
+  // secret, an auth wiring the contracts kit refuses. The detail goes to the
+  // process log where an operator reads it; the anonymous caller gets a bare
+  // 503. It used to get `(e as Error).message` verbatim, which is how the
+  // `isRevoked` wiring defect published the contracts configuration text —
+  // naming the service's own auth hooks — to every unauthenticated request.
   let verifier;
   try {
     verifier = dependencies.getCloudVerifier();
   } catch (e) {
-    return error(503, (e as Error).message);
+    console.error(`[calendar-serve] /v1 auth unavailable: ${(e as Error).message}`);
+    return error(503, "service unavailable");
   }
   const decision = await verifier.authenticate(req.headers, { method, path, requiredScopes });
   if (!decision.ok) {
