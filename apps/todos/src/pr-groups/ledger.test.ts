@@ -1248,6 +1248,31 @@ describe("authoritative PR-group ledger", () => {
       .rejects.toMatchObject({ code: "PR_GROUP_ATOMICITY_UNAVAILABLE" });
   });
 
+  test("a failed schema sync is retried on the next operation instead of being cached forever", async () => {
+    let queryCalls = 0;
+    const queryClient = {
+      query: async () => {
+        queryCalls += 1;
+        if (queryCalls === 1) {
+          throw Object.assign(new Error("canceling statement due to lock timeout"), {
+            errno: "55P03",
+          });
+        }
+        return { rows: [] };
+      },
+      transaction: async <T>(fn: (client: any) => Promise<T>) => fn(queryClient),
+    };
+    const persistence = new PostgresPrGroupLedgerPersistence(queryClient as any);
+
+    // The first operation surfaces the schema-sync failure.
+    await expect(persistence.transaction(async () => true))
+      .rejects.toThrow("canceling statement due to lock timeout");
+
+    // The failure must NOT be cached: the next operation re-runs the schema
+    // sync (which now succeeds) and completes normally.
+    await expect(persistence.transaction(async () => true)).resolves.toBe(true);
+  });
+
   test("timestamp-omitted append retries adopt the first server-assigned authoritative timestamp", async () => {
     const admitted = await ledger.admit(admission({ root_request_id: "timestamp-replay" }));
     const groupId = admitted.view.group.id;
