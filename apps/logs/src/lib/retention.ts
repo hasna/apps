@@ -17,6 +17,24 @@ const TTL_BY_LEVEL: Record<string, keyof RetentionConfig> = {
   fatal: "error_ttl_hours",
 };
 
+/**
+ * Records ids whose `logs` projection row retention deliberately removed, so
+ * that a later `logs doctor rebuild-index` / `repair-segments --apply` replay
+ * of the raw segments does not resurrect them. The raw event and its
+ * event_records index row survive eviction; only the projection row is
+ * retired. A deliberate re-ingest of the same id clears the tombstone (see
+ * lib/ingest.ts).
+ */
+function tombstoneEvicted(db: Database, ids: string[]): void {
+  if (ids.length === 0) return;
+  const stmt = db.prepare(
+    "INSERT OR IGNORE INTO retention_evictions (event_id) VALUES (?)",
+  );
+  db.transaction(() => {
+    for (const id of ids) stmt.run(id);
+  })();
+}
+
 export function runRetentionForProject(
   db: Database,
   projectId: string,
@@ -44,9 +62,20 @@ export function runRetentionForProject(
         ) as { c: number }
     ).c;
     if (before > 0) {
+      const evicted = db
+        .prepare(
+          "SELECT id FROM logs WHERE project_id = $p AND level = $level AND timestamp < $cutoff",
+        )
+        .all(sqlBindings({ $p: projectId, $level: level, $cutoff: cutoff })) as {
+        id: string;
+      }[];
       db.prepare(
         "DELETE FROM logs WHERE project_id = $p AND level = $level AND timestamp < $cutoff",
       ).run(sqlBindings({ $p: projectId, $level: level, $cutoff: cutoff }));
+      tombstoneEvicted(
+        db,
+        evicted.map((row) => row.id),
+      );
       deleted += before;
     }
   }
@@ -59,9 +88,20 @@ export function runRetentionForProject(
   ).c;
   if (total > project.max_rows) {
     const toDelete = total - project.max_rows;
+    const evicted = db
+      .prepare(
+        "SELECT id FROM logs WHERE project_id = $p ORDER BY timestamp ASC LIMIT $limit",
+      )
+      .all(sqlBindings({ $p: projectId, $limit: toDelete })) as {
+      id: string;
+    }[];
     db.prepare(
       "DELETE FROM logs WHERE id IN (SELECT id FROM logs WHERE project_id = $p ORDER BY timestamp ASC LIMIT $limit)",
     ).run(sqlBindings({ $p: projectId, $limit: toDelete }));
+    tombstoneEvicted(
+      db,
+      evicted.map((row) => row.id),
+    );
     deleted += toDelete;
   }
 

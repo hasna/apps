@@ -576,6 +576,18 @@ function migrate(db: Database): void {
     )
   `);
 
+  // Retention eviction tombstones: ids whose `logs` projection row retention
+  // deliberately removed. The raw event and its event_records index row
+  // survive, but rebuildEventStoreIndexLocked must NOT re-materialize these
+  // rows when it replays the raw segments. A deliberate re-ingest of the same
+  // deterministic id clears the tombstone (see lib/ingest.ts).
+  db.run(`
+    CREATE TABLE IF NOT EXISTS retention_evictions (
+      event_id TEXT PRIMARY KEY,
+      evicted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )
+  `);
+
   db.run(`
     CREATE TABLE IF NOT EXISTS event_segments (
       id TEXT PRIMARY KEY,
