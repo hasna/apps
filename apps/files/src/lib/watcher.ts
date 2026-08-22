@@ -3,6 +3,7 @@ import { extname, basename, relative } from "path";
 import { statSync } from "fs";
 import { lookup as mimeLookup } from "mime-types";
 import { hashFile } from "./hasher.js";
+import { loadConfig } from "./config.js";
 import { upsertFile, markFileDeleted } from "../db/files.js";
 import type { Source } from "../types/index.js";
 
@@ -56,7 +57,8 @@ function handleAdd(fullPath: string, source: Source, machine_id: string): void {
     if (!stat.isFile()) return;
     const relPath = relative(source.path!, fullPath);
     const entry = basename(fullPath);
-    const hash = hashFile(fullPath);
+    const hashSkipBytes = loadConfig().hash_skip_bytes;
+    const hash = hashSkipBytes > 0 && stat.size > hashSkipBytes ? undefined : hashFile(fullPath);
     upsertFile({
       source_id: source.id,
       machine_id,
