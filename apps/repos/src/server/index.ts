@@ -136,6 +136,21 @@ Bun.serve({
       return json({ error: "Unauthorized" }, 401);
     }
 
+    // DNS-rebinding guard for loopback binds: a browser-issued request to an
+    // attacker-resolved hostname carries Host: <attacker-domain>, and the
+    // request is then same-origin to the attacker's page, so no CORS applies.
+    // The MCP SDK rejects those Hosts on /mcp; this guard applies the same
+    // fixed allowlist to every /api route so a rebinding page cannot read the
+    // registry or POST /api/scan with attacker-chosen roots. A non-loopback
+    // bind already mandates REPOS_SERVE_TOKEN, which gates every route.
+    if (isLoopbackHostname(HOSTNAME)) {
+      const loopbackHosts = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
+      const host = req.headers.get("host") ?? "";
+      if (!loopbackHosts.has(host)) {
+        return json({ error: `Invalid Host header: ${host}` }, 403);
+      }
+    }
+
     // MCP Streamable HTTP (shared long-lived transport)
     const mcpResponse = await handleMcpHttpRoutes(req, { port: PORT, hostname: HOSTNAME });
     if (mcpResponse) return mcpResponse;

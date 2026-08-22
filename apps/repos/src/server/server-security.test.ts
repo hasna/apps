@@ -23,16 +23,26 @@ mkdirSync(join(attackRoot, "fakerepo"), { recursive: true });
 // matching the repro's attacker-chosen root.
 execFileSync("git", ["init", "-q", join(attackRoot, "fakerepo")]);
 
+// A second real git repository used by the authorized local scan path in the
+// default (no-token) configuration, kept separate from the attacker root so
+// the "never touches the attacker-chosen roots" assertions stay independent.
+const localRoot = join(work, "local-root");
+mkdirSync(join(localRoot, "fakerepo"), { recursive: true });
+execFileSync("git", ["init", "-q", join(localRoot, "fakerepo")]);
+
 writeFileSync(join(work, "config.json"), JSON.stringify({ workspaceRoots: [rootsDir] }));
 
-const freePort = await new Promise<number>((resolvePort) => {
-  const probe = createNetServer();
-  probe.listen(0, "127.0.0.1", () => {
-    const address = probe.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    probe.close(() => resolvePort(port));
+async function nextFreePort(): Promise<number> {
+  return new Promise<number>((resolvePort) => {
+    const probe = createNetServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      probe.close(() => resolvePort(port));
+    });
   });
-});
+}
+const freePort = await nextFreePort();
 
 const serverProcess = Bun.spawn({
   cmd: ["bun", "run", "src/server/index.ts"],
@@ -89,8 +99,54 @@ const INITIALIZE = {
   },
 };
 
+// Second server fixture: the DEFAULT configuration (no REPOS_SERVE_TOKEN) —
+// the shipped loopback-only mode. Local processes must still be served, but a
+// DNS-rebinding request (hostile Host header) must be rejected on every route,
+// /api included — not only on /mcp where the SDK provides the check.
+const defaultPort = await nextFreePort();
+const defaultServer = Bun.spawn({
+  cmd: ["bun", "run", "src/server/index.ts"],
+  cwd: join(import.meta.dir, "../.."),
+  env: {
+    ...process.env,
+    HOME: home,
+    REPOS_PORT: String(defaultPort),
+    HASNA_REPOS_DB_PATH: join(work, "repos-default.db"),
+    HASNA_REPOS_CONFIG_PATH: join(work, "config.json"),
+    HASNA_REPOS_HOOK_QUEUE_PATH: join(work, "hook-events-default.tsv"),
+  },
+  stdout: "pipe",
+  stderr: "pipe",
+});
+
+const defaultBaseUrl = `http://127.0.0.1:${defaultPort}`;
+
+const defaultStdoutLines: string[] = [];
+const defaultStdoutReader = (async () => {
+  let buffer = "";
+  for await (const chunk of defaultServer.stdout) {
+    buffer += new TextDecoder().decode(chunk);
+    let newline: number;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      defaultStdoutLines.push(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+    }
+  }
+  if (buffer) defaultStdoutLines.push(buffer);
+})();
+
+async function waitForDefaultLine(needle: string, timeoutMs = 10_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = defaultStdoutLines.find((line) => line.includes(needle));
+    if (found) return found;
+    await Bun.sleep(50);
+  }
+  throw new Error(`default-config repos-serve subprocess never printed a line containing: ${needle}`);
+}
+
 beforeAll(async () => {
-  // Wait for the server to answer before any test hits it.
+  // Wait for the token-gated server to answer before any test hits it.
   for (let attempt = 0; attempt < 100; attempt++) {
     try {
       const res = await fetch(`${baseUrl}/api/health`, {
@@ -106,8 +162,24 @@ beforeAll(async () => {
   throw new Error(`repos-serve subprocess did not become ready; stdout: ${stdoutLines.join("\n")}`);
 });
 
+beforeAll(async () => {
+  // Wait for the default-config server to answer (no auth needed there).
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      const res = await fetch(`${defaultBaseUrl}/api/health`);
+      if (res.status === 200) {
+        await waitForDefaultLine(`http://127.0.0.1:${defaultPort}`);
+        return;
+      }
+    } catch { /* not up yet */ }
+    await Bun.sleep(100);
+  }
+  throw new Error(`default-config repos-serve subprocess did not become ready; stdout: ${defaultStdoutLines.join("\n")}`);
+});
+
 afterAll(() => {
   serverProcess.kill();
+  defaultServer.kill();
   rmSync(work, { recursive: true, force: true });
 });
 
@@ -210,5 +282,78 @@ describe("repos-serve security hardening", () => {
       body: JSON.stringify(INITIALIZE),
     });
     expect(rebind.status).toBe(403);
+  });
+
+  it("rejects a hostile Host header on /api routes too (DNS rebinding)", async () => {
+    // The same rebinding request against /api must not reach the route: the
+    // server-level Host allowlist covers every route, not only /mcp.
+    const health = await fetch(`${baseUrl}/api/health`, {
+      headers: { Host: "evil.example:9999", Authorization: `Bearer ${BEARER}` },
+    });
+    expect(health.status).toBe(403);
+
+    const scan = await fetch(`${baseUrl}/api/scan`, {
+      method: "POST",
+      headers: {
+        Host: "evil.example:9999",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${BEARER}`,
+      },
+      body: JSON.stringify({ roots: [attackRoot] }),
+    });
+    expect(scan.status).toBe(403);
+    // The attacker-chosen root was never touched.
+    expect(existsSync(join(attackRoot, "fakerepo", ".git", "hooks", "post-commit"))).toBe(false);
+  });
+});
+
+describe("repos-serve default config (loopback, no token)", () => {
+  it("serves the API for local processes on loopback hosts", async () => {
+    // The default config is the shipped loopback-only mode: the banner must
+    // report the loopback bind.
+    expect(defaultStdoutLines.join("\n")).toContain(`http://127.0.0.1:${defaultPort}`);
+
+    const health = await fetch(`${defaultBaseUrl}/api/health`);
+    expect(health.status).toBe(200);
+
+    // A local process with the loopback Host may still scan — that is the
+    // intended local tooling path.
+    const scan = await fetch(`${defaultBaseUrl}/api/scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roots: [localRoot] }),
+    });
+    expect(scan.status).toBe(200);
+    expect(existsSync(join(localRoot, "fakerepo", ".git", "hooks", "post-commit"))).toBe(true);
+  });
+
+  it("rejects DNS-rebinding Host headers on every route, /api included", async () => {
+    // A rebinding page's same-origin request carries Host: <attacker-domain>
+    // and bypasses CORS entirely; without a server-level Host check on /api,
+    // it could read the registry and install executable hooks via /api/scan.
+    const health = await fetch(`${defaultBaseUrl}/api/health`, {
+      headers: { Host: "evil.example:9999" },
+    });
+    expect(health.status).toBe(403);
+
+    const scan = await fetch(`${defaultBaseUrl}/api/scan`, {
+      method: "POST",
+      headers: { Host: "evil.example:9999", "Content-Type": "application/json" },
+      body: JSON.stringify({ roots: [attackRoot] }),
+    });
+    expect(scan.status).toBe(403);
+    expect(existsSync(join(attackRoot, "fakerepo", ".git", "hooks", "post-commit"))).toBe(false);
+    expect(existsSync(join(work, "hook-events-default.tsv"))).toBe(false);
+
+    const mcp = await fetch(`${defaultBaseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        Host: "evil.example:9999",
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify(INITIALIZE),
+    });
+    expect(mcp.status).toBe(403);
   });
 });
