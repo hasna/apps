@@ -2692,11 +2692,10 @@ program
 
 program
   .command("import <org>")
-  .description("Clone all repos from a GitHub org")
-  .option("--dir <path>", "Target directory", ".")
+  .description("Clone all repos from a GitHub org into ~/.hasna/repos/clones/<org>")
   .option("--json", "Output as JSON")
   .action((org, opts) => {
-    const result = importFromOrg(org, opts.dir, {
+    const result = importFromOrg(org, {
       onProgress: opts.json ? undefined : (msg: string) => console.log(chalk.dim(msg)),
     });
     if (opts.json) { printJsonLine(result); return; }
@@ -2737,7 +2736,6 @@ program
   .description("Create a GitHub repository through the CLI's own credential — the caller holds no token")
   .option("--public", "Create public (default: private)")
   .option("--description <text>", "Repository description")
-  .option("--dir <parent>", "Also clone into <parent>/<name> and register the checkout")
   .option("--json", "Output the versioned JSON result")
   .action(async (spec, opts) => {
     const json = Boolean(opts.json);
@@ -2746,15 +2744,12 @@ program
         spec,
         visibility: opts.public ? "public" : "private",
         description: opts.description,
-        cloneParentDir: opts.dir,
       });
       if (json) {
         printJson(result);
         return;
       }
       console.log(chalk.green(`✓ created ${result.repo.url} (${result.repo.visibility})`));
-      if (result.clone) console.log(chalk.dim(`  cloned and registered ${result.clone.path}`));
-      else console.log(chalk.dim("  no local clone (pass --dir <parent> to clone and register)"));
     } catch (error) {
       printRepoLifecycleError(error, json, REPO_CREATE_SCHEMA);
     }
@@ -2762,13 +2757,12 @@ program
 
 program
   .command("clone <org/name>")
-  .description("Clone one repository to <dir>/<name> and register it — credential stays behind the CLI")
-  .option("--dir <parent>", "Parent directory for the clone (default: current directory)")
+  .description("Clone one repository to ~/.hasna/repos/clones/<org>/<name> and register it — credential stays behind the CLI")
   .option("--json", "Output the versioned JSON result")
   .action(async (spec, opts) => {
     const json = Boolean(opts.json);
     try {
-      const result = await cloneRepository({ spec, parentDir: opts.dir });
+      const result = await cloneRepository({ spec });
       if (json) {
         printJson(result);
         return;

@@ -354,6 +354,48 @@ export function computeWorktreePath(repoName: string, worktreeName: string): str
   return join(worktreeRootDir(), assertRepoSegment(repoName), assertWorktreeName(worktreeName));
 }
 
+// ── the clones root, and the only destination acquisition verbs produce ──────
+
+let clonesRootForTests: string | null = null;
+
+/** Test seam, mirroring `setWorktreeRootForTests`. */
+export function setClonesRootForTests(root: string | null): void {
+  clonesRootForTests = root;
+}
+
+/**
+ * The canonical clones root.
+ *
+ * Same derivation discipline as `worktreeRootDir()`: the operating system
+ * account database, never `$HOME` and never an environment variable. A root
+ * that moves with caller-controlled state is a containment check any caller
+ * can step around by exporting one value before invoking the CLI, so the
+ * destination of every acquisition verb is computed from this root and is
+ * never an argument.
+ */
+export function clonesRootDir(): string {
+  if (clonesRootForTests) return resolve(clonesRootForTests);
+  const home = resolveTrustedAccountHome();
+  if (!home) {
+    fail(
+      "TRUSTED_HOME_UNAVAILABLE",
+      "the account home could not be resolved from the operating system account database",
+    );
+  }
+  return join(home, ".hasna", "repos", "clones");
+}
+
+/**
+ * `<clones-root>/<org>/<repo-name>` — the only shape this module produces.
+ *
+ * The org segment is the point: a clone of `hasna/apps` lands at
+ * `<clones-root>/hasna/apps`, never flat at `<clones-root>/apps`, so two orgs
+ * that both own an `apps` repository cannot collide.
+ */
+export function computeClonePath(org: string, repoName: string): string {
+  return join(clonesRootDir(), assertRepoSegment(org), assertRepoSegment(repoName));
+}
+
 // ── repo resolution and parent health ────────────────────────────────────────
 
 function exactRepoLookup(input: string): string | number {

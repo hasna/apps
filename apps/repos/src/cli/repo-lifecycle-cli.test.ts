@@ -29,8 +29,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { closeDb, getDb } from "../db/database.js";
+
+const WORKTREES_MODULE = resolve(import.meta.dir, "../lib/worktrees.js");
+const CLI_MODULE = resolve(import.meta.dir, "index.tsx");
 
 let tempDir = "";
 
@@ -57,6 +60,8 @@ interface Fixture {
   shimDir: string;
   logDir: string;
   workDir: string;
+  clonesRoot: string;
+  driverPath: string;
 }
 
 /**
@@ -76,6 +81,7 @@ function seed(config: object = {}): Fixture {
   const shimDir = join(tempDir, "shim");
   const logDir = join(tempDir, "log");
   const workDir = join(tempDir, "work");
+  const clonesRoot = join(tempDir, "clones");
   mkdirSync(shimDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
   mkdirSync(workDir, { recursive: true });
@@ -130,7 +136,24 @@ exit 64
   const configPath = join(tempDir, "config.json");
   writeFileSync(configPath, JSON.stringify(config));
 
-  return { dbPath, configPath, shimDir, logDir, workDir };
+  /**
+   * The child process. The CLI itself is spawned, but through a two-line
+   * driver that pins the clones root to scratch first — the canonical root is
+   * deliberately not overridable by an environment variable, which is the
+   * point of `trustedAccountHome`, and a test must not write into the live
+   * clones root that other agents are working in. Same discipline as
+   * `worktrees-credential-isolation.test.ts`'s driver.
+   */
+  const driverPath = join(tempDir, "driver.ts");
+  writeFileSync(
+    driverPath,
+    `import { setClonesRootForTests } from ${JSON.stringify(WORKTREES_MODULE)};
+setClonesRootForTests(${JSON.stringify(clonesRoot)});
+await import(${JSON.stringify(CLI_MODULE)});
+`,
+  );
+
+  return { dbPath, configPath, shimDir, logDir, workDir, clonesRoot, driverPath };
 }
 
 /** A credential command the CLI can be configured with. */
@@ -143,7 +166,7 @@ function writeCredentialCommand(fixture: Fixture, body: string): string {
 
 function runCli(fixture: Fixture, args: string[], extraEnv: Record<string, string> = {}) {
   const result = Bun.spawnSync({
-    cmd: ["bun", "run", "src/cli/index.tsx", ...args],
+    cmd: ["bun", "run", fixture.driverPath, ...args],
     cwd: REPO_ROOT,
     env: {
       PATH: `${fixture.shimDir}:${process.env["PATH"] ?? "/usr/bin:/bin"}`,
@@ -364,55 +387,75 @@ describe("repos create", () => {
     expect(createCall).toContain("R5 scratch");
   });
 
-  test("--dir clones after creating and registers the checkout", () => {
+  test("create no longer clones — the clone verb is the acquisition surface", () => {
+    // Ratified plan k_msg3pncp_4wtvn5: `--dir` is removed from create, so the
+    // verb creates on GitHub and nothing else. Acquiring a checkout is the
+    // clone verb's job, with the destination computed — never caller-chosen.
     const fixture = seed();
-    const result = runCli(fixture, ["create", "hasna/scratch-r5", "--dir", fixture.workDir, "--json"]);
+    const result = runCli(fixture, ["create", "hasna/scratch-r5", "--json"]);
     expect(result.code).toBe(0);
     const payload = parseCliJson(result.stdout);
-    expect(payload.clone.path).toBe(join(fixture.workDir, "scratch-r5"));
-    expect(payload.clone.registered).toBe(true);
+    expect(payload.clone).toBeNull();
+    const calls = ghInvocations(fixture);
+    expect(calls.some((line) => line.startsWith("repo create hasna/scratch-r5"))).toBe(true);
+    expect(calls.some((line) => line.startsWith("repo clone"))).toBe(false);
     const db = getDb(fixture.dbPath);
-    const row = db.query("SELECT name FROM repos WHERE path = ?").get(join(fixture.workDir, "scratch-r5")) as { name: string } | null;
-    expect(row?.name).toBe("scratch-r5");
+    const flat = db.query("SELECT name FROM repos WHERE path LIKE ?").all("%scratch-r5%") as Array<{ name: string }>;
+    expect(flat).toEqual([]);
   });
 });
 
 describe("repos clone", () => {
-  test("clones to <dir>/<name> and registers it", () => {
+  test("clones to <clones-root>/<org>/<name> — the org segment is preserved — and registers it", () => {
+    // Regression for the flat-clone defect: `repos clone hasna/apps --dir R`
+    // landed at `R/apps`; the destination must be org-scoped so two orgs that
+    // both own an `apps` repository cannot collide.
     const fixture = seed();
-    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--dir", fixture.workDir, "--json"]);
+    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--json"]);
     expect(result.code).toBe(0);
     const payload = parseCliJson(result.stdout);
     expect(payload.ok).toBe(true);
-    expect(payload.clone.path).toBe(join(fixture.workDir, "scratch-r5"));
+    expect(payload.clone.path).toBe(join(fixture.clonesRoot, "hasna", "scratch-r5"));
+    expect(payload.clone.path).not.toBe(join(fixture.clonesRoot, "scratch-r5"));
     expect(payload.clone.registered).toBe(true);
     const db = getDb(fixture.dbPath);
-    const row = db.query("SELECT name FROM repos WHERE path = ?").get(join(fixture.workDir, "scratch-r5")) as { name: string } | null;
+    const row = db.query("SELECT name FROM repos WHERE path = ?").get(join(fixture.clonesRoot, "hasna", "scratch-r5")) as { name: string } | null;
     expect(row?.name).toBe("scratch-r5");
   });
 
   test("refuses an occupied destination before any gh call", () => {
     const fixture = seed();
-    mkdirSync(join(fixture.workDir, "scratch-r5"), { recursive: true });
-    writeFileSync(join(fixture.workDir, "scratch-r5", "keep"), "occupied");
-    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--dir", fixture.workDir, "--json"]);
+    mkdirSync(join(fixture.clonesRoot, "hasna", "scratch-r5"), { recursive: true });
+    writeFileSync(join(fixture.clonesRoot, "hasna", "scratch-r5", "keep"), "occupied");
+    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--json"]);
     expect(result.code).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("TARGET_PATH_OCCUPIED");
     expect(ghInvocations(fixture)).toEqual([]);
     // The occupant is untouched — the factory destroy-then-create hazard is
     // not reproduced on the repository plane either.
-    expect(readFileSync(join(fixture.workDir, "scratch-r5", "keep"), "utf8")).toBe("occupied");
+    expect(readFileSync(join(fixture.clonesRoot, "hasna", "scratch-r5", "keep"), "utf8")).toBe("occupied");
   });
 
   test("scrubs the caller's token from the clone child too", () => {
     const fixture = seed();
-    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--dir", fixture.workDir, "--json"]);
+    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--json"]);
     expect(result.code).toBe(0);
     const envs = ghChildEnvs(fixture);
     expect(envs.length).toBeGreaterThan(0);
     for (const env of envs) {
       expect(env).toContain("REPOS_TEST_CANARY=canary-visible");
       expect(env).not.toContain(CALLER_TOKEN);
+    }
+  });
+
+  test("clone, create and import expose no way to name a destination", () => {
+    // The enforcement point, asserted at the surface a caller actually
+    // invokes: the destination is computed, so no verb accepts `--dir`.
+    const fixture = seed();
+    for (const verb of ["clone", "create", "import"]) {
+      const help = runCli(fixture, [verb, "--help"]);
+      expect(help.code).toBe(0);
+      expect(help.stdout).not.toContain("--dir");
     }
   });
 });

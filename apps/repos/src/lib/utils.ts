@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { getDb } from "../db/database.js";
 import { listAllRepos, nonDerivedCheckoutSql, repoLookupPathState } from "../db/repos.js";
+import { computeClonePath } from "./worktrees.js";
 
 function git(repoPath: string, args: string[], timeout = 10_000): string {
   try {
@@ -402,7 +402,7 @@ export function exportRepos(format: "json" | "csv" = "json"): string {
   return JSON.stringify(repos, null, 2);
 }
 
-export function importFromOrg(org: string, targetDir: string, opts: { onProgress?: (msg: string) => void } = {}): {
+export function importFromOrg(org: string, opts: { onProgress?: (msg: string) => void } = {}): {
   cloned: number;
   skipped: number;
   errors: string[];
@@ -426,7 +426,9 @@ export function importFromOrg(org: string, targetDir: string, opts: { onProgress
   opts.onProgress?.(`Found ${ghRepos.length} repos in ${org}`);
 
   for (const ghRepo of ghRepos) {
-    const dest = join(targetDir, ghRepo.name);
+    // Destination is computed, never caller-chosen: org-scoped like the clone
+    // verb, so the import cannot flatten the org onto the clones root either.
+    const dest = computeClonePath(org, ghRepo.name);
     if (existsSync(dest)) {
       opts.onProgress?.(`  Skip ${ghRepo.name} (exists)`);
       skipped++;

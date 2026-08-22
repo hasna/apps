@@ -19,10 +19,13 @@ import {
   addWorktree,
   adoptWorktrees,
   assertWorktreeName,
+  clonesRootDir,
+  computeClonePath,
   computeWorktreePath,
   listWorktrees,
   releaseWorktree,
   removeWorktree,
+  setClonesRootForTests,
   setWorktreeRootForTests,
   worktreeRootDir,
 } from "./worktrees.js";
@@ -32,6 +35,7 @@ let tempDir = "";
 afterEach(() => {
   closeDb();
   setWorktreeRootForTests(null);
+  setClonesRootForTests(null);
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = "";
 });
@@ -177,6 +181,43 @@ describe("worktree name and path computation", () => {
     const read = () => {
       try {
         return `path:${worktreeRootDir()}`;
+      } catch (error) {
+        return `error:${(error as WorktreeError).code}`;
+      }
+    };
+    const before = read();
+    expect(before === "error:TRUSTED_HOME_UNAVAILABLE" || before.startsWith("path:/")).toBe(true);
+
+    const original = process.env["HOME"];
+    process.env["HOME"] = "/tmp/not-the-real-home";
+    try {
+      expect(read()).toBe(before);
+    } finally {
+      if (original === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = original;
+    }
+  });
+});
+
+describe("computeClonePath", () => {
+  test("the clone path is org-scoped under the root — never flat", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "repos-clone-path-"));
+    const root = join(tempDir, "clones");
+    setClonesRootForTests(root);
+    expect(computeClonePath("hasna", "apps")).toBe(join(root, "hasna", "apps"));
+    // The regression this exists for: two orgs both owning an `apps` repo must
+    // not collide flat at the root.
+    expect(computeClonePath("hasna", "apps")).not.toBe(join(root, "apps"));
+    expect(computeClonePath("hasnaxyz", "apps")).toBe(join(root, "hasnaxyz", "apps"));
+  });
+
+  test("the clones root is derived from the account database, not from $HOME", () => {
+    // Same discipline as `worktreeRootDir` and for the same reason: a root
+    // that moved with `$HOME` would be a containment check any caller can step
+    // around by exporting one value before invoking the CLI.
+    const read = () => {
+      try {
+        return `path:${clonesRootDir()}`;
       } catch (error) {
         return `error:${(error as WorktreeError).code}`;
       }
