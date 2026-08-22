@@ -53,7 +53,7 @@ registered by `@hasna/events`.
 | `repos worktree adopt [path]` | Backfill leases for worktrees that exist without one (dry run by default) |
 | `repos worktree release <lease-id>` | Mark a lease done and apply its cleanup policy |
 | `repos create <org>/<name>` | Create a GitHub repository through the CLI's own credential — the caller holds no token |
-| `repos clone <org>/<name>` | Clone one repository to `<dir>/<name>` and register it |
+| `repos clone <org>/<name>` | Clone one repository to `~/.hasna/repos/clones/<org>/<name>` and register it |
 | `repos archive <repo>` | Archive on GitHub, reversible with `--restore`; there is no delete verb |
 | `repos registry prune` | Retire registry rows whose path no longer exists (dry run unless explicitly confirmed) |
 | `repos registry health` | Report how many registry rows point at a usable git checkout |
@@ -224,9 +224,10 @@ mutations as verbs, with the credential *behind* the CLI. The point is the bound
 the convenience — an agent calls the verb and never holds a GitHub token:
 
 ```bash
-repos create hasna/scratch --description "..."          # private by default
-repos create hasna/scratch --public --dir ~/checkouts   # create, clone, register
-repos clone hasna/repos --dir ~/checkouts               # single-repo acquisition + registration
+repos create hasna/scratch --description "..."          # private by default; create on GitHub only
+repos create hasna/scratch --public                      # public; acquire with `repos clone` after
+repos clone hasna/repos                                  # single-repo acquisition + registration;
+                                                         # destination computed: ~/.hasna/repos/clones/hasna/repos
 repos archive old-experiment                             # registry name or <org>/<name>
 repos archive old-experiment --restore                   # archive is reversible
 ```
@@ -258,7 +259,7 @@ is Phase 2 and becomes one more source behind the same choke point, changing no 
 
 **There is deliberately no `repos delete`.** Archive is the terminal state the CLI can
 express (standing archive-don't-delete rule), so no delete-capable token ever needs to
-exist behind these verbs. `clone` and `create --dir` refuse an occupied destination with
+exist behind these verbs. `clone` refuses an occupied destination with
 its contents intact, register the checkout, and fail loudly if registration does not land
 — acquire-and-register is one contract, not a clone plus a hope.
 

@@ -50,11 +50,10 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { AmbiguousRepoNameError, getRepo } from "../db/repos.js";
 import { getConfig } from "./config.js";
 import { scanRepoPaths } from "./scanner.js";
-import { redactGitDiagnostics } from "./worktrees.js";
+import { computeClonePath, redactGitDiagnostics } from "./worktrees.js";
 
 export const REPO_CREATE_SCHEMA = "repos.repo-create.v1" as const;
 export const REPO_CLONE_SCHEMA = "repos.repo-clone.v1" as const;
@@ -359,20 +358,23 @@ interface CloneOutcome {
 }
 
 /**
- * Clone `<org>/<name>` to `<parentDir>/<name>` and register the checkout.
+ * Clone `<org>/<name>` to `<clones-root>/<org>/<name>` and register the
+ * checkout.
  *
+ * The destination is computed, never caller-chosen: the org segment keeps two
+ * orgs that both own an `apps` repository from colliding flat at the root.
  * The destination is refused, never cleared, when occupied — the factory
  * destroy-then-create hazard stays unrepresentable on this plane too. And a
  * clone that cannot be registered is a failure, not a warning: the verb's
  * contract is acquire-and-register, and half of it done silently is how
  * registry rows drift from disk.
  */
-async function cloneAndRegister(credential: ResolvedCredential, spec: RepoSpec, parentDir: string): Promise<CloneOutcome> {
-  const destination = join(resolve(parentDir), spec.name);
+async function cloneAndRegister(credential: ResolvedCredential, spec: RepoSpec): Promise<CloneOutcome> {
+  const destination = computeClonePath(spec.org, spec.name);
   if (existsSync(destination)) {
     fail("TARGET_PATH_OCCUPIED", `${destination} already exists`, {
       path: destination,
-      hint: "The verb never removes an occupant. Pick another --dir or remove the path yourself.",
+      hint: "The verb never removes an occupant. The destination is computed; remove the path yourself if it is genuinely stale.",
     });
   }
   runGh(credential, ["repo", "clone", `${spec.org}/${spec.name}`, destination], {
@@ -395,8 +397,6 @@ export interface CreateRepositoryRequest {
   spec: string;
   visibility?: RepoVisibility;
   description?: string;
-  /** When present, also clone to `<cloneParentDir>/<name>` and register it. */
-  cloneParentDir?: string;
 }
 
 export interface CreateRepositoryResult {
@@ -440,23 +440,20 @@ export async function createRepository(request: CreateRepositoryRequest): Promis
   // deriving one keeps this module free of hardcoded host assumptions.
   const url = created.stdout.split("\n").pop()?.trim() ?? "";
 
-  const clone = request.cloneParentDir
-    ? await cloneAndRegister(credential, spec, request.cloneParentDir)
-    : null;
-
+  // Create never clones (ratified plan k_msg3pncp_4wtvn5: no `--dir` on the
+  // verb). Acquiring a checkout is the clone verb's job, with the destination
+  // computed — `clone` stays null so the schema contract is unchanged.
   return {
     schema: REPO_CREATE_SCHEMA,
     ok: true,
     repo: { org: spec.org, name: spec.name, url, visibility },
     credential_source: credential.source,
-    clone,
+    clone: null,
   };
 }
 
 export interface CloneRepositoryRequest {
   spec: string;
-  /** Parent directory; the clone lands at `<parentDir>/<name>`. Default: cwd. */
-  parentDir?: string;
 }
 
 export interface CloneRepositoryResult {
@@ -470,7 +467,7 @@ export interface CloneRepositoryResult {
 export async function cloneRepository(request: CloneRepositoryRequest): Promise<CloneRepositoryResult> {
   const spec = parseRepoSpec(request.spec);
   const credential = resolveCredential();
-  const clone = await cloneAndRegister(credential, spec, request.parentDir ?? process.cwd());
+  const clone = await cloneAndRegister(credential, spec);
   return {
     schema: REPO_CLONE_SCHEMA,
     ok: true,

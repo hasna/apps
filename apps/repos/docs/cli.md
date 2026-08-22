@@ -136,10 +136,10 @@ base-resolution, and evidence-archive guarantees.
 
 | Command | Options and behavior |
 |---|---|
-| `repos create <org/name>` | Private by default; `--public`, `--description`, `--dir <parent>` to clone/register, `--json` |
-| `repos clone <org/name>` | Clone one repo and register it; `--dir <parent>`, `--json` |
+| `repos create <org/name>` | Private by default; `--public`, `--description`, `--json` |
+| `repos clone <org/name>` | Clone one repo into `~/.hasna/repos/clones/<org>/<name>` and register it; `--json` |
 | `repos archive <repo>` | Archive, or unarchive with `--restore`; `--json` |
-| `repos import <org>` | Clone all repos from an org; `--dir`, `--json` |
+| `repos import <org>` | Clone all repos from an org into `~/.hasna/repos/clones/<org>`; `--json` |
 | `repos export` | JSON by default, or `--csv` |
 
 `create`, `clone`, and `archive` use station-owned GitHub credentials and scrub
