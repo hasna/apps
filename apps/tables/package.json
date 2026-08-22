@@ -1,7 +1,7 @@
 {
   "name": "@hasna/tables",
   "version": "0.1.0",
-  "description": "Headless Airtable-like data tables SDK — bases, typed fields, records, views (filter/sort/group), formula + lookup fields, CSV/JSON import-export, plus a Glide-Data-Grid React component",
+  "description": "Headless Airtable-like data tables SDK \u2014 bases, typed fields, records, views (filter/sort/group), formula + lookup fields, CSV/JSON import-export, plus a Glide-Data-Grid React component",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -30,13 +30,14 @@
     "build": "bun run clean && NODE_ENV=production bun build src/index.ts --outdir dist --target bun && NODE_ENV=production bun build src/react/index.ts --outdir dist/react --target bun --external react --external react-dom --external @glideapps/glide-data-grid && NODE_ENV=production bun build src/cli/index.ts --outdir dist/cli --target bun && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
-    "prepack": "bun run build >&2 && bun run build:dashboard >&2",
+    "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:dashboard": "cd dashboard && bun run dev",
-    "postinstall": "mkdir -p $HOME/.hasna/tables 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/tables 2>/dev/null || true",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/tables-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan tables-artifact-scan.tgz; rc=$?; rm -f \"$PWD/tables-artifact-scan.tgz\"; exit $rc"
   },
   "keywords": [
     "tables",
