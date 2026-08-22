@@ -5,6 +5,7 @@ import { resetDatabase } from "./database.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule, getEnabledSchedules, updateLastRun } from "./schedules.js";
 import { createProject } from "./projects.js";
 import { createRun } from "./runs.js";
+import { getNextRunTime } from "../lib/scheduler.js";
 
 beforeEach(() => {
   resetDatabase();
@@ -61,6 +62,22 @@ describe("createSchedule", () => {
       projectId: project.id,
     });
     expect(s.projectId).toBe(project.id);
+  });
+
+  test("persists a future nextRunAt so the daemon can fire the schedule", () => {
+    const before = new Date();
+    const s = createSchedule({
+      name: "Every minute",
+      cronExpression: "* * * * *",
+      url: "http://localhost:3000",
+    });
+    // The daemon fires only when `nextRunAt && nextRunAt <= now`, so a
+    // schedule born without a persisted next_run_at never fires.
+    expect(s.nextRunAt).not.toBeNull();
+    expect(new Date(s.nextRunAt!).getTime()).toBeGreaterThan(before.getTime());
+    // Persisted in the store, not only computed for the response payload.
+    const reread = getSchedule(s.id)!;
+    expect(reread.nextRunAt).toBe(s.nextRunAt);
   });
 });
 
@@ -148,5 +165,20 @@ describe("updateLastRun", () => {
     expect(updated.lastRunId).toBe(run.id);
     expect(updated.lastRunAt).toBeTruthy();
     expect(updated.nextRunAt).toBe("2026-03-12T10:00:00.000Z");
+  });
+
+  test("advances nextRunAt past now after a fired run (daemon contract)", () => {
+    const s = createSchedule({ name: "test", cronExpression: "* * * * *", url: "http://a" });
+    const run = createRun({ url: "http://a", model: "haiku" });
+    // Exactly what the daemon does after a run: compute the next fire time
+    // from the cron expression and persist it via updateLastRun.
+    const next = getNextRunTime(s.cronExpression, new Date());
+    updateLastRun(s.id, run.id, next.toISOString());
+    const updated = getSchedule(s.id)!;
+    expect(updated.lastRunId).toBe(run.id);
+    expect(updated.nextRunAt).toBe(next.toISOString());
+    // The stored next_run_at must be in the future, otherwise the daemon
+    // gate (`nextRunAt && nextRunAt <= now`) would re-fire the same tick.
+    expect(new Date(updated.nextRunAt!).getTime()).toBeGreaterThan(Date.now());
   });
 });

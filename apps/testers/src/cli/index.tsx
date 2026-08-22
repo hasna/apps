@@ -96,6 +96,7 @@ import {
   listSchedules,
   updateSchedule,
   deleteSchedule,
+  updateLastRun,
   createAuthPreset,
   getAuthPreset,
   listAuthPresets,
@@ -131,6 +132,7 @@ import {
   listScanIssues,
   resolveScanIssue,
 } from "../store/index.js";
+import { getNextRunTime } from "../lib/scheduler.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
@@ -4347,8 +4349,23 @@ program
                     `  ${statusColor(run.status)} — ${run.passed}/${run.total} passed`,
                   );
 
-                  // Update schedule with last run info
-                  await updateSchedule(schedule.id, {});
+                  // Record the run and persist the next fire time computed
+                  // from the cron expression — next_run_at is the daemon's
+                  // gate, so without this advance a fired schedule would
+                  // re-fire on every tick.
+                  let nextRunAt: string | null = null;
+                  try {
+                    nextRunAt = getNextRunTime(
+                      schedule.cronExpression,
+                      new Date(),
+                    ).toISOString();
+                  } catch {
+                    // Cron has no next occurrence within the horizon; leave
+                    // next_run_at untouched.
+                  }
+                  if (nextRunAt) {
+                    await updateLastRun(schedule.id, run.id, nextRunAt);
+                  }
                 } catch (err) {
                   logError(
                     chalk.red(

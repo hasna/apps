@@ -2,15 +2,27 @@ import { getDatabase, uuid, now } from "./database.js";
 import type { CreateScheduleInput, UpdateScheduleInput, ScheduleFilter, Schedule, ScheduleRow } from "../types/index.js";
 import { scheduleFromRow, ScheduleNotFoundError } from "../types/index.js";
 import { resolvePartialId } from "./database.js";
+import { getNextRunTime } from "../lib/scheduler.js";
 
 export function createSchedule(input: CreateScheduleInput): Schedule {
   const db = getDatabase();
   const id = uuid();
   const timestamp = now();
 
+  // Persist the next fire time computed from the cron expression — the daemon
+  // fires only when `nextRunAt && nextRunAt <= now`, so a schedule born with
+  // next_run_at NULL would never fire.
+  let nextRunAt: string | null = null;
+  try {
+    nextRunAt = getNextRunTime(input.cronExpression).toISOString();
+  } catch {
+    // Invalid cron or no next occurrence within the horizon: keep NULL, the
+    // daemon gate skips schedules with no next run time.
+  }
+
   db.query(`
-    INSERT INTO schedules (id, project_id, name, cron_expression, url, scenario_filter, model, headed, parallel, timeout_ms, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    INSERT INTO schedules (id, project_id, name, cron_expression, url, scenario_filter, model, headed, parallel, timeout_ms, enabled, next_run_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
   `).run(
     id,
     input.projectId ?? null,
@@ -22,6 +34,7 @@ export function createSchedule(input: CreateScheduleInput): Schedule {
     input.headed ? 1 : 0,
     input.parallel ?? 1,
     input.timeoutMs ?? null,
+    nextRunAt,
     timestamp,
     timestamp,
   );
