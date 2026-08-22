@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- 009d79e: The SQLite development store now defaults to a file-backed database at the canonical package data root `~/.hasna/banking/banking.db` (created on first use, mode `0700`); `HASNA_BANKING_HOME` overrides the root, and an explicit `path` or `":memory:"` wins over both. Display name changed to "Hasna Banking" (retired `open-` prefix). `hasna.contract.json` aligned to the contracts kit 0.11.1 schema. Sol-guided coverage added for money, policy, execution, store, CLI/MCP, and audit paths. Documentation (README, docs/STATE_LAYOUT.md) and the storage-engine waiver reason updated to match the persistent default.
+- 009d79e: The SQLite development store now defaults to a file-backed database at the canonical package data root `~/.hasna/banking/banking.db` (created on first use, mode `0700`); `HASNA_BANKING_HOME` overrides the root, and an explicit `path` or `":memory:"` wins over both. Policy rule hashes now sort provider IDs before hashing, so persisted hashes are stable regardless of provider-list ordering. `hasna.contract.json` aligned to the contracts kit 0.11.1 schema. Sol-guided coverage added for money, policy, execution, store, CLI/MCP, and audit paths. Documentation (README, docs/STATE_LAYOUT.md) and the storage-engine waiver reason updated to match the persistent default, including the retired `open-`-prefixed legacy name.
 
 ## 0.0.8 - 2026-08-18
 
@@ -18,14 +18,6 @@ migration to `~/.hasna/banking`, complete LICENSE, alignment with
 fix for the secrets 0.2.9 non-TTY refusal, artifact-scan packing to scratch
 rather than the repo root, and the approval-status fix (a rejected approval
 now reports `denied` instead of `approved`).
-
-## Unreleased
-
-### Changed
-
-- Reserved `~/.hasna/banking` as the sole future package-global state root,
-  removed the install-time home-directory mutation and unused project-local
-  `.banking` ignore, and documented that the current package remains stateless.
 
 ## 0.0.7 - 2026-06-29
 
