@@ -27,7 +27,7 @@ import {
   type LoopsMigrationBundle,
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
-import { computeNextAfter } from "../lib/recurrence.js";
+import { initialNextRun } from "../lib/recurrence.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { LocalStore, getStore, type LoopStore } from "../lib/store/index.js";
@@ -179,8 +179,12 @@ export class LoopsClient {
       if (action === "stop") return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
       let nextRunAt = loop.nextRunAt;
       if (!nextRunAt) {
-        const now = new Date();
-        nextRunAt = computeNextAfter(loop.schedule, now, now);
+        // initialNextRun (not computeNextAfter) so schedule.type "once" binds
+        // schedule.at instead of undefined: computeNextAfter returns undefined
+        // for "once", which stored next_run_at NULL and left the resumed loop
+        // active but permanently dormant (dueLoops requires IS NOT NULL).
+        // Converges with the CLI and contract mutateLoop resume paths.
+        nextRunAt = initialNextRun(loop.schedule, new Date());
       }
       return this.store.updateLoop(loop.id, { status: "active", nextRunAt });
     }

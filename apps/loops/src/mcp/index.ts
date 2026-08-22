@@ -21,7 +21,7 @@ import { nowIso } from "../lib/ids.js";
 import { LOOP_LABEL_MAX_COUNT, mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 import { resolveLoopMachine } from "../lib/machines.js";
 import { dataDir } from "../lib/paths.js";
-import { computeNextAfter } from "../lib/recurrence.js";
+import { initialNextRun } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { LocalStore, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
@@ -808,10 +808,12 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
         // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL,
         // so resuming without recomputing leaves the loop active but permanently
         // dormant. Recompute the next slot from now when it is missing.
+        // initialNextRun (not computeNextAfter) so schedule.type "once" binds
+        // schedule.at instead of undefined, converging with the CLI and contract
+        // mutateLoop resume paths.
         let nextRunAt = loop.nextRunAt;
         if (!nextRunAt) {
-          const now = new Date();
-          nextRunAt = computeNextAfter(loop.schedule, now, now);
+          nextRunAt = initialNextRun(loop.schedule, new Date());
         }
         return { loop: publicLoop(await store.updateLoop(loop.id, { status: "active", nextRunAt })) };
       }),
