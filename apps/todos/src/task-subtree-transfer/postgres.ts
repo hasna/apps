@@ -87,10 +87,23 @@ export class PostgresTodosTaskSubtreeTransferBackend implements TodosTaskSubtree
   }
 
   private async ensureSchema(): Promise<void> {
-    this.schemaReady ??= (async () => {
-      for (const sql of postgresTodosSyncSchemaSql(this.tableName)) await this.client.query(sql);
-      for (const sql of postgresTodosTaskSubtreeTransferSchemaSql()) await this.client.query(sql);
-    })();
+    if (this.schemaReady === null) {
+      const attempt = (async () => {
+        for (const sql of postgresTodosSyncSchemaSql(this.tableName)) await this.client.query(sql);
+        for (const sql of postgresTodosTaskSubtreeTransferSchemaSql()) await this.client.query(sql);
+      })();
+      this.schemaReady = attempt;
+      try {
+        await attempt;
+      } catch (error) {
+        // A failed schema sync must never be cached: the same transient
+        // failure (e.g. a lock timeout) would otherwise be replayed on every
+        // later operation, permanently bricking the store. Clear the promise
+        // so the next operation retries the sync with fresh state.
+        this.schemaReady = null;
+        throw error;
+      }
+    }
     await this.schemaReady;
   }
 
