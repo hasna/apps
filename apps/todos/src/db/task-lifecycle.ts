@@ -7,6 +7,7 @@ import type {
   TaskRow,
 } from "../types/index.js";
 import {
+  isBlockingDependencyStatus,
   LockError,
   TaskNotStartableError,
   TaskNotFoundError,
@@ -84,7 +85,7 @@ export function getBlockingDeps(id: string, db?: Database): Task[] {
   const blocking: Task[] = [];
   for (const dep of deps) {
     const task = getTask(dep.depends_on, d);
-    if (task && task.status !== "completed") blocking.push(task);
+    if (task && isBlockingDependencyStatus(task.status)) blocking.push(task);
   }
   return blocking;
 }
@@ -537,7 +538,7 @@ export function getNextTask(
   }
 
   // Exclude blocked tasks (those with incomplete dependencies)
-  conditions.push("id NOT IN (SELECT td.task_id FROM task_dependencies td JOIN tasks dep ON dep.id = td.depends_on WHERE dep.status != 'completed')");
+  conditions.push("id NOT IN (SELECT td.task_id FROM task_dependencies td JOIN tasks dep ON dep.id = td.depends_on WHERE dep.status NOT IN ('completed', 'cancelled'))");
 
   const where = conditions.join(" AND ");
 

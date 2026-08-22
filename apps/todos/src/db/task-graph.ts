@@ -6,6 +6,7 @@ import type {
 } from "../types/index.js";
 import {
   DependencyCycleError,
+  isBlockingDependencyStatus,
   TaskNotFoundError,
 } from "../types/index.js";
 import { getDatabase, now } from "./database.js";
@@ -127,7 +128,7 @@ export function getTaskGraph(
     const deps = getTaskDependencies(t.id, d);
     const hasUnfinishedDeps = deps.some(dep => {
       const depTask = getTask(dep.depends_on, d);
-      return depTask && depTask.status !== "completed";
+      return depTask && isBlockingDependencyStatus(depTask.status);
     });
     return { id: t.id, short_id: t.short_id, title: t.title, status: t.status, priority: t.priority, is_blocked: hasUnfinishedDeps };
   }
