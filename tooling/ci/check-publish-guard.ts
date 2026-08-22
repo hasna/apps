@@ -47,11 +47,13 @@ const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }>
   // The content form of the account-id detector drops two measured benign
   // classes that a bare word-boundary 12-digit run fires on in generated
   // bundles (measured on @hasna/conversations 0.7.4): the trailing segment of
-  // a UUID (always preceded by "-") and epoch-millis numeric literals in
-  // bundled dependency code (followed by ")"). Real leak shapes — ARNs,
-  // quoted/coloned config values, env-style assignments — never carry either
-  // context, and the name scan keeps the strict catch-all for filenames.
-  { name: "aws-account-id", re: /\b[0-9]{12}\b/, contentRe: /(?<!-)\b[0-9]{12}\b(?!\))/ },
+  // a UUID (preceded by a 4-hex segment and "-", e.g. ...-8222-222222222222)
+  // and epoch-millis numeric literals in bundled dependency code (preceded by
+  // an arithmetic operator and space, e.g. "+ 946684800000"). Real leak
+  // shapes still fire: ARNs, quoted/coloned config values, env assignments,
+  // hyphenated labels ("account-123456789012") and function arguments
+  // ("accountId(123456789012)"). The name scan keeps the strict catch-all.
+  { name: "aws-account-id", re: /\b[0-9]{12}\b/, contentRe: /(?<![0-9a-fA-F]{4}-)(?<![+*/-] )\b[0-9]{12}\b/ },
   { name: "hasna-internal-org", re: /hasna[-]internal/ },
   { name: "internal-apps", re: /internal[-]apps/ },
   { name: "hasna-internal-scope", re: /@hasna[-]internal/ },
