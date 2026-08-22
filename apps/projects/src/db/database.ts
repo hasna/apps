@@ -35,6 +35,7 @@ export function getDatabase(path?: string): Database {
     ensureDir(path);
     const db = new Database(path);
     db.run("PRAGMA journal_mode=WAL");
+    db.run("PRAGMA busy_timeout=5000");
     db.run("PRAGMA foreign_keys=ON");
     runMigrations(db);
     return db;
@@ -46,6 +47,7 @@ export function getDatabase(path?: string): Database {
     _db = new Database(dbPath);
     _dbPath = dbPath;
     _db.run("PRAGMA journal_mode=WAL");
+    _db.run("PRAGMA busy_timeout=5000");
     _db.run("PRAGMA foreign_keys=ON");
     runMigrations(_db);
   }
