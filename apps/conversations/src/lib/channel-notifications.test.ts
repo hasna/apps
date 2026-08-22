@@ -200,6 +200,27 @@ describe("channel notifications", () => {
     expect(readChannelNotifications({ agent: "agent-a", channel: "ops" })).toHaveLength(0);
   });
 
+  test("an explicit empty channel is rejected, never widened to all channels", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+
+    const one = sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: "first notification" });
+    const two = sendMessage({ from: "bob", to: "ops", channel: "ops", session_id: "channel:ops", content: "second notification" });
+
+    // The legacy paging loop refused "" through readChannelNotifications
+    // ("channel must be a non-empty string"). The set-based replacement must
+    // keep that contract: "" must throw and must not mark anything.
+    expect(() => markAllChannelNotificationsRead("agent-a", "")).toThrow("channel must be a non-empty string");
+    expect(() => markAllChannelNotificationsRead("agent-a", "   ")).toThrow("channel must be a non-empty string");
+    expect(readChannelNotifications({ agent: "agent-a" })).toHaveLength(2);
+
+    // undefined still means "all channels" — the intended mark-all path.
+    expect(markAllChannelNotificationsRead("agent-a", undefined)).toBe(2);
+    expect(readChannelNotifications({ agent: "agent-a" })).toHaveLength(0);
+    void one;
+    void two;
+  });
+
   test("mark_read option clears unread state on read", () => {
     createChannel("ops", "creator");
     subscribeToChannelNotifications("ops", "agent-a");
