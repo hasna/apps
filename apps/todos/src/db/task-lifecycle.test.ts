@@ -12,9 +12,12 @@ import {
   completeTask,
   failTask,
   claimNextTask,
+  getNextTask,
+  getBlockingDeps,
   setTaskStatus,
   upsertTaskByFingerprint,
   getTaskByFingerprint,
+  addDependency,
 } from "./tasks.js";
 import { LockError, VersionConflictError } from "../types/index.js";
 
@@ -313,5 +316,43 @@ describe("updateTask releases the lock on EVERY terminal status, not only comple
     const out = updateTask(fresh.id, { version: fresh.version, title: "renamed" }, db);
     expect(out.title).toBe("renamed");
     expect(out.locked_by).toBe("holder-a");
+  });
+});
+
+describe("cancelled dependencies do not block dependents (regression 4f2fbd72)", () => {
+  it("unclaims and unblocks a dependent whose prereq was cancelled", () => {
+    // Regression 4f2fbd72: getBlockingDeps and getNextTask used a raw
+    // `status != 'completed'` predicate, so cancelling prereq A made dependent
+    // B unclaimable and unstartable even though every reporting surface
+    // (blocked_by, getBlockedTasks, completeTask's unblock query) treats
+    // cancelled as non-blocking — per isBlockingDependencyStatus
+    // (types/index.ts, regression 4599ef37): "a cancelled one will never
+    // complete, so treating it as blocking would deadlock the dependent
+    // forever".
+    const a = createTask({ title: "prereq-a" }, db);
+    const b = createTask({ title: "dependent-b" }, db);
+    addDependency(b.id, a.id, db);
+    setTaskStatus(a.id, "cancelled", undefined, db);
+
+    expect(getTask(a.id, db)!.status).toBe("cancelled");
+    expect(getTask(b.id, db)!.status).toBe("pending");
+
+    // getBlockingDeps treats cancelled as satisfied — no blockers.
+    expect(getBlockingDeps(b.id, db)).toEqual([]);
+
+    // getNextTask returns B to the work queue.
+    const next = getNextTask(undefined, undefined, db);
+    expect(next).not.toBeNull();
+    expect(next!.id).toBe(b.id);
+
+    // claimNextTask returns B.
+    const claimed = claimNextTask("agent", undefined, db);
+    expect(claimed).not.toBeNull();
+    expect(claimed!.id).toBe(b.id);
+
+    // startTask(B) succeeds — previously threw
+    // "Task is blocked by 1 unfinished dependency(ies)".
+    const started = startTask(b.id, "agent", db);
+    expect(started.status).toBe("in_progress");
   });
 });

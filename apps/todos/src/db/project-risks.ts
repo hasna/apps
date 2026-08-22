@@ -382,7 +382,7 @@ function scoreHealth(scope: "plan" | "project", scopeId: string, db?: Database):
         `SELECT dep.id, dep.short_id, dep.title, dep.status
          FROM task_dependencies td
          JOIN tasks dep ON dep.id = td.depends_on
-         WHERE td.task_id = ? AND dep.status != 'completed'`,
+         WHERE td.task_id = ? AND dep.status NOT IN ('completed', 'cancelled')`,
       ).all(task.id) as Array<{ id: string; short_id: string | null; title: string; status: string }>;
       return { id: task.id, short_id: task.short_id, title: redactEvidenceText(task.title), blockers };
     })
