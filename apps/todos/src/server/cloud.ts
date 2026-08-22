@@ -238,7 +238,19 @@ export async function ensureCloudSchema(): Promise<void> {
       await client.query(sql);
     }
     await getApiKeyStore().ensureSchema();
-  })();
+  })().catch((error) => {
+    // A transient DDL failure MUST NOT be memoized. Measured 2026-08-22
+    // (todos 724397): a single `canceling statement due to lock timeout`
+    // (55P03) on `CREATE INDEX IF NOT EXISTS todos_sync_records_updated_idx`
+    // at process start made the cached promise reject forever, so EVERY later
+    // /v1 request on that process failed (v1.ts awaits this OUTSIDE its
+    // handler try/catch, surfacing Bun's bare `Something went wrong!` 500).
+    // With two ECS tasks one poisoned process read as a ~50% "intermittent"
+    // outage. Clear the memo so the next request retries the idempotent
+    // (IF NOT EXISTS / OR REPLACE) schema DDL.
+    schemaEnsured = null;
+    throw error;
+  });
   return schemaEnsured;
 }
 
