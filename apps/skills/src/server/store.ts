@@ -633,16 +633,23 @@ export class PostgresSkillsStore implements SkillsProductStore {
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
-    if (input.idempotencyKey) {
-      const existing = await this.sql`
-        SELECT * FROM skills_runs
-        WHERE org_id = ${input.principal.orgId} AND idempotency_key = ${input.idempotencyKey}
-        LIMIT 1
-      `;
-      if (existing[0]) return rowToRun(existing[0]);
-    }
-    const id = runId();
+    // The idempotency pre-read must live inside the same RLS tenant transaction as
+    // the INSERT. A pooled connection carries no context between requests, so a
+    // bare-pool pre-read sees zero rows under the 0003 policy and a replay of an
+    // existing key falls through to the INSERT, which then violates the partial
+    // unique index skills_runs_org_idempotency_idx instead of returning the first
+    // run. Both statements on `tx` keep the read and the write under one
+    // transaction-local tenant context.
     return this.withContext(input.principal.orgId, false, async (tx) => {
+      if (input.idempotencyKey) {
+        const existing = await tx`
+          SELECT * FROM skills_runs
+          WHERE org_id = ${input.principal.orgId} AND idempotency_key = ${input.idempotencyKey}
+          LIMIT 1
+        `;
+        if (existing[0]) return rowToRun(existing[0]);
+      }
+      const id = runId();
       const rows = await tx`
         INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, idempotency_key, correlation_id)
         VALUES (${id}, ${input.principal.orgId}, ${input.principal.userId}, ${input.slug}, ${input.slug}, ${"queued"}, ${JSON.stringify(input.input)}::jsonb, ${JSON.stringify(input.args)}::jsonb, ${input.idempotencyKey ?? null}, ${randomUUID()})
