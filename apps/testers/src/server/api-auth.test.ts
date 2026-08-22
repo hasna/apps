@@ -26,6 +26,7 @@ process.env.TESTERS_DB_PATH = ":memory:";
 import { describe, test, expect, afterAll, beforeAll } from "bun:test";
 import { spawn, type Subprocess } from "bun";
 import { createServer } from "node:net";
+import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { mintApiKey, ApiKeyStore, apiKeyMigrations } from "@hasna/contracts/auth";
 import { createQueryClient } from "../generated/storage-kit/query.js";
@@ -65,15 +66,22 @@ async function waitUntilReady(baseUrl: string, path: string): Promise<void> {
   throw new Error(`Server did not become ready: ${baseUrl}${path}`);
 }
 
-function startServer(port: number, extraEnv: Record<string, string>): Subprocess {
+function startServer(port: number, extraEnv: Record<string, string | undefined>): Subprocess {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  env.TESTERS_DB_PATH = ":memory:";
+  env.TESTERS_PORT = String(port);
+  // An `undefined` value deletes the key from the child env, so a test can
+  // assert behavior with a variable explicitly UNSET (never inherited).
+  for (const [key, value] of Object.entries(extraEnv)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   return spawn({
     cmd: ["bun", "run", new URL("./index.ts", import.meta.url).pathname],
-    env: {
-      ...process.env,
-      TESTERS_DB_PATH: ":memory:",
-      TESTERS_PORT: String(port),
-      ...extraEnv,
-    },
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -242,5 +250,71 @@ describe.skipIf(!TESTERS_PG_TEST_URL)("legacy /api/* authenticated with a live P
       headers: { "x-api-key": token },
     });
     expect(res.status).toBe(200);
+  });
+});
+
+// ── O15-00414: the signing key must never have a committed fallback ─────────
+// The auth gate authenticates purely by symmetric HMAC with the signing key
+// (verifyApiKeyToken), so a defaulted constant in docker-compose.yml made the
+// whole API-key system forgeable by anyone who reads the repo: an offline
+// attacker could mint tokens carrying arbitrary scopes that pass signature
+// verification. The compose file now requires the variable
+// (${HASNA_TESTERS_API_SIGNING_KEY:?...}) so a deployment without an operator
+// key fails fast, restoring the server's own fail-closed guard (the auth
+// gate throws "API-key signing secret missing" when no key resolves).
+describe("docker-compose.yml requires the API signing key", () => {
+  test("no defaulted signing secret and no literal fallback value in the compose file", () => {
+    const text = readFileSync(
+      new URL("../../docker-compose.yml", import.meta.url),
+      "utf8",
+    );
+    const signingLine = text
+      .split("\n")
+      .find((line) => line.includes("HASNA_TESTERS_API_SIGNING_KEY"));
+    expect(
+      signingLine,
+      "docker-compose.yml must reference HASNA_TESTERS_API_SIGNING_KEY",
+    ).toBeTruthy();
+    if (!signingLine) return;
+    // Required form: ${HASNA_TESTERS_API_SIGNING_KEY:?...} — compose refuses
+    // to start the service when the operator did not supply the key.
+    expect(signingLine).toContain("${HASNA_TESTERS_API_SIGNING_KEY:?");
+    // Defaulted form: ${HASNA_TESTERS_API_SIGNING_KEY:-...} — the defect.
+    expect(signingLine).not.toContain("${HASNA_TESTERS_API_SIGNING_KEY:-");
+    expect(text).not.toContain("dev-signing-secret-change-me");
+  });
+});
+
+describe("cloud mode with NO signing key configured fails closed (O15-00414)", () => {
+  let serverProc: Subprocess;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const port = await getFreePort();
+    baseUrl = `http://127.0.0.1:${port}`;
+    serverProc = startServer(port, {
+      HASNA_TESTERS_DATABASE_URL: UNREACHABLE_DB,
+      // Delete every key the server could resolve, so a CI box carrying a
+      // stray API_KEY_SIGNING_SECRET cannot make this test vacuous.
+      HASNA_TESTERS_API_SIGNING_KEY: undefined,
+      API_KEY_SIGNING_SECRET: undefined,
+      HASNA_API_SIGNING_KEY: undefined,
+    });
+    await waitUntilReady(baseUrl, "/health");
+  }, 15_000);
+
+  afterAll(() => {
+    serverProc.kill();
+  });
+
+  test("a gated request is denied (503): the auth gate fails closed instead of accepting a token", async () => {
+    const res = await fetch(`${baseUrl}/api/workflows`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: workflowBody("echo nokey > /tmp/nokey.txt"),
+    });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(JSON.stringify(body)).toContain("signing secret missing");
   });
 });

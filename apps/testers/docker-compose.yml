@@ -38,7 +38,12 @@ services:
       # DATABASE_URL + signing key are set) is the protection on this surface.
       TESTERS_HOST: "0.0.0.0"
       HASNA_TESTERS_DATABASE_URL: postgresql://testers:testers@db:5432/testers
-      HASNA_TESTERS_API_SIGNING_KEY: ${HASNA_TESTERS_API_SIGNING_KEY:-dev-signing-secret-change-me}
+      # The signing key is the master key of the whole API-key system (the
+      # /api/* gate authenticates by symmetric HMAC with it), so it must NEVER
+      # have a committed or defaulted value. The required form fails `docker
+      # compose up` fast when the operator did not supply the key, which also
+      # restores the server's own fail-closed guard for any other deploy path.
+      HASNA_TESTERS_API_SIGNING_KEY: ${HASNA_TESTERS_API_SIGNING_KEY:?set HASNA_TESTERS_API_SIGNING_KEY for this deployment}
     ports:
       - "8080:8080"
     depends_on:
