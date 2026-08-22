@@ -1,0 +1,72 @@
+{
+  "$schema": "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "browser",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "General-purpose browser agent toolkit — Playwright, Chrome DevTools Protocol, and Lightpanda with automatic engine selection, exposed as a CLI, MCP server, REST server (browser-serve), and a local TypeScript SDK. Sessions, recordings, and browser state persist in the local SQLite store at ~/.hasna/browser/browser.db; the remote store is selected by HASNA_BROWSER_DATABASE_URL.",
+  "bins": [
+    "browser",
+    "browser-mcp",
+    "browser-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "browser-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      }
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "./sdk"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "browser-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "browser",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_BROWSER_",
+    "aliasEnvPrefix": "BROWSER_",
+    "sqlitePath": "~/.hasna/browser/browser.db"
+  }
+}
