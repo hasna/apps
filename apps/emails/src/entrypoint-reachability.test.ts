@@ -118,10 +118,11 @@ function allSourceFiles(): string[] {
 describe("shipped entrypoint reachability", () => {
   it("derives its entrypoints from the real build scripts", () => {
     const entrypoints = shippedEntrypoints().map((file) => relative(REPO_ROOT, file)).sort();
-    // The six package.json bin/exports builds plus the string-referenced TUI runtime.
+    // The seven package.json bin/exports builds plus the string-referenced TUI runtime.
     expect(entrypoints).toEqual([
       "src/cli/index.tsx",
       "src/cli/tui/runtime.tsx",
+      "src/inbound.ts",
       "src/index.ts",
       "src/mcp/index.ts",
       "src/selfhost.ts",
