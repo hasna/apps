@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.101
+
+### Patch Changes
+
+- @hasna/browser@0.5.26
+- @hasna/projects@0.1.142
+
 ## 0.0.100
 
 ### Patch Changes
