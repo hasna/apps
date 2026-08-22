@@ -153,7 +153,11 @@ function matchesExtraFilters(task: Task, filter: TaskFilter): boolean {
   }
   if (filter.tags?.length) {
     const taskTags = new Set(task.tags ?? []);
-    if (!filter.tags.every((tag) => taskTags.has(tag))) return false;
+    // ANY-of tag matching, parity with the plain SQLite list path
+    // (src/db/task-crud.ts: `id IN (SELECT task_id FROM task_tags WHERE tag IN
+    // (...))`) and the Postgres adapter — a query must not flip multi-tag
+    // filters to ALL-of.
+    if (!filter.tags.some((tag) => taskTags.has(tag))) return false;
   }
   // include_subtasks defaults to false: exclude tasks that have a parent, unless
   // a parent_id filter is explicitly targeting children.
