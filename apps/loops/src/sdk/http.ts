@@ -59,6 +59,8 @@ export interface LoopListResponse { "ok": boolean; "loops": Array<Loop> }
 
 export interface RunResponse { "ok": boolean; "run": Run }
 
+export interface RunNowResponse { "ok": boolean; "loop": Loop; "scheduledFor": string }
+
 export interface RunListResponse { "ok": boolean; "runs": Array<Run> }
 
 export interface DeleteResponse { "ok": boolean; "deleted": boolean }
@@ -437,6 +439,15 @@ export class LoopsClient {
     /** loops.rename */
     async loopsRename(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/rename`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Schedule a loop due now for a bound runner (hosted run-now) */
+    async runLoopNow(id: string, init?: RequestInit): Promise<RunNowResponse> {
+      return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/run-now`, {
         body: undefined,
         query: undefined,
         init,
