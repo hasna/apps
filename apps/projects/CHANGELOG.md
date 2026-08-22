@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.143
+
+### Patch Changes
+
+- Updated dependencies [b8f1f5d]
+  - @hasna/todos@0.15.45
+
+## 0.1.142
+
+### Patch Changes
+
+- Updated dependencies [73f839e]
+  - @hasna/todos@0.15.44
+
 ## 0.1.141
 
 ### Patch Changes
