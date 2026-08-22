@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { getLocalMachineId } from "../db.js";
+import { readWorkstationTestProfile, type WorkstationTestVerification } from "../test-profile.js";
 import { parseSysctlKeys } from "./loader.js";
 import { BASHRC_BLOCK_BEGIN, BASHRC_GUARD_REGEX } from "./bashrc-block.js";
 import type { EffectiveTemplate } from "./schema.js";
@@ -20,6 +21,7 @@ export interface TemplateCheckItem {
     | "package"
     | "command"
     | "service"
+    | "workstation-test-profile"
     | "access-floor"
     | "unit-convention"
     | "tailscale"
@@ -93,6 +95,8 @@ export interface CheckOptions {
    * never shells out by accident.
    */
   commandProbe?: CommandProbe | null;
+  /** Exact semantic controller result for fixture checks; local checks read the live package-owned controller. */
+  workstationTestProfileVerification?: WorkstationTestVerification;
   /** Additional systemd unit dirs to scan for unit conventions. */
   unitDirs?: string[];
   /**
@@ -572,6 +576,22 @@ export function checkStationTemplate(effective: EffectiveTemplate, options: Chec
             detail: `${service.name} expected active=${service.expectActive} enabled=${service.expectEnabled}, found ${active.stdout.trim() || "unknown"}/${enabled.stdout.trim() || "unknown"}`,
           }
     );
+  }
+
+  if (
+    effective.workstationTestProfile &&
+    (options.workstationTestProfileVerification ||
+      (options.rootDir === undefined && options.homeDir === undefined && process.platform === "linux"))
+  ) {
+    const verification = options.workstationTestProfileVerification ?? readWorkstationTestProfile().verification;
+    items.push({
+      id: "workstation-test-profile",
+      kind: "workstation-test-profile",
+      status: verification.admission === "allowed" ? "ok" : "drift",
+      detail: verification.admission === "allowed"
+        ? "derived profile, managed drop-in, and active aggregate controller verified"
+        : `aggregate controller refused: ${verification.reasonCodes.join(",")}`,
+    });
   }
 
   // The access floor is the guaranteed way into the box (EC2: the SSM agent,

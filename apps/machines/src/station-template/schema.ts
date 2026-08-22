@@ -261,6 +261,8 @@ export const templateLayerSchema = z.object({
   /** Binaries that must resolve on PATH, with their idempotent installers. */
   commands: z.array(templateCommandSchema).default([]),
   services: z.array(templateServiceSchema).default([]),
+  /** Install, activate, and semantically verify the package-owned aggregate test controller. */
+  workstationTestProfile: z.boolean().default(false),
   /** Runtime sysctl expectations (key → value), checked via /proc/sys. */
   sysctls: z.record(z.string()).default({}),
   runtimeValues: z.array(runtimeValueSchema).default([]),
@@ -334,6 +336,7 @@ export interface EffectiveTemplate {
   packages: { apt: string[]; bun: BunPackage[] };
   commands: TemplateCommand[];
   services: TemplateService[];
+  workstationTestProfile: boolean;
   sysctls: Record<string, string>;
   runtimeValues: z.infer<typeof runtimeValueSchema>[];
   unitConventions?: UnitConventions;

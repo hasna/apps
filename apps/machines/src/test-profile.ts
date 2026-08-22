@@ -52,6 +52,7 @@ export type WorkstationTestProfile = {
 };
 
 export type WorkstationTestControllerSnapshot = {
+  sliceName: string;
   cgroupV2: boolean;
   controllers: string[];
   userManager: boolean;
@@ -75,9 +76,10 @@ export interface WorkstationTestProfileStore {
 }
 
 export interface WorkstationTestProfileController {
-  inspect(): WorkstationTestControllerSnapshot;
+  inspect(sliceName?: string): WorkstationTestControllerSnapshot;
   activate(sliceName: string): WorkstationTestControllerSnapshot;
   reload(): WorkstationTestControllerSnapshot;
+  restore(sliceName: string, active: boolean): WorkstationTestControllerSnapshot;
 }
 
 export type WorkstationTestScopeClaim = {
@@ -104,9 +106,13 @@ export type WorkstationTestVerification = {
 };
 
 type RollbackRecord = {
-  schema: "machines.workstation_test_profile_rollback.v1";
+  schema: "machines.workstation_test_profile_rollback.v2";
   profileContent: string | null;
   sliceContent: string | null;
+  appliedProfileContent: string;
+  appliedSliceContent: string;
+  sliceName: string;
+  priorSliceActive: boolean;
 };
 
 function positiveInteger(value: number, name: string): number {
@@ -202,7 +208,7 @@ export function workstationTestProfilePaths(options: { homeDir: string }): Works
   const managedDir = join(options.homeDir, ".hasna", "machines", "profiles");
   return {
     profilePath: join(managedDir, "workstation-test-profile.json"),
-    slicePath: join(options.homeDir, ".config", "systemd", "user", "hasna-tests.slice"),
+    slicePath: join(options.homeDir, ".config", "systemd", "user", "hasna-tests.slice.d", "50-workstation-test-profile.conf"),
     rollbackPath: join(managedDir, "workstation-test-profile.rollback.json"),
   };
 }
@@ -229,6 +235,7 @@ function profileReasons(profile: WorkstationTestProfile): string[] {
     if (!Number.isSafeInteger(value) || value <= 0) reasons.push(`${name}_invalid`);
   }
   if (profile.aggregate.memorySwapMaxBytes !== 0) reasons.push("test_swap_not_zero");
+  if (profile.aggregate.sliceName !== "hasna-tests.slice") reasons.push("aggregate_slice_name_invalid");
   if (profile.aggregate.memoryHighBytes >= profile.aggregate.memoryMaxBytes) reasons.push("aggregate_memory_high_not_below_max");
   if (profile.aggregate.memoryMaxBytes + profile.nonTestReserve.memoryBytes !== profile.machine.totalMemoryBytes) {
     reasons.push("non_test_reserve_not_preserved");
@@ -244,8 +251,9 @@ function profileReasons(profile: WorkstationTestProfile): string[] {
   return reasons;
 }
 
-function controllerReasons(snapshot: WorkstationTestControllerSnapshot, requireActiveSlice: boolean): string[] {
+function controllerReasons(snapshot: WorkstationTestControllerSnapshot, requireActiveSlice: boolean, expectedSliceName: string): string[] {
   const reasons: string[] = [];
+  if (snapshot.sliceName !== expectedSliceName) reasons.push("controller_slice_mismatched");
   if (!snapshot.cgroupV2) reasons.push("cgroup_v2_unavailable");
   for (const controller of REQUIRED_CONTROLLERS) {
     if (!snapshot.controllers.includes(controller)) reasons.push(`controller_${controller}_unavailable`);
@@ -262,7 +270,10 @@ export function verifyWorkstationTestProfile(input: {
   sliceContent: string | null;
   controller: WorkstationTestControllerSnapshot;
 }): WorkstationTestVerification {
-  const reasons = [...profileReasons(input.expectedProfile), ...controllerReasons(input.controller, true)];
+  const reasons = [
+    ...profileReasons(input.expectedProfile),
+    ...controllerReasons(input.controller, true, input.expectedProfile.aggregate.sliceName),
+  ];
   if (input.profileContent !== serializeWorkstationTestProfile(input.expectedProfile)) reasons.push("managed_profile_missing_or_mismatched");
   if (input.sliceContent !== renderWorkstationTestSlice(input.expectedProfile)) reasons.push("aggregate_slice_missing_or_mismatched");
 
@@ -289,12 +300,56 @@ function parseRollback(content: string | null): RollbackRecord | null {
   if (content === null) return null;
   try {
     const value = JSON.parse(content) as Partial<RollbackRecord>;
-    if (value.schema !== "machines.workstation_test_profile_rollback.v1") return null;
+    if (value.schema !== "machines.workstation_test_profile_rollback.v2") return null;
     if (!(typeof value.profileContent === "string" || value.profileContent === null)) return null;
     if (!(typeof value.sliceContent === "string" || value.sliceContent === null)) return null;
+    if (typeof value.appliedProfileContent !== "string" || typeof value.appliedSliceContent !== "string") return null;
+    if (typeof value.sliceName !== "string" || !value.sliceName.trim()) return null;
+    if (typeof value.priorSliceActive !== "boolean") return null;
     return value as RollbackRecord;
   } catch {
     return null;
+  }
+}
+
+function restoreRollbackRecord(input: {
+  record: RollbackRecord;
+  paths: WorkstationTestProfilePaths;
+  store: WorkstationTestProfileStore;
+  controller: WorkstationTestProfileController;
+}): string[] {
+  const currentProfile = input.store.read(input.paths.profilePath);
+  const currentSlice = input.store.read(input.paths.slicePath);
+  const isAppliedPostimage =
+    currentProfile === input.record.appliedProfileContent && currentSlice === input.record.appliedSliceContent;
+  const isRestoredPreimage =
+    currentProfile === input.record.profileContent && currentSlice === input.record.sliceContent;
+  if (!isAppliedPostimage && !isRestoredPreimage) return ["applied_postimage_drift_detected"];
+
+  try {
+    if (isAppliedPostimage) {
+      input.store.commit([
+        { path: input.paths.profilePath, content: input.record.profileContent },
+        { path: input.paths.slicePath, content: input.record.sliceContent },
+      ]);
+    }
+    if (
+      input.store.read(input.paths.profilePath) !== input.record.profileContent ||
+      input.store.read(input.paths.slicePath) !== input.record.sliceContent
+    ) {
+      return ["rollback_file_readback_failed"];
+    }
+
+    const restored = input.controller.restore(input.record.sliceName, input.record.priorSliceActive);
+    if (restored.sliceName !== input.record.sliceName || restored.sliceActive !== input.record.priorSliceActive) {
+      return ["rollback_runtime_state_restore_failed"];
+    }
+
+    input.store.commit([{ path: input.paths.rollbackPath, content: null }]);
+    if (input.store.read(input.paths.rollbackPath) !== null) return ["rollback_record_clear_failed"];
+    return [];
+  } catch (error) {
+    return ["rollback_restore_failed", error instanceof Error ? error.name : "unknown_error"];
   }
 }
 
@@ -304,7 +359,11 @@ export function applyWorkstationTestProfile(input: {
   store: WorkstationTestProfileStore;
   controller: WorkstationTestProfileController;
 }): { status: "applied" | "unchanged" | "refused"; admission: "allowed" | "refused"; reasonCodes: string[] } {
-  const preflight = [...profileReasons(input.profile), ...controllerReasons(input.controller.inspect(), false)];
+  const priorController = input.controller.inspect(input.profile.aggregate.sliceName);
+  const preflight = [
+    ...profileReasons(input.profile),
+    ...controllerReasons(priorController, false, input.profile.aggregate.sliceName),
+  ];
   if (preflight.length > 0) return { status: "refused", admission: "refused", reasonCodes: preflight };
 
   const profileContent = serializeWorkstationTestProfile(input.profile);
@@ -317,7 +376,7 @@ export function applyWorkstationTestProfile(input: {
     expectedProfile: input.profile,
     profileContent: currentProfile,
     sliceContent: currentSlice,
-    controller: input.controller.inspect(),
+    controller: input.controller.inspect(input.profile.aggregate.sliceName),
   });
   if (currentVerification.admission === "allowed") {
     return { status: "unchanged", admission: "allowed", reasonCodes: [] };
@@ -327,9 +386,13 @@ export function applyWorkstationTestProfile(input: {
   }
 
   const record: RollbackRecord = {
-    schema: "machines.workstation_test_profile_rollback.v1",
+    schema: "machines.workstation_test_profile_rollback.v2",
     profileContent: currentProfile,
     sliceContent: currentSlice,
+    appliedProfileContent: profileContent,
+    appliedSliceContent: sliceContent,
+    sliceName: input.profile.aggregate.sliceName,
+    priorSliceActive: priorController.sliceActive,
   };
   try {
     input.store.commit([
@@ -345,21 +408,19 @@ export function applyWorkstationTestProfile(input: {
       controller: activated,
     });
     if (verified.admission === "allowed") return { status: "applied", admission: "allowed", reasonCodes: [] };
-    input.store.commit([
-      { path: input.paths.profilePath, content: record.profileContent },
-      { path: input.paths.slicePath, content: record.sliceContent },
-      { path: input.paths.rollbackPath, content: null },
-    ]);
-    input.controller.reload();
-    return { status: "refused", admission: "refused", reasonCodes: ["post_apply_verification_failed", ...verified.reasonCodes] };
+    const restoreReasons = restoreRollbackRecord({ ...input, record });
+    return {
+      status: "refused",
+      admission: "refused",
+      reasonCodes: ["post_apply_verification_failed", ...verified.reasonCodes, ...restoreReasons],
+    };
   } catch (error) {
-    input.store.commit([
-      { path: input.paths.profilePath, content: record.profileContent },
-      { path: input.paths.slicePath, content: record.sliceContent },
-      { path: input.paths.rollbackPath, content: null },
-    ]);
-    input.controller.reload();
-    return { status: "refused", admission: "refused", reasonCodes: ["apply_failed", error instanceof Error ? error.name : "unknown_error"] };
+    const restoreReasons = restoreRollbackRecord({ ...input, record });
+    return {
+      status: "refused",
+      admission: "refused",
+      reasonCodes: ["apply_failed", error instanceof Error ? error.name : "unknown_error", ...restoreReasons],
+    };
   }
 }
 
@@ -370,16 +431,12 @@ export function rollbackWorkstationTestProfile(input: {
 }): { status: "rolled-back" | "refused"; admission: "allowed" | "refused"; reasonCodes: string[] } {
   const record = parseRollback(input.store.read(input.paths.rollbackPath));
   if (!record) return { status: "refused", admission: "refused", reasonCodes: ["rollback_record_missing_or_invalid"] };
-  input.store.commit([
-    { path: input.paths.profilePath, content: record.profileContent },
-    { path: input.paths.slicePath, content: record.sliceContent },
-    { path: input.paths.rollbackPath, content: null },
-  ]);
-  input.controller.reload();
+  const restoreReasons = restoreRollbackRecord({ ...input, record });
+  if (restoreReasons.length > 0) return { status: "refused", admission: "refused", reasonCodes: restoreReasons };
   return { status: "rolled-back", admission: "refused", reasonCodes: ["safe_profile_unavailable_after_rollback"] };
 }
 
-export function evaluateWorkstationTestAdmission(
+function evaluateWorkstationTestClaims(
   profile: WorkstationTestProfile,
   scopes: readonly WorkstationTestScopeClaim[],
 ): WorkstationTestVerification {
@@ -416,6 +473,27 @@ export function evaluateWorkstationTestAdmission(
   return { admission: reasonCodes.length === 0 ? "allowed" : "refused", reasonCodes };
 }
 
+export function evaluateWorkstationTestAdmission(input: {
+  authority: MachineTestAuthority;
+  homeDir: string;
+  store: WorkstationTestProfileStore;
+  controller: WorkstationTestProfileController;
+  scopes: readonly WorkstationTestScopeClaim[];
+}): WorkstationTestVerification {
+  const candidate = input as unknown as Partial<WorkstationTestProfile>;
+  if (candidate.schema === "machines.workstation_test_profile.v1") {
+    return { admission: "refused", reasonCodes: ["current_controller_evidence_required"] };
+  }
+  const current = readWorkstationTestProfile({
+    authority: input.authority,
+    homeDir: input.homeDir,
+    store: input.store,
+    controller: input.controller,
+  });
+  if (current.verification.admission === "refused") return current.verification;
+  return evaluateWorkstationTestClaims(current.profile, input.scopes);
+}
+
 export function evaluateWorkstationTestPressure(
   profile: WorkstationTestProfile,
   scopes: readonly WorkstationTestPressureScope[],
@@ -434,6 +512,57 @@ export function evaluateWorkstationTestPressure(
     terminatedCgroup: offender?.cgroup ?? null,
     terminatedPids: offender ? [...offender.pids] : [],
     unaffectedPids: scopes.filter((scope) => scope !== offender).flatMap((scope) => scope.pids),
+    nonTestReserveBytes: profile.nonTestReserve.memoryBytes,
+  };
+}
+
+const SAFE_SCOPE_ID = /^[A-Za-z0-9_.:@-]+$/;
+
+function exactPressureScopeUnit(profile: WorkstationTestProfile, scope: WorkstationTestPressureScope): string {
+  if (!scope.scopeId || !SAFE_SCOPE_ID.test(scope.scopeId) || scope.scopeId === "." || scope.scopeId === "..") {
+    throw new Error("pressure scope identity is not a safe systemd unit stem");
+  }
+  if (scope.sliceName !== profile.aggregate.sliceName) throw new Error("pressure scope is outside the aggregate test slice");
+  const unit = `${scope.scopeId}.scope`;
+  const expectedSuffix = `/${profile.aggregate.sliceName}/${unit}`;
+  if (!scope.cgroup.startsWith("/") || scope.cgroup.includes("/../") || !scope.cgroup.endsWith(expectedSuffix)) {
+    throw new Error("pressure scope cgroup does not exactly bind the aggregate slice and scope unit");
+  }
+  return unit;
+}
+
+export function enforceWorkstationTestPressure(
+  profile: WorkstationTestProfile,
+  scopes: readonly WorkstationTestPressureScope[],
+  execute: (command: string, args: readonly string[]) => void = (command, args) => {
+    execFileSync(command, [...args], { stdio: "ignore" });
+  },
+): {
+  action: "none" | "terminate-slice";
+  triggeringScopeId: string | null;
+  terminatedSliceName: string | null;
+  unaffectedPids: number[];
+  nonTestReserveBytes: number;
+} {
+  const offender = scopes.find((scope) => scope.memoryCurrentBytes > scope.memoryMaxBytes) ?? null;
+  if (!offender) {
+    return {
+      action: "none",
+      triggeringScopeId: null,
+      terminatedSliceName: null,
+      unaffectedPids: scopes.flatMap((scope) => scope.pids),
+      nonTestReserveBytes: profile.nonTestReserve.memoryBytes,
+    };
+  }
+  const profileValidation = profileReasons(profile);
+  if (profileValidation.length > 0) throw new Error(`unsafe aggregate test profile: ${profileValidation.join(",")}`);
+  exactPressureScopeUnit(profile, offender);
+  execute("systemctl", ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", profile.aggregate.sliceName]);
+  return {
+    action: "terminate-slice",
+    triggeringScopeId: offender.scopeId,
+    terminatedSliceName: profile.aggregate.sliceName,
+    unaffectedPids: [],
     nonTestReserveBytes: profile.nonTestReserve.memoryBytes,
   };
 }
@@ -489,15 +618,16 @@ function delegatedUserControllers(): string[] {
 }
 
 export function createSystemdUserTestProfileController(): WorkstationTestProfileController {
-  const inspect = (): WorkstationTestControllerSnapshot => {
+  const inspect = (sliceName = "hasna-tests.slice"): WorkstationTestControllerSnapshot => {
     const cgroupV2 = existsSync("/sys/fs/cgroup/cgroup.controllers");
     const controllers = cgroupV2 ? readFileSync("/sys/fs/cgroup/cgroup.controllers", "utf8").trim().split(/\s+/).filter(Boolean) : [];
     const delegatedControllers = delegatedUserControllers();
     try {
-      const values = systemctlShow("hasna-tests.slice", [
+      const values = systemctlShow(sliceName, [
         "LoadState", "ActiveState", "MemoryHigh", "MemoryMax", "MemorySwapMax", "TasksMax", "MemoryOOMGroup", "ManagedOOMMemoryPressure",
       ]);
       return {
+        sliceName,
         cgroupV2,
         controllers,
         userManager: true,
@@ -514,7 +644,7 @@ export function createSystemdUserTestProfileController(): WorkstationTestProfile
         },
       };
     } catch {
-      return { cgroupV2, controllers, userManager: false, delegated: false, sliceLoaded: false, sliceActive: false };
+      return { sliceName, cgroupV2, controllers, userManager: false, delegated: false, sliceLoaded: false, sliceActive: false };
     }
   };
   return {
@@ -522,11 +652,16 @@ export function createSystemdUserTestProfileController(): WorkstationTestProfile
     activate(sliceName): WorkstationTestControllerSnapshot {
       execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
       execFileSync("systemctl", ["--user", "start", sliceName], { stdio: "ignore" });
-      return inspect();
+      return inspect(sliceName);
     },
     reload(): WorkstationTestControllerSnapshot {
       execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
       return inspect();
+    },
+    restore(sliceName, active): WorkstationTestControllerSnapshot {
+      execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+      execFileSync("systemctl", ["--user", active ? "start" : "stop", sliceName], { stdio: "ignore" });
+      return inspect(sliceName);
     },
   };
 }
@@ -548,7 +683,7 @@ export function readWorkstationTestProfile(options: {
       expectedProfile: profile,
       profileContent: store.read(paths.profilePath),
       sliceContent: store.read(paths.slicePath),
-      controller: controller.inspect(),
+      controller: controller.inspect(profile.aggregate.sliceName),
     }),
   };
 }

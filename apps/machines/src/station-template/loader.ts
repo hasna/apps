@@ -148,6 +148,7 @@ function mergeLayer(effective: EffectiveTemplate, layer: TemplateLayer, template
       effective.services.push(service);
     }
   }
+  if (layer.workstationTestProfile) effective.workstationTestProfile = true;
   effective.sysctls = { ...effective.sysctls, ...layer.sysctls };
   for (const value of layer.runtimeValues) {
     const existingIndex = effective.runtimeValues.findIndex((candidate) => candidate.path === value.path);
@@ -183,6 +184,7 @@ export function resolveStationTemplate(
     packages: { apt: [], bun: [] },
     commands: [],
     services: [],
+    workstationTestProfile: false,
     sysctls: {},
     runtimeValues: [],
     absences: [],
