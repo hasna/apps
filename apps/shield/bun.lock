@@ -14,7 +14,7 @@
         "ink": "^5.2.0",
         "openai": "^4.86.2",
         "react": "^19.1.0",
-        "zod": "^3.24.4",
+        "zod": "^3.25.0",
       },
       "devDependencies": {
         "@hasna/contracts": "0.13.1",
