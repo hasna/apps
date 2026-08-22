@@ -143,8 +143,12 @@ if (unexpected.length > 0) {
 // without a complete summary and must fail the gate.
 if (suiteStatus !== 0) {
   const summaryMatch = /Ran (\d+) tests across (\d+) files/.exec(output);
-  const failCountMatch = /(\d+) fail/.exec(output);
-  const reportedFails = failCountMatch ? Number(failCountMatch[1]) : null;
+  // The tally is "N pass[,/ ] M fail" in the runner's closing summary. The
+  // LAST match is taken (bun prints the tally once, but a naive first match
+  // can hit "0.13.3 failed to resolve" -> "3 fail" inside a version string).
+  const tallyMatches = [...output.matchAll(/(\d+) pass[\s,/]+(\d+) fail/g)];
+  const failCountMatch = tallyMatches.length > 0 ? tallyMatches[tallyMatches.length - 1] : null;
+  const reportedFails = failCountMatch ? Number(failCountMatch[2]) : null;
   const anyAllowlistedFired = failPairs.length > 0;
   const complete = summaryMatch !== null && reportedFails !== null && reportedFails === failPairs.length;
   if (!anyAllowlistedFired || !complete) {
