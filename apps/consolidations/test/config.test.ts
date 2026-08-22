@@ -21,15 +21,20 @@ describe("server data backend resolution", () => {
   });
 
   it("rejects legacy storage-mode variables with migration guidance", () => {
-    expect(() =>
-      resolveDataBackend({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "cloud" }),
-    ).toThrow(/was removed\. Delete the storage-mode variable/);
-    expect(() =>
-      resolveDataBackend({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "local" }),
-    ).toThrow(/was removed\. Delete the storage-mode variable/);
-    expect(() =>
-      resolveDataBackend({ CONSOLIDATIONS_STORAGE_MODE: "local" }),
-    ).toThrow(/was removed\. Delete the storage-mode variable/);
+    const LEGACY_KEYS = [
+      "HASNA_CONSOLIDATIONS_STORAGE_MODE",
+      "HASNA_CONSOLIDATIONS_MODE",
+      "CONSOLIDATIONS_STORAGE_MODE",
+      "CONSOLIDATIONS_MODE",
+    ] as const;
+    for (const key of LEGACY_KEYS) {
+      // A set variable is a stale configuration even when its value is blank.
+      for (const value of ["cloud", "local", ""]) {
+        expect(() => resolveDataBackend({ [key]: value })).toThrow(
+          /was removed\. Delete the storage-mode variable/,
+        );
+      }
+    }
   });
 
   it("databaseUrlPresent detects URL and FILE variants without reading values", () => {
