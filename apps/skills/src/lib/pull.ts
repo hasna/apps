@@ -31,8 +31,8 @@ import { dirname, join } from "node:path";
 import { createRemoteSkillsClient } from "./remote-client.js";
 import {
   getPortableSkillsRoot,
+  installCorpusSkillAtomically,
   normalizePortableSkillName,
-  writeCorpusSkill,
   type CorpusSkillMeta,
   type PortableSkillOptions,
 } from "./portable-skills.js";
@@ -276,7 +276,7 @@ async function pullOne(
     throw error;
   }
 
-  const written = writeCorpusSkill({ name: slug, skillMd, meta }, corpusOptions);
+  const written = installCorpusSkillAtomically({ name: slug, skillMd, meta }, corpusOptions);
   writePullMarker(written.path, {
     skill: slug,
     version: written.manifest.version,
@@ -659,7 +659,7 @@ function pickCorpusOptions(options: PullSkillsOptions): PortableSkillOptions {
   // Resolve the corpus root once, here, through the ONE canonical resolver
   // (resolveCorpusRoot()/getPortableSkillsRoot()): after the owner-layout
   // migration (PR #116) the corpus cache is <app folder>/skills and sync reads
-  // from there. Passing the resolved root as rootDir makes writeCorpusSkill()
+  // from there. Passing the resolved root as rootDir makes installCorpusSkillAtomically()
   // and installBundleAtomically() write to the same root sync reads — a pulled
   // skill is invisible to sync if it lands anywhere else.
   return { rootDir: resolveCorpusRoot(options) };

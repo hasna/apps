@@ -2,6 +2,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -441,6 +442,31 @@ export interface WriteCorpusSkillInput {
 }
 
 /**
+ * The corpus manifest for a pulled skill: SKILL.md frontmatter plus the instance's
+ * reported metadata. Carry the instance's kind when it reports one; else the SKILL.md
+ * frontmatter; else "instruction", because a pulled skill has no local src/ and is
+ * consumed as prose (runPortableSkill refuses to spawn an instruction skill, which is
+ * the safe answer for a doc-only corpus entry).
+ */
+function buildCorpusManifest(input: WriteCorpusSkillInput, name: string): PortableSkillManifest {
+  const frontmatter = parseSkillFrontmatter(input.skillMd) ?? undefined;
+  const kind: SkillKind = input.meta?.kind ?? parseSkillKind(frontmatter?.kind) ?? "instruction";
+  return {
+    $schema: PORTABLE_SKILL_SCHEMA,
+    standard: PORTABLE_SKILL_STANDARD,
+    name,
+    description: input.meta?.description ?? frontmatter?.description ?? `${displayName(name)} skill`,
+    version: input.meta?.version ?? frontmatter?.version ?? PORTABLE_SKILL_DEFAULT_VERSION,
+    displayName: input.meta?.displayName ?? frontmatter?.displayName ?? displayName(name),
+    category: input.meta?.category ?? frontmatter?.category ?? "Development Tools",
+    tags: input.meta?.tags?.length ? input.meta.tags : frontmatter?.tags ?? ["remote", name],
+    kind,
+    inputs: [],
+    commands: [],
+  };
+}
+
+/**
  * Write a skill fetched from a Skills instance into the local corpus (the
  * canonical root — installed/ before the layout migration, <app folder>/skills/
  * after it), so loadRegistry() surfaces it to both the CLI
@@ -473,28 +499,66 @@ export function writeCorpusSkill(
   // installed, which requires the installed bytes to BE the hashed bytes.
   writeFileSync(join(skillPath, "SKILL.md"), input.skillMd);
 
-  const frontmatter = parseSkillFrontmatter(input.skillMd) ?? undefined;
-  // Carry the instance's kind when it reports one; else the SKILL.md frontmatter; else
-  // "instruction", because a pulled skill has no local src/ and is consumed as prose
-  // (runPortableSkill refuses to spawn an instruction skill, which is the safe answer
-  // for a doc-only corpus entry).
-  const kind: SkillKind = input.meta?.kind ?? parseSkillKind(frontmatter?.kind) ?? "instruction";
-  const manifest: PortableSkillManifest = {
-    $schema: PORTABLE_SKILL_SCHEMA,
-    standard: PORTABLE_SKILL_STANDARD,
-    name,
-    description: input.meta?.description ?? frontmatter?.description ?? `${displayName(name)} skill`,
-    version: input.meta?.version ?? frontmatter?.version ?? PORTABLE_SKILL_DEFAULT_VERSION,
-    displayName: input.meta?.displayName ?? frontmatter?.displayName ?? displayName(name),
-    category: input.meta?.category ?? frontmatter?.category ?? "Development Tools",
-    tags: input.meta?.tags?.length ? input.meta.tags : frontmatter?.tags ?? ["remote", name],
-    kind,
-    inputs: [],
-    commands: [],
-  };
+  const manifest = buildCorpusManifest(input, name);
   writeSkillJsonWithHash(skillPath, manifest);
 
   return { name, path: skillPath, manifest, created };
+}
+
+/**
+ * Atomically replace the corpus entry for a metadata-only pull (todos b4d956a3):
+ * stage SKILL.md and skill.json in a sibling directory, then rename into place — the
+ * existing entry is moved aside first and removed only after the staged tree is in
+ * position. A failure at any point leaves either the old entry or nothing — never a
+ * partial skill, mirroring installBundleAtomically on the bundle path.
+ *
+ * The manifest construction is identical to writeCorpusSkill; what differs is that no
+ * write ever lands in the live target before the swap. The direct-overwrite order of
+ * writeCorpusSkill (SKILL.md, then skill.json) can destroy the prior good copy when a
+ * mid-write failure (ENOSPC, EISDIR, crash) hits between the two writes, leaving a
+ * truncated or mismatched SKILL.md/skill.json pair that loadRegistry then serves.
+ */
+export function installCorpusSkillAtomically(
+  input: WriteCorpusSkillInput,
+  options: PortableSkillOptions = {},
+): PortableSkillWriteResult {
+  const name = normalizePortableSkillName(input.name);
+  const root = getPortableSkillsRoot(options);
+  const target = join(root, name);
+  const created = !existsSync(target);
+  mkdirSync(root, { recursive: true });
+  const staging = mkdtempSync(join(root, `.pull-${name}-`));
+
+  let moved = false;
+  let backup: string | null = null;
+  try {
+    // Verbatim, never normalized: same contract as writeCorpusSkill — the hosted
+    // registry's revision is computed over the exact fetched bytes.
+    writeFileSync(join(staging, "SKILL.md"), input.skillMd);
+
+    const manifest = buildCorpusManifest(input, name);
+    writeSkillJsonWithHash(staging, manifest);
+
+    if (existsSync(target)) {
+      backup = mkdtempSync(join(root, `.pull-backup-${name}-`));
+      renameSync(target, join(backup, name));
+      moved = true;
+    }
+    renameSync(staging, target);
+    if (moved && backup) rmSync(backup, { recursive: true, force: true });
+    return { name, path: target, manifest, created };
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    if (moved && backup && existsSync(join(backup, name))) {
+      try {
+        renameSync(join(backup, name), target);
+      } catch {
+        // The original remains in the backup dir; the target is either absent or
+        // partial, and the error below names the staging path that failed.
+      }
+    }
+    throw error;
+  }
 }
 
 export function validatePortableSkillDirectory(name: string, skillPath: string): SkillValidationResult {
