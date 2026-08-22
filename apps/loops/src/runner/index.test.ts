@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import { applyRunnerEnvFile } from "./env-file.js";
-import { logRunnerCommandFailure, runRunnerLoop, runRunnerOnce, runnerStatus, RunnerRefusalError } from "./index.js";
+import { logRunnerCommandFailure, LoopsApiError, runRunnerLoop, runRunnerOnce, runnerStatus, RunnerRefusalError } from "./index.js";
 
 function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>, principalId: string, now?: () => Date) {
   const principal = {
@@ -21,7 +21,7 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
 }
 
 describe("loops-runner", () => {
-  test("command failures use stable logs without provider details", () => {
+  test("command failures surface a message with URL userinfo redacted", () => {
     const logged: string[] = [];
     const originalError = console.error;
     console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
@@ -30,13 +30,19 @@ describe("loops-runner", () => {
         name: "postgres://name-secret@db.internal/loops",
         code: "postgres://code-secret@db.internal/loops",
       }));
-      expect(logged).toEqual([JSON.stringify({ evt: "loops_runner_command_failed", errorType: "error" })]);
     } finally {
       console.error = originalError;
     }
+    const parsed = JSON.parse(logged[0]) as Record<string, unknown>;
+    expect(parsed.evt).toBe("loops_runner_command_failed");
+    expect(parsed.errorType).toBe("error");
+    // The message surfaces redacted (userinfo stripped, host kept); the
+    // name/code fields never appear in the line.
+    expect(String(parsed.message)).toBe("postgres://db.internal/loops");
+    expect(JSON.stringify(parsed)).not.toContain("user:secret");
   });
 
-  test("runner refusals surface their static reason; foreign errors stay opaque", () => {
+  test("runner refusals surface their static reason", () => {
     const logged: string[] = [];
     const originalError = console.error;
     console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
@@ -60,6 +66,56 @@ describe("loops-runner", () => {
     } finally {
       console.error = originalError;
     }
+  });
+
+  // Regression 539165c0: an API answered 825x with a wrong_token_kind 403 via
+  // postJson (a foreign LoopsApiError), and the old logger journaled an opaque
+  // line with no message — an invisible outage. Foreign errors must now surface
+  // their message so the failure reason is diagnosable.
+  test("foreign API failures surface their message so a wrong_token_kind 403 outage stays diagnosable", () => {
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logRunnerCommandFailure(new LoopsApiError("wrong_token_kind", 403));
+    } finally {
+      console.error = originalError;
+    }
+    const parsed = JSON.parse(logged[0]) as Record<string, unknown>;
+    expect(parsed.evt).toBe("loops_runner_command_failed");
+    expect(parsed.errorType).toBe("error");
+    expect(String(parsed.message)).toContain("wrong_token_kind");
+  });
+
+  // Regression 539165c0 (credential-safety half): messages now surface for every
+  // error class, so the URL-userinfo redactor is what keeps the safety invariant
+  // the opaque line used to provide — scheme://user:secret@host loses the
+  // userinfo but keeps the host.
+  test("URL userinfo is redacted from surfaced messages while the host survives", () => {
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logRunnerCommandFailure(new Error("postgres://user:secret@db.internal/loops"));
+    } finally {
+      console.error = originalError;
+    }
+    const parsed = JSON.parse(logged[0]) as Record<string, unknown>;
+    expect(String(parsed.message)).toBe("postgres://db.internal/loops");
+  });
+
+  test("non-Error throws fall back to String() and are redacted too", () => {
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { logged.push(values.map(String).join(" ")); };
+    try {
+      logRunnerCommandFailure("raw string failure postgres://u:s@db.internal/loops");
+    } finally {
+      console.error = originalError;
+    }
+    const parsed = JSON.parse(logged[0]) as Record<string, unknown>;
+    expect(parsed.errorType).toBe("string");
+    expect(String(parsed.message)).toBe("raw string failure postgres://db.internal/loops");
   });
 
   test("bound scope against a control plane that advertises no capabilities refuses with the reason", async () => {
