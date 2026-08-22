@@ -29,6 +29,7 @@ import type { AuthPreset } from "./auth-presets.js";
 import type { Session } from "./sessions.js";
 import type { StepResult } from "./step-results.js";
 import type { GoldenAnswer, GoldenCheckResult } from "./golden-answers.js";
+import { getNextRunTime } from "../lib/scheduler.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -1309,11 +1310,21 @@ export async function createSchedule(
   if (!body?.name) throw new ValidationError("name is required");
   if (!body?.cronExpression) throw new ValidationError("cronExpression is required");
   if (!body?.url) throw new ValidationError("url is required");
+  // Persist the next fire time computed from the cron expression — the daemon
+  // fires only when `nextRunAt && nextRunAt <= now`, so a schedule born with
+  // next_run_at NULL would never fire.
+  let nextRunAt: string | null = null;
+  try {
+    nextRunAt = getNextRunTime(body.cronExpression).toISOString();
+  } catch {
+    // Invalid cron or no next occurrence within the horizon: keep NULL, the
+    // daemon gate skips schedules with no next run time.
+  }
   const ts = nowIso();
   const row = await db.get(
-    `INSERT INTO schedules (id, project_id, name, cron_expression, url, scenario_filter, model, headed, parallel, timeout_ms, enabled, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$11) RETURNING *`,
-    [uuid(), body.projectId ?? null, body.name, body.cronExpression, body.url, j(body.scenarioFilter ?? {}), body.model ?? null, Boolean(body.headed), body.parallel ?? 1, body.timeoutMs ?? null, ts],
+    `INSERT INTO schedules (id, project_id, name, cron_expression, url, scenario_filter, model, headed, parallel, timeout_ms, enabled, next_run_at, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$11,$11) RETURNING *`,
+    [uuid(), body.projectId ?? null, body.name, body.cronExpression, body.url, j(body.scenarioFilter ?? {}), body.model ?? null, Boolean(body.headed), body.parallel ?? 1, body.timeoutMs ?? null, nextRunAt, ts, ts],
   );
   return scheduleRow(row);
 }
