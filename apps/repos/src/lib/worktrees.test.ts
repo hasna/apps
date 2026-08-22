@@ -342,6 +342,56 @@ describe("addWorktree", () => {
     expect(readFileSync(join(first.path, "WORK-IN-PROGRESS.txt"), "utf8")).toBe("half-finished\n");
   });
 
+  test("refuses to reuse a worktree claimed on a different base", () => {
+    // THE REGRESSION THIS PINS. `existing` is resolved as
+    // `leaseByClaim(...) ?? leaseByPath(db, target)` — leaseByClaim's WHERE
+    // includes base_ref, so a changed `--base` misses the claim lookup, but the
+    // leaseByPath fallback matches on the same computed path. The reuse branch
+    // then returned `created:false, reused:true` with the OLD lease's
+    // base_ref/base_sha at exit 0, never comparing the caller's base against
+    // the lease's — a silent success on the wrong base, the exact stale-base
+    // hazard resolveBase exists to prevent.
+    const { seedPath, repoName, db } = seed();
+    const releaseSha = commit(seedPath, "RELEASE.md", "release line\n");
+    git(seedPath, ["branch", "release-1.0"]);
+    git(seedPath, ["push", "origin", "release-1.0"]);
+
+    const first = addWorktree({ repo: repoName, task: "a321ba13" });
+    expect(first.lease.base_ref).toBe("main");
+    writeFileSync(join(first.path, "WORK-IN-PROGRESS.txt"), "half-finished\n");
+
+    expect(codeOf(() => addWorktree({ repo: repoName, task: "a321ba13", base: "origin/release-1.0" })))
+      .toBe("WORKTREE_BASE_MISMATCH");
+
+    // The lease and the worktree are untouched: same lease id, same base, file
+    // still in place.
+    const lease = db.query("SELECT * FROM worktree_leases WHERE lease_id = ?")
+      .get(first.lease.lease_id) as { base_ref: string; base_sha: string };
+    expect(lease.base_ref).toBe("main");
+    expect(lease.base_sha).toBe(first.lease.base_sha);
+    expect(releaseSha).not.toBe(first.lease.base_sha);
+    expect(existsSync(first.path)).toBe(true);
+    expect(readdirSync(first.path)).toContain("WORK-IN-PROGRESS.txt");
+  });
+
+  test("refuses to reuse a worktree whose claimed branch differs from the requested branch", () => {
+    const { repoName, db } = seed();
+    const first = addWorktree({ repo: repoName, task: "a321ba13", branch: "task-a321ba13" });
+    const verifiedAt = (db.query("SELECT verified_at FROM worktree_leases WHERE lease_id = ?")
+      .get(first.lease.lease_id) as { verified_at: string }).verified_at;
+
+    expect(codeOf(() => addWorktree({ repo: repoName, task: "a321ba13", branch: "other-branch" })))
+      .toBe("WORKTREE_BASE_MISMATCH");
+
+    // Same lease id, branch and verified_at unchanged: the mismatch refused the
+    // reuse before any lease state could be refreshed.
+    const lease = db.query("SELECT branch, verified_at FROM worktree_leases WHERE lease_id = ?")
+      .get(first.lease.lease_id) as { branch: string; verified_at: string };
+    expect(lease.branch).toBe("task-a321ba13");
+    expect(lease.verified_at).toBe(verifiedAt);
+    expect(existsSync(first.path)).toBe(true);
+  });
+
   test("refuses same-claim re-entry once the lease's gitdir is dead, without refreshing verified_at", () => {
     // The dead-gitdir class in the reuse path: the lease exists, the directory
     // exists, and the `.git` pointer is shape-valid — but the target gitdir is
