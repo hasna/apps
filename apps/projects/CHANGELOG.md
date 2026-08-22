@@ -4,6 +4,8 @@
 
 ### Patch Changes
 
+- a3bcfa7: API-mode budget reads reject with an error instead of returning a hardcoded empty list (fixes 9ddd325c), so a failed or unauthorized budget read can no longer present as a healthy zero.
+- 95342c1: Local `listEvents` bounds the result and returns newest-first, matching the api transport (fixes d731c1f8).
 - Updated dependencies [5ff8f02]
   - @hasna/conversations@0.7.5
 
@@ -11,6 +13,8 @@
 
 ### Patch Changes
 
+- e95d7bf: Budget reads parse `reset_at` as the zoneless UTC string it is stored as (fixes 654283bf), so budget state round-trips correctly in api mode.
+- abb96c5: The registry DB opens with `busy_timeout=5000` so concurrent writers wait instead of failing with SQLITE_BUSY (fixes 4d266bd1).
 - Updated dependencies [5275dde]
 - Updated dependencies [1c859c2]
   - @hasna/mementos@0.14.86
