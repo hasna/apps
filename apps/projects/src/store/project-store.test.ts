@@ -1404,3 +1404,58 @@ describe("projects list pagination (server row cap)", () => {
     expect(all.complete).toBe(true);
   });
 });
+
+// Regression d731c1f8: the local store's listEvents named its limit parameter
+// `_limit` and never applied it, returning the project's full history in
+// created_at ASC order. The api transport bounds (DESC LIMIT) and returns
+// newest-first, so buildProjectAgentContext/buildProjectHandoff took the HEAD
+// of the list — on the local transport an agent received the project's oldest
+// creation-era events as its "recent events" and the limit was a no-op.
+describe("local store listEvents (transport parity)", () => {
+  test("a limit bounds and reverses newest-first; no limit stays full ASC", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-list-events-"));
+    const previousHome = process.env[PROJECTS_HOME_ENV];
+    process.env[PROJECTS_HOME_ENV] = root;
+    closeDatabase();
+    __resetProjectStore();
+    try {
+      const store = resolveProjectStore({});
+      const project = await store.createProject({ name: "Local Events Parity", slug: "local-events-parity" });
+      const recorded = [
+        await store.recordEvent(project.id, { event_type: "note", source: "cli", metadata: { n: 1 } }),
+        await store.recordEvent(project.id, { event_type: "started", source: "cli", metadata: { n: 2 } }),
+        await store.recordEvent(project.id, { event_type: "updated", source: "cli", metadata: { n: 3 } }),
+        await store.recordEvent(project.id, { event_type: "created", source: "cli", metadata: { n: 4 } }),
+      ];
+
+      // No limit: full history in db (ASC) order — unchanged for the callers
+      // that depend on ascending order (workspace-agent, .at(-1) last-started).
+      // createProject records its own implicit "created" event, so the full
+      // list is the recorded events plus that oldest one.
+      const all = await store.listEvents(project.id);
+      expect(all.length).toBeGreaterThanOrEqual(recorded.length);
+      for (const event of recorded) {
+        expect(all.some((e) => e.id === event.id)).toBe(true);
+      }
+      expect(all[0]!.event_type).toBe("created");
+
+      // Limit: exactly N events, the newest N, newest-first — the api
+      // transport's contract (ORDER BY created_at DESC LIMIT).
+      const limited = await store.listEvents(project.id, 2);
+      expect(limited).toHaveLength(2);
+      expect(limited.map((e) => e.id)).toEqual(all.slice(-2).reverse().map((e) => e.id));
+      const timestamps = limited.map((e) => e.created_at);
+      expect(timestamps).toEqual([...timestamps].sort().reverse());
+
+      const single = await store.listEvents(project.id, 1);
+      expect(single).toHaveLength(1);
+      expect(single[0]!.id).toBe(all.at(-1)!.id);
+    } finally {
+      closeDatabase();
+      __resetProjectStore();
+      if (previousHome === undefined) delete process.env[PROJECTS_HOME_ENV];
+      else process.env[PROJECTS_HOME_ENV] = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
