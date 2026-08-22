@@ -61,6 +61,17 @@ type ControllerSnapshot = {
   sliceProperties?: Record<string, string | number | boolean>;
 };
 
+type ScopeSnapshot = {
+  unitName: string;
+  sliceName: string;
+  loadState: string;
+  activeState: string;
+  subState: string;
+  controlGroup: string;
+  invocationId: string;
+  observedAtMs: number;
+};
+
 type ManagedPaths = {
   profilePath: string;
   slicePath: string;
@@ -76,6 +87,7 @@ interface Store {
 
 interface Controller {
   inspect(sliceName?: string): ControllerSnapshot;
+  inspectScope(unitName: string): ScopeSnapshot | null;
   activate(sliceName: string): ControllerSnapshot;
   reload(): ControllerSnapshot;
   restore(sliceName: string, active: boolean): ControllerSnapshot;
@@ -83,7 +95,8 @@ interface Controller {
 
 type ScopeClaim = {
   scopeId: string;
-  sliceName: string;
+  unitName: string;
+  invocationId: string;
   memoryMaxBytes: number;
   tasks: number;
   processes: number;
@@ -232,16 +245,23 @@ class MemoryStore implements Store {
 class FixtureController implements Controller {
   activateCalls = 0;
   reloadCalls = 0;
+  readonly inspectScopeCalls: string[] = [];
   readonly restoreCalls: Array<{ sliceName: string; active: boolean }> = [];
 
   constructor(
     private readonly before: ControllerSnapshot,
     private readonly after: ControllerSnapshot = before,
     private readonly rolledBack: ControllerSnapshot = before,
+    private readonly scopeSnapshots: ReadonlyMap<string, ScopeSnapshot | null> = new Map(),
   ) {}
 
   inspect(): ControllerSnapshot {
     return this.before;
+  }
+
+  inspectScope(unitName: string): ScopeSnapshot | null {
+    this.inspectScopeCalls.push(unitName);
+    return this.scopeSnapshots.get(unitName) ?? null;
   }
 
   activate(): ControllerSnapshot {
@@ -263,7 +283,8 @@ class FixtureController implements Controller {
 function claim(profile: Profile, scopeId: string, memoryMaxBytes: number): ScopeClaim {
   return {
     scopeId,
-    sliceName: profile.aggregate.sliceName,
+    unitName: `${scopeId}.scope`,
+    invocationId: "0123456789abcdef0123456789abcdef",
     memoryMaxBytes,
     tasks: Math.max(1, Math.floor(profile.aggregate.tasksMax / 4)),
     processes: Math.max(1, Math.floor(profile.bounds.processesMax / 4)),
@@ -272,6 +293,33 @@ function claim(profile: Profile, scopeId: string, memoryMaxBytes: number): Scope
     browsers: 0,
     machineSlots: 1,
   };
+}
+
+function observedScope(
+  profile: Profile,
+  scope: ScopeClaim,
+  overrides: Partial<ScopeSnapshot> = {},
+): ScopeSnapshot {
+  return {
+    unitName: scope.unitName,
+    sliceName: profile.aggregate.sliceName,
+    loadState: "loaded",
+    activeState: "active",
+    subState: "running",
+    controlGroup: `/user.slice/user-1000.slice/user@1000.service/app.slice/${profile.aggregate.sliceName}/${scope.unitName}`,
+    invocationId: scope.invocationId,
+    observedAtMs: Date.now(),
+    ...overrides,
+  };
+}
+
+function controllerWithScopes(profile: Profile, scopes: readonly ScopeClaim[]): FixtureController {
+  return new FixtureController(
+    activeController(profile),
+    activeController(profile),
+    activeController(profile),
+    new Map(scopes.map((scope) => [scope.unitName, observedScope(profile, scope)])),
+  );
 }
 
 describe("aggregate workstation test profile", () => {
@@ -404,24 +452,25 @@ describe("aggregate workstation test profile", () => {
       [paths.profilePath]: api.serializeWorkstationTestProfile(profile),
       [paths.slicePath]: api.renderWorkstationTestSlice(profile),
     });
-    const controller = new FixtureController(activeController(profile));
     const within = Math.floor(profile.aggregate.memoryMaxBytes * 0.4);
     const over = Math.floor(profile.aggregate.memoryMaxBytes * 0.6);
+    const withinScopes = [claim(profile, "focused-a", within), claim(profile, "focused-b", within)];
+    const overScopes = [claim(profile, "focused-a", over), claim(profile, "focused-b", over)];
 
     expect(api.evaluateWorkstationTestAdmission({
       authority: machineAuthority,
       homeDir,
       store,
-      controller,
-      scopes: [claim(profile, "focused-a", within), claim(profile, "focused-b", within)],
+      controller: controllerWithScopes(profile, withinScopes),
+      scopes: withinScopes,
     })).toMatchObject({ admission: "allowed", reasonCodes: [] });
 
     const refused = api.evaluateWorkstationTestAdmission({
       authority: machineAuthority,
       homeDir,
       store,
-      controller,
-      scopes: [claim(profile, "focused-a", over), claim(profile, "focused-b", over)],
+      controller: controllerWithScopes(profile, overScopes),
+      scopes: overScopes,
     });
     expect(refused.admission).toBe("refused");
     expect(refused.reasonCodes).toContain("aggregate_memory_limit_exceeded");
@@ -453,6 +502,97 @@ describe("aggregate workstation test profile", () => {
       admission: "refused",
       reasonCodes: ["current_controller_evidence_required"],
     });
+  });
+
+  test("admission accepts a currently observed nested leaf and rejects the reviewer's fabricated caller claim before execution", () => {
+    const api = profileApi();
+    const machineAuthority = authority();
+    const profile = api.deriveWorkstationTestProfile(machineAuthority);
+    const homeDir = "/fixture/home";
+    const paths = api.workstationTestProfilePaths({ homeDir });
+    const store = new MemoryStore({
+      [paths.profilePath]: api.serializeWorkstationTestProfile(profile),
+      [paths.slicePath]: api.renderWorkstationTestSlice(profile),
+    });
+    const nested = claim(profile, "nested-leaf", 1024);
+    const observedController = controllerWithScopes(profile, [nested]);
+
+    expect(api.evaluateWorkstationTestAdmission({
+      authority: machineAuthority,
+      homeDir,
+      store,
+      controller: observedController,
+      scopes: [nested],
+    })).toEqual({ admission: "allowed", reasonCodes: [] });
+    expect(observedController.inspectScopeCalls).toEqual(["nested-leaf.scope"]);
+
+    const fabricatedController = new FixtureController(activeController(profile));
+    const fabricated = {
+      ...claim(profile, "fabricated", 1024),
+      sliceName: profile.aggregate.sliceName,
+      observed: observedScope(profile, claim(profile, "fabricated", 1024)),
+    } as unknown as ScopeClaim;
+    const refused = api.evaluateWorkstationTestAdmission({
+      authority: machineAuthority,
+      homeDir,
+      store,
+      controller: fabricatedController,
+      scopes: [fabricated],
+    });
+
+    expect(refused.admission).toBe("refused");
+    expect(refused.reasonCodes).toContain("scope_observation_missing");
+    expect(fabricatedController.inspectScopeCalls).toEqual(["fabricated.scope"]);
+    expect(fabricatedController.activateCalls).toBe(0);
+    expect(fabricatedController.reloadCalls).toBe(0);
+    expect(fabricatedController.restoreCalls).toEqual([]);
+  });
+
+  test("admission refuses missing, inactive, stale, replaced, wrong-parent, and ambiguous observed leaf scopes", () => {
+    const api = profileApi();
+    const machineAuthority = authority();
+    const profile = api.deriveWorkstationTestProfile(machineAuthority);
+    const homeDir = "/fixture/home";
+    const paths = api.workstationTestProfilePaths({ homeDir });
+    const store = new MemoryStore({
+      [paths.profilePath]: api.serializeWorkstationTestProfile(profile),
+      [paths.slicePath]: api.renderWorkstationTestSlice(profile),
+    });
+    const scope = claim(profile, "focused-negative", 1024);
+    const cases: Array<[string, ScopeSnapshot | null, string]> = [
+      ["missing", null, "scope_observation_missing"],
+      ["inactive", observedScope(profile, scope, { activeState: "inactive", subState: "dead" }), "scope_unit_inactive"],
+      ["stale", observedScope(profile, scope, { observedAtMs: Date.now() - 60_000 }), "scope_observation_stale"],
+      ["replaced", observedScope(profile, scope, { invocationId: "fedcba9876543210fedcba9876543210" }), "scope_invocation_mismatched"],
+      ["wrong-parent", observedScope(profile, scope, {
+        sliceName: "app.slice",
+        controlGroup: `/user.slice/user-1000.slice/user@1000.service/app.slice/${scope.unitName}`,
+      }), "scope_outside_aggregate_slice"],
+      ["ambiguous", observedScope(profile, scope, {
+        controlGroup: `/user.slice/${profile.aggregate.sliceName}/${profile.aggregate.sliceName}/${scope.unitName}`,
+      }), "scope_cgroup_ambiguous"],
+    ];
+
+    for (const [name, snapshot, reason] of cases) {
+      const controller = new FixtureController(
+        activeController(profile),
+        activeController(profile),
+        activeController(profile),
+        new Map([[scope.unitName, snapshot]]),
+      );
+      const result = api.evaluateWorkstationTestAdmission({
+        authority: machineAuthority,
+        homeDir,
+        store,
+        controller,
+        scopes: [scope],
+      });
+      expect(result.admission, name).toBe("refused");
+      expect(result.reasonCodes, name).toContain(reason);
+      expect(controller.activateCalls, name).toBe(0);
+      expect(controller.reloadCalls, name).toBe(0);
+      expect(controller.restoreCalls, name).toEqual([]);
+    }
   });
 
   test("an over-limit test scope is terminated as one cgroup while unrelated processes and the non-test reserve remain", () => {
