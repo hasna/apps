@@ -143,6 +143,9 @@ export interface MemoryFilter {
   min_importance?: number;
   pinned?: boolean;
   search?: string;
+  /** Annotation flag (e.g. needs-review, outdated, verify) — the local branch
+   *  already filters on it via the memory row's `flag` column. */
+  flag?: string;
   namespace?: string;
   as_of?: string; // ISO8601 date — return memories valid at this point in time
   limit?: number;
