@@ -33,6 +33,13 @@ function ingestLogLocked(db: DbAdapter, entry: LogEntry): LogRow {
       ? createRedactedEventId(entry.id)
       : entry.id
     : createEventId();
+  // A retention eviction tombstone (lib/retention.ts) retires the projection
+  // row while the raw event stays indexed. A deliberate re-ingest of the same
+  // deterministic id revives the event: clear the tombstone so the projection
+  // replay below re-materializes it and later rebuilds keep it.
+  db.prepare("DELETE FROM retention_evictions WHERE event_id = ?").run(
+    eventId,
+  );
   const existing = db.prepare("SELECT * FROM logs WHERE id = ?").get(eventId) as
     | LogRow
     | undefined;
