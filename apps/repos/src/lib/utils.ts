@@ -410,19 +410,34 @@ export function importFromOrg(org: string, opts: { onProgress?: (msg: string) =>
   let cloned = 0, skipped = 0;
   const errors: string[] = [];
 
-  let output: string;
+  let ghRepos: Array<{ name: string; sshUrl: string }>;
   try {
-    output = execFileSync("gh", ["repo", "list", org, "--limit", "500", "--json", "name,sshUrl,isArchived", "--no-archived"], {
+    // `gh repo list` truncates at the caller's --limit; `gh api --paginate`
+    // follows Link headers to exhaustion, so an org with more than 500
+    // visible repos cannot truncate by construction. The jq filter keeps the
+    // old `--no-archived` semantics (forks stay included, as with `gh repo
+    // list` by default).
+    const output = execFileSync("gh", ["api", "--paginate", `/orgs/${org}/repos?per_page=100`, "--jq", '.[] | select(.archived == false) | [.name, .ssh_url] | @tsv'], {
       encoding: "utf-8",
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
       stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
     }).trim();
+    ghRepos = output
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const [name, sshUrl] = line.split("\t");
+        if (!name || sshUrl === undefined) {
+          throw new Error(`unparseable gh output line: ${JSON.stringify(line)}`);
+        }
+        return { name, sshUrl };
+      });
   } catch {
     return { cloned: 0, skipped: 0, errors: ["Failed to list repos from GitHub"] };
   }
 
-  const ghRepos = JSON.parse(output || "[]") as Array<{ name: string; sshUrl: string }>;
   opts.onProgress?.(`Found ${ghRepos.length} repos in ${org}`);
 
   for (const ghRepo of ghRepos) {

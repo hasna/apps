@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, getDb } from "../db/database";
 import { upsertRepo, setRepoLookupPathStateForTests } from "../db/repos";
-import { findFile, fuzzyFindRepo } from "./utils";
+import { findFile, fuzzyFindRepo, importFromOrg } from "./utils";
+import { setClonesRootForTests } from "./worktrees";
 
 let testDir = "";
 
@@ -134,6 +135,150 @@ describe("utils", () => {
       const match = fuzzyFindRepo("loop");
       expect(match).toBeTruthy();
       expect(match!.name).toBe("open-loops");
+    });
+
+    // ── importFromOrg — regression for todos ffda4d33 ──────────────────────
+    // The verb previously issued one `gh repo list <org> --limit 500` call, so
+    // an org with more than 500 visible repos silently imported only the first
+    // 500 while the progress line reported the truncated count as the full
+    // population. These tests drive the verb against a fake `gh` on PATH.
+    describe("importFromOrg", () => {
+      const org = "big-org";
+      let savedPath = "";
+
+      function repoObject(name: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+        return { name, ssh_url: `git@github.com:big-org/${name}.git`, archived: false, fork: false, ...overrides };
+      }
+
+      function createFakeGh(binDir: string): void {
+        mkdirSync(binDir, { recursive: true });
+        // Emulates `gh api --paginate <endpoint> --jq <expr>`: runs the jq
+        // expression the code passes over a JSON payload file, or fails /
+        // emits garbage when the matching env switch is set. Records argv.
+        writeFileSync(join(binDir, "gh"), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "\${FAKE_GH_LOG:-/dev/null}"
+if [ "\${FAKE_GH_FAIL:-0}" = "1" ]; then
+  echo "gh: not authenticated" >&2
+  exit 1
+fi
+if [ "\${FAKE_GH_MALFORMED:-0}" = "1" ]; then
+  printf 'this is not tsv output\\n'
+  exit 0
+fi
+if [ -n "\${FAKE_GH_PAYLOAD:-}" ] && [ -f "\${FAKE_GH_PAYLOAD}" ]; then
+  jq_expr=""
+  prev=""
+  for a in "$@"; do
+    if [ "\${prev}" = "--jq" ]; then jq_expr="\${a}"; fi
+    prev="\${a}"
+  done
+  if [ -z "\${jq_expr}" ]; then
+    echo "gh: no --jq expression" >&2
+    exit 2
+  fi
+  exec jq -r "\${jq_expr}" "\${FAKE_GH_PAYLOAD}"
+fi
+exit 1
+`);
+        chmodSync(join(binDir, "gh"), 0o755);
+      }
+
+      function armFakeGh(opts: { payloadPath?: string; fail?: boolean; malformed?: boolean }): string {
+        const binDir = join(testDir, "fake-bin");
+        const logPath = join(testDir, "gh-argv.log");
+        createFakeGh(binDir);
+        savedPath = process.env.PATH ?? "";
+        process.env.PATH = `${binDir}:${savedPath}`;
+        process.env.FAKE_GH_LOG = logPath;
+        delete process.env.FAKE_GH_PAYLOAD;
+        delete process.env.FAKE_GH_FAIL;
+        delete process.env.FAKE_GH_MALFORMED;
+        if (opts.payloadPath) process.env.FAKE_GH_PAYLOAD = opts.payloadPath;
+        if (opts.fail) process.env.FAKE_GH_FAIL = "1";
+        if (opts.malformed) process.env.FAKE_GH_MALFORMED = "1";
+        return logPath;
+      }
+
+      function disarmFakeGh(): void {
+        if (savedPath) process.env.PATH = savedPath;
+        delete process.env.FAKE_GH_LOG;
+        delete process.env.FAKE_GH_PAYLOAD;
+        delete process.env.FAKE_GH_FAIL;
+        delete process.env.FAKE_GH_MALFORMED;
+        setClonesRootForTests(null);
+      }
+
+      it("imports every repo of an org with more than 500 visible repos (no 500 cap)", () => {
+        const clonesRoot = join(testDir, "clones");
+        setClonesRootForTests(clonesRoot);
+        const total = 558;
+        const payload = Array.from({ length: total }, (_, i) => repoObject(`repo-${String(i).padStart(3, "0")}`));
+        const payloadPath = join(testDir, "payload.json");
+        writeFileSync(payloadPath, JSON.stringify(payload));
+        // Pre-create every destination so the verb counts them as skips and
+        // never shells out to git — a skipped count of `total` proves every
+        // listed repo was seen and its name parsed, and zero errors proves no
+        // clone was attempted for a mistyped name.
+        for (const repo of payload) {
+          mkdirSync(join(clonesRoot, org, repo.name as string), { recursive: true });
+        }
+        const logPath = armFakeGh({ payloadPath });
+
+        const progress: string[] = [];
+        const result = importFromOrg(org, { onProgress: (msg: string) => progress.push(msg) });
+        disarmFakeGh();
+
+        expect(result).toEqual({ cloned: 0, skipped: total, errors: [] });
+        expect(progress).toContain(`Found ${total} repos in ${org}`);
+        const argv = readFileSync(logPath, "utf-8");
+        expect(argv).toContain("--paginate");
+        expect(argv).toContain("/orgs/big-org/repos?per_page=100");
+        expect(argv).not.toContain("--limit");
+      });
+
+      it("excludes archived repos (keeps the old --no-archived semantics)", () => {
+        const clonesRoot = join(testDir, "clones");
+        setClonesRootForTests(clonesRoot);
+        const payload = [
+          repoObject("live-one"),
+          repoObject("archived-one", { archived: true }),
+          repoObject("live-two"),
+        ];
+        const payloadPath = join(testDir, "payload.json");
+        writeFileSync(payloadPath, JSON.stringify(payload));
+        for (const name of ["live-one", "live-two"]) {
+          mkdirSync(join(clonesRoot, org, name), { recursive: true });
+        }
+        const logPath = armFakeGh({ payloadPath });
+
+        const result = importFromOrg(org, { onProgress: () => {} });
+        disarmFakeGh();
+
+        // The archived repo's destination was not pre-created, so had it been
+        // listed the verb would have attempted a clone and recorded an error.
+        expect(result).toEqual({ cloned: 0, skipped: 2, errors: [] });
+        expect(readFileSync(logPath, "utf-8")).toContain("select(.archived == false)");
+      });
+
+      it("returns the typed errors array instead of throwing on malformed gh output", () => {
+        armFakeGh({ malformed: true });
+        try {
+          const result = importFromOrg(org, { onProgress: () => {} });
+          expect(result).toEqual({ cloned: 0, skipped: 0, errors: ["Failed to list repos from GitHub"] });
+        } finally {
+          disarmFakeGh();
+        }
+      });
+
+      it("returns the typed errors array instead of throwing when gh fails", () => {
+        armFakeGh({ fail: true });
+        try {
+          const result = importFromOrg(org, { onProgress: () => {} });
+          expect(result).toEqual({ cloned: 0, skipped: 0, errors: ["Failed to list repos from GitHub"] });
+        } finally {
+          disarmFakeGh();
+        }
+      });
     });
 
     it("returns null rather than a scratch clone when nothing else matches", () => {
