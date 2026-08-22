@@ -1,7 +1,7 @@
 {
   "name": "@hasna/styles",
   "version": "0.1.16",
-  "description": "Style management platform for AI coding agents — profiles, preferences, health checks, and design system enforcement",
+  "description": "Style management platform for AI coding agents \u2014 profiles, preferences, health checks, and design system enforcement"
   "type": "module",
   "bin": {
     "styles": "bin/index.js",
@@ -35,7 +35,8 @@
     "dashboard:build": "cd dashboard && bun install && bun run build",
     "server": "bun run src/server/serve.ts",
     "server:dev": "bun --watch run src/server/serve.ts",
-    "prepack": "bun run build"
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/styles-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan styles-artifact-scan.tgz; rc=$?; rm -f \"$PWD/styles-artifact-scan.tgz\"; exit $rc",
+    "prepack": "bun run build && bun run scan:artifact"
   },
   "keywords": [
     "styles",
@@ -57,7 +58,8 @@
     "@types/bun": "latest",
     "@types/react": "^18.2.0",
     "bun-types": "1.3.14",
-    "typescript": "^5"
+    "typescript": "^5",
+    "@hasna/contracts": "0.11.1"
   },
   "dependencies": {
     "@hasna/events": "^0.1.6",

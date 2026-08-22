@@ -1,0 +1,11 @@
+services:
+  serve:
+    image: oven/bun:1
+    command: ["bunx", "--package", "@hasna/tickets", "tickets-serve"]
+    ports: ["19428:19428"]
+    environment:
+      PORT: "19428"
+    volumes:
+      - tickets-data:/root/.hasna/tickets
+volumes:
+  tickets-data:

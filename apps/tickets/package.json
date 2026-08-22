@@ -32,7 +32,8 @@
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun test && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/tickets/training 2>/dev/null || true",
-    "prepack": "bun run build"
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/tickets-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan tickets-artifact-scan.tgz; rc=$?; rm -f \"$PWD/tickets-artifact-scan.tgz\"; exit $rc",
+    "prepack": "bun run build && bun run scan:artifact"
   },
   "keywords": [
     "tickets",
@@ -86,6 +87,7 @@
     "@types/nodemailer": "^6.4.17",
     "@types/react": "^18.3.18",
     "typescript": "^5.7.3",
-    "bun-types": "1.3.14"
+    "bun-types": "1.3.14",
+    "@hasna/contracts": "0.11.1"
   }
 }
