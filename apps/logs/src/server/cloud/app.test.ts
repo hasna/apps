@@ -195,6 +195,114 @@ describe("cloud serve logs paging (offset forwarding)", () => {
   });
 });
 
+describe("cloud serve log identity roundtrip (9429baa0)", () => {
+  // The exact body ApiStore.ingestLog sends (src/store/api.ts): a deterministic
+  // client id plus the full run/process/privacy/page linkage set. The hosted
+  // /v1/logs handler previously dropped every one of these — createLog minted a
+  // fresh UUID per call and wrote a narrow column list — so per-line logs from
+  // `logs run` lost their id (a client retry inserted a duplicate row instead of
+  // deduping like local ingest) and their linkage.
+  const identityBody = {
+    id: "line-1-3f2a9c7e",
+    level: "info",
+    message: "per-line log from logs run",
+    source_event_id: "evt-8",
+    project_id: "proj-1",
+    page_id: "page-1",
+    source: "runner",
+    service: "apps",
+    privacy: "private",
+    machine_id: "mach-01",
+    repo_id: "repo-9",
+    app_id: "app-3",
+    process_id: "proc-42",
+    run_id: "run-777",
+    trace_id: "tr-1",
+    span_id: "span-5",
+    parent_span_id: "parent-4",
+    session_id: "ses-1",
+    release_id: "rel-2",
+    environment: "staging",
+    agent: "test-agent",
+    url: "https://example.com/x",
+    stack_trace: null,
+    metadata: { k: "v" },
+    timestamp: "2026-08-22T18:07:18.148Z",
+  };
+
+  test("POST /v1/logs honors the client id and stores the identity fields", async () => {
+    const a = app();
+    const write = {
+      "x-api-key": tokenWith(["logs:write"]),
+      "content-type": "application/json",
+    };
+    const read = { "x-api-key": tokenWith(["logs:read"]) };
+
+    const first = await a.request("/v1/logs", {
+      method: "POST",
+      headers: write,
+      body: JSON.stringify(identityBody),
+    });
+    expect(first.status).toBe(201);
+    const log1 = (await first.json()) as Record<string, unknown>;
+    expect(log1.id).toBe("line-1-3f2a9c7e");
+
+    const got = await a.request(`/v1/logs/${log1.id}`, { headers: read });
+    expect(got.status).toBe(200);
+    const row = (await got.json()) as Record<string, unknown>;
+    expect(row.source_event_id).toBe("evt-8");
+    expect(row.page_id).toBe("page-1");
+    expect(row.privacy).toBe("private");
+    expect(row.machine_id).toBe("mach-01");
+    expect(row.repo_id).toBe("repo-9");
+    expect(row.app_id).toBe("app-3");
+    expect(row.process_id).toBe("proc-42");
+    expect(row.run_id).toBe("run-777");
+    expect(row.span_id).toBe("span-5");
+    expect(row.parent_span_id).toBe("parent-4");
+    expect(row.release_id).toBe("rel-2");
+    expect(row.environment).toBe("staging");
+  });
+
+  test("re-POST with the same id dedupes like local ingest (no duplicate row)", async () => {
+    const a = app();
+    const write = {
+      "x-api-key": tokenWith(["logs:write"]),
+      "content-type": "application/json",
+    };
+    const read = { "x-api-key": tokenWith(["logs:read"]) };
+
+    const first = await a.request("/v1/logs", {
+      method: "POST",
+      headers: write,
+      body: JSON.stringify(identityBody),
+    });
+    expect(first.status).toBe(201);
+    expect(((await first.json()) as Record<string, unknown>).id).toBe(
+      "line-1-3f2a9c7e",
+    );
+
+    // A client retry with the same deterministic id must not insert a second row.
+    const second = await a.request("/v1/logs", {
+      method: "POST",
+      headers: write,
+      body: JSON.stringify(identityBody),
+    });
+    expect(second.status).toBe(201);
+    expect(((await second.json()) as Record<string, unknown>).id).toBe(
+      "line-1-3f2a9c7e",
+    );
+
+    const list = await a.request("/v1/logs?project_id=proj-1", { headers: read });
+    expect(list.status).toBe(200);
+    const logs = ((await list.json()) as { logs: unknown[] }).logs;
+    const matches = logs.filter(
+      (l) => (l as { id: string }).id === "line-1-3f2a9c7e",
+    );
+    expect(matches).toHaveLength(1);
+  });
+});
+
 describe("cloud serve data-plane parity (v1 surface)", () => {
   // Guards the review finding: events / test-reports / pages / jobs / perf /
   // issues / alert-rules / diagnose / compare must exist on the cloud /v1 API

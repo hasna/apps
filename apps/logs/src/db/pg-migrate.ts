@@ -22,6 +22,7 @@ import {
   createServerPoolFromEnv,
   defineMigration,
 } from "../generated/storage-kit/index.ts";
+import { LOG_IDENTITY_FIELDS_SQL } from "./migrations/006_logs_identity_fields.ts";
 import { PG_MIGRATIONS } from "./pg-migrations.ts";
 
 export const LOGS_APP_NAME = "logs";
@@ -32,8 +33,13 @@ export function logsCloudMigrations(): Migration[] {
     "0001_logs_pg_schema",
     PG_MIGRATIONS.map((sql) => sql.trim().replace(/;+$/, "")).join(";\n"),
   );
+  // Hosted per-line logs keep their deterministic client id and run/process/
+  // privacy/page linkage (todos 9429baa0). Must be its own migration id: adding
+  // the columns to 0001's CREATE TABLE would change that migration's checksum
+  // and the ledger refuses already-applied databases.
+  const identity = defineMigration("0002_logs_identity_fields", LOG_IDENTITY_FIELDS_SQL);
   const auth = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
-  return [schema, ...auth];
+  return [schema, identity, ...auth];
 }
 
 export interface RunMigrationsOptions {
