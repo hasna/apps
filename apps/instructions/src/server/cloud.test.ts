@@ -6,10 +6,13 @@
 // whole resolution FAIL LOUD rather than silently select a store. A reversed
 // priority or a swallowed legacy key would point the serve process at the
 // wrong database while reporting healthy.
+import net from "node:net";
 import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey, type ApiKeyStatus } from "@hasna/contracts/auth";
 import {
   INSTRUCTIONS_APP_SLUG,
+  closeCloud,
+  ensureCloudSchema,
   getCloudVerifier,
   getHonoAuthMiddleware,
   isPostgresBackendEnabled,
@@ -164,5 +167,53 @@ describe("cloud /v1 auth keyStatus wiring", () => {
     const decision = await verifier.authenticate({ "x-api-key": token }, { requiredScopes: ["instructions:read"] });
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.status).toBe(401);
+  });
+});
+
+// ── schema-ensure rejection recovery (row 6f6fdf2b) ──────────────────────────
+// ensureCloudSchema caches its in-flight promise at module level and replays it
+// on every later call (`if (schemaEnsured) return schemaEnsured`). A REJECTED
+// promise was cached forever: one transient Postgres failure at the first
+// authenticated /v1 request made every later request 503 ("database
+// unavailable") until process restart. closeCloud() could clear the cache, but
+// the serving process never calls it — the only call site is the `migrate` CLI
+// branch, which exits.
+//
+// The discriminator is the CONNECTION COUNT: the module's client pool is
+// deliberately persistent (like production), so only a genuine re-attempt
+// reaches the network. A counting TCP server that accepts and destroys sockets
+// fails the pg handshake fast through the connect-error path (no pool-level
+// 'error' events, no unhandled rejection).
+describe("ensureCloudSchema failure recovery (row 6f6fdf2b)", () => {
+  test("clears a rejected schema-ensure so the next call re-attempts", async () => {
+    // Isolate: earlier tests in this file may have created the module's pool.
+    await closeCloud();
+
+    const connections: string[] = [];
+    const server = net.createServer((socket) => {
+      connections.push("accepted");
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as net.AddressInfo;
+
+    const hadUrl = Object.prototype.hasOwnProperty.call(process.env, "HASNA_INSTRUCTIONS_DATABASE_URL");
+    const oldUrl = process.env.HASNA_INSTRUCTIONS_DATABASE_URL;
+    process.env.HASNA_INSTRUCTIONS_DATABASE_URL = `postgresql://repro:repro@127.0.0.1:${port}/repro`;
+    try {
+      await expect(ensureCloudSchema()).rejects.toThrow();
+      expect(connections.length).toBe(1); // positive control: the attempt reached the network
+
+      // With the bug the cached rejection is replayed and the server sees no
+      // second connection; with the fix the cache is cleared and a fresh
+      // attempt lands. Assert the re-attempt, not the error message.
+      await expect(ensureCloudSchema()).rejects.toThrow();
+      expect(connections.length).toBe(2);
+    } finally {
+      await closeCloud();
+      server.close();
+      if (hadUrl) process.env.HASNA_INSTRUCTIONS_DATABASE_URL = oldUrl;
+      else delete process.env.HASNA_INSTRUCTIONS_DATABASE_URL;
+    }
   });
 });
