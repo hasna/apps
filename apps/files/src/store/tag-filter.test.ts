@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import type { HasnaHttpTransport } from "@hasna/contracts/client/transport";
 import { wrapExecutor, type PgExecutor } from "../generated/storage-kit/query.js";
-import { listFiles as listCloudFiles } from "../server/pg-store.js";
+import { listFiles as listCloudFiles, tagFile as cloudTagFile, untagFile as cloudUntagFile } from "../server/pg-store.js";
 import type { FileWithTags } from "../types/index.js";
 import { ApiStore } from "./api-store.js";
 import { LocalStore } from "./local-store.js";
@@ -126,6 +126,73 @@ afterEach(async () => {
   }
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   testDir = undefined;
+});
+
+describe("cloud tag normalization mirrors the local store", () => {
+  test("tagFile stores lowercase and listFiles/untagFile look up lowercase", async () => {
+    // In-memory executor simulating a case-sensitive tags table: the stored
+    // name is the key, exactly like a real Postgres `=` comparison, so a
+    // mixed-case lookup cannot find a lowercase row and vice versa.
+    const stored = new Map<string, string>(); // stored tag name -> tag id
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const executor: PgExecutor = {
+      async query(text: string, values: readonly unknown[] = []) {
+        queries.push({ text, values });
+        const sql = text.trim();
+        if (/^SELECT id FROM tags WHERE name = \$1/i.test(sql)) {
+          const id = stored.get(String(values[0]));
+          return { rows: id ? ([{ id }] as never[]) : ([] as never[]), rowCount: id ? 1 : 0 };
+        }
+        if (/^INSERT INTO tags/i.test(sql)) {
+          const id = String(values[0]);
+          const name = String(values[1]);
+          if (!stored.has(name)) stored.set(name, id);
+          return { rows: [], rowCount: 1 };
+        }
+        if (/^INSERT INTO file_tags/i.test(sql)) return { rows: [], rowCount: 1 };
+        if (/^DELETE FROM file_tags/i.test(sql)) {
+          // values: [fileId, tagName] — the subquery resolves the tag id by name
+          return { rows: [], rowCount: stored.has(String(values[1])) ? 1 : 0 };
+        }
+        if (/^SELECT DISTINCT f\.\*/i.test(sql)) {
+          // The tag filter is one of several bound params (status comes first),
+          // so match on membership like a real `t_filter.name = $N` join.
+          const tag = values.find((v) => typeof v === "string" && stored.has(v));
+          return {
+            rows: tag !== undefined ? ([syntheticFile(MEMBER_ID, [String(tag)])] as never[]) : ([] as never[]),
+            rowCount: tag !== undefined ? 1 : 0,
+          };
+        }
+        if (/SELECT t\.name FROM tags/i.test(sql)) {
+          const names = [...stored.keys()];
+          return { rows: names.map((name) => ({ name })) as never[], rowCount: names.length };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    const client = wrapExecutor(executor);
+
+    // Storing a mixed-case tag must land as lowercase "alumia" — never a
+    // case-duplicate row (the local store lowercases on both lookup and insert).
+    await cloudTagFile(client, MEMBER_ID, "Alumia");
+    const tagInsert = queries.find((q) => /^INSERT INTO tags/i.test(q.text.trim()))!;
+    expect(tagInsert.values[1]).toBe("alumia");
+
+    // The lowercase filter matches the normalized stored tag.
+    expect((await listCloudFiles(client, { tag: "alumia", limit: 10 })).map((file) => file.id)).toEqual([MEMBER_ID]);
+
+    // A mixed-case filter is normalized to the same key before it reaches SQL.
+    const mixedCase = await listCloudFiles(client, { tag: "Alumia", limit: 10 });
+    const fileSelects = queries.filter((q) => /^SELECT DISTINCT f\.\*/i.test(q.text.trim()));
+    expect(fileSelects[fileSelects.length - 1].values).toContain("alumia");
+    expect(fileSelects[fileSelects.length - 1].values).not.toContain("Alumia");
+    expect(mixedCase.map((file) => file.id)).toEqual([MEMBER_ID]);
+
+    // Untag resolves the tag by the normalized name too.
+    await cloudUntagFile(client, MEMBER_ID, "Alumia");
+    const deleteQ = queries.find((q) => /^DELETE FROM file_tags/i.test(q.text.trim()))!;
+    expect(deleteQ.values).toEqual([MEMBER_ID, "alumia"]);
+  });
 });
 
 describe("local exact tag filtering", () => {

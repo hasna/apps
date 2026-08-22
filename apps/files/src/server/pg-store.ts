@@ -387,7 +387,9 @@ export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery):
   if (opts.max_size !== undefined) add("f.size <= $?", opts.max_size);
   const joins: string[] = [];
   if (opts.tag) {
-    params.push(opts.tag);
+    // Tags are stored lowercase (getOrCreateTag), so the filter must compare
+    // the normalized name — mirroring the local store's lookup semantics.
+    params.push(opts.tag.toLowerCase());
     joins.push(
       `JOIN file_tags ft_filter ON ft_filter.file_id = f.id
        JOIN tags t_filter ON t_filter.id = ft_filter.tag_id AND t_filter.name = $${params.length}`,
@@ -824,11 +826,15 @@ export async function listTags(client: TypedQueryClient): Promise<Tag[]> {
 }
 
 async function getOrCreateTag(client: TypedQueryClient, name: string): Promise<string> {
-  const existing = await client.get<{ id: string }>("SELECT id FROM tags WHERE name = $1", [name]);
+  // Tags are normalized to lowercase on both lookup and insert, mirroring the
+  // local store (db/tags.ts) so mixed-case input never creates case-duplicate
+  // rows and lowercase lookups always match.
+  const normalized = name.toLowerCase();
+  const existing = await client.get<{ id: string }>("SELECT id FROM tags WHERE name = $1", [normalized]);
   if (existing) return existing.id;
   const id = `tag_${nanoid(10)}`;
-  await client.execute("INSERT INTO tags (id, name) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING", [id, name]);
-  const row = await client.get<{ id: string }>("SELECT id FROM tags WHERE name = $1", [name]);
+  await client.execute("INSERT INTO tags (id, name) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING", [id, normalized]);
+  const row = await client.get<{ id: string }>("SELECT id FROM tags WHERE name = $1", [normalized]);
   return row!.id;
 }
 
@@ -840,7 +846,7 @@ export async function tagFile(client: TypedQueryClient, fileId: string, name: st
 export async function untagFile(client: TypedQueryClient, fileId: string, name: string): Promise<void> {
   await client.execute(
     "DELETE FROM file_tags WHERE file_id = $1 AND tag_id = (SELECT id FROM tags WHERE name = $2)",
-    [fileId, name],
+    [fileId, name.toLowerCase()],
   );
 }
 
