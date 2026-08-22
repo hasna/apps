@@ -18,6 +18,7 @@ type ApiRouteHandler = (
   url: URL,
   path: string,
   method: string,
+  socketAddress?: string | null,
 ) => Promise<Response | null>;
 
 const allRouteModules: readonly RouteKey[] = [
@@ -121,10 +122,11 @@ export async function handleApiRequest(
   url: URL,
   path: string,
   method: string,
+  socketAddress?: string | null,
 ): Promise<Response | null> {
   for (const route of routeModulesFor(path)) {
     const handler = await loadRouteHandler(route);
-    const response = await handler(req, url, path, method);
+    const response = await handler(req, url, path, method, socketAddress);
     if (response !== null) return response;
   }
 

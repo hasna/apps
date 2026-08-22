@@ -17,6 +17,7 @@ import {
   type DomainReadinessMutationInput,
 } from '../../lib/domain-readiness-service.js';
 import { json, notFound, badRequest, internalError, resolveId, resolveIdStrict, resolveOptionalId, parseBody, sanitizeProvider, checkRateLimit, tooManyRequests, queryInteger, optionalQueryInteger, queryPage } from './helpers.js';
+import { resolveClientIp } from '../self-hosted/auth/client-ip.js';
 
 class DomainReadinessRequestError extends Error {}
 
@@ -39,7 +40,7 @@ function localSandboxStore() {
   return createSqliteEmailStore({ database: getDatabase() });
 }
 
-export async function handle(req: Request, url: URL, path: string, method: string): Promise<Response | null> {
+export async function handle(req: Request, url: URL, path: string, method: string, socketAddress?: string | null): Promise<Response | null> {
 function enumField<T extends string>(body: Record<string, unknown>, key: string, allowed: readonly T[]): T | undefined {
   const value = body[key];
   if (value === undefined) return undefined;
@@ -225,7 +226,7 @@ if (domainDnsMatch && method === "GET") {
 // POST /api/domains/:id/verify
 const domainVerifyMatch = path.match(/^\/api\/domains\/([^/]+)\/verify$/);
 if (domainVerifyMatch && method === "POST") {
-  const ip = req.headers.get("x-forwarded-for") ?? "local";
+  const ip = resolveClientIp({ headers: req.headers, socketAddress }) ?? "local";
   if (!checkRateLimit(ip, "verify", 10)) return tooManyRequests();
   const id = resolveId("domains", domainVerifyMatch[1]!);
   if (!id) return notFound();
