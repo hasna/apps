@@ -678,6 +678,30 @@ describe("updateMemory", () => {
     expect(getTagsForMemory(db, m.id)).toEqual(["new1", "new2"]);
   });
 
+  it("does not replace tags when the update itself fails (atomicity)", () => {
+    const m = createMemory(
+      { key: "k", value: "original content", tags: ["tag-original"] },
+      "merge",
+      db
+    );
+    expect(getTagsForMemory(db, m.id)).toEqual(["tag-original"]);
+
+    // status "bogus" violates the memories.status CHECK constraint, so the
+    // guarded UPDATE throws. The tag rewrite must not have already replaced
+    // the join rows — regression: the DELETE/INSERT ran before the UPDATE,
+    // with no transaction, leaving new tags + old content + unbumped version.
+    expect(() => {
+      updateMemory(m.id, { status: "bogus" as any, tags: ["tag-replaced"], version: 1 }, db);
+    }).toThrow();
+
+    const after = getMemory(m.id, db)!;
+    expect(getTagsForMemory(db, m.id)).toEqual(["tag-original"]);
+    expect(after.status).toBe("active");
+    expect(after.version).toBe(1);
+    expect(after.value).toBe("original content");
+    expect(after.tags).toEqual(["tag-original"]);
+  });
+
   it("updates summary", () => {
     const m = createMemory({ key: "k", value: "v" }, "merge", db);
     const updated = updateMemory(m.id, { summary: "a summary", version: 1 }, db);

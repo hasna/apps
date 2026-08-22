@@ -1408,29 +1408,43 @@ export function updateMemory(
   if (input.tags !== undefined) {
     sets.push("tags = ?");
     params.push(JSON.stringify(input.tags));
-    // Update tags table
-    d.run("DELETE FROM memory_tags WHERE memory_id = ?", [memoryId]);
-    const insertTag = d.prepare(
-      "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)"
-    );
-    for (const tag of input.tags) {
-      insertTag.run(memoryId, tag);
-    }
   }
 
   params.push(memoryId);
-  const result = d.run(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`, params);
 
-  // A write that touched nothing must never be reported as a write. The row was
-  // read successfully a few lines up, so zero affected rows means the statement
-  // did not do what the caller asked and the caller cannot tell from the return
-  // value alone — which is exactly how this failed silently before.
-  if (result.changes === 0) {
-    throw new Error(
-      `Update affected no rows for memory ${memoryId}: the record was read but not written. ` +
-        `This is a bug in @hasna/mementos, not a bad argument — please report it.`,
-    );
-  }
+  // The tag rewrite and the guarded UPDATE are one transaction, and the UPDATE
+  // runs first: if it fails (CHECK constraint, FK, or the zero-changes guard
+  // below), the memory_tags join rows must not have been replaced already —
+  // otherwise the memory persists with the NEW tags, the OLD content, and an
+  // unbumped version. A tag-write failure inside the transaction rolls the
+  // whole update back the same way.
+  d.transaction(() => {
+    const res = d.run(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`, params);
+
+    // A write that touched nothing must never be reported as a write. The row was
+    // read successfully a few lines up, so zero affected rows means the statement
+    // did not do what the caller asked and the caller cannot tell from the return
+    // value alone — which is exactly how this failed silently before.
+    if (res.changes === 0) {
+      throw new Error(
+        `Update affected no rows for memory ${memoryId}: the record was read but not written. ` +
+          `This is a bug in @hasna/mementos, not a bad argument — please report it.`,
+      );
+    }
+
+    if (input.tags !== undefined) {
+      // Update tags table
+      d.run("DELETE FROM memory_tags WHERE memory_id = ?", [memoryId]);
+      const insertTag = d.prepare(
+        "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)"
+      );
+      for (const tag of input.tags) {
+        insertTag.run(memoryId, tag);
+      }
+    }
+
+    return res;
+  });
 
   const updated = getMemory(memoryId, d)!;
 
