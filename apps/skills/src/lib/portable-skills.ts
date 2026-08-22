@@ -268,6 +268,12 @@ export function scaffoldPortableSkill(name: string, options: ScaffoldPortableSki
     rmSync(skillPath, { recursive: true, force: true });
   }
 
+  // Deliberate creation-time template selection (task 568efaaa / P-01641): this default
+  // only chooses WHICH scaffold template to write — neither template records `kind` in
+  // the artifact (portable metadata in skill.json has no kind here; renderSkillMd keeps
+  // consumer frontmatter to name + description), so the default never launders an
+  // absent kind into a claimed `executable`. New skills are kind-less and sync as full
+  // content; a scaffolded skill that is genuinely runnable declares kind when authored.
   const kind: SkillKind = options.kind ?? "executable";
   const description = options.description ?? `${displayName(skillName)} skill`;
 
