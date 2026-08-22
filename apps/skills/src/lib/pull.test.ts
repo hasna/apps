@@ -887,6 +887,47 @@ describe("pullSkills — verified bundle path", () => {
       source.cleanup();
     }
   });
+
+  test("a bundle-less re-pull atomically replaces the entry when a mid-write failure would otherwise destroy it", async () => {
+    const root = tempRoot();
+    const v1 = "---\nname: atomic-demo\ndescription: first\nkind: instruction\n---\n# Demo v1\n";
+    const v2 = "---\nname: atomic-demo\ndescription: second\nkind: instruction\n---\n# Demo v2\n";
+    try {
+      // Install v1 through the real metadata-only pull path.
+      const first = await pullSkills({
+        names: ["atomic-demo"],
+        rootDir: root,
+        client: fakeClient({ "atomic-demo": { md: v1, meta: { kind: "instruction" } } }),
+      });
+      expect(first.results[0].success).toBe(true);
+      expect(readFileSync(join(root, "atomic-demo", "SKILL.md"), "utf-8")).toBe(v1);
+
+      // Squat a DIRECTORY on skill.json inside the live entry: the direct-overwrite
+      // writer (writeCorpusSkill) would now throw EISDIR on its skill.json write,
+      // AFTER SKILL.md was already overwritten — destroying v1 and leaving a
+      // truncated/mismatched pair. The atomic installer never writes into the live
+      // target, so the re-pull must swap the whole tree (squat included) aside and
+      // install v2 complete.
+      rmSync(join(root, "atomic-demo", "skill.json"));
+      mkdirSync(join(root, "atomic-demo", "skill.json"));
+
+      const second = await pullSkills({
+        names: ["atomic-demo"],
+        rootDir: root,
+        client: fakeClient({ "atomic-demo": { md: v2, meta: { kind: "instruction" } } }),
+      });
+      expect(second.results[0].success).toBe(true);
+      expect(readFileSync(join(root, "atomic-demo", "SKILL.md"), "utf-8")).toBe(v2);
+      // skill.json is a real manifest file again, never the squatting directory.
+      const manifest = JSON.parse(readFileSync(join(root, "atomic-demo", "skill.json"), "utf-8"));
+      expect(manifest.name).toBe("atomic-demo");
+      // No staging or backup leftovers in the corpus root.
+      const leftovers = readdirSync(root).filter((entry) => entry.startsWith(".pull-"));
+      expect(leftovers).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("verifyBundleResponseBytes", () => {
