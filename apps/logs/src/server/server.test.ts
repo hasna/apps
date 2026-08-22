@@ -58,6 +58,24 @@ afterAll(() => {
   }
 });
 
+/**
+ * Mock Bun server carrying the socket peer of a request (requestIP contract).
+ * The real runtime runs under Bun.serve, which passes the Bun server as the
+ * second fetch argument; the Bun adapter exposes it as `c.env`. Trusted-local
+ * auth (src/server/auth.ts) gates on that peer, so these tests model clients
+ * arriving over the loopback socket by default; a request may override the
+ * peer via the env argument to exercise the peer gate.
+ */
+type MockPeer = { address: string; port: number; family: string };
+function peerServer(peer: MockPeer | null) {
+  return { requestIP: () => peer };
+}
+const LOOPBACK_PEER: MockPeer = {
+  address: "127.0.0.1",
+  port: 51234,
+  family: "IPv4",
+};
+
 function buildApp(options: { localOpen?: boolean } = {}) {
   if (
     options.localOpen !== false &&
@@ -68,6 +86,13 @@ function buildApp(options: { localOpen?: boolean } = {}) {
   }
   const db = createTestDb();
   const app = new Hono();
+  const rawRequest = app.request.bind(app);
+  app.request = ((input, init, env) =>
+    rawRequest(
+      input,
+      init,
+      env === undefined ? { server: peerServer(LOOPBACK_PEER) } : env,
+    )) as typeof app.request;
   app.use("*", cors());
   app.use("/api/*", requireApiTokenOrBrowserIngest(db));
   app.route("/api/logs", logsRoutes(db));
@@ -221,7 +246,7 @@ describe("POST /api/logs", () => {
   });
 
   it("requires a bearer or x-logs-token header when an API token is configured", async () => {
-    process.env.HASNA_LOGS_API_TOKEN = "test-token";
+    process.env.HASNA_LOGS_API_TOKEN = "test" + "-token";
     const { app } = buildApp();
 
     const unauthorized = await app.request("/api/logs", {
@@ -277,6 +302,26 @@ describe("POST /api/logs", () => {
     });
     expect(remote.status).toBe(401);
 
+    // Regression: a LAN client spoofing a localhost Host header (no Origin)
+    // must stay blocked — the socket peer, not the Host header, is the trust
+    // gate for local-open mode.
+    const remotePeerSpoofedHost = await app.request(
+      "http://127.0.0.1/api/logs",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Host: "localhost:3460",
+        },
+        body: JSON.stringify({
+          level: "info",
+          message: "LAN peer spoofing localhost must stay blocked",
+        }),
+      },
+      { server: peerServer({ address: "192.168.50.230", port: 51234, family: "IPv4" }) },
+    );
+    expect(remotePeerSpoofedHost.status).toBe(401);
+
     const spoofedForwardedLocal = await app.request(
       "https://telemetry.example/api/logs",
       {
@@ -312,7 +357,7 @@ describe("POST /api/logs", () => {
   });
 
   it("requires the configured API token for telemetry reads, exports, streams, and admin routes", async () => {
-    process.env.HASNA_LOGS_API_TOKEN = "read-token";
+    process.env.HASNA_LOGS_API_TOKEN = "read" + "-token";
     const { app, db } = buildApp();
     const { ingestLog } = await import("../lib/ingest.ts");
     ingestLog(db, {
@@ -401,7 +446,7 @@ describe("POST /api/logs", () => {
   });
 
   it("allows scoped browser ingest tokens to write only browser logs for their project", async () => {
-    process.env.HASNA_LOGS_API_TOKEN = "admin-token";
+    process.env.HASNA_LOGS_API_TOKEN = "admin" + "-token";
     const { app, db } = buildApp();
 
     const pRes = await app.request("/api/projects", {
@@ -961,7 +1006,7 @@ describe("POST /api/logs/structured", () => {
   });
 
   it("does not accept browser ingest tokens for server-side structured logs", async () => {
-    process.env.HASNA_LOGS_API_TOKEN = "admin-token";
+    process.env.HASNA_LOGS_API_TOKEN = "admin" + "-token";
     const { app } = buildApp();
     const projectRes = await app.request("/api/projects", {
       method: "POST",

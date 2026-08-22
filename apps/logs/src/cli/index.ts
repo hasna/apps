@@ -1465,8 +1465,13 @@ program
   .command("serve")
   .description("Start the REST API server")
   .option("--port <n>", "Port", "3460")
+  .option(
+    "--local-open",
+    "Allow trusted local loopback API requests without a token",
+  )
   .action(async (opts) => {
     process.env.LOGS_PORT = opts.port;
+    if (opts.localOpen) process.env.HASNA_LOGS_LOCAL_OPEN = "1";
     const server = await import("../server/index.ts");
     Bun.serve(server.default);
   });
