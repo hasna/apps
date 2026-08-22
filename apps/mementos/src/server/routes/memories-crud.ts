@@ -12,6 +12,7 @@ import { parseDuration } from "../../lib/duration.js";
 import type {
   MemoryCategory,
   MemoryScope,
+  MemorySource,
   MemoryFilter,
   CreateMemoryInput,
 } from "../../types/index.js";
@@ -38,6 +39,14 @@ addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
   if (q["agent_id"]) filter.agent_id = q["agent_id"];
   if (q["project_id"]) filter.project_id = q["project_id"];
   if (q["session_id"]) filter.session_id = q["session_id"];
+  if (q["machine_id"]) filter.machine_id = q["machine_id"];
+  if (q["visible_to_machine_id"]) filter.visible_to_machine_id = q["visible_to_machine_id"];
+  if (q["search"]) filter.search = q["search"];
+  if (q["source"])
+    filter.source = q["source"].includes(",")
+      ? (q["source"].split(",") as MemorySource[])
+      : (q["source"] as MemorySource);
+  if (q["flag"]) filter.flag = q["flag"];
   if (q["namespace"]) filter.namespace = q["namespace"];
   if (q["status"]) filter.status = q["status"] as import("../../types/index.js").MemoryStatus;
 
