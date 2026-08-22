@@ -28,7 +28,10 @@ export function healthPayload(name: string = MCP_NAME): { status: string; name: 
   return { status: "ok", name };
 }
 
-export async function handleMcpHttpRoutes(req: Request): Promise<Response | null> {
+export async function handleMcpHttpRoutes(
+  req: Request,
+  options: { port?: number; hostname?: string } = {},
+): Promise<Response | null> {
   const url = new URL(req.url);
 
   if (url.pathname === "/health" && req.method === "GET") {
@@ -36,8 +39,25 @@ export async function handleMcpHttpRoutes(req: Request): Promise<Response | null
   }
 
   if (url.pathname === "/mcp") {
+    const port = options.port ?? DEFAULT_MCP_HTTP_PORT;
+    const hostname = options.hostname ?? "127.0.0.1";
+    // Fixed allowlist, never derived from the request: a DNS-rebinding request
+    // carries the ATTACKER's Host header, so host validation only works when
+    // the accepted set is the server's own loopback addresses.
+    const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname)) {
+      allowedHosts.push(`${hostname}:${port}`);
+    }
+    const allowedOrigins = (process.env["REPOS_MCP_ALLOWED_ORIGINS"] ?? "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
+      enableDnsRebindingProtection: true,
+      allowedHosts,
+      allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
     });
     const server = buildServer();
     await server.connect(transport);

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
@@ -20,6 +21,7 @@ import { ensureWorkspaceBootstrap, startAutoIndexWorker } from "../lib/auto-inde
 import { getHealthReport } from "../lib/utils.js";
 import { handleMcpHttpRoutes } from "../mcp/http.js";
 import { getCliVersion } from "../cli/version.js";
+import { isLoopbackHostname } from "./loopback.js";
 import { apiJsonResponse } from "./output.js";
 
 const VERSION = getCliVersion();
@@ -36,6 +38,9 @@ function handleCliFlags(argv: string[]): boolean {
     console.log("");
     console.log("Environment:");
     console.log("  REPOS_PORT     Server port (default: 19450)");
+    console.log("  REPOS_HOST     Hostname to bind (default: 127.0.0.1 — loopback only)");
+    console.log("  REPOS_SERVE_TOKEN  Bearer token required on every route when set;");
+    console.log("                     mandatory when REPOS_HOST is not loopback");
     return true;
   }
 
@@ -52,6 +57,24 @@ if (handleCliFlags(process.argv.slice(2))) {
 }
 
 const PORT = parseInt(process.env["REPOS_PORT"] || "19450");
+const HOSTNAME = process.env["REPOS_HOST"] || "127.0.0.1";
+// The bearer value served from the REPOS_SERVE_TOKEN environment contract.
+const SERVE_BEARER = process.env["REPOS_SERVE_TOKEN"] || "";
+
+if (!isLoopbackHostname(HOSTNAME) && !SERVE_BEARER) {
+  console.error(
+    `refusing to bind repos-serve to non-loopback host ${HOSTNAME} without REPOS_SERVE_TOKEN; ` +
+      "set REPOS_SERVE_TOKEN to expose the API and MCP endpoint over the network",
+  );
+  process.exit(1);
+}
+
+function bearerMatches(authorizationHeader: string): boolean {
+  const provided = authorizationHeader.startsWith("Bearer ") ? authorizationHeader.slice("Bearer ".length) : "";
+  const expectedDigest = createHash("sha256").update(SERVE_BEARER).digest();
+  const providedDigest = createHash("sha256").update(provided).digest();
+  return timingSafeEqual(expectedDigest, providedDigest);
+}
 
 const clients = new Set<ServerWebSocket>();
 
@@ -84,6 +107,7 @@ process.on("SIGINT", () => autoIndexWorker.stop());
 process.on("SIGTERM", () => autoIndexWorker.stop());
 
 Bun.serve({
+  hostname: HOSTNAME,
   port: PORT,
   websocket: {
     open(ws) {
@@ -105,19 +129,36 @@ Bun.serve({
     const path = url.pathname;
     const q = parseQuery(url);
 
+    // Token gate: with REPOS_SERVE_TOKEN set, every route — the MCP endpoint
+    // included — requires `Authorization: Bearer <token>`. Cross-origin pages
+    // cannot read responses (no CORS headers) and cannot forge the token.
+    if (SERVE_BEARER && !bearerMatches(req.headers.get("authorization") ?? "")) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+
+    // DNS-rebinding guard for loopback binds: a browser-issued request to an
+    // attacker-resolved hostname carries Host: <attacker-domain>, and the
+    // request is then same-origin to the attacker's page, so no CORS applies.
+    // The MCP SDK rejects those Hosts on /mcp; this guard applies the same
+    // fixed allowlist to every /api route so a rebinding page cannot read the
+    // registry or POST /api/scan with attacker-chosen roots. A non-loopback
+    // bind already mandates REPOS_SERVE_TOKEN, which gates every route.
+    if (isLoopbackHostname(HOSTNAME)) {
+      const loopbackHosts = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
+      const host = req.headers.get("host") ?? "";
+      if (!loopbackHosts.has(host)) {
+        return json({ error: `Invalid Host header: ${host}` }, 403);
+      }
+    }
+
     // MCP Streamable HTTP (shared long-lived transport)
-    const mcpResponse = await handleMcpHttpRoutes(req);
+    const mcpResponse = await handleMcpHttpRoutes(req, { port: PORT, hostname: HOSTNAME });
     if (mcpResponse) return mcpResponse;
 
-    // CORS preflight
+    // CORS preflight — answered without any Access-Control-Allow-* header, so
+    // cross-origin browsers are blocked from reading every route.
     if (req.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-        },
-      });
+      return new Response(null, { status: 204 });
     }
 
     // ── API Routes ──
@@ -228,4 +269,4 @@ Bun.serve({
   },
 });
 
-console.log(`repos server running on http://localhost:${PORT}`);
+console.log(`repos server running on http://${HOSTNAME}:${PORT}`);
