@@ -8,6 +8,7 @@ import { syncKnown, KNOWN_CONFIGS, syncProject, PROJECT_CONFIG_FILES } from "./s
 import { detectMachineContext } from "./machine";
 import { CONFIG_AGENTS } from "../types/index";
 import { tempRootPath } from "./test-temp-root";
+import { getConfigsStatus } from "../status";
 
 let tmpDir: string;
 
@@ -196,6 +197,80 @@ describe("syncKnown", () => {
 
     expect(result.updated).toBe(1);
     expect(config.outputs.map((output) => output.agent)).toEqual(["codex", "codewith", "opencode", "aicopilot", "antigravity", "cursor", "qwen"]);
+  });
+
+  // Regression: 452cb9d6 — extensionless shell dotfiles (~/.zshrc) resolved to
+  // the "text" dialect via detectFormat's extname-only keying, routing them to
+  // redactGeneric — a token-SHAPE-only matcher that never checks secret key
+  // names — so `export MY_DEPLOY_TOKEN=...` was stored verbatim in the DB.
+  // The redaction dialect must come from the PATH (redactFormatForTarget),
+  // while the stored row keeps the coarse format.
+  //
+  // The sentinel value is interpolated at runtime (never a literal assignment
+  // in source) so the staged-secrets scanners stay clean — the disk file the
+  // test writes still holds the literal, which is what the assertions check.
+  test("redacts secret key names in extensionless shell dotfiles before storing", async () => {
+    const db = getDatabase();
+    const secretValue = "synthetic-value-abc123xyz";
+    process.env["CONFIGS_HOME"] = tmpDir;
+    mkdirSync(join(tmpDir, ".claude", "rules"), { recursive: true });
+    try {
+      writeFileSync(join(tmpDir, ".zshrc"), `export MY_DEPLOY_TOKEN=${secretValue}\n`);
+
+      const result = await syncKnown({ store: new LocalConfigStore(db), agent: "zsh" });
+      const config = getConfig("zshrc", db);
+
+      expect(result.added).toBe(1);
+      expect(config.format).toBe("text"); // coarse stored format is kept
+      expect(config.content).toContain("{{MY_DEPLOY_TOKEN}}");
+      expect(config.content).not.toContain(secretValue);
+    } finally {
+      delete process.env["CONFIGS_HOME"];
+    }
+  });
+
+  test("status drift check sees no drift for a shell-redacted dotfile row", async () => {
+    const db = getDatabase();
+    const secretValue = "synthetic-value-abc123xyz";
+    process.env["CONFIGS_HOME"] = tmpDir;
+    mkdirSync(join(tmpDir, ".claude", "rules"), { recursive: true });
+    try {
+      writeFileSync(join(tmpDir, ".zshrc"), `export MY_DEPLOY_TOKEN=${secretValue}\n`);
+      await syncKnown({ store: new LocalConfigStore(db), agent: "zsh" });
+
+      const status = await getConfigsStatus(new LocalConfigStore(db), { homeDir: tmpDir });
+      expect(status.health.driftedTargets).toBe(0);
+      expect(status.health.unredactedSecretFindings).toBe(0);
+    } finally {
+      delete process.env["CONFIGS_HOME"];
+    }
+  });
+
+  test("re-sync corrects legacy rows that stored the literal shell value", async () => {
+    const db = getDatabase();
+    const secretValue = "synthetic-value-abc123xyz";
+    process.env["CONFIGS_HOME"] = tmpDir;
+    mkdirSync(join(tmpDir, ".claude", "rules"), { recursive: true });
+    try {
+      writeFileSync(join(tmpDir, ".zshrc"), `export MY_DEPLOY_TOKEN=${secretValue}\n`);
+      createConfig({
+        name: "zshrc",
+        category: "shell",
+        agent: "zsh",
+        format: "text",
+        content: `export MY_DEPLOY_TOKEN=${secretValue}\n`,
+        target_path: "~/.zshrc",
+      }, db);
+
+      const result = await syncKnown({ store: new LocalConfigStore(db), agent: "zsh" });
+      const config = getConfig("zshrc", db);
+
+      expect(result.updated).toBe(1);
+      expect(config.content).toContain("{{MY_DEPLOY_TOKEN}}");
+      expect(config.content).not.toContain(secretValue);
+    } finally {
+      delete process.env["CONFIGS_HOME"];
+    }
   });
 });
 

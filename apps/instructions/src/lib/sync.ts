@@ -324,8 +324,14 @@ export async function syncKnown(opts: SyncKnownOptions = {}): Promise<SyncResult
       const rawContent = normalizeKnownConfigSource(known, readFileSync(abs, "utf-8"));
       if (rawContent.length > 500_000) { result.skipped.push(known.path + " (too large)"); continue; }
       const fmt = known.format ?? detectFormat(abs);
-      // Always redact before storing
-      const redacted = redactContent(rawContent, fmt as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      // Always redact before storing. The DIALECT comes from the path, not the
+      // coarse stored format: detectFormat keys off extname only, so an
+      // extensionless shell dotfile (~/.zshrc) resolves to "text" and routes to
+      // redactGeneric — a token-SHAPE-only matcher that never checks secret key
+      // names — leaving `export MY_DEPLOY_TOKEN=...` stored verbatim. The row
+      // keeps the coarse format; consumers re-derive the dialect from the path
+      // via redactFormatForTarget (todos 452cb9d6).
+      const redacted = redactContent(rawContent, redactFormatForTarget(abs, fmt as RedactFormat));
       const machineAware = templateizeMachineContent(redacted.content, machine);
       const content = machineAware.content;
       const isTemplate = redacted.isTemplate || machineAware.changed;

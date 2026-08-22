@@ -282,7 +282,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const allConfigs = await store.listConfigs({ kind: "file" });
         const { existsSync: ex, readFileSync: rf } = await import("node:fs");
         const { expandPath } = await import("../lib/apply.js");
-        const { redactContent } = await import("../lib/redact.js");
+        const { redactContent, redactFormatForTarget } = await import("../lib/redact.js");
         let drifted = 0, missing = 0, templates = 0;
         const driftedSlugs: string[] = [];
         for (const c of allConfigs) {
@@ -290,9 +290,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           if (!c.target_path) continue;
           const abs = expandPath(c.target_path);
           if (!ex(abs)) { missing++; continue; }
-          // Compare redacted disk content vs stored (lightweight — only for known configs, ~30 files)
+          // Compare redacted disk content vs stored (lightweight — only for known configs, ~30 files).
+          // Dialect from the PATH: stored shell rows keep the coarse "text" format, and redacting
+          // disk with "text" leaves literals in place — false drift against shell-redacted stored
+          // content (todos 452cb9d6).
           const disk = rf(abs, "utf-8");
-          const { content: redactedDisk } = redactContent(disk, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+          const { content: redactedDisk } = redactContent(disk, redactFormatForTarget(c.target_path, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text"));
           if (redactedDisk !== c.content) { drifted++; driftedSlugs.push(c.slug); }
         }
         return ok({
@@ -337,13 +340,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ rendered, config_id: config.id, slug: config.slug });
       }
       case "scan_secrets": {
-        const { scanSecrets, redactContent } = await import("../lib/redact.js");
+        const { scanSecrets, redactContent, redactFormatForTarget } = await import("../lib/redact.js");
         const configs = args["id_or_slug"]
           ? [await store.getConfig(args["id_or_slug"] as string)]
           : await store.listConfigs({ kind: "file" });
         const findings: Array<{ slug: string; secrets: number; vars: string[] }> = [];
         for (const c of configs) {
-          const fmt = c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text";
+          // Dialect from the path: stored shell rows keep the coarse "text"
+          // format, so rescans must re-derive the shell dialect or stored
+          // literals stay invisible (todos 452cb9d6).
+          const fmt = redactFormatForTarget(c.target_path ?? "", c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
           const secrets = scanSecrets(c.content, fmt);
           if (secrets.length > 0) {
             findings.push({ slug: c.slug, secrets: secrets.length, vars: secrets.map((s) => s.varName) });

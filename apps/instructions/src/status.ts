@@ -5,7 +5,7 @@ import { expandPath } from "./lib/apply.js";
 import { isRetiredOrUnsupportedConfigAgent } from "./lib/config-agents.js";
 import { getPackageVersion } from "./lib/package-version.js";
 import { inspectManagedSkillRuntimes } from "./lib/managed-skill-runtimes.js";
-import { redactContent, scanSecrets, type RedactFormat } from "./lib/redact.js";
+import { redactContent, scanSecrets, redactFormatForTarget, type RedactFormat } from "./lib/redact.js";
 
 const PACKAGE_NAME = "@hasna/instructions";
 const PACKAGE_VERSION = getPackageVersion();
@@ -116,7 +116,10 @@ export async function getConfigsStatus(
   let knownTargets = 0;
 
   for (const config of fileConfigs) {
-    unredactedSecretFindings += scanSecrets(config.content, config.format as RedactFormat).length;
+    // Dialect from the path: a stored row keeps the coarse format ("text" for
+    // ~/.zshrc), so rescans must re-derive the shell dialect or pre-existing
+    // stored literals stay invisible (todos 452cb9d6).
+    unredactedSecretFindings += scanSecrets(config.content, redactFormatForTarget(config.target_path ?? "", config.format as RedactFormat)).length;
     if (isRetiredOrUnsupportedConfigAgent(config.agent)) continue;
     if (!config.target_path) continue;
 
@@ -128,7 +131,11 @@ export async function getConfigsStatus(
     }
 
     const disk = readFileSync(targetPath, "utf-8");
-    const { content: redactedDisk } = redactContent(disk, config.format as RedactFormat);
+    // Redact the disk side with the PATH-derived dialect: stored shell rows
+    // keep the coarse "text" format, and redacting disk with "text" leaves the
+    // literal — falsely drifting against the shell-redacted stored content
+    // (todos 452cb9d6).
+    const { content: redactedDisk } = redactContent(disk, redactFormatForTarget(config.target_path, config.format as RedactFormat));
     if (redactedDisk !== config.content) {
       driftedTargets += 1;
     }
