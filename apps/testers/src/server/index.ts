@@ -276,14 +276,15 @@ async function handleRequest(req: Request): Promise<Response> {
   const { pathname, searchParams } = parseUrl(req);
   const method = req.method;
 
-  // CORS preflight
+  // CORS preflight — must mirror the v1 surface (PATCH + x-api-key are used by
+  // the SDK and dashboard clients against /v1/*, which is routed below).
   if (method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
       },
     });
   }

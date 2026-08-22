@@ -209,4 +209,16 @@ describe("CORS", () => {
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
     expect(res.headers.get("Access-Control-Allow-Methods")).toContain("GET");
   });
+
+  test("OPTIONS preflight allows the v1 surface (PATCH + x-api-key)", async () => {
+    // Regression: the preflight used to allow only GET/POST/PUT/DELETE and
+    // Content-Type/Authorization, so SDK and dashboard browser clients could
+    // not complete the /v1/* preflight (x-api-key header, PATCH methods).
+    const res = await fetch(`${baseUrl}/v1/schedules`, { method: "OPTIONS" });
+    expect(res.status).toBe(204);
+    const methods = res.headers.get("Access-Control-Allow-Methods") ?? "";
+    const headers = res.headers.get("Access-Control-Allow-Headers") ?? "";
+    expect(methods).toContain("PATCH");
+    expect(headers).toContain("x-api-key");
+  });
 });
