@@ -41,7 +41,7 @@
       "kind": "sdk",
       "status": "deferred",
       "authMode": "local-only",
-      "deferReason": "The \".\" export is a hand-written library surface, not a client generated from an OpenAPI document; the generated service SDK lands with the /v1 API surface."
+      "deferReason": "The \"./sdk\" export aliases the hand-written library surface (dist/index.js), satisfying the four-surface law's importable-module requirement; a client generated from the OpenAPI document still lands with the /v1 API surface."
     }
   ],
   "storage": {
