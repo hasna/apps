@@ -97,14 +97,25 @@ fi
 rm -rf "$RESOURCES/tools" "$RESOURCES/node_modules/@hasna/events"
 mkdir -p "$RESOURCES/tools"
 cp "$REPO_ROOT/tools/notes-agent.mjs" "$REPO_ROOT/tools/notes-env.mjs" "$REPO_ROOT/tools/notes-events.mjs" "$REPO_ROOT/tools/notes-lib.mjs" "$RESOURCES/tools/"
-if [[ ! -f "$REPO_ROOT/node_modules/@hasna/events/dist/durable-spool.js" ]]; then
-  echo "error: missing @hasna/events; run bun install at the repository root" >&2
+# Bundle @hasna/events from the git-tracked workspace member (apps/events):
+# bun never creates a root-level node_modules/@hasna directory — on a fresh
+# install it links workspace deps into the consuming package's scope
+# (apps/notes/node_modules/@hasna/events -> ../../../events) — so a
+# root-hoisted path can never be a valid bundle source. apps/events/dist is
+# git-tracked, so it holds on a fresh checkout with no install step. Fall back
+# to a root-hoisted copy only if the member dist is somehow absent.
+EVENTS_SRC="$REPO_ROOT/apps/events"
+if [[ ! -f "$EVENTS_SRC/dist/durable-spool.js" ]]; then
+  EVENTS_SRC="$REPO_ROOT/node_modules/@hasna/events"
+fi
+if [[ ! -f "$EVENTS_SRC/dist/durable-spool.js" ]]; then
+  echo "error: missing @hasna/events bundle source ($EVENTS_SRC/dist/durable-spool.js)" >&2
   exit 1
 fi
 mkdir -p "$RESOURCES/node_modules/@hasna"
 mkdir -p "$RESOURCES/node_modules/@hasna/events"
-cp "$REPO_ROOT/node_modules/@hasna/events/package.json" "$RESOURCES/node_modules/@hasna/events/"
-cp -RL "$REPO_ROOT/node_modules/@hasna/events/dist" "$RESOURCES/node_modules/@hasna/events/dist"
+cp "$EVENTS_SRC/package.json" "$RESOURCES/node_modules/@hasna/events/"
+cp -RL "$EVENTS_SRC/dist" "$RESOURCES/node_modules/@hasna/events/dist"
 
 # Bundle the CLI (local note commands; the multi-machine sync engine was
 # removed — the client is a plain HTTP API client). Relative imports
