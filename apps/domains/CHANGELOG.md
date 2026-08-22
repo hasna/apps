@@ -1,5 +1,12 @@
 # @hasna/domains
 
+## 0.0.43
+
+### Patch Changes
+
+- Updated dependencies [554a5b9]
+  - @hasna/contracts@0.13.4
+
 ## 0.0.42
 
 ### Patch Changes

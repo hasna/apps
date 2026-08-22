@@ -1,5 +1,12 @@
 # @hasna/sessions
 
+## 0.12.19
+
+### Patch Changes
+
+- Updated dependencies [554a5b9]
+  - @hasna/contracts@0.13.4
+
 ## 0.12.18
 
 ### Patch Changes
