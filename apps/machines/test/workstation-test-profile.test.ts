@@ -51,6 +51,7 @@ type Profile = {
 };
 
 type ControllerSnapshot = {
+  sliceName: string;
   cgroupV2: boolean;
   controllers: string[];
   userManager: boolean;
@@ -74,9 +75,10 @@ interface Store {
 }
 
 interface Controller {
-  inspect(): ControllerSnapshot;
+  inspect(sliceName?: string): ControllerSnapshot;
   activate(sliceName: string): ControllerSnapshot;
   reload(): ControllerSnapshot;
+  restore(sliceName: string, active: boolean): ControllerSnapshot;
 }
 
 type ScopeClaim = {
@@ -119,7 +121,13 @@ type ProfileApi = {
     store: Store;
     controller: Controller;
   }): { status: "rolled-back" | "refused"; admission: "allowed" | "refused"; reasonCodes: string[] };
-  evaluateWorkstationTestAdmission(profile: Profile, scopes: readonly ScopeClaim[]): {
+  evaluateWorkstationTestAdmission(input: {
+    authority: MachineAuthority;
+    homeDir: string;
+    store: Store;
+    controller: Controller;
+    scopes: readonly ScopeClaim[];
+  }): {
     admission: "allowed" | "refused";
     reasonCodes: string[];
   };
@@ -128,6 +136,17 @@ type ProfileApi = {
     terminatedScopeId: string | null;
     terminatedCgroup: string | null;
     terminatedPids: number[];
+    unaffectedPids: number[];
+    nonTestReserveBytes: number;
+  };
+  enforceWorkstationTestPressure(
+    profile: Profile,
+    scopes: readonly PressureScope[],
+    execute: (command: string, args: readonly string[]) => void,
+  ): {
+    action: "none" | "terminate-slice";
+    triggeringScopeId: string | null;
+    terminatedSliceName: string | null;
     unaffectedPids: number[];
     nonTestReserveBytes: number;
   };
@@ -151,6 +170,7 @@ function profileApi(): ProfileApi {
     "rollbackWorkstationTestProfile",
     "evaluateWorkstationTestAdmission",
     "evaluateWorkstationTestPressure",
+    "enforceWorkstationTestPressure",
     "readWorkstationTestProfile",
   ] as const) {
     expect(typeof candidate[name], `@hasna/machines must export ${name}`).toBe("function");
@@ -170,6 +190,7 @@ function authority(overrides: Partial<MachineAuthority> = {}): MachineAuthority 
 
 function activeController(profile: Profile): ControllerSnapshot {
   return {
+    sliceName: profile.aggregate.sliceName,
     cgroupV2: true,
     controllers: ["cpu", "memory", "pids"],
     userManager: true,
@@ -211,6 +232,7 @@ class MemoryStore implements Store {
 class FixtureController implements Controller {
   activateCalls = 0;
   reloadCalls = 0;
+  readonly restoreCalls: Array<{ sliceName: string; active: boolean }> = [];
 
   constructor(
     private readonly before: ControllerSnapshot,
@@ -229,6 +251,11 @@ class FixtureController implements Controller {
 
   reload(): ControllerSnapshot {
     this.reloadCalls += 1;
+    return this.rolledBack;
+  }
+
+  restore(sliceName: string, active: boolean): ControllerSnapshot {
+    this.restoreCalls.push({ sliceName, active });
     return this.rolledBack;
   }
 }
@@ -369,21 +396,63 @@ describe("aggregate workstation test profile", () => {
 
   test("two or more focused scopes cannot exceed aggregate profile limits", () => {
     const api = profileApi();
-    const profile = api.deriveWorkstationTestProfile(authority());
+    const machineAuthority = authority();
+    const profile = api.deriveWorkstationTestProfile(machineAuthority);
+    const homeDir = "/fixture/home";
+    const paths = api.workstationTestProfilePaths({ homeDir });
+    const store = new MemoryStore({
+      [paths.profilePath]: api.serializeWorkstationTestProfile(profile),
+      [paths.slicePath]: api.renderWorkstationTestSlice(profile),
+    });
+    const controller = new FixtureController(activeController(profile));
     const within = Math.floor(profile.aggregate.memoryMaxBytes * 0.4);
     const over = Math.floor(profile.aggregate.memoryMaxBytes * 0.6);
 
-    expect(api.evaluateWorkstationTestAdmission(profile, [
-      claim(profile, "focused-a", within),
-      claim(profile, "focused-b", within),
-    ])).toMatchObject({ admission: "allowed", reasonCodes: [] });
+    expect(api.evaluateWorkstationTestAdmission({
+      authority: machineAuthority,
+      homeDir,
+      store,
+      controller,
+      scopes: [claim(profile, "focused-a", within), claim(profile, "focused-b", within)],
+    })).toMatchObject({ admission: "allowed", reasonCodes: [] });
 
-    const refused = api.evaluateWorkstationTestAdmission(profile, [
-      claim(profile, "focused-a", over),
-      claim(profile, "focused-b", over),
-    ]);
+    const refused = api.evaluateWorkstationTestAdmission({
+      authority: machineAuthority,
+      homeDir,
+      store,
+      controller,
+      scopes: [claim(profile, "focused-a", over), claim(profile, "focused-b", over)],
+    });
     expect(refused.admission).toBe("refused");
     expect(refused.reasonCodes).toContain("aggregate_memory_limit_exceeded");
+  });
+
+  test("admission refuses absent controller evidence and never trusts caller-supplied profile claims", () => {
+    const api = profileApi();
+    const machineAuthority = authority();
+    const profile = api.deriveWorkstationTestProfile(machineAuthority);
+    const homeDir = "/fixture/home";
+    const inactive = { ...activeController(profile), sliceLoaded: false, sliceActive: false };
+
+    const refused = api.evaluateWorkstationTestAdmission({
+      authority: machineAuthority,
+      homeDir,
+      store: new MemoryStore(),
+      controller: new FixtureController(inactive),
+      scopes: [claim(profile, "focused-a", Math.floor(profile.aggregate.memoryMaxBytes * 0.2))],
+    });
+    expect(refused.admission).toBe("refused");
+    expect(refused.reasonCodes).toContain("managed_profile_missing_or_mismatched");
+    expect(refused.reasonCodes).toContain("aggregate_slice_inactive");
+
+    const legacyCaller = api.evaluateWorkstationTestAdmission as unknown as (
+      suppliedProfile: Profile,
+      suppliedScopes: readonly ScopeClaim[],
+    ) => { admission: "allowed" | "refused"; reasonCodes: string[] };
+    expect(legacyCaller(profile, [claim(profile, "caller-only", 1)])).toEqual({
+      admission: "refused",
+      reasonCodes: ["current_controller_evidence_required"],
+    });
   });
 
   test("an over-limit test scope is terminated as one cgroup while unrelated processes and the non-test reserve remain", () => {
@@ -391,19 +460,45 @@ describe("aggregate workstation test profile", () => {
     const profile = api.deriveWorkstationTestProfile(authority());
     const safeClaim = claim(profile, "safe", Math.floor(profile.aggregate.memoryMaxBytes * 0.2));
     const badClaim = claim(profile, "offender", Math.floor(profile.aggregate.memoryMaxBytes * 0.25));
-    const result = api.evaluateWorkstationTestPressure(profile, [
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const result = api.enforceWorkstationTestPressure(profile, [
       { ...safeClaim, cgroup: "/user.slice/hasna-tests.slice/safe.scope", pids: [101, 102], memoryCurrentBytes: safeClaim.memoryMaxBytes },
       { ...badClaim, cgroup: "/user.slice/hasna-tests.slice/offender.scope", pids: [201, 202, 203], memoryCurrentBytes: badClaim.memoryMaxBytes + 1 },
-    ]);
+    ], (command, args) => calls.push({ command, args }));
 
     expect(result).toEqual({
-      action: "terminate-scope",
-      terminatedScopeId: "offender",
-      terminatedCgroup: "/user.slice/hasna-tests.slice/offender.scope",
-      terminatedPids: [201, 202, 203],
-      unaffectedPids: [101, 102],
+      action: "terminate-slice",
+      triggeringScopeId: "offender",
+      terminatedSliceName: "hasna-tests.slice",
+      unaffectedPids: [],
       nonTestReserveBytes: profile.nonTestReserve.memoryBytes,
     });
+    expect(calls).toEqual([{
+      command: "systemctl",
+      args: ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", "hasna-tests.slice"],
+    }]);
+  });
+
+  test("whole-cgroup enforcement refuses a substituted slice target without executing it", () => {
+    const api = profileApi();
+    const profile = api.deriveWorkstationTestProfile(authority());
+    const substituted = {
+      ...profile,
+      aggregate: { ...profile.aggregate, sliceName: "important.service" },
+      scope: { ...profile.scope, requiredSlice: "important.service" },
+    };
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const overLimit = claim(substituted, "offender", 1024);
+
+    expect(() => api.enforceWorkstationTestPressure(substituted, [{
+      ...overLimit,
+      cgroup: "/user.slice/important.service/offender.scope",
+      pids: [201],
+      memoryCurrentBytes: 1025,
+    }], (command, args) => {
+      calls.push({ command, args });
+    })).toThrow("aggregate_slice_name_invalid");
+    expect(calls).toEqual([]);
   });
 
   test("rollback restores the exact prior managed state and leaves admission refused when that state is not safe", () => {
@@ -426,15 +521,72 @@ describe("aggregate workstation test profile", () => {
       controller: new FixtureController(inactive, active),
     })).toMatchObject({ status: "applied", admission: "allowed" });
 
+    const rollbackController = new FixtureController(active, active, inactive);
     const rolledBack = api.rollbackWorkstationTestProfile({
       paths,
       store,
-      controller: new FixtureController(active, active, inactive),
+      controller: rollbackController,
     });
     expect(rolledBack).toMatchObject({ status: "rolled-back", admission: "refused" });
     expect(store.read(paths.profilePath)).toBe(priorProfile);
     expect(store.read(paths.slicePath)).toBe(priorSlice);
     expect(store.read(paths.rollbackPath)).toBeNull();
+    expect(rollbackController.restoreCalls).toEqual([{ sliceName: profile.aggregate.sliceName, active: false }]);
     expect(rolledBack.reasonCodes.length).toBeGreaterThan(0);
+  });
+
+  test("rollback refuses unexpected managed-file drift and preserves both drift and rollback evidence", () => {
+    const api = profileApi();
+    const profile = api.deriveWorkstationTestProfile(authority());
+    const paths = api.workstationTestProfilePaths({ homeDir: "/fixture/home" });
+    const inactive = { ...activeController(profile), sliceLoaded: false, sliceActive: false };
+    const active = activeController(profile);
+    const store = new MemoryStore();
+    expect(api.applyWorkstationTestProfile({
+      profile,
+      paths,
+      store,
+      controller: new FixtureController(inactive, active),
+    }).status).toBe("applied");
+    const rollbackRecord = store.read(paths.rollbackPath);
+    store.files.set(paths.slicePath, "[Slice]\nMemoryMax=unexpected-drift\n");
+    const rollbackController = new FixtureController(active, active, inactive);
+
+    const refused = api.rollbackWorkstationTestProfile({ paths, store, controller: rollbackController });
+    expect(refused).toEqual({
+      status: "refused",
+      admission: "refused",
+      reasonCodes: ["applied_postimage_drift_detected"],
+    });
+    expect(store.read(paths.slicePath)).toBe("[Slice]\nMemoryMax=unexpected-drift\n");
+    expect(store.read(paths.profilePath)).toBe(api.serializeWorkstationTestProfile(profile));
+    expect(store.read(paths.rollbackPath)).toBe(rollbackRecord);
+    expect(rollbackController.restoreCalls).toEqual([]);
+  });
+
+  test("post-apply verification failure restores prior bytes and prior active runtime state", () => {
+    const api = profileApi();
+    const profile = api.deriveWorkstationTestProfile(authority());
+    const paths = api.workstationTestProfilePaths({ homeDir: "/fixture/home" });
+    const priorProfile = "{\"legacy\":true}\n";
+    const priorSlice = "[Slice]\nMemoryMax=infinity\n";
+    const priorActive = activeController(profile);
+    const mismatched = {
+      ...priorActive,
+      sliceProperties: { ...priorActive.sliceProperties, MemoryMax: profile.aggregate.memoryMaxBytes - 1 },
+    };
+    const store = new MemoryStore({
+      [paths.profilePath]: priorProfile,
+      [paths.slicePath]: priorSlice,
+    });
+    const controller = new FixtureController(priorActive, mismatched, priorActive);
+
+    const refused = api.applyWorkstationTestProfile({ profile, paths, store, controller });
+    expect(refused.status).toBe("refused");
+    expect(refused.reasonCodes).toContain("post_apply_verification_failed");
+    expect(store.read(paths.profilePath)).toBe(priorProfile);
+    expect(store.read(paths.slicePath)).toBe(priorSlice);
+    expect(store.read(paths.rollbackPath)).toBeNull();
+    expect(controller.restoreCalls).toEqual([{ sliceName: profile.aggregate.sliceName, active: true }]);
   });
 });

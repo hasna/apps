@@ -60,6 +60,14 @@
         "mode": "0644",
         "kind": "systemd-dropin",
         "lesson": "2026-07-28: the userspace memory guard computed swap depth and ignored it, printing healthy 3.5 minutes before the panic; earlyoom trips on the swap condition. Kill-drill proven on station02 2026-07-28."
+      },
+      {
+        "id": "slice-tests",
+        "source": "files/base/home/user-systemd/hasna-tests.slice",
+        "target": "~/.config/systemd/user/hasna-tests.slice",
+        "mode": "0644",
+        "kind": "systemd-user-unit",
+        "lesson": "Aggregate local tests require one active cgroup-v2 controller installed by normal station setup; package-derived limits live in its managed drop-in and earlyoom remains only the host backstop."
       }
     ],
     "packages": {
@@ -80,8 +88,10 @@
       ]
     },
     "services": [
-      { "name": "earlyoom", "scope": "system", "expectEnabled": true, "expectActive": true }
+      { "name": "earlyoom", "scope": "system", "expectEnabled": true, "expectActive": true },
+      { "name": "hasna-tests.slice", "scope": "user", "expectEnabled": false, "expectActive": true }
     ],
+    "workstationTestProfile": true,
     "sysctls": {
       "vm.swappiness": "60",
       "vm.min_free_kbytes": "1048576",
