@@ -205,7 +205,18 @@ wait
 ck "queue-del recovery" "$(cat "$W/g5rc")" "0"
 
 # 15 sentinel: pass, cgroup removal, marker tamper, junk-name crash input, wedge alert
-ck "sentinel pass" "$("$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
+# "sentinel pass" is hermetic (release review P1): the previous form invoked
+# the sentinel with LIVE defaults — a healthy run wrote the live guard-dir
+# sentinel.log, and a clobbered install would have auto-rearmed the LIVE
+# wrapper and bun-real mid-battery. Drive temp copies of the wrapper and the
+# real bun plus a temp guard dir; the canary probe execs the real bun through
+# the wrapper (read-only, as in sections 16/17).
+mkdir -p "$W/g-pass/slots"
+cp "$WRAPPER_SOURCE" "$W/pass-bun-wrapper"
+chmod +x "$W/pass-bun-wrapper"
+cp "$BR" "$W/pass-bun-real" 2>/dev/null || cp "$(command -v bun)" "$W/pass-bun-real"
+chmod +x "$W/pass-bun-real"
+ck "sentinel pass" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-pass" SENTINEL_REAL_BUN="$W/pass-bun-real" SENTINEL_PINNED_URL="file://$W/no-pin-pass" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
 # The unscoped-wrapper and marker-tamper fixtures moved to hermetic temp
 # copies: with auto-rearm (row 7112181b) the sentinel HEALS a repairable
 # clobber (section 17), and the old fixtures pointed at LIVE paths

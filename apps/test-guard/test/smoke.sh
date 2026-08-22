@@ -42,15 +42,22 @@ fi
 FLEET_REAL="${TEST_GUARD_FLEET_REAL:-/home/hasna/.bun/bin/bun-real}"
 
 # Regression (publish-all-test-guard remediation): the shipped guard MUST NEVER
-# source the retired .hasna/cloud runtime config — the no-cloud guard forbids
-# the pattern in packed content (contracts no-cloud scan, runtime_config kind).
-# Proving it at the source surface so the package cannot regress it.
+# source the retired .hasna/cloud runtime config, and MUST NOT carry
+# internal-infra station names — the no-cloud guard forbids both patterns in
+# packed content (contracts no-cloud scan, runtime_config kind; publish-guard
+# station pattern). Release review P1 widened this to the COMPLETE shipped
+# file set: the scan previously covered only the three scripts and a
+# station-name reference rode into the packed README. The shipped set is the
+# package.json "files" list (battery.sh, bun-wrapper.sh, sentinel.sh,
+# README.md, LICENSE) — keep this list in sync when that field changes.
 CLOUD_GUARD_FAIL=0
-if grep -nE '\.hasna/cloud|hasna-cloud-env' "$HERE/sentinel.sh" "$HERE/bun-wrapper.sh" "$HERE/battery.sh"; then
-  echo "FAIL no-cloud-guard: retired .hasna/cloud runtime config reference found in a shipped script" >&2
+if grep -nE '\.hasna/cloud|hasna-cloud-env|station[0-9]+' \
+    "$HERE/sentinel.sh" "$HERE/bun-wrapper.sh" "$HERE/battery.sh" \
+    "$HERE/README.md" "$HERE/LICENSE"; then
+  echo "FAIL no-cloud-guard: retired .hasna/cloud runtime config or station-name reference found in a shipped file" >&2
   CLOUD_GUARD_FAIL=1
 else
-  echo "PASS no-cloud-guard: no retired .hasna/cloud runtime config reference in shipped scripts"
+  echo "PASS no-cloud-guard: no retired .hasna/cloud runtime config or station-name reference in the shipped file set"
 fi
 
 # CLI surface regression (a6fc52c7): --help exits 0 with usage; --version
@@ -99,6 +106,26 @@ fi
 rm -rf "$NOPKG_DIR"
 [ "$DERIVE_FAIL" = "0" ] && echo "PASS cli-version-derive: --version derives from the package.json beside the script; standalone copy without package.json fails closed"
 
+# Regression (release review P1): a package-manager global install invokes the
+# bin through a SYMLINK (~/.bun/bin/test-guard ->
+# .../node_modules/@hasna/test-guard/sentinel.sh). The version must resolve
+# from the package.json BESIDE THE REAL SCRIPT, not beside the symlink — the
+# pre-fix dirname "$0" reported VERSION unavailable on the installed bin.
+# Red-before: dirname "$0"; green-after: portable readlink chain.
+SYMLINK_FAIL=0
+SYMLINK_DIR=$(mktemp -d /tmp/tg-symlink.XXXXXX)
+mkdir -p "$SYMLINK_DIR/bin" "$SYMLINK_DIR/pkg"
+cp "$HERE/sentinel.sh" "$SYMLINK_DIR/pkg/sentinel.sh"
+printf '{\n  "name": "@hasna/test-guard",\n  "version": "0.0.3"\n}\n' > "$SYMLINK_DIR/pkg/package.json"
+ln -s "$SYMLINK_DIR/pkg/sentinel.sh" "$SYMLINK_DIR/bin/test-guard"
+SYM_VERSION=$("$SYMLINK_DIR/bin/test-guard" --version 2>/dev/null)
+if [ "$SYM_VERSION" != "hasna-test-guard sentinel 0.0.3" ]; then
+  echo "FAIL cli-version-symlink: bin-symlink invocation printed '$SYM_VERSION', expected 'hasna-test-guard sentinel 0.0.3' (the version in the package.json beside the real script)" >&2
+  SYMLINK_FAIL=1
+fi
+rm -rf "$SYMLINK_DIR"
+[ "$SYMLINK_FAIL" = "0" ] && echo "PASS cli-version-symlink: --version resolves through a bin symlink to the package.json beside the real script"
+
 RUNNER="$(mktemp /tmp/tg-smoke.XXXXXX)"
 trap 'rm -f "$RUNNER"' EXIT
 
@@ -128,7 +155,7 @@ export BUN_TEST_GUARD_WRAPPER_SOURCE="$HERE/bun-wrapper.sh"
 
 bash "$RUNNER"
 RC=$?
-if [ "$CLOUD_GUARD_FAIL" = "1" ] || [ "$CLI_FAIL" = "1" ] || [ "$DERIVE_FAIL" = "1" ]; then
+if [ "$CLOUD_GUARD_FAIL" = "1" ] || [ "$CLI_FAIL" = "1" ] || [ "$DERIVE_FAIL" = "1" ] || [ "$SYMLINK_FAIL" = "1" ]; then
   exit 1
 fi
 exit "$RC"
