@@ -339,7 +339,7 @@ function buildFilterConditions(filter?: MemoryFilter): FilterResult {
   // Must be active and not expired (defaults)
   conditions.push("m.status = 'active'");
   conditions.push(
-    "(m.expires_at IS NULL OR m.expires_at >= datetime('now'))"
+    "(m.expires_at IS NULL OR m.expires_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
   );
 
   if (!filter) return { conditions, params };

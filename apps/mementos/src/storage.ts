@@ -146,6 +146,15 @@ export function translateSql(sql: string): string {
     /datetime\s*\(\s*'now'\s*\)/gi,
     `to_char(now() AT TIME ZONE 'UTC', ${ISO_FMT})`
   );
+  // The local SQLite path renders `now` in the same byte format as JS
+  // `toISOString()` via `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` so stored
+  // ISO-8601 TEXT timestamps compare chronologically. Postgres has no
+  // strftime; map the exact ISO format string to the identical to_char
+  // expression the `datetime('now')` form already used.
+  translated = translated.replace(
+    /strftime\s*\(\s*'%Y-%m-%dT%H:%M:%fZ'\s*,\s*'now'\s*\)/gi,
+    `to_char(now() AT TIME ZONE 'UTC', ${ISO_FMT})`
+  );
   translated = translated.replace(
     /datetime\s*\(\s*'now'\s*,\s*'(-?\d+)\s+(minutes?|hours?|days?|seconds?)'\s*\)/gi,
     (_match, amount, unit) => {

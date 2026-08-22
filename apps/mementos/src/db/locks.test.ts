@@ -1,7 +1,7 @@
 process.env.MEMENTOS_DB_PATH = ":memory:";
 
 import { describe, test, expect, beforeEach } from "bun:test";
-import { resetDatabase } from "./database.js";
+import { getDatabase, resetDatabase } from "./database.js";
 import { registerAgent } from "./agents.js";
 import {
   acquireLock,
@@ -185,5 +185,50 @@ describe("cleanExpiredLocks", () => {
     acquireLock(alpha.id, "memory", "mem-1", "exclusive", 300);
     cleanExpiredLocks();
     expect(listAgentLocks(alpha.id)).toHaveLength(1);
+  });
+});
+
+describe("ISO-format expiry (regression: expires_at is ISO-8601 text)", () => {
+  // Locks are written with `new Date(...).toISOString()` (e.g. "2026-08-22T14:35:20.187Z")
+  // but expiry comparisons used SQLite `datetime('now')`, which renders
+  // "2026-08-22 14:36:20". Within the same UTC day 'T' (0x54) > ' ' (0x20), so
+  // every ISO lock compared lexicographically greater than now: expired locks
+  // stayed active and blocked other agents until UTC midnight.
+  function insertExpiredLock(agentId: string, resourceId = "mem-expired"): void {
+    getDatabase().run(
+      "INSERT INTO resource_locks (id, resource_type, resource_id, agent_id, lock_type, locked_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [
+        `expired-${resourceId}`,
+        "memory",
+        resourceId,
+        agentId,
+        "exclusive",
+        new Date().toISOString(),
+        new Date(Date.now() - 60_000).toISOString(),
+      ]
+    );
+  }
+
+  test("a lock expired 60s ago is invisible to checkLock and agentHoldsLock", () => {
+    const alpha = registerAgent("alpha");
+    insertExpiredLock(alpha.id);
+    expect(checkLock("memory", "mem-expired")).toHaveLength(0);
+    expect(agentHoldsLock(alpha.id, "memory", "mem-expired")).toBeNull();
+  });
+
+  test("cleanExpiredLocks deletes a lock expired 60s ago", () => {
+    const alpha = registerAgent("alpha");
+    insertExpiredLock(alpha.id);
+    expect(cleanExpiredLocks()).toBe(1);
+    expect(listAgentLocks(alpha.id)).toHaveLength(0);
+  });
+
+  test("a lock expired 60s ago does not block a second agent's acquireLock", () => {
+    const alpha = registerAgent("alpha");
+    const beta = registerAgent("beta");
+    insertExpiredLock(alpha.id);
+    const betaLock = acquireLock(beta.id, "memory", "mem-expired");
+    expect(betaLock).not.toBeNull();
+    expect(betaLock!.agent_id).toBe(beta.id);
   });
 });

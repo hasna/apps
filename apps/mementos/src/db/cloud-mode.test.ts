@@ -74,6 +74,25 @@ describe("Amendment A1 — SQLite→Postgres SQL translation", () => {
     expect(out).not.toContain("datetime(");
   });
 
+  test("strftime('%Y-%m-%dT%H:%M:%fZ', 'now') becomes the same ISO-8601 UTC text expression (local-path now() idiom)", () => {
+    // The local SQLite path now renders `now` in the same byte format as JS
+    // toISOString() via strftime; Postgres has no strftime, so translateSql
+    // must map it to the identical to_char(...) expression the datetime('now')
+    // form already used.
+    const out = translateSql(
+      "SELECT * FROM resource_locks WHERE expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+    );
+    expect(out).toContain("to_char(now() AT TIME ZONE 'UTC'");
+    expect(out).not.toContain("strftime(");
+    expect(out).not.toContain("datetime(");
+  });
+
+  test("strftime negative control: a different strftime format string is left untouched", () => {
+    const out = translateSql("SELECT strftime('%Y-%m-%d', 'now')");
+    expect(out).toContain("strftime('%Y-%m-%d', 'now')");
+    expect(out).not.toContain("to_char(");
+  });
+
   test("datetime('now', '-7 days') offset preserved as INTERVAL in ISO text", () => {
     const out = translateSql("SELECT * FROM m WHERE created_at >= datetime('now', '-7 days')");
     expect(out).toContain("now() - INTERVAL '7 days'");

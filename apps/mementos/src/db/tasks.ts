@@ -332,7 +332,7 @@ export function getTaskStats(db: Database, filter?: { project_id?: string; agent
   for (const row of priorityRows) byPriority[row.priority] = row.c;
 
   const overdue = (db.query(
-    `SELECT COUNT(*) as c FROM tasks ${where} AND status != 'completed' AND status != 'cancelled' AND due_at IS NOT NULL AND due_at < datetime('now')`
+    `SELECT COUNT(*) as c FROM tasks ${where} AND status != 'completed' AND status != 'cancelled' AND due_at IS NOT NULL AND due_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`
   ).get(...params) as { c: number }).c;
 
   return {

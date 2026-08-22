@@ -186,7 +186,7 @@ export async function detectContradiction(
   }
 
   // Exclude memories that have been invalidated (valid_until is set and in the past)
-  conditions.push("(valid_until IS NULL OR valid_until > datetime('now'))");
+  conditions.push("(valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))");
 
   const sql = `SELECT * FROM memories WHERE ${conditions.join(" AND ")} ORDER BY importance DESC LIMIT 10`;
   const rows = d.query(sql).all(...params) as Record<string, unknown>[];

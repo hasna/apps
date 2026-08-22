@@ -53,7 +53,7 @@ export async function runTemporalAgent(db: Database, query: string, opts: AsmrOp
 
   // Build base filter conditions
   const conditions: string[] = [
-    "(m.expires_at IS NULL OR m.expires_at >= datetime('now'))",
+    "(m.expires_at IS NULL OR m.expires_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
   ];
   const params: (string | number)[] = [];
 
