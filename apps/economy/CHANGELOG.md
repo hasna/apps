@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.17
+
+### Patch Changes
+
+- Updated dependencies [247187d]
+  - @hasna/projects@0.1.139
+
 ## 0.3.16
 
 ### Patch Changes
