@@ -443,14 +443,16 @@ export function importFromOrg(org: string, opts: { onProgress?: (msg: string) =>
   for (const ghRepo of ghRepos) {
     // Destination is computed, never caller-chosen: org-scoped like the clone
     // verb, so the import cannot flatten the org onto the clones root either.
-    const dest = computeClonePath(org, ghRepo.name);
-    if (existsSync(dest)) {
-      opts.onProgress?.(`  Skip ${ghRepo.name} (exists)`);
-      skipped++;
-      continue;
-    }
-    opts.onProgress?.(`  Cloning ${ghRepo.name}...`);
+    // A repo whose name the segment guard refuses (`.github`, unicode names)
+    // is a per-repo failure, never an abort of the whole import.
     try {
+      const dest = computeClonePath(org, ghRepo.name);
+      if (existsSync(dest)) {
+        opts.onProgress?.(`  Skip ${ghRepo.name} (exists)`);
+        skipped++;
+        continue;
+      }
+      opts.onProgress?.(`  Cloning ${ghRepo.name}...`);
       execFileSync("git", ["clone", ghRepo.sshUrl, dest], { timeout: 60000, stdio: ["pipe", "pipe", "pipe"] });
       cloned++;
     } catch (err) {

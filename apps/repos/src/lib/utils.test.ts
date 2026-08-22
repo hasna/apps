@@ -279,6 +279,32 @@ exit 1
           disarmFakeGh();
         }
       });
+
+      it("records a typed error for repos whose names are unusable as directory segments instead of aborting the import", () => {
+        const clonesRoot = join(testDir, "clones");
+        setClonesRootForTests(clonesRoot);
+        // A dot-name repo (real orgs carry `.github`) and a unicode-name repo
+        // both fail the destination segment guard; one misnamed repo must not
+        // abort the whole import.
+        const payload = [repoObject(".github"), repoObject("café"), repoObject("live-one")];
+        const payloadPath = join(testDir, "payload.json");
+        writeFileSync(payloadPath, JSON.stringify(payload));
+        mkdirSync(join(clonesRoot, org, "live-one"), { recursive: true });
+        armFakeGh({ payloadPath });
+
+        let result: ReturnType<typeof importFromOrg>;
+        try {
+          result = importFromOrg(org, { onProgress: () => {} });
+        } finally {
+          disarmFakeGh();
+        }
+
+        expect(result.skipped).toBe(1);
+        expect(result.cloned).toBe(0);
+        expect(result.errors).toHaveLength(2);
+        expect(result.errors.some((e) => e.startsWith(".github:"))).toBe(true);
+        expect(result.errors.some((e) => e.startsWith("café:"))).toBe(true);
+      });
     });
 
     it("returns null rather than a scratch clone when nothing else matches", () => {
