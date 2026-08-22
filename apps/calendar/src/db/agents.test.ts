@@ -71,4 +71,50 @@ describe("agents", () => {
     const agent = registerAgent({ name: "cap", capabilities: ["react", "go"] });
     expect(agent.capabilities).toEqual(["react", "go"]);
   });
+
+  test("duplicate registration without force throws ConflictError and leaves the row unchanged", () => {
+    const first = registerAgent({ name: "dup", role: "member", metadata: { k: "v" }, capabilities: ["go"] });
+    expect(() => registerAgent({ name: "dup", role: "admin" })).toThrow(ConflictError);
+
+    const after = getAgent(first.id)!;
+    expect(after.role).toBe("member");
+    expect(after.metadata).toEqual({ k: "v" });
+    expect(after.capabilities).toEqual(["go"]);
+  });
+
+  test("force registration takes over the same id, updates supplied fields, preserves omitted ones", () => {
+    const first = registerAgent({
+      name: "takeover",
+      role: "member",
+      title: "Original Title",
+      metadata: { keep: "me" },
+      capabilities: ["go"],
+    });
+
+    const taken = registerAgent({ name: "takeover", role: "admin", force: true });
+    expect(taken.id).toBe(first.id);
+    expect(taken.role).toBe("admin");
+    // Omitted fields are preserved, not reset.
+    expect(taken.title).toBe("Original Title");
+    expect(taken.metadata).toEqual({ keep: "me" });
+    expect(taken.capabilities).toEqual(["go"]);
+  });
+
+  test("force registration can replace capabilities and set a session", () => {
+    registerAgent({ name: "replace-cap", capabilities: ["go"] });
+    const taken = registerAgent({
+      name: "replace-cap",
+      capabilities: ["react"],
+      session_id: "sess-1",
+      force: true,
+    });
+    expect(taken.capabilities).toEqual(["react"]);
+    expect(taken.session_id).toBe("sess-1");
+  });
+
+  test("second delete returns false", () => {
+    const agent = registerAgent({ name: "del-twice" });
+    expect(deleteAgent(agent.id)).toBe(true);
+    expect(deleteAgent(agent.id)).toBe(false);
+  });
 });

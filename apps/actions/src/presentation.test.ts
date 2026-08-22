@@ -170,6 +170,20 @@ describe("presentation option boundaries", () => {
     expect(truncateText("abcdef", 3)).toBe("abc");
     expect(truncateText("  multi\n line  ", 20)).toBe("multi line");
   });
+
+  test("truncates below the suffix width by raw slicing", () => {
+    expect(truncateText("abcdef", 2)).toBe("ab");
+    expect(truncateText("abcdef", 1)).toBe("a");
+    expect(truncateText("abcdef", 0)).toBe("");
+  });
+
+  test("stringifies undefined, null, and objects inline", () => {
+    expect(truncateText(undefined)).toBe("");
+    expect(truncateText(null)).toBe("null");
+    expect(truncateText(42)).toBe("42");
+    expect(truncateText({ a: 1 })).toBe('{"a":1}');
+    expect(truncateText({ a: "x" }, 5)).toBe("{\"...");
+  });
 });
 
 describe("presentation summaries", () => {
@@ -279,5 +293,25 @@ describe("presentation summaries", () => {
       page: { kind: "runs", count: 1, total: 1, limit: 10, cursor: 0, nextCursor: null },
       hint: "inspect run details",
     });
+  });
+
+  // agent-authored test-gap addition (SOL consult unavailable: codewith exec with
+  // gpt-5.6-sol max reasoning timed out at the 570s window on two distinct accounts
+  // before producing a final answer; this spec was written from direct source analysis).
+  test("compact run summaries report absent input and output accurately", () => {
+    const run = {
+      ...runFixture(),
+      input: undefined,
+      output: undefined,
+      error: undefined,
+      preview: undefined,
+      events: [],
+    };
+    const compact = compactRun(run);
+    expect(compact.hasInput).toBe(false);
+    expect(compact.hasOutput).toBe(false);
+    expect(compact.hasError).toBe(false);
+    expect(compact.events).toBe(0);
+    expect(compact.summary).toBe(run.confirmationSummary);
   });
 });
