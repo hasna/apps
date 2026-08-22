@@ -35,7 +35,12 @@
 # semaphore controls concurrency; the scope independently bounds memory, swap,
 # and process count so active suites cannot turn the machine into a pager.
 
-REAL="/home/hasna/.bun/bin/bun-real"
+# HASNA_TEST_GUARD_REAL is a TEST-ONLY override (same seam class as
+# HASNA_TEST_GUARD_DIR, honored for isolated testing of the guard itself):
+# the battery drives temp copies of the bin layout and must never exec the
+# live bun-real (review cycle 2). Production cron/agents never set it; the
+# default remains the canonical fleet path.
+REAL="${HASNA_TEST_GUARD_REAL:-/home/hasna/.bun/bin/bun-real}"
 
 if [ ! -x "$REAL" ]; then
   echo "hasna-test-guard: FATAL: real bun missing at $REAL — see /home/hasna/.hasna/test-guard/README.md" >&2

@@ -41,7 +41,22 @@ export PATH="$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
 # a clear message) instead of silently reporting a possibly-stale version —
 # the fleet install at ~/.hasna/test-guard is exactly such a copy, and the
 # main probe below does not depend on VERSION.
-SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
+# Release-review P1: a package-manager global install invokes the bin through
+# a symlink (e.g. ~/.bun/bin/test-guard ->
+# .../node_modules/@hasna/test-guard/sentinel.sh), so the package.json must be
+# resolved BESIDE THE REAL SCRIPT, not beside the symlink. readlink -f is
+# GNU-only; use a portable readlink chain. A standalone copy with no
+# package.json anywhere on the resolved chain still fails closed below.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK=$(readlink "$SELF") 2>/dev/null || break
+  [ -n "$LINK" ] || break
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *) SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 VERSION=""
 if [ -n "$SCRIPT_DIR" ] && [ -r "$SCRIPT_DIR/package.json" ]; then
   VERSION=$(grep -m1 '"version"' "$SCRIPT_DIR/package.json" 2>/dev/null \
@@ -104,7 +119,7 @@ REALERT_SECS=21600
 # Fleet-pinned bun for auto-rearm (row 7112181b). When the curl installer
 # clobbers the wrapper, rearm restores it from the package source and re-pins
 # bun-real to PINNED_BUN_VERSION, verified against PINNED_BUN_SHA256 — the
-# sha256 of the EXTRACTED binary, recorded 2026-08-21 from the station01 fleet
+# sha256 of the EXTRACTED binary, recorded 2026-08-21 from the fleet
 # install (prefix 37141662ebed915a, matching the investigate-phase finding;
 # measured 2026-08-21 to be the aarch64 build the bun.sh installer installs
 # on this machine). The asset is derived from the machine arch exactly like

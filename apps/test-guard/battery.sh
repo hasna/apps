@@ -8,6 +8,29 @@ W=$(mktemp -d /tmp/tg-battery.XXXXXX)
 mkdir -p "$W/g1/slots" "$W/suite"
 pass=0; failn=0
 ck() { if [ "$2" = "$3" ]; then echo "PASS $1 [$2]"; pass=$((pass+1)); else echo "FAIL $1 [got:$2 want:$3]"; failn=$((failn+1)); fi; }
+# run_scoped mirrors the wrapper's own prepare_systemd_user_manager seam
+# (remediation 2026-08-22): the battery's direct systemd-run --user --scope
+# checks (sections 7/8) failed with "Failed to connect to bus: No medium
+# found" when run from a headless shell — background/cron contexts carry no
+# XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS. When the user bus is reachable,
+# behave exactly as before; otherwise fall back to the /run/user/<uid> bus
+# the same way the wrapper does, and only when the directory exists and is
+# ours. If neither route works, the honest failure still surfaces.
+run_scoped() {
+  local uid dir
+  if systemctl --user show-environment >/dev/null 2>&1; then
+    systemd-run --user --scope --quiet --collect "$@"
+    return $?
+  fi
+  uid=$(id -u 2>/dev/null) || uid=""
+  dir="/run/user/$uid"
+  if [ -n "$uid" ] && [ -d "$dir" ] && [ -O "$dir" ] && [ -w "$dir" ]; then
+    env -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR="$dir" \
+      systemd-run --user --scope --quiet --collect "$@"
+    return $?
+  fi
+  systemd-run --user --scope --quiet --collect "$@"
+}
 WRAPPER_SOURCE=${BUN_TEST_GUARD_WRAPPER_SOURCE:-/home/hasna/.hasna/test-guard/bun-wrapper.sh}
 SEN=${BUN_TEST_GUARD_SENTINEL:-/home/hasna/.hasna/test-guard/sentinel.sh}
 
@@ -89,7 +112,7 @@ mkdir -p "$W/g4/slots"; printf 'MAX_SLOTS=1\nMAX_WAIT_SECS=6\n' > "$W/g4/config"
 sleep 1
 rc=$(cd "$W/suite" && HASNA_TEST_GUARD_DIR="$W/g4" HASNA_TEST_GUARD_HELD=1 $B test >/dev/null 2>&1; echo $?)
 ck "forged HELD outside scope cannot bypass busy slot" "$rc" "75"
-rc=$(cd "$W/suite" && systemd-run --user --scope --quiet --collect \
+rc=$(cd "$W/suite" && run_scoped \
   -p MemoryHigh=12G -p MemoryMax=16G -p MemorySwapMax=0 -p TasksMax=4096 \
   -- env HASNA_TEST_GUARD_DIR="$W/g4" HASNA_TEST_GUARD_HELD=1 "$B" test >/dev/null 2>&1; echo $?)
 ck "bounded nested HELD runs without reacquiring" "$rc" "0"
@@ -99,7 +122,7 @@ wait
 
 # 8 a finite but loose outer scope must not be trusted as the fleet scope
 mkdir -p "$W/g-loose/slots"
-rc=$(cd "$W/suite" && systemd-run --user --scope --quiet --collect \
+rc=$(cd "$W/suite" && run_scoped \
   -p MemoryHigh=32G -p MemoryMax=64G -p MemorySwapMax=0 -p TasksMax=8192 \
   -- env HASNA_TEST_GUARD_DIR="$W/g-loose" HASNA_TEST_GUARD_HELD=1 "$B" test >/dev/null 2>&1; echo $?)
 ck "loose existing scope is re-guarded" "$rc" "0"
@@ -205,7 +228,20 @@ wait
 ck "queue-del recovery" "$(cat "$W/g5rc")" "0"
 
 # 15 sentinel: pass, cgroup removal, marker tamper, junk-name crash input, wedge alert
-ck "sentinel pass" "$("$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
+# Section 15 is fully hermetic (release review P1, cycles 1-2): the previous
+# forms invoked the sentinel with LIVE defaults — a healthy run wrote the live
+# guard-dir sentinel.log, and a clobbered install would have auto-rearmed the
+# LIVE wrapper and bun-real mid-battery. Every sentinel invocation below
+# drives the temp wrapper copy $W/pass-bun-wrapper and the temp real-bun copy
+# $W/pass-bun-real plus a temp guard dir; HASNA_TEST_GUARD_REAL redirects the
+# temp wrapper's own REAL (bun-wrapper.sh test-only override) so even the
+# canary probe execs the temp copy, never the live bun-real.
+mkdir -p "$W/g-pass/slots"
+cp "$WRAPPER_SOURCE" "$W/pass-bun-wrapper"
+chmod +x "$W/pass-bun-wrapper"
+cp "$BR" "$W/pass-bun-real" 2>/dev/null || cp "$(command -v bun)" "$W/pass-bun-real"
+chmod +x "$W/pass-bun-real"
+ck "sentinel pass" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-pass" SENTINEL_REAL_BUN="$W/pass-bun-real" HASNA_TEST_GUARD_REAL="$W/pass-bun-real" SENTINEL_PINNED_URL="file://$W/no-pin-pass" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
 # The unscoped-wrapper and marker-tamper fixtures moved to hermetic temp
 # copies: with auto-rearm (row 7112181b) the sentinel HEALS a repairable
 # clobber (section 17), and the old fixtures pointed at LIVE paths
@@ -219,9 +255,9 @@ cp "$BR" "$W/tamper-bun" 2>/dev/null || cp "$(command -v bun)" "$W/tamper-bun"
 chmod +x "$W/tamper-bun"
 ck "sentinel fails closed on marker-tamper ELF" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g-tamper2" SENTINEL_REAL_BUN="$W/no-real2" SENTINEL_PINNED_URL="file://$W/no-pin2" SENTINEL_PINNED_SHA256="0000000000000000000000000000000000000000000000000000000000000000" "$SEN" "$W/tamper-bun" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 mkdir -p "$W/g6/slots" "$W/g6/queue"; : > "$W/g6/queue/not-a-ticket"
-ck "sentinel junk survives" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" "$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
+ck "sentinel junk survives" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" HASNA_TEST_GUARD_REAL="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "0"
 : > "$W/g6/queue/$(( $(date +%s%N) - 2200000000000 )).$$"
-ck "sentinel wedge alerts" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" "$SEN" "$B" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
+ck "sentinel wedge alerts" "$(SENTINEL_DRY_RUN=1 SENTINEL_GUARD_DIR="$W/g6" SENTINEL_REAL_BUN="$W/pass-bun-real" HASNA_TEST_GUARD_REAL="$W/pass-bun-real" "$SEN" "$W/pass-bun-wrapper" "$WRAPPER_SOURCE" >/dev/null 2>&1; echo $?)" "1"
 
 # 16 sentinel classifies canary failures per state (ac4558ab). The probe's
 # exit code has THREE causes that previously collapsed into one 'NOT ENGAGED'

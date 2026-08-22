@@ -1,6 +1,6 @@
 # @hasna/test-guard — machine-wide bun test concurrency and memory guard
 
-**Task:** SC-00062 (Station Cleanup, station01). Installed 2026-07-30. This
+**Task:** SC-00062 (Station Cleanup). Installed 2026-07-30. This
 package is the canonical source home (added 2026-08-19, task 48d4725e): the
 sentinel, the wrapper, and the battery are tracked here so the guard ships
 through the normal PR → review → publish → install chain instead of living
@@ -70,7 +70,7 @@ journald tag `hasna-test-guard`.
 
 ## Why this layer
 
-- `CPUQuota` on `cron.service` was rejected: on station01 the ENTIRE agent
+- `CPUQuota` on `cron.service` was rejected: on the guard machine the ENTIRE agent
   estate (tmux, claude sessions, MCP servers, ~1280 tasks) lives inside
   `system.slice/cron.service`, so a quota there throttles every live agent —
   including work already running, which the rollout constraint forbade — and
@@ -111,7 +111,7 @@ journald tag `hasna-test-guard`.
 
 - **Incident 2026-07-30 13:19-14:59Z, defect #4** (#incidents 608485): the
   wrapper's plain `#!/usr/bin/env bash` shebang sourced the caller's
-  `$BASH_ENV` (`~/.hasna/cloud/agent-env.sh`) on every invocation, silently
+  `$BASH_ENV` (the retired internal cloud-runtime env file) on every invocation, silently
   reverting `env -u` unsets and clobbering explicit overrides of the 9
   todos/conversations/mementos routing variables back to production cloud
   values. Fixed with `#!/bin/bash --posix` (posix non-interactive bash sources
