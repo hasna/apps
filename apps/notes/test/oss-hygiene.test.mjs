@@ -9,7 +9,7 @@ import { join, relative } from 'node:path';
 // offending file:line so the leak is caught before it is pushed.
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const SKIP_DIRS = new Set(['.git', 'node_modules', '.build', 'dist', '.claude', '.hasna', 'shots']);
+const SKIP_DIRS = new Set(['.git', 'node_modules', '.build', 'dist', '.claude', '.hasna']);
 const SKIP_FILES = new Set(['bun.lock']);
 const TEXT_FILE = /\.(mjs|js|json|md|swift|ts|yml|yaml|sh|html|css|txt|plist|xml)$/;
 

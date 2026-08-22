@@ -15,9 +15,19 @@
   `Sources/HasnaNotesCore`, `Sources/HasnaNotesSmoke`), the bundled browser UI
   (`web/`), the AI sidecar server (`ai-sidecar/`), the brand/app-icon assets
   (`assets/`), and the app build and deploy scripts (`scripts/build_notes.sh`,
-  `scripts/deploy_notes.sh`, `scripts/notes-deploy-lib.sh`). The app-surface tests
-  went with them. The final upstream commits carrying the app in this repo are
-  **da9764f4 (#638)** and **5a449b417**.
+  `scripts/deploy_notes.sh`, `scripts/notes-deploy-lib.sh`). The app-only tooling
+  went with them: the web-UI screenshot harness (`tools/shoot.mjs`, which rendered
+  the deleted `web/index.html`) and the app-icon rasterizer
+  (`tools/render-appicon.mjs`, which read and rewrote the deleted `assets/brand`
+  tree), plus the `tools/shots/` ignore entry that only existed for the harness's
+  output. So did the app and web-UI documentation: `docs/design-rules-macos26.md`
+  (macOS 26 design rules), `docs/ui-contracts.md` (the `window.HasnaNotes` bridge
+  and boot-payload contract for the deleted web UI), and
+  `docs/brand-visual-system.md` (the app-icon and menu-bar asset system).
+  `docs/storage.md` and `docs/sync.md` stay — they document the headless package.
+  The app-surface tests went with them, and `test/app-removal.test.mjs` now guards
+  every removed path against reintroduction. The final upstream commits carrying
+  the app in this repo are **da9764f4 (#638)** and **5a449b417**.
 
   **No published surface changed.** The `bin` entries (`notes`, `notes-mcp`,
   `notes-serve`), the `exports` map (`.`, `./sdk`, `./events`), and the `files`
