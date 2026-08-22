@@ -45,7 +45,7 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "envPrefix": "HASNA_PROMPTS_",
     "aliasEnvPrefix": "PROMPTS_",
     "sqlitePath": "~/.hasna/prompts/prompts.db"
