@@ -8,6 +8,29 @@ W=$(mktemp -d /tmp/tg-battery.XXXXXX)
 mkdir -p "$W/g1/slots" "$W/suite"
 pass=0; failn=0
 ck() { if [ "$2" = "$3" ]; then echo "PASS $1 [$2]"; pass=$((pass+1)); else echo "FAIL $1 [got:$2 want:$3]"; failn=$((failn+1)); fi; }
+# run_scoped mirrors the wrapper's own prepare_systemd_user_manager seam
+# (remediation 2026-08-22): the battery's direct systemd-run --user --scope
+# checks (sections 7/8) failed with "Failed to connect to bus: No medium
+# found" when run from a headless shell — background/cron contexts carry no
+# XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS. When the user bus is reachable,
+# behave exactly as before; otherwise fall back to the /run/user/<uid> bus
+# the same way the wrapper does, and only when the directory exists and is
+# ours. If neither route works, the honest failure still surfaces.
+run_scoped() {
+  local uid dir
+  if systemctl --user show-environment >/dev/null 2>&1; then
+    systemd-run --user --scope --quiet --collect "$@"
+    return $?
+  fi
+  uid=$(id -u 2>/dev/null) || uid=""
+  dir="/run/user/$uid"
+  if [ -n "$uid" ] && [ -d "$dir" ] && [ -O "$dir" ] && [ -w "$dir" ]; then
+    env -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR="$dir" \
+      systemd-run --user --scope --quiet --collect "$@"
+    return $?
+  fi
+  systemd-run --user --scope --quiet --collect "$@"
+}
 WRAPPER_SOURCE=${BUN_TEST_GUARD_WRAPPER_SOURCE:-/home/hasna/.hasna/test-guard/bun-wrapper.sh}
 SEN=${BUN_TEST_GUARD_SENTINEL:-/home/hasna/.hasna/test-guard/sentinel.sh}
 
@@ -89,7 +112,7 @@ mkdir -p "$W/g4/slots"; printf 'MAX_SLOTS=1\nMAX_WAIT_SECS=6\n' > "$W/g4/config"
 sleep 1
 rc=$(cd "$W/suite" && HASNA_TEST_GUARD_DIR="$W/g4" HASNA_TEST_GUARD_HELD=1 $B test >/dev/null 2>&1; echo $?)
 ck "forged HELD outside scope cannot bypass busy slot" "$rc" "75"
-rc=$(cd "$W/suite" && systemd-run --user --scope --quiet --collect \
+rc=$(cd "$W/suite" && run_scoped \
   -p MemoryHigh=12G -p MemoryMax=16G -p MemorySwapMax=0 -p TasksMax=4096 \
   -- env HASNA_TEST_GUARD_DIR="$W/g4" HASNA_TEST_GUARD_HELD=1 "$B" test >/dev/null 2>&1; echo $?)
 ck "bounded nested HELD runs without reacquiring" "$rc" "0"
@@ -99,7 +122,7 @@ wait
 
 # 8 a finite but loose outer scope must not be trusted as the fleet scope
 mkdir -p "$W/g-loose/slots"
-rc=$(cd "$W/suite" && systemd-run --user --scope --quiet --collect \
+rc=$(cd "$W/suite" && run_scoped \
   -p MemoryHigh=32G -p MemoryMax=64G -p MemorySwapMax=0 -p TasksMax=8192 \
   -- env HASNA_TEST_GUARD_DIR="$W/g-loose" HASNA_TEST_GUARD_HELD=1 "$B" test >/dev/null 2>&1; echo $?)
 ck "loose existing scope is re-guarded" "$rc" "0"
