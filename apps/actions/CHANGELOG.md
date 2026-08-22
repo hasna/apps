@@ -5,7 +5,7 @@
 ### Patch Changes
 
 - ebf862c: fix(actions): serialize JsonActionsStore read-modify-write cycles with an inter-process lock so concurrent writers never lose records
-- @hasna/contracts@0.11.2
+- @hasna/contracts@0.11.1
 
 All notable changes to `@hasna/actions` are documented here.
 
