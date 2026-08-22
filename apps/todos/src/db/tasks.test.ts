@@ -1851,6 +1851,41 @@ describe("getTasksChangedSince", () => {
     expect(results.length).toBe(1);
     expect(results[0]!.id).toBe(task1.id);
   });
+
+  it("should include space-format stamps newer than an ISO cursor and exclude older ones", () => {
+    // Rows written by the DDL default `datetime('now')` (or arriving verbatim
+    // via snapshot import/sync) store "YYYY-MM-DD HH:MM:SS"; rows written by
+    // the API store ISO "YYYY-MM-DDTHH:MM:SS.sssZ". Compared as TEXT, " " (0x20)
+    // sorts before "T" (0x54), so the raw `updated_at > ?` comparison silently
+    // excludes space-format rows that are genuinely newer than the cursor.
+    const insert = db.query(
+      `INSERT INTO tasks (id, title, updated_at) VALUES (?, ?, ?)`,
+    );
+    insert.run("t-space-newer", "space stamp newer than cursor", "2026-08-20 23:00:00");
+    insert.run("t-iso-newer", "iso stamp newer than cursor", "2026-08-20T22:00:00Z");
+    insert.run("t-space-old", "space stamp older than cursor", "2026-08-20 20:00:00");
+
+    const results = getTasksChangedSince("2026-08-20T21:00:00Z", undefined, db);
+
+    const ids = results.map((t) => t.id);
+    expect(ids).toContain("t-space-newer");
+    expect(ids).toContain("t-iso-newer");
+    expect(ids).not.toContain("t-space-old");
+  });
+
+  it("should keep rows whose stamp julianday() cannot parse", () => {
+    // Mirrors the sibling updated_after semantics: "we cannot read this row's
+    // timestamp" is not the same claim as "this row is older than the cursor",
+    // so an unparseable stamp must not be dropped from changed-since feeds.
+    const insert = db.query(
+      `INSERT INTO tasks (id, title, updated_at) VALUES (?, ?, ?)`,
+    );
+    insert.run("t-unparseable", "unparseable stamp", "not-a-timestamp");
+
+    const results = getTasksChangedSince("2099-01-01T00:00:00Z", undefined, db);
+
+    expect(results.map((t) => t.id)).toContain("t-unparseable");
+  });
 });
 
 describe("failTask", () => {
