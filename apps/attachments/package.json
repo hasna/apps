@@ -31,7 +31,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli/index.ts src/mcp/server.ts src/serve/index.ts --root src --outdir dist --target bun && bun run scripts/write-types.ts",
+    "build": "bun run clean && bun build src/index.ts src/cli/index.ts src/mcp/server.ts src/serve/index.ts --root src --outdir dist --target bun --external @hasna/events --external @hasna/events/* && bun run scripts/write-types.ts",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "build:cli": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun",
     "prepare": "bun run build:js",
@@ -46,7 +46,7 @@
     "dashboard": "cd dashboard && bun run dev",
     "dashboard:build": "cd dashboard && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/attachments 2>/dev/null || true",
-    "build:js": "bun run clean && bun build src/index.ts src/cli/index.ts src/mcp/server.ts src/serve/index.ts --root src --outdir dist --target bun --external @hasna/events --external @hasna/events/* && bun run scripts/write-types.ts"
+    "build:js": "bun run build"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

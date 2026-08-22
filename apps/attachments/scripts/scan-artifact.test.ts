@@ -93,6 +93,27 @@ describe("scan:artifact release gate", () => {
     }
   });
 
+  it("keeps the scanned dist identical to the dist prepare rebuilds at pack time", () => {
+    // npm publish runs prepack (verify:release -> scan) BEFORE prepare. If
+    // prepare's rebuild differs from the build that was scanned, the scan
+    // covers a dist the publish never ships. Release review P1 (publish-all
+    // lane, 2026-08-22): build had no externals while build:js externalized
+    // @hasna/events, so the scanned CLI and publish-time CLI differed by
+    // 48,349 bytes. Lock one build definition: build carries the externals
+    // and build:js delegates to it, so verify:release and prepare reach the
+    // exact same dist.
+    const scripts = readJson("package.json").scripts as Record<string, string>;
+    expect(scripts["build"]).toContain("--external @hasna/events");
+    expect(scripts["build:js"]).toBe("bun run build");
+    // Both the scan path and the pack-time rebuild path must terminate at the
+    // same single build command.
+    for (const entry of ["verify:release", "prepare"]) {
+      expect([...scriptsReachedBy(scripts, entry)]).toContain("build");
+    }
+    const buildReached = [...scriptsReachedBy(scripts, "build")];
+    expect(buildReached).not.toContain("build:js");
+  });
+
   it("enforces the conformance and release gates in CI, not only on a reviewer's laptop", () => {
     // `contracts repo-conformance` is what checks published_artifact_gate. With
     // no workflow it runs when someone types it, which is not a gate.
