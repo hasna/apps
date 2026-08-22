@@ -76,6 +76,42 @@ export function getCliPath(): string {
 }
 
 /**
+ * Build the argv for one army worker subprocess. The `run` command takes the
+ * URL positionally and accepts scenario ids as a CSV via --scenario; the
+ * worker attaches its results to the coordinator's shared run record via
+ * --run-id (the CLI's army-worker mode never finalizes the run — the
+ * coordinator does once every worker has exited).
+ */
+export function buildWorkerArgs(
+  cliPath: string,
+  url: string,
+  model: string,
+  parallel: number,
+  runId: string,
+  chunkIds: string[],
+  extra?: { timeout?: number; personaId?: string },
+): string[] {
+  const args = [
+    "bun",
+    "run",
+    cliPath,
+    "run",
+    url,
+    "--model",
+    model,
+    "--parallel",
+    String(parallel),
+    "--run-id",
+    runId,
+    "--scenario",
+    chunkIds.join(","),
+  ];
+  if (extra?.timeout) args.push("--timeout", String(extra.timeout));
+  if (extra?.personaId) args.push("--persona", extra.personaId);
+  return args;
+}
+
+/**
  * Dispatch scenarios to multiple worker processes. Returns immediately after
  * all workers are spawned — poll the run record to check progress.
  */
@@ -122,18 +158,10 @@ export async function runWithArmy(options: ArmyRunOptions): Promise<ArmyRunResul
 
   // Spawn one worker process per chunk
   const workerPromises = chunks.map((chunkIds) => {
-    const args = [
-      "bun", "run", cliPath,
-      "run",
-      "--url", options.url,
-      "--model", model,
-      "--parallel", String(options.parallel ?? 2),
-      "--run-id", run.id,
-      "--scenario-ids", chunkIds.join(","),
-    ];
-
-    if (options.timeout) args.push("--timeout", String(options.timeout));
-    if (options.personaId) args.push("--persona", options.personaId);
+    const args = buildWorkerArgs(cliPath, options.url, model, options.parallel ?? 2, run.id, chunkIds, {
+      timeout: options.timeout,
+      personaId: options.personaId,
+    });
 
     const proc = Bun.spawn(args, {
       env,
@@ -144,13 +172,18 @@ export async function runWithArmy(options: ArmyRunOptions): Promise<ArmyRunResul
     return proc.exited;
   });
 
-  // Monitor in background — update run status when all workers finish
-  Promise.all(workerPromises).then(async () => {
+  // Monitor in background — update run status when all workers finish.
+  // Worker stdout/stderr is ignored, so a worker that died without recording
+  // any result (e.g. preflight failure before scenario execution) would
+  // otherwise finalize the run as "passed" having executed nothing. Treat a
+  // non-zero worker exit with zero recorded results as a failed run.
+  Promise.all(workerPromises).then(async (exitCodes) => {
     const results = await getResultsByRun(run.id);
     const passed = results.filter((r) => r.status === "passed").length;
     const failed = results.filter((r) => r.status !== "passed" && r.status !== "skipped").length;
+    const workerDiedSilently = exitCodes.some((code) => code !== 0) && results.length === 0;
     await updateRun(run.id, {
-      status: failed > 0 ? "failed" : "passed",
+      status: failed > 0 || workerDiedSilently ? "failed" : "passed",
       passed,
       failed,
       total: scenarios.length,

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getCliPath, resolveCliPath } from "../src/lib/army-runner.js";
+import { buildWorkerArgs, getCliPath, resolveCliPath } from "../src/lib/army-runner.js";
 
 // Regression (todos 21969ee6): getCliPath() hardcoded the dev-source entrypoint
 // (../cli/index.tsx). In a built package only dist/ ships — build:cli emits
@@ -81,5 +81,56 @@ describe("army runner worker CLI resolution", () => {
     const p = getCliPath();
     expect(p.endsWith("/cli/index.tsx")).toBe(true);
     expect(existsSync(p)).toBe(true);
+  });
+});
+
+describe("army worker spawn args", () => {
+  test("match the CLI run command surface: positional URL, --scenario CSV, --run-id", () => {
+    const args = buildWorkerArgs(
+      "/pkg/dist/cli/index.js",
+      "https://example.com",
+      "haiku",
+      2,
+      "run-123",
+      ["scenario-a", "scenario-b"],
+    );
+    expect(args).toEqual([
+      "bun",
+      "run",
+      "/pkg/dist/cli/index.js",
+      "run",
+      "https://example.com",
+      "--model",
+      "haiku",
+      "--parallel",
+      "2",
+      "--run-id",
+      "run-123",
+      "--scenario",
+      "scenario-a,scenario-b",
+    ]);
+  });
+
+  test("never pass --url/--scenario-ids flags the run command rejects", () => {
+    const args = buildWorkerArgs("/pkg/dist/cli/index.js", "https://example.com", "haiku", 2, "run-123", ["a"]);
+    expect(args).not.toContain("--url");
+    expect(args).not.toContain("--scenario-ids");
+    // The URL is the positional argument after the "run" subcommand (the
+    // first "run" is the bun verb).
+    const cliPathIdx = args.indexOf("/pkg/dist/cli/index.js");
+    expect(args[cliPathIdx + 1]).toBe("run");
+    expect(args[cliPathIdx + 2]).toBe("https://example.com");
+  });
+
+  test("appends --timeout and --persona only when provided", () => {
+    const base = buildWorkerArgs("/pkg/dist/cli/index.js", "https://example.com", "haiku", 2, "run-123", ["a"]);
+    expect(base).not.toContain("--timeout");
+    expect(base).not.toContain("--persona");
+
+    const full = buildWorkerArgs("/pkg/dist/cli/index.js", "https://example.com", "haiku", 2, "run-123", ["a"], {
+      timeout: 60000,
+      personaId: "persona-1",
+    });
+    expect(full.slice(-4)).toEqual(["--timeout", "60000", "--persona", "persona-1"]);
   });
 });
