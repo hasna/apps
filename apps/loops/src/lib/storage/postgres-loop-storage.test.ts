@@ -1176,6 +1176,59 @@ suite("PostgresLoopStorage (live)", () => {
     })).toMatchObject({ status: "succeeded" });
   });
 
+  test("expired-lease steal defers while the recorded process started within the grace window", async () => {
+    const claimedAt = new Date("2026-07-06T10:10:00.000Z");
+    const loop = await storage.createLoop(loopInput("pg-claim-grace-defer", { leaseMs: 10 }));
+    const first = await storage.claimRun(loop, claimedAt.toISOString(), "runner-a", claimedAt);
+    expect(first).toBeTruthy();
+    await storage.recordRunProcess(first!.run.id, { pid: 4242 }, { claimToken: first!.claimToken, now: claimedAt });
+
+    // Lease expired (leaseMs=10) and the recorded process started 20ms ago — well
+    // inside the grace window. The original runner may still be executing (a
+    // transient heartbeat outage), so a second runner must NOT steal the slot.
+    const stealAt = new Date("2026-07-06T10:10:00.020Z");
+    const second = await storage.claimRun(loop, claimedAt.toISOString(), "runner-b", stealAt);
+    expect(second).toBeUndefined();
+
+    // Recovery must defer, not abandon, within the window — abandoning would let
+    // the next claim pass mint a new attempt while the original runner is live.
+    const recovery = await storage.recoverExpiredRunLeasesDetailed(stealAt, {});
+    expect(recovery.abandoned.map((r) => r.id)).not.toContain(first!.run.id);
+    expect(recovery.deferred.map((r) => r.id)).toContain(first!.run.id);
+
+    // The slot still belongs to the original runner's row: no new attempt minted.
+    expect((await storage.getRunBySlot(loop.id, claimedAt.toISOString()))?.id).toBe(first!.run.id);
+    expect(await storage.countRuns("running")).toBe(1);
+  });
+
+  test("expired-lease steal proceeds once the recorded process start is outside the grace window", async () => {
+    const claimedAt = new Date("2026-07-06T10:00:00.000Z");
+    const loop = await storage.createLoop(loopInput("pg-claim-grace-expired", { leaseMs: 10 }));
+    const first = await storage.claimRun(loop, claimedAt.toISOString(), "runner-a", claimedAt);
+    expect(first).toBeTruthy();
+    await storage.recordRunProcess(first!.run.id, { pid: 4242 }, { claimToken: first!.claimToken, now: claimedAt });
+
+    // 11 minutes later the recorded process start is outside the grace window:
+    // a genuinely dead runner is reclaimed exactly as before.
+    const stealAt = new Date("2026-07-06T10:11:00.000Z");
+    const second = await storage.claimRun(loop, claimedAt.toISOString(), "runner-b", stealAt);
+    expect(second?.claimToken).toBeString();
+    expect(second?.claimToken).not.toBe(first?.claimToken);
+  });
+
+  test("recovery abandons expired-lease runs whose recorded process start is outside the grace window", async () => {
+    const claimedAt = new Date("2026-07-06T10:00:00.000Z");
+    const loop = await storage.createLoop(loopInput("pg-recovery-grace-expired", { leaseMs: 10 }));
+    const first = await storage.claimRun(loop, claimedAt.toISOString(), "runner-a", claimedAt);
+    expect(first).toBeTruthy();
+    await storage.recordRunProcess(first!.run.id, { pid: 4242 }, { claimToken: first!.claimToken, now: claimedAt });
+
+    const recoveryAt = new Date("2026-07-06T10:11:00.000Z");
+    const recovery = await storage.recoverExpiredRunLeasesDetailed(recoveryAt, {});
+    expect(recovery.abandoned.map((r) => r.id)).toContain(first!.run.id);
+    expect(recovery.deferred.map((r) => r.id)).not.toContain(first!.run.id);
+  });
+
   test("finalizeRun bounds runner timestamps and uses PostgreSQL server receipt time for omitted duration", async () => {
     const serverNow = new Date("2026-07-06T10:00:10.000Z");
     const startedAt = new Date("2026-07-06T10:00:05.000Z");
