@@ -36,7 +36,10 @@ async function runCloudCli(args: string[], apiUrl: string) {
       ...process.env,
       HOME: HOME_DIR,
       HASNA_SESSIONS_API_URL: apiUrl,
-      HASNA_SESSIONS_API_KEY: "test-key",
+      // Override tier: outranks the disk credential tier (fleet machines keep
+      // the real sessions config on disk at ~/.hasna/cloud/sessions.env) and
+      // the deprecated env tier, and emits no deprecation warning on stderr.
+      HASNA_SESSIONS_API_KEY_OVERRIDE: "test-key",
       HASNA_SESSIONS_MODE: "",
       HASNA_SESSIONS_STORAGE_MODE: "",
       SESSIONS_API_URL: "",

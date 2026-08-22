@@ -166,8 +166,13 @@ describe("relocate", () => {
     const origApiUrl = process.env.HASNA_SESSIONS_API_URL;
     const origApiKey = process.env.HASNA_SESSIONS_API_KEY;
     // Force local mode: unset the cloud flip envs.
-    delete process.env.HASNA_SESSIONS_API_URL;
-    delete process.env.HASNA_SESSIONS_API_KEY;
+    // Explicit blank URL/KEY = an explicit local choice. The @hasna/contracts
+    // client resolver consults a disk credential tier (~/.hasna/cloud/sessions.env
+    // on fleet machines) when the environment is SILENT about the URL; a
+    // DEFINED-BLANK URL overrides that disk pointer, so this keeps the test on
+    // the local store even on machines whose fleet config lives on disk.
+    process.env.HASNA_SESSIONS_API_URL = "";
+    process.env.HASNA_SESSIONS_API_KEY = "";
     process.env.HASNA_SESSIONS_DB_PATH = join(TEST_DIR, "sessions.db");
     resetDatabase();
 

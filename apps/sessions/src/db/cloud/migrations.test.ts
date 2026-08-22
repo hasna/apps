@@ -20,10 +20,12 @@ describe("cloud migration ledger", () => {
     const codewith = migrations.find((migration) => migration.id === "0004_codewith_session_source");
     const sourceIdIndex = migrations.find((migration) => migration.id === "0005_session_source_id_lookup_index");
     const sessionObjects = migrations.find((migration) => migration.id === "0006_session_objects");
+    const embeddingsType = migrations.find((migration) => migration.id === "0008_embeddings_float8");
     expect(initial).toBeDefined();
     expect(codewith).toBeDefined();
     expect(sourceIdIndex).toBeDefined();
     expect(sessionObjects).toBeDefined();
+    expect(embeddingsType).toBeDefined();
     expect(initial?.sql).toMatch(/CHECK\s*\(source IN \('claude', 'codex', 'gemini'\)\)/);
     expect(initial?.sql).not.toContain("codewith");
     expect(initial?.checksum).toBe(APPROVED_BASE_0001_CHECKSUM);
@@ -31,6 +33,7 @@ describe("cloud migration ledger", () => {
     expect(sourceIdIndex?.sql).toContain("idx_sessions_source_id");
     expect(sessionObjects?.sql).toContain("CREATE TABLE IF NOT EXISTS session_objects");
     expect(sessionObjects?.sql).toContain("idx_session_objects_retry");
+    expect(embeddingsType?.sql).toMatch(/ALTER COLUMN embedding TYPE FLOAT8\[\]/);
 
     const alreadyApplied = migrations
       .filter(
@@ -38,7 +41,8 @@ describe("cloud migration ledger", () => {
           migration.id !== "0004_codewith_session_source" &&
           migration.id !== "0005_session_source_id_lookup_index" &&
           migration.id !== "0006_session_objects" &&
-          migration.id !== "0007_embeddings",
+          migration.id !== "0007_embeddings" &&
+          migration.id !== "0008_embeddings_float8",
       )
       .map((migration) =>
         applied({
@@ -84,6 +88,7 @@ describe("cloud migration ledger", () => {
       ["0005_session_source_id_lookup_index", "pending"],
       ["0006_session_objects", "pending"],
       ["0007_embeddings", "pending"],
+      ["0008_embeddings_float8", "pending"],
     ]);
   });
 });

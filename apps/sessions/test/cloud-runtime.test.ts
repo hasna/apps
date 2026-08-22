@@ -137,3 +137,75 @@ describe("cloud migration runtime", () => {
     expect((await checkCloudReady(missingLedger as any)).error).toContain("permission denied");
   });
 });
+
+describe("cloud embeddings schema (regression: 0007 no-op after 0001)", () => {
+  it("full migration sequence yields float8[] embedding + integer synced_to_s3, and vectors round-trip", async () => {
+    // Real-Postgres integration test. 0007 declared the cloud embeddings
+    // schema (FLOAT8[], INTEGER synced_to_s3, two indexes) but ran as a
+    // no-op wherever 0001 had already created `embeddings` with BYTEA —
+    // the shipped column never matched the code, which writes/reads
+    // JavaScript number[]. Guard: this test FAILS on a schema that lacks
+    // 0008 (embedding reads bytea) and skips only when no Postgres is
+    // reachable (CI without a local PG is documented as uncovered).
+    const user = process.env.USER ?? "postgres";
+    const host = process.env.HASNA_SESSIONS_PG_HOST ?? "localhost";
+    const schema = `scratch_emb_${Date.now().toString(36)}`;
+    const origMode = process.env.HASNA_SESSIONS_STORAGE_MODE;
+    const origUrl = process.env.HASNA_SESSIONS_DATABASE_URL;
+    let admin: import("pg").Pool | null = null;
+    try {
+      admin = new (await import("pg")).Pool({ connectionString: `postgres://${user}@${host}/postgres` });
+      await admin.query(`CREATE SCHEMA ${schema}`);
+    } catch (error) {
+      console.log(`skip: no reachable Postgres at ${host} (${String(error).slice(0, 120)})`);
+      return;
+    }
+    try {
+      process.env.HASNA_SESSIONS_STORAGE_MODE = "cloud";
+      process.env.HASNA_SESSIONS_DATABASE_URL = `postgres://${user}@${host}/postgres?options=-csearch_path%3D${schema}`;
+      const client = getCloudClient();
+      const report = await runCloudMigrations({ client });
+      expect(report.applied).toContain("0008_embeddings_float8");
+
+      const cols = await client.many<{ column_name: string; data_type: string; udt_name: string }>(
+        `SELECT column_name, data_type, udt_name FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = 'embeddings'
+            AND column_name IN ('embedding', 'synced_to_s3')
+         ORDER BY column_name`,
+        [schema],
+      );
+      const byName = Object.fromEntries(cols.map((c) => [c.column_name, c]));
+      expect(byName.embedding.udt_name).toBe("_float8");
+      expect(byName.embedding.data_type).toBe("ARRAY");
+      expect(byName["synced_to_s3"].data_type).toBe("integer");
+
+      await client.execute(
+        `INSERT INTO sessions (id, source, source_id, title) VALUES ('s1', 'claude', 'src1', 't')`,
+      );
+      await client.execute(
+        `INSERT INTO messages (id, session_id, role, content) VALUES ('m1', 's1', 'user', 'hello')`,
+      );
+      const vec: number[] = [0.11, 0.22, -0.33, 0.44];
+      await client.execute(
+        `INSERT INTO embeddings
+           (id, message_id, session_id, chunk_index, chunk_text, embedding,
+            embedding_model, dimensions, created_at, synced_to_s3)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), 0)`,
+        ["e1", "m1", "s1", 0, "chunk", vec, "test-model", vec.length],
+      );
+      const row = await client.get<{ embedding: unknown }>(
+        `SELECT embedding FROM embeddings WHERE id = $1`,
+        ["e1"],
+      );
+      expect(Array.isArray(row?.embedding)).toBe(true);
+      expect(row?.embedding as number[]).toEqual(vec);
+    } finally {
+      await closeCloudClient();
+      if (admin) await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      if (origMode === undefined) delete process.env.HASNA_SESSIONS_STORAGE_MODE;
+      else process.env.HASNA_SESSIONS_STORAGE_MODE = origMode;
+      if (origUrl === undefined) delete process.env.HASNA_SESSIONS_DATABASE_URL;
+      else process.env.HASNA_SESSIONS_DATABASE_URL = origUrl;
+    }
+  });
+});

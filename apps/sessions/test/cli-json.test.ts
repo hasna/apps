@@ -38,8 +38,24 @@ function runCli(args: string[]) {
 }
 
 function runCliPipe(command: string) {
+  // Fleet machines export the real sessions cloud config via BASH_ENV
+  // (~/.hasna/cloud/agent-env.sh is sourced into every non-interactive bash),
+  // which clobbers env overrides passed to the spawn. Re-assert the test's
+  // local-mode environment IN-COMMAND, after that sourcing: a defined-blank
+  // API URL/KEY is an explicit local choice and also beats the disk
+  // credential tier.
+  const localEnv = [
+    `HASNA_SESSIONS_DB_PATH=${join(TEST_DIR, "sessions.db")}`,
+    `SESSIONS_DB_PATH=${join(TEST_DIR, "sessions.db")}`,
+    "HASNA_SESSIONS_API_URL=",
+    "HASNA_SESSIONS_API_KEY=",
+    "HASNA_SESSIONS_STORAGE_MODE=local",
+    "SESSIONS_STORAGE_MODE=local",
+    "HASNA_SESSIONS_MODE=",
+    "SESSIONS_MODE=",
+  ].join(" ");
   return Bun.spawnSync({
-    cmd: ["bash", "-o", "pipefail", "-c", command],
+    cmd: ["bash", "-o", "pipefail", "-c", `${localEnv} ${command}`],
     cwd: repoRoot,
     env: {
       ...process.env,
