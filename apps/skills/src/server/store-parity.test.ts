@@ -127,6 +127,50 @@ for (const backend of backends) {
       }
     });
 
+    test("a createRun replay with the same idempotency key returns the first run", async () => {
+      const fixture = await seeded(backend);
+      try {
+        // The replay is a read of the first run, never a second INSERT: on Postgres
+        // the dedupe pre-read must run inside the RLS tenant context, because a
+        // pooled connection carries no context between requests and the 0003 policy
+        // (`org_id = current_setting('app.skills_org_id', true) OR ...`) hides the
+        // first row from a context-less read - which would fall through to the
+        // INSERT and violate the partial unique index skills_runs_org_idempotency_idx.
+        // A superuser role bypasses RLS, so this assertion binds only when the
+        // postgres backend runs as a non-superuser role (HASNA_SKILLS_TEST_DATABASE_URL).
+        const first = await fixture.store.createRun({
+          principal: fixture.principal,
+          slug: "audio-transcript-pack",
+          input: {},
+          args: [],
+          idempotencyKey: "parity-replay-key",
+        });
+        const replay = await fixture.store.createRun({
+          principal: fixture.principal,
+          slug: "audio-transcript-pack",
+          input: {},
+          args: [],
+          idempotencyKey: "parity-replay-key",
+        });
+        expect(replay.id).toBe(first.id);
+
+        // The same key in a different org is a distinct run: the uniqueness
+        // constraint is (org_id, idempotency_key), so one tenant's key cannot
+        // collide with - or reveal - another's.
+        const other = await fixture.store.createRun({
+          principal: fixture.otherPrincipal,
+          slug: "audio-transcript-pack",
+          input: {},
+          args: [],
+          idempotencyKey: "parity-replay-key",
+        });
+        expect(other.id).not.toBe(first.id);
+        expect(other.orgId).toBe("org_b");
+      } finally {
+        await fixture.close();
+      }
+    });
+
     test("authentication is repeatable and does not depend on a per-request write landing", async () => {
       const fixture = await seeded(backend);
       try {
