@@ -302,9 +302,9 @@ export interface AcquireLockInput {
 /**
  * Operations that only exist on-box. Agent assignments, extra disk locations
  * and mutation locks are now modeled by the hosted /v1 API; project budgets
- * and spend remain machine-local sub-resources with no hosted routes, so a
- * write in api mode throws this rather than silently writing local sqlite
- * (split-brain).
+ * and spend remain machine-local sub-resources with no hosted routes, so any
+ * budget/spend access (reads included) in api mode throws this rather than
+ * silently writing local sqlite or returning an empty ledger (split-brain).
  */
 class LocalOnlyOperationError extends Error {
   constructor(operation: string) {
@@ -1663,8 +1663,11 @@ class ApiProjectStore implements ProjectStore {
   }
 
   // ---- App store (machine-local sqlite in BOTH transports; see shared impl) ----
-  // Budgets/spend below stay api-routed: they live in the project REGISTRY,
-  // which the server does model, so they are not part of this machine-local set.
+  // Budgets/spend are NOT part of this machine-local set: they are an on-box
+  // ledger (project_registry sqlite) that the hosted server does NOT model —
+  // route() dispatches projects/roots/agents/locks/recipes/machines and falls
+  // through to 404 for budgets — so every budget read/write in api mode throws
+  // LocalOnlyOperationError rather than silently returning an empty ledger.
   listDataModels = machineLocalAppStore.listDataModels;
   createDataModel = machineLocalAppStore.createDataModel;
   listDataRecords = machineLocalAppStore.listDataRecords;
@@ -1680,11 +1683,11 @@ class ApiProjectStore implements ProjectStore {
   }
 
   async listBudgets(): Promise<ProjectBudget[]> {
-    return [];
+    throw new LocalOnlyOperationError("list project budgets");
   }
 
   async getBudgetStatuses(): Promise<ProjectBudgetStatus[]> {
-    return [];
+    throw new LocalOnlyOperationError("read project budget statuses");
   }
 
   async resetBudget(): Promise<ProjectBudget> {

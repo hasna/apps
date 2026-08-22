@@ -772,6 +772,23 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   });
 
+  // Regression (todos 9ddd325c): budget READS in api mode were hardcoded
+  // `return []` stubs, so cloud-mode callers (budgets list/remaining, the
+  // buildProjectAgentContext budget block, budget-check actions, the MCP tool)
+  // got zero statuses, zero exhaustion, rc=0, and proceeded with no cap applied
+  // while only the write path failed loudly. The hosted server models no budget
+  // resource (route() falls through to 404), so reads must reject exactly like
+  // createBudget/resetBudget/recordSpend — and must never touch the network.
+  test("budget reads reject in api mode instead of returning a hardcoded [] (todos 9ddd325c)", async () => {
+    const { store, calls } = stubStore(() => ({}));
+    await expect(store.listBudgets()).rejects.toThrow(/local-only operation/i);
+    await expect(store.getBudgetStatuses()).rejects.toThrow(/local-only operation/i);
+    await expect(store.createBudget({} as never)).rejects.toThrow(/local-only operation/i);
+    await expect(store.resetBudget("wks_any")).rejects.toThrow(/local-only operation/i);
+    await expect(store.recordSpend({} as never)).rejects.toThrow(/local-only operation/i);
+    expect(calls).toHaveLength(0);
+  });
+
   // Regression: resolving "." (or any path/marker target) in api mode must NOT
   // hit the API — the URL parser collapses `/projects/.` to the collection
   // route `/projects/`, returning a LIST payload that then masqueraded as a
