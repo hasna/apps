@@ -26,6 +26,7 @@ import {
   searchAll,
   getRepoStats,
   getGlobalStats,
+  resolveIdOrName,
   setRepoLookupPathStateForTests,
 } from "./repos";
 
@@ -81,6 +82,43 @@ describe("repos", () => {
     upsertRepo({ path: "/tmp/test-repo-a", name: "duplicate-name" });
     upsertRepo({ path: "/tmp/test-repo-b", name: "duplicate-name" });
     expect(() => getRepo("duplicate-name")).toThrow("Multiple repos have the exact name");
+  });
+
+  // Regression for todos 12ed8c6d-910b-4824-891d-ea5d7edc9c25: GitHub permits
+  // all-numeric repository names, so an input like "2048" is ambiguous between
+  // a registry id and a repo NAME. resolveIdOrName gives the name row
+  // precedence and falls back to the safe-integer id only when no such name
+  // exists — the callers (worktree verbs, MCP, HTTP) must never coerce the
+  // string to a number before this decision.
+  describe("resolveIdOrName", () => {
+    it("resolves an all-numeric NAME before the id it resembles", () => {
+      db.query("INSERT INTO repos (id, path, name) VALUES (2048, '/tmp/infra-legacy', 'infra-legacy')").run();
+      db.query("INSERT INTO repos (id, path, name) VALUES (9, '/tmp/numeric-2048', '2048')").run();
+      expect(resolveIdOrName("2048")).toBe("2048");
+      expect(getRepo(resolveIdOrName("2048"))!.id).toBe(9);
+      // The id stays reachable on its own terms.
+      expect(getRepo(2048)!.name).toBe("infra-legacy");
+    });
+
+    it("falls back to the safe-integer id when no such name exists", () => {
+      db.query("INSERT INTO repos (id, path, name) VALUES (2048, '/tmp/infra-legacy', 'infra-legacy')").run();
+      expect(resolveIdOrName("2048")).toBe(2048);
+      expect(getRepo(resolveIdOrName("2048"))!.name).toBe("infra-legacy");
+    });
+
+    it("passes every other string shape through unchanged", () => {
+      expect(resolveIdOrName("0713")).toBe("0713");
+      expect(resolveIdOrName("+713")).toBe("+713");
+      expect(resolveIdOrName("0")).toBe("0");
+      expect(resolveIdOrName("hasna/apps")).toBe("hasna/apps");
+      expect(resolveIdOrName("open-loops")).toBe("open-loops");
+    });
+
+    it("propagates an ambiguous all-numeric name loudly instead of picking an id", () => {
+      db.query("INSERT INTO repos (id, path, name) VALUES (7, '/tmp/dup-a', '2048')").run();
+      db.query("INSERT INTO repos (id, path, name) VALUES (8, '/tmp/dup-b', '2048')").run();
+      expect(() => resolveIdOrName("2048")).toThrow("Multiple repos have the exact name '2048'");
+    });
   });
 
   // Regression for todos c357a1f3: `repos repo <name> --json` — the exact

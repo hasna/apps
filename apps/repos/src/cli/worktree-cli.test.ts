@@ -34,6 +34,22 @@ function seedDb(): string {
   return dbPath;
 }
 
+/**
+ * Registry fixture for the all-numeric-name defect (todos
+ * 12ed8c6d-910b-4824-891d-ea5d7edc9c25): GitHub permits an all-numeric
+ * repository name, so row id=9 carries the NAME "2048" while a DIFFERENT row
+ * holds the id 2048. An input of "2048" must resolve to the name row — never
+ * be silently coerced into the id and land on 'infra-legacy'.
+ */
+function seedNumericNameDb(): string {
+  const dbPath = seedDb();
+  const db = getDb(dbPath);
+  db.query("INSERT INTO repos (id, path, name) VALUES (2048, '/tmp/infra-legacy', 'infra-legacy')").run();
+  db.query("INSERT INTO repos (id, path, name) VALUES (9, '/tmp/numeric-2048', '2048')").run();
+  closeDb();
+  return dbPath;
+}
+
 function runCli(dbPath: string, args: string[]) {
   const result = Bun.spawnSync({
     cmd: ["bun", "run", "src/cli/index.tsx", ...args],
@@ -96,6 +112,19 @@ describe("repos worktree — argument surface", () => {
     const result = runCli(dbPath, ["worktree", "add", "open-anything", "--name", "../../escape", "--json"]);
     expect(result.code).toBe(1);
     expect(errorOf(result.stdout).code).toBe("INVALID_WORKTREE_NAME");
+  });
+
+  test("an all-numeric repo NAME resolves by name, never silently as a registry id", () => {
+    // Regression for todos 12ed8c6d-910b-4824-891d-ea5d7edc9c25: "2048" is the
+    // NAME of the id=9 row, while id=2048 belongs to 'infra-legacy'. The
+    // resolution must reach the name row and report THAT checkout, not coerce
+    // "2048" into the id and blame 'infra-legacy'.
+    const dbPath = seedNumericNameDb();
+    const result = runCli(dbPath, ["worktree", "add", "2048", "--name", "wt1", "--json"]);
+    expect(result.code).toBe(1);
+    expect(errorOf(result.stdout).code).toBe("PARENT_CHECKOUT_BROKEN");
+    expect(errorOf(result.stdout).message).toContain("'2048'");
+    expect(errorOf(result.stdout).message).not.toContain("infra-legacy");
   });
 
   test("an unregistered repo is reported, never guessed at", () => {

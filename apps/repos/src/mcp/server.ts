@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   listRepos,
   getRepo,
+  resolveIdOrName,
   AmbiguousRemoteError,
   searchRepos,
   listCommits,
@@ -147,7 +148,7 @@ server.tool("get_repo", "Get a repo by ID, path, or name", {
 }, async ({ id, verbose }) => {
   let repo;
   try {
-    repo = getRepo(isNaN(Number(id)) ? id : Number(id));
+    repo = getRepo(resolveIdOrName(id));
   } catch (error) {
     // A qualified owner/name that matches several live checkouts is
     // ambiguous, not absent — the same loud refusal the CLI prints.
