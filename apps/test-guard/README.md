@@ -1,4 +1,4 @@
-# @hasna/test-guard — machine-wide bun test concurrency and memory guard
+# @hasna/test-guard — resolved test admission and descendant lifetime guard
 
 **Task:** SC-00062 (Station Cleanup). Installed 2026-07-30. This
 package is the canonical source home (added 2026-08-19, task 48d4725e): the
@@ -19,29 +19,56 @@ There was no control at any layer.
 
 ## What this is
 
-A **flock(2) semaphore enforced in the runner resolution path**:
+A typed four-lane admission contract plus a **flock(2) semaphore enforced in
+the runner resolution path**:
+
+- `@hasna/test-guard/sdk` validates and deterministically classifies a fully
+  resolved execution plan as `LOCAL_FOCUSED`, `CLOUD_FULL`,
+  `LOCAL_DIAGNOSTIC`, or `UNCLASSIFIED`. Stable content-addressed
+  classification, admission, parent/child, and terminal receipts are the
+  handoff surface for Testers and host verification.
+- A local focused execution requires one package, explicit finite target IDs,
+  a completely resolved descendant closure, and non-null numeric memory,
+  process, swap, and wall-time limits. Broad, recursive, dynamic, CI-emulating,
+  lifecycle-hook, fanout, non-Bun, unresolved, and unbounded plans refuse
+  before spawn.
+- The shell wrapper is interception only. It never treats a command name as
+  safety evidence. A focused invocation keeps the ordinary `bun test <target>`
+  spelling but supplies its matching resolved plan through
+  `HASNA_TEST_GUARD_RESOLVED_PLAN_FILE`; a missing, unreadable, or mismatched
+  plan refuses with exit 78.
 
 - `/home/hasna/.bun/bin/bun` is a bash wrapper (marker: `hasna-test-guard
   wrapper`). Source of truth: `bun-wrapper.sh` in this package.
 - The real bun binary lives at `/home/hasna/.bun/bin/bun-real`.
 - Both `bunx` symlinks (`~/.bun/bin/bunx`, `~/.local/bin/bunx`) point at the
   wrapper; argv0 is preserved with `exec -a` so bunx semantics survive.
-- On `bun test`, the wrapper acquires one of `MAX_SLOTS` (default **4**) slot
-  locks under `slots/` before exec'ing bun-real. The lock fd is inherited
-  across exec, so the slot is held exactly as long as the suite lives and
-  releases on any exit, including SIGKILL. No daemon, no stale-lock cleanup.
+- After a `LOCAL_FOCUSED` admission, the wrapper acquires one of `MAX_SLOTS`
+  (default **4**) slot locks under `slots/`. The wrapper retains the lock after
+  the direct launcher exits and releases it only after systemd reports a
+  terminal scope and the complete recursive cgroup reports `populated 0`.
+  Ambiguous scope setup, accounting, or terminal evidence fails closed.
+- The local workstation controller dependency is the stable user-systemd unit
+  `hasna-tests.slice`. `@hasna/machines` owns provisioning and aggregate host
+  controls for that slice. `@hasna/test-guard` does not derive or provision
+  those controls: before allocating or spawning it queries the exact unit and
+  requires one loaded, active controller with memory accounting, finite
+  aggregate `MemoryMax` and `TasksMax`, and `MemorySwapMax=0`.
 - After acquiring a slot, Linux suites enter a transient systemd user scope
-  with `MemoryHigh=12G`, `MemoryMax=16G`, `MemorySwapMax=0`, and
-  `TasksMax=4096`. Preflight failures return exit 78; runtime `systemd-run`
+  bound by `--slice=hasna-tests.slice`, with narrower `MemoryHigh=12G`,
+  `MemoryMax=16G`, `MemorySwapMax=0`, and `TasksMax=4096`. The runtime proves
+  its current cgroup is exactly the named leaf scope beneath that aggregate
+  slice before it writes an ADMIT receipt or starts the test. Preflight
+  failures return exit 78; runtime `systemd-run`
   failures propagate their nonzero status. Sanitized cron/agent environments
   reconstruct the caller's own `/run/user/<uid>` transport after validating
   its ownership and permissions, then remove the synthetic variable before
   entering bun so the caller's environment contract remains exact. A suite
   already inside an intentionally bounded test scope is not nested again.
-- `HASNA_TEST_GUARD_HELD` is trusted only when the current cgroup is already
-  at least as strict as the requested memory, swap, and task limits. A stale or
-  forged marker in an unbounded or looser scope is cleared and re-enters the
-  normal semaphore/scope path.
+- Child plans inherit the parent lane, allocation, lease, cgroup, and remaining
+  budget. They can narrow scope and consume that budget, but cannot widen it or
+  acquire a second local allocation. Missing, stale, or mismatched parent
+  evidence refuses before spawn.
 - If all slots are busy the invocation **queues FIFO** up to `MAX_WAIT_SECS`
   (default **1800**), then fails LOUDLY with exit 75 and a message naming the
   guard — never runs unbounded (fail-closed). FIFO (added 2026-07-30, same
@@ -59,10 +86,11 @@ A **flock(2) semaphore enforced in the runner resolution path**:
   guard dir; requires rc=0 + '1 pass' + the exact cgroup limits + an
   `acquired ... argv=test` log line),
   because marker presence is not evidence the cap works.
-- Nested `bun test` under a slot-holding suite inherits
-  `HASNA_TEST_GUARD_HELD=1` and skips acquisition (no self-deadlock).
-- `HASNA_TEST_GUARD_BYPASS=1` skips the semaphore for one invocation; bypasses
-  are logged to `guard.log`.
+- Nested execution under a slot-holding suite skips acquisition only when its
+  allocation, lease, cgroup, resource bounds, and resolved child evidence
+  match. A marker alone is not parent evidence.
+- `HASNA_TEST_GUARD_BYPASS=1` cannot bypass focused admission or allocation;
+  it refuses with exit 78 and is logged.
 
 Config override: `config` in the guard dir (sourced), e.g. `MAX_SLOTS=6`.
 Evidence log: `guard.log` (every acquisition, wait, bypass, timeout) +
@@ -84,12 +112,10 @@ journald tag `hasna-test-guard`.
 
 1. Executing `/home/hasna/.bun/bin/bun-real test` directly bypasses the cap
    (deliberate escape hatch; audit via guard.log absence + process listings).
-2. Non-bun test runners (node/vitest/jest via node, pytest, cargo test) are
-   not covered. bun is the fleet-standard runner; extend the same pattern if
-   another runner starts saturating.
-3. `bun run test` where package.json's script says `bun test`: MEASURED
-   2026-07-30 (guard.log 13:23:54Z) — bun resolves the script's `bun` via
-   PATH, so it hits the wrapper and IS capped. Not a gap on bun 1.3.14.
+2. Non-Bun runners are classified `CLOUD_FULL`; they are never admitted to a
+   local focused allocation by this package.
+3. `bun run test` is lifecycle expansion and refuses locally. The resolved
+   cloud plan, rather than the wrapper's command spelling, owns that suite.
 4. A fresh bun reinstall (curl installer) replaces the wrapper. `bun upgrade`
    through the wrapper updates bun-real and is safe. The **sentinel** catches
    the clobber case and (since 0.0.3, row 7112181b) **auto-rearms**: it
@@ -100,9 +126,9 @@ journald tag `hasna-test-guard`.
    and the end-to-end canary (rc=0, '1 pass', exact cgroup limits,
    `acquired ... argv=test`) all pass; an unverifiable rearm keeps the alert
    path (fail-closed).
-5. `bun --some-flag test` (flags BEFORE the subcommand) bypasses the guard —
-   the wrapper checks only `$1`. Pre-existing shape, reviewer P3-5; no such
-   invocation observed in production logs. Follow-up, not a blocker.
+5. Pre-subcommand flag spellings and `bun run` expansion are intercepted but
+   refused unless a future package-owned resolver can prove their complete
+   closure. They do not bypass the guard.
 6. A SIGKILLed waiter whose pid is recycled before the next liveness sweep can
    hold the queue head until the staleness cap (MAX_WAIT+120s) — negligible
    probability and explicitly bounded. The reaper intentionally avoids
@@ -147,11 +173,23 @@ unverified binary).
 
 ## Tests
 
+- `bun test test/execution-lanes.test.ts --max-concurrency 1` exercises the
+  typed classifier, refusal-before-spawn sentinel, parent/child budget and
+  allocation inheritance, and stable terminal receipts.
+- `bash test/controller-enforcement.sh` uses hermetic `systemctl` and
+  `systemd-run` seams to prove controller-state refusal before spawn, exact
+  aggregate slice binding, resistance to forged environment claims, and real
+  cgroup ancestry admission.
+- `bash test/descendant-lifetime.sh` drives the real wrapper against a hermetic
+  fake systemd/cgroup surface and proves the slot remains unavailable after the
+  direct launcher exits until the descendant makes the cgroup empty.
 - `bun run test` (in this package) runs the hermetic smoke: battery sections 16
   (sentinel canary-state classification) and 17 (auto-rearm on a temp-dir COPY
   of the bin layout) against the repo copies. No machine guard install needed.
-- `battery.sh` is the full regression sweep (sections 1-17, 60 checks) and
-  must run on a station with the guard installed:
+- `battery.sh` remains the full historical regression sweep (sections 1-17,
+  60 checks). It is package-wide and therefore belongs to the `CLOUD_FULL`
+  lane; do not run it locally while that cloud lane is unavailable. The
+  eventual cloud invocation retains the installed-guard inputs below:
 
   ```bash
   BUN_TEST_GUARD_SENTINEL=<repo>/sentinel.sh \

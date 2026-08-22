@@ -103,6 +103,7 @@ BUN_PATH="${1:-/home/hasna/.bun/bin/bun}"
 # temp-dir COPY of the bin layout and must never touch the live bun-real.
 REAL="${SENTINEL_REAL_BUN:-/home/hasna/.bun/bin/bun-real}"
 WRAPPER_SOURCE="${2:-/home/hasna/.hasna/test-guard/bun-wrapper.sh}"
+RUNTIME_SOURCE="${SENTINEL_RUNTIME_SOURCE:-${WRAPPER_SOURCE%/*}/runtime.mjs}"
 # SENTINEL_GUARD_DIR is a TEST-ONLY override for exercising the queue-health
 # alert path against a controlled queue (live waiters reap any alertable
 # ticket planted in the real queue within seconds, making the control racy).
@@ -333,6 +334,9 @@ test("canary", () => {
   expect(readFileSync(`${root}/pids.max`, "utf8").trim()).toBe("4096");
 });
 EOF
+  cat > "$PROBE_DIR/suite/resolved-plan.json" <<'EOF'
+{"schema":"hasna.test_guard.execution_plan.v1","planId":"sentinel-canary","intent":"execute","runner":"bun","invocation":{"executable":"bun","argv":["test","canary.test.ts"]},"maySpawn":true,"packages":["@hasna/test-guard"],"targetIds":["canary.test.ts"],"selector":"explicit","packageWide":false,"workspaceWide":false,"recursive":false,"localCi":false,"lifecycleHooks":[],"dynamicDiscovery":false,"fanout":1,"descendants":[],"limits":{"memoryHighBytes":12884901888,"memoryMaxBytes":17179869184,"swapMaxBytes":0,"pidsMax":4096,"wallTimeMs":1800000}}
+EOF
   # env -u: a caller carrying HELD/BYPASS (nested/manual run) would otherwise
   # skip acquisition, false-alert "cap silently bypassed", and burn the 6h
   # damping stamp ahead of a real alert (reviewer P3-1).
@@ -346,7 +350,7 @@ EOF
   # causes, discriminated.
   probe_state=""
   probe_timeout=${SENTINEL_PROBE_TIMEOUT:-120}
-  probe_out=$(cd "$PROBE_DIR/suite" && env -u HASNA_TEST_GUARD_HELD -u HASNA_TEST_GUARD_BYPASS HASNA_TEST_GUARD_DIR="$PROBE_DIR/guard" timeout "$probe_timeout" "$BUN_PATH" test 2>&1)
+  probe_out=$(cd "$PROBE_DIR/suite" && env -u HASNA_TEST_GUARD_HELD -u HASNA_TEST_GUARD_BYPASS HASNA_TEST_GUARD_DIR="$PROBE_DIR/guard" HASNA_TEST_GUARD_RUNTIME="$RUNTIME_SOURCE" HASNA_TEST_GUARD_PACKAGE_ID=@hasna/test-guard HASNA_TEST_GUARD_RESOLVED_PLAN_FILE="$PROBE_DIR/suite/resolved-plan.json" timeout "$probe_timeout" "$BUN_PATH" test canary.test.ts 2>&1)
   probe_rc=$?
   if [ "$probe_rc" -ne 0 ]; then
     case "$probe_rc" in

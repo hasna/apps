@@ -26,10 +26,11 @@
 # cron-spawned work; this wrapper sits at the one path every bun invocation on
 # this box resolves through.
 #
-# Escape hatches:
-#   HASNA_TEST_GUARD_BYPASS=1  — skip the semaphore for this invocation (audited).
-#   HASNA_TEST_GUARD_HELD      — set automatically for children of a suite that
-#                                already holds a slot; prevents nested deadlock.
+# Parent controls:
+#   HASNA_TEST_GUARD_BYPASS=1  — refuses for focused local execution; it cannot
+#                                replace admission or allocation evidence.
+#   HASNA_TEST_GUARD_HELD      — set for children of an admitted suite; accepted
+#                                only with a valid parent receipt and cgroup.
 #
 # Every guarded Linux suite also runs in a transient systemd user scope. The
 # semaphore controls concurrency; the scope independently bounds memory, swap,
@@ -47,11 +48,6 @@ if [ ! -x "$REAL" ]; then
   exit 127
 fi
 
-# Fast path: anything that is not a top-level `bun test`.
-if [ "${1:-}" != "test" ]; then
-  exec -a "$0" "$REAL" "$@"
-fi
-
 # bunx is a symlink to this file; `bunx test` runs a package named "test",
 # it is not a test suite.
 case "${0##*/}" in
@@ -62,6 +58,41 @@ esac
 # guard is a control against accidental saturation, not an adversary boundary
 # (HASNA_TEST_GUARD_BYPASS already exists and is likewise logged).
 GUARD_DIR="${HASNA_TEST_GUARD_DIR:-/home/hasna/.hasna/test-guard}"
+WRAPPER_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || WRAPPER_DIR=""
+if [ -n "${HASNA_TEST_GUARD_RUNTIME:-}" ]; then
+  GUARD_RUNTIME=$HASNA_TEST_GUARD_RUNTIME
+elif [ -n "$WRAPPER_DIR" ] && [ -r "$WRAPPER_DIR/runtime.mjs" ]; then
+  GUARD_RUNTIME="$WRAPPER_DIR/runtime.mjs"
+else
+  GUARD_RUNTIME="$GUARD_DIR/runtime.mjs"
+fi
+readonly AGGREGATE_TEST_SLICE="hasna-tests.slice"
+
+# The wrapper only intercepts. The package-owned runtime resolves the complete
+# execution-plan shape and classifies it; the wrapper never decides safety from
+# a command name or argument position. Exit 10 is the sole local-focused admit
+# signal. Missing runtime or any other result fails closed before a child starts.
+if [ ! -r "$GUARD_RUNTIME" ]; then
+  echo "hasna-test-guard: refusing invocation; resolved-plan runtime missing at $GUARD_RUNTIME" >&2
+  exit 78
+fi
+if [ -n "${HASNA_TEST_GUARD_HELD:-}" ]; then
+  mkdir -p "$GUARD_DIR/receipts" 2>/dev/null || exit 78
+  HASNA_TEST_GUARD_CHILD_ADMISSION_RECEIPT_FILE="$GUARD_DIR/receipts/child-$$.json"
+  export HASNA_TEST_GUARD_CHILD_ADMISSION_RECEIPT_FILE
+fi
+"$REAL" "$GUARD_RUNTIME" intercept "$@"
+INTERCEPT_RC=$?
+case "$INTERCEPT_RC" in
+  0) exec -a "$0" "$REAL" "$@" ;;
+  10) ;;
+  78) exit 78 ;;
+  *)
+    echo "hasna-test-guard: refusing invocation; resolved-plan classification failed rc=$INTERCEPT_RC" >&2
+    exit 78
+    ;;
+esac
+
 MAX_SLOTS=4
 MAX_WAIT_SECS=1800
 # shellcheck disable=SC1091
@@ -77,6 +108,7 @@ glog() {
 
 has_bounded_test_scope() {
   local cgroup
+  local cgroup_file
   local cgroup_root
   local memory_high
   local memory_max
@@ -87,9 +119,14 @@ has_bounded_test_scope() {
   local expected_memory_swap_max
   local expected_tasks_max
 
-  cgroup=$(awk -F: '$1 == "0" { print $3 }' /proc/self/cgroup 2>/dev/null)
+  cgroup_file=/proc/self/cgroup
+  if [ "${HASNA_TEST_GUARD_TEST_LOCK_BACKEND:-}" = "mkdir" ] \
+    && [ -n "${HASNA_TEST_GUARD_TEST_PROC_SELF_CGROUP:-}" ]; then
+    cgroup_file=$HASNA_TEST_GUARD_TEST_PROC_SELF_CGROUP
+  fi
+  cgroup=$(awk -F: '$1 == "0" { print $3 }' "$cgroup_file" 2>/dev/null)
   [ -n "$cgroup" ] || return 1
-  cgroup_root="/sys/fs/cgroup$cgroup"
+  cgroup_root="${HASNA_TEST_GUARD_CGROUP_ROOT:-/sys/fs/cgroup}$cgroup"
   [ -r "$cgroup_root/memory.high" ] || return 1
   [ -r "$cgroup_root/memory.max" ] || return 1
   [ -r "$cgroup_root/memory.swap.max" ] || return 1
@@ -189,9 +226,11 @@ prepare_systemd_user_manager() {
 }
 
 run_transient_scope() {
+  local scope_unit=$1
+  shift
   if [ -n "$SYSTEMD_RUN_XDG_RUNTIME_DIR" ]; then
     env -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR="$SYSTEMD_RUN_XDG_RUNTIME_DIR" \
-      systemd-run --user --scope --quiet --collect \
+      systemd-run --user --scope --quiet --unit="$scope_unit" --slice="$AGGREGATE_TEST_SLICE" \
       -p MemoryAccounting=yes \
       -p "MemoryHigh=${BUN_TEST_MEMORY_HIGH:-12G}" \
       -p "MemoryMax=${BUN_TEST_MEMORY_MAX:-16G}" \
@@ -199,7 +238,7 @@ run_transient_scope() {
       -p "TasksMax=${BUN_TEST_TASKS_MAX:-4096}" \
       -- "$@"
   else
-    systemd-run --user --scope --quiet --collect \
+    systemd-run --user --scope --quiet --unit="$scope_unit" --slice="$AGGREGATE_TEST_SLICE" \
       -p MemoryAccounting=yes \
       -p "MemoryHigh=${BUN_TEST_MEMORY_HIGH:-12G}" \
       -p "MemoryMax=${BUN_TEST_MEMORY_MAX:-16G}" \
@@ -209,52 +248,209 @@ run_transient_scope() {
   fi
 }
 
+run_user_systemctl() {
+  if [ -n "$SYSTEMD_RUN_XDG_RUNTIME_DIR" ]; then
+    env -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR="$SYSTEMD_RUN_XDG_RUNTIME_DIR" \
+      systemctl --user "$@"
+  else
+    systemctl --user "$@"
+  fi
+}
+
+verify_aggregate_controller() {
+  local raw_file
+  local receipt_file
+  local controller_control_group
+
+  mkdir -p "$GUARD_DIR/receipts" 2>/dev/null || return 1
+  raw_file=$(mktemp "$GUARD_DIR/receipts/aggregate-controller.XXXXXX.raw") || return 1
+  chmod 600 "$raw_file" 2>/dev/null || { rm -f "$raw_file"; return 1; }
+  receipt_file="${raw_file%.raw}.json"
+  if ! run_user_systemctl show "$AGGREGATE_TEST_SLICE" \
+    --property=Id --property=Names --property=LoadState --property=ActiveState \
+    --property=MemoryAccounting --property=MemoryMax --property=MemorySwapMax \
+    --property=TasksMax --property=ControlGroup --no-pager >"$raw_file" 2>/dev/null; then
+    rm -f "$raw_file"
+    return 1
+  fi
+  if ! controller_control_group=$("$REAL" "$GUARD_RUNTIME" verify-controller \
+    "$AGGREGATE_TEST_SLICE" "$raw_file" "$receipt_file"); then
+    rm -f "$raw_file" "$receipt_file"
+    return 1
+  fi
+  case "$controller_control_group" in
+    /*/"$AGGREGATE_TEST_SLICE"|/"$AGGREGATE_TEST_SLICE") ;;
+    *) rm -f "$raw_file" "$receipt_file"; return 1 ;;
+  esac
+  rm -f "$raw_file"
+  AGGREGATE_CONTROLLER_RECEIPT_FILE=$receipt_file
+  AGGREGATE_CONTROLLER_CONTROL_GROUP=$controller_control_group
+  return 0
+}
+
+prepare_verified_aggregate_controller() {
+  [ "$(uname -s)" = "Linux" ] \
+    && command -v systemd-run >/dev/null 2>&1 \
+    && command -v systemctl >/dev/null 2>&1 \
+    && prepare_systemd_user_manager \
+    && verify_aggregate_controller
+}
+
+wait_for_scope_terminal_empty() {
+  local scope_unit=$1
+  local admitted_cgroup=$2
+  local state
+  local state_rc
+  local load_state
+  local active_state
+  local sub_state
+  local control_group
+  local cgroup_root
+  local populated
+  local ambiguity_logged=""
+  local cgroup_base="${HASNA_TEST_GUARD_CGROUP_ROOT:-/sys/fs/cgroup}"
+
+  [ "$admitted_cgroup" = "$AGGREGATE_CONTROLLER_CONTROL_GROUP/$scope_unit" ] || return 1
+
+  while :; do
+    state=$(run_user_systemctl show "$scope_unit" \
+      --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup \
+      --no-pager 2>/dev/null)
+    state_rc=$?
+    if [ "$(printf '%s\n' "$state" | grep -c '^LoadState=')" = "1" ] \
+      && [ "$(printf '%s\n' "$state" | grep -c '^ActiveState=')" = "1" ] \
+      && [ "$(printf '%s\n' "$state" | grep -c '^SubState=')" = "1" ] \
+      && [ "$(printf '%s\n' "$state" | grep -c '^ControlGroup=')" = "1" ]; then
+      load_state=$(printf '%s\n' "$state" | sed -n 's/^LoadState=//p')
+      active_state=$(printf '%s\n' "$state" | sed -n 's/^ActiveState=//p')
+      sub_state=$(printf '%s\n' "$state" | sed -n 's/^SubState=//p')
+      control_group=$(printf '%s\n' "$state" | sed -n 's/^ControlGroup=//p')
+      case "$control_group" in
+        /*) ;;
+        *) control_group="" ;;
+      esac
+      case "$control_group" in
+        /|*/../*|*/..|*//* ) control_group="" ;;
+      esac
+
+      if [ "$state_rc" -eq 0 ] \
+        && [ "$load_state" = "loaded" ] \
+        && [ "$control_group" = "$admitted_cgroup" ]; then
+        cgroup_root="$cgroup_base$control_group"
+        if [ -r "$cgroup_root/cgroup.events" ] && [ -r "$cgroup_root/cgroup.procs" ]; then
+          populated=$(sed -n 's/^populated[[:space:]][[:space:]]*\([01]\)$/\1/p' "$cgroup_root/cgroup.events")
+          if [ "$populated" = "0" ] \
+            && case "$active_state:$sub_state" in inactive:dead|failed:failed|failed:dead) true ;; *) false ;; esac \
+            && [ ! -s "$cgroup_root/cgroup.procs" ]; then
+            return 0
+          fi
+        fi
+      elif [ "$state_rc" -eq 4 ] \
+        && [ "$load_state" = "not-found" ] \
+        && [ "$active_state:$sub_state" = "inactive:dead" ] \
+        && [ -z "$control_group" ] \
+        && [ ! -e "$cgroup_base$admitted_cgroup" ]; then
+        # The package-owned ADMIT receipt proves this exact transient scope and
+        # cgroup existed before the test spawned. cgroup v2 cannot remove a
+        # populated cgroup; systemd's exact not-found/inactive/dead tuple plus
+        # absence of that admitted path therefore proves terminal emptiness
+        # after collection. Any other missing or mismatched evidence still holds.
+        return 0
+      fi
+    fi
+    if [ -z "$ambiguity_logged" ]; then
+      glog "holding terminal-state-unverified unit=$scope_unit cwd=$PWD"
+      ambiguity_logged=1
+    fi
+    sleep 1
+  done
+}
+
+if ! prepare_verified_aggregate_controller; then
+  glog "REFUSED aggregate-controller-unverified unit=$AGGREGATE_TEST_SLICE cwd=$PWD argv=$*"
+  echo "hasna-test-guard: refusing local execution; aggregate controller $AGGREGATE_TEST_SLICE is missing, inactive, mismatched, unlimited, or unverifiable" >&2
+  exit 78
+fi
+
 if [ -n "${HASNA_TEST_GUARD_HELD:-}" ]; then
-  if has_bounded_test_scope; then
+  current_cgroup_file=/proc/self/cgroup
+  if [ "${HASNA_TEST_GUARD_TEST_LOCK_BACKEND:-}" = "mkdir" ] \
+    && [ -n "${HASNA_TEST_GUARD_TEST_PROC_SELF_CGROUP:-}" ]; then
+    current_cgroup_file=$HASNA_TEST_GUARD_TEST_PROC_SELF_CGROUP
+  fi
+  current_cgroup=$(awk -F: '$1 == "0" { print $3 }' "$current_cgroup_file" 2>/dev/null)
+  if [ -n "${HASNA_TEST_GUARD_ALLOCATION_ID:-}" ] \
+    && [ -n "${HASNA_TEST_GUARD_LEASE_ID:-}" ] \
+    && [ -n "${HASNA_TEST_GUARD_CGROUP_ID:-}" ] \
+    && [ -n "$current_cgroup" ] \
+    && case "$current_cgroup" in *"$HASNA_TEST_GUARD_CGROUP_ID"*) true ;; *) false ;; esac \
+    && has_bounded_test_scope \
+    && "$REAL" "$GUARD_RUNTIME" child-admit \
+      "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$HASNA_TEST_GUARD_CHILD_ADMISSION_RECEIPT_FILE" \
+    && [ -s "${HASNA_TEST_GUARD_CHILD_ADMISSION_RECEIPT_FILE:-}" ]; then
+    HASNA_TEST_GUARD_PARENT_ADMISSION_RECEIPT_FILE=$HASNA_TEST_GUARD_CHILD_ADMISSION_RECEIPT_FILE
+    export HASNA_TEST_GUARD_PARENT_ADMISSION_RECEIPT_FILE
     exec -a "$0" "$REAL" "$@"
   fi
-  glog "STALE-HELD re-entering guard cwd=$PWD argv=$*"
-  unset HASNA_TEST_GUARD_HELD HASNA_TEST_GUARD_SLOT
+  glog "REFUSED invalid-parent-evidence cwd=$PWD argv=$*"
+  echo "hasna-test-guard: refusing child before spawn; parent allocation evidence is missing or mismatched" >&2
+  exit 78
 fi
 
 exec_guarded_test() {
-  export HASNA_TEST_GUARD_HELD=1
+  local scope_unit=$1
+  shift
+  local direct_rc
+  local admitted_cgroup
+  local admission_receipt="$GUARD_DIR/receipts/$scope_unit.json"
+  mkdir -p "$GUARD_DIR/receipts" 2>/dev/null || exit 78
+  rm -f "$admission_receipt" 2>/dev/null || exit 78
 
-  if has_bounded_test_scope; then
-    exec -a "$0" "$REAL" "$@"
-  fi
-
-  if [ "$(uname -s)" != "Linux" ] \
-    || ! command -v systemd-run >/dev/null 2>&1 \
-    || ! prepare_systemd_user_manager; then
-    glog "REFUSED no-systemd-user-scope cwd=$PWD argv=$*"
-    echo "hasna-test-guard: refusing unscoped bun test; systemd user scopes are unavailable" >&2
+  if ! prepare_verified_aggregate_controller; then
+    glog "REFUSED aggregate-controller-stale unit=$AGGREGATE_TEST_SLICE cwd=$PWD argv=$*"
+    echo "hasna-test-guard: refusing local execution; aggregate controller verification did not survive allocation" >&2
     exit 78
   fi
 
   if [ -n "$CALLER_XDG_RUNTIME_DIR_SET" ] \
     && [ -n "$CALLER_DBUS_SESSION_BUS_ADDRESS_SET" ]; then
-    run_transient_scope env \
+    run_transient_scope "$scope_unit" env \
       XDG_RUNTIME_DIR="$CALLER_XDG_RUNTIME_DIR" \
       DBUS_SESSION_BUS_ADDRESS="$CALLER_DBUS_SESSION_BUS_ADDRESS" \
-      "$REAL" "$@"
+      "$REAL" "$GUARD_RUNTIME" launch "$scope_unit" "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$admission_receipt" -- "$REAL" "$@"
   elif [ -n "$CALLER_XDG_RUNTIME_DIR_SET" ]; then
-    run_transient_scope env -u DBUS_SESSION_BUS_ADDRESS \
-      XDG_RUNTIME_DIR="$CALLER_XDG_RUNTIME_DIR" "$REAL" "$@"
+    run_transient_scope "$scope_unit" env -u DBUS_SESSION_BUS_ADDRESS \
+      XDG_RUNTIME_DIR="$CALLER_XDG_RUNTIME_DIR" \
+      "$REAL" "$GUARD_RUNTIME" launch "$scope_unit" "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$admission_receipt" -- "$REAL" "$@"
   elif [ -n "$CALLER_DBUS_SESSION_BUS_ADDRESS_SET" ]; then
-    run_transient_scope env -u XDG_RUNTIME_DIR \
+    run_transient_scope "$scope_unit" env -u XDG_RUNTIME_DIR \
       DBUS_SESSION_BUS_ADDRESS="$CALLER_DBUS_SESSION_BUS_ADDRESS" \
-      "$REAL" "$@"
+      "$REAL" "$GUARD_RUNTIME" launch "$scope_unit" "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$admission_receipt" -- "$REAL" "$@"
   else
-    run_transient_scope env -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS \
-      "$REAL" "$@"
+    run_transient_scope "$scope_unit" env -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS \
+      "$REAL" "$GUARD_RUNTIME" launch "$scope_unit" "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$admission_receipt" -- "$REAL" "$@"
   fi
-  exit $?
+  direct_rc=$?
+  if ! admitted_cgroup=$("$REAL" "$GUARD_RUNTIME" verify-admission \
+    "$scope_unit" "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$admission_receipt"); then
+    glog "REFUSED no-admission unit=$scope_unit direct_rc=$direct_rc release=1 cwd=$PWD argv=$*"
+    if [ "$direct_rc" -eq 0 ]; then
+      exit 78
+    fi
+    exit "$direct_rc"
+  fi
+  if ! wait_for_scope_terminal_empty "$scope_unit" "$admitted_cgroup"; then
+    glog "holding admission-identity-ambiguous unit=$scope_unit cgroup=$admitted_cgroup cwd=$PWD argv=$*"
+    while :; do sleep 60; done
+  fi
+  glog "terminal unit=$scope_unit direct_rc=$direct_rc active=inactive populated=0 release=1 cwd=$PWD argv=$*"
+  exit "$direct_rc"
 }
 
 if [ -n "${HASNA_TEST_GUARD_BYPASS:-}" ]; then
-  glog "BYPASS cwd=$PWD argv=$*"
-  exec -a "$0" "$REAL" "$@"
+  glog "REFUSED bypass-local-allocation cwd=$PWD argv=$*"
+  echo "hasna-test-guard: refusing local execution; bypass cannot replace verified admission and scope accounting" >&2
+  exit 78
 fi
 
 # --- FIFO queue (added 2026-07-30 after production starvation was measured:
@@ -277,6 +473,21 @@ trap 'rm -f "$QUEUE_DIR/$TICKET"' EXIT
 try_slots() {
   local i=0
   while [ "$i" -lt "$MAX_SLOTS" ]; do
+    # Hermetic descendant-lifetime regression seam. Production never sets it;
+    # mkdir ownership models one exclusive slot on hosts without flock(1).
+    if [ "${HASNA_TEST_GUARD_TEST_LOCK_BACKEND:-}" = "mkdir" ]; then
+      test_lock="$SLOT_DIR/slot-$i.lock"
+      if mkdir "$test_lock" 2>/dev/null; then
+        trap 'rmdir "$test_lock" 2>/dev/null; rm -f "$QUEUE_DIR/$TICKET"' EXIT
+        rm -f "$QUEUE_DIR/$TICKET"
+        glog "acquired slot=$i waited=$((SECONDS-start))s cwd=$PWD argv=$*"
+        export HASNA_TEST_GUARD_SLOT="$i"
+        scope_unit="hasna-test-guard-${TICKET//./-}.scope"
+        exec_guarded_test "$scope_unit" "$@"
+      fi
+      i=$((i+1))
+      continue
+    fi
     # NOTE: no redirection on this exec — `exec {fd}>>file 2>/dev/null` would
     # permanently null the shell's (and the exec'd suite's) stderr. Caught by
     # positive control 2026-07-30: suites lost their entire test output.
@@ -286,9 +497,11 @@ try_slots() {
         trap - EXIT
         glog "acquired slot=$i waited=$((SECONDS-start))s cwd=$PWD argv=$*"
         export HASNA_TEST_GUARD_SLOT="$i"
-        # fd stays open across exec: the flock is held for the lifetime of the
-        # systemd-run scope launcher and releases when the suite exits.
-        exec_guarded_test "$@"
+        scope_unit="hasna-test-guard-${TICKET//./-}.scope"
+        # The wrapper process retains the flock after the direct launcher exits.
+        # It releases only after terminal state and recursive cgroup emptiness
+        # are both observed for the named scope.
+        exec_guarded_test "$scope_unit" "$@"
       fi
       exec {fd}>&-
     fi

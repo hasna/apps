@@ -1,8 +1,10 @@
 {
   "name": "@hasna/test-guard",
   "version": "0.0.3",
-  "description": "Machine-wide bun test concurrency and memory guard (SC-00062): the flock-semaphore wrapper, the sentinel that watches it, and the regression battery — packaged so the control ships through the normal PR -> review -> publish -> install chain",
+  "description": "Resolved test execution-lane admission, inherited resource budgets, and complete-cgroup lifetime accounting",
   "license": "Apache-2.0",
+  "type": "module",
+  "types": "./runtime.d.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/apps.git"
@@ -10,12 +12,22 @@
   "files": [
     "battery.sh",
     "bun-wrapper.sh",
+    "runtime.mjs",
+    "runtime.d.ts",
+    "execution-plan.schema.json",
     "sentinel.sh",
     "README.md",
     "LICENSE"
   ],
   "bin": {
     "test-guard": "sentinel.sh"
+  },
+  "exports": {
+    "./sdk": {
+      "types": "./runtime.d.ts",
+      "import": "./runtime.mjs"
+    },
+    "./execution-plan.schema.json": "./execution-plan.schema.json"
   },
   "scripts": {
     "test": "bash test/smoke.sh",
