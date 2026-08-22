@@ -1,33 +1,39 @@
 # Hasna Notes
 
-A dead-simple, voice-first macOS notes app (a native WKWebView shell around a small
-web UI). Notes are stored as plain Markdown files with YAML frontmatter, so they stay
-forward-compatible with the installable `@hasna/notes` CLI/MCP package.
+A local-first, headless notes engine: a **CLI**, an **MCP server**, an importable
+**SDK**, and a **self-hosted HTTP server** (SQLite or PostgreSQL). Notes are plain
+Markdown files with YAML frontmatter, so the on-disk store is the contract and
+stays readable without any of this tooling.
+
+> **There is no desktop app in this package.** The macOS desktop app is a separate
+> product and is owned by **[hasna-products/personalnotes](https://github.com/hasna-products/personalnotes)**.
+> `@hasna/notes` ships no `Sources/`, no bundled web UI, no AI sidecar, and no
+> `.app` build — it is headless by design. The two remain interoperable through the
+> `personalnotes/v1` wire dialect and the Markdown-on-disk format documented below.
 
 ## What it is
 
-- A minimal, Google-Keep-simple UI: a slim sidebar (Home, collapsible
-  Notes/Labels, Archive, Trash) beside one clean content area — a
-  centered quick-note composer on Home, a flat notes list, and a plain
-  title + body editor.
-- **Voice capture is the core loop**: press record, watch the transcript stream in
-  real time, and the note writes itself. Recording survives in-app navigation.
-- **Markdown editing** with a selection popover (bold/italic) and slash commands for
-  headings, lists, quotes, code, checklists, and dividers — no toolbar. Markdown on
-  disk is the contract.
-- **Agentic tools** shared by the app's sidecar chat, CLI, and MCP: note search,
-  summarization, organization, consolidation, and confirmation-gated writes.
+- **`notes` — the CLI.** Create, list, search, label, archive, trash, purge,
+  paginate, retitle, and migrate notes. JSON output on every read path.
+- **`notes-mcp` — an MCP stdio server.** The same functionality exposed to any
+  MCP client, including Markdown helpers and the agent tool registry.
+- **`notes-serve` — a self-hosted HTTP server.** Speaks the `personalnotes/v1`
+  dialect over SQLite by default, or PostgreSQL when `HASNA_NOTES_DATABASE_URL`
+  is set — never both.
+- **`@hasna/notes` — an importable SDK** (`.`, `./sdk`, `./events`) over the same
+  domain logic the CLI and MCP server call.
+- **Agentic tools** shared by CLI, MCP, and SDK: note search, summarization,
+  organization, consolidation, and confirmation-gated writes.
 - Per-note **status / labels / machine attribution** with Archive and Trash
-  (configurable retention), searchable via a Cmd+K popover.
+  (configurable retention).
 
 ## Data format — the contract
 
-The Markdown files are the **source of truth** for the CLI/MCP tooling and the
-on-box store. The **macOS app is cloud-only** (owner brief 2026-08-19): its host reads
-and writes notes exclusively through the hosted notes API selected by
-`HASNA_NOTES_API_URL` + `HASNA_NOTES_API_KEY` (personalnotes/v1 dialect), and never
-touches local note files — an API URL without its key fails closed, and an unconfigured
-app shows a configuration banner instead of falling back to the on-disk store.
+The Markdown files are the **source of truth** for the CLI, MCP server, and SDK
+when running against the local store. Point any of them at a notes server instead
+with `HASNA_NOTES_API_URL` + `HASNA_NOTES_API_KEY` (personalnotes/v1 dialect); an
+API URL without its key fails closed, and without an API URL the client never
+guesses a server.
 
 - Data root: `~/.hasna/notes/` (the pre-rename `~/.hasna/apps/notes/` root is copied forward once on first use)
 - Preferred override: `HASNA_NOTES_ROOT`
@@ -95,13 +101,15 @@ body byte-for-byte, and logs every dropped v1/unknown key. The user's folder
 list is persisted separately in `~/.hasna/notes/folders.json`; labels can
 also be persisted in `~/.hasna/notes/labels.json` so empty labels survive.
 
-AI-generated titles are concise, capped to 3-4 words, and use the local sidecar's
-cheap OpenAI title model by default (`HASNA_NOTES_TITLE_MODEL`, default
-`gpt-4o-mini`). Title generation reads Markdown as plain text so syntax and raw
-HTML do not leak into titles. Manual titles are locked and are not overwritten
-unless a caller explicitly forces generation.
+AI-generated titles are concise and capped to 3-4 words. Title generation is
+heuristic by default and needs no network. Passing `--sidecar <url>` (plus
+`--sidecar-token`, or `HASNA_NOTES_SIDECAR_TOKEN`) delegates to any HTTP endpoint
+exposing `POST /title` — this package ships the client, not the server. Title
+generation reads Markdown as plain text so syntax and raw HTML do not leak into
+titles. Manual titles are locked and are not overwritten unless a caller
+explicitly forces generation.
 
-Markdown rendering is intentionally restricted. CLI, MCP, and web bridge helpers
+Markdown rendering is intentionally restricted. The CLI, MCP, and SDK helpers
 escape raw HTML, drop unsafe links, and expose plain-text extraction for titles
 and search:
 
@@ -116,11 +124,9 @@ bun cli/notes.mjs markdown apply-command bold --text hello --selection-start 0 -
 
 Hasna Notes records each new local note as a durable `notes` / `note.created`
 event. It does not run a filesystem watcher or a polling monitor. CLI, MCP,
-notes-agent, consolidation, server-applied imports, and the native app write
-the event from their existing create path. The shared JavaScript save boundary
-also emits for every absent target, so direct library callers are covered. Web
-duplicate uses `quickCreate`, so
-it reaches the same native `create` bridge before its normal follow-up save.
+notes-agent, consolidation, and server-applied imports write the event from
+their existing create path. The shared JavaScript save boundary also emits for
+every absent target, so direct SDK callers are covered.
 
 The stable event identity and dedupe key are both
 `notes:note:<uuid>:created`; the schema is `notes.v1`. Event data contains only
@@ -163,42 +169,32 @@ timestamps.
 ## Project layout
 
 ```
-Package.swift                       SwiftPM manifest (platform .macOS("26.0"))
-Sources/HasnaNotesCore/              Pure, UI-free logic (a library product)
-  Note.swift                        Note model + NoteStatus enum (+ folder field)
-  MarkdownStore.swift               Markdown + YAML-frontmatter read/write (atomic)
-  RichTextMarkdown.swift            Pure Markdown ↔ rich-text document bridge (tested)
-  FolderStore.swift                 folders.json persistence (empty folders survive)
-  LabelStore.swift                  labels.json persistence + normalization
-  SettingsStore.swift               settings.json persistence (trash retention)
-  NoteCreatedEvents.swift           Native crash-safe note.created spool + reconciliation
-Sources/HasnaNotesApp/              Native WKWebView shell (recording, bridges, sidecar)
-Sources/HasnaNotesSmoke/             CLI smoke test for the store + bridges (no Xcode needed)
-web/                                The app UI (index.html, app.js, styles.css)
-scripts/build_notes.sh         WKWebView app build with bundled web UI + sidecar
+bin/                        Published executables (notes, notes-mcp, notes-serve)
 cli/notes.mjs               CLI for notes, labels, pagination, and titles
 mcp/notes-mcp.mjs           MCP stdio server exposing the same functionality
-tools/notes-events.mjs              Shared Node note.created contract + spool state
+sdk/index.mjs               Importable SDK surface (@hasna/notes/sdk)
+client/http-store.mjs       personalnotes/v1 HTTP client (used when an API URL is set)
+server/                     Self-hosted HTTP server (SQLite + PostgreSQL adapters)
+  app.mjs                   Routes and request handling
+  db.mjs                    SQLite store
+  pg-adapter.mjs            PostgreSQL store
+  pg-migrations.ts          PostgreSQL migrations
+tools/notes-lib.mjs         Markdown + YAML-frontmatter read/write (atomic), domain logic
+tools/notes-agent.mjs       Shared agent tool registry (confirmation-gated writes)
+tools/notes-events.mjs      Shared Node note.created contract + spool state
+src/generated/storage-kit/  Generated storage/pool/TLS helpers
+scripts/                    PostgreSQL migration runner, test gate, artifact scan
+test/                       Test suite (bun test)
 ```
 
 ## Build & run
 
-This project builds with **SwiftPM only** — no Xcode required. It targets macOS 26
-(Liquid Glass APIs) and has been built and launched on a Mac with Command Line Tools.
-
-### On the Mac (macOS 26)
+This package is **JavaScript/TypeScript on Bun** — there is no compile step and no
+platform-specific toolchain. It runs anywhere Bun runs.
 
 ```bash
-bun install                          # installs the pinned durable-events dependency
-bash scripts/build_notes.sh   # swift build -c release + bundle web UI/sidecar + codesign
-open "dist/HasnaNotes.app"
-```
-
-### Verify the store logic
-
-```bash
-swift run -c release HasnaNotesSmoke   # round-trips a note through the markdown store
-bun test test/notes-functionality.test.mjs
+bun install --frozen-lockfile
+bun test
 ```
 
 ### CLI / MCP
@@ -236,11 +232,11 @@ notes-mcp
 deprecated `hasna-notes` / `hasna-notes-mcp` aliases are dropped, and the
 pre-rename binaries are not shipped.
 
-> **Wire dialect note.** The protocol between this app and any Hasna
-> Notes-compatible server is `personalnotes/v1` (the future hosted SaaS keeps
-> that dialect name, so it is preserved verbatim in the codebase and in this
-> README). The protocol is not renamed as part of the `notes` rename — only
-> the app, package, and binary names are.
+> **Wire dialect note.** The protocol between this package and any Hasna
+> Notes-compatible server is `personalnotes/v1` (the hosted SaaS and the
+> `hasna-products/personalnotes` desktop app keep that dialect name, so it is
+> preserved verbatim in the codebase and in this README). The protocol is not
+> renamed as part of the `notes` rename — only the package and binary names are.
 
 ### Talking to a notes server (single-server model)
 
@@ -283,37 +279,18 @@ Direct CLI/MCP deletion paths are also gated: `delete`, `trash`,
 unless confirmed, while permanent `purge` / `notes_purge` require `--yes` /
 `--force` or `confirm: true`.
 
-The web bridge exposes `window.HasnaNotes.chat.state/tools/send/approve/clear`
-and dispatches `hasna:chat-*` events for state, messages, deltas, tool calls,
-tool results, source references, confirmations, finish, and errors. The local
-sidecar also exposes `POST /chat` as an optional AI SDK streaming endpoint over a
-provided note snapshot; disk writes remain in the app/CLI/MCP tool layer.
+### Voice capture, transcription, and chat UI
 
-### Recording and transcription
-
-The native app keeps recording as app-level state. The web bridge exposes
-`window.HasnaNotes.recording.state/start/pause/resume/stop` and dispatches
-`hasna:recording-state`, `hasna:recording-progress`,
-`hasna:transcript-delta`, and `hasna:transcript-complete` events. Exposed
-states are `idle`, `recording`, `paused`, `stopping`, `transcribing`,
-`complete`, and `error`, so stop-to-transcribing is observable. Realtime
-transcription uses OpenAI realtime
-transcription when `OPENAI_API_KEY` is available, with ElevenLabs Scribe v2
-Realtime as an optional fallback when `ELEVENLABS_API_KEY` is present. Bounded
-OpenAI transcription remains the fallback and defaults to `gpt-4o-transcribe`.
-For OpenAI realtime, the sidecar uses the transcription-session WebSocket
-endpoint (`/v1/realtime?intent=transcription`) and sends
-`HASNA_NOTES_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
-`gpt-realtime-whisper`) as `audio.input.transcription.model`. No `model=` query
-parameter is sent on that WebSocket. Transcription-only models are rejected from
-the legacy realtime session-model slot; if an override puts
-`gpt-realtime-whisper`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, or
-`whisper-1` there, the sidecar falls back to `gpt-realtime` and reports a
-`configWarnings` entry from `/health`. `HASNA_NOTES_TRANSCRIBE_MODEL=
-gpt-realtime-whisper` is also ignored, because bounded transcription uses
-request/response speech-to-text models.
+Not in this package. Audio recording, realtime transcription, and the chat UI were
+surfaces of the desktop app and moved with it to
+[hasna-products/personalnotes](https://github.com/hasna-products/personalnotes).
+What remains here is the storage and tooling layer they were built on: the
+Markdown-on-disk contract, the agent tool registry, and the `personalnotes/v1`
+server. A transcript committed by any client is an ordinary note write and needs
+no special support from this package.
 
 ## Requirements
 
-- macOS 26 (Liquid Glass). Older systems fall back to `.ultraThinMaterial`.
-- Swift 6.x toolchain (Xcode or Command Line Tools).
+- **Bun >= 1.0.** No Swift toolchain, no Xcode, no platform-specific build.
+- Optional: PostgreSQL, if you set `HASNA_NOTES_DATABASE_URL` instead of using
+  the default SQLite store.

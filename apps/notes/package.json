@@ -1,7 +1,7 @@
 {
   "name": "@hasna/notes",
   "version": "0.3.0",
-  "description": "Local-first personal notes CLI, MCP server, macOS app, and self-hosted notes server (SQLite or PostgreSQL).",
+  "description": "Local-first personal notes CLI, MCP server, SDK, and self-hosted notes server (SQLite or PostgreSQL).",
   "type": "module",
   "bin": {
     "notes": "bin/notes.mjs",
@@ -82,7 +82,6 @@
   },
   "private": false,
   "workspaces": [
-    "ai-sidecar",
     "server"
   ]
 }
