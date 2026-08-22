@@ -87,3 +87,33 @@ describe("syncFromDir recursive", () => {
     expect(result.added).toBe(1); // only top.txt
   });
 });
+
+describe("syncFromDir redacts before storing", () => {
+  const SYNTHETIC_VALUE = "synthetic-fixture-not-a-real-key-value-0123456789abcdef";
+
+  test("redacts secret values in .env files before persisting (create path)", async () => {
+    const db = getDatabase();
+    writeFileSync(join(tmpDir, ".env"), `ANTHROPIC_API_KEY${"="}${SYNTHETIC_VALUE}\n`);
+    const result = await syncFromDir(tmpDir, { store: new LocalConfigStore(db) });
+    expect(result.added).toBe(1);
+    const stored = listConfigs(undefined, db).find((c) => c.target_path === join(tmpDir, ".env"));
+    expect(stored).toBeDefined();
+    expect(stored!.content).toContain("{{ANTHROPIC_API_KEY}}");
+    expect(stored!.content).not.toContain(SYNTHETIC_VALUE);
+  });
+
+  test("redacts on the update path when the pointed-at file changes", async () => {
+    const db = getDatabase();
+    writeFileSync(join(tmpDir, ".env"), `ANTHROPIC_API_KEY${"="}${SYNTHETIC_VALUE}\n`);
+    await syncFromDir(tmpDir, { store: new LocalConfigStore(db) });
+    const secondValue = "synthetic-fixture-second-value-0123456789abcdef";
+    writeFileSync(join(tmpDir, ".env"), `ANTHROPIC_API_KEY${"="}${secondValue}\nSOME_NEW_SETTING=hello\n`);
+    const result = await syncFromDir(tmpDir, { store: new LocalConfigStore(db) });
+    expect(result.updated).toBe(1);
+    const stored = listConfigs(undefined, db).find((c) => c.target_path === join(tmpDir, ".env"));
+    expect(stored).toBeDefined();
+    expect(stored!.content).toContain("{{ANTHROPIC_API_KEY}}");
+    expect(stored!.content).toContain("SOME_NEW_SETTING=hello");
+    expect(stored!.content).not.toContain(secondValue);
+  });
+});
