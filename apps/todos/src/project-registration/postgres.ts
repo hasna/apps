@@ -476,17 +476,30 @@ implements TodosProjectRegistrationBackend {
   }
 
   async ensureSchema(): Promise<void> {
-    this.schemaReady ??= (async () => {
-      for (const statement of postgresTodosSyncSchemaSql(
-        this.tableName,
-        this.cursorTableName,
-      )) {
-        await this.client.query(statement);
+    if (this.schemaReady === null) {
+      const attempt = (async () => {
+        for (const statement of postgresTodosSyncSchemaSql(
+          this.tableName,
+          this.cursorTableName,
+        )) {
+          await this.client.query(statement);
+        }
+        for (const statement of postgresTodosProjectRegistrationSchemaSql()) {
+          await this.client.query(statement);
+        }
+      })();
+      this.schemaReady = attempt;
+      try {
+        await attempt;
+      } catch (error) {
+        // A failed schema sync must never be cached: the same transient
+        // failure (e.g. a lock timeout) would otherwise be replayed on every
+        // later operation, permanently bricking the store. Clear the promise
+        // so the next operation retries the sync with fresh state.
+        this.schemaReady = null;
+        throw error;
       }
-      for (const statement of postgresTodosProjectRegistrationSchemaSql()) {
-        await this.client.query(statement);
-      }
-    })();
+    }
     await this.schemaReady;
   }
 
