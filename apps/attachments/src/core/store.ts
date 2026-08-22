@@ -5,14 +5,13 @@
 //   - LocalStore  — on-box: SQLite metadata (AttachmentsDB) + S3/local object
 //                   bytes. Fully first-class, works with zero cloud config.
 //   - ApiStore    — HTTP `<API_URL>/v1` + bearer key, via @hasna/contracts. Used
-//                   for BOTH `self_hosted` (our AWS) and `cloud` (SaaS); the two
-//                   differ only by URL/key, which is a server-side tenancy detail,
-//                   not client code.
+//                   for the hosted route; the URL/key are server-side tenancy
+//                   details, not client code.
 //
-// The mode is resolved purely from env by `resolveStore` (delegating to the
-// contracts client-flip): presence of HASNA_ATTACHMENTS_API_URL +
-// HASNA_ATTACHMENTS_API_KEY (and/or HASNA_ATTACHMENTS_STORAGE_MODE) => ApiStore;
-// otherwise LocalStore. This is the ONLY place that decision is made, so every
+// The transport is resolved purely from env by `resolveStore` (delegating to
+// the contracts client-flip): presence of HASNA_ATTACHMENTS_API_URL +
+// HASNA_ATTACHMENTS_API_KEY => ApiStore; otherwise LocalStore. This is the
+// ONLY place that decision is made, so every
 // command/tool/method routes through the same interface and no caller ever
 // touches sqlite (`bun:sqlite`) or a raw `fetch` directly. That is the
 // split-brain bug this module exists to eliminate.
@@ -125,7 +124,7 @@ export interface Store {
   /**
    * Create a presigned S3 PUT URL for a direct client->S3 upload plus a pending
    * record. The URL is minted by whichever side holds the S3 credentials — the
-   * client's own config in local mode, the `/v1` server in self_hosted/cloud
+   * client's own config locally, the `/v1` server on the hosted route
    * mode — so the client itself never needs credentials. expiryMs must be > 0.
    */
   presignUpload(
@@ -449,7 +448,7 @@ export class ApiStore implements Store {
   }
 
   async deleteExpired(): Promise<number> {
-    // The self_hosted/cloud server enforces expiry server-side; there is no bulk
+    // The hosted server enforces expiry server-side; there is no bulk
     // purge route, so remove the expired records the API still reports.
     const all = await this.v1.list({ includeExpired: true });
     const now = Date.now();
@@ -502,7 +501,7 @@ export interface ResolveStoreOptions {
 /**
  * The one call every command/tool/method makes to get its store. Resolves the
  * client-flip env for `attachments`; returns an {@link ApiStore} when
- * self_hosted/cloud is configured, otherwise a {@link LocalStore}. Throws (via the
+ * the hosted route is configured, otherwise a {@link LocalStore}. Throws (via the
  * contracts resolver) if cloud was requested but misconfigured, so a client never
  * silently reads the wrong dataset.
  */

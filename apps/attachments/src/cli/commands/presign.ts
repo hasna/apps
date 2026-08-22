@@ -5,7 +5,7 @@ import { formatExpiry, exitError } from "../utils";
 
 // Presigned direct-to-S3 upload works on both backends: the store that holds
 // the S3 credentials mints the PUT URL (the client's own config in local mode,
-// the /v1 server in self_hosted/cloud mode), so the client needs none.
+// the /v1 server on the hosted route), so the client needs none.
 
 export function presignUploadCommand(): Command {
   const cmd = new Command("presign-upload")

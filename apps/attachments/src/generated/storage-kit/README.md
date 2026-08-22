@@ -12,18 +12,18 @@ A canonical Postgres storage kit shared across the Hasna fleet:
 
 | File            | Purpose                                                              |
 | --------------- | ------------------------------------------------------------------- |
-| `mode.ts`       | Storage-mode + env resolution (`local` \| `cloud`), per the contract |
 | `tls.ts`        | The one correct TLS approach (libpq `sslmode` semantics + RDS CA)    |
 | `pool.ts`       | `pg.Pool` factory with fleet-standard TLS                            |
 | `query.ts`      | Typed query wrapper (`query` / `many` / `get` / `one` / `execute`)   |
 | `migrations.ts` | `schema_migrations` ledger with sha256 checksums                     |
 | `health.ts`     | `checkHealth` (SELECT 1) and `checkReady` (migrated?) probes         |
 
-## PURE REMOTE (Amendment A1)
+## Server backend selection
 
-Cloud mode = reads **and** writes go directly to cloud Postgres. This kit
-contains **no sync engine, no cache-as-mode, and no merge logic**. In `local`
-mode there is no Postgres pool at all; SQLite is authoritative.
+The PostgreSQL backend is selected by the environment: a configured
+`HASNA_<NAME>_DATABASE_URL` builds a Pool; without one there is no PostgreSQL
+path and SQLite is authoritative. This kit contains **no sync engine, no cache
+as a mode, and no merge logic**.
 
 ## TLS
 

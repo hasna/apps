@@ -1,14 +1,16 @@
-// Self-hosted (`mode=self_hosted`) storage backend for the attachments CLI.
+// Hosted HTTP storage backend for the attachments CLI.
 //
 // LOCKED ARCHITECTURE: when `HASNA_ATTACHMENTS_API_URL` + `HASNA_ATTACHMENTS_API_KEY`
-// are set, every read and write routes to the app's cloud HTTP API at
+// are both set, every read and write routes to the app's hosted HTTP API at
 // `<API_URL>/v1` with the bearer key — never the local SQLite store, never a raw
 // DSN. This uses a small in-repo JSON HTTP client for the attachments `/v1`
 // surface so the CLI does not depend on unpublished contracts package exports.
 //
-// The toggle is the presence of the two env vars (that is what the fleet flip
-// tool writes): both set -> cloud; either unset -> local. An explicit
-// `HASNA_ATTACHMENTS_STORAGE_MODE=local` forces local even when the vars are set.
+// The client has exactly two stores: the local SQLite store and the hosted HTTP
+// API, selected by the env contract alone. Both env vars set -> hosted; neither
+// set -> local; exactly one set -> a hard error (fail closed, never a silent
+// drift to the wrong dataset). There is no mode variable: a surviving
+// storage-mode variable is rejected.
 //
 // SAFETY: the API key never appears in logs or return values. It lives only
 // inside the contracts transport (and, for the binary download stream that the
@@ -156,33 +158,19 @@ function toAttachment(input: ApiAttachment): Attachment {
 }
 
 /**
- * Bridge the fleet flip's two-var convention to the local cloud resolver: when
- * both `HASNA_ATTACHMENTS_API_URL` and `HASNA_ATTACHMENTS_API_KEY` are present
- * (and the mode is not explicitly forced to `local`), treat the client as
- * `self_hosted` so `resolveStorageClient` returns the cloud-http transport.
- */
-function deriveEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const url = env.HASNA_ATTACHMENTS_API_URL || env.ATTACHMENTS_API_URL;
-  const key = env.HASNA_ATTACHMENTS_API_KEY || env.ATTACHMENTS_API_KEY;
-  const explicitMode = (env.HASNA_ATTACHMENTS_STORAGE_MODE || env.HASNA_ATTACHMENTS_MODE || "").toLowerCase();
-  if (url && key && explicitMode !== "local") {
-    return { ...env, HASNA_ATTACHMENTS_STORAGE_MODE: "self_hosted" };
-  }
-  return env;
-}
-
-/**
- * Resolve the attachments storage backend for this process. Returns a
- * `cloud-http` store wired to `<API_URL>/v1` when self_hosted is configured,
- * otherwise `{ transport: 'local' }` so the caller uses the local SQLite store.
- * Throws if cloud is explicitly requested but misconfigured, so a client never
- * silently drifts back to local.
+ * Resolve the attachments storage backend for this process. The env contract
+ * alone selects it: both `HASNA_ATTACHMENTS_API_URL` and
+ * `HASNA_ATTACHMENTS_API_KEY` set -> `cloud-http` wired to `<API_URL>/v1`;
+ * neither set -> `{ transport: 'local' }` so the caller uses the local SQLite
+ * store; exactly one set -> a hard error (fail closed, never a silent drift
+ * back to local). A surviving storage-mode variable is rejected outright —
+ * the mode concept is removed and never selects anything.
  */
 export function resolveAttachmentsV1(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: ResolveStorageClientOverrides,
 ): ResolveAttachmentsV1Result {
-  const resolved = resolveStorageClient(APP_SLUG, deriveEnv(env), overrides);
+  const resolved = resolveStorageClient(APP_SLUG, env, overrides);
   if (resolved.transport !== "cloud-http") return { transport: "local", store: null };
   return { transport: "cloud-http", store: makeStore(resolved.client, env) };
 }
@@ -192,17 +180,22 @@ function resolveStorageClient(
   env: NodeJS.ProcessEnv,
   overrides: ResolveStorageClientOverrides = {},
 ): StorageClientResolution {
-  const explicitMode = (env.HASNA_ATTACHMENTS_STORAGE_MODE || env.HASNA_ATTACHMENTS_MODE || "").toLowerCase();
-  if (explicitMode === "local") return { transport: "local", client: null };
+  const legacyModeKey = env.HASNA_ATTACHMENTS_STORAGE_MODE || env.HASNA_ATTACHMENTS_MODE;
+  if (legacyModeKey !== undefined && legacyModeKey !== "") {
+    throw new Error(
+      "HASNA_ATTACHMENTS_STORAGE_MODE was removed. Set HASNA_ATTACHMENTS_API_URL with HASNA_ATTACHMENTS_API_KEY " +
+        "to select the hosted API, or leave both unset for local SQLite.",
+    );
+  }
 
   const apiUrl = env.HASNA_ATTACHMENTS_API_URL || env.ATTACHMENTS_API_URL;
   const apiKey = env.HASNA_ATTACHMENTS_API_KEY || env.ATTACHMENTS_API_KEY;
   if (!apiUrl && !apiKey) return { transport: "local", client: null };
   if (!apiUrl || !apiKey) {
-    if (explicitMode === "self_hosted") {
-      throw new Error("Self-hosted attachments mode requires HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY");
-    }
-    return { transport: "local", client: null };
+    throw new Error(
+      "Attachments hosted routing requires both HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY; " +
+        "a partial flip refuses to route so the client never silently reads the wrong dataset.",
+    );
   }
 
   return { transport: "cloud-http", client: createStorageClient(apiUrl, apiKey, overrides.fetchImpl ?? fetch) };
