@@ -316,7 +316,9 @@ function windowStartFor(budget: ProjectBudget): string | null {
   } else if (budget.window === "monthly") {
     start = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 1));
   }
-  const resetAt = budget.reset_at ? new Date(budget.reset_at) : null;
+  // reset_at is stored as a zoneless UTC wall-clock string (see now() in ../db/database.ts),
+  // so parse it as UTC explicitly instead of letting the engine treat it as local time.
+  const resetAt = budget.reset_at ? new Date(budget.reset_at.replace(" ", "T") + "Z") : null;
   if (resetAt && (!start || resetAt > start)) return resetAt.toISOString();
   return start?.toISOString() ?? null;
 }
