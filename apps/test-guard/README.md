@@ -79,21 +79,22 @@ before this fix every `bun test` inside a sandbox either REFUSED with exit 78
 `MAX_WAIT_SECS` and exited 75 — independent adversarial-review test evidence
 was blocked.
 
-Degradation, both halves logged to `guard.log`:
-
 - **Container invocation → direct exec.** A wrapper run inside a container
   (`/.dockerenv`, `/run/.containerenv`, or the OCI `container=docker` env var)
   skips the semaphore and scope layers entirely and execs bun-real directly,
-  logged `SANDBOX direct-exec`. A disposable sandbox is already bounded by
-  its own container cgroup, so the machine-protection purpose of the cap does
-  not apply; refusing would protect nothing and block real work. The fleet
-  stations never match the markers, so the machine cap there is unchanged.
-- **Unwritable queue dir → direct exec.** If the FIFO ticket cannot be
-  created, the semaphore cannot enforce anything; the wrapper degrades loudly
-  (logged `DEGRADED queue-unwritable` + a stderr line) instead of the silent
-  `MAX_WAIT` wedge. On the fleet stations the guard dir is the writable live
-  install, so this fires only on a broken install — which the sentinel owns
-  as its alert surface, independent of the wrapper.
+  logged `SANDBOX direct-exec` (best-effort: if the guard dir itself is
+  read-only the log line cannot be written, and the run still proceeds — a
+  disposable sandbox is already bounded by its own container cgroup). The
+  fleet stations never match the markers, so the machine cap there is
+  unchanged.
+- **Unwritable queue dir → immediate fail-closed.** If the FIFO ticket
+  cannot be created on a non-container host, the cap cannot enforce anything,
+  so the wrapper refuses immediately and loudly (logged `REFUSED
+  queue-unwritable` + a stderr line, exit 75) instead of the old silent
+  `MAX_WAIT` wedge. It never runs a suite unbounded on a station; the guard
+  refusing to run is the machine-protection contract. (A container
+  invocation never reaches this branch — the SANDBOX path above already
+  direct-execed.)
 
 The station fail-closed paths are unchanged and re-proven by battery
 section 18's non-container control and by section 10 (no systemd scope on a

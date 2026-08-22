@@ -295,14 +295,15 @@ mkdir -p "$QUEUE_DIR" 2>/dev/null
 
 TICKET="$(date +%s%N).$$"
 if ! : > "$QUEUE_DIR/$TICKET" 2>/dev/null; then
-  # The FIFO cannot function and the cap cannot be enforced: degrade loudly
-  # instead of the silent MAX_WAIT wedge (exit 75) that blocked every suite
-  # in a read-only guard dir. On the fleet stations the guard dir is the
-  # writable live install, so this fires only on a broken install, which the
-  # sentinel (independent of this wrapper) owns as its alert surface.
-  glog "DEGRADED queue-unwritable cwd=$PWD argv=$*"
-  echo "hasna-test-guard: guard queue unwritable at $QUEUE_DIR — machine cap cannot enforce; running WITHOUT the semaphore (degraded). Check the guard dir permissions; the sentinel alerts on install breakage." >&2
-  exec -a "$0" "$REAL" "$@"
+  # The FIFO cannot function, so the cap cannot be enforced: fail closed
+  # IMMEDIATELY and loudly instead of the silent MAX_WAIT wedge (the old
+  # behavior spun 1800s and then exited 75 anyway). This branch is only
+  # reachable on a non-container host — a container invocation was already
+  # direct-execed by the SANDBOX path above — so it must never run a suite
+  # unbounded; the cap refusing to run is the machine-protection contract.
+  glog "REFUSED queue-unwritable cwd=$PWD argv=$*"
+  echo "hasna-test-guard: guard queue unwritable at $QUEUE_DIR — machine cap cannot enforce; refusing to run unbounded (fail-closed). Fix the guard dir permissions." >&2
+  exit 75
 fi
 trap 'rm -f "$QUEUE_DIR/$TICKET"' EXIT
 

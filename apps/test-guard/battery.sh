@@ -356,14 +356,15 @@ ck "s17 rearm logs to sentinel.log" "$(grep -c 'rearm:' "$G17/sentinel.log")" "1
 # read-only guard dir, so `bun test` REFUSED (78) or wedged the FIFO queue
 # (75) — blocking independent review test evidence. A container invocation
 # must degrade to a direct, logged exec of bun-real (the sandbox is already
-# bounded by its own container cgroup), and an unwritable queue dir must
-# degrade loudly instead of the silent MAX_WAIT wedge. The station's
-# fail-closed paths (sections 6/10) are unchanged and re-proven by the
-# non-container control below. Runs the WRAPPER SOURCE against a temp copy
-# of bun-real via the HASNA_TEST_GUARD_REAL seam; on a host without a usable
-# bun the section skips like s16/s17. On a host that is ITSELF a container
-# (CI runner), the container-path assertions run against the real
-# /.dockerenv marker and the non-container control skips.
+# bounded by its own container cgroup); an unwritable queue on a
+# NON-container host must fail closed immediately and loudly (never run
+# unbounded, never wedge). The station's fail-closed paths (sections 6/10)
+# are unchanged and re-proven by the non-container control below. Runs the
+# WRAPPER SOURCE against a temp copy of bun-real via the
+# HASNA_TEST_GUARD_REAL seam; on a host without a usable bun the section
+# skips like s16/s17. On a host that is ITSELF a container (CI runner), the
+# container-path assertions run against the real /.dockerenv marker and the
+# non-container control skips.
 W18="$W/s18"; G18="$W18/guard"; S18SUITE="$W18/suite"
 mkdir -p "$G18/slots" "$S18SUITE"
 cat > "$S18SUITE/sandbox.test.ts" <<'EOF'
@@ -399,11 +400,19 @@ if [ -x "$W18/real-bun" ]; then
   s18q=$(cd "$W18/qro-suite" && HASNA_TEST_GUARD_DIR="$G18Q" HASNA_TEST_GUARD_REAL="$W18/real-bun" \
     bash "$WRAPPER_SOURCE" test 2>&1); s18q_rc=$?
   chmod 755 "$G18Q/queue"
-  ck "s18 read-only queue rc" "$s18q_rc" "0"
-  ck "s18 read-only queue output" "$(printf '%s' "$s18q" | grep -c '1 pass')" "1"
   if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && [ "${container:-}" != "docker" ]; then
-    ck "s18 read-only queue logged DEGRADED" "$(grep -c 'DEGRADED queue-unwritable .*argv=test' "$G18Q/guard.log")" "1"
+    # Non-container host (station): an unwritable queue must FAIL CLOSED
+    # immediately (rc=75, no suite run) — never run unbounded. Red-before:
+    # the old wrapper wedged MAX_WAIT then exited 75 without the REFUSED
+    # line; the first fix attempt wrongly degraded to an unscoped run.
+    ck "s18 read-only queue fails closed rc" "$s18q_rc" "75"
+    ck "s18 read-only queue did not run suite" "$(printf '%s' "$s18q" | grep -c '1 pass')" "0"
+    ck "s18 read-only queue logged REFUSED" "$(grep -c 'REFUSED queue-unwritable .*argv=test' "$G18Q/guard.log")" "1"
   else
+    # Container host (CI runner): the SANDBOX direct-exec path fires before
+    # the queue is ever touched — the suite runs, rc=0.
+    ck "s18 container read-only queue direct-exec rc" "$s18q_rc" "0"
+    ck "s18 container read-only queue output" "$(printf '%s' "$s18q" | grep -c '1 pass')" "1"
     ck "s18 container read-only queue logged SANDBOX" "$(grep -c 'SANDBOX .*argv=test' "$G18Q/guard.log")" "1"
   fi
 else
