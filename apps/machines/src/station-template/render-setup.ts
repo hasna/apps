@@ -238,15 +238,29 @@ export function buildStationTemplateSteps(effective: EffectiveTemplate, options:
 
   for (const service of effective.services) {
     const systemctl = service.scope === "user" ? "systemctl --user" : "sudo systemctl";
-    if (service.expectEnabled || service.expectActive) {
+    const action = service.expectEnabled
+      ? `enable ${service.expectActive ? "--now " : ""}${quote(service.name)}`
+      : service.expectActive
+        ? `start ${quote(service.name)}`
+        : null;
+    if (action) {
       steps.push({
         id: `template-service-${service.name}`,
-        title: `Enable and start ${service.name}`,
-        command: `${systemctl} enable ${service.expectActive ? "--now " : ""}${quote(service.name)}`,
+        title: `${service.expectEnabled ? "Enable" : "Start"} ${service.name}`,
+        command: `${systemctl} ${action}`,
         manager: "shell",
         privileged: service.scope === "system",
       });
     }
+  }
+
+  if (effective.workstationTestProfile) {
+    steps.push({
+      id: "template-workstation-test-profile",
+      title: "Apply and verify the aggregate workstation test controller",
+      command: "machines test-profile apply --yes --json",
+      manager: "shell",
+    });
   }
 
   if (effective.packages.bun.length > 0) {

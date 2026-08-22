@@ -145,7 +145,8 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
     );
   }
   for (const service of effective.services.filter((candidate) => candidate.scope === "system" && candidate.name !== "tailscaled")) {
-    runcmd.push(`systemctl enable ${service.expectActive ? "--now " : ""}${service.name}`);
+    if (service.expectEnabled) runcmd.push(`systemctl enable ${service.expectActive ? "--now " : ""}${service.name}`);
+    else if (service.expectActive) runcmd.push(`systemctl start ${service.name}`);
   }
   if (effective.tailscale?.join) {
     // Owner ruling 2026-07-30: NO shipped cloud layer declares tailscale —
@@ -179,6 +180,16 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
       `runuser -l ${user} -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user daemon-reload' || true`
     );
   }
+  for (const service of effective.services.filter((candidate) => candidate.scope === "user")) {
+    const action = service.expectEnabled
+      ? `enable ${service.expectActive ? "--now " : ""}${service.name}`
+      : service.expectActive
+        ? `start ${service.name}`
+        : null;
+    if (action) {
+      runcmd.push(`runuser -l ${user} -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user ${action}'`);
+    }
+  }
   runcmd.push(`runuser -l ${user} -c 'command -v bun >/dev/null 2>&1 || curl -fsSL https://bun.sh/install | bash'`);
   if (effective.packages.bun.length > 0) {
     runcmd.push(
@@ -186,6 +197,9 @@ export function renderCloudInit(effective: EffectiveTemplate, options: CloudInit
       // drift check, not an install pin.
       `runuser -l ${user} -c 'export PATH="$HOME/.bun/bin:$PATH"; bun install -g ${effective.packages.bun.map((pkg) => pkg.name).join(" ")}'`
     );
+  }
+  if (effective.workstationTestProfile) {
+    runcmd.push(`runuser -l ${user} -c 'export PATH="$HOME/.bun/bin:$PATH"; machines test-profile apply --yes --json'`);
   }
   if (effective.secretsBootstrap) {
     // Optional on first boot: the secrets CLI needs its own auth before this works.
