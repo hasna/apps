@@ -373,6 +373,25 @@ export async function updateScenario(
   );
   return row ? scenarioRow(row) : null;
 }
+/**
+ * Persist the pass-cache write (lastPassedAt/lastPassedUrl) for a scenario,
+ * mirroring the local SQLite store (src/db/scenarios.ts updateScenarioPassedCache).
+ * This is the server side of the hosted client's PATCH /v1/scenarios/:id; the
+ * client issues that PATCH from ApiStore.updateScenarioPassedCache and the
+ * runner deliberately treats a failure as non-critical, so a missing route or
+ * a write that omits these columns silently no-ops the cache.
+ */
+export async function updateScenarioPassedCache(
+  db: TypedQueryClient,
+  id: string,
+  url: string,
+): Promise<Scenario | null> {
+  const row = await db.get(
+    `UPDATE scenarios SET last_passed_at=$2, last_passed_url=$3, updated_at=$4 WHERE id=$1 RETURNING *`,
+    [id, nowIso(), url, nowIso()],
+  );
+  return row ? scenarioRow(row) : null;
+}
 export async function deleteScenario(db: TypedQueryClient, id: string): Promise<boolean> {
   const existing = await getScenario(db, id);
   if (!existing) return false;

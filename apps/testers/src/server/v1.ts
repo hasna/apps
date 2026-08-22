@@ -227,6 +227,16 @@ async function route(
     } else {
       if (method === "GET") return notNull(await store.getScenario(db, id), "scenario");
       if (method === "PUT") return notNull(await store.updateScenario(db, id, (await readJson(req)) as never), "scenario");
+      if (method === "PATCH") {
+        // Pass-cache write: the hosted client (ApiStore.updateScenarioPassedCache)
+        // sends { lastPassedUrl } and the runner treats a failure as non-critical,
+        // so an unhandled PATCH silently no-ops the cache (regression ff19ac0f).
+        const body = (await readJson(req)) as { lastPassedUrl?: string };
+        if (typeof body?.lastPassedUrl !== "string" || !body.lastPassedUrl) {
+          throw new ValidationError("lastPassedUrl is required");
+        }
+        return notNull(await store.updateScenarioPassedCache(db, id, body.lastPassedUrl), "scenario");
+      }
       if (method === "DELETE") return json({ deleted: await store.deleteScenario(db, id) });
     }
   }

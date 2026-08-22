@@ -105,6 +105,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           },
           required: ["name"],
         },
+        UpdateScenarioPassedCache: {
+          type: "object",
+          properties: { lastPassedUrl: { type: "string" } },
+          required: ["lastPassedUrl"],
+        },
         Run: {
           type: "object",
           additionalProperties: true,
@@ -267,6 +272,13 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       "/v1/scenarios/{id}": {
         get: { operationId: "getScenario", summary: "Get scenario", parameters: [idParam], responses: okJson("Scenario") },
         put: { operationId: "updateScenario", summary: "Update scenario", parameters: [idParam], requestBody: jsonBody("CreateScenario"), responses: okJson("Scenario") },
+        patch: {
+          operationId: "updateScenarioPassedCache",
+          summary: "Record the last-passed cache entry for a scenario",
+          parameters: [idParam],
+          requestBody: jsonBody("UpdateScenarioPassedCache"),
+          responses: okJson("Scenario"),
+        },
         delete: { operationId: "deleteScenario", summary: "Delete scenario", parameters: [idParam], responses: okJson("DeleteResult") },
       },
       "/v1/runs": {
