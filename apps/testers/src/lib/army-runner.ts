@@ -10,6 +10,7 @@
  *   // Poll getRun(runId) to check progress
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createRun, getRun, updateRun } from "../store/index.js";
 import { listScenarios } from "../store/index.js";
@@ -52,12 +53,26 @@ function chunkArray<T>(arr: T[], n: number): T[][] {
 }
 
 /**
- * Resolve the path to the testers CLI binary.
+ * Resolve the testers CLI entrypoint relative to the directory hosting the
+ * runner code. The only caller of runWithArmy is the MCP server, which runs
+ * from <pkg>/src/mcp in the dev tree and from the <pkg>/dist/mcp bundle in a
+ * built package — so the CLI entrypoint is always one level up under cli/.
+ *
+ * Built package: <pkg>/dist/cli/index.js (the "testers" bin; build:cli emits
+ * this — a built tarball ships dist/ only, never src/). Dev source:
+ * <pkg>/src/cli/index.tsx. Prefer the built artifact when present.
  */
-function getCliPath(): string {
-  // In development: run source directly
-  const srcPath = join(import.meta.dir, "../cli/index.tsx");
-  return srcPath;
+export function resolveCliPath(hostDir: string): string {
+  const built = join(hostDir, "../cli/index.js");
+  if (existsSync(built)) return built;
+  return join(hostDir, "../cli/index.tsx");
+}
+
+/**
+ * Resolve the path to the testers CLI binary for army worker processes.
+ */
+export function getCliPath(): string {
+  return resolveCliPath(import.meta.dir);
 }
 
 /**
