@@ -320,7 +320,11 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
 
   for (const skill of targets) {
     const manifest = readPortableSkillManifest(skill.path, skill.name);
-    const kind: SkillKind = manifest.kind ?? "executable";
+    // Absent `kind` is NOT a declaration of executability (task 568efaaa / P-01641):
+    // coercing it to "executable" made corpus-mode sync distribute a pointer stub and
+    // discard the full body. Only an explicit `kind: executable` may stub; an absent
+    // kind is content, resolved inside sourceSkillMd.
+    const kind = manifest.kind;
     const sourceMd = sourceSkillMd(
       skill.path,
       skill.name,
@@ -436,10 +440,11 @@ export function writeManagedSkillDir(
   }
 
   // Never silently replace content with a pointer stub (bug 60f2ab27): a managed home may
-  // hold full adopted content while the corpus entry renders as an executable pointer
-  // (kind: executable, or no kind at all). Replacing it was silent data loss — rc=0, no
-  // warning — and the drift census then validated the stub state, so the loss was
-  // invisible. Refuse unless --force explicitly requests the replacement.
+  // hold full adopted content while the corpus entry declares `kind: executable` and
+  // renders as a pointer. Replacing it was silent data loss — rc=0, no warning — and the
+  // drift census then validated the stub state, so the loss was invisible. Refuse unless
+  // --force explicitly requests the replacement. (An absent kind no longer renders as a
+  // pointer at all — task 568efaaa — so only a real declaration reaches this branch.)
   if (dirExists && managed && hasSkillMd && !options.force && isPointerSkillMd(skillMd)) {
     let existingIsStub = false;
     try {
@@ -533,16 +538,21 @@ function sourceSkillMd(
   skillPath: string,
   name: string,
   description: string,
-  kind: SkillKind,
+  kind: SkillKind | undefined,
   preferBundledDocs = false,
 ): string {
-  if (kind === "instruction" || preferBundledDocs) {
+  // Absent kind is content, never a pointer (task 568efaaa / P-01641): the corpus is
+  // 691 of 700 skills kind-less, and coercing them to "executable" laundered two of
+  // them into 15-line pointer stubs. Only an explicit `kind: executable` declaration
+  // is stubbed; an instruction skill, a kind-less skill, and every source-mode skill
+  // carry their full document.
+  if (kind === undefined || kind === "instruction" || preferBundledDocs) {
     const skillMdPath = join(skillPath, "SKILL.md");
     if (existsSync(skillMdPath)) return readFileSync(skillMdPath, "utf-8");
   }
-  // Executable skills (and instruction skills missing their SKILL.md) get a pointer: the
-  // runnable bytes are not copied into an agent folder, only a description of the skill
-  // and how to run it.
+  // Declared executable skills (and instruction skills missing their SKILL.md) get a
+  // pointer: the runnable bytes are not copied into an agent folder, only a description
+  // of the skill and how to run it.
   return pointerSkillMd(name, description);
 }
 

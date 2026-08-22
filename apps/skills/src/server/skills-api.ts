@@ -610,7 +610,13 @@ function buildPublishInput(manifest: Record<string, unknown>): Omit<PublishSkill
     throw new SkillRequestError(413, "SKILL_MD_TOO_LARGE", `skillMd exceeds ${MAX_SKILL_MD_BYTES} bytes`);
   }
 
-  const kindValue = optionalString(manifest.kind) ?? "executable";
+  // Absent `kind` is a doc-only publish, never a claimed `executable` (task 568efaaa /
+  // P-01641): the stored row's kind drives the pull->sync decision downstream, and
+  // coercing an absent kind to "executable" laundered full-content skills into pointer
+  // stubs. A publish that does not declare executability is consumed as prose, exactly
+  // like the corpus-side default in writeCorpusSkill; runnable skills declare
+  // `kind: executable` (declaration wins).
+  const kindValue = optionalString(manifest.kind) ?? "instruction";
   if (kindValue !== "executable" && kindValue !== "instruction") {
     throw new SkillRequestError(400, "INVALID_KIND", "`kind` must be 'executable' or 'instruction'");
   }

@@ -302,17 +302,44 @@ describe("syncSkillsToAgents", () => {
     }
   });
 
-  test("sync refuses to replace a content-bearing managed home with an executable pointer stub", () => {
-    // Regression for O15-00102 (task 60f2ab27): a corpus skill WITHOUT kind frontmatter
-    // (kind defaults to executable) synced over an adopted full-content managed home,
-    // replacing it with a 15-line pointer stub at rc=0 with no warning.
+  test("a kind-less content-bearing skill synced into a fresh home writes the full body, not a pointer stub", () => {
+    // Regression for P-01641 (task 568efaaa): an ABSENT `kind` was coerced to
+    // `executable`, so corpus-mode sync distributed a pointer stub on the CREATE path
+    // and the full body was discarded (claude-code-deepseek 6541B -> 465B, merge-pr
+    // 7143B -> 629B). Only an explicit `kind: executable` may produce a stub.
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
     try {
-      const fullMd = "---\nname: oss-pr-zero-drain\ndescription: Drain the PR queues\n---\n\n# OSS PR-Zero Drain\n\nFull content that must survive.\n";
-      // No kind in frontmatter, no skill.json kind: kind defaults to executable.
+      const fullMd = "---\nname: claude-code-deepseek\ndescription: Deepseek through Claude Code\n---\n\n# Claude Code Deepseek\n\nLong-form body that must reach the agent folder in full, never a 15-line pointer.\n";
+      // No kind in frontmatter and no kind in skill.json: the laundering shape.
+      seedCorpusSkill(corpus, "claude-code-deepseek", fullMd, {
+        "skill.json": JSON.stringify({ standard: "hasna.skill.v1", name: "claude-code-deepseek" }),
+      });
+      const { actions } = syncSkillsToAgents({ rootDir: corpus, homeDir: home, agents: ["claude"] });
+      expect(actions).toHaveLength(1);
+      expect(actions[0].action).toBe("create");
+      const synced = readFileSync(join(home, ".claude", "skills", "claude-code-deepseek", "SKILL.md"), "utf-8");
+      expect(synced).toContain("Long-form body that must reach the agent folder in full, never a 15-line pointer.");
+      expect(synced).not.toContain("This is an executable skill from the @hasna/skills catalog");
+      expect(synced).not.toMatch(/^kind:\s*executable\b/m);
+    } finally {
+      rmSync(corpus, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("sync refuses to replace a content-bearing managed home with an executable pointer stub", () => {
+    // Regression for O15-00102 (task 60f2ab27): a corpus skill synced over an adopted
+    // full-content managed home, replacing it with a 15-line pointer stub at rc=0 with
+    // no warning. The corpus entry DECLARES kind: executable — the one shape that still
+    // yields a pointer (an absent kind is content, see P-01641 / task 568efaaa).
+    const corpus = tempDir("sync-corpus-");
+    const home = tempDir("sync-home-");
+    try {
+      const fullMd = "---\nname: oss-pr-zero-drain\ndescription: Drain the PR queues\nkind: executable\n---\n\n# OSS PR-Zero Drain\n\nFull content that must survive.\n";
+      // Declared executable in frontmatter AND skill.json: a genuine declaration.
       seedCorpusSkill(corpus, "oss-pr-zero-drain", fullMd, {
-        "skill.json": JSON.stringify({ standard: "hasna.skill.v1", name: "oss-pr-zero-drain" }),
+        "skill.json": JSON.stringify({ standard: "hasna.skill.v1", name: "oss-pr-zero-drain", kind: "executable" }),
       });
       const homeDir = join(home, ".claude", "skills", "oss-pr-zero-drain");
       mkdirSync(homeDir, { recursive: true });

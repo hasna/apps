@@ -157,7 +157,12 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
       description: manifest.description,
       category: manifest.category ?? "Development Tools",
       tags: manifest.tags ?? [],
-      kind: manifest.kind ?? "executable",
+      // Absent `kind` is a doc-only publish, never a claimed `executable` (task
+      // 568efaaa / P-01641): the row's kind drives pull -> sync, and coercing an absent
+      // kind to "executable" laundered full-content skills into pointer stubs. A skill
+      // whose manifest does not declare executability is consumed as prose; runnable
+      // skills declare `kind: executable` (declaration wins).
+      kind: manifest.kind ?? "instruction",
       version: options.version ?? manifest.version,
       source: "custom",
       // Declared so the server can reject a body that did not arrive intact, rather than
