@@ -7,6 +7,7 @@ import {
   type TelemetryEnvelope,
   appendRawEvent,
   indexRawEvent,
+  replayLogProjectionFromStore,
   withEventStoreLock,
 } from "./event-store.ts";
 import { getEvent } from "./events.ts";
@@ -36,6 +37,13 @@ function ingestLogLocked(db: DbAdapter, entry: LogEntry): LogRow {
     | LogRow
     | undefined;
   if (existing) return existing;
+  // The projection row may be gone (logs delete / retention) while the raw
+  // event and its event_records index row survive. Re-materialize from the
+  // stored raw event instead of appending a duplicate raw line, which would
+  // throw "Event record already indexed with different raw pointer" and leave
+  // an orphan line plus an inflated event_count behind on every SDK retry.
+  const replayed = replayLogProjectionFromStore(db, eventId);
+  if (replayed) return replayed;
   const eventTime = entry.timestamp ?? new Date().toISOString();
   const ingestTime = new Date().toISOString();
   const source = entry.source ?? "sdk";
