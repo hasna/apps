@@ -2955,6 +2955,186 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("hosted stuck-run reconciliation isolates one candidate's advancement failure from the rest of the batch", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    // The pinned API clock sits 45 minutes ahead of the wall clock so every
+    // run claimed below (claims are stamped with the wall clock) is older
+    // than the recovery time and past the recovery grace.
+    const testStart = new Date();
+    const now = new Date(testStart.getTime() + 45 * 60_000);
+    const T = now.getTime();
+
+    // A wedged loop whose breaker marker window is densely occupied, plus a
+    // clean wedged loop. Both trips of the circuit breaker happen during
+    // recovery advancement (>= 5 consecutive failed runs with maxAttempts 1),
+    // so the marker INSERT is what distinguishes them.
+    const createWedgedLoop = async (name: string) => {
+      const loop = await storage.createLoop({
+        name,
+        schedule: { type: "interval", everyMs: 10 * 60_000 },
+        target: { type: "command", command: "true" },
+        maxAttempts: 1,
+        retryDelayMs: 1_000,
+        leaseMs: 1_000,
+      }, new Date(T - 24 * 3600_000));
+      return { loop, runner: `runner-${name}` };
+    };
+
+    // Claims are stamped with the wall clock (the storage has no injectable
+    // clock), which is exactly what keeps the streak deterministic: the
+    // occupied slots are created first, then the failed runs and the wedge,
+    // so the failed runs are always the most recently created runs that the
+    // breaker's consecutive-failure count reads (listRuns orders by created
+    // time) regardless of when the test runs.
+    const seedWedgedRun = async (loop: Loop, runner: string) => {
+      for (let i = 0; i < 5; i += 1) {
+        const slot = new Date(T - (70 - i * 10) * 60_000).toISOString();
+        const claim = await storage.claimRun(loop, slot, runner, new Date());
+        if (!claim) throw new Error(`seed claim failed for ${runner}`);
+        await storage.finalizeRun(claim.run.id, {
+          status: "failed",
+          finishedAt: new Date(Date.now() + 500).toISOString(),
+          durationMs: 500,
+          stdout: "",
+          stderr: "",
+          error: "boom",
+        }, { claimedBy: runner, claimToken: claim.claimToken, now: new Date(Date.now() + 500) });
+      }
+      const wedgeSlot = new Date(T - 20 * 60_000).toISOString();
+      const wedgeClaim = await storage.claimRun(loop, wedgeSlot, runner, new Date());
+      if (!wedgeClaim) throw new Error(`wedge claim failed for ${runner}`);
+      await storage.updateLoop(loop.id, { nextRunAt: wedgeSlot });
+      return wedgeClaim.run;
+    };
+
+    const dense = await createWedgedLoop("hosted-stuck-dense-marker");
+    const clean = await createWedgedLoop("hosted-stuck-clean-marker");
+
+    // Occupy every 1ms slot the breaker marker probe examines (1000 probes)
+    // plus the slot the probe then inserts into, so the marker INSERT for the
+    // dense loop's loop_runs row hits the UNIQUE(loop_id, scheduled_for)
+    // constraint and the recovered-run advancement throws.
+    for (let i = 0; i <= 1000; i += 1) {
+      await storage.createSkippedRun(dense.loop, new Date(T + i).toISOString(), "occupied");
+    }
+    const denseWedge = await seedWedgedRun(dense.loop, dense.runner);
+    const cleanWedge = await seedWedgedRun(clean.loop, clean.runner);
+
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now });
+    try {
+      const detected = await fetch(apiUrl(server, "/v1/leases/stuck?limit=10"));
+      expect(detected.status).toBe(200);
+      const body = await detected.json() as {
+        report: { candidates: Array<{ runId: string; loopId: string; snapshotId: string }> };
+      };
+      expect(body.report.candidates).toHaveLength(2);
+      const candidates = new Map(body.report.candidates.map((entry) => [entry.runId, entry]));
+      const denseCandidate = candidates.get(denseWedge.id);
+      const cleanCandidate = candidates.get(cleanWedge.id);
+      expect(denseCandidate).toBeDefined();
+      expect(cleanCandidate).toBeDefined();
+
+      const reconcile = await fetch(apiUrl(server, "/v1/leases/reconcile"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ candidates: [denseCandidate, cleanCandidate] }),
+      });
+      expect(reconcile.status).toBe(200);
+      const outcomeByRunId = new Map(
+        ((await reconcile.json()) as {
+          reconciliation: { outcomes: Array<{ runId: string; outcome: string; reason?: string }> };
+        }).reconciliation.outcomes.map((outcome) => [outcome.runId, outcome]),
+      );
+
+      // The dense-slot candidate's advancement failure is isolated: the batch
+      // still succeeds, the candidate reports the conflict, and its run stays
+      // recovered (abandoned) so a later pass can retry advancement.
+      expect(outcomeByRunId.get(denseWedge.id)).toMatchObject({
+        runId: denseWedge.id,
+        outcome: "conflict",
+        reason: "advancement_failed",
+      });
+      expect(await storage.getRun(denseWedge.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getLoop(dense.loop.id)).toMatchObject({ status: "active" });
+
+      // The clean candidate still recovers and its loop is paused by the
+      // circuit breaker.
+      expect(outcomeByRunId.get(cleanWedge.id)).toMatchObject({
+        runId: cleanWedge.id,
+        outcome: "recovered",
+      });
+      expect(await storage.getRun(cleanWedge.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getLoop(clean.loop.id)).toMatchObject({ status: "paused" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("legacy lease recovery keeps the pass alive when a page's advancement fails", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    // The pinned API clock sits 45 minutes ahead of the wall clock so every
+    // run claimed below is older than the recovery time and past the recovery
+    // grace.
+    const testStart = new Date();
+    const now = new Date(testStart.getTime() + 45 * 60_000);
+    const T = now.getTime();
+    const loop = await storage.createLoop({
+      name: "hosted-recover-dense-marker",
+      schedule: { type: "interval", everyMs: 10 * 60_000 },
+      target: { type: "command", command: "true" },
+      maxAttempts: 1,
+      retryDelayMs: 1_000,
+      leaseMs: 1_000,
+    }, new Date(T - 24 * 3600_000));
+    const runner = "runner-recover-dense";
+    // The occupied slots are created first, then the failed runs and the
+    // wedge are claimed with the wall clock, so the failed runs are always
+    // the most recently created runs the breaker's consecutive-failure count
+    // reads, regardless of when the test runs.
+    for (let i = 0; i <= 1000; i += 1) {
+      await storage.createSkippedRun(loop, new Date(T + i).toISOString(), "occupied");
+    }
+    for (let i = 0; i < 5; i += 1) {
+      const slot = new Date(T - (70 - i * 10) * 60_000).toISOString();
+      const claim = await storage.claimRun(loop, slot, runner, new Date());
+      if (!claim) throw new Error("seed claim failed");
+      await storage.finalizeRun(claim.run.id, {
+        status: "failed",
+        finishedAt: new Date(Date.now() + 500).toISOString(),
+        durationMs: 500,
+        stdout: "",
+        stderr: "",
+        error: "boom",
+      }, { claimedBy: runner, claimToken: claim.claimToken, now: new Date(Date.now() + 500) });
+    }
+    const wedgeSlot = new Date(T - 20 * 60_000).toISOString();
+    const wedgeClaim = await storage.claimRun(loop, wedgeSlot, runner, new Date());
+    if (!wedgeClaim) throw new Error("wedge claim failed");
+    await storage.updateLoop(loop.id, { nextRunAt: wedgeSlot });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => now });
+    try {
+      const first = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      expect(first.status).toBe(200);
+      const firstBody = await first.json() as { abandoned: Array<{ id: string }> };
+      expect(firstBody.abandoned.some((run) => run.id === wedgeClaim!.run.id)).toBe(true);
+      // The run is recovered, but its loop could not be paused because the
+      // breaker marker window is dense; the pass still returns 200 and the
+      // run stays retryable on the next invocation.
+      expect(await storage.getRun(wedgeClaim!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await storage.getLoop(loop.id)).toMatchObject({ status: "active" });
+
+      const second = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      expect(second.status).toBe(200);
+      expect(await storage.getLoop(loop.id)).toMatchObject({ status: "active" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("hosted stuck-run reconciliation refuses to repeat an admitted external operation blindly", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
