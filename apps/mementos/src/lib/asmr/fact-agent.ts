@@ -22,7 +22,7 @@ function hasFts5Table(db: Database): boolean {
 function buildScopeFilter(opts: AsmrOptions): { conditions: string[]; params: (string | number)[] } {
   const conditions: string[] = [
     "m.status = 'active'",
-    "(m.expires_at IS NULL OR m.expires_at >= datetime('now'))",
+    "(m.expires_at IS NULL OR m.expires_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
     "m.category IN ('preference', 'fact', 'knowledge')",
   ];
   const params: (string | number)[] = [];
