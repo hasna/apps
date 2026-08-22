@@ -13,6 +13,7 @@ import {
   getSessionJob,
   listSessionJobs,
   updateSessionJob,
+  claimSessionJob,
 } from "../db/session-jobs.js";
 import { autoResolveAgentProject } from "./session-auto-resolve.js";
 import { providerRegistry } from "./providers/registry.js";
@@ -543,6 +544,57 @@ describe("processSessionJob", () => {
     const result = await processSessionJob("nonexistent-job-id", db);
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.chunksProcessed).toBe(0);
+  });
+
+  it("does not re-run extraction when the job is already claimed by another worker", async () => {
+    // Worker A claims the job first (atomic claim at the DB layer).
+    const job = createSessionJob(
+      {
+        session_id: "test-session-claim",
+        transcript: "We decided to use TypeScript with Bun as our runtime.",
+        source: "manual",
+      },
+      db
+    );
+    claimSessionJob(job.id, db);
+
+    // Worker B's processSessionJob must NOT call the provider or extract anything.
+    let providerCalls = 0;
+    const mockProvider = {
+      name: "anthropic" as const,
+      config: { apiKey: "test", model: "test-model" },
+      extractMemories: async () => {
+        providerCalls++;
+        return [
+          {
+            content: "should never be extracted",
+            category: "fact" as const,
+            importance: 8,
+            tags: ["typescript", "bun"],
+            suggestedScope: "shared" as const,
+            reasoning: "test",
+          },
+        ];
+      },
+      extractEntities: async () => ({ entities: [], relations: [] }),
+      scoreImportance: async () => 8,
+    };
+
+    const originalGetAvailable = providerRegistry.getAvailable.bind(providerRegistry);
+    providerRegistry.getAvailable = () => mockProvider;
+
+    try {
+      const result = await processSessionJob(job.id, db);
+      expect(result.chunksProcessed).toBe(0);
+      expect(result.memoriesExtracted).toBe(0);
+      expect(result.errors.some((e) => e.includes("already claimed"))).toBe(true);
+      expect(providerCalls).toBe(0);
+
+      const updatedJob = getSessionJob(job.id, db);
+      expect(updatedJob!.status).toBe("processing");
+    } finally {
+      providerRegistry.getAvailable = originalGetAvailable;
+    }
   });
 
   it("handles LLM failure gracefully (marks completed with 0 memories)", async () => {
