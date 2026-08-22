@@ -61,6 +61,7 @@ import {
 import { dueSlots } from "../lib/recurrence.js";
 import { classifyLoopExecutionStaleness } from "../lib/execution-staleness.js";
 import {
+  collectBreakerWindowRuns,
   loopAdvancementPatchMatchesCurrent,
   planLoopAdvancement,
   resolveBreakerThreshold,
@@ -2022,7 +2023,10 @@ async function advanceLoopAfterRun(
         ? await storage.getRunBySlot(current.id, current.retryScheduledFor)
         : undefined,
       recentRuns: current
-        ? await storage.listRuns({ loopId: current.id, limit: Math.max(threshold * 4, 50) })
+        ? await collectBreakerWindowRuns(
+          (opts) => storage.listRuns({ loopId: current.id, ...opts }),
+          Math.max(threshold * 4, 50),
+        )
         : [],
       retryRandom,
       circuitBreakerThreshold: threshold,

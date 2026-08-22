@@ -937,6 +937,95 @@ describe("scheduler", () => {
     }
   });
 
+  test("breaker window pages past overlap-skip bookkeeping so a hang cannot dilute the failure streak", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "breaker-skip-dilution",
+          schedule: { type: "interval", everyMs: 300_000 },
+          target: { type: "command", command: "true" },
+          overlap: "skip",
+          maxAttempts: 1,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      // Four real final failures before the hang, one per due slot.
+      for (let i = 0; i < 4; i += 1) {
+        const at = new Date("2026-01-01T00:00:00Z").getTime() + i * 300_000;
+        const claimed = store.claimRun(loop, new Date(at).toISOString(), "test", new Date(at));
+        expect(claimed).toBeDefined();
+        store.finalizeRun(claimed!.run.id, {
+          status: "timed_out",
+          finishedAt: new Date(at + 60_000).toISOString(),
+          durationMs: 60_000,
+          stdout: "",
+          stderr: "",
+        });
+      }
+      // A run claimed at 00:20 hangs; while it hangs the daemon mints one
+      // skipped bookkeeping row per due slot (5-min cron over ~4h).
+      const hungAt = new Date("2026-01-01T00:20:00Z");
+      const hung = store.claimRun(loop, hungAt.toISOString(), "test", hungAt);
+      expect(hung).toBeDefined();
+      for (let i = 1; i <= 49; i += 1) {
+        store.createSkippedRun(
+          loop,
+          new Date(hungAt.getTime() + i * 300_000).toISOString(),
+          "previous run still active; skipped",
+        );
+      }
+      const final = store.finalizeRun(hung!.run.id, {
+        status: "timed_out",
+        finishedAt: new Date(hungAt.getTime() + 240 * 60_000).toISOString(),
+        durationMs: 240 * 60_000,
+        stdout: "",
+        stderr: "",
+      });
+      // The raw 50-row window is [skipped x49, timed_out x1], so the four
+      // prior failures sit outside it; the streak must page past the skips.
+      expect(consecutiveFailureCount(store, loop.id)).toBe(5);
+      advanceLoop(store, loop, final, new Date(final.finishedAt!), false, { random: noJitter });
+      expect(store.getLoop(loop.id)?.status).toBe("paused");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("breaker still trips on five consecutive timed_out runs with no skips in the window", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "breaker-no-skip-control",
+          schedule: { type: "interval", everyMs: 300_000 },
+          target: { type: "command", command: "true" },
+          overlap: "skip",
+          maxAttempts: 1,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      let final: LoopRun | undefined;
+      for (let i = 0; i < 5; i += 1) {
+        const at = new Date("2026-01-01T00:00:00Z").getTime() + i * 300_000;
+        const claimed = store.claimRun(loop, new Date(at).toISOString(), "test", new Date(at));
+        expect(claimed).toBeDefined();
+        final = store.finalizeRun(claimed!.run.id, {
+          status: "timed_out",
+          finishedAt: new Date(at + 60_000).toISOString(),
+          durationMs: 60_000,
+          stdout: "",
+          stderr: "",
+        });
+      }
+      expect(consecutiveFailureCount(store, loop.id)).toBe(5);
+      advanceLoop(store, loop, final!, new Date(final!.finishedAt!), false, { random: noJitter });
+      expect(store.getLoop(loop.id)?.status).toBe("paused");
+    } finally {
+      store.close();
+    }
+  });
+
   test("circuit breaker does not trip while deferred backlog retries are owed", async () => {
     const store = new Store(":memory:");
     try {

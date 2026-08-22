@@ -9,6 +9,9 @@ export const EXPIRY_REASON_PREFIX = "expired after consecutive successful runs";
 const THROTTLED_RETRY_MULTIPLIER = 4;
 const MAX_RETRY_EXPONENT = 20;
 
+/** Hard cap on rows examined while paging a streak window past skipped rows. */
+export const MAX_BREAKER_WINDOW_SCAN = 1_000;
+
 export type CircuitBreakerThreshold = number | ((loop: Loop) => number | undefined);
 
 export type LoopAdvancementPatch = Partial<
@@ -81,6 +84,69 @@ function withoutCursorRegression(current: Loop, candidate: string): string {
     : candidate;
 }
 
+function isStreakMarker(run: LoopRun): boolean {
+  return (
+    run.status === "skipped" &&
+    ((run.error?.startsWith(CIRCUIT_BREAKER_REASON_PREFIX) ?? false) ||
+      (run.error?.startsWith(EXPIRY_REASON_PREFIX) ?? false))
+  );
+}
+
+/**
+ * Collect a streak window that pages past ordinary overlap-skip bookkeeping
+ * rows. A hung overlap:"skip" loop mints one skipped row per due slot, so a
+ * raw newest-N read can fill its window with neutral rows and push every real
+ * outcome beyond the streak's reach. This pages the store read (created_at
+ * DESC) until the window holds `windowLimit` meaningful rows or `maxScan`
+ * rows have been examined. Circuit-breaker and expiry marker rows are kept:
+ * the streak counters read them as watermarks, so a manual resume keeps
+ * starting a fresh streak. Accepts both the synchronous local store read and
+ * the hosted storage contract's async read.
+ */
+export function collectBreakerWindowRuns(
+  listRuns: (opts: { limit: number; offset: number }) => readonly LoopRun[],
+  windowLimit: number,
+  maxScan?: number,
+): LoopRun[];
+export function collectBreakerWindowRuns(
+  listRuns: (opts: { limit: number; offset: number }) => Promise<readonly LoopRun[]>,
+  windowLimit: number,
+  maxScan?: number,
+): Promise<LoopRun[]>;
+export function collectBreakerWindowRuns(
+  listRuns: (opts: { limit: number; offset: number }) => readonly LoopRun[] | Promise<readonly LoopRun[]>,
+  windowLimit: number,
+  maxScan = MAX_BREAKER_WINDOW_SCAN,
+): LoopRun[] | Promise<LoopRun[]> {
+  const window: LoopRun[] = [];
+  let offset = 0;
+  const keep = (page: readonly LoopRun[]): void => {
+    for (const run of page) {
+      if (run.status === "skipped" && !isStreakMarker(run)) continue;
+      window.push(run);
+    }
+  };
+  const collect = (): LoopRun[] | Promise<LoopRun[]> => {
+    while (window.length < windowLimit && offset < maxScan) {
+      const page = listRuns({ limit: Math.min(windowLimit, maxScan - offset), offset });
+      if (typeof (page as Promise<readonly LoopRun[]>).then === "function") {
+        return (page as Promise<readonly LoopRun[]>).then((resolved) => {
+          offset += resolved.length;
+          if (resolved.length === 0) return window;
+          keep(resolved);
+          return collect();
+        });
+      }
+      const resolved = page as readonly LoopRun[];
+      offset += resolved.length;
+      if (resolved.length === 0) break;
+      keep(resolved);
+    }
+    return window;
+  };
+  return collect();
+}
+
 export function resolveBreakerThreshold(loop: Loop, override?: CircuitBreakerThreshold): number {
   const perLoop = (loop as { circuitBreakerThreshold?: unknown }).circuitBreakerThreshold;
   if (typeof perLoop === "number" && Number.isFinite(perLoop)) return Math.floor(perLoop);
@@ -106,9 +172,13 @@ export function consecutiveFailureCountFromRuns(
     const at = new Date(run.scheduledFor).getTime();
     if (watermark === undefined || at > watermark) watermark = at;
   }
+  // Skipped bookkeeping rows carry no outcome signal. Exclude them from the
+  // working list entirely (not just `continue` past them) so neutral rows can
+  // never consume counting positions inside a bounded window.
+  const meaningful = runs.filter((run) => run.status !== "skipped");
   let count = 0;
-  for (const run of runs) {
-    if (run.status === "running" || run.status === "skipped") continue;
+  for (const run of meaningful) {
+    if (run.status === "running") continue;
     if (watermark !== undefined && new Date(run.scheduledFor).getTime() <= watermark) continue;
     if (run.status === "succeeded") break;
     if (run.attempt < maxAttempts) continue;
@@ -143,9 +213,13 @@ export function consecutiveSuccessCountFromRuns(
     const at = new Date(run.scheduledFor).getTime();
     if (watermark === undefined || at > watermark) watermark = at;
   }
+  // Skipped bookkeeping rows carry no outcome signal. Exclude them from the
+  // working list entirely (not just `continue` past them) so neutral rows can
+  // never consume counting positions inside a bounded window.
+  const meaningful = runs.filter((run) => run.status !== "skipped");
   let count = 0;
-  for (const run of runs) {
-    if (run.status === "running" || run.status === "skipped") continue;
+  for (const run of meaningful) {
+    if (run.status === "running") continue;
     if (watermark !== undefined && new Date(run.scheduledFor).getTime() <= watermark) continue;
     if (run.status === "succeeded") {
       count += 1;

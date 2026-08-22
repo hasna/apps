@@ -4,6 +4,7 @@ import {
   CIRCUIT_BREAKER_REASON_PREFIX,
   DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
   MAX_RETRY_DELAY_MS,
+  collectBreakerWindowRuns,
   consecutiveFailureCountFromRuns,
   loopAdvancementPatchMatchesCurrent,
   planLoopAdvancement,
@@ -262,7 +263,10 @@ export interface AdvanceLoopOptions {
  * fresh streak before the breaker can trip again.
  */
 export function consecutiveFailureCount(store: Store, loopId: string, maxAttempts = 1, scanLimit = 50): number {
-  return consecutiveFailureCountFromRuns(store.listRuns({ loopId, limit: scanLimit }), maxAttempts);
+  return consecutiveFailureCountFromRuns(
+    collectBreakerWindowRuns((opts) => store.listRuns({ loopId, ...opts }), scanLimit),
+    maxAttempts,
+  );
 }
 
 function applyCircuitBreakerPlan(
@@ -320,7 +324,12 @@ export function advanceLoop(
       retryIntentRun: current?.retryScheduledFor
         ? store.getRunBySlot(current.id, current.retryScheduledFor)
         : undefined,
-      recentRuns: current ? store.listRuns({ loopId: current.id, limit: Math.max(threshold * 4, 50) }) : [],
+      recentRuns: current
+        ? collectBreakerWindowRuns(
+          (opts) => store.listRuns({ loopId: current.id, ...opts }),
+          Math.max(threshold * 4, 50),
+        )
+        : [],
       retryRandom,
       circuitBreakerThreshold: threshold,
     });
