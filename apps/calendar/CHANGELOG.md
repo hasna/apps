@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - bf6885f: calendar-serve answers --help and --version before any port parse, serve import, or bind; previously `calendar-serve --help` fell through to the bind path and died with `calendar-serve: refusing to start — no serve credential is configured` (rc=1) instead of printing usage (BUG row dd27cac0).
+- externalize `zod` from the serve bundle so the packed tarball no longer carries the 12-digit nil-UUID run from zod's v4 UUID regex, which trips the repo publish-guard `aws-account-id` pattern (required CI gate). `zod` remains a declared runtime dependency, so runtime behavior is unchanged.
 
 ## 0.3.4
 
