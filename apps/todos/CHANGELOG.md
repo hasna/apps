@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.46
+
+### Patch Changes
+
+- 4794bda: Release-review P1 remediation (0.15.44 review, findings 1-2): the Postgres sync adapter's changed-since path (`getChangedSince` / `getTasksChangedSince`) and the cloud changed-since/report path (`cloudChangedSince`) compared `updated_at` against the cursor as raw text. Stored stamps mix ISO ("2026-08-05T18:54:55.814Z") with space-form ("2026-06-10 11:24:47", the DDL default `datetime('now')` plus snapshot import/sync), and as text space (0x20) sorts before 'T' (0x54), so space-form rows that are genuinely NEWER than an ISO cursor were silently omitted from changed-since feeds, CLI summaries, and activity reports. Both paths now compare the stamps as instants via a shared `changedSinceStampNewer` helper (apps/todos/src/lib/instant-compare.ts) mirroring the SQL `julianday()` predicate used by the SQLite/Postgres updated_after paths, including its keep-unparseable semantics: a stamp that cannot be parsed is KEPT, because "cannot read the row's timestamp" is not "older than the cursor"; naive (no-offset) stamps are read as UTC, matching SQLite julianday. Regression tests: postgres-adapter changed-since space-form case (storage.test.ts), cloud changed-since space-form/unparseable case (cloud-router.test.ts), helper unit tests (instant-compare.test.ts).
+
 ## 0.15.45
 
 ### Patch Changes
