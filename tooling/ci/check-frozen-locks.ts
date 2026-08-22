@@ -34,15 +34,36 @@
  *   So RULE 2 compares dependencies only, exactly as strict as the lane.
  *
  * EXCEPTIONS — deliberate and attributable. Each names a manifest pin to a
- * version that is NOT on the npm registry (measured E404 2026-08-21); the
- * owning release lane must publish (or repin) before the app can leave this
- * registry, and the lockfile cannot be regenerated while the pin is
- * unresolvable. A member leaves this set in the change that publishes its pin.
+ * version that is NOT on the npm registry; the owning release lane must publish
+ * (or repin) before the app can leave this registry, and the lockfile cannot be
+ * regenerated while the pin is unresolvable. A member leaves this set in the
+ * change that publishes its pin.
  *
- *   automations — manifest pins @hasna/actions@0.2.1 (E404)
- *   browser     — manifest pins @hasna/connectors@1.4.2 (E404)
- *   economy     — manifest pins @hasna/projects@0.1.134 (E404)
- *   testers     — manifest pins @hasna/browser@0.5.18 (E404)
+ * Re-measured 2026-08-23 (`bun install --lockfile-only` in an isolated copy of
+ * the member, plus `npm view <spec> version`). Every entry below still fails to
+ * resolve, so none leaves the set here:
+ *
+ *   automations — @hasna/actions@^0.2.1 E404 (latest 0.1.6). The pin is a peer
+ *                 dependency, not a `dependencies` entry: a probe that reads
+ *                 only `dependencies` reports this member clean.
+ *   browser     — @hasna/conversations@0.7.5, @hasna/mementos@0.14.86,
+ *                 @hasna/todos@0.15.43 all E404. Its originally cited blocker
+ *                 @hasna/connectors@1.4.2 IS now published; the member stays
+ *                 excepted on the three above, not on that one.
+ *   economy     — resolves @hasna/conversations@0.7.5, @hasna/mementos@0.14.86,
+ *                 @hasna/todos@0.15.43 transitively (through its own
+ *                 @hasna/projects@0.1.141 pin, which is itself published) —
+ *                 all three E404, so the install still fails.
+ *   projects    — @hasna/conversations@0.7.5, @hasna/mementos@0.14.86,
+ *                 @hasna/todos@0.15.43 all E404 (registry latest 0.7.4,
+ *                 0.14.85, 0.15.41). Added 2026-08-23: the wave that bumped
+ *                 these manifest pins has not published them, so this member's
+ *                 4 RULE 2 hits (those three plus @hasna/contracts 0.13.3 ->
+ *                 0.13.4) cannot be regenerated away — a partial regeneration
+ *                 is not a thing `bun install` offers. It leaves the set in the
+ *                 change that publishes the three pins.
+ *   testers     — @hasna/browser@0.5.25 E404. Inert for RULE 2 as well: no
+ *                 `apps/testers/bun.lock` is tracked (only its dashboard's).
  *
  * Not covered, stated so the boundary is visible:
  *   - apps with a Dockerfile but NO own lockfile (hooks — no
@@ -70,6 +91,7 @@ const UNRESOLVABLE_PINS = new Set<string>([
   "automations",
   "browser",
   "economy",
+  "projects",
   "testers",
 ]);
 
@@ -289,8 +311,15 @@ if (process.argv.includes("--self-test")) {
   if (problems.length > 0) {
     console.error(`FROZEN-LOCK VIOLATIONS (${problems.length}):`);
     for (const p of problems) console.error(`  - ${p}`);
-    console.error("Regenerate the stale lockfile(s): per-app bun.lock files regenerate standalone");
-    console.error("(`bun install --lockfile-only` in the app dir), the root one at the monorepo root.");
+    console.error("Regenerate the stale lockfile(s). The root one: `bun install --lockfile-only` at");
+    console.error("the monorepo root. A per-app one: NOT in apps/<name>/ — measured on bun 1.3.13,");
+    console.error("`bun install --lockfile-only` there walks up to the workspace root (root");
+    console.error("package.json declares workspaces [\"apps/*\", ...]) and rewrites the ROOT bun.lock");
+    console.error("at rc=0 while apps/<name>/bun.lock is left untouched. Copy the member's");
+    console.error("package.json + bun.lock (plus any manifest its own `workspaces` names) into a");
+    console.error("directory with no workspace parent, run `bun install --lockfile-only` there, and");
+    console.error("copy the result back — that standalone shape is exactly what the Docker deploy");
+    console.error("lane installs, so it is the shape the lockfile must be generated in.");
     process.exit(1);
   }
   console.log("frozen-locks: root bun.lock and app bun.lock files match their manifests");
