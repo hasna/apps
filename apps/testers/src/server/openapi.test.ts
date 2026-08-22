@@ -25,6 +25,9 @@ describe("openapi document", () => {
     expect(doc.paths["/v1/scenarios/count"].get.operationId).toBe("countScenarios");
     expect(doc.paths["/v1/scenarios/import"].post.operationId).toBe("importScenarios");
     expect(doc.paths["/v1/scenarios"].get.parameters.some((p: any) => p.name === "offset")).toBe(true);
+    // personas pagination params declared (regression e920ef6a)
+    expect(doc.paths["/v1/personas"].get.parameters.some((p: any) => p.name === "limit")).toBe(true);
+    expect(doc.paths["/v1/personas"].get.parameters.some((p: any) => p.name === "offset")).toBe(true);
   });
 
   it("marks probes public and /v1 secured by apiKey", () => {

@@ -291,7 +291,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         get: {
           operationId: "listPersonas",
           summary: "List personas",
-          parameters: [{ name: "projectId", in: "query", required: false, schema: { type: "string" } }],
+          parameters: [
+            { name: "projectId", in: "query", required: false, schema: { type: "string" } },
+            { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+            { name: "offset", in: "query", required: false, schema: { type: "integer" } },
+          ],
           responses: listOf("Persona"),
         },
         post: { operationId: "createPersona", summary: "Create persona", requestBody: jsonBody("CreatePersona"), responses: okJson("Persona") },
