@@ -808,10 +808,14 @@ class LocalProjectStore implements ProjectStore {
     return { workspace: res.workspace, hard: res.hard, id: res.workspace.id };
   }
 
-  async listEvents(idOrSlug: string, _limit?: number): Promise<WorkspaceEvent[]> {
+  async listEvents(idOrSlug: string, limit?: number): Promise<WorkspaceEvent[]> {
     const project = dbResolveWorkspace(idOrSlug);
     if (!project) throw new Error(`Project not found: ${idOrSlug}`);
-    return dbListWorkspaceEvents(project.id);
+    const events = dbListWorkspaceEvents(project.id);
+    // Bounded reads come back newest-first, matching the api transport
+    // (ORDER BY created_at DESC LIMIT); the unbounded read stays ASC for the
+    // callers that depend on ascending order.
+    return limit && limit > 0 ? events.slice(-limit).reverse() : events;
   }
 
   async recordEvent(idOrSlug: string, input: RecordEventInput): Promise<WorkspaceEvent> {
