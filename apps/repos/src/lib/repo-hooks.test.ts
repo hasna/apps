@@ -1,6 +1,14 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { execSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execSync, spawn } from "node:child_process";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import {
   HOOK_MARKER_START,
@@ -232,6 +240,72 @@ describe("repo-hooks", () => {
       resolve("/tmp/repo-a"),
       resolve("/tmp/repo-b"),
     ]);
-    expect(readFileSync(queuePath, "utf-8")).toBe("");
+    // The drain consumes the inode it took via rename: the queue path is gone
+    // and the consumed file is removed. A leftover empty file at the queue
+    // path is the old read-then-truncate artifact — the exact shape that
+    // destroyed appends landing between the read and the truncate.
+    expect(existsSync(queuePath)).toBe(false);
+    expect(existsSync(`${queuePath}.consumed`)).toBe(false);
+  });
+
+  it("returns appends that land during a drain on the next drain", () => {
+    const queuePath = process.env["HASNA_REPOS_HOOK_QUEUE_PATH"]!;
+    writeFileSync(queuePath, "2026-04-08T13:00:00Z\t/tmp/repo-a\n");
+
+    const first = drainHookQueue(queuePath);
+
+    // A hook append racing the drain: its open happens after the drain's
+    // rename took the old inode, so it lands in a fresh queue file the drain
+    // never read. The drain must not have clobbered it, and the next drain
+    // must return it.
+    appendFileSync(queuePath, "2026-04-08T13:00:01Z\t/tmp/repo-b\n");
+
+    expect(first).toEqual([resolve("/tmp/repo-a")]);
+    expect(drainHookQueue(queuePath)).toEqual([resolve("/tmp/repo-b")]);
+  });
+
+  it("draining an empty queue is a no-op", () => {
+    const queuePath = process.env["HASNA_REPOS_HOOK_QUEUE_PATH"]!;
+    expect(drainHookQueue(queuePath)).toEqual([]);
+    expect(drainHookQueue(queuePath)).toEqual([]);
+  });
+
+  it("loses no entries when appends and a second drainer race the take (bounded race)", async () => {
+    const queuePath = process.env["HASNA_REPOS_HOOK_QUEUE_PATH"]!;
+    const TOTAL = 2000;
+    let returned = 0;
+    const seen = new Set<string>();
+
+    const drain = () => {
+      for (const repo of drainHookQueue(queuePath)) {
+        seen.add(repo);
+        returned++;
+      }
+    };
+    const firstDrainer = setInterval(drain, 4);
+    const secondDrainer = setInterval(drain, 7);
+
+    // Appender mimics the installed post-commit hook's `printf ... >>` —
+    // open, append, close per entry — in a separate process, so the append
+    // races the drainers exactly as hook processes race the auto-index worker.
+    const script = `
+      import { appendFileSync } from "node:fs";
+      for (let i = 0; i < ${TOTAL}; i++) {
+        appendFileSync(${JSON.stringify(queuePath)}, "2026-08-22T00:00:00Z\\t/tmp/race-" + i + "\\n");
+      }
+    `;
+    const child = spawn("bun", ["-e", script], { stdio: "pipe" });
+    const exitCode = await new Promise<number | null>((resolveExit, reject) => {
+      child.on("exit", resolveExit);
+      child.on("error", reject);
+    });
+    if (exitCode !== 0) throw new Error(`race appender exited ${exitCode}`);
+
+    clearInterval(firstDrainer);
+    clearInterval(secondDrainer);
+    drain(); // final take of whatever the appender left behind
+
+    expect(seen.size).toBe(TOTAL); // no entry lost
+    expect(returned).toBe(TOTAL); // no entry drained twice
   });
 });
