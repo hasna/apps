@@ -75,8 +75,8 @@ export function upsertFile(input: Omit<FileRecord, "id" | "indexed_at" | "create
   const id = input.id ?? `f_${nanoid(10)}`;
   const canonical = generateCanonicalName(input.name);
   db.run(
-    `INSERT INTO files (id, source_id, machine_id, path, name, original_name, canonical_name, ext, size, mime, hash, status, modified_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO files (id, source_id, machine_id, path, name, original_name, canonical_name, ext, size, mime, hash, status, modified_at, sync_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [id, input.source_id, input.machine_id, input.path, input.name, input.name, canonical, input.ext, input.size, input.mime, input.hash ?? null, input.status, input.modified_at ?? null]
   );
   refreshFileFts(id);

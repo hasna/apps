@@ -1664,8 +1664,8 @@ export async function createFileUploadIntent(
     [objectId, identity, source.bucket, region, objectKey, input.tenantId, input.size, mime, nowIso],
   );
   await client.execute(
-    `INSERT INTO files (id, source_id, machine_id, path, name, original_name, canonical_name, ext, size, mime, hash, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    `INSERT INTO files (id, source_id, machine_id, path, name, original_name, canonical_name, ext, size, mime, hash, status, sync_version)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1)`,
     [fileId, source.id, machine.id, objectKey, base, input.name, canonical, ext, input.size, mime, input.checksum ?? null, "active"],
   );
   const revisionIdentity = `${identity}|${input.checksum ?? ""}|${input.size}|${mime}|${base}`;
