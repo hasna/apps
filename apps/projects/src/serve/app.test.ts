@@ -1818,4 +1818,16 @@ describe("projects-serve hosted writes for on-box sub-resources", () => {
     expect(body.released).toBe(true);
     expect(releaseArgs).toEqual([["workspace:wks_test1", "lock_abc123"]]);
   });
+
+  // Regression (todos 9ddd325c): the hosted server models NO budget resource —
+  // route() dispatches projects/roots/agents/locks/recipes/machines and falls
+  // through to 404 for anything else. Pinning that the read path is 404 (not a
+  // silent empty list) is what makes the client-side LocalOnlyOperationError
+  // honest: there is no server budget surface to read from.
+  test("GET /v1/budgets returns 404 (server models no budget resource, todos 9ddd325c)", async () => {
+    const res = await handler()(
+      new Request("http://x/v1/budgets", { headers: { "x-api-key": keyWith(["projects:read"]) } }),
+    );
+    expect(res.status).toBe(404);
+  });
 });
