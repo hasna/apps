@@ -486,7 +486,21 @@ export async function storePublishedSkill(
     );
     input = { ...input, bundle: { ...input.bundle, ...placement } };
   }
-  const record = await store.publishSkill(input);
+  let record: ServerSkillRecord;
+  try {
+    record = await store.publishSkill(input);
+  } catch (error) {
+    // The object was uploaded before the store could refuse the write - the designed
+    // 409 for a stale/missing If-Match, or any other store error - and the digest-keyed
+    // object now has no row referencing it (the bundle INSERT never ran, or rolled
+    // back with the transaction). Discard it under the same reference guard the success
+    // path uses, so content-addressed reuse is never deleted out from under a live
+    // skill, then rethrow: the refusal is the caller's to report.
+    if (input.bundle?.sha256) {
+      await discardCollectedObject(store, artifactStorage, principal, input.bundle.sha256);
+    }
+    throw error;
+  }
   if (superseded && superseded !== record.bundleSha256) {
     await discardCollectedObject(store, artifactStorage, principal, superseded);
   }
