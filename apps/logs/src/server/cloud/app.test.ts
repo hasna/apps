@@ -144,6 +144,57 @@ describe("cloud serve CRUD roundtrip", () => {
   });
 });
 
+describe("cloud serve logs paging (offset forwarding)", () => {
+  test("?limit=2&offset=2 returns the next page, not page 1 again", async () => {
+    const a = app();
+    const key = tokenWith(["logs:read", "logs:write"]);
+    const h = { "x-api-key": key, "content-type": "application/json" };
+
+    const proj = await (
+      await a.request("/v1/projects", {
+        method: "POST",
+        headers: h,
+        body: JSON.stringify({ name: "paging" }),
+      })
+    ).json();
+
+    // Seed three logs with distinct timestamps so ORDER BY timestamp DESC is
+    // deterministic: newest first is msg-3, msg-2, msg-1.
+    for (let i = 1; i <= 3; i++) {
+      const res = await a.request("/v1/logs", {
+        method: "POST",
+        headers: h,
+        body: JSON.stringify({
+          project_id: proj.id,
+          level: "info",
+          message: `msg-${i}`,
+          timestamp: `2026-01-01T00:00:0${i}.000Z`,
+        }),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const page1 = (await (
+      await a.request(`/v1/logs?project_id=${proj.id}&limit=2`, {
+        headers: { "x-api-key": key },
+      })
+    ).json()) as { logs: { message: string }[] };
+    const page2 = (await (
+      await a.request(`/v1/logs?project_id=${proj.id}&limit=2&offset=2`, {
+        headers: { "x-api-key": key },
+      })
+    ).json()) as { logs: { message: string }[] };
+
+    const m1 = page1.logs.map((l) => l.message);
+    const m2 = page2.logs.map((l) => l.message);
+
+    // Page 2 must be the rows after page 1, not page 1 replayed.
+    expect(m1).toEqual(["msg-3", "msg-2"]);
+    expect(m2).toEqual(["msg-1"]);
+    expect(m2).not.toEqual(m1);
+  });
+});
+
 describe("cloud serve data-plane parity (v1 surface)", () => {
   // Guards the review finding: events / test-reports / pages / jobs / perf /
   // issues / alert-rules / diagnose / compare must exist on the cloud /v1 API

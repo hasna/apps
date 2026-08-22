@@ -333,6 +333,45 @@ describe("ApiStore.watchEvents (hosted event-catalog watch)", () => {
   });
 });
 
+describe("ApiStore.listLogs (hosted logs paging)", () => {
+  test("offset returns the second page, not page 1 again", async () => {
+    const { api, state } = buildApiStore();
+    // Seed three logs with distinct timestamps (newest first: msg-3, msg-2,
+    // msg-1). The SDK sends offset (sdk/src/index.ts) and ApiStore forwards it
+    // (src/store/api.ts), so this pins the whole hosted paging path.
+    for (let i = 1; i <= 3; i++) {
+      state.logs.set(`log-${i}`, {
+        id: `log-${i}`,
+        timestamp: `2026-01-01T00:00:0${i}.000Z`,
+        project_id: "proj-1",
+        level: "info",
+        source: "sdk",
+        service: null,
+        message: `msg-${i}`,
+        trace_id: null,
+        session_id: null,
+        agent: null,
+        url: null,
+        stack_trace: null,
+        metadata: null,
+      });
+    }
+
+    const page1 = await api.listLogs({ project_id: "proj-1", limit: 2 });
+    const page2 = await api.listLogs({
+      project_id: "proj-1",
+      limit: 2,
+      offset: 2,
+    });
+
+    expect(page1.map((r) => r.message)).toEqual(["msg-3", "msg-2"]);
+    expect(page2.map((r) => r.message)).toEqual(["msg-1"]);
+    expect(page2.map((r) => r.message)).not.toEqual(
+      page1.map((r) => r.message),
+    );
+  });
+});
+
 describe("ApiStore scan port (hosted scan-run surface)", () => {
   test("getScanJob returns the job and null for an unknown id", async () => {
     const { api } = buildApiStore();

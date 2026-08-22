@@ -87,6 +87,7 @@ export interface ListLogsQuery {
   trace_id?: string;
   q?: string;
   limit?: number;
+  offset?: number;
 }
 
 /** Read a non-empty string attribute from a loosely-typed record, else null. */
@@ -263,11 +264,17 @@ export class CloudLogStore {
       MAX_LOG_LIMIT,
     );
     params.push(limit);
+    // Mirror lib/query.ts: clamp a finite offset (negative/NaN -> 0).
+    const offset = Math.max(
+      0,
+      Math.floor(Number.isFinite(query.offset) ? query.offset! : 0),
+    );
+    params.push(offset);
     const rows = await this.client.many<LogRow>(
       `SELECT id, timestamp, project_id, level, source, service, message,
               trace_id, session_id, agent, url, stack_trace, metadata
        FROM logs ${where}
-       ORDER BY timestamp DESC LIMIT $${params.length}`,
+       ORDER BY timestamp DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
     return rows.map(rowToLog);

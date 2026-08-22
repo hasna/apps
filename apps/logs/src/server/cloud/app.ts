@@ -193,6 +193,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
       ...(q.trace_id ? { trace_id: q.trace_id } : {}),
       ...(q.q ? { q: q.q } : {}),
       ...(q.limit ? { limit: Number(q.limit) } : {}),
+      ...(q.offset ? { offset: Number(q.offset) } : {}),
     });
     return c.json({ logs });
   });
