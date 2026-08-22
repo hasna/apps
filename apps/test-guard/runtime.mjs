@@ -179,7 +179,7 @@ export function verifyAggregateControllerObservation(observation, options = {}) 
   return { ...body, receiptId: digest("aggregate-controller", body) };
 }
 
-function validAggregateControllerReceipt(receipt, nowUnixMs = Date.now()) {
+function validAggregateControllerReceiptIntegrity(receipt) {
   if (
     !isPlainObject(receipt) ||
     receipt.schema !== AGGREGATE_CONTROLLER_RECEIPT_SCHEMA ||
@@ -198,10 +198,14 @@ function validAggregateControllerReceipt(receipt, nowUnixMs = Date.now()) {
   ) {
     return false;
   }
-  const age = nowUnixMs - receipt.verifiedAtUnixMs;
-  if (age < 0 || age > CONTROLLER_RECEIPT_MAX_AGE_MS) return false;
   const body = Object.fromEntries(Object.entries(receipt).filter(([key]) => key !== "receiptId"));
   return receipt.receiptId === digest("aggregate-controller", body);
+}
+
+function validAggregateControllerReceipt(receipt, nowUnixMs = Date.now()) {
+  if (!validAggregateControllerReceiptIntegrity(receipt)) return false;
+  const age = nowUnixMs - receipt.verifiedAtUnixMs;
+  return age >= 0 && age <= CONTROLLER_RECEIPT_MAX_AGE_MS;
 }
 
 function controllerContextReasons(controller, currentCgroupPath, leafScopeUnit) {
@@ -409,6 +413,26 @@ function validAdmittedParent(parent) {
     Object.entries(parent).filter(([key]) => key !== "receiptId" && key !== "parentChildReceipt"),
   );
   return parent.receiptId === digest("admission", body);
+}
+
+function admittedRootCgroup(admission, aggregateController, scopeUnit) {
+  if (
+    !validAdmittedParent(admission) ||
+    !validAggregateControllerReceiptIntegrity(aggregateController) ||
+    admission.decision !== "ADMIT" ||
+    admission.lane !== "LOCAL_FOCUSED" ||
+    admission.acquiredLocalAllocation !== true ||
+    admission.parentAdmissionReceiptId !== null ||
+    admission.allocationId !== scopeUnit ||
+    admission.leaseId !== scopeUnit ||
+    admission.aggregateControllerReceiptId !== aggregateController.receiptId ||
+    admission.aggregateUnit !== aggregateController.unit ||
+    admission.aggregateControlGroup !== aggregateController.controlGroup ||
+    admission.cgroupId !== `${aggregateController.controlGroup}/${scopeUnit}`
+  ) {
+    return null;
+  }
+  return admission.cgroupId;
 }
 
 export function admitResolvedExecutionPlan(value, context = {}) {
@@ -668,6 +692,20 @@ async function main() {
     } catch (error) {
       const reasons = Array.isArray(error?.reasonCodes) ? error.reasonCodes.join(",") : "UNVERIFIABLE";
       process.stderr.write(`hasna-test-guard: aggregate controller refused reasons=${reasons}\n`);
+      process.exit(78);
+    }
+  }
+  if (operation === "verify-admission") {
+    const [scopeUnit, controllerReceiptFile, admissionReceiptFile] = process.argv.slice(3);
+    if (!scopeUnit || !controllerReceiptFile || !admissionReceiptFile) process.exit(78);
+    try {
+      const aggregateController = readReceipt(controllerReceiptFile);
+      const admission = readReceipt(admissionReceiptFile);
+      const cgroup = admittedRootCgroup(admission, aggregateController, scopeUnit);
+      if (!cgroup) process.exit(78);
+      process.stdout.write(`${cgroup}\n`);
+      process.exit(0);
+    } catch {
       process.exit(78);
     }
   }

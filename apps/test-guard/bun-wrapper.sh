@@ -298,7 +298,9 @@ prepare_verified_aggregate_controller() {
 
 wait_for_scope_terminal_empty() {
   local scope_unit=$1
+  local admitted_cgroup=$2
   local state
+  local state_rc
   local load_state
   local active_state
   local sub_state
@@ -308,10 +310,13 @@ wait_for_scope_terminal_empty() {
   local ambiguity_logged=""
   local cgroup_base="${HASNA_TEST_GUARD_CGROUP_ROOT:-/sys/fs/cgroup}"
 
+  [ "$admitted_cgroup" = "$AGGREGATE_CONTROLLER_CONTROL_GROUP/$scope_unit" ] || return 1
+
   while :; do
     state=$(run_user_systemctl show "$scope_unit" \
       --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup \
-      --no-pager 2>/dev/null) || state=""
+      --no-pager 2>/dev/null)
+    state_rc=$?
     if [ "$(printf '%s\n' "$state" | grep -c '^LoadState=')" = "1" ] \
       && [ "$(printf '%s\n' "$state" | grep -c '^ActiveState=')" = "1" ] \
       && [ "$(printf '%s\n' "$state" | grep -c '^SubState=')" = "1" ] \
@@ -328,8 +333,9 @@ wait_for_scope_terminal_empty() {
         /|*/../*|*/..|*//* ) control_group="" ;;
       esac
 
-      if [ "$load_state" = "loaded" ] \
-        && [ "$control_group" = "$AGGREGATE_CONTROLLER_CONTROL_GROUP/$scope_unit" ]; then
+      if [ "$state_rc" -eq 0 ] \
+        && [ "$load_state" = "loaded" ] \
+        && [ "$control_group" = "$admitted_cgroup" ]; then
         cgroup_root="$cgroup_base$control_group"
         if [ -r "$cgroup_root/cgroup.events" ] && [ -r "$cgroup_root/cgroup.procs" ]; then
           populated=$(sed -n 's/^populated[[:space:]][[:space:]]*\([01]\)$/\1/p' "$cgroup_root/cgroup.events")
@@ -339,6 +345,17 @@ wait_for_scope_terminal_empty() {
             return 0
           fi
         fi
+      elif [ "$state_rc" -eq 4 ] \
+        && [ "$load_state" = "not-found" ] \
+        && [ "$active_state:$sub_state" = "inactive:dead" ] \
+        && [ -z "$control_group" ] \
+        && [ ! -e "$cgroup_base$admitted_cgroup" ]; then
+        # The package-owned ADMIT receipt proves this exact transient scope and
+        # cgroup existed before the test spawned. cgroup v2 cannot remove a
+        # populated cgroup; systemd's exact not-found/inactive/dead tuple plus
+        # absence of that admitted path therefore proves terminal emptiness
+        # after collection. Any other missing or mismatched evidence still holds.
+        return 0
       fi
     fi
     if [ -z "$ambiguity_logged" ]; then
@@ -384,8 +401,10 @@ exec_guarded_test() {
   local scope_unit=$1
   shift
   local direct_rc
+  local admitted_cgroup
   local admission_receipt="$GUARD_DIR/receipts/$scope_unit.json"
   mkdir -p "$GUARD_DIR/receipts" 2>/dev/null || exit 78
+  rm -f "$admission_receipt" 2>/dev/null || exit 78
 
   if ! prepare_verified_aggregate_controller; then
     glog "REFUSED aggregate-controller-stale unit=$AGGREGATE_TEST_SLICE cwd=$PWD argv=$*"
@@ -412,7 +431,18 @@ exec_guarded_test() {
       "$REAL" "$GUARD_RUNTIME" launch "$scope_unit" "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$admission_receipt" -- "$REAL" "$@"
   fi
   direct_rc=$?
-  wait_for_scope_terminal_empty "$scope_unit"
+  if ! admitted_cgroup=$("$REAL" "$GUARD_RUNTIME" verify-admission \
+    "$scope_unit" "$AGGREGATE_CONTROLLER_RECEIPT_FILE" "$admission_receipt"); then
+    glog "REFUSED no-admission unit=$scope_unit direct_rc=$direct_rc release=1 cwd=$PWD argv=$*"
+    if [ "$direct_rc" -eq 0 ]; then
+      exit 78
+    fi
+    exit "$direct_rc"
+  fi
+  if ! wait_for_scope_terminal_empty "$scope_unit" "$admitted_cgroup"; then
+    glog "holding admission-identity-ambiguous unit=$scope_unit cgroup=$admitted_cgroup cwd=$PWD argv=$*"
+    while :; do sleep 60; done
+  fi
   glog "terminal unit=$scope_unit direct_rc=$direct_rc active=inactive populated=0 release=1 cwd=$PWD argv=$*"
   exit "$direct_rc"
 }
