@@ -257,8 +257,51 @@ try {
   }
   checks++;
 
+  // 6. The PgSyncPool stale-response race against a real server (todos
+  //    027d17e9): a query that outlives the (env-shortened) query timeout is
+  //    abandoned, and the worker's LATE response for it must never be consumed
+  //    by the next query. The sleep's response lands while the victim query is
+  //    waiting, so a leak shows up as the victim receiving marker_a.
+  //
+  //    The timeout env is shortened for the sleep query ONLY and restored
+  //    before the victim query, whose own response arrives after pg_sleep(5)
+  //    finishes (≈5s later) and needs the normal 60s budget to still be
+  //    waiting when it does.
+  const originalTimeout = process.env["MEMENTOS_PGSYNC_QUERY_TIMEOUT_MS"];
+  process.env["MEMENTOS_PGSYNC_QUERY_TIMEOUT_MS"] = "2000";
+  const racePool = new PgAdapter(connectionString);
+  try {
+    let timedOut = false;
+    try {
+      racePool.get("SELECT pg_sleep(5), 42 AS marker_a", []);
+    } catch (error) {
+      timedOut = error instanceof Error && /PostgreSQL query timed out/.test(error.message);
+    }
+    if (!timedOut) {
+      fail("pg_sleep query did not time out under the shortened query timeout");
+    }
+  } finally {
+    if (originalTimeout === undefined) {
+      delete process.env["MEMENTOS_PGSYNC_QUERY_TIMEOUT_MS"];
+    } else {
+      process.env["MEMENTOS_PGSYNC_QUERY_TIMEOUT_MS"] = originalTimeout;
+    }
+  }
+  try {
+    const victim = racePool.get("SELECT 7 AS marker_b", []);
+    if (!victim || victim.marker_b !== 7 || "marker_a" in victim) {
+      fail(
+        "query after a timed-out query consumed the stale predecessor response " +
+          `(expected marker_b === 7, got ${JSON.stringify(victim)})`
+      );
+    }
+    checks++;
+  } finally {
+    racePool.close();
+  }
+
   console.log(
-    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, round-trip, delete, audit-value-hash, project-resources)`
+    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, round-trip, delete, audit-value-hash, project-resources, stale-response race)`
   );
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));

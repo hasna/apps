@@ -13,6 +13,12 @@
  * shared data buffer and flips the status word. One client (not a pool) keeps
  * transactions (BEGIN/COMMIT/ROLLBACK) correct since all statements are
  * serialized over the single connection.
+ *
+ * Every request carries a `gen` generation token, which the response echoes
+ * into status[0]. A caller whose query timed out has abandoned it, but this
+ * worker still finishes it and writes the response — the generation lets the
+ * caller recognize that late response and discard it instead of letting the
+ * next query consume it.
  */
 import { parentPort, workerData } from "node:worker_threads";
 import pg from "pg";
@@ -37,7 +43,7 @@ interface WorkerData {
 }
 
 const { dsn, ssl, control, data } = workerData as WorkerData;
-const status = new Int32Array(control); // [0]=status(0 idle,1 ok,2 err), [1]=byteLength
+const status = new Int32Array(control); // [0]=responding generation (0 idle), [1]=byteLength, [2]=status code (1 ok, 2 err)
 const dataView = new Uint8Array(data);
 const encoder = new TextEncoder();
 
@@ -55,7 +61,14 @@ async function ensureConnected(): Promise<void> {
   await connecting;
 }
 
-function respond(statusCode: number, payload: unknown): void {
+/**
+ * Write a response tagged with the request's `gen` generation. The payload
+ * lands in the shared data buffer first, then the length, then the status
+ * code, and finally the generation — the caller only reads the payload after
+ * observing status[0] === its own gen, so the data/len/code writes are all
+ * visible (Atomics stores are sequentially consistent).
+ */
+function respond(gen: number, statusCode: number, payload: unknown): void {
   const bytes = encoder.encode(JSON.stringify(payload));
   if (bytes.length > dataView.length) {
     const errBytes = encoder.encode(
@@ -65,22 +78,27 @@ function respond(statusCode: number, payload: unknown): void {
     );
     dataView.set(errBytes, 0);
     Atomics.store(status, 1, errBytes.length);
-    Atomics.store(status, 0, 2);
+    Atomics.store(status, 2, 2);
+    Atomics.store(status, 0, gen);
     Atomics.notify(status, 0);
     return;
   }
   dataView.set(bytes, 0);
   Atomics.store(status, 1, bytes.length);
-  Atomics.store(status, 0, statusCode);
+  Atomics.store(status, 2, statusCode);
+  Atomics.store(status, 0, gen);
   Atomics.notify(status, 0);
 }
 
-parentPort?.on("message", async (msg: { sql: string; params: unknown[] }) => {
-  try {
-    await ensureConnected();
-    const result = await client.query(msg.sql, msg.params as unknown[]);
-    respond(1, { rows: result.rows, rowCount: result.rowCount });
-  } catch (error) {
-    respond(2, { message: error instanceof Error ? error.message : String(error) });
+parentPort?.on(
+  "message",
+  async (msg: { sql: string; params: unknown[]; gen: number }) => {
+    try {
+      await ensureConnected();
+      const result = await client.query(msg.sql, msg.params as unknown[]);
+      respond(msg.gen, 1, { rows: result.rows, rowCount: result.rowCount });
+    } catch (error) {
+      respond(msg.gen, 2, { message: error instanceof Error ? error.message : String(error) });
+    }
   }
-});
+);
