@@ -691,7 +691,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.19",
+      "version": "0.3.22",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -704,7 +704,7 @@
         "@hasna/contracts": "0.13.4",
         "@hasna/events": "^0.1.16",
         "@hasna/mcp-harness": "^0.1.0",
-        "@hasna/projects": "0.1.141",
+        "@hasna/projects": "0.1.144",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
