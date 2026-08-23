@@ -121,20 +121,8 @@ export function getApiKeyStore(): ApiKeyStore {
 
 /**
  * The framework-agnostic API-key verifier for `/v1`. Tokens are stateless,
- * HMAC-signed by the contracts issuer; key lifecycle is resolved against the
- * RDS `api_keys` table. Fails closed when no signing secret is configured.
- *
- * `keyStatus` — not `isRevoked` — is the hook, and that is the security
- * property rather than a style choice. `isRevoked` is a boolean predicate that
- * returns `false` BOTH for an active key and for a kid this service has no
- * record of, so an authentically signed token that was never registered
- * authenticated, and could never be turned off: revocation writes `revoked_at`
- * to a row that does not exist. `keyStatus` reports `unknown` for that kid and
- * anything other than `"active"` denies. `@hasna/contracts` refuses the
- * `isRevoked`-only wiring at construction time, which surfaced here as every
- * `/v1` route answering 503 with the contracts configuration text — including
- * to anonymous callers — instead of 401. Same wiring as the sibling `/v1`
- * services (`instructions`, `domains`, `testers`).
+ * HMAC-signed by the contracts issuer; revocation is checked against the RDS
+ * `api_keys` table. Fails closed when no signing secret is configured.
  */
 export function getCloudVerifier(): ApiKeyVerifier {
   if (cachedVerifier) return cachedVerifier;
@@ -144,11 +132,16 @@ export function getCloudVerifier(): ApiKeyVerifier {
       "Calendar /v1 auth requires a signing secret (HASNA_CALENDAR_API_SIGNING_KEY / HASNA_API_SIGNING_KEY / API_KEY_SIGNING_SECRET).",
     );
   }
+  const store = getApiKeyStore();
   cachedVerifier = verifyApiKey({
     app: CALENDAR_APP_SLUG,
     signingSecret,
-    // Bound as a property on ApiKeyStore, so no `this` binding is needed here.
-    keyStatus: getApiKeyStore().keyStatus,
+    // Strict key-status hook: anything other than "active" (unknown, revoked,
+    // expired) denies. The contract refuses the deprecated `isRevoked`-only
+    // wiring eagerly at construction (contracts #62, 0.8.7+) — the calendar
+    // 0.3.6 /v1 503 incident (row I38-00755, deploy-oss-fleet-0823a confirm
+    // 725517) was exactly that throw surfacing as 503 on every business route.
+    keyStatus: store.keyStatus,
   });
   return cachedVerifier;
 }
