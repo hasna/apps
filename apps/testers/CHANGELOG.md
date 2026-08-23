@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- @hasna/browser@0.5.30
+- @hasna/browser@0.5.29 (pin corrected from 0.5.30, which was never published — the version wave generated the pin from the workspace version; 0.5.29 is the registry latest and the version 0.0.104 already shipped with)
 
 ## 0.0.104
 
