@@ -75,7 +75,7 @@
     },
     "apps/attachments": {
       "name": "@hasna/attachments",
-      "version": "1.1.7",
+      "version": "1.1.8",
       "bin": {
         "attachments": "dist/cli/index.js",
         "attachments-mcp": "dist/mcp/server.js",
@@ -691,7 +691,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.24",
+      "version": "0.3.25",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -911,7 +911,7 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.7.5",
+      "version": "0.7.6",
       "bin": {
         "hooks": "bin/index.js",
         "hooks-serve": "bin/serve.js",
@@ -1093,7 +1093,7 @@
     },
     "apps/markdown": {
       "name": "@hasna/markdown",
-      "version": "0.1.19",
+      "version": "0.1.20",
       "bin": {
         "markdown": "dist/cli/index.js",
         "markdown-mcp": "dist/mcp/index.js",
@@ -1559,7 +1559,7 @@
     },
     "apps/shield": {
       "name": "@hasna/shield",
-      "version": "0.1.28",
+      "version": "0.1.29",
       "bin": {
         "shield": "bin/shield.sh",
         "shield-mcp": "bin/shield-mcp.sh",
@@ -1839,7 +1839,7 @@
     },
     "apps/testers": {
       "name": "@hasna/testers",
-      "version": "0.0.107",
+      "version": "0.0.108",
       "bin": {
         "testers": "dist/cli/index.js",
         "testers-mcp": "dist/mcp/index.js",
