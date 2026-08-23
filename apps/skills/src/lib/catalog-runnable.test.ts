@@ -49,6 +49,8 @@ import { join } from "node:path";
 import { getPackedFiles } from "./packlist.js";
 import { listHostedMetadataSlugs, parseHostedSourceExclusionSlugs } from "./hosted-skill-set.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
+import { loadRegistry } from "./registry.js";
+import { isServerOwnedSkill, resolveRunRouting } from "./run-routing.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -212,6 +214,58 @@ describe("the published package carries what the catalog promises (zero corpus)"
   test("no instruction skill's SKILL.md ships in the package", () => {
     const shipped = instructionSkills.filter((slug) => packedSet.has(`skills/${slug}/SKILL.md`));
     expect(shipped).toEqual([]);
+  });
+});
+
+describe("run routing resolves from configuration, credential, and the server-owned marker", () => {
+  // Mock inputs only — never a real credential or origin. The resolver is pure:
+  // the route decision depends on exactly these three inputs and nothing else.
+  const MOCK_CREDENTIAL = "mock-api-key-for-routing-test";
+  const MOCK_ORIGIN = "https://skills.example.com";
+  const serverOwnedSkill = { name: "server-owned-demo", serverOwned: true };
+  const localSkill = { name: "local-demo", serverOwned: false };
+
+  test("a server-owned skill routes remote when an origin and a credential are present", () => {
+    expect(resolveRunRouting(serverOwnedSkill, MOCK_CREDENTIAL, MOCK_ORIGIN)).toEqual({
+      route: "remote",
+      apiKey: MOCK_CREDENTIAL,
+    });
+  });
+
+  test("a server-owned skill fails closed without a credential — never a silent local run", () => {
+    const routing = resolveRunRouting(serverOwnedSkill, null, MOCK_ORIGIN);
+    expect(routing.route).toBe("error");
+    if (routing.route !== "error") throw new Error("expected error routing");
+    expect(routing.code).toBe("REMOTE_REQUIRES_CREDENTIAL");
+    expect(routing.error).toContain("skills auth login");
+  });
+
+  test("a server-owned skill fails closed without a configured origin", () => {
+    const routing = resolveRunRouting(serverOwnedSkill, MOCK_CREDENTIAL, undefined);
+    expect(routing.route).toBe("error");
+    if (routing.route !== "error") throw new Error("expected error routing");
+    expect(routing.code).toBe("REMOTE_REQUIRES_ORIGIN");
+    expect(routing.error).toContain("skills setup --api-url");
+  });
+
+  test("a local skill stays local even when an origin and a credential are configured", () => {
+    expect(resolveRunRouting(localSkill, MOCK_CREDENTIAL, MOCK_ORIGIN)).toEqual({ route: "local" });
+  });
+
+  test("a local skill stays local when nothing is configured", () => {
+    expect(resolveRunRouting(localSkill, null, undefined)).toEqual({ route: "local" });
+  });
+
+  test("every shipped catalog entry routes local by default (no credential, no origin)", () => {
+    for (const skill of loadRegistry()) {
+      expect(resolveRunRouting(skill, null, undefined)).toEqual({ route: "local" });
+    }
+  });
+
+  test("the server-owned marker is the routing switch on a skill (positive control)", () => {
+    expect(isServerOwnedSkill(serverOwnedSkill)).toBe(true);
+    expect(isServerOwnedSkill(localSkill)).toBe(false);
+    expect(isServerOwnedSkill({ serverOwned: undefined })).toBe(false);
   });
 });
 

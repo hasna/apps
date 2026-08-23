@@ -19,7 +19,7 @@ Requires [Bun](https://bun.sh/) 1.0+.
 # Browse skills interactively
 skills
 
-# Point the CLI at a Skills API server when you want remote runs
+# Point the CLI at a Skills API server for server-owned (premium) skill runs
 skills setup --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
 
@@ -35,28 +35,41 @@ skills setup agents
 # See what a skill needs
 skills info logo-design
 
-# Premium skills run through the configured Skills API
-skills run logo-design --brief "minimal geometric owl mark"
+# Server-owned (premium) skills run through the configured Skills API
+skills run <server-owned-skill> --brief "minimal geometric owl mark"
 
-# Free/local skills can still use your own provider keys when documented
+# Every other skill runs on this machine by default, even when an API is
+# configured; local skills may use your own provider keys when documented
 skills requires brand-style-guide
 OPENAI_API_KEY=... skills run brand-style-guide ./brand-notes.md
 ```
 
 ## Server-Side Runtime Skills
 
-Premium skills run on the server. The CLI and MCP server submit them to the
-configured Skills API, create local run metadata, and then expose status and
-artifact commands. They do not fall back to bundled local execution when auth is
-missing or the server runtime is unavailable.
+Premium skills run on the server. A skill is premium — server-owned — when its
+published contract carries the server-owned marker (`skills.runtime: "hosted"`
+or `skills.source: "remote" | "private-hosted"` in the skill's `package.json`).
+The CLI and MCP server submit server-owned skills to the configured Skills API,
+create local run metadata, and then expose status and artifact commands. They
+do not fall back to bundled local execution when auth is missing or the server
+runtime is unavailable.
 
-Use `SKILLS_API_KEY` or `skills auth login --api-key` for premium server-side
+Routing is config-driven and local is the default: a run is sent to the API
+only when an origin is configured (`apiUrl` or `$SKILLS_API_URL`), a credential
+is present (`SKILLS_API_KEY` or the auth store), and the skill carries the
+server-owned marker. Every other skill runs on this machine, whether or not an
+API is configured. No skill in the OSS catalog is server-owned today; the
+marker arrives with skills synced from a Skills API deployment. A server-owned
+skill run without the origin or the credential fails closed with an error
+naming the missing setup — it never silently runs locally.
+
+Use `SKILLS_API_KEY` or `skills auth login --api-key` for server-side
 execution:
 
 ```bash
 skills setup --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
-skills run logo-design --brief "minimal geometric owl mark"
+skills run <server-owned-skill> --brief "minimal geometric owl mark"
 skills runs status <run-id>
 skills exports download <run-id>
 ```
@@ -175,10 +188,11 @@ Stable command shapes:
   `{ "dryRun": true, "actions": [...] }` where applicable.
 - Runtime: `run --json <skill> ...` returns
   `{ "skill", "args", "exitCode", "stdout", "stderr", "error", "run" }`.
-  Premium server-side runs include `{ "contractVersion": 1, "remote": true,
-  "remoteRun", "pricing", "run", "nextActions" }` and return immediately with
+  Server-owned (premium) runs include `{ "contractVersion": 1, "remote": true,
+  "remoteRun", "run", "nextActions" }` and return immediately with
   status commands such as `skills runs status <run-id>` and
-  `skills exports download <run-id>`.
+  `skills exports download <run-id>`. Premium-catalog and pricing metadata is
+  served by the API and never ships in this package.
 - Config and schedules: `config * --json` and `schedule * --json` return
   machine-readable status objects.
 - Storage: `storage status --json` returns local `.skills` paths and optional
@@ -487,8 +501,11 @@ bun run typecheck          # TypeScript type checking
    manifests, bin entries, docs, and SKILL.md frontmatter
 4. Run `bun test` to verify registry-wide validation passes
 
-Premium server-executed skills should add public contracts, pricing, docs, and tests
-without adding provider secrets to the OSS package.
+Server-owned (premium) skills declare the server-owned marker in their
+published contract (`skills.runtime: "hosted"` or `skills.source: "remote" |
+"private-hosted"`), ship public contracts, docs, and tests, and add no provider
+secrets and no pricing metadata to the OSS package — pricing is served by the
+API.
 
 Portable skill directories are auto-discovered from
 `~/.hasna/skills/installed/<name>/`. Skills found in either older location -

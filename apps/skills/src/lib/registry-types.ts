@@ -29,6 +29,15 @@ export interface SkillMeta {
   kind?: SkillKind;
   availability?: SkillAvailabilityMetadata;
   source?: SkillSource;
+  /**
+   * Execution is server-owned per the published-skill contract: the skill's
+   * package.json declares `skills.runtime: "hosted"` or `skills.source:
+   * "remote" | "private-hosted"` (see isHostedMetadataPackage in
+   * hosted-skill-set.ts). A server-owned skill is submitted to the configured
+   * Skills API and never falls back to local execution (see resolveRunRouting
+   * in run-routing.ts). Absent means local execution is the contract.
+   */
+  serverOwned?: boolean;
 }
 
 export interface SkillAvailabilityMetadata {

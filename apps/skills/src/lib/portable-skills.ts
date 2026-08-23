@@ -19,6 +19,7 @@ import {
 } from "./config.js";
 import { SKILLS } from "./registry-data/index.js";
 import type { SkillKind, SkillMeta } from "./registry-types.js";
+import { isHostedMetadataSkillDir } from "./hosted-skill-set.js";
 import {
   parseSkillFrontmatter,
   validateSkillDirectory,
@@ -248,6 +249,10 @@ export function listPortableSkillMetas(options: PortableSkillOptions = {}): Skil
     version: skill.version,
     ...(manifest.kind ? { kind: manifest.kind } : {}),
     source: "custom" as const,
+    // The server-owned marker is a property of the published contract
+    // (package.json skills.runtime/skills.source), so it is derived from that
+    // file rather than from skill.json.
+    ...(isHostedMetadataSkillDir(skill.path) ? { serverOwned: true } : {}),
     };
   });
 }

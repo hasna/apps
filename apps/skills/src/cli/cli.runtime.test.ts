@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync as mkdtempSyncTop, mkdirSync as mkdirSyncTop, rmSync as rmSyncTop, writeFileSync as writeFileSyncTop } from "fs";
+import { mkdtempSync as mkdtempSyncTop, mkdirSync as mkdirSyncTop, readFileSync as readFileSyncTop, rmSync as rmSyncTop, writeFileSync as writeFileSyncTop } from "fs";
 import { join as joinTop } from "path";
 import { tmpdir as tmpdirTop } from "os";
 import {
@@ -24,6 +24,23 @@ const FIXTURE_HOME = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-runtime-fixtures-"
   mkdirSyncTop(dir, { recursive: true });
   writeFileSyncTop(joinTop(dir, "package.json"), JSON.stringify({ name: "deps-fixture", version: "0.1.0", dependencies: { "csv-parse": "^5.0.0" } }));
   writeFileSyncTop(joinTop(dir, "SKILL.md"), "---\nname: deps-fixture\ndescription: Declares an npm dependency.\n---\n# Deps\n");
+
+  // Server-owned fixture: the portable/remote install flow marker
+  // (package.json skills.runtime: "hosted"), docs but no runnable source. A
+  // local run of this skill must fail (no entry point); the only correct
+  // outcome for a scheduled run is the routing fail-closed error.
+  const hosted = joinTop(FIXTURE_HOME, "custom", "hosted-schedule-fixture");
+  mkdirSyncTop(hosted, { recursive: true });
+  writeFileSyncTop(joinTop(hosted, "package.json"), JSON.stringify({ name: "hosted-schedule-fixture", version: "0.1.0", skills: { runtime: "hosted" } }));
+  writeFileSyncTop(joinTop(hosted, "SKILL.md"), "---\nname: hosted-schedule-fixture\ndescription: Server-owned fixture for schedule routing.\n---\n# Hosted\n");
+
+  // Local fixture: runnable, silent, exits 0. Proves the schedule surface still
+  // executes non-server-owned skills locally.
+  const local = joinTop(FIXTURE_HOME, "custom", "local-schedule-fixture");
+  mkdirSyncTop(joinTop(local, "src"), { recursive: true });
+  writeFileSyncTop(joinTop(local, "package.json"), JSON.stringify({ name: "local-schedule-fixture", version: "0.1.0", bin: { "local-schedule-fixture": "src/index.ts" } }));
+  writeFileSyncTop(joinTop(local, "src", "index.ts"), "");
+  writeFileSyncTop(joinTop(local, "SKILL.md"), "---\nname: local-schedule-fixture\ndescription: Runnable local fixture for schedule routing.\n---\n# Local\n");
 }
 const FIXTURE_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME };
 afterAll(() => rmSyncTop(FIXTURE_HOME, { recursive: true, force: true }));
@@ -471,8 +488,122 @@ describe("CLI runtime and misc commands", () => {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+  });
 
+  describe("schedule run routing", () => {
+    // Regression: the schedule surface must consult run routing like `skills run`
+    // and the MCP run_skill tool. A server-owned skill (marker from the
+    // portable/remote install flow) scheduled without the origin or the
+    // credential used to execute LOCALLY — contradicting the README ("A
+    // server-owned skill run without the origin or the credential fails closed
+    // ... it never silently runs locally").
+    function writeDueSchedule(cwd: string, skill: string) {
+      const dir = joinTop(cwd, ".skills");
+      mkdirSyncTop(dir, { recursive: true });
+      writeFileSyncTop(
+        joinTop(dir, "schedules.json"),
+        JSON.stringify({
+          version: 1,
+          schedules: [{
+            id: "sched-" + skill,
+            name: skill,
+            skill,
+            cron: "0 0 1 1 *",
+            args: [],
+            enabled: true,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            nextRun: "2020-01-01T00:00:00.000Z",
+          }],
+        }, null, 2),
+      );
+    }
 
+    function lastRunStatus(cwd: string): string | undefined {
+      const schedules = JSON.parse(readFileSyncTop(joinTop(cwd, ".skills", "schedules.json"), "utf8"));
+      return schedules.schedules[0].lastRunStatus;
+    }
+
+    const NO_ROUTING_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME, SKILLS_API_URL: "", SKILLS_API_KEY: "" };
+    const ORIGIN_ONLY_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME, SKILLS_API_URL: "https://skills.example.com", SKILLS_API_KEY: "" };
+    const FULL_ROUTING_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME, SKILLS_API_URL: "https://skills.example.com", SKILLS_API_KEY: "sk_schedule_fixture" };
+
+    test("server-owned skill scheduled without origin or credential fails closed and never runs locally", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(joinTop(tmpdir(), "cli-schedule-hosted-unconfigured-"));
+      try {
+        writeDueSchedule(tmpDir, "hosted-schedule-fixture");
+        const { stdout, exitCode } = await runCliInCwd(["schedule", "run", "--json"], tmpDir, NO_ROUTING_ENV);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.ran).toBe(1);
+        expect(data.results[0].status).toBe("error");
+        expect(data.results[0].error).toContain("REMOTE_REQUIRES_ORIGIN");
+        expect(data.results[0].error).toContain("server-owned");
+        expect(data.results[0].error).toContain("skills setup --api-url");
+        // The failure is the routing gate, not a local-execution attempt: the
+        // hosted fixture has no entry point, so a local run would have failed
+        // with "Entry point ... not found".
+        expect(data.results[0].error).not.toContain("Entry point");
+        expect(lastRunStatus(tmpDir)).toBe("error");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("server-owned skill scheduled with an origin but no credential fails closed naming auth login", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(joinTop(tmpdir(), "cli-schedule-hosted-no-auth-"));
+      try {
+        writeDueSchedule(tmpDir, "hosted-schedule-fixture");
+        const { stdout, exitCode } = await runCliInCwd(["schedule", "run", "--json"], tmpDir, ORIGIN_ONLY_ENV);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.results[0].status).toBe("error");
+        expect(data.results[0].error).toContain("REMOTE_REQUIRES_CREDENTIAL");
+        expect(data.results[0].error).toContain("skills auth login");
+        expect(data.results[0].error).not.toContain("Entry point");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("server-owned skill scheduled with origin and credential fails closed (no remote submission, no local run)", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(joinTop(tmpdir(), "cli-schedule-hosted-configured-"));
+      try {
+        writeDueSchedule(tmpDir, "hosted-schedule-fixture");
+        const { stdout, exitCode } = await runCliInCwd(["schedule", "run", "--json"], tmpDir, FULL_ROUTING_ENV);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.results[0].status).toBe("error");
+        expect(data.results[0].error).toContain("Scheduled hosted runs are not supported yet");
+        expect(data.results[0].error).toContain("skills run hosted-schedule-fixture");
+        expect(data.results[0].error).not.toContain("Entry point");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("non-server-owned skill still executes locally when scheduled, even with hosted routing configured", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(joinTop(tmpdir(), "cli-schedule-local-"));
+      try {
+        writeDueSchedule(tmpDir, "local-schedule-fixture");
+        const { stdout, exitCode } = await runCliInCwd(["schedule", "run", "--json"], tmpDir, FULL_ROUTING_ENV);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.ran).toBe(1);
+        expect(data.results[0].status).toBe("success");
+        expect(data.results[0].paid).toBe(false);
+        expect(lastRunStatus(tmpDir)).toBe("success");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("runtime --json", () => {

@@ -192,6 +192,24 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
 
+  // The schedule surface routes like `skills run` and the MCP run_skill tool:
+  // consult the resolver before executing, so a server-owned skill (marker from
+  // the portable/remote install flow) never silently runs locally. Without the
+  // origin or the credential it fails closed naming the missing setup; with
+  // both configured it still fails closed because scheduled hosted runs are not
+  // supported yet — the README guarantee is "never silently runs locally".
+  const { resolveConfiguredRunRouting } = await import("../../lib/run-routing.js");
+  const routing = resolveConfiguredRunRouting(skill);
+  if (routing.route === "error") {
+    throw new Error(`${routing.code}: ${routing.error}`);
+  }
+  if (routing.route === "remote") {
+    throw new Error(
+      `${skill.name} is a server-owned skill. Scheduled hosted runs are not supported yet — ` +
+      `run it with: skills run ${skill.name}`,
+    );
+  }
+
   const { runSkill } = await import("../../lib/skillinfo.js");
   const result = await runSkill(skill.name, args);
   if (result.exitCode !== 0) {
