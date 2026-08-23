@@ -61,11 +61,67 @@ function checkDir(root: string): { violations: string[]; count: number; ghosts: 
   return { violations, count: members.length, ghosts: ghostPaths };
 }
 
+/**
+ * README member-claim gate (todos T-00105, row 6fafeaa5).
+ *
+ * The root README must not advertise a CLI as a member deliverable of this
+ * repo when that package is not a member here. Measured 2026-08-24: the
+ * README claimed "the unified `hasna` CLI" while `@hasna/cli` (bin `hasna`)
+ * is retired/deprecated on npm and has no source in this tree — an audit row
+ * then filed "published but NOT deployed" against the retired package.
+ *
+ * Two patterns, both checked:
+ *   A. "the unified `X` CLI" — X must resolve to a member package
+ *      (`apps/X/package.json` named `@hasna/X`) or to a member-shipped bin.
+ *   B. a concrete backticked `@hasna/<name>` literal in the README must be a
+ *      member package, or appear on a line that marks it retired — an honest
+ *      retirement note stays, live advertising of a non-member is refused.
+ */
+const UNIFIED_CLI_RE = /the unified `([a-z0-9-]+)` CLI/g;
+const CONCRETE_NAME_RE = /`@hasna\/([a-z0-9-]+)(?:@[^`]*)?`/g;
+const RETIRED_RE = /\bretired\b/i;
+
+function checkReadmeClaims(root: string): string[] {
+  const readmePath = path.join(root, "README.md");
+  if (!fs.existsSync(readmePath)) return [];
+  const readme = fs.readFileSync(readmePath, "utf8");
+  const memberNames = new Set<string>();
+  const memberBins = new Set<string>();
+  for (const dir of memberPackages(root).members) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    memberNames.add(pkg.name as string);
+    const bin = pkg.bin;
+    if (typeof bin === "string") memberBins.add(bin);
+    else if (bin && typeof bin === "object") {
+      for (const b of Object.values(bin)) memberBins.add(b as string);
+    }
+  }
+  const violations: string[] = [];
+  for (const m of readme.matchAll(UNIFIED_CLI_RE)) {
+    const slug = m[1];
+    if (!memberNames.has(`@hasna/${slug}`) && !memberBins.has(slug)) {
+      violations.push(`README.md: advertises "the unified \`${slug}\` CLI" but no member package ships it (no @hasna/${slug} member, no member bin "${slug}")`);
+    }
+  }
+  for (const m of readme.matchAll(CONCRETE_NAME_RE)) {
+    const name = `@hasna/${m[1]}`;
+    if (memberNames.has(name)) continue;
+    const lineStart = readme.lastIndexOf("\n", m.index) + 1;
+    const lineEnd = readme.indexOf("\n", m.index);
+    const line = readme.slice(lineStart, lineEnd < 0 ? undefined : lineEnd);
+    if (RETIRED_RE.test(line)) continue;
+    violations.push(`README.md: names non-member package ${name} without marking it retired (line: "${line.trim()}")`);
+  }
+  return violations;
+}
+
 function run(root: string): number {
   const { violations, count, ghosts } = checkDir(root);
-  if (violations.length > 0) {
-    console.error(`NAME-CONFORMANCE VIOLATIONS (${violations.length}):`);
+  const readmeViolations = checkReadmeClaims(root);
+  if (violations.length > 0 || readmeViolations.length > 0) {
+    console.error(`NAME-CONFORMANCE VIOLATIONS (${violations.length + readmeViolations.length}):`);
     for (const v of violations) console.error(`  ${v}`);
+    for (const v of readmeViolations) console.error(`  ${v}`);
     return 1;
   }
   if (ghosts.length > 0) {
@@ -120,6 +176,39 @@ function selfTest(): number {
   );
   const goodRes = checkDir(goodRoot);
   check("clean tree passes (1 valid member, 0 violations, 0 ghosts)", goodRes.count === 1 && goodRes.violations.length === 0 && goodRes.ghosts.length === 0);
+
+  // README member-claim gate (todos T-00105) — two-sided controls
+  const readmeRoot = path.join(tmp, "readme");
+  fs.mkdirSync(path.join(readmeRoot, "apps", "foo"), { recursive: true });
+  fs.writeFileSync(
+    path.join(readmeRoot, "package.json"),
+    JSON.stringify({ name: "@hasna/apps", private: true, workspaces: ["apps/*"] }, null, 2),
+  );
+  fs.writeFileSync(
+    path.join(readmeRoot, "apps", "foo", "package.json"),
+    JSON.stringify({ name: "@hasna/foo" }, null, 2),
+  );
+  // positive control A: README advertises "the unified `hasna` CLI" with no cli member -> must fire
+  fs.writeFileSync(
+    path.join(readmeRoot, "README.md"),
+    "Member packages publish per-app CLIs, the unified `hasna` CLI, and SDKs.\n",
+  );
+  const staleClaim = checkReadmeClaims(readmeRoot);
+  check("README unified-CLI claim for a non-member fires", staleClaim.length === 1 && staleClaim[0].includes("no member package ships it"));
+  // positive control B: README names a concrete non-member package without retirement -> must fire
+  fs.writeFileSync(
+    path.join(readmeRoot, "README.md"),
+    "Consumers may install `@hasna/ghost` directly.\n",
+  );
+  const ghostClaim = checkReadmeClaims(readmeRoot);
+  check("README concrete non-member name without retirement fires", ghostClaim.length === 1 && ghostClaim[0].includes("@hasna/ghost"));
+  // negative control: member + explicitly retired non-member -> must stay silent
+  fs.writeFileSync(
+    path.join(readmeRoot, "README.md"),
+    "Members ship per-app CLIs and SDKs. The retired `@hasna/cli` package (deprecated on npm) is not a member; `@hasna/foo` is.\n",
+  );
+  const cleanClaims = checkReadmeClaims(readmeRoot);
+  check("README member + retired non-member stays silent", cleanClaims.length === 0);
 
   fs.rmSync(tmp, { recursive: true, force: true });
   if (failed) {

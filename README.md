@@ -1,10 +1,9 @@
 # hasna/apps
 
 Hasna's **public** OSS apps monorepo. Member packages under `apps/` publish
-public `@hasna/*` npm packages — per-app CLIs, the unified `hasna` CLI, and
-SDKs. This repo is fully public. Hasna's private scope (`@hasna-internal/*`,
-`hasna-internal` org) is never described or referenced beyond this prohibition;
-see the publish guard.
+public `@hasna/*` npm packages — per-app CLIs and SDKs. This repo is fully
+public. Hasna's private scope (`@hasna-internal/*`, `hasna-internal` org) is
+never described or referenced beyond this prohibition; see the publish guard.
 
 ## What lives where
 
@@ -28,7 +27,14 @@ Member packages live under `apps/` — one directory per public `@hasna/<name>`
 package with the four surfaces (CLI, MCP server bin, `-serve` server bin,
 `./sdk` import). Recorded exception: `apps/agency` (reconstructed from the
 published @hasna/agency@0.3.1 bundle, row 91a7b09d) ships the CLI bin only —
-the artifact never shipped the other surfaces. The LIVE member count is what
+the artifact never shipped the other surfaces.
+
+Retired umbrella: the `@hasna/cli` package (bin `hasna`, deprecated on npm)
+is retired and has no source in this repo — do not deploy or advertise it
+here. The supported surface is the per-app CLIs, and the name-conformance
+gate refuses any README claim of a unified CLI that no member package ships.
+
+The LIVE member count is what
 the census gate prints —
 `bun tooling/ci/check-names.ts` — and this README deliberately carries no
 snapshot number, because a snapshot rots while the gate's output does not.
