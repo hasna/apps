@@ -341,9 +341,17 @@ class PostgresJsonRecordStore {
   async ensureSchema(): Promise<void> {
     if (!this.schemaReady) {
       this.schemaReady = (async () => {
-        for (const sql of postgresTodosSyncSchemaSql(this.tableName, this.cursorTableName)) {
-          await this.options.client.query(sql);
-        }
+        // Transient lock timeouts on the idempotent DDL (55P03, e.g. waiting
+        // on a table lock while another transaction writes — incident 724667 /
+        // HP-00083) are retried in-request with a bounded backoff, so a single
+        // short-lived lock holder does not surface as HTTP 500 on the first
+        // operation after a memo clear. The DDL is idempotent (IF NOT EXISTS),
+        // so re-running it is safe.
+        await retryOnTransientPostgresError(async () => {
+          for (const sql of postgresTodosSyncSchemaSql(this.tableName, this.cursorTableName)) {
+            await this.options.client.query(sql);
+          }
+        });
       })().catch((error) => {
         // Same retry-on-transient-failure discipline as ensureCloudSchema
         // (server/cloud.ts, incident 724397): a DDL lock timeout (55P03) must
@@ -994,22 +1002,40 @@ class PostgresJsonRecordStore {
   private async withTaskParentIntegrityTransaction<T>(
     fn: (client: TodosPostgresQueryClient) => Promise<T>,
   ): Promise<T> {
-    if (typeof this.options.client.transaction !== "function") {
+    const transaction = this.options.client.transaction;
+    if (typeof transaction !== "function") {
       throw new Error(
         "TASK_PARENT_ATOMICITY_UNAVAILABLE: PostgreSQL parent writes and task deletion require transaction(callback)",
       );
     }
-    return this.options.client.transaction(async (client) => {
-      // Acquire in a separate statement. Under PostgreSQL READ COMMITTED the
-      // guarded statement that follows receives a fresh snapshot after any
-      // preceding lock holder commits; an advisory-lock CTE inside the guarded
-      // statement would retain the stale snapshot established before waiting.
-      await client.query(
-        "/* todos:task-parent-integrity-lock */ SELECT pg_advisory_xact_lock(hashtextextended($1 || ':task-parent-integrity', 0))",
-        [this.service],
-      );
-      return fn(client);
-    });
+    // Incident 724667 / HP-00083 (2026-08-22): PATCH /tasks/{id} (and every
+    // other guarded task write) returned HTTP 500 in bursts — measured 83
+    // failures at 17:50-17:59Z and 83+ at 19:30-19:32Z on todos.hasna.xyz,
+    // each surfacing `PostgresError: canceling statement due to lock timeout`
+    // (SQLSTATE 55P03): the `todos_app` role's 5s `lock_timeout` canceled the
+    // advisory-lock statement or the guarded write while another transaction
+    // held the task-parent-integrity advisory lock (or a task/plan row lock).
+    // The failure is transient — the fleet observed recovery within seconds —
+    // and the v1 route mapped it to HTTP 500, indistinguishable from a crash.
+    //
+    // Retry the WHOLE transaction on transient Postgres errors (55P03, 40P01,
+    // 40001), bounded with a short backoff. Each attempt re-acquires the
+    // advisory lock and re-runs the guarded statement; a canceled attempt
+    // leaves no partial state, and the version CAS inside the statement keeps
+    // the caller's optimistic-concurrency contract intact across retries.
+    return retryOnTransientPostgresError(() =>
+      transaction(async (client) => {
+        // Acquire in a separate statement. Under PostgreSQL READ COMMITTED the
+        // guarded statement that follows receives a fresh snapshot after any
+        // preceding lock holder commits; an advisory-lock CTE inside the guarded
+        // statement would retain the stale snapshot established before waiting.
+        await client.query(
+          "/* todos:task-parent-integrity-lock */ SELECT pg_advisory_xact_lock(hashtextextended($1 || ':task-parent-integrity', 0))",
+          [this.service],
+        );
+        return fn(client);
+      }),
+    );
   }
 
   async upsertTaskWithPlanMembershipGuard(
@@ -3528,6 +3554,82 @@ function compareClock(left: string, right: string): number {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+/**
+ * SQLSTATE classes that are transient by nature and safe to retry at the
+ * statement/transaction boundary (Postgres: "Transaction Retry" guidance):
+ * - 55P03 lock_not_available — a lock wait exceeded the role's lock_timeout
+ *   (measured on the `todos_app` role, incident 724667 / HP-00083);
+ * - 40P01 deadlock_detected — the server broke a deadlock by canceling us;
+ * - 40001 serialization_failure — a serializable-transaction conflict.
+ * All three cancel the current statement/transaction without committing, so
+ * re-running the whole unit is safe.
+ */
+const TRANSIENT_POSTGRES_SQLSTATES = new Set(["55P03", "40P01", "40001"]);
+
+/** Message-level markers used when the SQLSTATE surface is unavailable. */
+const TRANSIENT_POSTGRES_MESSAGE_MARKERS = [
+  "canceling statement due to lock timeout", // 55P03
+  "deadlock detected",                        // 40P01
+  "could not serialize access",               // 40001
+];
+
+/**
+ * True when a Bun SQL error is one of the transient Postgres classes. Bun
+ * wraps server errors as PostgresError with `code: "ERR_POSTGRES_SERVER_ERROR"`;
+ * the SQLSTATE is read from the same surface as isPostgresUniqueViolation
+ * (errno/sqlState/sqlstate/code on the error and its cause).
+ */
+function isTransientPostgresError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as {
+    code?: unknown;
+    errno?: unknown;
+    sqlState?: unknown;
+    sqlstate?: unknown;
+    message?: unknown;
+    cause?: unknown;
+  };
+  const states = [candidate.code, candidate.errno, candidate.sqlState, candidate.sqlstate];
+  if (typeof candidate.cause === "object" && candidate.cause !== null) {
+    const cause = candidate.cause as { code?: unknown; errno?: unknown; sqlState?: unknown; sqlstate?: unknown };
+    states.push(cause.code, cause.errno, cause.sqlState, cause.sqlstate);
+  }
+  if (states.some((state) => typeof state === "string" && TRANSIENT_POSTGRES_SQLSTATES.has(state))) {
+    return true;
+  }
+  const message = typeof candidate.message === "string"
+    ? candidate.message
+    : (candidate.cause as { message?: unknown } | null)?.message;
+  return typeof message === "string"
+    && TRANSIENT_POSTGRES_MESSAGE_MARKERS.some((marker) => message.includes(marker));
+}
+
+/**
+ * Bounded retry for transient Postgres errors. The retried unit MUST be a
+ * whole statement or transaction: a canceled attempt never commits, so no
+ * partial state exists between attempts. Deliberately small — two attempts
+ * with a 150ms backoff keep the worst case (5s lock_timeout wait + retry)
+ * inside the fleet CLI's 10s remote-request bound (cloud-router.ts), while
+ * absorbing the measured recovery pattern (holder commits within seconds).
+ */
+async function retryOnTransientPostgresError<T>(
+  fn: () => Promise<T>,
+  attempts = 2,
+  delayMs = 150,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientPostgresError(error) || attempt === attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+  throw lastError;
 }
 
 function isPostgresUniqueViolation(error: unknown): boolean {
