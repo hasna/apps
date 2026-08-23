@@ -9,10 +9,19 @@
 // Reads from the mirrored content/ tree — no network, no remote picker.
 
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 import { handleCompactEventsCli } from "./compact-events-cli.ts";
 import { assertContentMirror, resolveContentDir } from "./content.ts";
 import { fetchResource } from "./fetch.ts";
 import { harvest } from "./harvest.ts";
+
+const USAGE = `ui (@hasna/ui) — offline ui.sh
+  commands: fetch <uri...>, list [--limit n] [--cursor n] [--json], harvest [content-dir], serve [port], events, webhooks
+  flags: -h, --help (this help); -V, --version (print version)`;
+
+function printUsage(stream: NodeJS.WriteStream): void {
+  stream.write(`${USAGE}\n`);
+}
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
@@ -100,6 +109,14 @@ async function printUriList(rest: string[]): Promise<void> {
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
+  if (cmd === "-h" || cmd === "--help") {
+    printUsage(process.stdout);
+    return;
+  }
+  if (cmd === "-V" || cmd === "--version") {
+    console.log(pkg.version);
+    return;
+  }
   if (await runSharedEventCli([cmd, ...rest].filter((arg): arg is string => typeof arg === "string"))) return;
   switch (cmd) {
     case "fetch": {
@@ -126,7 +143,7 @@ async function main() {
       break;
     }
     default:
-      console.error("ui (@hasna/ui) — offline ui.sh\n  commands: fetch <uri...>, list [--limit n] [--cursor n] [--json], harvest [content-dir], serve [port], events, webhooks");
+      printUsage(process.stderr);
       process.exit(cmd ? 1 : 0);
   }
 }
