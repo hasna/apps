@@ -54,7 +54,13 @@ describe("client store resolution (two-backend env contract)", () => {
     expect(r.transport).toBe("sqlite");
     expect(r.misconfigured).toBe(true);
     expect(r.warning).toContain("HASNA_RECORDINGS_API_URL");
-    expect(() => resolveStorageClient(APP, { HASNA_RECORDINGS_API_KEY: "test-key" })).toThrow();
+    // The canonical seam (resolveStorageClient, re-exported from
+    // @hasna/contracts/client/storage) treats a key without a URL as "no
+    // server selected" and stays on the local store. The app's own resolver
+    // (resolveStoreClient, used by getStore) keeps the partial-pair
+    // fail-closed contract on top of the seam.
+    expect(resolveStorageClient(APP, { HASNA_RECORDINGS_API_KEY: "test-key" }).transport).toBe("sqlite");
+    expect(() => getStore({ HASNA_RECORDINGS_API_KEY: "test-key" })).toThrow();
   });
 
   test("getStore picks http from url+key presence", () => {
@@ -64,6 +70,28 @@ describe("client store resolution (two-backend env contract)", () => {
     });
     expect(b.mode).toBe("http");
     expect(b.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  test("url + deliberate override credential -> http via the seam call-time chain (P1-1 regression)", () => {
+    // The seam resolves the credential at call time through the deliberate
+    // tiers (override, profile, disk) even when the legacy env key is absent.
+    // The app wrapper must not pre-gate on the env key pair before the seam
+    // gets a chance to resolve. Measured against the #957 seam contract; was
+    // throwing "HASNA_RECORDINGS_API_URL is set but HASNA_RECORDINGS_API_KEY
+    // is not..." before the 0.3.9 remediation.
+    const r = getStore({
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
+      HASNA_RECORDINGS_API_KEY_OVERRIDE: "test-override-key",
+    });
+    expect(r.mode).toBe("http");
+    expect(r.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  test("url only with no resolvable credential -> still fail closed, never silently local", () => {
+    // URL without any credential anywhere (no env key, no override) must keep
+    // the fail-closed contract: throwing, not silently reading the on-box
+    // dataset. The seam's own resolver throws for this configuration.
+    expect(() => getStore({ HASNA_RECORDINGS_API_URL: "https://api.example.com" })).toThrow();
   });
 
   test("getStore picks sqlite when env unset", () => {

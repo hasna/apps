@@ -5,7 +5,7 @@
 //   • LocalStore  — on-box SQLite (src/db/*), first-class, fully functional.
 //   • ApiStore    — the server's HTTP `/v1` API with a bearer key.
 //
-// The transport is resolved from the environment by `resolveStorageClient`
+// The transport is resolved from the environment by `resolveStoreClient`
 // (src/http/client.ts): the presence of BOTH HASNA_RECORDINGS_API_URL and
 // HASNA_RECORDINGS_API_KEY routes to the ApiStore; any other environment uses
 // the LocalStore. WHO operates the server, and whether its internal storage is
@@ -26,7 +26,11 @@ import * as recordingsDb from "./db/recordings.js";
 import * as agentsDb from "./db/agents.js";
 import * as projectsDb from "./db/projects.js";
 import { saveFeedback as saveFeedbackLocal, type FeedbackInput } from "./db/feedback.js";
-import { resolveStorageClient, type StorageClient } from "./http/client.js";
+import {
+  resolveStoreClient,
+  type HasnaStorageClient,
+  type QueryParams,
+} from "./http/client.js";
 import { createHash, randomUUID } from "node:crypto";
 import { recordingCreateIdentity } from "./lib/recording-create-identity.js";
 import { withLocalStoreReaderLease } from "./lib/install-maintenance.js";
@@ -158,7 +162,27 @@ const localStore: Store = {
 
 // ── ApiStore (the server's HTTP `/v1` API + bearer key) ──────────────────────
 
-function apiStore(client: StorageClient): Store {
+// The recordings server returns resource-named list envelopes
+// (`{ recordings, count }`, `{ agents, count }`, `{ projects, count }`), not
+// the shared client's standard envelope keys, so list reads go through the
+// transport with the resource key added to the extraction order.
+async function listResource<T>(client: HasnaStorageClient, resource: string, query?: QueryParams): Promise<{ items: T[]; raw: unknown }> {
+  const raw = await client.transport.get<unknown>(`/${resource}`, query ? { query } : undefined);
+  return { items: extractEnvelopeItems<T>(raw, resource), raw };
+}
+
+function extractEnvelopeItems<T>(raw: unknown, resource: string): T[] {
+  if (Array.isArray(raw)) return raw as T[];
+  if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    for (const key of [resource, "items", "data", "results", "rows", "records"]) {
+      if (Array.isArray(obj[key])) return obj[key] as T[];
+    }
+  }
+  return [];
+}
+
+function apiStore(client: HasnaStorageClient): Store {
   return {
     mode: "http",
     baseUrl: client.baseUrl,
@@ -175,7 +199,7 @@ function apiStore(client: StorageClient): Store {
       const res = await client.create<unknown>(
         "recordings",
         identity.input,
-        identity.idempotencyKey,
+        { idempotencyKey: identity.idempotencyKey },
       );
       return unwrap<Recording>(res, "recording");
     },
@@ -184,7 +208,7 @@ function apiStore(client: StorageClient): Store {
       return res ? unwrap<Recording>(res, "recording") : null;
     },
     async listRecordings(filter) {
-      const { items } = await client.list<Recording>("recordings", listQuery(filter));
+      const { items } = await listResource<Recording>(client, "recordings", listQuery(filter));
       return items;
     },
     async countRecordings(filter) {
@@ -196,7 +220,7 @@ function apiStore(client: StorageClient): Store {
 
       while (pageRequests < maxPageRequests) {
         pageRequests += 1;
-        const { items, raw } = await client.list<Recording>("recordings", {
+        const { items, raw } = await listResource<Recording>(client, "recordings", {
           ...listQuery(filter),
           limit: pageLimit,
           offset,
@@ -223,7 +247,7 @@ function apiStore(client: StorageClient): Store {
       throw new Error(`Recordings API exceeded ${maxPageRequests} pages while counting legacy results`);
     },
     async searchRecordings(query, filter) {
-      const { items } = await client.list<Recording>("recordings", listQuery({ ...(filter ?? {}), search: query }));
+      const { items } = await listResource<Recording>(client, "recordings", listQuery({ ...(filter ?? {}), search: query }));
       return items;
     },
     async deleteRecording(id) {
@@ -254,7 +278,7 @@ function apiStore(client: StorageClient): Store {
       return res ? unwrap<Agent>(res, "agent") : null;
     },
     async listAgents() {
-      const { items } = await client.list<Agent>("agents");
+      const { items } = await listResource<Agent>(client, "agents");
       return items;
     },
     async heartbeatAgent(idOrName) {
@@ -297,7 +321,7 @@ function apiStore(client: StorageClient): Store {
       return res ? unwrap<Project>(res, "project") : null;
     },
     async listProjects() {
-      const { items } = await client.list<Project>("projects");
+      const { items } = await listResource<Project>(client, "projects");
       return items;
     },
     async saveFeedback(input) {
@@ -359,7 +383,7 @@ let cached: Store | null = null;
  */
 export function getStore(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): Store {
   if (env === process.env && cached) return cached;
-  const resolved = resolveStorageClient(APP, env);
+  const resolved = resolveStoreClient(APP, env);
   const store = resolved.transport === "http" ? apiStore(resolved.client) : localStore;
   if (env === process.env) cached = store;
   return store;

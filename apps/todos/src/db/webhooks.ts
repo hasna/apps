@@ -247,8 +247,19 @@ async function deliverWebhook(
       const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
       headers["X-Webhook-Signature"] = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
     }
-    const resp = await fetch(wh.url, { method: "POST", headers, body });
+    // redirect:"manual" is load-bearing SSRF hardening (todos row 3f81aefd):
+    // the URL and resolved-IP checks above inspect only the configured URL, and
+    // Bun's default redirect:"follow" would transparently re-issue this POST —
+    // full payload and X-Webhook-Signature HMAC header — at an unvalidated
+    // 3xx target. The authenticated egress path pins the same option
+    // (cloud-router.ts getTodosCloudClient, "authenticated redirects are
+    // disabled to prevent credential leakage").
+    const resp = await fetch(wh.url, { method: "POST", headers, body, redirect: "manual" });
     const respText = await resp.text().catch(() => "");
+    if (resp.status >= 300 && resp.status < 400) {
+      logDelivery(db, wh.id, event, body, resp.status, "Blocked: webhook URL returned a 3xx redirect; redirects are never followed (SSRF prevention)", attempt);
+      return;
+    }
     logDelivery(db, wh.id, event, body, resp.status, respText.slice(0, 1000), attempt);
 
     if (resp.status >= 400 && attempt < MAX_RETRY_ATTEMPTS) {

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/browser",
-  "version": "0.5.28",
+  "version": "0.5.29",
   "description": "General-purpose browser agent toolkit — Playwright, Chrome DevTools Protocol, Lightpanda with auto engine selection. CLI + MCP + REST + SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -65,7 +65,7 @@
     "@hasna/conversations": "0.7.5",
     "@hasna/events": "0.1.3",
     "@hasna/mementos": "0.14.86",
-    "@hasna/secrets": "0.3.4",
+    "@hasna/secrets": "0.3.5",
     "@hasna/sessions": "0.12.19",
     "@hasna/skills": "0.1.41",
     "@hasna/todos": "0.15.46",

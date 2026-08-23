@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.23
+
+### Patch Changes
+
+- Updated dependencies [50473b8]
+  - @hasna/projects@0.1.145
+
 ## 0.3.22
 
 ### Patch Changes

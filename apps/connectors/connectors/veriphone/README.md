@@ -21,7 +21,7 @@ bun install
 Set your API key via environment variable or CLI profile:
 
 ```bash
-export VERIPHONE_API_KEY=your-api-key-here
+export VERIPHONE_API_KEY=<your-api-key>
 # or
 bun run dev config set-key your-api-key-here
 ```
@@ -35,7 +35,7 @@ Get an API key at [veriphone.io](https://veriphone.io).
 bun run dev verify "+4915123577723"
 
 # With default country hint
-bun run dev verify "015123577723" --default-country DE
+bun run dev verify "0151-23577723" --default-country DE
 
 # Use POST method
 bun run dev verify "+14155552671" --method post

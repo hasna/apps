@@ -226,12 +226,18 @@ describe("HookRegistry", () => {
 describe("WebhookHooks DB", () => {
   beforeEach(() => freshDb());
 
-  test("create and retrieve webhook", () => {
-    const wh = createWebhookHook({
+  // Hostname validation resolves DNS; these fixtures must stay deterministic
+  // and network-free, so a stub resolver returning a public address is used.
+  const stubLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+  const createHook = (input: Parameters<typeof createWebhookHook>[0]) =>
+    createWebhookHook(input, testDb, { lookup: stubLookup });
+
+  test("create and retrieve webhook", async () => {
+    const wh = await createHook({
       type: "PostMemorySave",
       handlerUrl: "https://example.com/hook",
       priority: 50,
-    }, testDb);
+    });
 
     expect(wh.id).toBeDefined();
     expect(wh.type).toBe("PostMemorySave");
@@ -245,10 +251,10 @@ describe("WebhookHooks DB", () => {
     expect(fetched!.id).toBe(wh.id);
   });
 
-  test("list webhooks with type filter", () => {
-    createWebhookHook({ type: "PostMemorySave", handlerUrl: "https://a.com/1" }, testDb);
-    createWebhookHook({ type: "PostMemorySave", handlerUrl: "https://a.com/2" }, testDb);
-    createWebhookHook({ type: "OnSessionStart", handlerUrl: "https://b.com/1" }, testDb);
+  test("list webhooks with type filter", async () => {
+    await createHook({ type: "PostMemorySave", handlerUrl: "https://a.com/1" });
+    await createHook({ type: "PostMemorySave", handlerUrl: "https://a.com/2" });
+    await createHook({ type: "OnSessionStart", handlerUrl: "https://b.com/1" });
 
     const memoryHooks = listWebhookHooks({ type: "PostMemorySave" }, testDb);
     expect(memoryHooks).toHaveLength(2);
@@ -257,9 +263,9 @@ describe("WebhookHooks DB", () => {
     expect(sessionHooks).toHaveLength(1);
   });
 
-  test("list webhooks with enabled filter", () => {
-    const wh1 = createWebhookHook({ type: "PostMemorySave", handlerUrl: "https://a.com" }, testDb);
-    const wh2 = createWebhookHook({ type: "PostMemorySave", handlerUrl: "https://b.com" }, testDb);
+  test("list webhooks with enabled filter", async () => {
+    const wh1 = await createHook({ type: "PostMemorySave", handlerUrl: "https://a.com" });
+    const wh2 = await createHook({ type: "PostMemorySave", handlerUrl: "https://b.com" });
     updateWebhookHook(wh2.id, { enabled: false }, testDb);
 
     const enabled = listWebhookHooks({ enabled: true }, testDb);
@@ -270,8 +276,8 @@ describe("WebhookHooks DB", () => {
     expect(disabled.some((w) => w.id === wh2.id)).toBe(true);
   });
 
-  test("update webhook fields", () => {
-    const wh = createWebhookHook({ type: "OnSessionEnd", handlerUrl: "https://x.com" }, testDb);
+  test("update webhook fields", async () => {
+    const wh = await createHook({ type: "OnSessionEnd", handlerUrl: "https://x.com" });
 
     const updated = updateWebhookHook(wh.id, { enabled: false, priority: 10, description: "test hook" }, testDb);
     expect(updated).not.toBeNull();
@@ -280,8 +286,8 @@ describe("WebhookHooks DB", () => {
     expect(updated!.description).toBe("test hook");
   });
 
-  test("delete webhook", () => {
-    const wh = createWebhookHook({ type: "PostEntityCreate", handlerUrl: "https://z.com" }, testDb);
+  test("delete webhook", async () => {
+    const wh = await createHook({ type: "PostEntityCreate", handlerUrl: "https://z.com" });
     expect(getWebhookHook(wh.id, testDb)).not.toBeNull();
 
     const deleted = deleteWebhookHook(wh.id, testDb);
@@ -294,8 +300,8 @@ describe("WebhookHooks DB", () => {
     expect(deleted).toBe(false);
   });
 
-  test("recordWebhookInvocation increments counters", () => {
-    const wh = createWebhookHook({ type: "PostRelationCreate", handlerUrl: "https://r.com" }, testDb);
+  test("recordWebhookInvocation increments counters", async () => {
+    const wh = await createHook({ type: "PostRelationCreate", handlerUrl: "https://r.com" });
 
     recordWebhookInvocation(wh.id, true, testDb);
     recordWebhookInvocation(wh.id, true, testDb);

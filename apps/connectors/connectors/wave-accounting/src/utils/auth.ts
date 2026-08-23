@@ -6,7 +6,7 @@ const DEFAULT_AUTH_URL = 'https://api.waveapps.com/oauth2/authorize/';
 const DEFAULT_TOKEN_URL = 'https://api.waveapps.com/oauth2/token/';
 
 // Wave OAuth scopes for accounting/invoicing operations
-// https://developer.waveapps.com/hc/en-us/articles/360032818132-OAuth-Scopes
+// (see developer.waveapps.com OAuth scopes documentation)
 const DEFAULT_SCOPES = [
   'business:read',
   'invoice:read',

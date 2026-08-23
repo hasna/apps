@@ -184,7 +184,7 @@ async function prepareMcpRuntime(): Promise<void> {
   }
 
   await ensureRestServerRunning();
-  loadWebhooksFromDb();
+  await loadWebhooksFromDb();
 }
 
 async function main(): Promise<void> {
