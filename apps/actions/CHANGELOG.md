@@ -1,16 +1,11 @@
 # Changelog
 
-## 0.2.2
-
-### Patch Changes
-
-- a10f2316: fix(actions): make the JSON store write lock ownership-safe — a stale lock is only taken over when its holder process is no longer alive, takeover moves only the owner file so the canonical lock path never empties while a live writer continues, and release only removes a lock this process still owns (release-review P1 remediation)
-
 ## 0.2.1
 
 ### Patch Changes
 
 - ebf862c: fix(actions): serialize JsonActionsStore read-modify-write cycles with an inter-process lock so concurrent writers never lose records
+- @hasna/contracts@0.11.2
 
 All notable changes to `@hasna/actions` are documented here.
 
