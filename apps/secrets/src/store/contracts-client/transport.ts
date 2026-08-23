@@ -7,8 +7,9 @@
 //
 // This module makes the client actually talk to the cloud. Given an app name and
 // the environment it decides whether reads AND writes should be routed to the
-// app's cloud HTTP API (`<API_URL>/v1`, default `https://<app>.hasna.xyz/v1`)
-// with the API key, or fall through to the local store.
+// app's cloud HTTP API (`<API_URL>/v1`, default
+// `https://<app>.<HASNA_FLEET_API_DOMAIN>/v1`) with the API key, or fall
+// through to the local store.
 //
 // THE CLIENT-FLIP CONTRACT (env vars). For app `<NAME>` = envToken(name):
 //
@@ -18,15 +19,17 @@
 //     <NAME>_STORAGE_MODE                                             (alias)
 //     <NAME>_MODE                                                     (alias)
 //   API base URL (optional; `/v1` is appended automatically):
-//     HASNA_<NAME>_API_URL = https://<app>.hasna.xyz
+//     HASNA_<NAME>_API_URL = https://<app>.<your-api-domain>
 //     <NAME>_API_URL                                                  (alias)
 //   API key (bearer / x-api-key):
 //     HASNA_<NAME>_API_KEY = hasna_<app>_...
 //     <NAME>_API_KEY                                                  (alias)
 //
 // DECISION: transport is `cloud-http` IFF the resolved mode is `cloud` AND an API
-// key is present. The base URL defaults to `https://<app>.hasna.xyz` when a key is
-// present but no URL is set. If mode is `cloud` but the API key is MISSING, we do
+// key is present. The base URL defaults to the fleet domain template (see
+// `fleetApiDomain`) when a key is present but no URL is set — this published
+// package ships no real hostname, so absent `HASNA_FLEET_API_DOMAIN` that default
+// is a non-resolving placeholder. If mode is `cloud` but the API key is MISSING, we do
 // NOT silently serve wrong local data — we return `local` with a loud `warning`
 // and `misconfigured: true` so the caller can hard-fail instead of drifting.
 //
@@ -42,9 +45,25 @@
 import { normalizeStorageMode, envToken, type Env, type StorageMode } from "./mode.js";
 import { guardedFetch } from "../../test-isolation.js";
 
+const FLEET_API_DOMAIN_ENV_KEY = "HASNA_FLEET_API_DOMAIN";
+const NEUTRAL_FLEET_API_DOMAIN = "your-deployment.example";
+
+/**
+ * Fleet API domain suffix. This published package never ships a real internal
+ * hostname: override with `HASNA_FLEET_API_DOMAIN` (REQUIRED in a real
+ * deployment) or set an explicit `HASNA_<NAME>_API_URL` per app. Absent both,
+ * this falls back to a neutral placeholder in the reserved `.example` TLD that
+ * intentionally does not resolve to any service, so a client that never
+ * configured a host fails on DNS instead of reaching an unintended one.
+ */
+export function fleetApiDomain(env: Env = process.env as Env): string {
+  const configured = env[FLEET_API_DOMAIN_ENV_KEY]?.trim();
+  return configured ? configured.toLowerCase() : NEUTRAL_FLEET_API_DOMAIN;
+}
+
 /** Default cloud host template. `<app>` is the app slug. */
-export function defaultCloudBaseUrl(name: string): string {
-  return `https://${name}.hasna.xyz`;
+export function defaultCloudBaseUrl(name: string, env: Env = process.env as Env): string {
+  return `https://${name}.${fleetApiDomain(env)}`;
 }
 
 export interface ClientTransportEnvKeys {
@@ -197,7 +216,7 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
     };
   }
 
-  const rawUrl = urlHit?.value ?? defaultCloudBaseUrl(name);
+  const rawUrl = urlHit?.value ?? defaultCloudBaseUrl(name, env);
   const apiUrlSource = urlHit ? urlHit.key : "default";
   let baseUrl: string;
   try {

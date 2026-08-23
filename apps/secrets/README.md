@@ -42,7 +42,7 @@ shared AWS profile files. `--env` names the child variable and its account-scope
 secret selector; the value is never printed or written into the local vault:
 
 ```bash
-secrets exec --provider your-source-profile --account 123456789012 \
+secrets exec --provider your-source-profile --account your-aws-account-id \
   --env EXAMPLE_NPM_TOKEN -- my-tool sync
 ```
 
@@ -514,7 +514,7 @@ own AWS profile and secret paths — none are hardcoded:
 ```bash
 AWS_PROFILE=your-aws-profile secrets aws sync --dry-run
 secrets aws push example/app/prod/s3 --profile your-aws-profile --dry-run
-secrets aws sync --credential-mode role --role-arn arn:aws:iam::123456789012:role/example --source-profile your-aws-profile --dry-run
+secrets aws sync --credential-mode role --role-arn your-iam-role-arn --source-profile your-aws-profile --dry-run
 ```
 
 Credential source precedence is command flags, `HASNA_SECRETS_AWS_*`

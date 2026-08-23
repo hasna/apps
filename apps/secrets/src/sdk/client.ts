@@ -63,7 +63,7 @@ export interface VaultItemInput { "id"?: string; "kind": string; "title": string
 export interface UserInput { "id": string; "name": string; "type"?: "human" | "agent" }
 
 export interface SecretsClientOptions {
-  /** Base URL origin, e.g. process.env.APP_API_URL (`https://secrets.hasna.xyz`). */
+  /** Base URL origin, e.g. process.env.APP_API_URL (`https://secrets.your-deployment.example`). */
   baseUrl: string;
   /** API key, e.g. process.env.APP_API_KEY. Sent as Bearer + x-api-key. */
   apiKey?: string;

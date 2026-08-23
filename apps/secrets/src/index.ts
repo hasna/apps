@@ -247,7 +247,7 @@ MCP usage
 
 Self-hosted (api mode)
   Route all reads/writes to the cloud API instead of the local vault:
-    export HASNA_SECRETS_API_URL=https://secrets.hasna.xyz
+    export HASNA_SECRETS_API_URL=https://secrets.your-deployment.example
     export HASNA_SECRETS_API_KEY=<bearer key from your vault>
 
   Unset both vars to fall back to the local encrypted vault (fully reversible).
