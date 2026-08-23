@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+### Patch Changes
+
+- 8b70821: tai-mcp answers --version/-V/--help before the readline transport (todos row 7e5f8f3d). Previously `tai-mcp --version`/`--help` fell into the readline loop and printed nothing (silent-empty family).
+
 All notable changes to `@hasna/tai` are documented in this file.
 
 ## 0.1.6 - 2026-08-01
@@ -49,7 +55,7 @@ byte-identical — and a session cookie is bearer authentication under a differe
 so anything logging an HTTP request through this function emitted live sessions.
 
 - **`Cookie:` and `Set-Cookie:` values are now redacted**, whatever the cookie is named.
-  The rule keys on the header's *role* — a `;`-delimited list of `name=value` pairs — rather
+  The rule keys on the header's _role_ — a `;`-delimited list of `name=value` pairs — rather
   than on a list of cookie names, so `session`, `sid`, `PHPSESSID`, `JSESSIONID`,
   `connect.sid`, `laravel_session`, `__Host-*` and `__Secure-*` are covered because none of
   them is special. Measured against 0.1.4: 9 of 10 cookie shapes leaked.
@@ -75,7 +81,7 @@ Security release. `redactSensitiveText` printed its `[REDACTED]` marker while le
 credential intact beside it, so output that looked redacted still carried the secret.
 
 - Closes the misleading-marker class for authorization-style fields: the marker no longer
-  replaces only the auth *scheme* (`Basic`, `Digest`, `MAC`, `Negotiate`) while the parameter
+  replaces only the auth _scheme_ (`Basic`, `Digest`, `MAC`, `Negotiate`) while the parameter
   carrying the credential survives. Measured against the published bundle, the leaking shapes
   were `authorization=Basic <v>`, `Authorization: Digest ... response=<v>`,
   `HTTP_AUTHORIZATION=MAC mac=<v>` and `proxy_authorization: MAC mac=<v>`.

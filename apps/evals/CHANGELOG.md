@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5
+
+### Patch Changes
+
+- 8b70821: evals-serve answers --version/-V/--help before any bind (todos row 7e5f8f3d). Previously `evals-serve --version`/`--help` fell through to startEvalsServer() and bound :19440 with no output.
+
 ## 0.2.4
 
 ### Patch Changes
