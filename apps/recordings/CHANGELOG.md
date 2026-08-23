@@ -4,6 +4,7 @@
 
 ### Patch Changes
 
+- 15b6181c: Migrate the HTTP storage client to the @hasna/contracts client seam: resolveStorageClient is now imported from @hasna/contracts/client/storage instead of the vendored copy, and the app's own resolver (resolveStoreClient) keeps the partial-pair fail-closed contract on top of the seam's call-time credential chain (deliberate override, profile, disk, then the deprecated env fallback). The manifest kitVersion is aligned to the pinned @hasna/contracts 0.13.4.
 - Updated dependencies [554a5b9]
   - @hasna/contracts@0.13.4
 

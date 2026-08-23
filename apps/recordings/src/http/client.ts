@@ -414,6 +414,31 @@ export type ResolveStoreClientResult =
 export function resolveStoreClient(name: string, env: Env = process.env): ResolveStoreClientResult {
   const resolution = resolveTransport(name, env);
   if (resolution.misconfigured) {
+    // A partial env pair is not necessarily a hard failure: the shared seam
+    // resolves the credential at CALL TIME through the full chain (deliberate
+    // override, profile, disk, then the deprecated env fallback). A URL that
+    // the seam can back with a resolvable credential is a valid http client;
+    // only a URL with NO resolvable credential anywhere is a true
+    // misconfiguration and fails closed (never silently drift onto the wrong
+    // on-box dataset). Consult the seam before throwing.
+    const wired = createClientTransport(name, env);
+    if (wired.transport === "http") {
+      return {
+        transport: "http",
+        client: createHasnaStorageClient(name, wired.client),
+        resolution: {
+          transport: "http",
+          requested: "http",
+          modeSource: resolution.modeSource === "default" ? "auto:api-url+seam-credential" : resolution.modeSource,
+          baseUrl: wired.resolution.baseUrl,
+          apiKeyPresent: true,
+          misconfigured: false,
+          warning: null,
+        },
+      };
+    }
+    // The seam could not route either (no URL, or a URL with no resolvable
+    // credential): keep the app's fail-closed contract.
     throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the /v1 API.`);
   }
   if (resolution.transport === "sqlite" || !resolution.baseUrl) {
