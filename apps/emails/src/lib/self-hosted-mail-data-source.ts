@@ -1865,6 +1865,10 @@ export class SelfHostedMailDataSource implements MailDataSource {
     const counts = await this.mailboxCounts({ source: opts?.source });
     return {
       counts,
+      // Server-side aggregate (/v1/messages/counts) for the whole store; scoped
+      // walks throw on exhaustion rather than returning a partial tally — so
+      // these counts are always the exact totals.
+      countsComplete: true,
       folders: MAILBOXES.map((folder) => ({
         id: folder,
         folder,
@@ -1885,6 +1889,8 @@ export class SelfHostedMailDataSource implements MailDataSource {
       kind: "all",
       badges: ["self_hosted"],
       counts,
+      // Server-side aggregate — always the exact totals (see listMailboxStatus).
+      countsComplete: true,
       total: receivedTotal,
       unread: counts.unread,
       latestReceivedAt,

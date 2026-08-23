@@ -625,14 +625,16 @@ function unscopedMailboxCounts(db: Database): MailboxCounts {
 }
 
 /** Folder counts without materializing mailbox rows. */
-export function mailboxCounts(db?: Database): MailboxCounts;
-export function mailboxCounts(opts?: { source?: MailboxSource }, db?: Database): MailboxCounts;
-export function mailboxCounts(optsOrDb?: Database | { source?: MailboxSource }, maybeDb?: Database): MailboxCounts {
+export function mailboxCounts(db?: Database): MailboxCounts & { countsComplete: boolean };
+export function mailboxCounts(opts?: { source?: MailboxSource }, db?: Database): MailboxCounts & { countsComplete: boolean };
+export function mailboxCounts(optsOrDb?: Database | { source?: MailboxSource }, maybeDb?: Database): MailboxCounts & { countsComplete: boolean } {
   const isDb = typeof (optsOrDb as { query?: unknown } | undefined)?.query === "function";
   const d = (isDb ? optsOrDb as Database : maybeDb) || getDatabase();
   const opts = isDb ? undefined : optsOrDb as { source?: MailboxSource } | undefined;
   const source = mailboxSourceFromRef(opts?.source);
-  if (!hasSourceFilter(source)) return unscopedMailboxCounts(d);
+  // SQL COUNT(*) aggregates are exact by construction: the local arm is never
+  // truncated, so its counts always carry `countsComplete: true`.
+  if (!hasSourceFilter(source)) return { ...unscopedMailboxCounts(d), countsComplete: true };
 
   const recipientSrc = recipientSourceClause(source);
   const senderSrc = senderSourceClause(source);
@@ -670,6 +672,7 @@ export function mailboxCounts(optsOrDb?: Database | { source?: MailboxSource }, 
     archived: countValue(row?.archived),
     spam: countValue(row?.spam),
     trash: countValue(row?.trash),
+    countsComplete: true,
   };
 }
 
@@ -683,6 +686,8 @@ export interface MailboxFolderStatus {
 export interface MailboxStatusSummary {
   counts: MailboxCounts;
   folders: MailboxFolderStatus[];
+  /** Local SQL COUNT(*) aggregates are exact by construction — always true here. */
+  countsComplete: boolean;
 }
 
 export interface MailboxStatusOptions {
@@ -694,6 +699,7 @@ export function listMailboxStatus(opts?: MailboxStatusOptions, db?: Database): M
   const counts = mailboxCounts({ source: opts?.source }, d);
   return {
     counts,
+    countsComplete: counts.countsComplete,
     folders: MAILBOXES.map((folder) => ({
       id: folder,
       folder,
@@ -721,6 +727,8 @@ export interface MailboxSourceSummary {
   region?: string;
   badges: string[];
   counts: MailboxCounts;
+  /** Local SQL COUNT(*) aggregates are exact by construction — always true here. */
+  countsComplete: boolean;
   total: number;
   unread: number;
   latestReceivedAt: string | null;
@@ -775,11 +783,12 @@ function latestReceivedAtForSource(source: MailboxSource | undefined, db: Databa
   return row?.latest ?? null;
 }
 
-function sourceSummary(input: Omit<MailboxSourceSummary, "counts" | "total" | "unread" | "latestReceivedAt">, source: MailboxSource | undefined, db: Database): MailboxSourceSummary {
+function sourceSummary(input: Omit<MailboxSourceSummary, "counts" | "countsComplete" | "total" | "unread" | "latestReceivedAt">, source: MailboxSource | undefined, db: Database): MailboxSourceSummary {
   const counts = mailboxCounts({ source }, db);
   return {
     ...input,
     counts,
+    countsComplete: counts.countsComplete,
     total: sourceMessageCount(source, db),
     unread: counts.unread,
     latestReceivedAt: latestReceivedAtForSource(source, db),
