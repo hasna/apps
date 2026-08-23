@@ -257,7 +257,7 @@
     },
     "apps/calendar": {
       "name": "@hasna/calendar",
-      "version": "0.3.6",
+      "version": "0.3.7",
       "bin": {
         "calendar": "dist/cli/index.js",
         "calendar-mcp": "dist/mcp/bin.js",
