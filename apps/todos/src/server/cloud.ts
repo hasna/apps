@@ -92,6 +92,26 @@ let cachedProjectRegistrationAuthority: TodosProjectRegistrationAuthority | null
 let cachedTaskManifestAuthority: TodosTaskManifestAuthority | null = null;
 let cachedTaskSubtreeTransferAuthority: TodosTaskSubtreeTransferAuthority | null = null;
 let schemaEnsured: Promise<void> | null = null;
+let lastSchemaAttemptAtMs = 0;
+let lastSchemaFailure: unknown = null;
+
+/**
+ * Minimum interval between schema-retry attempts after a failed run (P2 from
+ * PR #931 review, todos O15-00479). A SUSTAINED schema failure must not
+ * re-run the whole idempotent DDL sequence on every /v1 request — under lock
+ * contention that saturates the 6-connection pool. Calls inside the window
+ * rethrow the recorded failure; the first call after the interval makes a
+ * fresh attempt. Overridable for tests/ops via
+ * HASNA_TODOS_SCHEMA_RETRY_MIN_MS (ms).
+ */
+const DEFAULT_SCHEMA_RETRY_MIN_MS = 10_000;
+
+function schemaRetryMinIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.HASNA_TODOS_SCHEMA_RETRY_MIN_MS;
+  if (!raw) return DEFAULT_SCHEMA_RETRY_MIN_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_SCHEMA_RETRY_MIN_MS;
+}
 
 function getCloudTenantId(): string {
   return process.env.HASNA_TODOS_TENANT_ID ?? "default";
@@ -220,6 +240,18 @@ export function getCloudVerifier(): ApiKeyVerifier {
  */
 export async function ensureCloudSchema(): Promise<void> {
   if (schemaEnsured) return schemaEnsured;
+  if (
+    lastSchemaFailure !== null
+    && Date.now() - lastSchemaAttemptAtMs < schemaRetryMinIntervalMs()
+  ) {
+    // Cooldown (P2 from PR #931 review): a sustained schema failure must not
+    // re-run the idempotent DDL sequence on every request — under lock
+    // contention that saturates the pool. Rethrow the recorded failure without
+    // a fresh attempt; the memo stays cleared, so the first call after the
+    // min-interval makes a fresh attempt.
+    throw lastSchemaFailure;
+  }
+  lastSchemaAttemptAtMs = Date.now();
   schemaEnsured = (async () => {
     const client = getClient();
     for (const sql of postgresTodosSyncSchemaSql()) {
@@ -247,8 +279,11 @@ export async function ensureCloudSchema(): Promise<void> {
     // handler try/catch, surfacing Bun's bare `Something went wrong!` 500).
     // With two ECS tasks one poisoned process read as a ~50% "intermittent"
     // outage. Clear the memo so the next request retries the idempotent
-    // (IF NOT EXISTS / OR REPLACE) schema DDL.
+    // (IF NOT EXISTS / OR REPLACE) schema DDL. The failure is recorded so the
+    // cooldown can rethrow it without re-running the DDL (P2 from PR #931
+    // review, todos O15-00479).
     schemaEnsured = null;
+    lastSchemaFailure = error;
     throw error;
   });
   return schemaEnsured;
@@ -347,4 +382,6 @@ export async function closeCloud(): Promise<void> {
   cachedTaskManifestAuthority = null;
   cachedTaskSubtreeTransferAuthority = null;
   schemaEnsured = null;
+  lastSchemaAttemptAtMs = 0;
+  lastSchemaFailure = null;
 }
