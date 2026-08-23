@@ -3,6 +3,7 @@ import { getStoreWithResolution, LocalStore } from "./store/index.js";
 import type { Store } from "./store/types.js";
 import { clientTransportEnvKeys, type ClientTransportResolution } from "./store/contracts-client/transport.js";
 import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
+import { VERSION } from "./version.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
 import {
@@ -26,6 +27,10 @@ const VAULT_ITEM_KINDS: VaultItemKind[] = [
 function usage(): void {
   console.log(`
 secrets — local secrets vault for AI agents
+
+Options:
+  --version               print the package version and exit
+  --help                  show this help and exit
 
 Commands:
   docs                        show a practical usage guide
@@ -432,6 +437,14 @@ async function runSharedEventCli(args: string[]): Promise<boolean> {
 
 if (await runSharedEventCli(args)) process.exit(0);
 const [command, ...rest] = args;
+
+// Binds-before-help class (todos row afd9e358): --version must answer
+// BEFORE any store resolution or command dispatch. It previously fell through
+// to command dispatch and died with rc=1 "Unknown command: --version".
+if (command === "--version" || command === "-V") {
+  console.log(VERSION);
+  process.exit(0);
+}
 
 if (!command || command === "--help" || command === "-h") {
   usage();
