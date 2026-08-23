@@ -1,0 +1,207 @@
+# Blacksmith Testbox — the build/test gate for the codewith member app.
+# Gate-lane home for the codewith member testbox workflow (owner directive 2026-08-22: "use hasna org").
+# The Blacksmith CLI interactive lane (blacksmith testbox warmup/run) fetches this file at a
+# ref from this repo; the run then syncs the hasna-internal/internal-apps content being gated.
+# Dispatch-only + paths-scoped to apps/codewith/**, which does not exist in this repo — inert here.
+#
+# Port of hasna/codewith's .github/workflows/blacksmith-testbox.yml (source
+# reference 0ea9e63c0, fix(skills): preserve Testbox tool parity) into this
+# monorepo, scoped to apps/codewith/**. Codex-rs Rust work MUST run on the
+# repository's Blacksmith Testbox workflow, never via local cargo builds.
+#
+# DISPATCH-ONLY. The workflow exposes `workflow_dispatch` only; the coordinator
+# gates every run (`gh workflow run blacksmith-testbox.yml --repo
+# hasna-internal/internal-apps`). The `paths` filter below scopes the lane to
+# the codewith member app and documents the blast radius — GitHub does not
+# apply path filters to manual dispatch, but if this lane is ever wired to
+# CI events the filter keeps it from firing on other members.
+#
+# Paths are adapted for the monorepo layout: the codewith content moved to
+# apps/codewith/, so codex-rs is apps/codewith/codex-rs and the justfile that
+# `just test-fast` resolves sits at apps/codewith/justfile. Everything else —
+# job name (light-checks-testbox), inputs (build_command, warm_target), and the
+# pinned useblacksmith/begin-testbox + useblacksmith/run-testbox actions — is
+# byte-faithful to the source.
+
+name: Blacksmith Testbox
+
+on:
+  workflow_dispatch:
+    paths:
+      - "apps/codewith/**"
+    inputs:
+      testbox_id:
+        description: Blacksmith Testbox session ID
+        required: false
+        default: ""
+        type: string
+      warm_target:
+        description: Pre-build the workspace so testbox shells start with a warm target dir
+        required: false
+        default: true
+        type: boolean
+      build_command:
+        description: >-
+          Build/test command to run on the Blacksmith box (empty = just warm). Runs from the
+          repo root in a login shell, verbatim -- $?, ${PIPESTATUS[0]}, $(...) and $((...))
+          are evaluated there, not by the workflow. A non-zero exit fails this run.
+          For codex-rs, enter the member path explicitly: `cd apps/codewith/codex-rs && ...`.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  light-checks-testbox:
+    name: codex-rs Testbox
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      # Keep this list in sync with ~/.codewith-testbox-env below: any build-affecting
+      # variable set here but missing there changes the cargo fingerprint, which would
+      # make a testbox shell rebuild the workspace from scratch and defeat the warm-up.
+      # (Notably: do NOT set RUSTFLAGS here — repo CI does not, and an unpersisted
+      # RUSTFLAGS invalidates the warmed target dir.)
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_TERM_COLOR: always
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - uses: useblacksmith/checkout@41cdeedae8edb2e684ba22896a5fd2a3cb85db6b # pin: v1
+
+      - uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67 # pin: v2
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+
+      # codex-bwrap's build.rs needs libcap.pc; the Blacksmith image does not ship it,
+      # so without this every codex-rs build fails in ~1 min at the linker/pkg-config step.
+      # Mirrors what rust-ci-full.yml installs for the same reason.
+      - name: Install system build deps
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config libcap-dev bubblewrap
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: just,cargo-nextest
+
+      # Keep the Testbox shell aligned with the repo's Bazel-backed CI jobs.
+      # `just argument-comment-lint` resolves repo-pinned tooling through DotSlash.
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      # Testbox shells are fresh logins: they do NOT inherit this job's env or PATH.
+      # Persist the Rust toolchain + build env so `blacksmith testbox run` works out of the box.
+      - name: Persist toolchain for Testbox shells
+        run: |
+          CARGO_BIN="$(dirname "$(command -v cargo)")"
+          cat > "$HOME/.codewith-testbox-env" <<EOF
+          export PATH="$CARGO_BIN:\$PATH"
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/apps/codewith/codex-rs/target"
+          export CARGO_NET_GIT_FETCH_WITH_CLI="true"
+          export CARGO_TERM_COLOR="always"
+          export RUST_MIN_STACK="8388608"
+          EOF
+          for rc in "$HOME/.bashrc" "$HOME/.profile"; do
+            grep -q 'codewith-testbox-env' "$rc" 2>/dev/null || \
+              printf '\n. "$HOME/.codewith-testbox-env"\n' >> "$rc"
+          done
+          sudo ln -sf "$CARGO_BIN/cargo" /usr/local/bin/cargo
+          sudo ln -sf "$CARGO_BIN/rustc" /usr/local/bin/rustc
+          sudo ln -sf "$(command -v just)" /usr/local/bin/just
+          sudo ln -sf "$(command -v cargo-nextest)" /usr/local/bin/cargo-nextest
+          sudo ln -sf "$(command -v dotslash)" /usr/local/bin/dotslash
+
+      # These run from `apps/codewith/codex-rs` on purpose: rustup resolves an override
+      # from the rust-toolchain.toml in the *current directory*, not from --manifest-path.
+      # Warming from the member root would build with the bootstrap toolchain instead of
+      # the pinned one, so every testbox command (which runs under apps/codewith/codex-rs)
+      # would recompile.
+      - name: Prime toolchain
+        working-directory: apps/codewith/codex-rs
+        run: |
+          . "$HOME/.codewith-testbox-env"
+          # Go through the rustup proxies first: they materialise the toolchain named by
+          # apps/codewith/codex-rs/rust-toolchain.toml (rustup >= 1.28 no longer installs
+          # it from `rustup show`). This is the same path rust-ci.yml relies on.
+          rustc --version
+          cargo --version
+          rustup show active-toolchain
+          just --version
+          cargo nextest --version
+          dotslash --version
+
+      # Fetch deps (and optionally pre-build) so an interactive testbox is immediately usable
+      # instead of spending the first 10+ minutes cold-compiling the workspace.
+      - name: Warm cargo registry
+        working-directory: apps/codewith/codex-rs
+        run: |
+          . "$HOME/.codewith-testbox-env"
+          cargo fetch --locked
+
+      - name: Warm target dir
+        if: ${{ inputs.warm_target }}
+        working-directory: apps/codewith/codex-rs
+        run: |
+          . "$HOME/.codewith-testbox-env"
+          cargo check --workspace --all-targets
+
+      # This step is a build GATE: if the operator's command fails, the run MUST be red.
+      #
+      # The command is handed to the shell through `env:` and referenced as "$BUILD_COMMAND".
+      # It is never interpolated into the script text. Two separate reasons, both load-bearing:
+      #
+      #  1. Correctness. `bash -lc "${{ inputs.build_command }}"` pastes the operator's text
+      #     inside a double-quoted string in THIS script, so this shell expands $?,
+      #     ${PIPESTATUS[0]}, $(...) and $((...)) before the inner shell ever sees them.
+      #     A submitted `...; rc1=$?; ...; rc2=${PIPESTATUS[0]}; exit $(( rc1 + rc2 ))`
+      #     degraded to `...; rc1=0; ...; rc2=0; exit 0`, so a clippy error[E0004] was
+      #     reported as a green required check (run 30190166288). Through `env:` the value
+      #     is data, not script text, and the inner shell parses it exactly as typed.
+      #  2. Security. Interpolating an input into a `run:` body is a script-injection sink
+      #     (the input becomes part of the program). workflow_dispatch needs write access so
+      #     the blast radius is limited, but the env-var form removes the sink outright --
+      #     the same one-line change fixes both problems. Every other workflow in this repo
+      #     already passes inputs via `env:`; this step was the only exception.
+      #
+      # The inner `bash -lc` is deliberate: the operator gets a plain login shell (toolchain
+      # env, no -e/-o pipefail), so idioms like `cmd; rc=$?` collect statuses as written
+      # instead of aborting at the first failure. Its exit status is captured and re-raised
+      # explicitly below, which is what makes the gate honest.
+      - name: Run build command on Blacksmith box
+        if: ${{ inputs.build_command != '' }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build_command }}
+        run: |
+          set -euo pipefail
+          . "$HOME/.codewith-testbox-env"
+          echo "::group::build command"
+          printf '%s\n' "$BUILD_COMMAND"
+          echo "::endgroup::"
+          # `|| status=$?` keeps the failure ours to report and is safe under `set -e`.
+          # Output is intentionally NOT wrapped in a log group: a collapsed group hides the
+          # compiler errors that explain why the gate went red.
+          status=0
+          bash -lc "$BUILD_COMMAND" || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=Testbox build command failed::exit status ${status}"
+            exit "$status"
+          fi
+          echo "build command exited 0"
+
+      # Must be the LAST step: hands the box over and holds it open for
+      # `blacksmith testbox run --id <id> "<cmd>"`.
+      - uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc # pin: v2
