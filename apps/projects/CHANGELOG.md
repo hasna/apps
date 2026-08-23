@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [4ee7aed]
+  - @hasna/loops@0.6.0
+
 ## 0.1.145
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- 4ee7aed: Add `loops-serve provision-runner-key`: a repeatable, idempotent path that provisions one machine runner principal plus its machine-kind API key (tenant + principal + active membership roles `worker,service` + scope `loops:runner`, 365-day ttl), so fleet runner provisioning never again depends on hand-minting keys at deploy time. Runner routes strictly require `machine`-kind tokens (`403 wrong_token_kind` otherwise), and the new verb binds the key through the same tables `open_loops_authenticate_key` reads. It mints at most one token per runner — an existing active machine key is confirmed and reported (`already_provisioned`), never doubled — and the token is delivered only to an explicit `--token-out` file (mode 600) or to stdout via the explicit `--print-token` flag; stdout otherwise carries exactly `{"runnerId","kid","expiresAt"}` and the token is never logged. SQL shape and validation are covered by hermetic tests; a live Postgres suite proves the minted key authenticates through `open_loops_authenticate_key` as `machine` kind under the enforced tenant schema, and that a rerun is a true no-op.
+
 ## 0.5.11
 
 ### Patch Changes
