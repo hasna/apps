@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { ensureOperatorDataDir } from "./data-dir.js";
 import { getStore } from "./store/index.js";
 import { isTestVaultRedirectContext, testVaultDir } from "./test-isolation.js";
+import { VERSION } from "./version.js";
 
 export const SERVE_PORT = 27462;
 const ALLOWED_EXTENSION_ORIGIN = process.env.HASNA_SECRETS_EXTENSION_ORIGIN?.trim() || "";
@@ -154,7 +155,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
 
       // Health — no auth
       if (url.pathname === "/health") {
-        return json({ ok: true, version: "1.0.0" }, 200, cors);
+        return json({ ok: true, version: VERSION }, 200, cors);
       }
 
       // All other endpoints require auth

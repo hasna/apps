@@ -8,6 +8,7 @@ import {
   scanWorkspaceExposures,
 } from "./scanner.js";
 import { getStore } from "./store/index.js";
+import { VERSION } from "./version.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
@@ -15,7 +16,7 @@ const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secur
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "secrets",
-    version: "0.1.0",
+    version: VERSION,
   });
 
   // Every DATA tool routes through the resolved Store (LocalStore or ApiStore).
