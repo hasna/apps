@@ -92,7 +92,11 @@ export function loadConfig(configPath?: string): RecordingsConfig {
   if (process.env.OPENAI_API_KEY && !fileProvidedOpenAIKey) {
     config.openai_api_key = process.env.OPENAI_API_KEY;
   }
-  if (process.env.RECORDINGS_API_KEY) {
+  // RECORDINGS_API_KEY is the app's OpenAI transcription-key override (a
+  // third-party OpenAI key), not a Hasna service-client credential — the
+  // waiver marker below records why the @hasna/contracts client chain does
+  // not apply to this read.
+  if (process.env.RECORDINGS_API_KEY) { // hasna-credential-seam-waiver: RECORDINGS_API_KEY is the OpenAI transcription-key override for config.openai_api_key; a third-party OpenAI key, not a Hasna service-client credential, so the @hasna/contracts client chain does not apply to it.
     config.openai_api_key = process.env.RECORDINGS_API_KEY;
   }
   if (process.env.RECORDINGS_ENHANCEMENT_KEY) {

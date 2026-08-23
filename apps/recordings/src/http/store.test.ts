@@ -54,7 +54,13 @@ describe("client store resolution (two-backend env contract)", () => {
     expect(r.transport).toBe("sqlite");
     expect(r.misconfigured).toBe(true);
     expect(r.warning).toContain("HASNA_RECORDINGS_API_URL");
-    expect(() => resolveStorageClient(APP, { HASNA_RECORDINGS_API_KEY: "test-key" })).toThrow();
+    // The canonical seam (resolveStorageClient, re-exported from
+    // @hasna/contracts/client/storage) treats a key without a URL as "no
+    // server selected" and stays on the local store. The app's own resolver
+    // (resolveStoreClient, used by getStore) keeps the partial-pair
+    // fail-closed contract on top of the seam.
+    expect(resolveStorageClient(APP, { HASNA_RECORDINGS_API_KEY: "test-key" }).transport).toBe("sqlite");
+    expect(() => getStore({ HASNA_RECORDINGS_API_KEY: "test-key" })).toThrow();
   });
 
   test("getStore picks http from url+key presence", () => {
