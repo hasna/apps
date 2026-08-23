@@ -11,7 +11,6 @@ export const COLLECTION_MAX_PREVIEW_BYTES = 1_024;
 export const COLLECTION_DEFAULT_TIMEOUT_MS = 3_000;
 export const COLLECTION_MAX_TIMEOUT_MS = 5_000;
 export const COLLECTION_PREVIEW_SCAN_CHARS = 4_096;
-export const RESTRICTED_CHANNEL_PREVIEW = "[REDACTED:RESTRICTED_CHANNEL_BODY]";
 
 function strictPositiveInteger(name: string, value: unknown, fallback: number): number {
   if (value === undefined || value === null) return fallback;
@@ -82,16 +81,6 @@ function nullableSafeString(value: unknown, maxBytes = 256): string | null {
   return value === undefined || value === null || value === "" ? null : boundedSafeString(value, maxBytes);
 }
 
-function isRestrictedName(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized.includes("incident") || normalized.includes("security");
-}
-
-export function isRestrictedCoordinationMessage(row: Record<string, unknown>): boolean {
-  return isRestrictedName(row.channel) || isRestrictedName(row.to_agent) || isRestrictedName(row.session_id);
-}
-
 function attachmentCount(value: unknown): number {
   if (Array.isArray(value)) return value.length;
   if (typeof value === "string" && value) {
@@ -106,9 +95,8 @@ function attachmentCount(value: unknown): number {
 }
 
 export function buildMessagePreview(row: Record<string, unknown>, previewBytes = COLLECTION_DEFAULT_PREVIEW_BYTES): MessagePreview {
-  const restricted = isRestrictedCoordinationMessage(row);
-  const source = restricted ? "" : String(row.preview_source ?? "").replace(/\s+/g, " ").trim();
-  const redactedSource = restricted ? RESTRICTED_CHANNEL_PREVIEW : redactSensitiveText(source);
+  const source = String(row.preview_source ?? "").replace(/\s+/g, " ").trim();
+  const redactedSource = redactSensitiveText(source);
   const preview = truncateUtf8(redactedSource, resolveCollectionPreviewBytes(previewBytes));
   const contentBytes = Math.max(0, Number(row.content_bytes ?? Buffer.byteLength(source)) || 0);
   const attachments = attachmentCount(row.attachment_count ?? row.attachments);
@@ -136,8 +124,8 @@ export function buildMessagePreview(row: Record<string, unknown>, previewBytes =
     preview: preview.text,
     preview_bytes: Buffer.byteLength(preview.text),
     content_bytes: contentBytes,
-    truncated: restricted || preview.truncated || contentBytes > Buffer.byteLength(source),
-    redacted: restricted || redactedSource !== source,
+    truncated: preview.truncated || contentBytes > Buffer.byteLength(source),
+    redacted: redactedSource !== source,
   };
   if (row.mention_id != null) message.mention_id = Number(row.mention_id);
   if (row.uuid != null) message.uuid = boundedSafeString(row.uuid, 128);
@@ -232,13 +220,6 @@ export function packMessagePreviewPage(
   return result;
 }
 
-export function restrictedCollectionSqlPredicate(alias = ""): string {
-  const c = alias ? `${alias}.` : "";
-  return `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
-}
-
-export const RESTRICTED_COLLECTION_SQL_PREDICATE = restrictedCollectionSqlPredicate();
-
 /**
  * The bounded `preview_source` column every DERIVED read must select instead of
  * `content`.
@@ -246,11 +227,12 @@ export const RESTRICTED_COLLECTION_SQL_PREDICATE = restrictedCollectionSqlPredic
  * Summary and topic extraction are derived reads: they never show a body, so it
  * is easy to assume they need not bound one. They do. A weighted topic list is
  * the body sampled — a term only appears because it appeared in a message — so
- * running the extractor over a restricted row leaks that row, and running it
- * over an unbounded body lets content nobody would ever page to steer the
- * output. Restricted rows yield the empty string here and contribute nothing.
+ * running the extractor over an unbounded body lets content nobody would ever
+ * page to steer the output. The bound is the same preview scan window the
+ * collection surfaces use; content-safety redaction runs downstream in
+ * `buildMessagePreview` / `redactSensitiveText` where the text is emitted.
  */
 export function boundedPreviewSourceSql(alias = ""): string {
   const c = alias ? `${alias}.` : "";
-  return `CASE WHEN ${restrictedCollectionSqlPredicate(alias)} THEN '' ELSE substr(${c}content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source`;
+  return `substr(${c}content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) AS preview_source`;
 }

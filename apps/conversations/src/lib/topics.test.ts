@@ -109,12 +109,12 @@ describe("getTrendingTopics", () => {
 });
 
 /**
- * G6 — topic derivation is bounded and restricted-safe.
+ * G6 — topic derivation is bounded and content-safety redacted.
  *
- * `SELECT content FROM messages` pulled whole bodies into the extractor. A
- * weighted term list built from a body the caller cannot read is a slow read of
- * that body, so restricted rows must not contribute at all, and no row may
- * contribute past the shared preview scan window.
+ * `SELECT content FROM messages` pulled whole bodies into the extractor. No row
+ * may contribute past the shared preview scan window, and the corpus passes
+ * through `redactSensitiveText` before the extractor sees it. Incident/security
+ * rows are read on the same terms as any other row.
  */
 describe("G6 topic derivation consumes bounded restricted-safe previews", () => {
   function insertLegacy(content: string, opts: { channel?: string | null; session_id: string }): void {
@@ -133,20 +133,20 @@ describe("G6 topic derivation consumes bounded restricted-safe previews", () => 
     expect(topics.map((topic) => topic.topic)).not.toContain(beyond);
   });
 
-  test("restricted channels contribute no topics at all", () => {
-    const secret = "restrictedtopicterm";
+  test("incident and security channels contribute topics like any other channel", () => {
+    const term = "restrictedtopicterm";
     createChannel("security-bridge", "tester");
-    insertLegacy(`body ${secret} ${secret} ${secret}`, { channel: "security-bridge", session_id: "channel:security-bridge" });
+    insertLegacy(`body ${term} ${term} ${term}`, { channel: "security-bridge", session_id: "channel:security-bridge" });
 
-    expect(getChannelTopics("security-bridge").map((t) => t.topic)).not.toContain(secret);
-    expect(getTrendingTopics().map((t) => t.topic)).not.toContain(secret);
+    expect(getChannelTopics("security-bridge").map((t) => t.topic)).toContain(term);
+    expect(getTrendingTopics().map((t) => t.topic)).toContain(term);
   });
 
-  test("restricted sessions contribute no topics at all", () => {
-    const secret = "restrictedsessionterm";
-    insertLegacy(`body ${secret} ${secret}`, { channel: null, session_id: "incident-review-session" });
+  test("incident-named sessions contribute topics like any other session", () => {
+    const term = "restrictedsessionterm";
+    insertLegacy(`body ${term} ${term}`, { channel: null, session_id: "incident-review-session" });
 
-    expect(getSessionTopics("incident-review-session").map((t) => t.topic)).not.toContain(secret);
+    expect(getSessionTopics("incident-review-session").map((t) => t.topic)).toContain(term);
   });
 
   // The instrument can pass: ordinary rows still produce ordinary topics.

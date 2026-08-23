@@ -62,7 +62,7 @@ describe("E-00051 safe public read boundaries", () => {
     expect(source).not.toMatch(/\bmarkSessionRead\b/);
   });
 
-  test("LocalStore broad collection methods never return restricted bodies or raw fields", async () => {
+  test("LocalStore broad collection methods never return raw metadata or attachment fields", async () => {
     const channel = "security-incidents";
     const rawBody = "needle restricted root cause body";
     createChannel(channel, "creator");
@@ -101,10 +101,11 @@ describe("E-00051 safe public read boundaries", () => {
     };
     const serialized = JSON.stringify(results);
 
-    expect(serialized).not.toContain(rawBody);
+    // Incident/security bodies flow through the bounded preview like any other
+    // channel; the raw metadata and attachment fields never do.
+    expect(serialized).toContain(rawBody);
     expect(serialized).not.toContain("raw-metadata-must-not-escape");
     expect(serialized).not.toContain("/private/evidence.txt");
-    expect(serialized).toContain("[REDACTED:RESTRICTED_CHANNEL_BODY]");
 
     // Exact-id disclosure remains the one explicit full-body path.
     expect(getMessageById(root.id)?.content).toBe(rawBody);
@@ -132,9 +133,9 @@ describe("E-00051 safe public read boundaries", () => {
     expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(64 * 1024);
     expect(artifact.byte_length).toBe(Buffer.byteLength(payload, "utf8"));
     expect(artifact.download_path).toBeNull();
-    expect(payload).not.toContain(rawBody);
+    // The incident/security body flows through as the bounded preview field.
+    expect(payload).toContain(rawBody);
     expect(payload).not.toContain("/private/private.txt");
-    expect(payload).toContain("[REDACTED:RESTRICTED_CHANNEL_BODY]");
     const exported = JSON.parse(payload) as Array<Record<string, unknown>>;
     expect(exported[0].content).toBeUndefined();
     expect(exported[0].metadata).toBeUndefined();

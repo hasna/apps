@@ -5,7 +5,6 @@ import {
   COLLECTION_MAX_LIMIT,
   COLLECTION_MAX_PREVIEW_BYTES,
   COLLECTION_PREVIEW_SCAN_CHARS,
-  RESTRICTED_CHANNEL_PREVIEW,
   resolveCollectionLimit,
   resolveCollectionMaxBytes,
   resolveCollectionOffset,
@@ -32,7 +31,6 @@ import { resolveSelfSenderId } from "./sender-identity.js";
 export const DEFAULT_PREVIEW_CHARS = 140;
 
 export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
-  if (content === RESTRICTED_CHANNEL_PREVIEW) return content;
   const markers: string[] = [];
   const protectedContent = redactSensitiveText(content).replace(/\[REDACTED:[A-Z_]+\]/g, (marker) => {
     const placeholder = `REDACTIONMARKER${markers.length}TOKEN`;
@@ -51,7 +49,6 @@ export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_
 
 export function buildByteBoundedMessagePreview(content: string, maxChars: number, maxBytes: number): string {
   const preview = buildMessagePreview(content, maxChars);
-  if (preview === RESTRICTED_CHANNEL_PREVIEW) return preview;
   return truncateUtf8(preview, resolveCollectionPreviewBytes(maxBytes)).text;
 }
 
@@ -223,7 +220,6 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
   const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
   const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
 
-  const restricted = `(lower(COALESCE(m.channel, '')) LIKE '%incident%' OR lower(COALESCE(m.channel, '')) LIKE '%security%' OR lower(COALESCE(m.to_agent, '')) LIKE '%incident%' OR lower(COALESCE(m.to_agent, '')) LIKE '%security%' OR lower(COALESCE(m.session_id, '')) LIKE '%incident%' OR lower(COALESCE(m.session_id, '')) LIKE '%security%')`;
   const rows = db.prepare(`
     SELECT
       m.id AS message_id,
@@ -231,7 +227,7 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
       m.from_agent,
       m.created_at,
       m.priority,
-      CASE WHEN ${restricted} THEN '${RESTRICTED_CHANNEL_PREVIEW}' ELSE substr(m.content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+      substr(m.content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) AS preview_source,
       CASE WHEN json_valid(m.attachments) THEN json_array_length(m.attachments) ELSE 0 END AS attachment_count,
       s.preview_chars,
       snr.message_id AS read_message_id

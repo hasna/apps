@@ -92,7 +92,6 @@ import type {
 } from "../types.js";
 import {
   COLLECTION_PREVIEW_SCAN_CHARS,
-  RESTRICTED_CHANNEL_PREVIEW,
   buildMessagePreview as buildCollectionMessagePreview,
   packMessagePreviewPage,
 } from "../lib/message-previews.js";
@@ -248,14 +247,9 @@ function strictIsoDateQuery(searchParams: Pick<URLSearchParams, "get">, name: st
   return resolveIso8601Date(searchParams.get(name), name);
 }
 
-function pgRestrictedCollectionPredicate(alias = ""): string {
-  const c = alias ? `${alias}.` : "";
-  return `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
-}
-
 function pgBoundedPreviewSourceSql(alias = ""): string {
   const c = alias ? `${alias}.` : "";
-  return `CASE WHEN ${pgRestrictedCollectionPredicate(alias)} THEN '' ELSE left(${c}content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source`;
+  return `left(${c}content, ${COLLECTION_PREVIEW_SCAN_CHARS}) AS preview_source`;
 }
 
 function messagePreviewProjectionPg(alias = ""): string {
@@ -3843,9 +3837,7 @@ async function handleChannelNotifications(
       priority: string; preview_source: string; attachment_count: number; preview_chars: number; read_message_id: number | null;
     }>(
       `SELECT m.id AS message_id, m.channel, m.from_agent, m.created_at, m.priority,
-              CASE WHEN lower(COALESCE(m.channel, '')) LIKE '%incident%'
-                     OR lower(COALESCE(m.channel, '')) LIKE '%security%'
-                   THEN '${RESTRICTED_CHANNEL_PREVIEW}' ELSE left(m.content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+              left(m.content, ${COLLECTION_PREVIEW_SCAN_CHARS}) AS preview_source,
               CASE WHEN m.attachments IS NULL OR m.attachments = '' THEN 0
                    ELSE jsonb_array_length(m.attachments::jsonb) END AS attachment_count,
               s.preview_chars, snr.message_id AS read_message_id

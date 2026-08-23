@@ -333,21 +333,20 @@ describe("readChannelNotifications is preview-only", () => {
     expect(JSON.stringify(notification)).not.toContain("end-of-body");
   });
 
-  test("previews for restricted scopes are suppressed entirely", () => {
+  test("previews for incident and security scopes carry the real bounded preview with content-safety redaction", () => {
     createChannel("incident-response", "creator");
     subscribeToChannelNotifications("incident-response", "agent-a");
-    const secret = "containment-plan-alpha";
-    sendMessage({
-      from: "alice",
-      to: "incident-response",
-      channel: "incident-response",
-      session_id: "channel:incident-response",
-      content: `restricted ${secret}`,
-    });
+    const term = "containment-plan-alpha";
+    const syntheticPat = `${"ghp" + "_" + "z".repeat(24)}`;
+    insertLegacyChannelMessage("incident-response", `restricted ${term} ${syntheticPat}`);
 
     const [notification] = readChannelNotifications({ agent: "agent-a" });
-    expect(notification.preview).toBe("[REDACTED:RESTRICTED_CHANNEL_BODY]");
-    expect(JSON.stringify(notification)).not.toContain(secret);
+    expect(notification.preview).toContain("restricted");
+    // Notification previews normalize hyphens out of the text by design.
+    expect(notification.preview).toContain(term.replaceAll("-", " "));
+    expect(notification.preview).toContain("[REDACTED:PAT]");
+    expect(JSON.stringify(notification)).toContain(term.replaceAll("-", " "));
+    expect(JSON.stringify(notification)).not.toContain(syntheticPat);
   });
 
   test("the preview redacts on the same terms the detail route does", () => {

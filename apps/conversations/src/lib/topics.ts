@@ -1,18 +1,18 @@
 import { getDb } from "./db.js";
 import { extractTopics, type TopicWeight } from "./topic-extract.js";
-import { boundedPreviewSourceSql, restrictedCollectionSqlPredicate } from "./message-previews.js";
+import { boundedPreviewSourceSql } from "./message-previews.js";
 import { redactSensitiveText } from "./content-safety.js";
 import { resolveAnalyticsLimit } from "./strict-query-values.js";
 
 /**
- * Build the extractor's corpus from bounded, redacted, unrestricted rows only.
+ * Build the extractor's corpus from bounded, redacted rows.
  *
  * These queries used to select whole `content`. A topic list is the body
- * sampled — every term in it appeared in some message — so extracting over a
- * restricted incident/security row publishes that row one weighted word at a
- * time, and extracting over an unbounded body lets text far past the shared
- * preview scan window decide what the channel is "about". The SQL drops
- * restricted rows outright; `preview_source` bounds what remains.
+ * sampled — every term in it appeared in some message — and extracting over an
+ * unbounded body lets text far past the shared preview scan window decide what
+ * the channel is "about". `preview_source` bounds what remains and
+ * `redactSensitiveText` strips credential-shaped values before the extractor
+ * sees them.
  */
 function corpusFrom(rows: Array<{ preview_source: string | null }>): string {
   return rows.map((row) => redactSensitiveText(row.preview_source ?? "")).join("\n");
@@ -35,7 +35,7 @@ export function getChannelTopics(channelName: string, opts?: { limit?: number; s
 
   const rows = db.prepare(
     `SELECT ${boundedPreviewSourceSql()} FROM messages
-     WHERE channel = ? ${sinceClause} AND NOT ${restrictedCollectionSqlPredicate()}
+     WHERE channel = ? ${sinceClause}
      ORDER BY created_at DESC LIMIT ${limit}`
   ).all(...params) as { preview_source: string }[];
 
@@ -51,7 +51,7 @@ export function getSessionTopics(sessionId: string, opts?: { limit?: number }): 
 
   const rows = db.prepare(
     `SELECT ${boundedPreviewSourceSql()} FROM messages
-     WHERE session_id = ? AND NOT ${restrictedCollectionSqlPredicate()}
+     WHERE session_id = ?
      ORDER BY created_at DESC LIMIT ${limit}`
   ).all(sessionId) as { preview_source: string }[];
 
@@ -74,7 +74,7 @@ export function getTrendingTopics(opts?: { project_id?: string; hours?: number; 
   }
 
   const rows = db.prepare(
-    `SELECT ${boundedPreviewSourceSql()} FROM messages ${where} AND NOT ${restrictedCollectionSqlPredicate()}
+    `SELECT ${boundedPreviewSourceSql()} FROM messages ${where}
      ORDER BY created_at DESC LIMIT 500`
   ).all(...params) as { preview_source: string }[];
 
