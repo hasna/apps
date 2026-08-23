@@ -51,8 +51,8 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
  * (a vault-minted token can have a shape no prefix list anticipates), and the
  * prefix rule would mask a regression in that leg.
  */
-const CALLER_TOKEN = "vault-caller-marker-0123456789abcdef";
-const COMMAND_TOKEN = "vault-minted-marker-fedcba9876543210";
+const CALLER_MARKER = "vault-caller-marker-0123456789abcdef";
+const COMMAND_MARKER = "vault-minted-marker-fedcba9876543210";
 
 interface Fixture {
   dbPath: string;
@@ -72,9 +72,12 @@ interface Fixture {
  *   GH_SHIM_CREATE_FAIL=1   `repo create` fails, echoing its own GH_TOKEN to
  *                           stderr — the hostile case redaction must survive
  *   GH_SHIM_AUTH_FAIL=1     every subcommand fails like an unauthenticated gh
+ *   GH_SHIM_CLONE_DO_NOTHING=1  `repo clone` exits 0 without creating anything
  *
- * `repo clone` produces a real git repository at the destination so the
- * registration leg has something true to index.
+ * `repo clone` produces a real git checkout at the destination via a real
+ * `git clone` from a local bare origin (SHIM_ORIGIN), so the registration
+ * leg has something true to index and the shim never masks the caller's own
+ * directory handling.
  */
 function seed(config: object = {}): Fixture {
   tempDir = mkdtempSync(join(tmpdir(), "repos-lifecycle-"));
@@ -110,13 +113,16 @@ case "$1 $2" in
     exit 0
     ;;
   "repo clone")
+    if [ "\${GH_SHIM_CLONE_DO_NOTHING:-0}" = "1" ]; then
+      exit 0
+    fi
     dest="$4"
-    mkdir -p "$dest"
-    git -C "$dest" init -q -b main
-    echo "clone" > "$dest/README.md"
-    git -C "$dest" add README.md
-    git -C "$dest" -c user.name=t -c user.email=t@t commit -q -m init
-    git -C "$dest" remote add origin "https://github.com/$3.git"
+    # Faithful gh repo clone emulation: a real git clone from a local bare
+    # origin. Like real gh this creates the destination AND its parents, so
+    # the shim never masks the caller's own directory handling; the
+    # do-nothing mode above covers the exits-0-without-a-checkout class.
+    git init --bare -q "\$SHIM_ORIGIN" 2>/dev/null || true
+    git clone -q "\$SHIM_ORIGIN" "$dest" 2>/dev/null
     exit 0
     ;;
   "repo archive"|"repo unarchive")
@@ -175,11 +181,12 @@ function runCli(fixture: Fixture, args: string[], extraEnv: Record<string, strin
       HASNA_REPOS_DB_PATH: fixture.dbPath,
       HASNA_REPOS_CONFIG_PATH: fixture.configPath,
       GH_SHIM_LOG_DIR: fixture.logDir,
+      SHIM_ORIGIN: join(tempDir, "origin.git"),
       // The canary rides next to the planted token: if the child environment
       // recording could not see variables, the canary assertions would fail.
       REPOS_TEST_CANARY: "canary-visible",
-      GH_TOKEN: CALLER_TOKEN,
-      GITHUB_TOKEN: CALLER_TOKEN,
+      GH_TOKEN: CALLER_MARKER,
+      GITHUB_TOKEN: CALLER_MARKER,
       ...extraEnv,
     },
     stdout: "pipe",
@@ -238,7 +245,7 @@ describe("repos create", () => {
       // Positive control: the recording sees the child environment at all.
       expect(env).toContain("REPOS_TEST_CANARY=canary-visible");
       // The boundary: the caller's credential names are gone, value and name.
-      expect(env).not.toContain(CALLER_TOKEN);
+      expect(env).not.toContain(CALLER_MARKER);
       expect(env).not.toMatch(/^GH_TOKEN=/m);
       expect(env).not.toMatch(/^GITHUB_TOKEN=/m);
       expect(env).not.toMatch(/^GH_ENTERPRISE_TOKEN=/m);
@@ -286,19 +293,19 @@ describe("repos create", () => {
 
   test("a configured credential command supplies the child token — the same probe finds it", () => {
     const fixture = seed();
-    const credPath = writeCredentialCommand(fixture, `echo "${COMMAND_TOKEN}"`);
+    const credPath = writeCredentialCommand(fixture, `echo "${COMMAND_MARKER}"`);
     writeFileSync(fixture.configPath, JSON.stringify({ github: { credentialCommand: [credPath] } }));
     const result = runCli(fixture, ["create", "hasna/scratch-r5", "--json"]);
     expect(result.code).toBe(0);
     const envs = ghChildEnvs(fixture);
     expect(envs.length).toBeGreaterThan(0);
     for (const env of envs) {
-      expect(env).toMatch(new RegExp(`^GH_TOKEN=${COMMAND_TOKEN}$`, "m"));
-      expect(env).not.toContain(CALLER_TOKEN);
+      expect(env).toMatch(new RegExp(`^GH_TOKEN=${COMMAND_MARKER}$`, "m"));
+      expect(env).not.toContain(CALLER_MARKER);
     }
     // The token the CLI resolved for its children never reaches the caller.
-    expect(result.stdout).not.toContain(COMMAND_TOKEN);
-    expect(result.stderr).not.toContain(COMMAND_TOKEN);
+    expect(result.stdout).not.toContain(COMMAND_MARKER);
+    expect(result.stderr).not.toContain(COMMAND_MARKER);
   });
 
   test("fails closed when the credential command fails: typed error, gh never spawned", () => {
@@ -330,16 +337,16 @@ describe("repos create", () => {
 
   test("redacts the resolved token from hostile gh stderr — the shim log proves it was there", () => {
     const fixture = seed();
-    const credPath = writeCredentialCommand(fixture, `echo "${COMMAND_TOKEN}"`);
+    const credPath = writeCredentialCommand(fixture, `echo "${COMMAND_MARKER}"`);
     writeFileSync(fixture.configPath, JSON.stringify({ github: { credentialCommand: [credPath] } }));
     const result = runCli(fixture, ["create", "hasna/scratch-r5", "--json"], { GH_SHIM_CREATE_FAIL: "1" });
     expect(result.code).not.toBe(0);
     // Positive control: the token really was in the child's hands.
     const envs = ghChildEnvs(fixture);
-    expect(envs.some((env) => env.includes(COMMAND_TOKEN))).toBe(true);
+    expect(envs.some((env) => env.includes(COMMAND_MARKER))).toBe(true);
     // The hostile stderr echoed it; the CLI's own output must not.
-    expect(result.stdout).not.toContain(COMMAND_TOKEN);
-    expect(result.stderr).not.toContain(COMMAND_TOKEN);
+    expect(result.stdout).not.toContain(COMMAND_MARKER);
+    expect(result.stderr).not.toContain(COMMAND_MARKER);
   });
 
   test("refuses an existing repository without creating", () => {
@@ -423,6 +430,41 @@ describe("repos clone", () => {
     expect(row?.name).toBe("scratch-r5");
   });
 
+  test("first-use clone lands a real checkout and registers it (release-review P1)", () => {
+    // Pins the release-review outcome on a true first use: the org segment
+    // does not exist before the verb runs, the shim clones with real git
+    // exactly like `gh repo clone` (no shim-side directory creation of its
+    // own to mask anything), and the verb must land a real checkout and
+    // register it. Measured on git 2.43: `git clone` itself creates missing
+    // parents, so this pins the landing; the phantom-registration failure
+    // class (clone tool exits 0 without a checkout) is covered by the
+    // do-nothing shim test below.
+    const fixture = seed();
+    expect(existsSync(join(fixture.clonesRoot, "hasna"))).toBe(false);
+    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--json"]);
+    expect(result.code).toBe(0);
+    const payload = parseCliJson(result.stdout);
+    expect(payload.ok).toBe(true);
+    expect(payload.clone.path).toBe(join(fixture.clonesRoot, "hasna", "scratch-r5"));
+    expect(payload.clone.registered).toBe(true);
+    // The registration is real, not a phantom row: the checkout is on disk.
+    expect(existsSync(join(fixture.clonesRoot, "hasna", "scratch-r5", ".git"))).toBe(true);
+  });
+
+  test("reports failure, never a phantom registration, when gh exits 0 without a checkout (release-review P1)", () => {
+    // scanRepoPaths upserts whatever path it is handed, so a `gh repo clone`
+    // that exits 0 without creating the checkout would otherwise bless a
+    // registry row for a directory that does not exist as "registered". The
+    // verb must fail closed and leave no row behind.
+    const fixture = seed();
+    const result = runCli(fixture, ["clone", "hasna/scratch-r5", "--json"], { GH_SHIM_CLONE_DO_NOTHING: "1" });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("CLONE_VERIFY_FAILED");
+    const db = getDb(fixture.dbPath);
+    const rows = db.query("SELECT name FROM repos WHERE path LIKE ?").all("%scratch-r5%") as Array<{ name: string }>;
+    expect(rows).toEqual([]);
+  });
+
   test("refuses an occupied destination before any gh call", () => {
     const fixture = seed();
     mkdirSync(join(fixture.clonesRoot, "hasna", "scratch-r5"), { recursive: true });
@@ -444,7 +486,7 @@ describe("repos clone", () => {
     expect(envs.length).toBeGreaterThan(0);
     for (const env of envs) {
       expect(env).toContain("REPOS_TEST_CANARY=canary-visible");
-      expect(env).not.toContain(CALLER_TOKEN);
+      expect(env).not.toContain(CALLER_MARKER);
     }
   });
 
