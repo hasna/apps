@@ -54,7 +54,7 @@ describe("contracts conformance register", () => {
       "surface_bindings",
       "public_manifest_safety",
       "hosting_story",
-      "mode_enum_compliance",
+      "server_backend_configuration",
       "published_artifact_gate",
       "credential_seam_compliance",
       "no_cloud_guard",
