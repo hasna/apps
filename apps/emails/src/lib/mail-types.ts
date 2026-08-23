@@ -287,6 +287,14 @@ export interface MailboxFolderStatus {
 export interface MailboxStatusSummary {
   counts: MailboxCounts;
   folders: MailboxFolderStatus[];
+  /**
+   * false => `counts` were tallied over a scan that could not prove it reached
+   * the end of the table (page budget exhausted, or the paging window moved),
+   * so every number is a LOWER BOUND and must be presented as one. The
+   * self-hosted arm sets this from the honest pager's `complete`; arms that
+   * count from SQL aggregates or a server-side aggregate always set true.
+   */
+  countsComplete: boolean;
 }
 
 export interface MailboxStatusOptions {
@@ -307,6 +315,8 @@ export interface MailboxSourceSummary {
   region?: string;
   badges: string[];
   counts: MailboxCounts;
+  /** See `MailboxStatusSummary.countsComplete` — `total`/`unread` share it. */
+  countsComplete: boolean;
   total: number;
   unread: number;
   latestReceivedAt: string | null;

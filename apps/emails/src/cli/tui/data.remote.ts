@@ -17,6 +17,7 @@
  */
 import { uuid } from "../../db/runtime.js";
 import { selfHostedStoreFor, type SelfHostedResourceStore } from "../../db/self-hosted-store.js";
+import { SELF_HOSTED_SERVER_PAGE_MAX, enumerateSelfHostedRows } from "../../db/self-hosted-page.js";
 import { cbool, cnum, cobj, cstr, cstrArray, cstrOrNull, carray } from "../../db/self-hosted-resource.js";
 import {
   setInboundReadFlag, setInboundArchivedFlag, setInboundStarredFlag,
@@ -78,11 +79,30 @@ const MESSAGE_RESOURCE = "messages";
 
 // Bounded, TTL-cached full scan. One scan serves list/counts/status/labels/
 // conversation within a short window; mutations invalidate it.
-const SELF_HOSTED_MAIL_PAGE = 500;
-const SELF_HOSTED_MAIL_SCAN_CAP = 5000;
+//
+// The scan is an HONEST bounded enumeration (self-hosted-page.ts), not a bare
+// limit/offset loop: a short page is only the end of the table when it is short
+// relative to what was ASKED for, and a page that repeats a row or does not
+// begin on the row the previous one ended on proves the paging window moved —
+// which means the rows read are a subset of the table, never the whole of it.
+// `complete` says whether the walk actually reached the end; every count
+// published from the rows carries it, so a truncated scan is never presented as
+// an exact total.
+const SELF_HOSTED_MAIL_PAGE = SELF_HOSTED_SERVER_PAGE_MAX;
+const SELF_HOSTED_MAIL_SCAN_PAGE_BUDGET = 40;
 const SELF_HOSTED_MAIL_SCAN_TTL_MS = 4000;
 
-let mailScanCache: { at: number; rows: Record<string, unknown>[] } | null = null;
+interface MailScanState {
+  rows: Record<string, unknown>[];
+  /** false => `rows` is a LOWER BOUND (page budget ran out or the window moved). */
+  complete: boolean;
+  pages: number;
+  duplicates: number;
+  shifted: boolean;
+  exhausted: boolean;
+}
+
+let mailScanCache: { at: number; state: MailScanState } | null = null;
 let priorityRuleCache: { at: number; rules: PrioritySenderRule[] } | null = null;
 
 function messagesStore(): SelfHostedResourceStore {
@@ -90,25 +110,37 @@ function messagesStore(): SelfHostedResourceStore {
 }
 
 /** Full, bounded scan of the operator store. Degrades to [] if unreachable. */
-function scanAllMessages(): Record<string, unknown>[] {
+function scanMailState(): MailScanState {
   const cached = mailScanCache;
-  if (cached && Date.now() - cached.at < SELF_HOSTED_MAIL_SCAN_TTL_MS) return cached.rows;
-  const rows: Record<string, unknown>[] = [];
+  if (cached && Date.now() - cached.at < SELF_HOSTED_MAIL_SCAN_TTL_MS) return cached.state;
   try {
-    const store = messagesStore();
-    for (let offset = 0; offset < SELF_HOSTED_MAIL_SCAN_CAP; offset += SELF_HOSTED_MAIL_PAGE) {
-      const page = store.list({ limit: SELF_HOSTED_MAIL_PAGE, offset });
-      rows.push(...page);
-      if (page.length < SELF_HOSTED_MAIL_PAGE) break;
-    }
+    const enumeration = enumerateSelfHostedRows(messagesStore(), {
+      pageSize: SELF_HOSTED_MAIL_PAGE,
+      pageBudget: SELF_HOSTED_MAIL_SCAN_PAGE_BUDGET,
+    });
+    const state: MailScanState = {
+      rows: enumeration.rows,
+      complete: enumeration.complete,
+      pages: enumeration.pages,
+      duplicates: enumeration.duplicates,
+      shifted: enumeration.shifted,
+      exhausted: enumeration.exhausted,
+    };
+    mailScanCache = { at: Date.now(), state };
+    return state;
   } catch (error) {
     rethrowSelfHostedResponseFailure(error);
     // A missing/unreachable serve yields an empty view rather than crashing the
-    // TUI. Not cached, so the next read retries.
-    return [];
+    // TUI. Not cached, so the next read retries. The empty view is not a claim
+    // of completeness either — nothing was counted, so the fallback is never
+    // published as an exact total.
+    return { rows: [], complete: false, pages: 0, duplicates: 0, shifted: false, exhausted: false };
   }
-  mailScanCache = { at: Date.now(), rows };
-  return rows;
+}
+
+/** Full, bounded scan of the operator store. Degrades to [] if unreachable. */
+function scanAllMessages(): Record<string, unknown>[] {
+  return scanMailState().rows;
 }
 
 function getMessageRow(id: string): Record<string, unknown> | null {
@@ -373,14 +405,19 @@ interface MailboxStats {
   total: number;
   unread: number;
   latestReceivedAt: string | null;
+  /** false => `counts`/`total`/`unread` are LOWER BOUNDS, never exact totals. */
+  countsComplete: boolean;
 }
 
 function scanMailboxStats(source?: MailboxSource): MailboxStats {
   const counts = emptyMailboxCounts();
-  if (sourceMatchesNothing(source)) return { counts, total: 0, unread: 0, latestReceivedAt: null };
+  if (sourceMatchesNothing(source)) {
+    return { counts, total: 0, unread: 0, latestReceivedAt: null, countsComplete: true };
+  }
   const rules = currentPrioritySenderRules();
   let latest: string | null = null;
-  for (const row of scanAllMessages()) {
+  const scan = scanMailState();
+  for (const row of scan.rows) {
     if (!v1SourceMatch(row, source)) continue;
     for (const folder of MAILBOXES) {
       if (v1FolderMatch(row, folder, rules)) counts[folder] += 1;
@@ -391,23 +428,39 @@ function scanMailboxStats(source?: MailboxSource): MailboxStats {
     }
   }
   const total = counts.inbox + counts.archived + counts.spam + counts.trash;
-  return { counts, total, unread: counts.unread, latestReceivedAt: latest };
+  return {
+    counts,
+    total,
+    unread: counts.unread,
+    latestReceivedAt: latest,
+    countsComplete: scan.complete,
+  };
 }
 
-/** Folder counts. */
-export function mailboxCounts(opts?: { source?: MailboxSource }): MailboxCounts {
-  return scanMailboxStats(mailboxSourceFromRef(opts?.source)).counts;
+/**
+ * Folder counts.
+ *
+ * `countsComplete` says whether the numbers are the whole truth: when it is
+ * false (the scan budget ran out or the paging window moved — see
+ * `scanMailState`), every count is a LOWER BOUND and must not be presented as
+ * an exact total. Prefer `listMailboxStatus()` when you publish the counts, so
+ * the marker travels with them.
+ */
+export function mailboxCounts(opts?: { source?: MailboxSource }): MailboxCounts & { countsComplete: boolean } {
+  const stats = scanMailboxStats(mailboxSourceFromRef(opts?.source));
+  return { ...stats.counts, countsComplete: stats.countsComplete };
 }
 
 export function listMailboxStatus(opts?: MailboxStatusOptions): MailboxStatusSummary {
-  const counts = mailboxCounts({ source: opts?.source });
+  const stats = scanMailboxStats(mailboxSourceFromRef(opts?.source));
   return {
-    counts,
+    counts: stats.counts,
+    countsComplete: stats.countsComplete,
     folders: MAILBOXES.map((folder) => ({
       id: folder,
       folder,
       label: mailboxLabel(folder),
-      count: counts[folder],
+      count: stats.counts[folder],
     })),
   };
 }
@@ -426,6 +479,7 @@ export function listMailboxSources(opts?: ListMailboxSourcesOptions): MailboxSou
     kind: "all",
     badges: ["self_hosted"],
     counts: stats.counts,
+    countsComplete: stats.countsComplete,
     total: stats.total,
     unread: stats.unread,
     latestReceivedAt: opts?.includeLatest === false ? null : stats.latestReceivedAt,
