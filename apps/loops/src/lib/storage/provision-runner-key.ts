@@ -169,15 +169,22 @@ export async function provisionRunnerKey(
           AND key.scopes @> $3::jsonb
           AND principal.kind = 'machine'
           AND principal.status = 'active'
-          AND EXISTS (
-            SELECT 1
-              FROM tenant_memberships ms
-              JOIN tenant_membership_roles mr
-                ON mr.tenant_id = ms.tenant_id AND mr.principal_id = ms.principal_id
-             WHERE ms.tenant_id = $2
-               AND ms.principal_id = $1
-               AND ms.status = 'active'
-               AND mr.role = ANY($4)
+          AND NOT EXISTS (
+            -- EVERY requested role must be present on the active membership:
+            -- a membership carrying only one of several requested roles must
+            -- not satisfy the no-op check (the ANY form would match that
+            -- single role and wrongly confirm a role-starved key).
+            SELECT 1 FROM unnest($4::text[]) AS requested(role)
+             WHERE NOT EXISTS (
+               SELECT 1
+                 FROM tenant_memberships ms
+                 JOIN tenant_membership_roles mr
+                   ON mr.tenant_id = ms.tenant_id AND mr.principal_id = ms.principal_id
+                WHERE ms.tenant_id = $2
+                  AND ms.principal_id = $1
+                  AND ms.status = 'active'
+                  AND mr.role = requested.role
+             )
           )
         ORDER BY key.issued_at DESC
         LIMIT 1`,

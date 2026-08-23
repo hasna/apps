@@ -179,7 +179,12 @@ describe("provisionRunnerKey (hermetic)", () => {
     expect(check?.sql).toContain("key.tenant_id = $2");
     expect(check?.sql).toContain("key.scopes @> $3::jsonb");
     expect(check?.sql).toContain("tenant_memberships");
-    expect(check?.sql).toContain("mr.role = ANY($4)");
+    expect(check?.sql).toContain("unnest($4::text[])");
+    expect(check?.sql).toContain("mr.role = requested.role");
+    // EVERY requested role must be present: `= ANY` would match a single
+    // role and wrongly confirm a role-starved key, so it must not appear in
+    // the no-op check.
+    expect(check?.sql).not.toContain("mr.role = ANY");
     expect(check?.sql).toContain("ms.status = 'active'");
     expect(check?.params?.[1]).toBe(TENANT);
     expect(check?.params?.[2]).toBe(JSON.stringify(["loops:runner"]));
@@ -609,6 +614,55 @@ liveSuite("provisionRunnerKey (live Postgres)", () => {
     });
     expect(third.status).toBe("already_provisioned");
     expect(third.kid).toBe(second.kid);
+  });
+
+  test("a membership missing one requested role is not a no-op — the key is re-minted with all requested roles", async () => {
+    const starvedRunner = `${TEST_RUNNER}-role-starved`;
+    const first = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: starvedRunner,
+      tenantId: TEST_TENANT,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+    });
+    expect(first.status).toBe("provisioned");
+
+    // Drop one of the two requested roles from the membership. The no-op
+    // check must NOT be satisfied by the surviving `worker` role alone: the
+    // requested binding (worker + service) is not present, so a fresh key is
+    // minted and the role-starved key is disabled.
+    await executor!.queryClient.execute(
+      `DELETE FROM tenant_membership_roles WHERE tenant_id = $1 AND principal_id = $2 AND role = 'service'`,
+      [TEST_TENANT, starvedRunner],
+    );
+
+    const second = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: starvedRunner,
+      tenantId: TEST_TENANT,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+    });
+    expect(second.status).toBe("provisioned");
+    if (second.status !== "provisioned") return;
+
+    const roles = await executor!.queryClient.many<{ role: string }>(
+      `SELECT role FROM tenant_membership_roles
+        WHERE tenant_id = $1 AND principal_id = $2 ORDER BY role`,
+      [TEST_TENANT, starvedRunner],
+    );
+    expect(roles.map((row) => row.role).sort()).toEqual(["service", "worker"]);
+
+    const keys = await executor!.queryClient.many<{ kid: string; disabled_at: string | null }>(
+      `SELECT kid, disabled_at FROM api_keys
+        WHERE principal_id = $1 AND token_kind = 'machine' ORDER BY issued_at`,
+      [starvedRunner],
+    );
+    expect(keys).toHaveLength(2);
+    expect(keys.filter((key) => key.disabled_at === null)).toHaveLength(1);
+    expect(keys.filter((key) => key.disabled_at === null)[0].kid).toBe(second.kid);
   });
 
   test("suspended-principal reactivation disables the old key — exactly one active key afterward", async () => {
