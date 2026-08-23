@@ -41,11 +41,16 @@ interface RunResult {
 async function runBin(
   entry: string,
   args: string[],
-  extraEnv: Record<string, string> = {},
+  extraEnv: Record<string, string | undefined> = {},
 ): Promise<RunResult> {
+  const env: Record<string, string> = { ...process.env, HASNA_SECRETS_VERSION: PROBE_VERSION };
+  for (const [key, value] of Object.entries(extraEnv)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   const proc = Bun.spawn([process.execPath, "run", entry, ...args], {
     cwd: SECRETS_ROOT,
-    env: { ...process.env, HASNA_SECRETS_VERSION: PROBE_VERSION, ...extraEnv },
+    env,
     stdout: "pipe",
     stderr: "pipe",
     stdin: "pipe",
@@ -121,11 +126,31 @@ describe("secrets-mcp answers --version/--help without entering stdio (row afd9e
     expect(result.stdout).toContain("secrets-mcp");
     expect(result.stdout).not.toContain("jsonrpc");
   });
+
+  test("plain mcp (no early args) still reaches the transport path (negative probe)", async () => {
+    // No early arg: the stdio transport path must still be reached — with stdin
+    // closed it ends the transport and exits rc=0, printing neither the version
+    // nor usage. A fix that swallowed or skipped the start path would regress
+    // this side.
+    const result = await runBin("src/mcp-server.ts", []);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain(PROBE_VERSION);
+    expect(result.stdout).not.toContain("Usage:");
+  });
 });
 
 describe("secrets-serve answers --version/--help before the boot path (row afd9e358)", () => {
+  // Scrub the master-key vars from the child env so the boot-path negative
+  // probe deterministically fails at the master-key gate even on a machine
+  // that operates secrets-serve with HASNA_SECRETS_MASTER_KEY set.
+  const SERVE_SCRUB: Record<string, string | undefined> = {
+    HASNA_SECRETS_MASTER_KEY: undefined,
+    SECRETS_MASTER_KEY: undefined,
+  };
+
   test("--version prints the package version and exits without booting", async () => {
-    const result = await runBin("src/server/index.ts", ["--version"]);
+    const result = await runBin("src/server/index.ts", ["--version"], SERVE_SCRUB);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(PROBE_VERSION);
@@ -134,7 +159,7 @@ describe("secrets-serve answers --version/--help before the boot path (row afd9e
   });
 
   test("--help prints usage and exits without booting", async () => {
-    const result = await runBin("src/server/index.ts", ["--help"]);
+    const result = await runBin("src/server/index.ts", ["--help"], SERVE_SCRUB);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("usage: secrets-serve");
@@ -145,7 +170,7 @@ describe("secrets-serve answers --version/--help before the boot path (row afd9e
     // No early arg: the boot path must still be reached — here it fails fast at
     // the master-key gate (rc=1) instead of answering version/usage. A fix that
     // swallowed or skipped the start path would regress this side.
-    const result = await runBin("src/server/index.ts", []);
+    const result = await runBin("src/server/index.ts", [], SERVE_SCRUB);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("requires a master key");

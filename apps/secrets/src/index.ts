@@ -29,8 +29,8 @@ function usage(): void {
 secrets — local secrets vault for AI agents
 
 Options:
-  --version               print the package version and exit
-  --help                  show this help and exit
+  -V, --version           print the package version and exit
+  -h, --help              show this help and exit
 
 Commands:
   docs                        show a practical usage guide

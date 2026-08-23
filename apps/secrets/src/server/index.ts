@@ -34,8 +34,8 @@ async function main(): Promise<void> {
   secrets-serve --version                  Print the package version
 
 options:
-  --help              show this help and exit
-  --version           print the package version and exit
+  -h, --help          show this help and exit
+  -V, --version       print the package version and exit
 `);
     process.exit(0);
   }
