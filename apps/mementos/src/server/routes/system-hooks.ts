@@ -43,17 +43,21 @@ export function registerSystemHookRoutes(): void {
     if (!body.type || !body.handler_url) {
       return errorResponse("type and handler_url are required", 400);
     }
-    const wh = createWebhookHook({
-      type: body.type as import("../../types/hooks.js").HookType,
-      handlerUrl: body.handler_url as string,
-      priority: body.priority as number | undefined,
-      blocking: body.blocking as boolean | undefined,
-      agentId: body.agent_id as string | undefined,
-      projectId: body.project_id as string | undefined,
-      description: body.description as string | undefined,
-    });
-    reloadWebhooks();
-    return json(wh, 201);
+    try {
+      const wh = createWebhookHook({
+        type: body.type as import("../../types/hooks.js").HookType,
+        handlerUrl: body.handler_url as string,
+        priority: body.priority as number | undefined,
+        blocking: body.blocking as boolean | undefined,
+        agentId: body.agent_id as string | undefined,
+        projectId: body.project_id as string | undefined,
+        description: body.description as string | undefined,
+      });
+      reloadWebhooks();
+      return json(wh, 201);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
   });
 
   addRoute("GET", "/api/webhooks/:id", (_req, _url, params) => {

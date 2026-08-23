@@ -2,6 +2,7 @@ import { SqliteAdapter as Database } from "../storage.js";
 type SQLQueryBindings = string | number | null | boolean;
 import { getDatabase, now, shortUuid } from "./database.js";
 import { isApiMode, apiJson, toQuery } from "./api-mode.js";
+import { isIP } from "node:net";
 import type { WebhookHook, HookType } from "../types/hooks.js";
 
 // ============================================================================
@@ -26,6 +27,143 @@ function parseRow(row: Record<string, unknown>): WebhookHook {
 }
 
 // ============================================================================
+// Webhook handler URL validation — SSRF guard
+// ============================================================================
+//
+// handler_url is caller-supplied and the delivery path POSTs the full hook
+// context (including complete Memory objects) to it from the serve/MCP
+// process. Without validation, any caller of any surface (MCP tool, REST
+// route, CLI) can point it at 169.254.169.254 (cloud metadata), a loopback or
+// private-network service, or an external collector. Only public http(s)
+// endpoints are accepted.
+
+function isBlockedIpv4(parts: number[]): boolean {
+  const a = parts[0]!;
+  const b = parts[1]!;
+  if (a === 0) return true; // 0.0.0.0/8 — "this network"
+  if (a === 127) return true; // 127.0.0.0/8 — loopback
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 — link-local, incl. 169.254.169.254
+  if (a === 10) return true; // 10.0.0.0/8 — private
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 — private
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16 — private
+  return false;
+}
+
+function isBlockedIpv6(bytes: number[]): boolean {
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d) — apply the IPv4 rules to the tail.
+  const mapped =
+    bytes.slice(0, 10).every((b) => b === 0) &&
+    bytes[10]! === 0xff &&
+    bytes[11]! === 0xff;
+  if (mapped) return isBlockedIpv4(bytes.slice(12, 16));
+  if (bytes.every((b) => b === 0)) return true; // :: — unspecified
+  if (bytes.slice(0, 15).every((b) => b === 0) && bytes[15]! === 1) return true; // ::1 — loopback
+  if ((bytes[0]! & 0xfe) === 0xfc) return true; // fc00::/7 — unique-local
+  if (bytes[0]! === 0xfe && (bytes[1]! & 0xc0) === 0x80) return true; // fe80::/10 — link-local
+  return false;
+}
+
+/** Expand a dotted-quad IPv4 tail into two 16-bit IPv6 groups (::ffff:1.2.3.4). */
+function quadToGroups(quad: string): number[] | null {
+  const nums = quad.split(".").map((p) => Number(p));
+  const [a, b, c, d] = nums;
+  const valid = [a, b, c, d].every(
+    (n) => n !== undefined && Number.isInteger(n) && n >= 0 && n <= 255
+  );
+  if (!valid) return null;
+  return [(a! << 8) | b!, (c! << 8) | d!];
+}
+
+function parseIpv6Bytes(host: string): number[] | null {
+  const groups = host.split("::");
+  if (groups.length > 2) return null;
+  const headRaw = groups[0] ?? "";
+  const tailRaw = groups[1] ?? "";
+  const head = headRaw === "" ? [] : headRaw.split(":");
+  const tail = tailRaw === "" ? [] : tailRaw.split(":");
+
+  const headNums: number[] = [];
+  for (const g of head) {
+    if (!/^[0-9a-f]{1,4}$/i.test(g)) return null;
+    headNums.push(parseInt(g, 16));
+  }
+  const tailNums: number[] = [];
+  for (const g of tail) {
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(g)) {
+      const quads = quadToGroups(g);
+      if (!quads) return null;
+      tailNums.push(...quads);
+    } else if (/^[0-9a-f]{1,4}$/i.test(g)) {
+      tailNums.push(parseInt(g, 16));
+    } else {
+      return null;
+    }
+  }
+
+  const hasCompression = groups.length === 2;
+  if (!hasCompression && headNums.length !== 8) return null;
+  if (hasCompression && headNums.length + tailNums.length >= 8) return null;
+
+  const zeros = 8 - headNums.length - tailNums.length;
+  const all = [...headNums, ...new Array(zeros).fill(0), ...tailNums];
+  const bytes: number[] = [];
+  for (const n of all) {
+    bytes.push((n >> 8) & 0xff, n & 0xff);
+  }
+  return bytes;
+}
+
+const BLOCKED_TARGET_MESSAGE =
+  "Invalid webhook handler URL — loopback, link-local, and private network targets are not allowed";
+
+/**
+ * Validate a webhook handler URL. Throws a descriptive Error when the URL is
+ * not a public http(s) endpoint: unparseable, wrong scheme, embedded
+ * credentials, or a loopback / link-local / private / metadata target.
+ */
+export function validateWebhookHandlerUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid webhook handler URL "${url}" — must be a valid http(s) URL`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Invalid webhook handler URL "${url}" — only http and https are allowed`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`Invalid webhook handler URL "${url}" — embedded credentials are not allowed`);
+  }
+
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+
+  if (host === "localhost" || host.endsWith(".localhost")) {
+    throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+  }
+
+  const version = isIP(host);
+  if (version === 4) {
+    if (isBlockedIpv4(host.split(".").map((p) => Number(p)))) {
+      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+    }
+  } else if (version === 6) {
+    // Fail closed on an IPv6 literal our parser cannot classify.
+    const bytes = parseIpv6Bytes(host);
+    if (!bytes || isBlockedIpv6(bytes)) {
+      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+    }
+  } else {
+    // Not an IP literal. Numeric-only hostnames are IPv4 shorthands
+    // (127.1, 2130706433) or garbage — refuse them rather than resolve them.
+    // Zone identifiers only appear on link-local scopes — refuse them outright.
+    if (/^[0-9]+(\.[0-9]+)*$/.test(host) || /^0x[0-9a-f]+$/i.test(host) || host.includes("%")) {
+      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+    }
+  }
+}
+
+// ============================================================================
 // Create
 // ============================================================================
 
@@ -43,6 +181,7 @@ export function createWebhookHook(
   input: CreateWebhookHookInput,
   db?: Database
 ): WebhookHook {
+  validateWebhookHandlerUrl(input.handlerUrl);
   if (!db && isApiMode()) {
     const { data } = apiJson<WebhookHook>("POST", "/webhooks", {
       type: input.type,

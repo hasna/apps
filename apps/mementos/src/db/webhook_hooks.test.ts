@@ -9,6 +9,7 @@ import {
   updateWebhookHook,
   deleteWebhookHook,
   recordWebhookInvocation,
+  validateWebhookHandlerUrl,
 } from "./webhook_hooks.js";
 
 describe("webhook hooks", () => {
@@ -91,5 +92,54 @@ describe("webhook hooks", () => {
     const stats = getWebhookHook(hook.id, db)!;
     expect(stats.invocationCount).toBe(2);
     expect(stats.failureCount).toBe(1);
+  });
+});
+
+describe("validateWebhookHandlerUrl", () => {
+  it("accepts public http(s) URLs", () => {
+    expect(() => validateWebhookHandlerUrl("https://example.com/hook")).not.toThrow();
+    expect(() => validateWebhookHandlerUrl("http://example.com:8080/hook")).not.toThrow();
+    expect(() => validateWebhookHandlerUrl("https://hooks.example.com/path?q=1")).not.toThrow();
+    expect(() => validateWebhookHandlerUrl("http://8.8.8.8/hook")).not.toThrow();
+    expect(() => validateWebhookHandlerUrl("http://172.32.0.1/hook")).not.toThrow();
+    expect(() => validateWebhookHandlerUrl("http://[2001:db8::1]/hook")).not.toThrow();
+  });
+
+  it("rejects non-http(s) schemes and unparseable URLs", () => {
+    expect(() => validateWebhookHandlerUrl("ftp://example.com/hook")).toThrow();
+    expect(() => validateWebhookHandlerUrl("file:///etc/passwd")).toThrow();
+    expect(() => validateWebhookHandlerUrl("not a url")).toThrow();
+    expect(() => validateWebhookHandlerUrl("")).toThrow();
+  });
+
+  it("rejects loopback, link-local, private, and metadata targets", () => {
+    const blocked = [
+      "http://127.0.0.1:43129/capture",
+      "http://127.1/capture", // inet_aton shorthand for 127.0.0.1
+      "http://2130706433/capture", // decimal shorthand for 127.0.0.1
+      "http://0x7f000001/capture", // hex shorthand for 127.0.0.1
+      "http://localhost/capture",
+      "http://Localhost/capture",
+      "http://foo.localhost/capture",
+      "http://[::1]/capture",
+      "http://[::ffff:127.0.0.1]/capture", // IPv4-mapped loopback
+      "http://169.254.169.254/latest/meta-data/",
+      "http://10.0.0.1/capture",
+      "http://172.16.0.1/capture",
+      "http://172.31.255.254/capture",
+      "http://192.168.1.1/capture",
+      "http://[fc00::1]/capture",
+      "http://[fd00::1]/capture",
+      "http://[fe80::1]/capture",
+      "http://0.0.0.0/capture",
+      "http://[::]/capture",
+    ];
+    for (const url of blocked) {
+      expect(() => validateWebhookHandlerUrl(url), url).toThrow(/not allowed/);
+    }
+  });
+
+  it("rejects credentials embedded in the URL", () => {
+    expect(() => validateWebhookHandlerUrl("http://user:pass@example.com/hook")).toThrow();
   });
 });

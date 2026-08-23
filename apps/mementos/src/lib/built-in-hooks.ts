@@ -10,6 +10,7 @@ import { hookRegistry } from "./hooks.js";
 import {
   listWebhookHooks,
   recordWebhookInvocation,
+  validateWebhookHandlerUrl,
 } from "../db/webhook_hooks.js";
 import type { HookType } from "../types/hooks.js";
 
@@ -252,6 +253,16 @@ export function loadWebhooksFromDb(): void {
     const webhooks = listWebhookHooks({ enabled: true });
 
     for (const wh of webhooks) {
+      // Fail closed on rows that predate URL validation or bypassed the
+      // persistence chokepoint: a disallowed handler URL is never registered.
+      try {
+        validateWebhookHandlerUrl(wh.handlerUrl);
+      } catch (err) {
+        console.error(
+          `[hooks] Skipping webhook ${wh.id} (${wh.type}): ${err instanceof Error ? err.message : String(err)}`
+        );
+        continue;
+      }
       hookRegistry.register({
         type: wh.type,
         blocking: wh.blocking,
@@ -274,10 +285,15 @@ export function loadWebhooksFromDb(): void {
 /**
  * Create a handler that POSTs the hook context to an HTTP endpoint.
  * Records invocation stats in DB.
+ *
+ * Fails closed at the fetch site: a handler URL that does not pass
+ * validation is never fetched, even if a row predates validation or was
+ * registered past the persistence chokepoint.
  */
-function makeWebhookHandler(webhookId: string, url: string) {
+export function makeWebhookHandler(webhookId: string, url: string) {
   return async (context: Record<string, unknown>): Promise<void> => {
     try {
+      validateWebhookHandlerUrl(url);
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
