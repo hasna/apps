@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir, hostname } from "node:os";
+import { join } from "node:path";
 import type { QueryResultRow } from "pg";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import type { PostgresStorage } from "../lib/storage/postgres.js";
@@ -9,6 +12,9 @@ import {
   classifyTenantEnforcementGate,
   logServeCommandFailure,
   program,
+  runProvisionRunnerKeyWithClient,
+  splitCsv,
+  writeTokenFile,
 } from "./index.js";
 
 function bootstrapClient(role: {
@@ -260,5 +266,217 @@ describe("loops-serve database bootstrap", () => {
     const transferCommand = program.commands.find((command) => command.name() === "shared-to-dedicated-transfer");
     expect(transferCommand).toBeDefined();
     expect(transferCommand!.options).toHaveLength(0);
+  });
+});
+
+describe("loops-serve provision-runner-key command", () => {
+  const SIGNING_SECRET = "provision-cli-test-signing-secret-32-b";
+
+  function recordingClient(activeKey: { kid: string; expires_at: string } | null) {
+    const statements: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const base: TypedQueryClient = {
+      query: async <T extends QueryResultRow>() => ({ rows: [] as T[], rowCount: 0 }),
+      many: async <T extends QueryResultRow>() => [] as T[],
+      one: async <T extends QueryResultRow>() => {
+        throw new Error("unexpected one()");
+      },
+      get: async <T extends QueryResultRow>(sql: string, params: readonly unknown[] = []) => {
+        statements.push({ sql, params });
+        if (sql.includes("FROM api_keys key")) return (activeKey ?? null) as unknown as T | null;
+        return null;
+      },
+      execute: async (sql: string, params: readonly unknown[] = []) => {
+        statements.push({ sql, params });
+      },
+    };
+    const client: PoolQueryClient = {
+      ...base,
+      pool: null as never,
+      transaction: async <T>(fn: (transaction: TypedQueryClient) => Promise<T>): Promise<T> => fn(base),
+      close: async () => undefined,
+    };
+    return { client, statements };
+  }
+
+  function swapConsole(output: { stdout: string[]; stderr: string[] }) {
+    const originalLog = console.log;
+    const originalWarn = console.warn;
+    console.log = (message?: unknown) => output.stdout.push(String(message));
+    console.warn = (message?: unknown) => output.stderr.push(String(message));
+    return () => {
+      console.log = originalLog;
+      console.warn = originalWarn;
+    };
+  }
+
+  test("registers the command with its option surface and no token flag leakage", () => {
+    const command = program.commands.find((command) => command.name() === "provision-runner-key");
+    expect(command).toBeDefined();
+    const flags = command!.options.map((option) => option.flags);
+    expect(flags).toContain("--runner-id <id>");
+    expect(flags).toContain("--tenant-id <id>");
+    expect(flags).toContain("--roles <csv>");
+    expect(flags).toContain("--scope <csv>");
+    expect(flags).toContain("--ttl-seconds <n>");
+    expect(flags).toContain("--token-out <path>");
+    expect(flags).toContain("--print-token");
+    // No flag may accept a literal token value.
+    expect(command!.options.every((option) => !option.flags.includes("--token "))).toBe(true);
+  });
+
+  test("splitCsv trims, drops empties, and preserves order", () => {
+    expect(splitCsv("worker, service ,,worker")).toEqual(["worker", "service", "worker"]);
+    expect(splitCsv("")).toEqual([]);
+    expect(splitCsv(undefined)).toEqual([]);
+  });
+
+  test("writeTokenFile writes mode 600 regardless of umask", () => {
+    const dir = mkdtempSync(join(tmpdir(), "loops-provision-"));
+    try {
+      chmodSync(dir, 0o777);
+      const path = join(dir, "runner.env");
+      writeTokenFile(path, "hasna_loops_secret-token");
+      expect(readFileSync(path, "utf8")).toBe("hasna_loops_secret-token\n");
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed before touching the database when tenant, secret, or delivery is missing", async () => {
+    const definitelyBroken = {} as PoolQueryClient;
+    const env = { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET };
+    await expect(runProvisionRunnerKeyWithClient({}, env, definitelyBroken))
+      .rejects.toThrow("requires --tenant-id <id> or HASNA_LOOPS_TENANT_ID");
+    await expect(runProvisionRunnerKeyWithClient({ tenantId: "tenant-a" }, env, definitelyBroken))
+      .rejects.toThrow("requires --token-out <path> or --print-token");
+    await expect(runProvisionRunnerKeyWithClient(
+      { tenantId: "tenant-a", tokenOut: "/tmp/x", printToken: true },
+      env,
+      definitelyBroken,
+    )).rejects.toThrow("either --token-out <path> or --print-token, not both");
+    await expect(runProvisionRunnerKeyWithClient({ tenantId: "tenant-a" }, {}, definitelyBroken))
+      .rejects.toThrow("requires HASNA_LOOPS_API_SIGNING_KEY");
+  });
+
+  test("provisioning with --token-out: stdout carries ONLY the JSON summary; the token lands in the file at 600", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loops-provision-"));
+    try {
+      const tokenOut = join(dir, "runner-token");
+      const { client } = recordingClient(null);
+      const output: { stdout: string[]; stderr: string[] } = { stdout: [], stderr: [] };
+      const restore = swapConsole(output);
+      try {
+        const result = await runProvisionRunnerKeyWithClient(
+          { runnerId: "station-cli-test", tenantId: "tenant-a", tokenOut },
+          { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET },
+          client,
+        );
+        expect(result.provisioned).toBe(true);
+      } finally {
+        restore();
+      }
+      expect(output.stdout).toHaveLength(1);
+      const summary = JSON.parse(output.stdout[0]);
+      expect(Object.keys(summary).sort()).toEqual(["expiresAt", "kid", "runnerId"]);
+      expect(summary.runnerId).toBe("station-cli-test");
+      expect(output.stderr).toHaveLength(0);
+      const token = readFileSync(tokenOut, "utf8").trim();
+      expect(output.stdout.join("\n")).not.toContain(token);
+      expect(token.startsWith("hasna_loops_")).toBe(true);
+      expect(statSync(tokenOut).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--print-token emits exactly the JSON summary line then the token line", async () => {
+    const { client } = recordingClient(null);
+    const output: { stdout: string[]; stderr: string[] } = { stdout: [], stderr: [] };
+    const restore = swapConsole(output);
+    try {
+      await runProvisionRunnerKeyWithClient(
+        { runnerId: "station-cli-test", tenantId: "tenant-a", printToken: true },
+        { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET },
+        client,
+      );
+    } finally {
+      restore();
+    }
+    expect(output.stdout).toHaveLength(2);
+    const summary = JSON.parse(output.stdout[0]);
+    expect(Object.keys(summary).sort()).toEqual(["expiresAt", "kid", "runnerId"]);
+    expect(output.stdout[1]).toMatch(/^hasna_loops_/);
+  });
+
+  test("runner id defaults to the container hostname; tenant id defaults from the env", async () => {
+    const { client, statements } = recordingClient(null);
+    const output: { stdout: string[]; stderr: string[] } = { stdout: [], stderr: [] };
+    const restore = swapConsole(output);
+    try {
+      await runProvisionRunnerKeyWithClient(
+        { printToken: true },
+        { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET, HASNA_LOOPS_TENANT_ID: "tenant-from-env" },
+        client,
+      );
+    } finally {
+      restore();
+    }
+    const membership = statements.find((s) => s.sql.includes("INSERT INTO tenant_memberships"));
+    expect(membership?.params).toEqual(["tenant-from-env", hostname()]);
+    const roleInserts = statements.filter((s) => s.sql.includes("INSERT INTO tenant_membership_roles"));
+    expect(roleInserts.map((s) => s.params?.[2]).sort()).toEqual(["service", "worker"]);
+    const keyInsert = statements.find((s) => s.sql.includes("INSERT INTO api_keys"));
+    expect(keyInsert?.params).toHaveLength(8);
+    expect(keyInsert?.params?.[1]).toBe(hostname()); // agent == runner principal id
+    expect(JSON.parse(String(keyInsert?.params?.[2]))).toEqual(["loops:runner"]); // scopes
+    expect(keyInsert?.params?.[6]).toBe("tenant-from-env"); // tenant_id
+    expect(keyInsert?.params?.[7]).toBe(hostname()); // principal_id
+    const issuedAt = keyInsert?.params?.[4] as Date;
+    const expiresAt = keyInsert?.params?.[5] as Date;
+    expect(Math.round((expiresAt.getTime() - issuedAt.getTime()) / 1000)).toBe(31_536_000);
+  });
+
+  test("already-provisioned: same summary shape, a stderr note, and NO token anywhere", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loops-provision-"));
+    try {
+      const tokenOut = join(dir, "runner-token");
+      const { client } = recordingClient({ kid: "existing-key", expires_at: "2099-01-01T00:00:00.000Z" });
+      const output: { stdout: string[]; stderr: string[] } = { stdout: [], stderr: [] };
+      const restore = swapConsole(output);
+      try {
+        const result = await runProvisionRunnerKeyWithClient(
+          { runnerId: "station-cli-test", tenantId: "tenant-a", tokenOut },
+          { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET },
+          client,
+        );
+        expect(result.provisioned).toBe(false);
+        expect(result.kid).toBe("existing-key");
+      } finally {
+        restore();
+      }
+      expect(output.stdout).toHaveLength(1);
+      expect(JSON.parse(output.stdout[0]).kid).toBe("existing-key");
+      expect(output.stderr).toHaveLength(1);
+      expect(output.stderr[0]).toContain("no new token minted");
+      expect(statSync(dir).isDirectory()).toBe(true);
+      expect(readdirSync(dir)).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("invalid role or scope csvs fail with the module's message", async () => {
+    const { client } = recordingClient(null);
+    await expect(runProvisionRunnerKeyWithClient(
+      { runnerId: "station-cli-test", tenantId: "tenant-a", roles: "admin,superuser", tokenOut: "/tmp/irrelevant" },
+      { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET },
+      client,
+    )).rejects.toThrow("invalid role 'superuser'");
+    await expect(runProvisionRunnerKeyWithClient(
+      { runnerId: "station-cli-test", tenantId: "tenant-a", scope: "loops:bogus,*,x", tokenOut: "/tmp/irrelevant" },
+      { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET },
+      client,
+    )).rejects.toThrow("invalid scope 'x'");
   });
 });
