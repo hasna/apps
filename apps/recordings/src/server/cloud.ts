@@ -90,7 +90,19 @@ export function getCloudVerifier(): ApiKeyVerifier {
   cachedVerifier = verifyApiKey({
     app: RECORDINGS_APP_SLUG,
     signingSecret,
-    isRevoked: store.isRevoked,
+    // Strict key-status hook: anything other than "active" (unknown, revoked,
+    // expired) denies. The contract refuses the deprecated `isRevoked`-only
+    // wiring eagerly at construction (contracts 0.9.0+), so the previous
+    // wiring made every /v1 request throw inside v1.ts and return 503
+    // "authentication service unavailable" (T-00094).
+    keyStatus: store.keyStatus,
+    audit: (event) => {
+      if (event.outcome === "deny") {
+        console.warn(
+          `[recordings-serve] auth deny kid=${event.kid ?? "-"} reason=${event.reason} ${event.method ?? ""} ${event.path ?? ""}`,
+        );
+      }
+    },
   });
   return cachedVerifier;
 }
