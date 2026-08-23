@@ -253,8 +253,13 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         tags: z.array(z.string()).optional().describe("Filter by tags (AND logic)"),
         created_after: z.string().optional().describe("ISO date — tasks created after this date"),
         created_before: z.string().optional().describe("ISO date — tasks created before this date"),
-        limit: z.number().optional().describe("Max results (default: 50, max 500)"),
-        offset: z.number().optional().describe("Pagination offset"),
+        // O15-00354: a bare z.number() forwarded 0/negative/non-integer limits
+        // into GET /v1/tasks, where the bound silently vanished and the caller
+        // received the WHOLE TABLE at 200. Enforce the documented contract here
+        // so the local store path fails closed too (limit 0/negative would drop
+        // the LIMIT clause there exactly as it did remotely).
+        limit: z.number().int().min(1).optional().describe("Max results (default: 50, max 500)"),
+        offset: z.number().int().min(0).optional().describe("Pagination offset"),
         metadata: z.record(z.unknown()).optional().describe("Exact top-level metadata filters"),
       },
       async (params) => {

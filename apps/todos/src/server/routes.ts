@@ -254,22 +254,52 @@ function taskStatusQueryParam(url: URL):
   return { ok: true, value: collapseEnumValues(result.values) };
 }
 
+/**
+ * Validate a pagination query param, or an error message for a 400.
+ *
+ * `parseInt` used to be cast straight into the `listTasks` filter, where a
+ * falsy or NaN limit dropped the LIMIT clause and a negative limit became
+ * SQLite `LIMIT -1` — every case answering 200 with the WHOLE TABLE while the
+ * caller believed the read was bounded (O15-00354; same defect and remedy as
+ * `GET /v1/tasks`). Digits only, and the value must be a safe integer within
+ * the documented range: `limit` >= 1, `offset` >= 0.
+ */
+function parsePaginationQueryParam(url: URL, name: "limit" | "offset"):
+  | { ok: true; value: number | undefined }
+  | { ok: false; message: string } {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return { ok: true, value: undefined };
+  const min = name === "limit" ? 1 : 0;
+  const message = name === "limit" ? "limit must be a positive integer" : "offset must be a non-negative integer";
+  if (!/^\d+$/.test(raw)) return { ok: false, message };
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min) return { ok: false, message };
+  return { ok: true, value };
+}
+
 export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
   const statusParam = taskStatusQueryParam(url);
   if (!statusParam.ok) return json({ error: statusParam.message }, 400);
   const projectId = url.searchParams.get("project_id") || undefined;
   const sessionId = url.searchParams.get("session_id") || undefined;
   const agentId = url.searchParams.get("agent_id") || undefined;
-  const limitParam = url.searchParams.get("limit");
-  const offsetParam = url.searchParams.get("offset");
+  // Pagination bounds. `parseInt` used to be cast straight into the store
+  // filter, where a falsy or NaN limit dropped the LIMIT clause and a negative
+  // limit became SQLite `LIMIT -1` — every case answering 200 with the WHOLE
+  // TABLE while the caller believed the read was bounded (O15-00354, same
+  // defect and remedy as GET /v1/tasks). Reject with 400, fail closed.
+  const limitParam = parsePaginationQueryParam(url, "limit");
+  if (!limitParam.ok) return json({ error: limitParam.message }, 400);
+  const offsetParam = parsePaginationQueryParam(url, "offset");
+  if (!offsetParam.ok) return json({ error: offsetParam.message }, 400);
   const fields = parseFieldsParam(url);
   const tasks = listTasks({
     status: statusParam.value as Task["status"] | Task["status"][] | undefined,
     project_id: projectId,
     session_id: sessionId,
     agent_id: agentId,
-    limit: limitParam ? parseInt(limitParam, 10) : undefined,
-    offset: offsetParam ? parseInt(offsetParam, 10) : undefined,
+    limit: limitParam.value,
+    offset: offsetParam.value,
   });
   return json(tasks.map(t => taskToSummary(t, fields)));
 }

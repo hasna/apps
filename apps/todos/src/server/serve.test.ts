@@ -142,6 +142,30 @@ describe("GET /api/tasks", () => {
     expect(task).toHaveProperty("created_at");
     expect(task).toHaveProperty("updated_at");
   });
+
+  // O15-00354: the handler used to map `parseInt(limitParam, 10)` straight into
+  // the store filter, where a falsy or NaN limit dropped the LIMIT clause and a
+  // negative limit became SQLite `LIMIT -1` — every case answering 200 with the
+  // WHOLE TABLE while the caller believed the read was bounded. Same defect and
+  // same remedy as GET /v1/tasks (see v1-limit-validation.test.ts): 400, fail
+  // closed.
+  it.each([
+    ["0", "zero is falsy in the store, so the LIMIT clause vanished"],
+    ["-1", "SQLite LIMIT -1 means no limit"],
+    ["abc", "parseInt(\"abc\") is NaN, and NaN is falsy"],
+    ["1.5", "not an integer — must not silently truncate"],
+  ])("rejects limit=%j with 400 rather than returning the whole table (%s)", async (value) => {
+    const res = await api("GET", `/api/tasks?limit=${encodeURIComponent(value)}`);
+    expect(res.status).toBe(400);
+  });
+
+  it.each([
+    ["-1", "a negative offset must not be cast into the store"],
+    ["abc", "non-numeric offset must not parse to NaN"],
+  ])("rejects offset=%j with 400 rather than guessing (%s)", async (value) => {
+    const res = await api("GET", `/api/tasks?limit=2&offset=${encodeURIComponent(value)}`);
+    expect(res.status).toBe(400);
+  });
 });
 
 // ── POST /api/tasks ─────────────────────────────────────────────────────────

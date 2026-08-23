@@ -144,6 +144,48 @@ function parseSinceCursor(raw: string):
   return { ok: true, value: new Date(parsed).toISOString() };
 }
 
+/**
+ * Validate a pagination query param, or 400.
+ *
+ * `limit` and `offset` used to be `Number(...)`-cast straight into the store
+ * filter. `listTasks` only adds a LIMIT clause when the value is truthy, so:
+ *
+ *     st=200 rows=all   ?limit=0     <- 0 is falsy: the LIMIT clause vanished
+ *     st=200 rows=all   ?limit=-1    <- SQLite `LIMIT -1` means "no limit"
+ *     st=200 rows=all   ?limit=abc   <- Number("abc") is NaN, and NaN is falsy
+ *
+ * Every one answered 200 with the ENTIRE table while the caller believed the
+ * read was bounded — the exact failure the `updated_after` rejection above
+ * exists to end. On the Postgres backend the same values reached `LIMIT $n`
+ * and errored, so the endpoint also 500'd cross-backend. The OpenAPI contract
+ * already says `limit` is an integer >= 1 and `offset` an integer >= 0; this
+ * enforces it. Digits only, and the value must be a safe integer within the
+ * documented range — `1.5` must not silently truncate and a 26-digit number
+ * must not become `Infinity`.
+ */
+function paginationQueryParam(
+  url: URL,
+  name: "limit" | "offset",
+): { ok: true; value: number | undefined } | { ok: false; response: Response } {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return { ok: true, value: undefined };
+  const min = name === "limit" ? 1 : 0;
+  if (!/^\d+$/.test(raw)) {
+    return {
+      ok: false,
+      response: error(400, name === "limit" ? "limit must be a positive integer" : "offset must be a non-negative integer"),
+    };
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min) {
+    return {
+      ok: false,
+      response: error(400, name === "limit" ? "limit must be a positive integer" : "offset must be a non-negative integer"),
+    };
+  }
+  return { ok: true, value };
+}
+
 function validateTaskCompletion(value: unknown):
   | { ok: true; agentId?: string; options: TodosTaskCompletionOptions }
   | { ok: false; message: string } {
@@ -744,6 +786,16 @@ export async function handleV1Request(
           if (updatedAfter !== null && !updatedAfter.ok) {
             return error(400, updatedAfter.message);
           }
+          // Pagination bounds. Reject a malformed value with 400 rather than
+          // dropping it: `Number("abc")` is NaN, `0` is falsy, and a negative
+          // limit becomes SQLite `LIMIT -1` — all three answered 200 with the
+          // ENTIRE table while the caller believed the read was bounded, the
+          // same silent-whole-table failure the `updated_after` rejection
+          // above exists to end.
+          const limitParam = paginationQueryParam(url, "limit");
+          if (!limitParam.ok) return limitParam.response;
+          const offsetParam = paginationQueryParam(url, "offset");
+          if (!offsetParam.ok) return offsetParam.response;
           const filter = {
             ...(updatedAfter !== null && updatedAfter.ok ? { updated_after: updatedAfter.value } : {}),
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
@@ -766,8 +818,8 @@ export async function handleV1Request(
             ...(url.searchParams.get("tags") ? {
               tags: url.searchParams.get("tags")!.split(",").map((tag) => tag.trim()).filter(Boolean),
             } : {}),
-            ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
-            ...(url.searchParams.get("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
+            ...(limitParam.value !== undefined ? { limit: limitParam.value } : {}),
+            ...(offsetParam.value !== undefined ? { offset: offsetParam.value } : {}),
           };
           const tasks = await store.tasks.list(filter);
           // `total` is the full match count for the filter (ignoring limit/offset),
