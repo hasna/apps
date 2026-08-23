@@ -4,20 +4,28 @@
  *
  * Runs the app's own Linux-CI-partitioned suite — `test:gated`, which covers
  * every discovered `*.test.ts` (the quarantine file is empty by design) — and
- * fails on ANY failure except the allowlisted pre-existing classes below.
- *
- * Why the allowlist exists: the suite is red at this release's base sha with
- * exactly two measured pre-existing classes (both reproduced identically at
- * the pristine base commit 4a9b31e56, classified non-blocking by the release
- * lineage). The old `prepublishOnly` (`bun run test`, bare) could not pass on
- * any box for independent reasons: no timeout flag for the long macOS
- * lifecycle suites, and the ambient hosted-store environment on fleet boxes.
+ * fails on ANY failure.
  *
  * The allowlist is SELF-INVALIDATING, the same property as
  * `.github/linux-quarantine.txt`: if an allowlisted failure stops failing
  * (the owning lane lands its fix, or a quarantined package ages out of the
  * 7-day window), the gate exits 1 and demands the entry be removed. Any
  * failure outside the allowlist fails the gate.
+ *
+ * Allowlist history (both entries removed 2026-08-23 by the 0.3.9 release
+ * lane, publish-all-recordings, per this gate's own self-invalidation
+ * contract — each failure stopped failing at head 15b6181c6):
+ *   - service-contract-manifest.test.ts (credential_seam_compliance): the
+ *     contracts-surface migration landed in hasna/apps PR #957
+ *     (resolveStorageClient now imported from @hasna/contracts/client), so
+ *     the conformance check passes; the entry's own reason said "Remove this
+ *     entry when the lane lands."
+ *   - native-app-companion-contract.test.ts (release supply-chain policy):
+ *     the companion build's --minimum-release-age=604800 quarantine no longer
+ *     bites because @hasna/contracts is on the fleet minimumReleaseAgeExcludes
+ *     list (the sanctioned mechanism for fresh publishes); the test passes.
+ * Both removals are the gate's designed behaviour, not a weakening: any
+ * future failure now fails the gate with zero allowlisted exceptions.
  *
  * The gate FAILS CLOSED on abnormal termination: a non-zero suite exit is
  * acceptable only when it is fully explained by allowlisted failures — the
@@ -34,22 +42,7 @@ import { join } from "node:path";
 
 const SEP = "::";
 
-const GATED_KEYS: Array<{ file: string; test: string; owner: string; reason: string }> = [
-  {
-    file: "src/__tests__/service-contract-manifest.test.ts",
-    test: "the repository satisfies the tracked contract kit's conformance checks",
-    owner: "contracts-surface lanes (hasna/apps PRs 743/749/754 lineage)",
-    reason:
-      "credential_seam_compliance flags the vendored client seam (resolveStorageClient in src/http/client.ts) and the RECORDINGS_API_KEY env read (src/lib/config.ts) - an in-flight migration owned by the contracts-surface lanes; classified pre-existing at the release base. Remove this entry when the lane lands.",
-  },
-  {
-    file: "src/__tests__/native-app-companion-contract.test.ts",
-    test: "(unnamed)",
-    owner: "release supply-chain policy",
-    reason:
-      "build_companion_cli.sh enforces --minimum-release-age=604800, so the companion build refuses @hasna/contracts@0.13.3 (published 2026-08-21T13:13Z) inside its 7-day quarantine by design until 2026-08-28. The npm publish path does not build the companion. Remove this entry when the package ages out.",
-  },
-];
+const GATED_KEYS: Array<{ file: string; test: string; owner: string; reason: string }> = [];
 
 function run(argv: string[], env: Record<string, string>): { status: number; stdout: string; stderr: string } {
   const res = spawnSync(process.execPath, argv, { encoding: "utf8", env: { ...process.env, ...env } });
