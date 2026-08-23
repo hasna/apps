@@ -30,6 +30,12 @@ export function setS3CredentialProviderFactoryForTests(factory?: typeof fromIni)
   credentialProviderFactory = factory ?? fromIni;
 }
 
+let clientFactory: ((source: Source) => S3Client) | undefined;
+
+export function setS3ClientFactoryForTests(factory?: (source: Source) => S3Client): void {
+  clientFactory = factory;
+}
+
 export type S3CredentialSource =
   | "static_config"
   | "aws_profile"
@@ -84,7 +90,7 @@ export function describeS3ClientConfig(source: Source): S3ClientConfigDiagnostic
 }
 
 function makeClient(source: Source): S3Client {
-  return new S3Client(createS3ClientConfig(source));
+  return clientFactory ? clientFactory(source) : new S3Client(createS3ClientConfig(source));
 }
 
 export async function indexS3Source(source: Source, machine_id: string): Promise<IndexStats> {
@@ -115,7 +121,7 @@ export async function indexS3Source(source: Source, machine_id: string): Promise
   } while (continuationToken);
 
   // Mark files as deleted if they no longer exist in S3
-  const indexedFiles = listFiles({ source_id: source.id, status: "active" });
+  const indexedFiles = listFiles({ source_id: source.id, status: "active", limit: 100000 });
   for (const file of indexedFiles) {
     if (!seen.has(file.path)) {
       const result = getDb().run(
