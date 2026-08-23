@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase } from '../db/database.js'
+import { isolateHostedAccountsEnv } from '../lib/test-hermetic-accounts.js'
 import { ingestClaude, ingestJsonlProjects, ingestTakumi } from './claude.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
@@ -14,7 +15,10 @@ function jsonl(...rows: unknown[]): string {
   return rows.map(r => JSON.stringify(r)).join('\n') + '\n'
 }
 
+let restoreAccountsEnv: () => void
+
 beforeEach(() => {
+  restoreAccountsEnv = isolateHostedAccountsEnv()
   root = join(tmpdir(), `economy-claude-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   projectsDir = join(root, 'projects')
   mkdirSync(projectsDir, { recursive: true })
@@ -22,6 +26,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  restoreAccountsEnv()
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
 

@@ -172,7 +172,10 @@ export const mockGeneratePresignedLink = mock(
 );
 export const mockGenerateServerLink = mock((id: string, baseUrl: string) => `${baseUrl}/a/${id}`);
 
-const actualLinks = await import("../core/links");
+// require() keeps this synchronous (no top-level await): under `bun test
+// --isolate`, a top-level await in a module imported by a test file never
+// resumes, leaving every export in the temporal dead zone.
+const actualLinks = require("../core/links") as typeof import("../core/links");
 
 mock.module("../core/links", () => ({
   ...actualLinks,
@@ -211,7 +214,12 @@ mock.module("../core/download", () => ({
   downloadAttachment: mock(async () => ({ path: "/tmp/x", filename: "x", size: 0 })),
 }));
 
-const serverModule = await import("./server");
+// require() keeps this synchronous: a top-level `await import` would leave
+// the exported bindings in the temporal dead zone for importing test files
+// under `bun test --isolate` (each file evaluates the harness in its own
+// realm, and the awaited exports are not ready when the import resolves).
+// server.ts and its import graph have no top-level await, so require() is safe.
+const serverModule = require("./server") as typeof import("./server");
 export const createApp = serverModule.createApp;
 export const startServer = serverModule.startServer;
 

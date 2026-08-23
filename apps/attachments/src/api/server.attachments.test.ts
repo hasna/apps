@@ -11,7 +11,7 @@ import {
   mockGenerateServerLink,
   mockOpenAttachmentStream,
   mockS3Delete,
-} from "./server.test-harness.test";
+} from "./server.test-harness";
 
 describe("REST API server attachment routes", () => {
   describe("GET /api/attachments/:id", () => {

@@ -1,5 +1,13 @@
 import { describe, it, expect, mock, beforeAll, beforeEach, afterEach, afterAll, spyOn } from "bun:test";
 import { tmpdir } from "os";
+
+// Keep the server under test on the local store: with
+// HASNA_ATTACHMENTS_API_URL/KEY present in the operator's environment, the
+// server routes to the hosted attachments API (core/cloud-v1.ts) and these
+// mocked-module tests fail against live state. The one test that exercises
+// cloud routing sets the variables itself.
+delete process.env.HASNA_ATTACHMENTS_API_URL;
+delete process.env.HASNA_ATTACHMENTS_API_KEY;
 import { join } from "path";
 import { mkdirSync, rmSync } from "fs";
 import * as configModule from "../core/config";
@@ -100,6 +108,12 @@ const mockS3ClientInstance = {
   head: mock(async (_key: string) => ({ contentLength: 4096, contentType: "application/pdf" })),
   presign: mock(async () => "https://presigned"),
   presignPut: mock(async (_key: string, _contentType: string, _expiresIn: number) => "https://example.com/presigned-put-url"),
+  // The server's multipart routes call these on S3Client; mirror the api
+  // harness's mock so a leaked registration still satisfies the whole graph.
+  createMultipartUpload: mock(async () => "upload_test123"),
+  presignUploadPart: mock(async () => "https://example.com/presigned-part-url"),
+  completeMultipartUpload: mock(async () => {}),
+  abortMultipart: mock(async () => {}),
 };
 
 const mockUploadFromUrl = mock(async (_url: string, _opts: object) => ({
@@ -139,8 +153,26 @@ const mockUploadStreamAttachment = mock(async (_stream: unknown, filename: strin
 }));
 
 mock.module("../core/upload.js", () => ({ uploadFile: mockUploadFile, uploadFromUrl: mockUploadFromUrl, uploadFromBuffer: mockUploadFromBuffer, uploadStreamAttachment: mockUploadStreamAttachment }));
+// The export set mirrors src/core/download.ts so that a leaked registration in
+// the shared single-process registry still satisfies every named import in the
+// server graph (api routes need isExpired/openAttachmentStream/streamAttachment).
 mock.module("../core/download.js", () => ({
   downloadAttachment: mockDownloadAttachment,
+  streamAttachment: mock(async (_id: string) => ({
+    body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("x")); c.close(); } }),
+    contentLength: 1,
+    contentType: "text/plain",
+    status: 200,
+  })),
+  openAttachmentStream: mock(async (_id: string) => ({
+    body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("x")); c.close(); } }),
+    contentLength: 1,
+    contentType: "text/plain",
+    status: 200,
+  })),
+  isExpired: mock((_att: unknown) => false),
+  extractId: mock((id: string) => id),
+  extractShareToken: mock((id: string) => id),
 }));
 mock.module("../core/db.js", () => ({
   AttachmentsDB: class MockAttachmentsDB {
@@ -152,6 +184,14 @@ mock.module("../core/db.js", () => ({
     close = mockClose;
     insert = mockDbInsert;
     createShareLink = mockDbCreateShareLink;
+    // Mirror the api harness's mock: the server graph (store.ts, public
+    // routes) calls these, so a leaked registration still satisfies every
+    // named method on the class.
+    findShareLinksByAttachmentId = mock((_id: string) => []);
+    findShareLinkByToken = mock((_token: string) => null);
+    consumeShareLink = mock((_id: string) => true);
+    releaseShareLink = mock((_id: string) => true);
+    incrementDownloads = mock((_id: string) => {});
   },
 }));
 // Set up real config with test values
@@ -182,6 +222,10 @@ mock.module("../core/s3.js", () => ({
     head = mockS3ClientInstance.head;
     presign = mockS3ClientInstance.presign;
     presignPut = mockS3ClientInstance.presignPut;
+    createMultipartUpload = mockS3ClientInstance.createMultipartUpload;
+    presignUploadPart = mockS3ClientInstance.presignUploadPart;
+    completeMultipartUpload = mockS3ClientInstance.completeMultipartUpload;
+    abortMultipart = mockS3ClientInstance.abortMultipart;
   },
 }));
 

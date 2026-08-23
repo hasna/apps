@@ -1,4 +1,4 @@
-import { getDb } from "./database.js";
+import { getDb } from "./db-access.js";
 import type {
   Advisory,
   AdvisoryIOC,

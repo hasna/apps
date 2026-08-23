@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { startServer } from "./server.test-harness.test";
+import { startServer } from "./server.test-harness";
 
 describe("REST API — startServer", () => {
   it("calls Bun.serve when typeof Bun !== undefined (Bun environment)", () => {

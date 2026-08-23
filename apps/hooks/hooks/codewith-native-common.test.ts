@@ -52,7 +52,11 @@ describe("codewith native common helpers", () => {
     });
 
     const git = (cwd: string, ...args: string[]): void => {
-      const result = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", ...args], {
+      // Disable hooks for fixture repos: the machine's ambient global
+      // core.hooksPath (e.g. a lefthook wrapper) writes to commit stderr and
+      // would fail the empty-stderr assertion below for reasons unrelated to
+      // the code under test.
+      const result = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "core.hooksPath=", ...args], {
         cwd,
         stdout: "pipe",
         stderr: "pipe",

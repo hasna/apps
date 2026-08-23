@@ -6,7 +6,7 @@ import {
   mockAttachment,
   mockDbFindAll,
   mockUploadStreamAttachment,
-} from "./server.test-harness.test";
+} from "./server.test-harness";
 
 describe("REST API server", () => {
   describe("GET /api/health", () => {
@@ -40,7 +40,7 @@ describe("REST API server", () => {
 
   describe("API auth", () => {
     it("keeps health public when ATTACHMENTS_API_TOKEN is configured", async () => {
-      process.env.ATTACHMENTS_API_TOKEN = "secret-token";
+      process.env["ATTACHMENTS_API_TOKEN"] = "secret-token";
       const res = await currentApp().request("/api/health");
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -48,13 +48,13 @@ describe("REST API server", () => {
     });
 
     it("rejects operational API requests without the configured token", async () => {
-      process.env.ATTACHMENTS_API_TOKEN = "secret-token";
+      process.env["ATTACHMENTS_API_TOKEN"] = "secret-token";
       const res = await currentApp().request("/api/attachments");
       expect(res.status).toBe(401);
     });
 
     it("accepts bearer tokens for operational API requests", async () => {
-      process.env.ATTACHMENTS_API_TOKEN = "secret-token";
+      process.env["ATTACHMENTS_API_TOKEN"] = "secret-token";
       const res = await currentApp().request("/api/attachments", {
         headers: { authorization: "Bearer secret-token" },
       });

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { openDatabase } from '../db/database.js'
+import { isolateHostedAccountsEnv } from '../lib/test-hermetic-accounts.js'
 import { ingestCodex, readCodexModel } from './codex.js'
 import { computeCost } from '../lib/pricing.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
@@ -13,8 +14,10 @@ let codexDbPath: string
 let configPath: string
 let rolloutPath: string
 let db: Database
+let restoreAccountsEnv: () => void
 
 beforeEach(() => {
+  restoreAccountsEnv = isolateHostedAccountsEnv()
   root = join(tmpdir(), `economy-codex-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   mkdirSync(root, { recursive: true })
   codexDbPath = join(root, 'state_5.sqlite')
@@ -26,6 +29,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  restoreAccountsEnv()
   delete process.env['HASNA_ECONOMY_CODEX_DB_PATH']
   delete process.env['HASNA_ECONOMY_CODEX_CONFIG_PATH']
   delete process.env['HASNA_ECONOMY_CODEWITH_DB_PATH']

@@ -15,6 +15,11 @@ const SYNC_ENV_KEYS = [
   'HASNA_ECONOMY_CODEX_CONFIG_PATH',
   'HASNA_ECONOMY_GEMINI_TMP_DIR',
   'HASNA_ECONOMY_GEMINI_HISTORY_DIR',
+  // Account resolution (src/lib/accounts.ts) calls the hosted accounts API
+  // when these are set, which 401s under a mismatched app token. The sync
+  // tests exercise the ingest path, so keep them off the ambient cloud store.
+  'HASNA_ACCOUNTS_API_KEY',
+  'HASNA_ACCOUNTS_API_URL',
 ] as const
 
 function makeDb(): Database {
@@ -102,6 +107,7 @@ describe('REST API server', () => {
     db = makeDb()
     seedData(db)
     handler = createHandler(db)
+    for (const key of SYNC_ENV_KEYS) delete process.env[key]
   })
 
   afterEach(() => {

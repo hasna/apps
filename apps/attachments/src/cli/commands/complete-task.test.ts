@@ -174,7 +174,7 @@ describe("completeTaskWithFiles", () => {
   it("uploads files, PATCHes evidence into task metadata, then completes", async () => {
     const upload = makeUpload("att_001", "https://example.com/att_001");
     const fakeFetch = makeFetch();
-    process.env.HASNA_TODOS_API_KEY = "remote-key";
+    process.env["HASNA_TODOS_API_KEY"] = "remote-key";
 
     const result = await completeTaskWithFiles(
       "TASK-001",
@@ -481,6 +481,7 @@ describe("complete-task CLI command", () => {
   it("uses custom --todos-url when provided", async () => {
     const seen: string[] = [];
     const base = makeFetch();
+    const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: unknown, init?: unknown) => {
       seen.push(String(url));
       return (base as unknown as (u: unknown, i?: unknown) => Promise<Response>)(url, init);
@@ -496,6 +497,7 @@ describe("complete-task CLI command", () => {
       expect(seen.every((u) => u.startsWith("http://localhost:4000"))).toBe(true);
     } finally {
       capture.restore();
+      globalThis.fetch = originalFetch;
     }
   });
 

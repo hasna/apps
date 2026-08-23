@@ -81,12 +81,18 @@ describe("hasna.contract.json", () => {
     expect(result.success).toBe(true);
   });
 
-  test("declares the app identity the published package uses", () => {
+  test("declares the app identity the published package uses", async () => {
     const manifest = ServiceContractManifestSchema.parse(rawManifest);
     expect(manifest.schema).toBe("hasna.service_contract.v1");
     expect(manifest.name).toBe("shield");
     expect(manifest.contractVersion).toBe("v1");
-    expect(manifest.kitVersion).toBe("0.13.1");
+    // Derive the expected kit version from the installed @hasna/contracts
+    // package (same pattern as economy's contract-manifest test) so the
+    // manifest cannot silently drift away from the kit it claims to track.
+    const installed = (await Bun.file(
+      join(repoRoot, "node_modules", "@hasna", "contracts", "package.json"),
+    ).json()) as { version: string };
+    expect(manifest.kitVersion).toBe(installed.version);
   });
 
   test("declared bins match package.json bin", () => {
