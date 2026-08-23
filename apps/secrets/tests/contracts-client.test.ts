@@ -51,7 +51,14 @@ describe("vendored client mode helpers", () => {
       expect(normalizeStorageMode(alias.replace("_", "-"))).toEqual({ mode: "cloud", deprecatedAlias: alias });
     }
     expect(() => normalizeStorageMode("invalid")).toThrow("Unknown storage mode");
-    expect(defaultCloudBaseUrl("demo")).toBe("https://demo.hasna.xyz");
+    // The published package ships no real hostname: absent HASNA_FLEET_API_DOMAIN
+    // the default composes the neutral, non-resolving `.example` placeholder; set,
+    // it composes the configured suffix. An explicit env map keeps the ambient
+    // environment out of the assertion.
+    expect(defaultCloudBaseUrl("demo", {})).toBe("https://demo.your-deployment.example");
+    expect(defaultCloudBaseUrl("demo", { HASNA_FLEET_API_DOMAIN: "api.example.org" })).toBe(
+      "https://demo.api.example.org",
+    );
   });
 
   it("preserves HTTP error metadata", () => {

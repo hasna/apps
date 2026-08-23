@@ -353,6 +353,37 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
   };
 }
 
+/**
+ * Build the /v1 verifier the deployed server runs on.
+ *
+ * `keyStatus` is the STRICT hook: anything other than `"active"` denies, so a
+ * validly-signed token this service has no `api_keys` record of is refused
+ * (`unknown_key`, 401). The deprecated `isRevoked`-only wiring this replaced
+ * could not do that — it returns `false` both for an active key and for one
+ * that was never registered, which makes an unregistered key irrevocable — and
+ * `@hasna/contracts` >= 0.8.7 refuses it EAGERLY AT CONSTRUCTION. Because
+ * `startCloudServer` builds the verifier during boot, that throw took the whole
+ * service down rather than one route: `secrets-serve` could not start at all
+ * under the pinned contracts 0.13.4.
+ *
+ * Same defect class as the @hasna/calendar 0.3.6 /v1 503 incident (row
+ * I38-00755, fixed in #967) and the @hasna/todos 0.15.38 one (row ae34a051,
+ * fixed in #769). Extracted from `startCloudServer` so the wiring is reachable
+ * from a test without opening a Postgres pool or running the version backfill.
+ */
+export function createCloudVerifier(client: PoolQueryClient, signingSecret: string): ApiKeyVerifier {
+  const keyStore = new ApiKeyStore(client);
+  return verifyApiKey({
+    app: APP_NAME,
+    signingSecret,
+    keyStatus: keyStore.keyStatus,
+    audit: (e) => {
+      // Structured, value-free audit line (never logs the token or secret).
+      console.log(JSON.stringify({ evt: "api_auth", ...e }));
+    },
+  });
+}
+
 /** Boot the cloud service: resolve env, open the pool, build auth + routes. */
 export async function startCloudServer(): Promise<void> {
   bootstrapCloudEnv();
@@ -368,16 +399,7 @@ export async function startCloudServer(): Promise<void> {
   // run is a no-op (UNIQUE(key, version)).
   const backfilled = await store.runVersionBackfill();
   if (backfilled > 0) console.log(`secrets-serve: version baseline backfilled ${backfilled} key(s)`);
-  const keyStore = new ApiKeyStore(client);
-  const verifier = verifyApiKey({
-    app: APP_NAME,
-    signingSecret,
-    isRevoked: keyStore.isRevoked,
-    audit: (e) => {
-      // Structured, value-free audit line (never logs the token or secret).
-      console.log(JSON.stringify({ evt: "api_auth", ...e }));
-    },
-  });
+  const verifier = createCloudVerifier(client, signingSecret);
 
   const handle = createHandler({ client, store, verifier });
 

@@ -75,6 +75,32 @@
  * those stale conformance entries were deleted. Current kit/pin drift for
  * hooks (0.8.4/0.11.1), mementos (0.11.1/0.10.6) and orgs (0.10.6/0.11.1)
  * is recorded in KIT_VERSION_EXCEPTIONS pending their pin migrations.
+ * 2026-08-23 (main-gate repair, PR #946): consolidations' SDK exception
+ * entry DELETED — the member ships an `./sdk` export (all four surfaces
+ * present), so the recorded exception that passes was a stale-entry failure
+ * under the two-sided contract. No kitVersion exception was ADDED in this
+ * change: the 13 unrecorded kit/pin mismatches CI reported (access,
+ * calendar, conversations, economy, emails, knowledge, machines, markdown,
+ * prompts, recordings, secrets, sessions, shield) were FIXED by aligning
+ * each manifest's kitVersion to its own pinned @hasna/contracts version
+ * rather than allowlisted. The alignment is verdict-neutral by measurement,
+ * not by assumption: `contracts repo-conformance` was run for all 13 before
+ * and after at each member's effective validator version and every verdict
+ * is unchanged (3 ok, 10 fail), so every recorded CONTRACTS_EXCEPTIONS
+ * member still fails as the two-sided contract requires. kitVersion does not
+ * select the validator for these members — all 13 pin a dep >= 0.4.1, so
+ * resolveValidatorVersion returns the pin — and the validator does not gate
+ * on the declared kit (measured: apps/access passes at both 0.13.4 and the
+ * self-test's 0.11.1 with kit=0.13.1 and kit=0.13.4).
+ * 2026-08-23 (main-gate repair, PR #966): prompts' SDK exception entry
+ * DELETED — release(prompts) 0.3.34 (main da6f7465f) added the `./sdk`
+ * export to apps/prompts/package.json while the recorded exception stayed,
+ * so the entry became a stale record that fails the two-sided contract
+ * exactly as consolidations' did below. Same class, same remedy: delete the
+ * record, scaffold nothing. prompts keeps its CONTRACTS_EXCEPTIONS entry —
+ * that registry is about manifest conformance, not surfaces, and prompts
+ * still fails it. The 43 members that are recorded AND still genuinely
+ * missing `./sdk` are untouched and keep the check non-vacuous.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -332,7 +358,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "pixels", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #69." },
-  { member: "prompts", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "router", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -484,14 +509,25 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 ];
 
 /** kitVersion must match the member's pinned @hasna/contracts version
- * (normalized). Recorded mismatches: */
+ * (normalized). Recorded mismatches — kitVersion/pinned refreshed to the
+ * MEASURED tree 2026-08-23 (the recorded numbers had drifted behind the
+ * contracts-align waves: files/todos/hooks were recorded against pins of
+ * 0.5.2/0.5.2/0.11.1 while their manifests now pin 0.13.4, and datasets was
+ * recorded without its caret). The entries themselves all still hold — each
+ * is a member whose kit claim cannot be moved to its pin without other work:
+ * datasets and mementos pin BELOW their kit claim (aligning would downgrade
+ * the claim; the pin is held back because contracts 0.11.1 dropped the
+ * parseContract export the code imports), and files/todos/hooks/orgs carry
+ * pre-backend-schema-era manifests whose shape the newer kit does not
+ * describe, so the claim moves only with the manifest rewrite their
+ * CONTRACTS_EXCEPTIONS remediation tasks own. */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
-  { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
-  { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
-  { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
+  { member: "datasets", kitVersion: "0.11.1", pinned: "^0.10.6" },
+  { member: "files", kitVersion: "0.4.2", pinned: "0.13.4" },
+  { member: "todos", kitVersion: "0.11.1", pinned: "0.13.4" },
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
-  { member: "hooks", kitVersion: "0.8.4", pinned: "0.11.1" },
+  { member: "hooks", kitVersion: "0.8.4", pinned: "0.13.4" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —

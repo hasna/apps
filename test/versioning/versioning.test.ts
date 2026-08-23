@@ -33,10 +33,19 @@ function syntheticGit(command: string[], cwd: string): string {
 // construction on those release PRs. The two tests in this group pin the exemption
 // detector against synthetic git repos: a release-shaped diff MUST be recognized
 // (positive arm) and a plain unbacked bump MUST stay recognized as such (negative arm).
+// The fixture's own branch is named EXPLICITLY (`git init -b`), never inherited from
+// the machine: `git init` takes its initial branch from init.defaultBranch, so a
+// fixture that later checks out a hardcoded "master" dies with `pathspec 'master' did
+// not match any file(s)` on any machine configured for "main" — measured on station01
+// (init.defaultBranch=main), where the base-moved-past-the-release test threw before
+// it could assert anything. A thrown fixture is not a failing invariant; the branch
+// name must be a fixture constant.
+const FIXTURE_BRANCH = "fixture-head";
+
 function releaseShapeRepo(): { dir: string; consumed: () => Map<string, string> } {
   const dir = mkdtempSync(join(tmpdir(), "versioning-release-shape-"));
   const git = (command: string[]) => syntheticGit(command, dir);
-  git(["git", "init", "-q"]);
+  git(["git", "init", "-q", "-b", FIXTURE_BRANCH]);
   git(["git", "config", "user.email", "test@example.com"]);
   git(["git", "config", "user.name", "versioning-test"]);
   // Machine git hooks (e.g. a global lefthook) add seconds per commit and make the
@@ -70,14 +79,19 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // for the release lane's missing heading step and could never converge on a moving
 // main (measured: record half-life ~2.5h, review cycle > 2.5h).
 
-// Literal runtime version exports are a different class: a hand-written constant in
-// source, not a release-lane ledger. Verified live at this change (2026-08-15,
-// main 5957da4ee): catalog 0.2.0/0.1.0 and treasury 0.1.1/0.1.0 still fire and both
-// records still match, so the map is kept.
-const KNOWN_RUNTIME_MISMATCHES = new Map([
-  ["@hasna/catalog", { packageVersion: "0.2.0", runtimeVersion: "0.1.0" }],
-  ["@hasna/treasury", { packageVersion: "0.1.1", runtimeVersion: "0.1.0" }],
-]);
+// Literal runtime version exports are a different class from the deleted changelog
+// ledger: a hand-written constant in source, not a release-lane artifact. So the
+// EXEMPTION MECHANISM is kept — but it now carries no entries.
+//
+// Re-measured 2026-08-23, and both records are dead: apps/catalog/src/version.ts
+// exports VERSION "0.2.1" against package version 0.2.1 (aligned, no longer fires),
+// and apps/treasury/src/version.ts exports `APP_VERSION = pkg.version` — derived, not
+// a literal, so readStaticRuntimeVersions (which requires a same-line string literal)
+// yields nothing for it and it cannot fire at all. An exemption that no longer
+// matches its subject is a hole, not a record: it would silently pass exactly the
+// catalog 0.2.0/0.1.0 drift it was written to document if that recurred. Empty is the
+// honest state; a genuine future exemption is one line plus its measurement.
+const KNOWN_RUNTIME_MISMATCHES = new Map<string, { packageVersion: string; runtimeVersion: string }>([]);
 
 // The npm-parity keyspace is a REPORTING lane (f05fe292 design, option (a)): registry
 // and main are two independent writers (publishes from other repos vs imports into
@@ -211,7 +225,7 @@ describe("hasna/apps versioning integrity", () => {
       rmSync(join(dir, ".changeset", "release-1.md"));
       git(["git", "add", "-A"]);
       git(["git", "commit", "-qm", "base absorbs release"]);
-      git(["git", "checkout", "-q", "master"]);
+      git(["git", "checkout", "-q", FIXTURE_BRANCH]);
       const backed = consumed();
       expect(backed.get("@hasna/pkg")).toBe("release-1.md");
     } finally {

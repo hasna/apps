@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Major Changes
+### Minor Changes
 
 - **BREAKING: the macOS desktop app is removed from `@hasna/notes` and now lives in
   `hasna-products/personalnotes` (repo `hasna-products/personalnotes`).** Owner
