@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { captureSnapshot, getSnapshotEnvelope, listSnapshots, planSnapshotRestore } from "../runtime.js";
+import { getPackageVersion } from "../version.js";
 
 interface JsonRpcRequest {
   jsonrpc?: "2.0";
@@ -114,6 +115,34 @@ async function callTool(name: string, args: Record<string, unknown>) {
   throw new Error(`Unknown tool: ${name}`);
 }
 
+function printHelp(): void {
+  console.log(`Usage: snapshots-mcp [options]
+
+MCP server for @hasna/snapshots
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+
+Reads JSON-RPC requests over stdio.`);
+}
+
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  // Control surfaces (todos row cbb7ca3d): --version/--help must answer
+  // BEFORE the stdio read. Previously `snapshots-mcp --version` entered
+  // stdio mode, printed nothing, and exited rc=0 silently when stdin closed.
+  if (args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(getPackageVersion());
+    process.exit(0);
+  }
+  await main();
+}
+
 async function main(): Promise<void> {
   const input = await new Response(Bun.stdin.stream()).text();
   for (const line of input.split(/\r?\n/).filter((candidate) => candidate.trim())) {
@@ -132,8 +161,4 @@ async function main(): Promise<void> {
       }));
     }
   }
-}
-
-if (import.meta.main) {
-  await main();
 }

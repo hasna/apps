@@ -13,6 +13,7 @@ import {
 import { normalizePolicyMode } from "../policy.js";
 import { applyServicePlan, planService, serviceStatus } from "../service.js";
 import { defaultDbPath } from "../util.js";
+import { getPackageVersion } from "../version.js";
 
 interface ParsedArgs {
   positional: string[];
@@ -20,6 +21,17 @@ interface ParsedArgs {
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
+  // Control surfaces (todos row cbb7ca3d): --version/--help must answer
+  // BEFORE command dispatch. Previously `snapshots --version` fell through
+  // to the default help case and printed usage JSON instead of the version.
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(getPackageVersion());
+    return;
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printHelp();
+    return;
+  }
   const parsed = parseArgs(argv);
   const [command = "help", ...rest] = parsed.positional;
   const dbPath = stringFlag(parsed, "db") ?? defaultDbPath();
