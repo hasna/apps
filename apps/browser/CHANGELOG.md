@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.30
+
+### Patch Changes
+
+- Updated dependencies [85ec5ff]
+  - @hasna/conversations@0.7.6
+
 ## 0.5.29
 
 ### Patch Changes
