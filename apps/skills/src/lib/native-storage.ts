@@ -84,6 +84,79 @@ export const SKILLS_STORAGE_ENV = SKILLS_NATIVE_STORAGE_ENV;
 export const SKILLS_STORAGE_FALLBACK_ENV = SKILLS_NATIVE_STORAGE_FALLBACK_ENV;
 
 /**
+ * Compatibility contract for the `./storage` subpath (`@hasna/skills/storage`).
+ *
+ * Consumers — including private SaaS embedders — compile against this subpath.
+ * `version` is the contract version: it MUST be bumped on every breaking
+ * removal or rename of a listed member. `values` are the runtime exports
+ * (functions, classes, constants) and `types` the type-only exports the
+ * subpath guarantees; `src/storage-boundary.test.ts` imports the subpath and
+ * fails if a listed member is no longer exported, so a removal cannot land
+ * silently.
+ *
+ * The retirement this contract exists to make unrepeatable: in 0.1.61 the
+ * storage-mode label functions, their mode type, and the storage-mode env
+ * variables were removed from both the main entrypoint and this subpath (see
+ * the CHANGELOG entry for 0.1.61, "the deployment 'mode' concept is gone").
+ * Nothing replaced them with a successor — the mode concept is gone and must
+ * not be reintroduced. The replacement for the old question ("which mode am I
+ * in?") is configuration-derived status: call
+ * `getSkillsNativeStorageStatus()` (aliases `getSkillsStorageStatus` /
+ * `getStorageStatus`) and read `remote.databaseConfigured` /
+ * `remote.s3Configured`. On-box SQLite and files are always present; Postgres
+ * and S3 are used when, and only when, their variables are set.
+ */
+export const storageCapabilities = {
+  version: 1,
+  values: [
+    "SKILLS_NATIVE_STORAGE_ENV",
+    "SKILLS_NATIVE_STORAGE_FALLBACK_ENV",
+    "SKILLS_STORAGE_ENV",
+    "SKILLS_STORAGE_FALLBACK_ENV",
+    "SKILLS_STORAGE_TABLES",
+    "STORAGE_TABLES",
+    "SkillsPostgresSyncStore",
+    "SkillsS3ObjectStore",
+    "buildSkillsS3ObjectUrl",
+    "createSkillsPostgresSyncStore",
+    "createSkillsS3ObjectStore",
+    "createSkillsSnapshotSyncRecord",
+    "exportSkillsLocalSnapshot",
+    "getSkillsNativeStorageStatus",
+    "getSkillsStorageDatabaseEnv",
+    "getSkillsStorageDatabaseUrl",
+    "getSkillsStorageStatus",
+    "getStorageDatabaseEnv",
+    "getStorageDatabaseUrl",
+    "getStorageStatus",
+    "importSkillsLocalSnapshot",
+    "planSkillsS3SnapshotUpload",
+    "resolveSkillsNativeStorageConfig",
+    "resolveStorageConfig",
+    "signSkillsAwsV4Request",
+    "skillsPostgresSyncSchemaSql",
+    "storageCapabilities",
+    "uploadSkillsSnapshotFilesToS3",
+  ],
+  types: [
+    "AwsCredentials",
+    "SignSkillsAwsV4RequestOptions",
+    "SkillsFetch",
+    "SkillsLocalSnapshot",
+    "SkillsNativeStorageConfig",
+    "SkillsNativeStorageStatus",
+    "SkillsPostgresQueryClient",
+    "SkillsS3ObjectStoreOptions",
+    "SkillsS3PutObjectOptions",
+    "SkillsS3SnapshotPlanEntry",
+    "SkillsS3StoredObject",
+    "SkillsSnapshotFile",
+    "SkillsStorageTable",
+    "SkillsSyncRecord",
+  ],
+} as const;
+
+/**
  * Token identifying this application's environment namespace.
  *
  * Used only to scope the retired-setting refusal to our own variables. Sibling

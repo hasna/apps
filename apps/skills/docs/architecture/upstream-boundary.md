@@ -44,6 +44,33 @@ These belong in a private service wrapper, not the open core:
 - Production SaaS databases and artifact buckets, unless passed explicitly into
   open-core storage envs for a documented sync operation.
 
+## Storage Subpath Contract (`./storage`)
+
+The `./storage` subpath (`@hasna/skills/storage`) is a stable compatibility
+surface for consumers that embed the package's sync-storage helpers — including
+private SaaS wrappers. Its supported surface is declared, versioned, and
+test-enforced:
+
+- `storageCapabilities` is exported from both `./storage` and the main
+  entrypoint. It lists `version`, `values` (runtime exports: functions,
+  classes, constants), and `types` (type-only exports) that the subpath
+  guarantees. `src/storage-boundary.test.ts` imports the subpath and asserts
+  every listed value is present, so a future removal fails the OSS suite.
+- Removing or renaming a listed member is a breaking change for embedders:
+  bump `storageCapabilities.version` in the same change and update the
+  contract lists, the docs, and the tests together. Do not remove a member
+  silently.
+- The retired deployment-"mode" concept has no successor and must not be
+  reintroduced: the storage-mode label functions, their mode type, and the
+  storage-mode env variables were removed from both entrypoints in 0.1.61 (see
+  the CHANGELOG entry for 0.1.61 for the exact names). The replacement for the
+  old "which mode am I in?" question is configuration-derived status: call
+  `getSkillsNativeStorageStatus()` (aliases `getSkillsStorageStatus` /
+  `getStorageStatus`) and read `remote.databaseConfigured` /
+  `remote.s3Configured`. On-box SQLite and files are always present; Postgres
+  and S3 are used when, and only when, their variables are set. The status
+  payloads carry no `mode` field.
+
 ## Sync Rules
 
 1. Preserve local-capable behavior for the open package.

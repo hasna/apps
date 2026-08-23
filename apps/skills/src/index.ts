@@ -359,6 +359,7 @@ export {
   resolveStorageConfig,
   signSkillsAwsV4Request,
   skillsPostgresSyncSchemaSql,
+  storageCapabilities,
   uploadSkillsSnapshotFilesToS3,
   type AwsCredentials,
   type SignSkillsAwsV4RequestOptions,
