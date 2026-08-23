@@ -5,9 +5,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getStore } from "./store/index.js";
 import type { SecretType } from "./types.js";
+import { VERSION } from "./version.js";
 
 const PACKAGE_NAME = "@hasna/secrets";
-const FALLBACK_PACKAGE_VERSION = "0.1.31";
+const FALLBACK_PACKAGE_VERSION = VERSION;
 
 export interface SecretReferenceStatus {
   service: "secrets";

@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { execSync } from "child_process";
+import { VERSION } from "./version.js";
 
 const MCP_NAME = "secrets";
 
@@ -60,7 +61,7 @@ function installGemini(cmd: string): string {
   // gemini-extension.json manifest
   writeFileSync(
     join(dir, "gemini-extension.json"),
-    JSON.stringify({ name: MCP_NAME, version: "1.0.0" }, null, 2)
+    JSON.stringify({ name: MCP_NAME, version: VERSION }, null, 2)
   );
 
   // SKILL.md with MCP server info
