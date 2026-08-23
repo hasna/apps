@@ -132,10 +132,16 @@ export function getCloudVerifier(): ApiKeyVerifier {
       "Calendar /v1 auth requires a signing secret (HASNA_CALENDAR_API_SIGNING_KEY / HASNA_API_SIGNING_KEY / API_KEY_SIGNING_SECRET).",
     );
   }
+  const store = getApiKeyStore();
   cachedVerifier = verifyApiKey({
     app: CALENDAR_APP_SLUG,
     signingSecret,
-    isRevoked: getApiKeyStore().isRevoked,
+    // Strict key-status hook: anything other than "active" (unknown, revoked,
+    // expired) denies. The contract refuses the deprecated `isRevoked`-only
+    // wiring eagerly at construction (contracts #62, 0.8.7+) — the calendar
+    // 0.3.6 /v1 503 incident (row I38-00755, deploy-oss-fleet-0823a confirm
+    // 725517) was exactly that throw surfacing as 503 on every business route.
+    keyStatus: store.keyStatus,
   });
   return cachedVerifier;
 }
