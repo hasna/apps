@@ -29,7 +29,7 @@ bun add connect-clickbank
 connect-clickbank config set-key YOUR_API_KEY
 
 # Or use environment variable
-export CLICKBANK_API_KEY=YOUR_API_KEY
+export CLICKBANK_API_KEY=<your-api-key>
 
 # View today's stats
 connect-clickbank stats today
@@ -288,4 +288,4 @@ MIT
 
 - [ClickBank API Documentation](https://support.clickbank.com/hc/en-us/articles/220376527-ClickBank-APIs)
 - [ClickBank API Specifications](https://support.clickbank.com/en/articles/10535397-clickbank-api-specifications)
-- [How to Create ClickBank API Keys](https://support.clickbank.com/hc/en-us/articles/360040581831-How-to-Create-ClickBank-API-Keys)
+- [How to Create ClickBank API Keys](https://support.clickbank.com/hc/en-us)

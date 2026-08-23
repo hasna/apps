@@ -42,8 +42,22 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }> = [
-  { name: "hasna-xyz-domain", re: /[.]hasna[.]xyz/ },
-  { name: "aws-arn", re: /arn[:]aws[:]/ },
+  // The content form of the domain detector requires a CONCRETE label before
+  // `.hasna.xyz`. The strict name scan keeps the catch-all; the content form
+  // drops the measured benign class of placeholder templates in runtime host
+  // resolution and docs — `https://${name}.hasna.xyz`, `<app>.hasna.xyz` —
+  // which carry no internal identity (measured on @hasna/secrets
+  // transport.ts host default and its bundled docs). Concrete subdomains
+  // (`secrets.hasna.xyz`, `telephony.hasna.xyz`) still fire in content.
+  { name: "hasna-xyz-domain", re: /[.]hasna[.]xyz/, contentRe: /[a-z0-9-]+[.]hasna[.]xyz/ },
+  // The content form of the ARN detector requires an account-bearing or
+  // concrete-resource ARN. The strict name scan keeps the catch-all; the
+  // content form drops the measured benign class of placeholder templates in
+  // dynamic ARN construction — `arn:aws:s3:::${bucket}` (measured on
+  // @hasna/emails buildSesBucketPolicy), which carries no internal identity.
+  // Real ARNs — `arn:aws:iam::123456789012:role/x`, `arn:aws:s3:::bucket` —
+  // still fire in content.
+  { name: "aws-arn", re: /arn[:]aws[:]/, contentRe: /arn:aws:(?:[a-z0-9-]+:[a-z0-9-]*:[0-9]{12}|s3:::[^$"'\s`]+)/ },
   // The content form of the account-id detector drops two measured benign
   // classes that a bare word-boundary 12-digit run fires on in generated
   // bundles (measured on @hasna/conversations 0.7.4): the trailing segment of
@@ -427,6 +441,45 @@ function selfTest(): number {
       "clean pack reports the content scan census (entries + contents scanned)",
       clean.rc === 0 &&
         /\d+ tarball entries, \d+ contents scanned, 0 internal-infra strings/.test(cleanOut),
+    );
+
+    // Content-form refinements: a real account-bearing ARN in content FIRES,
+    // while the measured benign placeholder templates (dynamic ARN
+    // construction and host defaults with no internal identity) stay SILENT.
+    const arnRoot = path.join(root, "arn-root");
+    fs.mkdirSync(arnRoot, { recursive: true });
+    fixturePackage(
+      path.join(arnRoot, "apps"),
+      "self-test-arn",
+      ["policy.json"],
+      false,
+      { "policy.json": `{"Resource": "arn:aws:iam::123456789012:role/example"}\n` },
+    );
+    const arn = capture(() => run(arnRoot));
+    const arnOut = arn.lines.join("\n");
+    check(
+      "real account-bearing ARN in a pack entry's CONTENT FIRES (rc=1, pattern named)",
+      arn.rc === 1 && arnOut.includes("PUBLISH-GUARD VIOLATION") && arnOut.includes("aws-arn"),
+    );
+
+    const templateRoot = path.join(root, "template-root");
+    fs.mkdirSync(templateRoot, { recursive: true });
+    fixturePackage(
+      path.join(templateRoot, "apps"),
+      "self-test-template",
+      ["policy.json"],
+      false,
+      {
+        "policy.json":
+          `{"Resource": "arn:aws:s3:::${"${bucket}"}/*"}\n` +
+          `{"Host": "https://${"${name}"}.hasna.xyz"}\n`,
+      },
+    );
+    const template = capture(() => run(templateRoot));
+    const templateOut = template.lines.join("\n");
+    check(
+      "placeholder ARN/domain templates in CONTENT stay SILENT (rc=0, no violation)",
+      template.rc === 0 && !templateOut.includes("PUBLISH-GUARD VIOLATION"),
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

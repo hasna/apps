@@ -29,7 +29,7 @@ bun test
 ## Authentication
 
 - **Bearer token (dev):** Full-access token from Wave developer portal
-- **OAuth2 (production):** Scopes per https://developer.waveapps.com/hc/en-us/articles/360032818132-OAuth-Scopes
+- **OAuth2 (production):** Scopes per the Wave OAuth scopes documentation (developer.waveapps.com)
 
 Auth type: `oauth` / `bearer`
 
