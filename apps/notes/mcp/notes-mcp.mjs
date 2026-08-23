@@ -36,6 +36,30 @@ import {
 } from '../tools/notes-agent.mjs';
 import { reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
 
+// Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+// answer BEFORE any module-scope side effect — including
+// reconcileNoteCreatedEvents(dataRoot()) below, which scans the note store
+// and writes event-spool files. They previously fell into the stdio framing
+// loop and printed nothing (silent-empty family).
+const EARLY_ARGV = process.argv.slice(2);
+if (EARLY_ARGV.includes('--version') || EARLY_ARGV.includes('-V')) {
+  const { readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '../package.json'), 'utf8'));
+  console.log(pkg.version);
+  process.exit(0);
+}
+if (EARLY_ARGV.includes('--help') || EARLY_ARGV.includes('-h')) {
+  console.log(`Usage: notes-mcp [options]
+
+Hasna Notes MCP server (stdio)
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command`);
+  process.exit(0);
+}
+
 await reconcileNoteCreatedEvents(dataRoot()).catch(() => null);
 
 const tools = [

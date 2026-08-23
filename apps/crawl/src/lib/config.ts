@@ -3,8 +3,17 @@ import { join } from "path";
 import type { CrawlConfig } from "../types/index.js";
 import { getDataDir } from "../db/database.js";
 
-const CONFIG_DIR = getDataDir();
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+// Lazy, not module scope: getDataDir() migrates the legacy data dir and
+// mkdirs ~/.hasna/crawl as a side effect. Running it at import time would
+// make `crawl-mcp --version`/`crawl-serve --version` touch the data dir
+// before the early-arg guard answers (todos row 7e5f8f3d).
+function configDir(): string {
+  return getDataDir();
+}
+
+function configFile(): string {
+  return join(configDir(), "config.json");
+}
 
 const DEFAULT_CONFIG: CrawlConfig = {
   userAgent: "crawl/1.0 (+https://github.com/hasna/crawl)",
@@ -19,17 +28,17 @@ const DEFAULT_CONFIG: CrawlConfig = {
 };
 
 function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  if (!existsSync(configDir())) {
+    mkdirSync(configDir(), { recursive: true });
   }
 }
 
 function readConfigFile(): CrawlConfig {
   try {
-    if (!existsSync(CONFIG_FILE)) {
+    if (!existsSync(configFile())) {
       return { ...DEFAULT_CONFIG };
     }
-    const raw = readFileSync(CONFIG_FILE, "utf-8");
+    const raw = readFileSync(configFile(), "utf-8");
     const parsed = JSON.parse(raw) as Partial<CrawlConfig>;
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
@@ -39,11 +48,11 @@ function readConfigFile(): CrawlConfig {
 
 function writeConfigFile(config: CrawlConfig): void {
   ensureConfigDir();
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+  writeFileSync(configFile(), JSON.stringify(config, null, 2), "utf-8");
 }
 
 export function getConfigPath(): string {
-  return CONFIG_FILE;
+  return configFile();
 }
 
 export function getConfig(): CrawlConfig {

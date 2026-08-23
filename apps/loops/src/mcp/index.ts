@@ -1099,6 +1099,28 @@ export function listToolsForCli(): LoopsMcpToolMetadata[] {
 }
 
 async function main(): Promise<void> {
+  // Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+  // answer BEFORE any transport resolution or bind. They previously fell
+  // through and started the shared HTTP server (:8890) with no output.
+  const argv = process.argv.slice(2);
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(packageVersion());
+    return;
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Usage: loops-mcp [options]
+
+MCP server for @hasna/loops (Streamable HTTP by default; --stdio to select stdio).
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  list-tools     print the tool metadata as JSON
+  --http         explicitly select Streamable HTTP transport
+  --stdio        explicitly select stdio transport
+  --port <n>     HTTP port (default: 8890)`);
+    return;
+  }
   if (process.argv[2] === "list-tools") {
     console.log(JSON.stringify(listToolsForCli(), null, 2));
     return;

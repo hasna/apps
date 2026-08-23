@@ -93,6 +93,21 @@ export function assertStdioSafety(): void {
 }
 
 async function main(): Promise<void> {
+  // Binds-before-version class (todos row 7e5f8f3d): --help must answer
+  // BEFORE any transport. It previously fell through and printed nothing
+  // (silent-empty family on help).
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(`Usage: treasury-mcp [options]
+
+MCP server for @hasna/treasury.
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  --http         explicitly select Streamable HTTP transport
+  --port <n>     HTTP port (--http mode)`);
+    return;
+  }
   if (process.argv.includes("--version") || process.argv.includes("-V")) {
     console.log(APP_VERSION);
     return;

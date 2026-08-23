@@ -1,2 +1,4 @@
-/** Single source of truth for the app version. */
-export const APP_VERSION = "0.1.5";
+import pkg from "../package.json";
+
+/** Single source of truth for the app version (derived from package.json). */
+export const APP_VERSION = pkg.version;

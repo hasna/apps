@@ -52,6 +52,25 @@ const tools = [
   }
 ];
 
+// Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+// answer BEFORE the readline transport is entered. They previously fell into
+// the readline loop and printed nothing (silent-empty family).
+const EARLY_ARGV = process.argv.slice(2);
+if (EARLY_ARGV.includes("--version") || EARLY_ARGV.includes("-V")) {
+  console.log(readPackageVersion());
+  process.exit(0);
+}
+if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
+  console.log(`Usage: tai-mcp [options]
+
+MCP server for @hasna/tai (stdio).
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command`);
+  process.exit(0);
+}
+
 const rl = createInterface({ input: process.stdin });
 
 rl.on("line", async (line) => {

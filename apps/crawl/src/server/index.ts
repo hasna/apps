@@ -544,5 +544,26 @@ export function startCrawlServer(options: { port?: number; hostname?: string } =
 }
 
 if (import.meta.main) {
+  // Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+  // answer BEFORE startCrawlServer() binds. They previously fell through and
+  // bound :19700 with no output.
+  const argv = process.argv.slice(2);
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(VERSION);
+    process.exit(0);
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Usage: crawl-serve [options]
+
+Runs the @hasna/crawl HTTP API.
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+
+Environment:
+  PORT  Listen port (default: 19700)`);
+    process.exit(0);
+  }
   startCrawlServer({ port: DEFAULT_PORT });
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import pkg from "../../package.json" with { type: "json" };
 import { runEvals } from "../core/runner.js";
 import { judgeOnce } from "../core/judge.js";
 import { loadDataset } from "../datasets/loader.js";
@@ -105,6 +106,27 @@ export function startEvalsServer(port = PORT): ReturnType<typeof Bun.serve> {
 }
 
 if (import.meta.main) {
+  // Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+  // answer BEFORE startEvalsServer() binds. They previously fell through and
+  // bound :19440 with no output.
+  const argv = process.argv.slice(2);
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(pkg.version);
+    process.exit(0);
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Usage: evals-serve [options]
+
+Runs the @hasna/evals evaluation server.
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+
+Environment:
+  EVALS_PORT  Listen port (default: 19440)`);
+    process.exit(0);
+  }
   startEvalsServer(PORT);
   console.log(`evals-serve running on http://localhost:${PORT}`);
 }

@@ -1202,6 +1202,26 @@ return server;
 
 async function main() {
   const argv = process.argv.slice(2);
+  // Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+  // answer BEFORE any transport resolution or bind. They previously fell
+  // through and started the crawl HTTP server (:8857) with no output.
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(VERSION);
+    return;
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Usage: crawl-mcp [options]
+
+MCP server for @hasna/crawl (Streamable HTTP by default; --stdio to select stdio).
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  --http         explicitly select Streamable HTTP transport
+  --stdio        explicitly select stdio transport
+  --port <n>     HTTP port (default: 8857)`);
+    return;
+  }
   const { isStdioMode } = await import("./http.js");
   if (isStdioMode(argv)) {
     const transport = new StdioServerTransport();
