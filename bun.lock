@@ -691,7 +691,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.23",
+      "version": "0.3.24",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -704,7 +704,7 @@
         "@hasna/contracts": "0.13.4",
         "@hasna/events": "^0.1.16",
         "@hasna/mcp-harness": "^0.1.0",
-        "@hasna/projects": "0.1.145",
+        "@hasna/projects": "1.0.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
@@ -1035,7 +1035,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.5.11",
+      "version": "0.6.0",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
@@ -1291,7 +1291,7 @@
     },
     "apps/projects": {
       "name": "@hasna/projects",
-      "version": "0.1.145",
+      "version": "1.0.0",
       "bin": {
         "projects": "dist/cli/index.js",
         "projects-mcp": "dist/mcp/index.js",
@@ -1320,7 +1320,7 @@
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
-        "@hasna/loops": ">=0.5.11",
+        "@hasna/loops": ">=0.6.0",
       },
       "optionalPeers": [
         "@hasna/loops",
@@ -1839,7 +1839,7 @@
     },
     "apps/testers": {
       "name": "@hasna/testers",
-      "version": "0.0.106",
+      "version": "0.0.107",
       "bin": {
         "testers": "dist/cli/index.js",
         "testers-mcp": "dist/mcp/index.js",
@@ -1851,7 +1851,7 @@
         "@hasna/browser": "0.5.29",
         "@hasna/contracts": "^0.13.4",
         "@hasna/events": "^0.1.13",
-        "@hasna/projects": "^0.1.145",
+        "@hasna/projects": "^1.0.0",
         "@hasna/sandboxes": "^0.1.40",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "ai": "^6.0.175",
