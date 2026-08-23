@@ -374,46 +374,196 @@ export class SQLiteActionsStore implements ActionsStore {
 
 /** Lock directory serializing read-modify-write cycles across processes. */
 export const JSON_STORE_LOCK_DIRNAME = ".actions-write.lock";
+const JSON_STORE_LOCK_OWNER_FILENAME = "owner";
 const JSON_STORE_LOCK_TIMEOUT_MS = 15_000;
 const JSON_STORE_LOCK_STALE_MS = 30_000;
+const JSON_STORE_LOCK_HEARTBEAT_MS = 5_000;
+const JSON_STORE_LOCK_MAX_CYCLE_RETRIES = 5;
+
+function randomLockOwnerId(): string {
+  return `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Thrown when a lock holder loses its lock before committing; the caller retries the whole cycle. */
+export class JsonStoreLockLostError extends Error {
+  constructor(lockPath: string) {
+    super(`JsonActionsStore write lock lost at ${lockPath}; retrying the cycle under a fresh lock`);
+    this.name = "JsonStoreLockLostError";
+  }
+}
+
+/**
+ * Internal: one acquisition handle of the JsonActionsStore write lock.
+ *
+ * The protocol is ownership-fenced so a stale-lock takeover can never leave two
+ * writers in the critical section:
+ *
+ * - Every lock directory carries an owner file written atomically (`wx`) right
+ *   after `mkdir`, so the canonical path is never an ownerless directory for
+ *   longer than that window. A live holder heartbeats the owner file, so
+ *   staleness (judged by the owner file's mtime, not the directory's) means a
+ *   dead holder.
+ * - A stale lock is claimed by atomically renaming the directory to a
+ *   breaker-unique tombstone; exactly one breaker can win that rename, and a
+ *   successor's fresh lock is never removed.
+ * - Before the commit rename, the holder fences: it re-reads the owner file and
+ *   aborts with {@link JsonStoreLockLostError} if the lock is no longer its own.
+ *   A holder displaced by a takeover therefore aborts instead of writing, and
+ *   the whole read-modify-write cycle retries under the new holder's lock.
+ * - Release removes only a lock directory whose owner file still names this
+ *   handle; a successor's lock is left in place.
+ *
+ * Exported for the deterministic concurrency regression tests; not part of the
+ * public API.
+ */
+export class JsonStoreWriteLock {
+  readonly lockPath: string;
+  readonly ownerPath: string;
+  readonly ownerId: string;
+  private readonly staleMs: number;
+  private readonly heartbeatMs: number;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(dataDir: string, options?: { staleMs?: number; heartbeatMs?: number }) {
+    this.lockPath = join(dataDir, JSON_STORE_LOCK_DIRNAME);
+    this.ownerPath = join(this.lockPath, JSON_STORE_LOCK_OWNER_FILENAME);
+    this.ownerId = randomLockOwnerId();
+    this.staleMs = options?.staleMs ?? JSON_STORE_LOCK_STALE_MS;
+    this.heartbeatMs = options?.heartbeatMs ?? JSON_STORE_LOCK_HEARTBEAT_MS;
+  }
+
+  /** Acquire the lock before a read-modify-write cycle, taking over a stale lock. */
+  async acquire(deadline: number): Promise<void> {
+    for (;;) {
+      try {
+        await mkdir(this.lockPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (await this.takeOverStale()) continue;
+        if (Date.now() > deadline) {
+          throw new Error(`Timed out waiting for the actions JSON store write lock at ${this.lockPath}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10 + Math.floor(Math.random() * 20)));
+        continue;
+      }
+      try {
+        await writeFile(this.ownerPath, this.ownerId, { encoding: "utf-8", flag: "wx", mode: 0o600 });
+        this.startHeartbeat();
+        return;
+      } catch {
+        // The directory vanished or was re-created between mkdir and the owner
+        // write. If it was re-created, it carries someone else's owner file and
+        // must not be removed; if it vanished, there is nothing to remove.
+        // Either way the acquire loop retries.
+      }
+    }
+  }
+
+  /** Fence: true only while this handle still owns the canonical lock directory. */
+  async owns(): Promise<boolean> {
+    try {
+      return (await readFile(this.ownerPath, "utf-8")) === this.ownerId;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Release only a lock directory this handle still owns. A successor's lock is
+   * never removed: if the owner file is missing (we were taken over) or names a
+   * different owner, the directory is left in place.
+   */
+  async release(): Promise<void> {
+    this.stopHeartbeat();
+    try {
+      const current = await readFile(this.ownerPath, "utf-8");
+      if (current === this.ownerId) {
+        await rm(this.lockPath, { recursive: true, force: true });
+      }
+    } catch {
+      // Already gone or unreadable; nothing to release.
+    }
+  }
+
+  /**
+   * If the current lock is stale, claim it by atomically renaming the directory
+   * to a breaker-unique tombstone (which is then removed). Only one breaker can
+   * win the rename for a given directory, and a live holder's heartbeat keeps
+   * its owner file fresh, so a stale lock means a dead holder. If a live holder
+   * is displaced anyway (its heartbeat was delayed past the stale age), its
+   * commit fence aborts its write, so the displaced cycle retries under the new
+   * holder's lock instead of losing records.
+   */
+  private async takeOverStale(): Promise<boolean> {
+    try {
+      const ownerInfo = await stat(this.ownerPath);
+      if (Date.now() - ownerInfo.mtimeMs <= this.staleMs) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      // No owner file: a dead acquirer between mkdir and owner write, or a
+      // holder in its release window. Judge by the directory's own age; a fresh
+      // directory is a live mid-acquire and must be left alone.
+      try {
+        const dirInfo = await stat(this.lockPath);
+        if (Date.now() - dirInfo.mtimeMs <= this.staleMs) return false;
+      } catch {
+        return false; // the directory vanished between checks; let the loop retry
+      }
+    }
+    const tombstone = `${this.lockPath}.tomb-${this.ownerId}`;
+    try {
+      await rename(this.lockPath, tombstone);
+    } catch {
+      return false; // another breaker claimed the directory first
+    }
+    await rm(tombstone, { recursive: true, force: true }).catch(() => undefined);
+    return true;
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      writeFile(this.ownerPath, this.ownerId, { encoding: "utf-8", mode: 0o600 }).catch(() => undefined);
+    }, this.heartbeatMs);
+    this.heartbeatTimer.unref?.();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+}
 
 /**
  * Serializes a read-modify-write cycle with an atomic `mkdir` lock. The JSON store
  * writes whole files, so two processes appending disjoint records without a lock
  * both read the old file and the later rename silently drops the earlier writer's
- * records. A stale lock (holder died mid-cycle) is broken on age rather than
- * blocking the next writer forever.
+ * records. A stale lock (holder died mid-cycle) is taken over on age rather than
+ * blocking the next writer forever; see {@link JsonStoreWriteLock} for the
+ * ownership-fenced takeover and commit protocol.
  */
-async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
+async function withJsonStoreLock<T>(dataDir: string, fn: (lock: JsonStoreWriteLock) => Promise<T>): Promise<T> {
   await mkdir(dataDir, { recursive: true });
-  const lockPath = join(dataDir, JSON_STORE_LOCK_DIRNAME);
   const deadline = Date.now() + JSON_STORE_LOCK_TIMEOUT_MS;
-  for (;;) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < JSON_STORE_LOCK_MAX_CYCLE_RETRIES; attempt += 1) {
+    const lock = new JsonStoreWriteLock(dataDir);
+    await lock.acquire(deadline);
     try {
-      await mkdir(lockPath);
-      break;
+      return await fn(lock);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > JSON_STORE_LOCK_STALE_MS) {
-          await rm(lockPath, { recursive: true, force: true });
-          continue;
-        }
-      } catch {
-        // The holder released between stat and now; retry the acquire.
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for the actions JSON store write lock at ${lockPath}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10 + Math.floor(Math.random() * 20)));
+      if (!(error instanceof JsonStoreLockLostError)) throw error;
+      lastError = error;
+      // The lock was lost before commit; re-read and retry under a fresh lock.
+    } finally {
+      await lock.release();
     }
   }
-  try {
-    return await fn();
-  } finally {
-    await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
-  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`JsonActionsStore write cycle failed after ${JSON_STORE_LOCK_MAX_CYCLE_RETRIES} attempts`);
 }
 
 export class JsonActionsStore implements ActionsStore {
@@ -438,13 +588,13 @@ export class JsonActionsStore implements ActionsStore {
   }
 
   async saveManifest(manifest: ActionManifest): Promise<ActionManifest> {
-    return withJsonStoreLock(this.dataDir, async () => {
+    return withJsonStoreLock(this.dataDir, async (lock) => {
       await this.init();
       const manifests = await this.readJson<ActionManifest[]>(this.manifestsPath, []);
       const index = manifests.findIndex((item) => item.id === manifest.id);
       if (index >= 0) manifests[index] = manifest;
       else manifests.push(manifest);
-      await this.writeJson(this.manifestsPath, manifests);
+      await this.writeJson(this.manifestsPath, manifests, lock);
       return manifest;
     });
   }
@@ -460,23 +610,23 @@ export class JsonActionsStore implements ActionsStore {
   }
 
   async createRun(run: ActionRun): Promise<ActionRun> {
-    return withJsonStoreLock(this.dataDir, async () => {
+    return withJsonStoreLock(this.dataDir, async (lock) => {
       await this.init();
       const runs = await this.readJson<ActionRun[]>(this.runsPath, []);
       runs.push(run);
-      await this.writeJson(this.runsPath, runs);
+      await this.writeJson(this.runsPath, runs, lock);
       return run;
     });
   }
 
   async updateRun(run: ActionRun): Promise<ActionRun> {
-    return withJsonStoreLock(this.dataDir, async () => {
+    return withJsonStoreLock(this.dataDir, async (lock) => {
       await this.init();
       const runs = await this.readJson<ActionRun[]>(this.runsPath, []);
       const index = runs.findIndex((item) => item.id === run.id);
       if (index >= 0) runs[index] = run;
       else runs.push(run);
-      await this.writeJson(this.runsPath, runs);
+      await this.writeJson(this.runsPath, runs, lock);
       return run;
     });
   }
@@ -501,11 +651,11 @@ export class JsonActionsStore implements ActionsStore {
   }
 
   async appendAuditEvent(event: ActionAuditEvent): Promise<ActionAuditEvent> {
-    return withJsonStoreLock(this.dataDir, async () => {
+    return withJsonStoreLock(this.dataDir, async (lock) => {
       await this.init();
       const events = await this.readJson<ActionAuditEvent[]>(this.eventsPath, []);
       events.push(event);
-      await this.writeJson(this.eventsPath, events);
+      await this.writeJson(this.eventsPath, events, lock);
       return event;
     });
   }
@@ -537,9 +687,22 @@ export class JsonActionsStore implements ActionsStore {
     }
   }
 
-  private async writeJson(path: string, value: unknown): Promise<void> {
+  private async writeJson(path: string, value: unknown, lock?: JsonStoreWriteLock): Promise<void> {
+    // Commit fence: the whole-file rename below is the commit, so the holder
+    // verifies ownership immediately before it. A holder displaced by a stale
+    // takeover aborts instead of writing, and withJsonStoreLock retries the
+    // cycle under the fresh lock. The check-to-rename window is the residual
+    // race of any filesystem lock without a lease; the fence keeps it to the
+    // width of a single rename(2) call.
+    if (lock !== undefined && !(await lock.owns())) {
+      throw new JsonStoreLockLostError(lock.lockPath);
+    }
     const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+    if (lock !== undefined && !(await lock.owns())) {
+      await rm(tempPath, { force: true }).catch(() => undefined);
+      throw new JsonStoreLockLostError(lock.lockPath);
+    }
     await rename(tempPath, path);
     await chmod(path, 0o600).catch(() => undefined);
   }
