@@ -92,6 +92,15 @@
  * resolveValidatorVersion returns the pin — and the validator does not gate
  * on the declared kit (measured: apps/access passes at both 0.13.4 and the
  * self-test's 0.11.1 with kit=0.13.1 and kit=0.13.4).
+ * 2026-08-23 (main-gate repair, PR #966): prompts' SDK exception entry
+ * DELETED — release(prompts) 0.3.34 (main da6f7465f) added the `./sdk`
+ * export to apps/prompts/package.json while the recorded exception stayed,
+ * so the entry became a stale record that fails the two-sided contract
+ * exactly as consolidations' did below. Same class, same remedy: delete the
+ * record, scaffold nothing. prompts keeps its CONTRACTS_EXCEPTIONS entry —
+ * that registry is about manifest conformance, not surfaces, and prompts
+ * still fails it. The 43 members that are recorded AND still genuinely
+ * missing `./sdk` are untouched and keep the check non-vacuous.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -349,7 +358,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "pixels", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #69." },
-  { member: "prompts", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "router", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
