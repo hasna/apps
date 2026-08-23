@@ -9,6 +9,8 @@ import {
   createLocalSqliteTodosStorageAdapter,
   type TodosPostgresQueryClient,
 } from "../storage.js";
+import { ResourceConflictError } from "../types/index.js";
+import { TodosShadowMirror } from "./shadow.js";
 import { TodosShadowOutbox, createTodosShadowOutbox } from "./shadow-outbox.js";
 
 interface MemoryRow {
@@ -26,7 +28,7 @@ interface MemoryRow {
 function createMemoryPostgresClient(options: {
   failFirst?: number;
   failForever?: boolean;
-  onInsert?: () => void | Promise<void>;
+  onInsert?: (values?: readonly unknown[]) => void | Promise<void>;
 } = {}) {
   const rows = new Map<string, MemoryRow>();
   let remainingFailures = options.failFirst ?? 0;
@@ -34,7 +36,7 @@ function createMemoryPostgresClient(options: {
   const client: TodosPostgresQueryClient = {
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       if (sql.includes("INSERT INTO todos_sync_records")) {
-        if (options.onInsert) await options.onInsert();
+        if (options.onInsert) await options.onInsert(values);
         if (options.failForever || remainingFailures > 0) {
           if (!options.failForever) remainingFailures -= 1;
           throw new Error("simulated mirror failure");
@@ -205,6 +207,67 @@ describe("durable shadow outbox", () => {
     expect(outbox.getStats().failed).toBe(1);
     // Nothing was dropped silently — it is a visible divergence row.
     expect(cloud.rows.size).toBe(0);
+  });
+
+  test("parks a colliding task-list upsert as failed after exactly one attempt with retries unchanged", async () => {
+    // A typed data collision (duplicate task-list slug on a different
+    // object_id, ba6e4a19) is terminal: retrying cannot converge and only
+    // feeds the duplicate-key retry storm, so the outbox parks it immediately.
+    const cloud = createMemoryPostgresClient({
+      onInsert: (values) => {
+        if (values?.[1] === "task_lists") {
+          throw new ResourceConflictError(
+            "TASK_LIST_SLUG_CONFLICT",
+            `Task list with slug "accounting" already exists in this scope`,
+          );
+        }
+      },
+    });
+    const outbox = createTodosShadowOutbox({ db, postgresClient: cloud.client, retryBaseMs: 5 });
+    const local = createLocalSqliteTodosStorageAdapter({ db });
+    await local.taskLists.create({ name: "Accounting", slug: "accounting" });
+
+    await outbox.flush();
+
+    const rows = outboxRows(db).filter((r) => r.object_type === "task_lists");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!).toMatchObject({ status: "failed", attempts: 1 });
+    const stats = outbox.getStats();
+    expect(stats.retries).toBe(0);
+    expect(stats.failed).toBe(1);
+    expect(stats.lastError).toContain("already exists in this scope");
+  });
+
+  test("mirror treats a typed slug conflict as terminal: dropped, never retried", async () => {
+    const cloud = createMemoryPostgresClient({
+      onInsert: (values) => {
+        if (values?.[1] === "task_lists") {
+          throw new ResourceConflictError(
+            "TASK_LIST_SLUG_CONFLICT",
+            `Task list with slug "accounting" already exists in this scope`,
+          );
+        }
+      },
+    });
+    const mirror = new TodosShadowMirror({
+      postgresClient: cloud.client,
+      maxRetries: 5,
+      retryBaseMs: 5,
+    });
+    mirror.enqueueUpsert("taskLists", {
+      id: "tl-accounting-b",
+      slug: "accounting",
+      project_id: null,
+      name: "Colliding",
+    });
+    await mirror.flush();
+
+    const metrics = mirror.getMetrics();
+    expect(metrics.failed).toBe(1);
+    expect(metrics.retries).toBe(0);
+    expect(metrics.mirrored).toBe(0);
+    expect(metrics.pending).toBe(0);
+    expect(metrics.lastError).toContain("already exists in this scope");
   });
 });
 

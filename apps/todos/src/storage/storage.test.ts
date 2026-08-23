@@ -1440,6 +1440,120 @@ describe("storage adapter contracts", () => {
       .rejects.toMatchObject({ code: "PROJECT_SLUG_CONFLICT" });
   });
 
+  test("pushSnapshot maps scoped-slug unique violations to typed sync conflicts", async () => {
+    // The upsert arbiter is the table PRIMARY KEY, but the deployed uniqueness
+    // invariants are the partial expression indexes
+    // todos_sync_records_task_list_scope_slug_uidx / _project_task_list_slug_uidx.
+    // A slug collision on a DIFFERENT object_id therefore bypasses ON CONFLICT and
+    // raises a raw 23505 (ba6e4a19 duplicate-key retry storm). The destination
+    // preflight SELECT and the INSERT are separate statements (TOCTOU), so a
+    // concurrent pusher can pass the preflight and still hit the index — which is
+    // what this mock simulates: the preflight SELECT is blind, the INSERT raises.
+    let taskListWrites = 0;
+    const taskListStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "task_lists") {
+          taskListWrites += 1;
+          if (taskListWrites > 1) {
+            throw Object.assign(new Error("duplicate key value violates unique constraint"), {
+              code: "ERR_POSTGRES_SERVER_ERROR",
+              cause: {
+                sqlState: "23505",
+                constraint: "todos_sync_records_task_list_scope_slug_uidx",
+              },
+            });
+          }
+        }
+        return { rows: [] as T[] };
+      },
+    });
+    const taskListSnapshot = (id: string) => ({
+      exportedAt: "2026-07-15T00:00:00.000Z",
+      source: "sqlite",
+      tasks: [],
+      projects: [],
+      projectMachinePaths: [],
+      plans: [],
+      agents: [],
+      taskLists: [{
+        id,
+        project_id: null,
+        slug: "accounting",
+        name: "Accounting",
+        created_at: "2026-07-15T00:00:00.000Z",
+        updated_at: "2026-07-15T00:00:00.000Z",
+      }],
+      templates: [],
+      auditHistory: [],
+      tombstones: [],
+    } as unknown as TodosStorageSnapshot);
+    await expect(taskListStore.pushSnapshot(taskListSnapshot("tl-accounting-a"))).resolves.toMatchObject({ records: 1 });
+    // Same scope (project_id null -> ''), same slug, DIFFERENT object_id: the
+    // PK arbiter cannot see the collision, the unique index can.
+    await expect(taskListStore.pushSnapshot(taskListSnapshot("tl-accounting-b")))
+      .rejects.toMatchObject({ name: "ResourceConflictError", code: "TASK_LIST_SLUG_CONFLICT" });
+
+    // Project index variant maps to PROJECT_SLUG_CONFLICT.
+    let projectWrites = 0;
+    const projectStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "projects") {
+          projectWrites += 1;
+          if (projectWrites > 1) {
+            throw Object.assign(new Error("duplicate key value violates unique constraint"), {
+              code: "ERR_POSTGRES_SERVER_ERROR",
+              cause: {
+                sqlState: "23505",
+                constraint: "todos_sync_records_project_task_list_slug_uidx",
+              },
+            });
+          }
+        }
+        return { rows: [] as T[] };
+      },
+    });
+    const projectSnapshot = (id: string) => ({
+      exportedAt: "2026-07-15T00:00:00.000Z",
+      source: "sqlite",
+      tasks: [],
+      projects: [{
+        id,
+        name: "Finance",
+        path: `/tmp/${id}`,
+        task_list_id: "finance",
+        created_at: "2026-07-15T00:00:00.000Z",
+        updated_at: "2026-07-15T00:00:00.000Z",
+      }],
+      projectMachinePaths: [],
+      plans: [],
+      agents: [],
+      taskLists: [],
+      templates: [],
+      auditHistory: [],
+      tombstones: [],
+    } as unknown as TodosStorageSnapshot);
+    await expect(projectStore.pushSnapshot(projectSnapshot("project-finance-a"))).resolves.toMatchObject({ records: 1 });
+    await expect(projectStore.pushSnapshot(projectSnapshot("project-finance-b")))
+      .rejects.toMatchObject({ name: "ResourceConflictError", code: "PROJECT_SLUG_CONFLICT" });
+
+    // Metadata-less client (some drivers omit the constraint name): the
+    // fallback re-read classifies deterministically, mirroring
+    // renameProjectAtomic's post-failure re-read.
+    const metadataLessStore = createPostgresTodosSyncStore({
+      async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "task_lists") {
+          throw Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" });
+        }
+        if (sql.includes("todos:classify-sync-task-list-conflict")) {
+          return { rows: [{ conflict: true }] as T[] };
+        }
+        return { rows: [] as T[] };
+      },
+    });
+    await expect(metadataLessStore.pushSnapshot(taskListSnapshot("tl-accounting-c")))
+      .rejects.toMatchObject({ name: "ResourceConflictError", code: "TASK_LIST_SLUG_CONFLICT" });
+  });
+
   test("cloud adapter supports lock/unlock, dependencies and verifications on the shared dataset", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
