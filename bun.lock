@@ -216,7 +216,7 @@
     },
     "apps/browser": {
       "name": "@hasna/browser",
-      "version": "0.5.28",
+      "version": "0.5.29",
       "bin": {
         "browser": "dist/cli/index.js",
         "browser-mcp": "dist/mcp/index.js",
@@ -228,7 +228,7 @@
         "@hasna/conversations": "0.7.5",
         "@hasna/events": "0.1.3",
         "@hasna/mementos": "0.14.86",
-        "@hasna/secrets": "0.3.4",
+        "@hasna/secrets": "0.3.5",
         "@hasna/sessions": "0.12.19",
         "@hasna/skills": "0.1.41",
         "@hasna/todos": "0.15.46",
@@ -691,7 +691,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.22",
+      "version": "0.3.23",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -704,7 +704,7 @@
         "@hasna/contracts": "0.13.4",
         "@hasna/events": "^0.1.16",
         "@hasna/mcp-harness": "^0.1.0",
-        "@hasna/projects": "0.1.144",
+        "@hasna/projects": "0.1.145",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
@@ -911,7 +911,7 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.7.3",
+      "version": "0.7.4",
       "bin": {
         "hooks": "bin/index.js",
         "hooks-serve": "bin/serve.js",
@@ -919,7 +919,7 @@
       "dependencies": {
         "@hasna/contracts": "0.13.4",
         "@hasna/events": "^0.1.16",
-        "@hasna/secrets": "0.3.4",
+        "@hasna/secrets": "0.3.5",
         "@modelcontextprotocol/sdk": "^1.26.0",
         "chalk": "^5.3.0",
         "commander": "^12.1.0",
@@ -1291,7 +1291,7 @@
     },
     "apps/projects": {
       "name": "@hasna/projects",
-      "version": "0.1.144",
+      "version": "0.1.145",
       "bin": {
         "projects": "dist/cli/index.js",
         "projects-mcp": "dist/mcp/index.js",
@@ -1354,7 +1354,7 @@
     },
     "apps/recordings": {
       "name": "@hasna/recordings",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "bin": {
         "recordings": "dist/cli/index.js",
         "recordings-mcp": "dist/mcp/index.js",
@@ -1447,7 +1447,7 @@
     },
     "apps/secrets": {
       "name": "@hasna/secrets",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "bin": {
         "secrets": "dist/index.js",
         "secrets-mcp": "dist/mcp-server.js",
@@ -1839,7 +1839,7 @@
     },
     "apps/testers": {
       "name": "@hasna/testers",
-      "version": "0.0.103",
+      "version": "0.0.104",
       "bin": {
         "testers": "dist/cli/index.js",
         "testers-mcp": "dist/mcp/index.js",
@@ -1848,10 +1848,10 @@
       "dependencies": {
         "@anthropic-ai/sdk": "^0.52.0",
         "@e2b/code-interpreter": "^1.5.1",
-        "@hasna/browser": "0.5.28",
+        "@hasna/browser": "0.5.29",
         "@hasna/contracts": "^0.13.4",
         "@hasna/events": "^0.1.13",
-        "@hasna/projects": "^0.1.144",
+        "@hasna/projects": "^0.1.145",
         "@hasna/sandboxes": "^0.1.40",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "ai": "^6.0.175",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.29
+
+### Patch Changes
+
+- Updated dependencies [50473b8]
+  - @hasna/secrets@0.3.5
+
 ## 0.5.28
 
 ### Patch Changes
