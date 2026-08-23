@@ -7,6 +7,7 @@ import type {
   TaskList,
   TaskTemplate,
 } from "../types/index.js";
+import { ResourceConflictError } from "../types/index.js";
 import {
   createLocalSqliteTodosStorageAdapter,
   type CreateLocalSqliteTodosStorageAdapterOptions,
@@ -261,6 +262,17 @@ export class TodosShadowMirror {
       const message = error instanceof Error ? error.message : String(error);
       const objectType = op.kind === "upsert" ? SNAPSHOT_TO_OBJECT_TYPE[op.key] : op.objectType;
       const id = op.kind === "upsert" ? String(op.record["id"]) : op.id;
+      if (error instanceof ResourceConflictError) {
+        // A typed data collision (duplicate task-list/project slug on a
+        // different object_id) is TERMINAL: retrying cannot converge — the
+        // unique index is the final arbiter — and every retry re-enqueues the
+        // same failing write, feeding the duplicate-key retry storm. Park the
+        // op immediately and count the divergence.
+        this.metrics.failed += 1;
+        this.metrics.lastError = message;
+        this.onEvent?.({ type: "dropped", objectType, id, error: message });
+        return;
+      }
       this.metrics.retries += 1;
       this.metrics.lastError = message;
       op.attempts += 1;

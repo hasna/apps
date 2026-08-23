@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { TaskHistory } from "../types/index.js";
+import { ResourceConflictError } from "../types/index.js";
 import {
   createLocalSqliteTodosStorageAdapter,
 } from "./local-sqlite.js";
@@ -252,6 +253,20 @@ export class TodosShadowOutbox {
       this.onEvent?.({ type: "mirrored", objectType: row.object_type, id: row.object_id, lagMs });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof ResourceConflictError) {
+        // A typed data collision (duplicate task-list/project slug on a
+        // different object_id) is TERMINAL: retrying cannot converge — the
+        // unique index is the final arbiter — and every retry re-enqueues the
+        // same failing write, feeding the duplicate-key retry storm. Park the
+        // row immediately and count the divergence.
+        this.metrics.lastError = message;
+        this.db.run(
+          `UPDATE shadow_outbox SET attempts=?, last_error=?, status='failed' WHERE seq=? AND revision=?`,
+          [row.attempts + 1, message, row.seq, row.revision],
+        );
+        this.onEvent?.({ type: "parked", objectType: row.object_type, id: row.object_id, error: message });
+        return;
+      }
       this.metrics.retries += 1;
       this.metrics.lastError = message;
       const attempts = row.attempts + 1;

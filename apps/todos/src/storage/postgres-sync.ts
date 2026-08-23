@@ -1,4 +1,5 @@
 import type { TaskHistory } from "../types/index.js";
+import { ResourceConflictError } from "../types/index.js";
 import type {
   TodosStorageContext,
   TodosStorageSnapshot,
@@ -11,6 +12,7 @@ import {
   validateSnapshotRoutingDestinationConflicts,
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
+import { isPostgresUniqueViolation, postgresConstraintName } from "./postgres-errors.js";
 
 export type TodosPostgresSyncRecordType =
   | "tasks"
@@ -429,64 +431,143 @@ export class PostgresTodosSyncStore {
     if (routingErrors.length > 0) {
       throw new Error(`Invalid snapshot routing metadata: ${routingErrors.join("; ")}`);
     }
-    const existing = await this.client.query<TodosPostgresSyncRecordRow>(
-      `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version
-       FROM ${this.tableName}
-       WHERE service = $1 AND object_type IN ($2, $3) AND deleted_at IS NULL`,
-      [this.service, "projects", "task_lists"],
-    );
-    const existingProjects: ProjectRoutingRecord[] = [];
-    const existingTaskLists: TaskListRoutingRecord[] = [];
-    for (const row of existing.rows) {
-      const payload = payloadRecord(row.payload);
-      if (row.object_type === "projects") existingProjects.push(payload as unknown as ProjectRoutingRecord);
-      if (row.object_type === "task_lists") existingTaskLists.push(payload as unknown as TaskListRoutingRecord);
-    }
-    const destinationErrors = validateSnapshotRoutingDestinationConflicts(
-      snapshot.projects,
-      snapshot.taskLists,
-      existingProjects,
-      existingTaskLists,
-    );
-    if (destinationErrors.length > 0) {
-      throw new Error(`Snapshot routing conflicts with destination: ${destinationErrors.join("; ")}`);
-    }
-    const result: PostgresTodosSyncPushResult = { records: 0, objectTypes: {} };
-    const sourceMachineId = context.requestId ?? this.sourceMachineId ?? null;
-    for (const entry of snapshotEntries(snapshot)) {
-      if (entry.deletedAt === null) assertCanonicalScopedSlugEntry(entry);
-      await this.client.query(
-        `INSERT INTO ${this.tableName} (
-          service, object_type, object_id, payload, updated_at,
-          deleted_at, source_machine_id, version
-        ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz, $7, $8)
-        ON CONFLICT (service, object_type, object_id) DO UPDATE SET
-          payload = EXCLUDED.payload,
-          updated_at = EXCLUDED.updated_at,
-          deleted_at = EXCLUDED.deleted_at,
-          source_machine_id = EXCLUDED.source_machine_id,
-          version = EXCLUDED.version
-        WHERE ${this.tableName}.updated_at < EXCLUDED.updated_at
-           OR (${this.tableName}.updated_at = EXCLUDED.updated_at
-               AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))`,
-        [
-          this.service,
-          entry.type,
-          entry.id,
-          // Bind the object directly — the driver serializes it to jsonb. Pre-
-          // encoding with JSON.stringify makes Bun.SQL double-encode into a jsonb
-          // string scalar (breaks server-side payload->>'field' filters).
-          entry.payload,
-          entry.updatedAt,
-          entry.deletedAt,
-          sourceMachineId,
-          entry.version,
-        ],
+    // The destination-conflict read and the snapshot's inserts are only atomic
+    // together when the client can run them in one transaction. Without one, a
+    // concurrent pusher (outbox drain racing a CLI push on another machine) can
+    // pass the read and still hit the unique index — the typed classification
+    // below keeps that race from escalating into a duplicate-key retry storm.
+    const push = async (client: TodosPostgresQueryClient): Promise<PostgresTodosSyncPushResult> => {
+      const existing = await client.query<TodosPostgresSyncRecordRow>(
+        `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version
+         FROM ${this.tableName}
+         WHERE service = $1 AND object_type IN ($2, $3) AND deleted_at IS NULL`,
+        [this.service, "projects", "task_lists"],
       );
-      result.records += 1;
-      result.objectTypes[entry.type] = (result.objectTypes[entry.type] ?? 0) + 1;
+      const existingProjects: ProjectRoutingRecord[] = [];
+      const existingTaskLists: TaskListRoutingRecord[] = [];
+      for (const row of existing.rows) {
+        const payload = payloadRecord(row.payload);
+        if (row.object_type === "projects") existingProjects.push(payload as unknown as ProjectRoutingRecord);
+        if (row.object_type === "task_lists") existingTaskLists.push(payload as unknown as TaskListRoutingRecord);
+      }
+      const destinationErrors = validateSnapshotRoutingDestinationConflicts(
+        snapshot.projects,
+        snapshot.taskLists,
+        existingProjects,
+        existingTaskLists,
+      );
+      if (destinationErrors.length > 0) {
+        throw new Error(`Snapshot routing conflicts with destination: ${destinationErrors.join("; ")}`);
+      }
+      const result: PostgresTodosSyncPushResult = { records: 0, objectTypes: {} };
+      const sourceMachineId = context.requestId ?? this.sourceMachineId ?? null;
+      for (const entry of snapshotEntries(snapshot)) {
+        if (entry.deletedAt === null) assertCanonicalScopedSlugEntry(entry);
+        try {
+          await client.query(
+            `INSERT INTO ${this.tableName} (
+              service, object_type, object_id, payload, updated_at,
+              deleted_at, source_machine_id, version
+            ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz, $7, $8)
+            ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+              payload = EXCLUDED.payload,
+              updated_at = EXCLUDED.updated_at,
+              deleted_at = EXCLUDED.deleted_at,
+              source_machine_id = EXCLUDED.source_machine_id,
+              version = EXCLUDED.version
+            WHERE ${this.tableName}.updated_at < EXCLUDED.updated_at
+               OR (${this.tableName}.updated_at = EXCLUDED.updated_at
+                   AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))`,
+            [
+              this.service,
+              entry.type,
+              entry.id,
+              // Bind the object directly — the driver serializes it to jsonb. Pre-
+              // encoding with JSON.stringify makes Bun.SQL double-encode into a jsonb
+              // string scalar (breaks server-side payload->>'field' filters).
+              entry.payload,
+              entry.updatedAt,
+              entry.deletedAt,
+              sourceMachineId,
+              entry.version,
+            ],
+          );
+        } catch (error) {
+          // The ON CONFLICT arbiter is the table PRIMARY KEY; the deployed
+          // uniqueness invariants are the partial expression indexes
+          // _task_list_scope_slug_uidx / _project_task_list_slug_uidx, so a
+          // slug collision on a DIFFERENT object_id bypasses the upsert and
+          // raises a raw 23505. Classify it into the typed conflict so the
+          // mirror/outbox retry machinery treats it as terminal instead of
+          // re-enqueueing forever (ba6e4a19 duplicate-key retry storm).
+          await this.classifySyncInsertConflict(error, entry);
+        }
+        result.records += 1;
+        result.objectTypes[entry.type] = (result.objectTypes[entry.type] ?? 0) + 1;
+      }
+      return result;
+    };
+    if (typeof this.client.transaction === "function") {
+      return this.client.transaction((client) => push(client));
     }
-    return result;
+    return push(this.client);
+  }
+
+  /**
+   * Map a raw 23505 from the push INSERT into the typed ResourceConflictError
+   * codes the adapter already surfaces (TASK_LIST_SLUG_CONFLICT /
+   * PROJECT_SLUG_CONFLICT). Mirrors postgres-adapter.ts's upsert mapping and
+   * renameProjectAtomic's post-failure re-read for metadata-less clients.
+   */
+  private async classifySyncInsertConflict(
+    error: unknown,
+    entry: { type: TodosPostgresSyncRecordType; id: string; payload: unknown },
+  ): Promise<never> {
+    if (!isPostgresUniqueViolation(error)) throw error;
+    const payload = entry.payload as Record<string, unknown>;
+    const taskListSlug = String(payload["slug"] ?? "");
+    const projectSlug = String(payload["task_list_id"] ?? "");
+    const constraintName = postgresConstraintName(error);
+    if (entry.type === "projects" && constraintName.includes("project_task_list_slug_uidx")) {
+      throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Project slug "${projectSlug}" already exists`);
+    }
+    if (entry.type === "task_lists" && constraintName.includes("task_list_scope_slug_uidx")) {
+      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${taskListSlug}" already exists in this scope`);
+    }
+    // Some drivers omit constraint metadata. Re-read the destination to
+    // classify deterministically, mirroring renameProjectAtomic's fallback.
+    // The re-read deliberately uses THIS client, not the executing (possibly
+    // transaction) client: the failed INSERT has aborted any enclosing
+    // transaction, so the read must run on a separate connection. Each slug
+    // index is scoped to exactly one object type, so the entry's object type
+    // selects the re-read.
+    if (entry.type === "task_lists") {
+      const scope = typeof payload["project_id"] === "string" ? payload["project_id"] : "";
+      const conflict = await this.client.query<{ conflict: boolean }>(
+        `/* todos:classify-sync-task-list-conflict */ SELECT EXISTS (
+          SELECT 1 FROM ${this.tableName}
+          WHERE service = $1 AND object_type = 'task_lists' AND object_id <> $2
+            AND deleted_at IS NULL AND COALESCE(payload->>'project_id','') = $3 AND payload->>'slug' = $4
+        ) AS conflict`,
+        [this.service, entry.id, scope, taskListSlug],
+      );
+      if (conflict.rows[0]?.conflict) {
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${taskListSlug}" already exists in this scope`);
+      }
+    } else if (entry.type === "projects") {
+      const conflict = await this.client.query<{ conflict: boolean }>(
+        `/* todos:classify-sync-project-conflict */ SELECT EXISTS (
+          SELECT 1 FROM ${this.tableName}
+          WHERE service = $1 AND object_type = 'projects' AND object_id <> $2
+            AND deleted_at IS NULL AND payload->>'task_list_id' = $3
+        ) AS conflict`,
+        [this.service, entry.id, projectSlug],
+      );
+      if (conflict.rows[0]?.conflict) {
+        throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Project slug "${projectSlug}" already exists`);
+      }
+    }
+    throw error;
   }
 
   async pullSnapshot(options: PullPostgresTodosSnapshotOptions = {}): Promise<TodosStorageSnapshot> {
