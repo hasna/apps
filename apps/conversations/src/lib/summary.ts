@@ -3,7 +3,6 @@ import { extractTopics, type TopicWeight } from "./topics.js";
 import {
   boundedPreviewSourceSql,
   buildMessagePreview,
-  restrictedCollectionSqlPredicate,
 } from "./message-previews.js";
 import { resolveAnalyticsLimit } from "./strict-query-values.js";
 
@@ -29,9 +28,8 @@ export interface SummaryOptions {
 /**
  * The one place a summary turns a row into text a caller sees.
  *
- * `row.preview` is already the bounded, redacted projection — restricted
- * incident/security rows arrive as the RESTRICTED marker rather than a body —
- * so this only applies the summary's own tighter snippet cap. It replaces a
+ * `row.preview` is already the bounded, redacted projection — so this only
+ * applies the summary's own tighter snippet cap. It replaces a
  * `redactSensitiveText(row.content).slice(0, n)` that ran over whole stored
  * bodies selected by `SELECT *`.
  */
@@ -51,7 +49,6 @@ interface SummaryRow {
   reply_to: number | null;
   /** Bounded + redacted; never a stored body. */
   preview: string;
-  restricted: boolean;
 }
 
 /**
@@ -70,7 +67,6 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
   const rows = db.prepare(
     `SELECT id, from_agent, to_agent, created_at, priority, blocking, pinned_at, read_at, reply_to,
             ${boundedPreviewSourceSql()},
-            CASE WHEN ${restrictedCollectionSqlPredicate()} THEN 1 ELSE 0 END AS restricted,
             channel, session_id
      FROM messages WHERE ${filterCol} = ? ORDER BY created_at DESC LIMIT ${limit}`
   ).all(filterVal) as Record<string, unknown>[];
@@ -87,10 +83,9 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
     pinned_at: row.pinned_at == null ? null : String(row.pinned_at),
     read_at: row.read_at == null ? null : String(row.read_at),
     reply_to: row.reply_to == null ? null : Number(row.reply_to),
-    // buildMessagePreview owns the redaction and the restricted substitution;
-    // deriving a second bounding rule here is how the two drift apart.
+    // buildMessagePreview owns the redaction; deriving a second bounding rule
+    // here is how the two drift apart.
     preview: buildMessagePreview(row).preview,
-    restricted: row.restricted === 1,
   }));
 
   // Participants
@@ -104,10 +99,9 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
   const dates = messages.map((m) => m.created_at).sort();
   const dateRange = { first: dates[0], last: dates[dates.length - 1] };
 
-  // Topics. Restricted rows are excluded from the corpus outright: a term only
-  // reaches this list because it appeared in a message, so extracting over a
-  // restricted body publishes that body one weighted word at a time.
-  const allContent = messages.filter((m) => !m.restricted).map((m) => m.preview).join("\n");
+  // Topics. Every preview is already content-safety redacted, so the corpus is
+  // every row's bounded preview.
+  const allContent = messages.map((m) => m.preview).join("\n");
   const topics = extractTopics(allContent, 10);
 
   // Key messages: high priority, pinned, most reactions, most replies

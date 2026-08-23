@@ -12,7 +12,6 @@ import { createChannel } from "./channels";
 import { resetStoreForTests } from "./store";
 import {
   COLLECTION_MAX_LIMIT,
-  RESTRICTED_CHANNEL_PREVIEW,
   resolveCollectionMaxBytes,
   resolveCollectionTimeoutMs,
 } from "./message-previews";
@@ -66,7 +65,7 @@ describe("bounded message collection projections", () => {
     expect(getReadReceipts(sent.id)).toEqual([]);
   });
 
-  test("incident and security collection projections never expose a body or body-derived snippet", () => {
+  test("incident and security collection projections return the real body with content-safety redaction", () => {
     const syntheticPat = `${"ghp" + "_" + "z".repeat(24)}`;
     createChannel("security-incidents", "test");
     const sent = sendMessage({
@@ -79,9 +78,10 @@ describe("bounded message collection projections", () => {
     getDb().prepare("UPDATE messages SET content = ? WHERE id = ?").run(`restricted coordination ${syntheticPat}`, sent.id);
 
     const page = readMessagePreviews({ channel: "security-incidents" });
-    expect(page.messages[0].preview).toBe(RESTRICTED_CHANNEL_PREVIEW);
+    expect(page.messages[0].preview).toContain("restricted coordination");
+    expect(page.messages[0].preview).toContain("[REDACTED:PAT]");
     expect(page.messages[0].redacted).toBe(true);
-    expect(JSON.stringify(page)).not.toContain("restricted coordination");
+    expect(JSON.stringify(page)).toContain("restricted coordination");
     expect(JSON.stringify(page)).not.toContain(syntheticPat);
   });
 

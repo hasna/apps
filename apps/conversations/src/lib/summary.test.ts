@@ -135,9 +135,9 @@ describe("getConversationSummary", () => {
  *
  *   - Content past COLLECTION_PREVIEW_SCAN_CHARS still moved the output, so an
  *     attacker could steer a "summary" with a body nobody would ever page to.
- *   - Restricted incident/security rows were summarised on the same terms as
- *     any other row. A topic list IS the body, sampled: a term extracted from a
- *     restricted body is that body leaking one word at a time.
+ *   - Incident/security rows are read on the same terms as any other row: the
+ *     incidents channel is open to the fleet, and the bounded preview passes
+ *     through `redactSensitiveText` like every other surface.
  */
 describe("G6 summary consumes bounded restricted-safe previews", () => {
   test("content beyond the preview scan window cannot affect topics", () => {
@@ -153,9 +153,9 @@ describe("G6 summary consumes bounded restricted-safe previews", () => {
     expect(summary!.topics.map((topic) => topic.topic)).not.toContain(beyond);
   });
 
-  test("restricted-scope bodies never reach topics or key messages", () => {
-    const secret = "quarantinedincidentterm";
-    insertLegacyMessage(`urgent ${secret}`, {
+  test("incident-scope bodies reach topics and key messages through the bounded preview", () => {
+    const term = "quarantinedincidentterm";
+    insertLegacyMessage(`urgent ${term}`, {
       session_id: "incident-summary",
       channel: "incident-bridge",
       priority: "urgent",
@@ -164,9 +164,8 @@ describe("G6 summary consumes bounded restricted-safe previews", () => {
     const summary = getConversationSummary("incident-summary");
     expect(summary).toBeTruthy();
     const serialized = JSON.stringify(summary);
-    expect(serialized).not.toContain(secret);
-    expect(summary!.topics.map((topic) => topic.topic)).not.toContain(secret);
-    // The supported output semantics survive: the row is still counted.
+    expect(serialized).toContain(term);
+    expect(summary!.topics.map((topic) => topic.topic)).toContain(term);
     expect(summary!.message_count).toBe(1);
     expect(summary!.key_messages.length).toBeGreaterThan(0);
   });

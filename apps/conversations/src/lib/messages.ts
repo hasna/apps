@@ -507,13 +507,12 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
 function previewProjectionColumns(alias = ""): string {
   const c = alias ? `${alias}.` : "";
-  const restricted = `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
   return `${c}id, ${c}uuid, ${c}session_id, ${c}from_agent, ${c}to_agent, ${c}channel, ${c}project_id,
           ${c}priority, ${c}blocking, ${c}reply_to, ${c}working_dir, ${c}repository, ${c}branch,
           ${c}created_at, ${c}read_at, ${c}edited_at, ${c}pinned_at,
           CASE WHEN ${c}metadata IS NULL OR ${c}metadata = '' THEN 0 ELSE 1 END AS has_metadata,
           CASE WHEN json_valid(${c}attachments) THEN json_array_length(${c}attachments) ELSE 0 END AS attachment_count,
-          CASE WHEN ${restricted} THEN '' ELSE substr(${c}content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+          substr(${c}content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) AS preview_source,
           length(CAST(${c}content AS BLOB)) AS content_bytes`;
 }
 
