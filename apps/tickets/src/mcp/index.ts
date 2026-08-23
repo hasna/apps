@@ -768,7 +768,31 @@ return server;
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const { isHttpMode, resolveHttpPort, startHttpServer } = await import("./http.ts");
+  const { isHttpMode, resolveHttpPort, startHttpServer, DEFAULT_MCP_HTTP_PORT } = await import("./http.ts");
+  // Binds-before-help class (todos row 5fcf7a67): --help/--version must
+  // answer BEFORE any transport is resolved or connected. They previously
+  // fell through to isHttpMode()/StdioServerTransport.connect, entered MCP
+  // stdio mode, printed nothing, and exited rc=0 silently when stdin closed.
+  const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Usage: tickets-mcp [options]
+
+MCP server for @hasna/tickets
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  --http         explicitly select Streamable HTTP transport
+  --port <n>     HTTP port (default: ${DEFAULT_MCP_HTTP_PORT})
+
+Set MCP_HTTP=1 (or pass --http) to serve over Streamable HTTP;
+MCP_HTTP_PORT sets its port. The default is stdio for MCP clients.`);
+    process.exit(0);
+  }
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(getPackageVersion());
+    process.exit(0);
+  }
   if (isHttpMode()) {
     await startHttpServer(resolveHttpPort());
     return;
