@@ -216,7 +216,7 @@
     },
     "apps/browser": {
       "name": "@hasna/browser",
-      "version": "0.5.29",
+      "version": "0.5.30",
       "bin": {
         "browser": "dist/cli/index.js",
         "browser-mcp": "dist/mcp/index.js",
@@ -225,7 +225,7 @@
       "dependencies": {
         "@anthropic-ai/sdk": "0.104.1",
         "@hasna/connectors": "1.4.2",
-        "@hasna/conversations": "0.7.5",
+        "@hasna/conversations": "0.7.6",
         "@hasna/events": "0.1.3",
         "@hasna/mementos": "0.14.86",
         "@hasna/secrets": "0.3.5",
@@ -483,7 +483,7 @@
     },
     "apps/conversations": {
       "name": "@hasna/conversations",
-      "version": "0.7.5",
+      "version": "0.7.6",
       "bin": {
         "conversations": "bin/index.js",
         "conversations-inbox": "bin/inbox",
@@ -1839,7 +1839,7 @@
     },
     "apps/testers": {
       "name": "@hasna/testers",
-      "version": "0.0.104",
+      "version": "0.0.105",
       "bin": {
         "testers": "dist/cli/index.js",
         "testers-mcp": "dist/mcp/index.js",
@@ -1848,7 +1848,7 @@
       "dependencies": {
         "@anthropic-ai/sdk": "^0.52.0",
         "@e2b/code-interpreter": "^1.5.1",
-        "@hasna/browser": "0.5.29",
+        "@hasna/browser": "0.5.30",
         "@hasna/contracts": "^0.13.4",
         "@hasna/events": "^0.1.13",
         "@hasna/projects": "^0.1.145",
