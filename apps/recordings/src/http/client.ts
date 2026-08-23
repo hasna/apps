@@ -1,12 +1,14 @@
-// Vendored HTTP storage client for the Hasna Service Contract v1.
+// HTTP storage client for the Hasna Service Contract v1.
 //
-// This is a self-contained copy of the `@hasna/contracts` client-flip transport
-// + storage client (resolveStorageClient / createHasnaHttpTransport). It is
-// vendored here — rather than imported from `@hasna/contracts` — because the
-// published contracts package does not yet expose the client subpath, and this
-// package externalizes `@hasna/contracts` at build time. Vendoring keeps the
-// HTTP read/write path self-contained in the shipped `dist` bundle so an
-// installed CLI works without an unpublished dependency.
+// The shared client seam (resolveStorageClient and the storage-client types)
+// is imported from `@hasna/contracts/client` rather than vendored: a fork does
+// not receive credential-resolution fixes, so the credential chain (argument,
+// deliberate override, profile, disk, then the deprecated env fallback) is the
+// maintained code path. This file keeps the app's own env-selection resolver
+// (resolveTransport — the documented two-backend contract, incl. the
+// HASNA_<APP>_CLIENT_STORE override) and the local transport/CRUD plumbing used
+// by tests and the ./storage public surface; only credential resolution goes
+// through the shared seam.
 //
 // THE CLIENT HAS EXACTLY TWO STORES: `sqlite` (an on-box file) and `http` (the
 // server's `<API_URL>/v1` API with a bearer key). It NEVER opens Postgres — the
@@ -22,6 +24,13 @@
 // hosted URL/key pair is present.
 //
 // SAFETY: never logs, returns, or embeds the API key value.
+
+import { createClientTransport } from "@hasna/contracts/client";
+import {
+  createHasnaStorageClient,
+  resolveStorageClient,
+  type HasnaStorageClient,
+} from "@hasna/contracts/client/storage";
 
 export type Env = Record<string, string | undefined>;
 
@@ -391,15 +400,18 @@ export function createStorageClient(name: string, transport: HttpTransport): Sto
   };
 }
 
-export type ResolveResult =
+export type ResolveStoreClientResult =
   | { transport: "sqlite"; client: null; resolution: TransportResolution }
-  | { transport: "http"; client: StorageClient; resolution: TransportResolution };
+  | { transport: "http"; client: HasnaStorageClient; resolution: TransportResolution };
 
-// The one call an app's storage resolver makes. Returns a ready StorageClient
-// when both the API URL and the API key are present, else { transport:'sqlite' }.
-// Throws when the hosted API is partially configured (so callers never
-// silently read the wrong dataset).
-export function resolveStorageClient(name: string, env: Env = process.env, fetchImpl?: FetchLike): ResolveResult {
+// The one call the app's storage resolver makes. Selection is this file's
+// documented env contract (resolveTransport — incl. the CLIENT_STORE override
+// and the partial-pair fail-closed), so the app's recorded selection semantics
+// are unchanged. The client itself is built through the @hasna/contracts seam,
+// which resolves the credential at call time through the maintained chain
+// instead of a process-start env snapshot. Throws when the hosted API is
+// partially configured (so callers never silently read the wrong dataset).
+export function resolveStoreClient(name: string, env: Env = process.env): ResolveStoreClientResult {
   const resolution = resolveTransport(name, env);
   if (resolution.misconfigured) {
     throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the /v1 API.`);
@@ -407,9 +419,15 @@ export function resolveStorageClient(name: string, env: Env = process.env, fetch
   if (resolution.transport === "sqlite" || !resolution.baseUrl) {
     return { transport: "sqlite", client: null, resolution };
   }
-  const keys = envKeys(name);
-  const apiKey = firstEnv(env, keys.apiKeyKeys)?.value;
-  if (!apiKey) throw new Error(`Client for '${name}' resolved to the /v1 API without an API key.`);
-  const transport = createHttpTransport({ name, baseUrl: resolution.baseUrl, apiKey, ...(fetchImpl ? { fetchImpl } : {}) });
-  return { transport: "http", client: createStorageClient(name, transport), resolution };
+  const wired = createClientTransport(name, env);
+  if (wired.transport !== "http") {
+    throw new Error(`Client for '${name}' resolved to the /v1 API without an API key.`);
+  }
+  return { transport: "http", client: createHasnaStorageClient(name, wired.client), resolution };
 }
+
+// The canonical seam entry point, re-exported for consumers of the public
+// storage surface. The seam's own resolution semantics apply (an API URL with
+// a resolvable credential selects http; anything else is the local store).
+export { resolveStorageClient };
+export type { HasnaStorageClient };
