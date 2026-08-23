@@ -182,6 +182,9 @@ jobs:
   build-test:
     name: build + test (affected)
     runs-on: ubuntu-latest
+    env:
+      # @hasna/todos multi-entry bundle OOMs at the ~4GB default Node heap
+      NODE_OPTIONS: --max-old-space-size=8192
 
     steps:
       - uses: actions/checkout@v4
