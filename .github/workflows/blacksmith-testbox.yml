@@ -131,7 +131,8 @@ jobs:
       # the pinned one, so every testbox command (which runs under apps/codewith/codex-rs)
       # would recompile.
       - name: Prime toolchain
-        working-directory: . # lane: codewith content arrives via testbox run sync
+        if: ${{ hashFiles('apps/codewith/**/Cargo.toml') != '' }}
+        working-directory: apps/codewith/codex-rs
         run: |
           . "$HOME/.codewith-testbox-env"
           # Go through the rustup proxies first: they materialise the toolchain named by
@@ -147,14 +148,15 @@ jobs:
       # Fetch deps (and optionally pre-build) so an interactive testbox is immediately usable
       # instead of spending the first 10+ minutes cold-compiling the workspace.
       - name: Warm cargo registry
-        working-directory: . # lane: codewith content arrives via testbox run sync
+        if: ${{ hashFiles('apps/codewith/**/Cargo.toml') != '' }}
+        working-directory: apps/codewith/codex-rs
         run: |
           . "$HOME/.codewith-testbox-env"
           cargo fetch --locked
 
       - name: Warm target dir
-        if: ${{ inputs.warm_target }}
-        working-directory: . # lane: codewith content arrives via testbox run sync
+        if: ${{ inputs.warm_target && hashFiles('apps/codewith/**/Cargo.toml') != '' }}
+        working-directory: apps/codewith/codex-rs
         run: |
           . "$HOME/.codewith-testbox-env"
           cargo check --workspace --all-targets
