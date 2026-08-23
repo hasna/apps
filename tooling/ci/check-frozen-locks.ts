@@ -253,19 +253,25 @@ function defaultPublishedProbe(pkg: string): string | null {
 interface RegistryCheckResult {
   problems: string[];
   skipped: number;
+  failedProbes: number;
 }
 
 function checkRegistryEdges(root: string, published: PublishedProbe = defaultPublishedProbe): RegistryCheckResult {
   const lock = path.join(root, "bun.lock");
-  const empty: RegistryCheckResult = { problems: [], skipped: 0 };
+  const empty: RegistryCheckResult = { problems: [], skipped: 0, failedProbes: 0 };
   if (!fs.existsSync(lock)) return empty;
   const doc = parseLockfile(lock);
   const problems: string[] = [];
   let skipped = 0;
+  let failedProbes = 0;
   const entries = doc.packages ?? {};
   const probeCache = new Map<string, string | null>();
   const probe = (pkg: string): string | null => {
-    if (!probeCache.has(pkg)) probeCache.set(pkg, published(pkg));
+    if (!probeCache.has(pkg)) {
+      const result = published(pkg);
+      probeCache.set(pkg, result);
+      if (result === null) failedProbes++;
+    }
     return probeCache.get(pkg)!;
   };
   const skipNotified = new Set<string>();
@@ -424,6 +430,7 @@ export function runCheck(root: string, published: PublishedProbe = defaultPublis
   return {
     problems: [...checkRootLockfile(root), ...checkAppLockfiles(root), ...registry.problems],
     skipped: registry.skipped,
+    failedProbes: registry.failedProbes,
   };
 }
 
@@ -650,9 +657,11 @@ if (process.argv.includes("--self-test")) {
   selfTest();
 } else {
   const root = process.cwd();
-  const { problems, skipped } = runCheck(root);
+  const { problems, skipped, failedProbes } = runCheck(root);
   if (skipped > 0) {
-    console.error(`FROZEN-LOCK RULE 3 COULD NOT RUN — ${skipped} npm probe(s) failed (registry unreachable).`);
+    console.error(
+      `FROZEN-LOCK RULE 3 COULD NOT RUN — ${skipped} check(s) skipped (${failedProbes} npm probe(s) failed, registry unreachable).`,
+    );
     console.error("A gate that could not run has cleared nothing: this run is NOT a pass. Fix the network and re-run.");
     process.exit(2);
   }
