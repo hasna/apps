@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- 462d1c4: fix: schedule creation persists the computed `next_run_at` so the daemon fires and advances schedules (release-review P1 remediation for 0.0.100)
+- 462d1c4: fix: schedule creation binds `created_at`/`updated_at` to the actual creation time instead of the computed `next_run_at` (timestamp integrity, release-review P1 remediation for 0.0.100)
 - 462d1c4: fix: CORS preflight mirrors the v1 surface — allows PATCH and the `x-api-key` header used by the SDK and dashboard clients
 - d75c5bd: fix: require the API signing key — fail closed on `docker compose up` instead of defaulting to a committed secret (O15-00414)
 - 462d1c4: chore: contract manifest `kitVersion` aligned to 0.13.4
