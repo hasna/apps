@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.32
+
+### Patch Changes
+
+- Updated dependencies [4af006f]
+- Updated dependencies [5e23b61]
+- Updated dependencies [9fd8163]
+  - @hasna/secrets@0.3.7
+  - @hasna/skills@0.1.65
+  - @hasna/todos@0.15.48
+
 ## 0.5.31
 
 ### Patch Changes

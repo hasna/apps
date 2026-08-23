@@ -1,5 +1,11 @@
 # @hasna/tickets
 
+## 0.1.23
+
+### Patch Changes
+
+- fdeb50e: tickets-serve and tickets-mcp answer --help/--version cleanly before any bind or transport connect (todos row 5fcf7a67). Previously `tickets-serve --help`/`--version` fell through to serve() and bound the port (EADDRINUSE when occupied, or bind-and-serve forever), and `tickets-mcp --version`/`--help` entered MCP stdio mode, printed nothing, and exited rc=0 silently when stdin closed.
+
 ## 0.1.22
 
 ### Patch Changes

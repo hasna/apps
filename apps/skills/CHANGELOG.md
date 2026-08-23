@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.65
+
+### Patch Changes
+
+- 5e23b61: Pin the `./storage` subpath compatibility contract: export `storageCapabilities` (version, values, types) from both `./storage` and the main entrypoint, and add `src/storage-boundary.test.ts`, which imports the subpath like a packed consumer and asserts every contract member is present while the retired deployment-mode surface (`getStorageMode` / `getSkillsStorageMode` / `SkillsStorageMode`) stays absent — so a future removal fails the OSS suite loudly instead of breaking embedders silently, as the 0.1.61 `getStorageMode` removal did. `docs/architecture/upstream-boundary.md` now documents the supported storage contract and the status-function replacement for the removed mode concept.
+
 ## 0.1.64
 
 ### Patch Changes
@@ -30,6 +36,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.63] - 2026-08-15
 
 ### Added
+
 - **Owner layout migration** — `skills storage migrate` moves `installed/` and
   legacy flat skill dirs into `~/.hasna/skills/skills/` (the canonical corpus
   cache that becomes the sync source), creates `logs/` and `outputs/` lazily,
@@ -52,6 +59,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.62] - 2026-08-10
 
 ### Fixed
+
 - Worktree-originated npm releases now publish from a disposable normal clone
   at the exact source HEAD and verify the registry `gitHead`, preserving source
   worktree metadata on success, publish failure, and forced termination.
@@ -59,6 +67,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.61] - 2026-08-09
 
 ### Removed
+
 - **The deployment "mode" concept is gone, in all three unrelated places it had
   grown.** Skills has one deployment story: you run it. Where it runs and who
   runs it were never product variants, and three separate subsystems had each
@@ -85,6 +94,7 @@ All notable changes to this project will be documented in this file.
   push users toward choosing a mode, and there is no longer a choice to make.
 
 ### Added
+
 - **`skills sync [names...] [--for <agent>] [--dry-run] [--all] [--force]`** — the last
   mile: write skills from this machine's corpus into each coding agent's global skills
   folder (`~/.claude/skills/<name>/SKILL.md`, `~/.codewith/…`, `~/.codex/…`,
@@ -138,6 +148,7 @@ All notable changes to this project will be documented in this file.
   `src/index.ts` and `src/storage.ts` duplicate the whole native-storage export
   list with nothing checking they agree; and `.skills/exports/` is a sibling of
   `runs/`, not nested inside it.
+
 - `skills config unset <key>` (and the exported `unsetConfig`). With modes gone,
   "run on this machine" is the absence of a configured `apiUrl`, so there has to
   be a supported way back to that state; previously the only way to express the
@@ -149,6 +160,7 @@ All notable changes to this project will be documented in this file.
   `--api-url ""` is now an error rather than a silent no-op.
 
 ### Changed
+
 - **`~/.hasna/skills/` is now the skills app folder and installed skills live in
   `~/.hasna/skills/installed/<name>/`.** App data (`config.json`, `skills.db`,
   `auth.json`) stays at the app root. This matches every sibling Hasna app —
@@ -168,6 +180,7 @@ All notable changes to this project will be documented in this file.
   reading `$HOME`. Auth (`auth.json`) still resolves from `$HOME` at startup.
 
 ### Fixed
+
 - Named `skills sync` now resolves repository-managed instruction skills from
   the packaged `agent-skills/` tree as well as the public `skills/` catalog.
   The npm tarball includes those agent skills and the release guard rejects a
@@ -193,6 +206,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.60] - 2026-07-25
 
 ### Fixed
+
 - `skills auth signup`/`auth login` no longer fail with a bare, unactionable
   message such as "Something went wrong!". API failures now report the HTTP
   status and the exact endpoint that was called, non-JSON error bodies (proxy
@@ -208,6 +222,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.59] - 2026-07-24
 
 ### Fixed
+
 - Rebranded "Open Skills" to "Hasna Skills" and scrubbed internal domain/infra
   leakage from published output (#34).
 - `doctor --json` now always emits an array shape for stable machine parsing
@@ -220,17 +235,20 @@ All notable changes to this project will be documented in this file.
   the real subcommands (runs, exports, storage, webhooks, events) (#42).
 
 ### Added
+
 - Hardened squash-merge provenance handling (#40).
 
 ## [0.1.54] - 2026-06-29
 
 ### Fixed
+
 - Corrected the `project-dashboard-reports` Mailery provider-panel example to
   use the released `mailery project-panel` command.
 
 ## [0.1.53] - 2026-06-29
 
 ### Fixed
+
 - Tightened the `project-dashboard-reports` CLI checklist so provider-panel
   examples match the bounded limits and project-scoped knowledge command in the
   full skill guidance.
@@ -238,6 +256,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.52] - 2026-06-29
 
 ### Added
+
 - Bundled `project-dashboard-reports` skill for Hasna agent-managed project
   dashboards, `.hasna/project` layout, Projects JSON Render/React Flow viewer
   workflow, provider panel commands, `#iproj-*` channel naming, and redaction
@@ -246,27 +265,32 @@ All notable changes to this project will be documented in this file.
 ## [0.1.12] - 2026-03-12
 
 ### Added
+
 - REST `?fields=` filtering on `GET /api/skills`, `/api/skills/search`, `/api/skills/:name` — specify only the fields you need (60-80% response size reduction)
 - CLI `--format=compact` — outputs skill names only (one per line)
 - CLI `--format=csv` — outputs `name,category,description` CSV for agent processing
 
 ### Changed
+
 - Compact mutation responses — `POST /api/skills/:name/install` and `/remove` return minimal `{skill,success}` on success; full detail only on failure (~80% smaller on mutations)
 
 ## [0.1.11] - 2026-03-12
 
 ### Changed
+
 - MCP lean stubs — stripped all param `.describe()` annotations from inputSchema across all 16 tools. Full descriptions available on demand via `describe_tools`.
 
 ## [0.1.10] - 2026-03-12
 
 ### Added
+
 - MCP `search_tools` tool — list tool names, optionally filtered by keyword
 - MCP `describe_tools` tool — get full descriptions for specific tools by name (on-demand schema lookup)
 
 ## [0.1.9] - 2026-03-12
 
 ### Changed
+
 - `list_skills` and `search_skills` MCP tools now return `[{name,category}]` by default — add `detail: true` for full objects (~90% token reduction on discovery calls)
 - `skills://registry` resource now compact `[{name,category}]` instead of full objects
 - All 14 MCP tool descriptions trimmed to ≤60 chars
@@ -276,6 +300,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.8] - 2026-03-11
 
 ### Added
+
 - `skills install --category <cat>` — bulk install all skills in a category
 - `skills export` / `skills import` — portable skill configs across machines
 - `skills whoami` — setup summary (installed skills, agent configs, env vars, version)
@@ -292,6 +317,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.6] - 2026-03-11
 
 ### Added
+
 - Fuzzy search in `searchSkills()` — typos and abbreviations are tolerated (Levenshtein edit distance + prefix matching)
 - `skills tags` command lists all tags with skill counts (CLI, MCP `list_tags` tool, REST `GET /api/tags`)
 - `--tags` filter on `skills list` and `skills search` (comma-separated, OR logic, case-insensitive)
@@ -303,20 +329,24 @@ All notable changes to this project will be documented in this file.
 ## [0.1.5] - 2026-03-10
 
 ### Changed
+
 - Server defaults to OS-assigned port (port 0) instead of hardcoded 3579 — prevents port conflicts
 - Self-update reads package name dynamically from package.json (forks work correctly)
 
 ### Fixed
+
 - Removed hardcoded `@hasna/skills` in CLI and server self-update commands
 - Stale port reference in README
 
 ### Added
+
 - Test coverage for server (version, agent install, self-update, no-dashboard), installer (dependency warnings), skillinfo (CLAUDE.md fallback)
 - 244 tests, 99% function coverage, 96% line coverage
 
 ## [0.1.2] - 2026-02-15
 
 ### Added
+
 - Hasna branding on dashboard (logo + "Hasna Skills" header)
 - CLAUDE.md for AI agent development guidance
 - Full test coverage: 213 tests across 10 files
@@ -327,6 +357,7 @@ All notable changes to this project will be documented in this file.
 ## [0.1.1] - 2026-02-15
 
 ### Added
+
 - Skills Dashboard: Vite + React 19 + Tailwind v4 + shadcn/ui web UI
 - Bun HTTP server with 7 REST API routes
 - `skills serve` command to launch web dashboard
@@ -338,17 +369,20 @@ All notable changes to this project will be documented in this file.
 ## [0.0.3] - 2025-01-15
 
 ### Changed
+
 - Version bump to 0.0.3
 
 ## [0.0.2] - 2025-01-14
 
 ### Changed
+
 - Consolidated skills from 266 to 200 (removed scaffolds, merged duplicates)
 - Updated repository URL and description
 
 ## [0.0.1] - 2025-01-13
 
 ### Added
+
 - Initial release with 266 AI agent skills
 - CLI with interactive TUI (ink/React)
 - MCP server for AI agent integration
