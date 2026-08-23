@@ -9,14 +9,20 @@
 //
 // The verb is IDEMPOTENT: when the runner principal already exists as an
 // active machine principal and holds at least one active, unexpired,
-// non-revoked, non-disabled `machine`-kind key for this app, it returns the
-// existing key and NEVER mints a second token. A `pg_advisory_xact_lock`
-// keyed on the runner id serializes concurrent runs so two invocations cannot
-// both pass the no-op check and mint twice.
+// non-revoked, non-disabled `machine`-kind key for THIS app, the REQUESTED
+// tenant, with memberships carrying every requested role and key scopes
+// covering every requested scope, it returns the existing key and NEVER mints
+// a second token. Any other existing key — wrong tenant, missing role, or
+// missing scope — does not satisfy the no-op check: the mint path runs, the
+// stray key is disabled, and a fresh key is minted for the requested binding.
+// A `pg_advisory_xact_lock` keyed on the runner id serializes concurrent runs
+// so two invocations cannot both pass the no-op check and mint twice.
 //
-// The minted token is returned to the CALLER exactly once. This module never
-// logs it; the caller decides where it lands (file / stdout) and remains
-// responsible for never printing it into transcripts.
+// The minted token is returned to the CALLER exactly once. Delivery happens
+// INSIDE the transaction through the optional `deliverToken` callback so a
+// delivery failure rolls the mint back. This module never logs the token; the
+// caller decides where it lands (file / stdout) and remains responsible for
+// never printing it into transcripts.
 
 import { isValidScope, mintApiKey, normalizeTenantId } from "@hasna/contracts/auth";
 import type { PoolQueryClient } from "../../generated/storage-kit/query.js";
@@ -52,6 +58,16 @@ export interface ProvisionRunnerKeyOptions {
   nowMs?: number;
   /** Key-id override (tests / deterministic reissue). */
   kid?: string;
+  /**
+   * Called with the minted token INSIDE the transaction, after the key row is
+   * inserted and before commit. A delivery failure therefore rolls the mint
+   * back — a committed key whose plaintext was never delivered is
+   * unrecoverable (only the hash is stored) and the idempotency check would
+   * otherwise refuse a re-run forever. Never invoked on the
+   * `already_provisioned` path. The caller remains responsible for never
+   * printing the token into transcripts.
+   */
+  deliverToken?: (token: string) => void;
 }
 
 export type ProvisionRunnerKeyOutcome =
@@ -144,16 +160,35 @@ export async function provisionRunnerKey(
          FROM api_keys key
          JOIN principals principal ON principal.id = key.principal_id
         WHERE key.principal_id = $1
+          AND key.tenant_id = $2
           AND key.token_kind = 'machine'
           AND key.app = 'loops'
           AND key.revoked_at IS NULL
           AND key.disabled_at IS NULL
           AND (key.expires_at IS NULL OR key.expires_at > now())
+          AND key.scopes @> $3::jsonb
           AND principal.kind = 'machine'
           AND principal.status = 'active'
+          AND NOT EXISTS (
+            -- EVERY requested role must be present on the active membership:
+            -- a membership carrying only one of several requested roles must
+            -- not satisfy the no-op check (the ANY form would match that
+            -- single role and wrongly confirm a role-starved key).
+            SELECT 1 FROM unnest($4::text[]) AS requested(role)
+             WHERE NOT EXISTS (
+               SELECT 1
+                 FROM tenant_memberships ms
+                 JOIN tenant_membership_roles mr
+                   ON mr.tenant_id = ms.tenant_id AND mr.principal_id = ms.principal_id
+                WHERE ms.tenant_id = $2
+                  AND ms.principal_id = $1
+                  AND ms.status = 'active'
+                  AND mr.role = requested.role
+             )
+          )
         ORDER BY key.issued_at DESC
         LIMIT 1`,
-      [runnerId],
+      [runnerId, tenantId, JSON.stringify(scopes), roles],
     );
     if (existing) {
       return {
@@ -226,6 +261,14 @@ export async function provisionRunnerKey(
        VALUES ($1, 'loops', $2, $3::jsonb, $4, $5, $6, 'provision-runner-key', $7, $8, 'machine')`,
       [minted.kid, runnerId, JSON.stringify(scopes), minted.tokenHash, issuedAt, expiresAt, tenantId, runnerId],
     );
+
+    // Deliver INSIDE the transaction: a delivery failure (e.g. the --token-out
+    // file cannot be written) rolls the mint back, so no active key is ever
+    // left behind whose plaintext was lost — the command can simply be
+    // re-run. Delivery after commit would strand an unrecoverable active key
+    // (only the hash is stored) behind an idempotency check that then refuses
+    // every re-run.
+    options.deliverToken?.(minted.token);
 
     return {
       status: "provisioned",

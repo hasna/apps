@@ -466,6 +466,26 @@ describe("loops-serve provision-runner-key command", () => {
     }
   });
 
+  test("a --token-out write failure propagates and never reports a provisioned key", async () => {
+    // A directory as the token path makes the file write fail. Delivery runs
+    // inside the provisioning transaction, so the failure must propagate to
+    // the caller — nothing may read as provisioned for a key whose plaintext
+    // was never delivered.
+    const dir = mkdtempSync(join(tmpdir(), "loops-provision-"));
+    try {
+      const { client } = recordingClient(null);
+      await expect(
+        runProvisionRunnerKeyWithClient(
+          { runnerId: "station-cli-test", tenantId: "tenant-a", tokenOut: dir },
+          { HASNA_LOOPS_API_SIGNING_KEY: SIGNING_SECRET },
+          client,
+        ),
+      ).rejects.toThrow(/EISDIR|directory|ENOTDIR|permission denied/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("invalid role or scope csvs fail with the module's message", async () => {
     const { client } = recordingClient(null);
     await expect(runProvisionRunnerKeyWithClient(

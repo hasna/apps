@@ -1119,6 +1119,13 @@ export async function runProvisionRunnerKeyWithClient(
     scopes,
     ttlSeconds,
     signingSecret,
+    // File delivery runs INSIDE the provisioning transaction (see
+    // provisionRunnerKey): a write failure rolls the mint back, so a re-run
+    // mints a fresh key instead of stranding an active key whose plaintext
+    // was lost. `--print-token` stays post-commit to preserve the exact
+    // stdout order (summary line, then token line) — a stdout write failure
+    // is not a recovery hazard.
+    ...(opts.printToken ? {} : { deliverToken: (token: string) => writeTokenFile(tokenOut!, token) }),
   });
   const summary = { runnerId: outcome.runnerId, kid: outcome.kid, expiresAt: outcome.expiresAt };
   console.log(JSON.stringify(summary));
@@ -1128,8 +1135,6 @@ export async function runProvisionRunnerKeyWithClient(
     // log line: not here, not in the module, not in any error path.
     if (opts.printToken) {
       console.log(outcome.token);
-    } else {
-      writeTokenFile(tokenOut!, outcome.token);
     }
   } else {
     console.warn(
