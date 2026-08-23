@@ -2,8 +2,9 @@
  * run-routing.ts — where a skill run executes: on this machine, or on the
  * configured Skills API.
  *
- * One resolver serves both run surfaces (the CLI `skills run` path and the MCP
- * `run_skill` tool) so the two cannot drift apart.
+ * One resolver serves every run surface (the CLI `skills run` path, the MCP
+ * `run_skill` tool, and the `skills schedule run` surface) so they cannot drift
+ * apart.
  *
  * A skill run is REMOTE only when all three hold:
  *
