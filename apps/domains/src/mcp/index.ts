@@ -1929,8 +1929,36 @@ return server;
 }
 
 // --- Start ---
+function printHelp(): void {
+  console.log(`Usage: domains-mcp [options]
+
+MCP server for @hasna/domains (Streamable HTTP by default, stdio with --stdio)
+
+Options:
+  --stdio           Serve MCP over stdio (env: MCP_STDIO=1)
+  --http            Serve MCP over Streamable HTTP (127.0.0.1; env: MCP_HTTP=1)
+  --port <number>   HTTP port (default: 8859, env: MCP_HTTP_PORT)
+  -V, --version     output the version number
+  -h, --help        display help for command`);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
+  // Binds-before-version class (todos row 46a45765): --help/--version must
+  // answer BEFORE any bind. They previously fell through past the
+  // isStdioMode check to resolveMcpHttpPort + startHttpServer (default port
+  // 8859): with the shared port occupied, `domains-mcp --version` died
+  // EADDRINUSE rc=1 printing nothing; with the port free it bound and hung
+  // instead of answering. Same pattern as the sibling MCP bins (tickets,
+  // styles, calendar, conversations, dispatch).
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(getPackageVersion());
+    process.exit(0);
+  }
   const { isStdioMode } = await import("./http.js");
   if (isStdioMode(argv)) {
     const transport = new StdioServerTransport();
