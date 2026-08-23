@@ -348,7 +348,7 @@ function checkRegistryEdges(root: string, published: PublishedProbe = defaultPub
     }
   }
 
-  return { problems, skipped };
+  return { problems, skipped, failedProbes };
 }
 
 function compareEntry(label: string, entry: any, manifest: any, fields: readonly ("dependencies" | "devDependencies")[]): string[] {
