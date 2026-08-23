@@ -90,7 +90,18 @@ export function getCloudVerifier(): ApiKeyVerifier {
   cachedVerifier = verifyApiKey({
     app: RECORDINGS_APP_SLUG,
     signingSecret,
-    isRevoked: store.isRevoked,
+    // @hasna/contracts >= 0.9.0 throws at construction when wired with only
+    // the deprecated `isRevoked` hook (it cannot refuse a key this service has
+    // no record of). `keyStatus` denies unknown, revoked and expired kids —
+    // the wiring every other contracts consumer in this tree uses.
+    keyStatus: store.keyStatus,
+    audit: (event) => {
+      if (event.outcome === "deny") {
+        console.warn(
+          `[recordings-serve] auth deny kid=${event.kid ?? "-"} reason=${event.reason} ${event.method ?? ""} ${event.path ?? ""}`,
+        );
+      }
+    },
   });
   return cachedVerifier;
 }

@@ -574,3 +574,75 @@ describe("cloud migration parity", () => {
     expect(canonical.slice(canonicalUpgrade)).toMatch(/on delete set null/i);
   });
 });
+
+// ── Verifier construction against the installed @hasna/contracts kit ──────────
+// Regression for I38-00752: @hasna/contracts >= 0.9.0 throws at construction
+// when `verifyApiKey` is wired with only the deprecated `isRevoked` hook. The
+// 0.3.8/0.3.9 servers shipped that wiring, so every authenticated /v1 request
+// landed in the v1.ts catch and returned 503 "authentication service
+// unavailable" while /health and /version stayed 200. The construction must
+// succeed with the `keyStatus` hook, and a request with no token must be
+// denied without touching the database.
+//
+// The probe runs in a fresh `bun -e` subprocess: `mock.module("./cloud.js")`
+// in other server test files replaces the module for the whole test process,
+// and `getCloudVerifier` caches its result in module scope — either would make
+// an in-process assertion vacuously pass or fail depending on file ordering.
+import { spawnSync } from "node:child_process";
+
+const SIGNING_KEY_ENV = [
+  "HASNA_RECORDINGS_API_SIGNING_KEY",
+  "HASNA_API_SIGNING_KEY",
+  "API_KEY_SIGNING_SECRET",
+] as const;
+const DB_URL_ENV = [
+  "HASNA_RECORDINGS_DATABASE_URL",
+  "RECORDINGS_DATABASE_URL",
+  "DATABASE_URL",
+] as const;
+
+const PROBE_SCRIPT = `
+import { getCloudVerifier } from "./src/server/cloud.ts";
+const verifier = getCloudVerifier();
+if (typeof verifier.authenticate !== "function") throw new Error("verifier has no authenticate");
+const decision = await verifier.authenticate(new Headers(), {
+  method: "GET",
+  path: "/v1/recordings",
+  requiredScopes: ["recordings:read"],
+});
+if (decision.ok || decision.status !== 401) {
+  throw new Error("expected a 401 missing-token denial, got " + JSON.stringify(decision));
+}
+console.log("VERIFIER_OK");
+`;
+
+function probeCloudEnv(env: Record<string, string>): { status: number | null; stdout: string; stderr: string } {
+  const childEnv: Record<string, string | undefined> = { ...process.env };
+  for (const k of [...SIGNING_KEY_ENV, ...DB_URL_ENV]) delete childEnv[k];
+  for (const [k, v] of Object.entries(env)) childEnv[k] = v;
+  const res = spawnSync(process.execPath, ["-e", PROBE_SCRIPT], {
+    cwd: new URL("../..", import.meta.url).pathname,
+    env: childEnv,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  return { status: res.status, stdout: res.stdout, stderr: res.stderr };
+}
+
+describe("cloud verifier construction", () => {
+  test("fails closed when no signing secret is configured", () => {
+    const { status, stderr } = probeCloudEnv({});
+    expect(status).not.toBe(0);
+    expect(stderr).toMatch(/signing secret/i);
+  });
+
+  test("constructs with the contracts keyStatus hook and denies a missing token without a database", () => {
+    const { status, stdout, stderr } = probeCloudEnv({
+      HASNA_RECORDINGS_API_SIGNING_KEY: "test-signing-secret-0123456789abcdef",
+      HASNA_RECORDINGS_DATABASE_URL: "postgres://placeholder:placeholder@127.0.0.1:1/placeholder",
+    });
+    expect(stderr).not.toMatch(/isRevoked|key-status hook/i);
+    expect(status).toBe(0);
+    expect(stdout).toContain("VERIFIER_OK");
+  });
+});
