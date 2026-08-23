@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
@@ -422,6 +422,44 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
+ * Restores a moved lock-owner file ATOMICALLY and NON-CLOBBERING: the canonical
+ * owner path is recreated only while it is still absent. A successor that
+ * reacquired a released lock in the meantime has installed its own owner file; a
+ * replacing `rename` would overwrite that live successor's owner with a stale one
+ * (dead pid), letting a later breaker take over a live writer's lock — overlapping
+ * whole-file writes, i.e. record loss. `fs.link` fails EEXIST when the target
+ * already exists, so the restore either recreates the moved file or leaves a
+ * successor's owner untouched — never both, and with no window between the check
+ * and the act. The quarantine path and the lock directory both live under the
+ * same dataDir, so the hard link cannot cross a filesystem boundary (EXDEV).
+ *
+ * @returns true when the moved file was restored to the canonical path; false
+ *          when it was disposed as an orphan (a successor's owner was already in
+ *          place, or the lock directory itself vanished — the holder released
+ *          concurrently and the moved file belongs to a released lock).
+ */
+export async function restoreMovedOwnerFile(lockPath: string, quarantinePath: string): Promise<boolean> {
+  const ownerFile = join(lockPath, JSON_STORE_LOCK_OWNER_FILE);
+  try {
+    await link(quarantinePath, ownerFile);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST" || code === "ENOENT") {
+      // EEXIST: a successor's owner file is already installed (or is being
+      // installed right now) — the moved file is an orphan of a superseded owner.
+      // ENOENT: the lock directory vanished — the holder released concurrently;
+      // the moved file is an orphan of a released lock. Either way, dispose the
+      // moved file; never clobber, never leak the quarantine.
+      await rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
+      return false;
+    }
+    throw error;
+  }
+  await rm(quarantinePath, { force: true }).catch(() => undefined);
+  return true;
+}
+
+/**
  * Atomically takes over a validated stale lock WITHOUT ever emptying the canonical
  * lock path. POSIX offers no conditional delete, so a plain `rm` after a stale check
  * has a check-then-act window: a waiter preempted between its validation and its
@@ -431,8 +469,11 @@ function isProcessAlive(pid: number): boolean {
  * and nobody can acquire into a gap while a live owner continues. The moved file is
  * re-verified: if it is exactly the validated dead owner, the caller's owner is
  * installed and the takeover is complete; anything else — a live successor's owner
- * file moved by a delayed breaker — is restored atomically, never deleted. An owner
- * file that vanishes first (ENOENT) or is unreadable is never grounds for takeover.
+ * file moved by a delayed breaker — is restored atomically and NON-CLOBBERING
+ * (restoreMovedOwnerFile): if a successor has already installed its owner in the
+ * meanwhile (release + reacquire), the moved file is an orphan and is disposed,
+ * never overwriting the successor's owner. An owner file that vanishes first
+ * (ENOENT) or is unreadable is never grounds for takeover.
  *
  * @returns true when the caller now holds the lock; false when the takeover did not
  *          land (owner vanished first, or the moved file was not the validated dead
@@ -458,30 +499,26 @@ export async function takeOverJsonStoreLock(
     // The file we moved is exactly the validated stale owner: install ours. If the
     // install cannot land, restore the dead owner's file so a later breaker can
     // retry, then surface the failure (fail closed: no takeover without an owner).
+    // The restore is non-clobbering: no successor can be in this directory while
+    // we hold the moved dead owner, but the helper's EEXIST/ENOENT handling makes
+    // even an impossible race fail closed instead of overwriting.
     try {
       await writeFile(ownerFile, JSON.stringify(myOwner));
     } catch (error) {
-      await rename(quarantinePath, ownerFile).catch(() => undefined);
+      await restoreMovedOwnerFile(lockPath, quarantinePath);
       throw error;
     }
     await rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
     return true;
   }
   // We moved something else — a live successor's owner file, or one with no readable
-  // owner. Restore it atomically; never delete a lock we cannot prove dead. The
-  // restore target lives inside the always-present lock directory, so it can only
-  // fail with ENOENT if the directory itself vanished — the holder released
-  // concurrently — in which case the moved file is an orphan of a released lock and
-  // is safe to dispose of.
-  try {
-    await rename(quarantinePath, ownerFile);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      await rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
-      return false;
-    }
-    throw error;
-  }
+  // owner. Restore it non-clobbering; never delete a lock we cannot prove dead, and
+  // never overwrite a successor's owner in a recreated lock directory: the release
+  // path may have removed the directory and a successor may have reacquired it
+  // while we were delayed — their installed owner file must win, and the moved file
+  // is then an orphan of a superseded owner, safe to dispose of (the helper handles
+  // both EEXIST and ENOENT the same way).
+  await restoreMovedOwnerFile(lockPath, quarantinePath);
   return false;
 }
 

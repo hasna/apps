@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -7,6 +7,7 @@ import {
   JSON_STORE_LOCK_OWNER_FILE,
   JsonActionsStore,
   releaseJsonStoreLockIfOwned,
+  restoreMovedOwnerFile,
   takeOverJsonStoreLock,
 } from "./storage.js";
 
@@ -22,6 +23,10 @@ import {
  * 4. A takeover moves only the OWNER FILE — the lock directory never leaves the
  *    canonical path — so a delayed breaker can never expose an empty lock path that a
  *    third writer could acquire into while a live owner continues.
+ * 5. A delayed breaker's RESTORE is non-clobbering: it can never replace a successor's
+ *    owner file in a recreated lock directory (release + reacquire while the breaker
+ *    was delayed), so a stale owner with a dead pid can never sit on a live writer's
+ *    lock and invite a later takeover of a live critical section.
  */
 function readOwner(lockPath: string): { token: string } {
   return JSON.parse(
@@ -216,6 +221,67 @@ describe("JsonActionsStore write-lock ownership", () => {
 
       // The current owner's release does remove it.
       await releaseJsonStoreLockIfOwned(lockPath, "successor");
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a delayed breaker's restore never replaces a successor's owner in a recreated lock directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "actions-json-lock-restore-"));
+    const lockPath = join(root, JSON_STORE_LOCK_DIRNAME);
+    const ownerFile = join(lockPath, JSON_STORE_LOCK_OWNER_FILE);
+    const ownerC = { token: "holder-c", pid: process.pid, host: "test", startedAt: new Date().toISOString() };
+    const ownerD = { token: "writer-d", pid: process.pid, host: "test", startedAt: new Date().toISOString() };
+    try {
+      // C holds the lock (exactly as the acquire loop leaves it: directory plus owner file).
+      mkdirSync(lockPath, { recursive: true });
+      writeFileSync(ownerFile, JSON.stringify(ownerC));
+
+      // C's release has already read its own token — the check releaseJsonStoreLockIfOwned
+      // performs before removing the directory.
+      expect(readOwner(lockPath).token).toBe("holder-c");
+
+      // B, a breaker delayed since before C acquired, performs its move: it renames the
+      // CURRENT owner file (C's live one) to its quarantine path — exactly what
+      // takeOverJsonStoreLock does before re-verifying the moved token.
+      const quarantineB = join(root, `${JSON_STORE_LOCK_DIRNAME}.quarantine-b`);
+      renameSync(ownerFile, quarantineB);
+
+      // C's release completes: the lock directory is removed.
+      rmSync(lockPath, { recursive: true, force: true });
+
+      // D reacquires the released lock: mkdir succeeds, D installs its own owner.
+      mkdirSync(lockPath, { recursive: true });
+      writeFileSync(ownerFile, JSON.stringify(ownerD));
+
+      // B's restore lands LAST. It must NOT replace D's owner with C's stale owner: a
+      // stale owner with a dead pid would let a later breaker take over D's live
+      // critical section (overlapping whole-file writes -> record loss).
+      const restored = await restoreMovedOwnerFile(lockPath, quarantineB);
+      expect(restored).toBe(false);
+      expect(readOwner(lockPath).token).toBe("writer-d");
+      expect(existsSync(quarantineB)).toBe(false);
+
+      // Positive control, same helper: when no successor has installed an owner yet,
+      // the moved file is restored (the restore still works — a check that cannot
+      // pass would be worthless).
+      writeFileSync(ownerFile, JSON.stringify(ownerC));
+      const quarantineB2 = join(root, `${JSON_STORE_LOCK_DIRNAME}.quarantine-b2`);
+      renameSync(ownerFile, quarantineB2);
+      const restored2 = await restoreMovedOwnerFile(lockPath, quarantineB2);
+      expect(restored2).toBe(true);
+      expect(readOwner(lockPath).token).toBe("holder-c");
+      expect(existsSync(quarantineB2)).toBe(false);
+
+      // Negative control, same helper: when the lock directory itself vanished (the
+      // holder released concurrently and nobody reacquired), the moved file is
+      // disposed, not resurrected into a nonexistent lock.
+      renameSync(ownerFile, quarantineB2);
+      rmSync(lockPath, { recursive: true, force: true });
+      const restored3 = await restoreMovedOwnerFile(lockPath, quarantineB2);
+      expect(restored3).toBe(false);
+      expect(existsSync(quarantineB2)).toBe(false);
       expect(existsSync(lockPath)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
