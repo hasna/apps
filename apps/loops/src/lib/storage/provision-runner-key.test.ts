@@ -100,6 +100,17 @@ describe("provisionRunnerKey (hermetic)", () => {
     const roleDelete = statements.find((s) => s.sql.includes("DELETE FROM tenant_membership_roles"));
     expect(roleDelete?.params).toEqual([TENANT, RUNNER]);
 
+    // Never two active keys: any otherwise-active machine-kind key for the
+    // runner is disabled before the new key is inserted.
+    const disableUpdate = statements.find((s) => s.sql.includes("UPDATE api_keys"));
+    expect(disableUpdate?.sql).toContain("SET disabled_at = now()");
+    expect(disableUpdate?.sql).toContain("token_kind = 'machine'");
+    expect(disableUpdate?.params).toEqual([RUNNER]);
+    const keyInsertIndex = statements.findIndex((s) => s.sql.includes("INSERT INTO api_keys"));
+    const disableUpdateIndex = statements.findIndex((s) => s.sql.includes("UPDATE api_keys"));
+    expect(disableUpdateIndex).toBeGreaterThanOrEqual(0);
+    expect(keyInsertIndex).toBeGreaterThan(disableUpdateIndex);
+
     const keyInsert = statements.find((s) => s.sql.includes("INSERT INTO api_keys"));
     expect(keyInsert?.params).toEqual([
       "testkid123",
@@ -446,5 +457,62 @@ liveSuite("provisionRunnerKey (live Postgres)", () => {
     );
     expect(rows).toHaveLength(1);
     if (first.status === "provisioned") throw new Error("second run must not mint");
+  });
+
+  test("suspended-principal reactivation disables the old key — exactly one active key afterward", async () => {
+    // Provision, suspend the principal while its key is still unexpired, then
+    // re-provision: the verb must reactivate the principal, disable the old
+    // key, and mint exactly one replacement — never two active keys.
+    const first = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: TEST_RUNNER,
+      tenantId: TEST_TENANT,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+    });
+    expect(first.status).toBe("already_provisioned"); // still active from the previous test
+
+    await executor!.queryClient.execute(
+      `UPDATE principals SET status='suspended', updated_at=now() WHERE id = $1`,
+      [TEST_RUNNER],
+    );
+
+    const second = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: TEST_RUNNER,
+      tenantId: TEST_TENANT,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+    });
+    expect(second.status).toBe("provisioned");
+    if (second.status !== "provisioned") return;
+
+    const keys = await executor!.queryClient.many<{
+      kid: string;
+      disabled_at: string | null;
+      revoked_at: string | null;
+      expires_at: string | null;
+    }>(
+      `SELECT kid, disabled_at, revoked_at, expires_at
+         FROM api_keys
+        WHERE principal_id = $1 AND token_kind = 'machine'
+        ORDER BY issued_at`,
+      [TEST_RUNNER],
+    );
+    expect(keys).toHaveLength(2);
+    expect(keys.filter((key) => key.disabled_at === null)).toHaveLength(1);
+    expect(keys.filter((key) => key.disabled_at === null)[0].kid).toBe(second.kid);
+    const disabled = keys.filter((key) => key.disabled_at !== null);
+    expect(disabled).toHaveLength(1);
+    expect(disabled[0].kid).toBe(first.kid);
+
+    const principal = await executor!.queryClient.get<{ status: string; kind: string }>(
+      `SELECT status, kind FROM principals WHERE id = $1`,
+      [TEST_RUNNER],
+    );
+    expect(principal?.status).toBe("active");
+    expect(principal?.kind).toBe("machine");
   });
 });

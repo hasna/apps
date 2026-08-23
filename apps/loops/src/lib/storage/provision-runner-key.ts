@@ -191,6 +191,23 @@ export async function provisionRunnerKey(
        ON CONFLICT (tenant_id, principal_id) DO UPDATE SET status='active', updated_at=now()`,
       [tenantId, runnerId],
     );
+    // Never leave two active machine keys for one runner: the no-op check
+    // above only matched an ACTIVE principal, so arriving here with an active
+    // (unexpired, non-revoked, non-disabled) machine-kind key means the
+    // principal was suspended, re-tenanting, or the key is a stray. Disable
+    // any such key before reactivating the principal so exactly one active
+    // key exists afterward.
+    await tx.execute(
+      `UPDATE api_keys
+          SET disabled_at = now()
+        WHERE principal_id = $1
+          AND token_kind = 'machine'
+          AND app = 'loops'
+          AND revoked_at IS NULL
+          AND disabled_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())`,
+      [runnerId],
+    );
     // Delete-then-insert roles, mirroring the tenant-backfill loader, so the
     // stored role set is exactly the requested set.
     await tx.execute(
