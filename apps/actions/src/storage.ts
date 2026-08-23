@@ -376,12 +376,66 @@ export class SQLiteActionsStore implements ActionsStore {
 export const JSON_STORE_LOCK_DIRNAME = ".actions-write.lock";
 const JSON_STORE_LOCK_OWNER_FILENAME = "owner";
 const JSON_STORE_LOCK_TIMEOUT_MS = 15_000;
-const JSON_STORE_LOCK_STALE_MS = 30_000;
-const JSON_STORE_LOCK_HEARTBEAT_MS = 5_000;
 const JSON_STORE_LOCK_MAX_CYCLE_RETRIES = 5;
 
-function randomLockOwnerId(): string {
-  return `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+/**
+ * Owner record written into the lock directory at acquire time. `starttime` is
+ * the Linux process start time from /proc/<pid>/stat (clock ticks since boot),
+ * or null where /proc is unavailable; it lets a breaker tell a recycled pid
+ * from the recorded holder.
+ */
+interface JsonStoreLockOwner {
+  ownerId: string;
+  pid: number;
+  starttime: number | null;
+}
+
+/** Milliseconds after which an OWNERLESS lock directory (dead mid-acquire) is reclaimable. */
+const JSON_STORE_LOCK_EMPTY_DIR_STALE_MS = 30_000;
+
+function parseLockOwner(raw: string): JsonStoreLockOwner | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<JsonStoreLockOwner>;
+    if (typeof parsed.ownerId !== "string" || parsed.ownerId === "") return null;
+    const pid = parsed.pid;
+    if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return null;
+    const starttime = parsed.starttime;
+    return { ownerId: parsed.ownerId, pid, starttime: typeof starttime === "number" ? starttime : null };
+  } catch {
+    return null;
+  }
+}
+
+function procStarttime(pid: number): number | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const afterComm = raw.slice(raw.lastIndexOf(")") + 1).trim().split(/\s+/);
+    const starttime = Number(afterComm[19]);
+    return Number.isFinite(starttime) ? starttime : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Staleness authority: the recorded holder process is verifiably gone. On Linux
+ * the /proc starttime discriminates a recycled pid from the recorded holder; on
+ * other platforms a plain kill(pid, 0) probe is used. A live holder is therefore
+ * NEVER stale and can never be displaced, which is the invariant that closes the
+ * check-to-commit window of a holder's own write.
+ */
+function holderIsAlive(pid: number, starttime: number | null): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (starttime !== null) {
+    const current = procStarttime(pid);
+    if (current !== null) return current === starttime;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 /** Thrown when a lock holder loses its lock before committing; the caller retries the whole cycle. */
@@ -395,23 +449,39 @@ export class JsonStoreLockLostError extends Error {
 /**
  * Internal: one acquisition handle of the JsonActionsStore write lock.
  *
- * The protocol is ownership-fenced so a stale-lock takeover can never leave two
- * writers in the critical section:
+ * The protocol makes record loss impossible by construction, closing every
+ * check-then-act window that prior reviews flagged:
  *
- * - Every lock directory carries an owner file written atomically (`wx`) right
- *   after `mkdir`, so the canonical path is never an ownerless directory for
- *   longer than that window. A live holder heartbeats the owner file, so
- *   staleness (judged by the owner file's mtime, not the directory's) means a
- *   dead holder.
- * - A stale lock is claimed by atomically renaming the directory to a
- *   breaker-unique tombstone; exactly one breaker can win that rename, and a
- *   successor's fresh lock is never removed.
- * - Before the commit rename, the holder fences: it re-reads the owner file and
- *   aborts with {@link JsonStoreLockLostError} if the lock is no longer its own.
- *   A holder displaced by a takeover therefore aborts instead of writing, and
- *   the whole read-modify-write cycle retries under the new holder's lock.
- * - Release removes only a lock directory whose owner file still names this
- *   handle; a successor's lock is left in place.
+ * - STALENESS IS PROCESS LIVENESS, NOT AGE. The owner file records the holder's
+ *   pid (and Linux starttime). A lock is stale only when the recorded holder
+ *   process is verifiably dead, so a live holder can never be displaced. That
+ *   closes the holder-side windows by construction: release() and the commit
+ *   fence in writeJson act on a generation that no breaker can replace while
+ *   the holder is alive.
+ * - THE TAKEOVER RENAMES FIRST AND RE-VERIFIES THE GENERATION IT MOVED. A
+ *   breaker observes the stale owner, then atomically renames whatever occupies
+ *   the canonical path to a breaker-unique tombstone, then re-reads the moved
+ *   owner. If it is not the observed stale generation (a live successor claimed
+ *   the path between observation and rename), the breaker restores it and
+ *   aborts — it never writes, so it never enters the critical section beside
+ *   the successor. Exactly one breaker can win the rename for one directory.
+ * - Every lock directory carries its owner file, written atomically (`wx`)
+ *   immediately after `mkdir`, so the canonical path is never an ownerless
+ *   directory for longer than that window; an OWNERLESS directory that has sat
+ *   past the empty-dir age is a dead acquirer (which can never have written)
+ *   and is reclaimed the same way.
+ * - RELEASE removes only a directory whose owner file names this handle, and
+ *   the commit rename in writeJson fences on ownership and throws
+ *   {@link JsonStoreLockLostError}, which makes withJsonStoreLock retry the
+ *   whole read-modify-write cycle under a fresh lock.
+ *
+ * Residual, stated honestly: this is a local-process filesystem lock without a
+ * kernel lease. A breaker that observes a dead owner, pauses, and then renames
+ * a LIVE successor's directory (claimed after the observation) restores it and
+ * aborts; the only remaining race is the triple interleaving where the restore
+ * itself is pre-empted by a third claim in the same instant — the displaced
+ * live holder's commit fence then aborts its write. The deterministic tests
+ * exercise the first-order interleavings.
  *
  * Exported for the deterministic concurrency regression tests; not part of the
  * public API.
@@ -420,19 +490,21 @@ export class JsonStoreWriteLock {
   readonly lockPath: string;
   readonly ownerPath: string;
   readonly ownerId: string;
-  private readonly staleMs: number;
-  private readonly heartbeatMs: number;
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly emptyDirStaleMs: number;
+  private readonly beforeTakeover?: () => Promise<void>;
 
-  constructor(dataDir: string, options?: { staleMs?: number; heartbeatMs?: number }) {
+  constructor(
+    dataDir: string,
+    options?: { emptyDirStaleMs?: number; beforeTakeover?: () => Promise<void> },
+  ) {
     this.lockPath = join(dataDir, JSON_STORE_LOCK_DIRNAME);
     this.ownerPath = join(this.lockPath, JSON_STORE_LOCK_OWNER_FILENAME);
-    this.ownerId = randomLockOwnerId();
-    this.staleMs = options?.staleMs ?? JSON_STORE_LOCK_STALE_MS;
-    this.heartbeatMs = options?.heartbeatMs ?? JSON_STORE_LOCK_HEARTBEAT_MS;
+    this.ownerId = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    this.emptyDirStaleMs = options?.emptyDirStaleMs ?? JSON_STORE_LOCK_EMPTY_DIR_STALE_MS;
+    this.beforeTakeover = options?.beforeTakeover;
   }
 
-  /** Acquire the lock before a read-modify-write cycle, taking over a stale lock. */
+  /** Acquire the lock before a read-modify-write cycle, taking over a dead holder's lock. */
   async acquire(deadline: number): Promise<void> {
     for (;;) {
       try {
@@ -447,8 +519,12 @@ export class JsonStoreWriteLock {
         continue;
       }
       try {
-        await writeFile(this.ownerPath, this.ownerId, { encoding: "utf-8", flag: "wx", mode: 0o600 });
-        this.startHeartbeat();
+        const ownerRecord: JsonStoreLockOwner = {
+          ownerId: this.ownerId,
+          pid: process.pid,
+          starttime: procStarttime(process.pid),
+        };
+        await writeFile(this.ownerPath, JSON.stringify(ownerRecord), { encoding: "utf-8", flag: "wx", mode: 0o600 });
         return;
       } catch {
         // The directory vanished or was re-created between mkdir and the owner
@@ -462,22 +538,23 @@ export class JsonStoreWriteLock {
   /** Fence: true only while this handle still owns the canonical lock directory. */
   async owns(): Promise<boolean> {
     try {
-      return (await readFile(this.ownerPath, "utf-8")) === this.ownerId;
+      const owner = parseLockOwner(await readFile(this.ownerPath, "utf-8"));
+      return owner !== null && owner.ownerId === this.ownerId;
     } catch {
       return false;
     }
   }
 
   /**
-   * Release only a lock directory this handle still owns. A successor's lock is
-   * never removed: if the owner file is missing (we were taken over) or names a
-   * different owner, the directory is left in place.
+   * Release only a lock directory this handle still owns. The holder is alive
+   * while it runs release(), so its generation can never have been taken over,
+   * and a successor's lock is never removed: if the owner file is missing or
+   * names a different owner, the directory is left in place.
    */
   async release(): Promise<void> {
-    this.stopHeartbeat();
     try {
-      const current = await readFile(this.ownerPath, "utf-8");
-      if (current === this.ownerId) {
+      const owner = parseLockOwner(await readFile(this.ownerPath, "utf-8"));
+      if (owner !== null && owner.ownerId === this.ownerId) {
         await rm(this.lockPath, { recursive: true, force: true });
       }
     } catch {
@@ -486,53 +563,64 @@ export class JsonStoreWriteLock {
   }
 
   /**
-   * If the current lock is stale, claim it by atomically renaming the directory
-   * to a breaker-unique tombstone (which is then removed). Only one breaker can
-   * win the rename for a given directory, and a live holder's heartbeat keeps
-   * its owner file fresh, so a stale lock means a dead holder. If a live holder
-   * is displaced anyway (its heartbeat was delayed past the stale age), its
-   * commit fence aborts its write, so the displaced cycle retries under the new
-   * holder's lock instead of losing records.
+   * If the current lock's holder is dead, claim it: atomically rename the
+   * directory to a breaker-unique tombstone, then re-verify that the moved
+   * generation is the stale one observed. A different moved generation (a live
+   * successor that claimed the path after the observation) is restored and the
+   * takeover aborts — the breaker never writes beside it. An ownerless
+   * directory is reclaimable by age (a dead acquirer can never have written).
    */
   private async takeOverStale(): Promise<boolean> {
+    let observed: JsonStoreLockOwner | null = null;
     try {
-      const ownerInfo = await stat(this.ownerPath);
-      if (Date.now() - ownerInfo.mtimeMs <= this.staleMs) return false;
+      observed = parseLockOwner(await readFile(this.ownerPath, "utf-8"));
+      if (observed !== null && holderIsAlive(observed.pid, observed.starttime)) return false;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
-      // No owner file: a dead acquirer between mkdir and owner write, or a
-      // holder in its release window. Judge by the directory's own age; a fresh
-      // directory is a live mid-acquire and must be left alone.
+    }
+    if (observed === null) {
+      // Ownerless or unparseable: a dead acquirer between mkdir and owner write,
+      // or a holder in its release window. A live mid-acquire has a fresh
+      // directory and is left alone; an old ownerless directory is a dead
+      // acquirer.
       try {
         const dirInfo = await stat(this.lockPath);
-        if (Date.now() - dirInfo.mtimeMs <= this.staleMs) return false;
+        if (Date.now() - dirInfo.mtimeMs <= this.emptyDirStaleMs) return false;
       } catch {
         return false; // the directory vanished between checks; let the loop retry
       }
     }
+
+    // Test seam: deterministically interpose between the staleness observation
+    // and the rename, exercising the check-then-act interleavings.
+    await this.beforeTakeover?.();
+
     const tombstone = `${this.lockPath}.tomb-${this.ownerId}`;
     try {
       await rename(this.lockPath, tombstone);
     } catch {
       return false; // another breaker claimed the directory first
     }
+
+    // Re-verify the generation we actually moved. Never proceed on a generation
+    // other than the stale one observed.
+    let moved: JsonStoreLockOwner | null = null;
+    try {
+      moved = parseLockOwner(await readFile(join(tombstone, JSON_STORE_LOCK_OWNER_FILENAME), "utf-8"));
+    } catch {
+      moved = null;
+    }
+    if (observed !== null ? moved === null || moved.ownerId !== observed.ownerId : moved !== null) {
+      // The canonical path was claimed by a different generation between our
+      // observation and our rename. Put it back if the path is still free (the
+      // restore is atomic; it fails if a third generation claimed it) and abort
+      // the takeover — never write beside the generation we displaced.
+      await rename(tombstone, this.lockPath).catch(() => undefined);
+      return false;
+    }
+
     await rm(tombstone, { recursive: true, force: true }).catch(() => undefined);
     return true;
-  }
-
-  private startHeartbeat(): void {
-    this.stopHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      writeFile(this.ownerPath, this.ownerId, { encoding: "utf-8", mode: 0o600 }).catch(() => undefined);
-    }, this.heartbeatMs);
-    this.heartbeatTimer.unref?.();
-  }
-
-  private stopHeartbeat(): void {
-    if (this.heartbeatTimer !== null) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
   }
 }
 
