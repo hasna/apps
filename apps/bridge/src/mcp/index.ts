@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import pkg from "../../package.json" with { type: "json" };
 import {
   attachBridgeSession,
   broadcast,
@@ -200,6 +201,25 @@ export function buildServer(): McpServer {
   );
 
   return server;
+}
+
+// Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+// answer BEFORE the stdio transport connect at module top. They previously
+// fell into the transport and printed nothing (silent-empty family).
+const EARLY_ARGV = process.argv.slice(2);
+if (EARLY_ARGV.includes("--version") || EARLY_ARGV.includes("-V")) {
+  console.log(pkg.version);
+  process.exit(0);
+}
+if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
+  console.log(`Usage: bridge-mcp [options]
+
+MCP server for @hasna/bridge (stdio).
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command`);
+  process.exit(0);
 }
 
 const server = buildServer();

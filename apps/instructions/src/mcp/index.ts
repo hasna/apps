@@ -1,10 +1,33 @@
 #!/usr/bin/env bun
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { getPackageVersion } from "../lib/package-version.js";
 import { buildServer } from "./server.js";
 import { isStdioMode, resolveHttpPort, startMcpHttpServer } from "./http.js";
 
 async function main() {
   const argv = process.argv.slice(2);
+
+  // Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+  // answer BEFORE any transport resolution or bind. They previously fell
+  // through and started the shared HTTP server (:8853) with no output.
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(getPackageVersion());
+    return;
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Usage: configs-mcp [options]
+
+MCP server for @hasna/instructions (Streamable HTTP by default; --stdio to select stdio).
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  --claude       register with Claude Code (stdio, user scope)
+  --http         explicitly select Streamable HTTP transport
+  --stdio        explicitly select stdio transport
+  --port <n>     HTTP port (default: 8853)`);
+    return;
+  }
 
   if (argv.includes("--claude")) {
     const proc = Bun.spawn(

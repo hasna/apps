@@ -13,6 +13,13 @@ function resolvePort(argv: string[]): number {
 }
 
 const args = process.argv.slice(2)
+// Binds-before-version class (todos row 7e5f8f3d): --version must answer
+// BEFORE resolvePort()/Bun.serve. It previously fell through and bound the
+// OTLP listener (:4318) with no output.
+if (args.includes('--version') || args.includes('-V')) {
+  console.log(packageMetadata.version)
+  process.exit(0)
+}
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: economy-otel [options]
 
@@ -20,6 +27,7 @@ OTLP/HTTP metrics sidecar — ingests *.cost.* / *.token.* metrics into economy.
 
 Options:
   -p, --port <port>  Port to bind (default: ECONOMY_OTEL_PORT or 4318)
+  -V, --version      output the version number
   -h, --help         display help for command
 
 Environment:

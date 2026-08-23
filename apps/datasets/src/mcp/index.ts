@@ -329,10 +329,18 @@ Runs the datasets MCP server over stdio.
 
 Options:
   --stdio       Run over stdio (default)
+  -V, --version  output the version number
   -h, --help   Show this help text`);
 }
 
 async function main(): Promise<void> {
+  // Binds-before-version class (todos row 7e5f8f3d): --version must answer
+  // BEFORE the stdio transport connect. It previously fell through and
+  // printed nothing (silent-empty family).
+  if (process.argv.includes("--version") || process.argv.includes("-V")) {
+    console.log(pkg.version);
+    return;
+  }
   if (process.argv.includes("-h") || process.argv.includes("--help")) {
     printHelp();
     return;

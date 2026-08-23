@@ -289,6 +289,28 @@ const tools = [
   },
 ];
 
+// Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+// answer BEFORE the stdio framing loop is entered. They previously fell into
+// the stdin framing loop and printed nothing (silent-empty family).
+const EARLY_ARGV = process.argv.slice(2);
+if (EARLY_ARGV.includes('--version') || EARLY_ARGV.includes('-V')) {
+  const { readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '../package.json'), 'utf8'));
+  console.log(pkg.version);
+  process.exit(0);
+}
+if (EARLY_ARGV.includes('--help') || EARLY_ARGV.includes('-h')) {
+  console.log(`Usage: notes-mcp [options]
+
+Hasna Notes MCP server (stdio)
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command`);
+  process.exit(0);
+}
+
 let buffer = Buffer.alloc(0);
 
 // Stdio framing. The MCP spec's stdio transport is NEWLINE-DELIMITED JSON —

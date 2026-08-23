@@ -21,17 +21,27 @@ import { openStorage } from './storage.mjs';
 import { createApp, resolveConfig, SERVICE, VERSION } from './app.mjs';
 import { DEFAULT_DB_PATH, LEGACY_DB_PATH, migrateLegacyServerDb } from './paths.mjs';
 
+// Binds-before-version class (todos row 7e5f8f3d): --version must answer
+// BEFORE resolveConfig()/Bun.serve. It previously fell through and bound the
+// listener (:8788) with no output.
+if (process.argv.includes('--version') || process.argv.includes('-V')) {
+  console.log(VERSION);
+  process.exit(0);
+}
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`${SERVICE} v${VERSION} — self-hosted Hasna Notes server (personalnotes/v1 dialect)
 
-Usage: bun index.mjs [--port <n>] [--host [addr]] [--db <path>] [--auto-approve] [--dev]
+Usage: notes-serve [--port <n>] [--host [addr]] [--db <path>] [--auto-approve] [--dev]
 
   --port <n>       listen port (default 8788; env HASNA_NOTES_SERVER_PORT or PORT)
   --host [addr]    bind address (default 127.0.0.1; bare --host binds 0.0.0.0)
   --db <path>      SQLite file (default ~/.hasna/notes/server.db;
                    PostgreSQL is selected by HASNA_NOTES_DATABASE_URL instead)
   --auto-approve   auto-approve device logins from loopback (single-user convenience)
-  --dev            include devCode in OTP login responses (for tests/dev)`);
+  --dev            include devCode in OTP login responses (for tests/dev)
+  -V, --version    output the version number
+  -h, --help       display help for command`);
+
   process.exit(0);
 }
 

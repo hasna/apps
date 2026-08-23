@@ -53,6 +53,23 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
 }
 
 async function main(): Promise<void> {
+  // Binds-before-version class (todos row 7e5f8f3d): --version/--help must
+  // answer BEFORE the stdio transport connect. They previously fell through
+  // and printed nothing (silent-empty family).
+  if (process.argv.includes("--version") || process.argv.includes("-V")) {
+    console.log(ACTIONS_VERSION);
+    return;
+  }
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(`Usage: actions-mcp [options]
+
+MCP server for @hasna/actions (stdio).
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command`);
+    return;
+  }
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
