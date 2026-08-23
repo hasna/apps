@@ -444,6 +444,25 @@ const isServerDirectRun = import.meta.main
   || process.argv[1]?.endsWith("/server/index.js");
 
 if (isServerDirectRun) {
+  // Binds-before-help class (todos row 5fcf7a67): --help/--version must
+  // answer BEFORE any bind. They previously fell through to serve(), which
+  // either died at the bind with EADDRINUSE (port occupied, rc=1) or bound
+  // and served forever.
+  const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`usage: tickets-serve [options]   Start the tickets HTTP API
+  tickets-serve --version              Print the package version
+
+options:
+  --help              show this help and exit
+  --version           print the package version and exit
+`);
+    process.exit(0);
+  }
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(pkgVersion);
+    process.exit(0);
+  }
   serve({ fetch: app.fetch, port: PORT });
   console.log(`tickets server running on http://localhost:${PORT}`);
 
