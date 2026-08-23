@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const root = process.cwd();
@@ -60,6 +60,9 @@ function collectFiles(entries: string[]): string[] {
 
   for (const entry of entries) {
     const path = join(root, entry);
+    // Some entries (e.g. a per-package bun.lock) do not exist in this
+    // monorepo layout; skip them instead of crashing the whole suite.
+    if (!existsSync(path)) continue;
     const stat = statSync(path);
     if (stat.isDirectory()) {
       walk(path, files);

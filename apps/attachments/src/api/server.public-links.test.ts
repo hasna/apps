@@ -11,7 +11,7 @@ import {
   mockGeneratePresignedLink,
   mockOpenAttachmentStream,
   mockShareLink,
-} from "./server.test-harness.test";
+} from "./server.test-harness";
 
 describe("REST API server public links", () => {
   describe("GET /a/:token — public share page", () => {

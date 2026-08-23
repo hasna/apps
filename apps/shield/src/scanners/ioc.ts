@@ -18,7 +18,7 @@ import {
   getIOCsForAdvisory,
 } from "../db/advisories.js";
 import { seedAdvisories } from "../data/advisories.js";
-import { getDb } from "../db/database.js";
+import { getDb } from "../db/db-access.js";
 import { getAlertManager } from "../alerts/index.js";
 
 // --- Ensure advisory data is loaded ---

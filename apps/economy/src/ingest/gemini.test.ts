@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase } from '../db/database.js'
+import { isolateHostedAccountsEnv } from '../lib/test-hermetic-accounts.js'
 import { ingestGemini } from './gemini.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
@@ -10,8 +11,10 @@ let root: string
 let tmpDir: string
 let historyDir: string
 let db: Database
+let restoreAccountsEnv: () => void
 
 beforeEach(() => {
+  restoreAccountsEnv = isolateHostedAccountsEnv()
   root = join(tmpdir(), `economy-gemini-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   tmpDir = join(root, 'gemini-tmp')
   historyDir = join(root, 'gemini-history')
@@ -21,6 +24,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  restoreAccountsEnv()
   delete process.env['HASNA_ECONOMY_GEMINI_TMP_DIR']
   delete process.env['HASNA_ECONOMY_GEMINI_HISTORY_DIR']
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })

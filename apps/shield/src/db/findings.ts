@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { createHash } from "crypto";
-import { getDb } from "./database.js";
+import { getDb } from "./db-access.js";
 import type { Finding, FindingInput, SecurityScore } from "../types/index.js";
 import { Severity, type ScannerType } from "../types/index.js";
 import {

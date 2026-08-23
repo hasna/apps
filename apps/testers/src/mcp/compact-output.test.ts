@@ -1,4 +1,8 @@
 process.env.TESTERS_DB_PATH = ":memory:";
+// Keep the in-process MCP server on the local fixture store: with
+// HASNA_TESTERS_API_URL/KEY set, the server routes to the hosted API.
+import { isolateHostedApiEnv } from "../lib/test-hermetic-api-env.js";
+isolateHostedApiEnv();
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";

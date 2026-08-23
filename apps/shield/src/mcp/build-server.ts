@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readFileSync } from "fs";
 import { z } from "zod";
 
-import { getDb } from "../db/database.js";
+import { getDb } from "../db/db-access.js";
 import { seedBuiltinRules } from "../db/index.js";
 import { seedAdvisories } from "../data/advisories.js";
 import { PACKAGE_VERSION } from "../lib/version.js";

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { getDb } from "./database.js";
+import { getDb } from "./db-access.js";
 import type { Scan } from "../types/index.js";
 import { ScanStatus, type ScannerType } from "../types/index.js";
 import { sanitizeScanForOutput, sanitizeTextForBoundary } from "../lib/finding-safety.js";

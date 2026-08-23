@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { spawnSync } from "bun";
 
 import { closeDatabase, resetDatabase } from "../db/database.js";
+import { isolateHostedApiEnv } from "../lib/test-hermetic-api-env.js";
 import { createEnvironment } from "../db/environments.js";
 
 const cleanupPaths: string[] = [];
@@ -24,8 +25,11 @@ function setupEnvDb() {
   return { dbPath };
 }
 
+const restoreApiEnv = isolateHostedApiEnv();
+
 afterEach(() => {
   closeDatabase();
+  restoreApiEnv();
   for (const dir of cleanupPaths.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }

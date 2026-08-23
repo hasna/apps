@@ -92,7 +92,11 @@ describe("fetchTaskMeta", () => {
       assignee: "aurelius",
       created_at: "2026-03-14T10:23:00Z",
     });
-    process.env.TODOS_API_KEY = "remote-key";
+    // fetchTaskMeta prefers HASNA_TODOS_API_KEY over TODOS_API_KEY
+    // (core/todos.ts); drop the ambient value so this case actually exercises
+    // the TODOS_API_KEY fallback instead of the operator's live key.
+    delete process.env.HASNA_TODOS_API_KEY;
+    process.env["TODOS_API_KEY"] = "remote-key";
     const meta = await fetchTaskMeta("TASK-001", "http://localhost:3000", fakeFetch);
     delete process.env.TODOS_API_KEY;
     const [, init] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
@@ -128,7 +132,7 @@ describe("fetchTaskHistory", () => {
       { timestamp: "2026-03-14T10:45:00Z", action: "started", actor: "aurelius" },
       { timestamp: "2026-03-14T11:30:00Z", action: "completed", actor: "aurelius", progress: 100 },
     ]);
-    process.env.HASNA_TODOS_API_KEY = "remote-key";
+    process.env["HASNA_TODOS_API_KEY"] = "remote-key";
     const history = await fetchTaskHistory("TASK-001", "http://localhost:3000", fakeFetch);
     delete process.env.HASNA_TODOS_API_KEY;
     const [, init] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];

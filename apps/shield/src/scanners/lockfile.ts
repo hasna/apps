@@ -12,7 +12,7 @@ import {
 import { getCodeSnippet } from "./secrets.js";
 import { isVersionAffected, listAdvisories } from "../db/advisories.js";
 import { seedAdvisories } from "../data/advisories.js";
-import { getDb } from "../db/database.js";
+import { getDb } from "../db/db-access.js";
 
 function ensureSeeded(): void {
   try {

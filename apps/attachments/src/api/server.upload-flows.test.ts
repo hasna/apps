@@ -14,7 +14,7 @@ import {
   mockS3Head,
   mockS3PresignPut,
   mockS3PresignUploadPart,
-} from "./server.test-harness.test";
+} from "./server.test-harness";
 
 describe("REST API server direct upload flows", () => {
   describe("direct multipart upload API", () => {

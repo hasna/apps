@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { getDb } from "./database.js";
+import { getDb } from "./db-access.js";
 import type { Project } from "../types/index.js";
 import {
   sanitizeIdentifierForOutput,

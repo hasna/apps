@@ -234,10 +234,14 @@ export function setupTestDb(): () => void {
   _testDb = createTestDb();
   const db = _testDb;
 
-  // Mock database.js so that getDb() returns our bun:sqlite in-memory DB.
+  // Mock the db-access seam so getDb() returns our bun:sqlite in-memory DB.
   // bun:sqlite and better-sqlite3 share the same API surface for
   // prepare/exec/transaction/close, which is all the CRUD modules use.
-  mock.module("./database.js", () => ({
+  // The seam is a wrapper (never a re-export): bun 1.3.14 mock.module on a
+  // module that re-exports another module also replaces the re-exported
+  // module's bindings, which would leak this mock into the real-behavior
+  // tests (database.test.ts, hasna-home.test.ts) that import database.js.
+  mock.module("./db-access.js", () => ({
     getDb: () => db,
     getTestDb: () => createTestDb(),
     closeDb: () => {},

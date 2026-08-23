@@ -9,6 +9,7 @@ import { createScenario } from "../db/scenarios.js";
 import { createResult } from "../db/results.js";
 import { createScreenshot } from "../db/screenshots.js";
 import { closeDatabase, resetDatabase } from "../db/database.js";
+import { isolateHostedApiEnv } from "../lib/test-hermetic-api-env.js";
 
 const cleanupPaths: string[] = [];
 
@@ -31,8 +32,11 @@ function setupSeededDb() {
   return { dbPath, runId: run.id, resultId: result.id };
 }
 
+const restoreApiEnv = isolateHostedApiEnv();
+
 afterEach(() => {
   closeDatabase();
+  restoreApiEnv();
   for (const dir of cleanupPaths.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -1,5 +1,13 @@
 import { describe, it, expect, mock, beforeAll, beforeEach, afterEach, afterAll, spyOn } from "bun:test";
 import { tmpdir } from "os";
+
+// Keep the server under test on the local store: with
+// HASNA_ATTACHMENTS_API_URL/KEY present in the operator's environment, the
+// server routes to the hosted attachments API (core/cloud-v1.ts) and these
+// mocked-module tests fail against live state. The one test that exercises
+// cloud routing sets the variables itself.
+delete process.env.HASNA_ATTACHMENTS_API_URL;
+delete process.env.HASNA_ATTACHMENTS_API_KEY;
 import { join } from "path";
 import { mkdirSync, rmSync } from "fs";
 import * as configModule from "../core/config";

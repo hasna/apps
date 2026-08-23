@@ -52,7 +52,7 @@ export function resolveDbPath(): string {
   return getDbPath();
 }
 
-let _postInitCallbacks: Array<() => void> = [];
+let _postInitCallbacks: Array<(db: Database) => void> = [];
 let _initialized = false;
 
 function failDatabaseInitialization(db: Database | null): never {
@@ -72,7 +72,7 @@ function failDatabaseInitialization(db: Database | null): never {
   throw new Error(DATABASE_INIT_ERROR);
 }
 
-export function onDbInit(cb: () => void): void {
+export function onDbInit(cb: (db: Database) => void): void {
   _postInitCallbacks.push(cb);
   if (!_initialized) return;
   const db = _db;
@@ -83,7 +83,10 @@ export function onDbInit(cb: () => void): void {
     return;
   }
   try {
-    cb();
+    // Pass the published handle: a callback must not re-resolve getDb()
+    // through an import seam that tests may mock, or it would run against a
+    // different database than the one being initialized.
+    cb(db);
     if (_db !== db) throw new Error("database connection changed during initialization");
     db.exec("SELECT 1");
   } catch {
@@ -119,7 +122,7 @@ export function getDb(): Database {
     // complete until every callback returns and the candidate remains live.
     _db = db;
     if (!_initialized) {
-      for (const cb of _postInitCallbacks) cb();
+      for (const cb of _postInitCallbacks) cb(db);
       if (_db !== db) throw new Error("database connection changed during initialization");
       db.exec("SELECT 1");
       _initialized = true;

@@ -1,10 +1,10 @@
 import crypto from "crypto";
-import { getDb, onDbInit } from "./database.js";
+import { getDb, onDbInit } from "./db-access.js";
 import type { Rule } from "../types/index.js";
 import { ScannerType, Severity } from "../types/index.js";
 
 // Auto-seed builtin rules when DB is first initialized
-onDbInit(() => seedBuiltinRules());
+onDbInit((db) => seedBuiltinRules(db));
 
 interface RuleRow {
   id: string;
