@@ -140,7 +140,11 @@ function initServer(): void {
   if (_serverInitialized) return;
   _serverInitialized = true;
   warnIfPrimaryMachineUnset();
-  loadWebhooksFromDb();
+  // Webhook loading now validates hostnames against DNS, so it is async.
+  // Fire-and-forget at startup: loadWebhooksFromDb catches its own errors and
+  // the _webhooksLoaded guard prevents re-entry; registration lands a moment
+  // later while the server finishes booting.
+  void loadWebhooksFromDb();
   startSessionQueueWorker();
   startTaskRunner();
 }

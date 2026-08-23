@@ -7,6 +7,8 @@ import {
   reloadWebhooks,
   makeWebhookHandler,
 } from "./built-in-hooks.js";
+import { validateWebhookHandlerUrl } from "../db/webhook_hooks.js";
+import type { WebhookUrlValidationOptions } from "../db/webhook_hooks.js";
 
 /**
  * SSRF regression: webhook handler_url is caller-supplied and the delivery
@@ -26,6 +28,11 @@ function insertPoisonedWebhook(db: ReturnType<typeof getDatabase>, url: string, 
   );
 }
 
+const PUBLIC_V4 = { address: "93.184.216.34", family: 4 };
+const PUBLIC_V6 = { address: "2001:db8::1", family: 6 };
+
+const opts = (lookup: NonNullable<WebhookUrlValidationOptions["lookup"]>): WebhookUrlValidationOptions => ({ lookup });
+
 describe("webhook delivery fails closed on disallowed handler URLs", () => {
   let fetchCalls: number;
 
@@ -42,12 +49,12 @@ describe("webhook delivery fails closed on disallowed handler URLs", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("loadWebhooksFromDb skips rows whose handler URL is loopback/private", () => {
+  it("loadWebhooksFromDb skips rows whose handler URL is loopback/private", async () => {
     const db = getDatabase();
     insertPoisonedWebhook(db, "http://169.254.169.254/latest/meta-data/", "poisoned-meta");
     insertPoisonedWebhook(db, "http://127.0.0.1:43129/capture", "poisoned-loopback", "PostMemorySave");
 
-    reloadWebhooks();
+    await reloadWebhooks();
 
     const webhookHooks = hookRegistry
       .list()
@@ -61,7 +68,7 @@ describe("webhook delivery fails closed on disallowed handler URLs", () => {
     const db = getDatabase();
     insertPoisonedWebhook(db, "http://127.0.0.1:43129/capture");
 
-    reloadWebhooks();
+    await reloadWebhooks();
     await hookRegistry.runHooks("PostMemoryUpdate", {
       memoryId: "m1",
       input: {},
@@ -92,11 +99,32 @@ describe("webhook delivery fails closed on disallowed handler URLs", () => {
       return new Response("ok", { status: 200 });
     }) as typeof fetch;
 
-    const handler = makeWebhookHandler("valid-id", "https://example.com/hook");
+    const handler = makeWebhookHandler("valid-id", "https://example.com/hook", opts(async () => [PUBLIC_V4, PUBLIC_V6]));
     await handler({ agentId: "a" });
 
     expect(fetchCalls).toBe(1);
     expect(receivedBody).not.toBeNull();
     expect(JSON.parse(receivedBody!)).toEqual({ agentId: "a" });
+  });
+
+  it("re-checks DNS at delivery: a name rebound to a blocked address performs no outbound POST", async () => {
+    // DNS-rebinding regression, deterministic: the resolver returns a public
+    // address at registration time and a blocked (metadata) address at
+    // delivery time. The delivery-time re-check must reject and never fetch.
+    let currentAddrs: { address: string; family: number }[] = [PUBLIC_V4];
+    const rebindingLookup = async () => currentAddrs;
+
+    // Registration-time validation passes against the public resolution.
+    await expect(
+      validateWebhookHandlerUrl("http://attacker.example/hook", opts(rebindingLookup))
+    ).resolves.toBeUndefined();
+
+    // Attacker rebinds the name to the cloud metadata service.
+    currentAddrs = [{ address: "169.254.169.254", family: 4 }];
+
+    const handler = makeWebhookHandler("rebound-id", "http://attacker.example/hook", opts(rebindingLookup));
+    await handler({ agentId: "a", memory: { id: "m1", value: "secret" } });
+
+    expect(fetchCalls).toBe(0);
   });
 });

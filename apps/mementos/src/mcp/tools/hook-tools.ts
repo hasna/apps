@@ -100,7 +100,7 @@ export function registerHookTools(server: McpServer): void {
     async (args) => {
       try {
         const { reloadWebhooks } = await import("../../lib/built-in-hooks.js");
-        const wh = createWebhookHook({
+        const wh = await createWebhookHook({
           type: args.type,
           handlerUrl: args.handler_url,
           priority: args.priority,
@@ -110,7 +110,7 @@ export function registerHookTools(server: McpServer): void {
           description: args.description,
         });
         // Reload so the new webhook is immediately active
-        reloadWebhooks();
+        await reloadWebhooks();
         return { content: [{ type: "text" as const, text: JSON.stringify(wh, null, 2) }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

@@ -44,7 +44,7 @@ export function registerSystemHookRoutes(): void {
       return errorResponse("type and handler_url are required", 400);
     }
     try {
-      const wh = createWebhookHook({
+      const wh = await createWebhookHook({
         type: body.type as import("../../types/hooks.js").HookType,
         handlerUrl: body.handler_url as string,
         priority: body.priority as number | undefined,
@@ -53,7 +53,7 @@ export function registerSystemHookRoutes(): void {
         projectId: body.project_id as string | undefined,
         description: body.description as string | undefined,
       });
-      reloadWebhooks();
+      await reloadWebhooks();
       return json(wh, 201);
     } catch (err) {
       return errorResponse(err instanceof Error ? err.message : String(err), 400);
@@ -74,7 +74,7 @@ export function registerSystemHookRoutes(): void {
       description: body.description as string | undefined,
     });
     if (!updated) return errorResponse("Webhook not found", 404);
-    reloadWebhooks();
+    await reloadWebhooks();
     return json(updated);
   });
 

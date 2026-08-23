@@ -3,6 +3,8 @@ type SQLQueryBindings = string | number | null | boolean;
 import { getDatabase, now, shortUuid } from "./database.js";
 import { isApiMode, apiJson, toQuery } from "./api-mode.js";
 import { isIP } from "node:net";
+import { lookup as dnsLookup } from "node:dns/promises";
+import type { LookupAddress } from "node:dns";
 import type { WebhookHook, HookType } from "../types/hooks.js";
 
 // ============================================================================
@@ -36,6 +38,18 @@ function parseRow(row: Record<string, unknown>): WebhookHook {
 // route, CLI) can point it at 169.254.169.254 (cloud metadata), a loopback or
 // private-network service, or an external collector. Only public http(s)
 // endpoints are accepted.
+//
+// The guard has two layers, both mandatory:
+//   1. Literal checks — IP literals, numeric/hex shorthands, and "localhost"
+//      are classified syntactically, exactly as before.
+//   2. Resolution checks — any other hostname is resolved (A and AAAA) and
+//      EVERY resolved address must be public. A name that resolves to any
+//      blocked range is rejected, a name that cannot be resolved is rejected
+//      (fail closed — it could never be delivered anyway, and rejecting it
+//      closes the SSRF class).
+// Layer 2 makes DNS names like 127.0.0.1.nip.io / 169.254.169.254.nip.io /
+// localtest.me — which resolve to loopback / link-local / private addresses —
+// as unreachable as the literals themselves.
 
 function isBlockedIpv4(parts: number[]): boolean {
   const a = parts[0]!;
@@ -117,11 +131,56 @@ const BLOCKED_TARGET_MESSAGE =
   "Invalid webhook handler URL — loopback, link-local, and private network targets are not allowed";
 
 /**
- * Validate a webhook handler URL. Throws a descriptive Error when the URL is
- * not a public http(s) endpoint: unparseable, wrong scheme, embedded
- * credentials, or a loopback / link-local / private / metadata target.
+ * Resolver signature: returns every A/AAAA address for a hostname.
+ * Defaults to node:dns/promises lookup (all addresses, verbatim order).
  */
-export function validateWebhookHandlerUrl(url: string): void {
+export type HostResolver = (hostname: string) => Promise<LookupAddress[]>;
+
+export interface WebhookUrlValidationOptions {
+  /**
+   * Hostname resolver override — a deterministic test seam. Production call
+   * sites never pass it; when absent the real system resolver is used.
+   */
+  lookup?: HostResolver;
+}
+
+function defaultResolveHost(hostname: string): Promise<LookupAddress[]> {
+  return dnsLookup(hostname, { all: true, verbatim: true });
+}
+
+function assertResolvedAddressPublic(address: string, url: string): void {
+  const version = isIP(address);
+  if (version === 4) {
+    if (isBlockedIpv4(address.split(".").map((p) => Number(p)))) {
+      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+    }
+  } else if (version === 6) {
+    // Fail closed on an IPv6 address our parser cannot classify.
+    const bytes = parseIpv6Bytes(address);
+    if (!bytes || isBlockedIpv6(bytes)) {
+      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+    }
+  } else {
+    // The resolver returned something that is neither IPv4 nor IPv6.
+    throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+  }
+}
+
+/**
+ * Validate a webhook handler URL. Rejects (async) when the URL is not a
+ * public http(s) endpoint: unparseable, wrong scheme, embedded credentials,
+ * or a loopback / link-local / private / metadata target — whether named
+ * directly as an IP literal or indirectly via a DNS name that resolves to one
+ * of those ranges. A hostname that cannot be resolved is rejected (fail
+ * closed): it could never be delivered, and rejecting it closes the SSRF
+ * class.
+ */
+export async function validateWebhookHandlerUrl(
+  url: string,
+  opts?: WebhookUrlValidationOptions
+): Promise<void> {
+  const resolveHost = opts?.lookup ?? defaultResolveHost;
+
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -143,23 +202,44 @@ export function validateWebhookHandlerUrl(url: string): void {
   }
 
   const version = isIP(host);
-  if (version === 4) {
-    if (isBlockedIpv4(host.split(".").map((p) => Number(p)))) {
-      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+  if (version === 4 || version === 6) {
+    // IP literal — the syntactic check alone decides; there is nothing to
+    // resolve. (IPv6 literals fail closed when unclassifiable.)
+    if (version === 4) {
+      if (isBlockedIpv4(host.split(".").map((p) => Number(p)))) {
+        throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+      }
+    } else {
+      const bytes = parseIpv6Bytes(host);
+      if (!bytes || isBlockedIpv6(bytes)) {
+        throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+      }
     }
-  } else if (version === 6) {
-    // Fail closed on an IPv6 literal our parser cannot classify.
-    const bytes = parseIpv6Bytes(host);
-    if (!bytes || isBlockedIpv6(bytes)) {
-      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
-    }
-  } else {
-    // Not an IP literal. Numeric-only hostnames are IPv4 shorthands
-    // (127.1, 2130706433) or garbage — refuse them rather than resolve them.
-    // Zone identifiers only appear on link-local scopes — refuse them outright.
-    if (/^[0-9]+(\.[0-9]+)*$/.test(host) || /^0x[0-9a-f]+$/i.test(host) || host.includes("%")) {
-      throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
-    }
+    return;
+  }
+
+  // Not an IP literal. Numeric-only hostnames are IPv4 shorthands
+  // (127.1, 2130706433) or garbage — refuse them rather than resolve them.
+  // Zone identifiers only appear on link-local scopes — refuse them outright.
+  if (/^[0-9]+(\.[0-9]+)*$/.test(host) || /^0x[0-9a-f]+$/i.test(host) || host.includes("%")) {
+    throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+  }
+
+  // Hostname: resolve (A and AAAA) and require EVERY resolved address to be
+  // public. A name resolving to any blocked range — 127.0.0.1.nip.io,
+  // 169.254.169.254.nip.io, localtest.me, and friends — is rejected here.
+  // Resolution failure fails closed.
+  let addrs: LookupAddress[];
+  try {
+    addrs = await resolveHost(host);
+  } catch {
+    throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+  }
+  if (addrs.length === 0) {
+    throw new Error(`${BLOCKED_TARGET_MESSAGE}: "${url}"`);
+  }
+  for (const { address } of addrs) {
+    assertResolvedAddressPublic(address, url);
   }
 }
 
@@ -177,11 +257,12 @@ export interface CreateWebhookHookInput {
   description?: string;
 }
 
-export function createWebhookHook(
+export async function createWebhookHook(
   input: CreateWebhookHookInput,
-  db?: Database
-): WebhookHook {
-  validateWebhookHandlerUrl(input.handlerUrl);
+  db?: Database,
+  opts?: WebhookUrlValidationOptions
+): Promise<WebhookHook> {
+  await validateWebhookHandlerUrl(input.handlerUrl, opts);
   if (!db && isApiMode()) {
     const { data } = apiJson<WebhookHook>("POST", "/webhooks", {
       type: input.type,
