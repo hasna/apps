@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.107
+
+### Patch Changes
+
+- @hasna/projects@1.0.0
+
 ## 0.0.106
 
 ### Patch Changes

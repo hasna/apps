@@ -1,6 +1,6 @@
 {
   "name": "@hasna/testers",
-  "version": "0.0.106",
+  "version": "0.0.107",
   "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
@@ -54,7 +54,7 @@
     "@hasna/browser": "0.5.29",
     "@hasna/contracts": "^0.13.4",
     "@hasna/events": "^0.1.13",
-    "@hasna/projects": "^0.1.145",
+    "@hasna/projects": "^1.0.0",
     "@hasna/sandboxes": "^0.1.40",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "ai": "^6.0.175",
