@@ -1,7 +1,7 @@
 # Contracts conformance status
 
 `hasna.contract.json` declares this repo against `hasna.service_contract.v1`. The gate is
-`bun run contracts:check` (`@hasna/contracts@0.8.5 repo-conformance .`).
+`bun run contracts:check` (`@hasna/contracts@0.13.4 repo-conformance .`).
 
 **`bun run contracts:check` currently exits 1.** Four checks are open. They are recorded
 here rather than papered over, because the manifest is only allowed to describe surfaces
@@ -27,7 +27,7 @@ Tracked as todos task `1c1c18f0-072e-4331-a1e8-e8f897427485` in project `prompts
 ## Why no waiver closes them
 
 The kit derives all four from one fact: `prompts-serve` is a declared bin. In
-`@hasna/contracts@0.8.5` (`dist/conformance.js`), a `cli-with-store` repo whose bins include
+`@hasna/contracts@0.13.4` (`dist/conformance.js`), a `cli-with-store` repo whose bins include
 `<name>-serve` sets `requiresGeneratedServiceSdk`, which
 
 - promotes `requiredSurfaceKinds` from `['cli']` to all four surface kinds, so `deferred` is
@@ -53,6 +53,8 @@ Mutually exclusive, and both are owner decisions rather than incremental cleanup
 ## Checks that pass today
 
 `manifest_valid`, `bins_allowlisted`, `bins_match_package`, `surface_bindings`,
-`public_manifest_safety`, `hosting_story`, `mode_enum_compliance`,
+`public_manifest_safety`, `hosting_story`, `server_backend_configuration`,
 `published_artifact_gate`, `credential_seam_compliance`, `no_cloud_guard`.
-`health_shape` skips because no `GET /health` sample is handed to the checker.
+`mode_enum_compliance` no longer exists in the 0.13.4 kit (the mode vocabulary was
+removed); the manifest now declares `storage.backend`. `health_shape` skips because
+no `GET /health` sample is handed to the checker.
