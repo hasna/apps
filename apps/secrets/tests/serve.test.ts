@@ -56,13 +56,33 @@ function fakeStore() {
   } as unknown as CloudSecretsStore;
 }
 
+/**
+ * Registered api_keys rows, keyed by kid — the `keyStatus` hook's world.
+ *
+ * Separate from `persistedTenantByKid` on purpose: registration (can this key
+ * authenticate at all?) and tenant assignment (which tenant may it write for?)
+ * are two different gates, and one test below exercises a key that is
+ * registered but has no tenant row.
+ */
+const registeredKids = new Set<string>();
+
 function handler(store = fakeStore()) {
-  const verifier = verifyApiKey({ app: "secrets", signingSecret: SIGNING });
+  // Mirrors the real wiring in src/server/serve.ts (createCloudVerifier).
+  // `keyStatus` is REQUIRED by @hasna/contracts >= 0.8.7: constructing without
+  // a key-status hook throws, which is what failed all 9 tests in this file at
+  // main 709594ecf. It is also strict — an unregistered kid denies — so the
+  // fake must answer for the kids the tests mint.
+  const verifier = verifyApiKey({
+    app: "secrets",
+    signingSecret: SIGNING,
+    keyStatus: (kid: string) => (registeredKids.has(kid) ? "active" : "unknown"),
+  });
   return createHandler({ client: fakeClient(), store, verifier });
 }
 
 function keyWith(scopes: string[], persistTenant = true): string {
   const minted = mintApiKey({ app: "secrets", scopes, signingSecret: SIGNING });
+  registeredKids.add(minted.kid);
   if (persistTenant) persistedTenantByKid.set(minted.kid, TEST_TENANT);
   return minted.token;
 }
@@ -70,6 +90,7 @@ function keyWith(scopes: string[], persistTenant = true): string {
 describe("secrets serve", () => {
   beforeEach(() => {
     persistedTenantByKid.clear();
+    registeredKids.clear();
   });
 
   test("health/version/ready need no auth", async () => {
