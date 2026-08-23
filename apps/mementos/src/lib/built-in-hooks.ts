@@ -10,7 +10,9 @@ import { hookRegistry } from "./hooks.js";
 import {
   listWebhookHooks,
   recordWebhookInvocation,
+  validateWebhookHandlerUrl,
 } from "../db/webhook_hooks.js";
+import type { WebhookUrlValidationOptions } from "../db/webhook_hooks.js";
 import type { HookType } from "../types/hooks.js";
 
 // Lazy import to avoid circular deps — auto-memory imports db, which imports hooks
@@ -244,7 +246,7 @@ hookRegistry.register({
 
 let _webhooksLoaded = false;
 
-export function loadWebhooksFromDb(): void {
+export async function loadWebhooksFromDb(): Promise<void> {
   if (_webhooksLoaded) return;
   _webhooksLoaded = true;
 
@@ -252,6 +254,18 @@ export function loadWebhooksFromDb(): void {
     const webhooks = listWebhookHooks({ enabled: true });
 
     for (const wh of webhooks) {
+      // Fail closed on rows that predate URL validation or bypassed the
+      // persistence chokepoint: a disallowed handler URL is never registered.
+      // This re-resolves hostnames, so a row whose name now resolves to a
+      // blocked range is skipped just like a literal blocked row.
+      try {
+        await validateWebhookHandlerUrl(wh.handlerUrl);
+      } catch (err) {
+        console.error(
+          `[hooks] Skipping webhook ${wh.id} (${wh.type}): ${err instanceof Error ? err.message : String(err)}`
+        );
+        continue;
+      }
       hookRegistry.register({
         type: wh.type,
         blocking: wh.blocking,
@@ -274,10 +288,29 @@ export function loadWebhooksFromDb(): void {
 /**
  * Create a handler that POSTs the hook context to an HTTP endpoint.
  * Records invocation stats in DB.
+ *
+ * Fails closed at the fetch site: a handler URL that does not pass
+ * validation is never fetched, even if a row predates validation or was
+ * registered past the persistence chokepoint. Validation runs again at
+ * delivery time and RE-RESOLVES the hostname, so a name that was public at
+ * registration but has since been rebound (DNS rebinding) to a blocked range
+ * is rejected immediately before connect.
+ *
+ * Note on pinning: Bun's fetch exposes no connect-target override, and
+ * rewriting the URL to an IP literal would break TLS (SNI) verification for
+ * https endpoints. The re-resolve-and-re-check at delivery narrows the
+ * rebinding window to the interval between the check and the OS connect.
+ *
+ * @param opts Validation options — a deterministic resolver seam for tests.
  */
-function makeWebhookHandler(webhookId: string, url: string) {
+export function makeWebhookHandler(
+  webhookId: string,
+  url: string,
+  opts?: WebhookUrlValidationOptions
+) {
   return async (context: Record<string, unknown>): Promise<void> => {
     try {
+      await validateWebhookHandlerUrl(url, opts);
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -292,9 +325,9 @@ function makeWebhookHandler(webhookId: string, url: string) {
 }
 
 // Re-export so callers can reload webhooks when a new one is created
-export function reloadWebhooks(): void {
+export async function reloadWebhooks(): Promise<void> {
   _webhooksLoaded = false;
-  loadWebhooksFromDb();
+  await loadWebhooksFromDb();
 }
 
 // Export hook type for use in MCP/REST

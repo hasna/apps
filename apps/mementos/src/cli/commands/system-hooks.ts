@@ -143,7 +143,7 @@ export function registerHooksCommand(program: Command): void {
     .action(async (type: string, url: string, opts) => {
       const { createWebhookHook } = await import("../../db/webhook_hooks.js");
       const { reloadWebhooks } = await import("../../lib/built-in-hooks.js");
-      const wh = createWebhookHook({
+      const wh = await createWebhookHook({
         type: type as HookType,
         handlerUrl: url,
         blocking: opts.blocking ?? false,
@@ -152,7 +152,7 @@ export function registerHooksCommand(program: Command): void {
         projectId: opts.project,
         description: opts.description,
       });
-      reloadWebhooks();
+      await reloadWebhooks();
       console.log(chalk.green("✓ Webhook created"));
       console.log(`  ID:   ${chalk.cyan(wh.id)}`);
       console.log(`  Type: ${wh.type}`);
@@ -181,7 +181,7 @@ export function registerHooksCommand(program: Command): void {
       const { reloadWebhooks } = await import("../../lib/built-in-hooks.js");
       const updated = updateWebhookHook(id, { enabled: true });
       if (updated) {
-        reloadWebhooks();
+        await reloadWebhooks();
         console.log(chalk.green(`✓ Webhook ${id} enabled`));
       } else {
         console.error(chalk.red(`Webhook not found: ${id}`));
@@ -197,7 +197,7 @@ export function registerHooksCommand(program: Command): void {
       const { reloadWebhooks } = await import("../../lib/built-in-hooks.js");
       const updated = updateWebhookHook(id, { enabled: false });
       if (updated) {
-        reloadWebhooks();
+        await reloadWebhooks();
         console.log(chalk.yellow(`⊘ Webhook ${id} disabled`));
       } else {
         console.error(chalk.red(`Webhook not found: ${id}`));
