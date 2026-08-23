@@ -24,7 +24,7 @@ import { describe, expect, test } from "bun:test";
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
 
 describe("PostgresJsonRecordStore schema-ensure transient-failure retry", () => {
-  test("a DDL lock timeout on first use is not memoized — the next call retries and succeeds", async () => {
+  test("a one-shot DDL lock timeout is retried in-request; a persistent one is not memoized", async () => {
     let queryCalls = 0;
     const client = {
       query: async <T>() => {
@@ -32,6 +32,8 @@ describe("PostgresJsonRecordStore schema-ensure transient-failure retry", () => 
         if (queryCalls === 1) {
           // Simulate the measured failure: Postgres cancels the DDL statement
           // because lock_timeout expired while CREATE INDEX waited on a lock.
+          // The 2026-08-22 bursts (incident 724667 / HP-00083) surfaced this
+          // to clients as HTTP 500; the retry absorbs the transient case.
           throw new Error("canceling statement due to lock timeout");
         }
         return { rows: [] as T[] };
@@ -42,13 +44,37 @@ describe("PostgresJsonRecordStore schema-ensure transient-failure retry", () => 
       service: "schema-retry-test",
     });
 
-    // First use: the schema DDL throws -> the read fails.
-    await expect(adapter.tasks.get("task-1")).rejects.toThrow("lock timeout");
-
-    // Second use: with a memoized rejection this rejects with the STALE error
-    // (poisoned process); the fix re-runs the idempotent DDL and the read
-    // resolves normally.
+    // The one-shot transient 55P03 is retried within the same operation: the
+    // first use succeeds instead of surfacing a 500.
     await expect(adapter.tasks.get("task-1")).resolves.toBeNull();
     expect(queryCalls).toBeGreaterThan(1);
+  });
+
+  test("a persistent DDL lock timeout is not memoized — the next call retries and succeeds", async () => {
+    let queryCalls = 0;
+    let fail = true;
+    const client = {
+      query: async <T>() => {
+        queryCalls += 1;
+        if (fail) {
+          throw new Error("canceling statement due to lock timeout");
+        }
+        return { rows: [] as T[] };
+      },
+    };
+    const adapter = createPostgresTodosStorageAdapter({
+      client: client as never,
+      service: "schema-retry-test",
+    });
+
+    // Persistent holder: the operation surfaces the transient error after
+    // bounded in-request retries.
+    await expect(adapter.tasks.get("task-1")).rejects.toThrow("lock timeout");
+
+    // Once the holder commits, the failure must NOT be memoized (poisoned
+    // process) — the next use re-runs the idempotent DDL and resolves.
+    fail = false;
+    await expect(adapter.tasks.get("task-1")).resolves.toBeNull();
+    expect(queryCalls).toBeGreaterThan(3);
   });
 });
