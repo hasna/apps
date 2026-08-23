@@ -248,6 +248,53 @@ describe("hasna/apps versioning integrity", () => {
     expect(rewriteWorkspaceRange("workspace:~", "1.2.3")).toBe("~1.2.3");
   });
 
+  test("no member exact-pins @hasna/contracts one patch behind the in-tree version (wave-miss shape)", () => {
+    // The ship-latest version wave bumps @hasna/contracts by one patch and aligns the
+    // pins of every consumer released in that wave. A member whose exact pin sits
+    // EXACTLY ONE PATCH behind the in-tree contracts version is the wave-miss shape:
+    // it was aligned by the wave and then reverted by a release lane's interim re-pin
+    // to the then-published version, with no later release re-aligning it. Measured:
+    // hasna/apps#861 re-pinned @hasna/calendar to contracts 0.13.3 after wave #856
+    // aligned it to 0.13.4 (0.13.4 was not yet on the registry at #861's moment —
+    // correct then), and the registry advance to 0.13.4 was never picked up by
+    // calendar's next release — the reported defect (row 2ce5505f, T-00097).
+    // Members two or more versions behind are deliberate per-release registry pins
+    // (the frozen-locks gate's EXCEPTIONS rationale, e.g. actions 0.11.1, billing
+    // 0.9.0), NOT this class; a `^`/`~` range resolves forward on the registry and
+    // is not this class either.
+    const contracts = membersByName.get("@hasna/contracts");
+    expect(contracts, "@hasna/contracts is a member of this tree").toBeDefined();
+    const [major, minor, patch] = contracts!.version.split(".").map(Number);
+    if (![major, minor, patch].every(Number.isInteger)) {
+      console.info("[SKIP versioning] @hasna/contracts version is not plain numeric semver; wave-miss pin check skipped");
+      return;
+    }
+    const sections = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
+    const waveMiss = members.flatMap((member) => {
+      return sections.flatMap((section) => {
+        const deps = member.manifest[section];
+        if (!deps || typeof deps !== "object" || Array.isArray(deps)) return [];
+        const range = deps["@hasna/contracts"];
+        if (typeof range !== "string") return [];
+        const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(range);
+        if (!match) return [];
+        const pinMajor = Number(match[1]);
+        const pinMinor = Number(match[2]);
+        const pinPatch = Number(match[3]);
+        if (pinMajor === major && pinMinor === minor && pinPatch === patch - 1) {
+          return [{ member: member.name, pin: range, inTree: contracts!.version }];
+        }
+        return [];
+      });
+    });
+    if (waveMiss.length > 0) {
+      console.info(
+        `[INFO versioning] @hasna/contracts wave-miss pins: ${waveMiss.map((w) => `${w.member} pins ${w.pin} vs in-tree ${w.inTree}`).join(", ")}`,
+      );
+    }
+    expect(waveMiss).toEqual([]);
+  });
+
   test("changelog release headings match package versions (strict)", () => {
     const mismatches = members.flatMap((member) => {
       const changelogVersion = readLatestChangelogVersion(member);
