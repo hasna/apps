@@ -352,7 +352,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "markdown", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "mcps", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
