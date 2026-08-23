@@ -248,8 +248,17 @@ function addQueueLines(raw: string, repos: Set<string>): void {
  * path, so without this those taken-but-unread events are lost forever. The
  * pid-suffixed consumed name is private by design, so a sibling consumed
  * file whose pid is dead is an orphan by definition, and one whose pid is
- * live belongs to a drainer mid-take and must be left untouched. Files in
- * the shared (pid-less) slot are never touched either — they are the
+ * live belongs to a drainer mid-take and must be left untouched.
+ *
+ * The one pid that must be swept WITHOUT a liveness check is this process's
+ * own: drainHookQueue is fully synchronous, so no in-process drain can be
+ * mid-flight when recovery runs, and every prior invocation of the drain
+ * removed its own file in its finally. A `.consumed.<own-pid>` file at this
+ * moment is therefore necessarily the orphan of a prior incarnation of this
+ * pid (OS pid reuse) — and if it is skipped, the drain's own rename below
+ * REPLACES that stale file and destroys its events.
+ *
+ * Files in the shared (pid-less) slot are never touched — they are the
  * pre-pid-suffix artifact this design replaced.
  */
 function recoverOrphanedConsumedFiles(queuePath: string, repos: Set<string>): void {
@@ -266,8 +275,8 @@ function recoverOrphanedConsumedFiles(queuePath: string, repos: Set<string>): vo
   for (const entry of entries) {
     if (!entry.startsWith(prefix)) continue;
     const pid = Number(entry.slice(prefix.length));
-    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
-    if (pidIsAlive(pid)) continue;
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    if (pid !== process.pid && pidIsAlive(pid)) continue;
     const orphanPath = join(dir, entry);
     let raw = "";
     try {

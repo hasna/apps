@@ -341,6 +341,26 @@ describe("repo-hooks", () => {
     expect(existsSync(queuePath)).toBe(false);
   });
 
+  it("recovers a consumed file orphaned by OS pid reuse before the take replaces it (release-review P1, cycle 1)", () => {
+    const queuePath = process.env["HASNA_REPOS_HOOK_QUEUE_PATH"]!;
+    // A prior incarnation of THIS process pid died mid-drain, leaving a
+    // `.consumed.<pid>` file that OS pid-reuse now makes look like our own
+    // take. It is provably not ours: drainHookQueue is fully synchronous, so
+    // no in-process drain is mid-flight when recovery runs, and every prior
+    // invocation removed its file in its finally. If recovery skips it, the
+    // drain's own renameSync REPLACES the stale file and its events are lost.
+    const reusePath = `${queuePath}.consumed.${process.pid}`;
+    writeFileSync(reusePath, "2026-04-08T13:00:00Z\t/tmp/repo-reuse\n");
+    writeFileSync(queuePath, "2026-04-08T13:00:01Z\t/tmp/repo-live\n");
+
+    expect(drainHookQueue(queuePath)).toEqual([
+      resolve("/tmp/repo-reuse"),
+      resolve("/tmp/repo-live"),
+    ]);
+    expect(existsSync(reusePath)).toBe(false);
+    expect(existsSync(queuePath)).toBe(false);
+  });
+
   it("leaves a live drainer's consumed file alone (negative control)", () => {
     const queuePath = process.env["HASNA_REPOS_HOOK_QUEUE_PATH"]!;
     // A sibling consumed file whose pid is alive belongs to a drainer that
