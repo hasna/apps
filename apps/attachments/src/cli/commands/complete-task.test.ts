@@ -1,4 +1,3 @@
-console.log("MARKER_RUN src/cli/commands/complete-task.test.ts");
 import { describe, it, expect, mock, beforeEach, spyOn } from "bun:test";
 
 // ---------------------------------------------------------------------------
