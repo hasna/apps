@@ -305,6 +305,37 @@ exit 1
         expect(result.errors.some((e) => e.startsWith(".github:"))).toBe(true);
         expect(result.errors.some((e) => e.startsWith("café:"))).toBe(true);
       });
+
+      it("imports into the org-scoped destination on true first use (release-review P1)", () => {
+        // Pins the release-review outcome: a first-use import must land a
+        // real checkout at <clones-root>/<org>/<name> with neither the org
+        // parent nor the destination pre-existing, and the parent is created
+        // by the code rather than assumed. (Measured on git 2.43: `git
+        // clone` itself creates missing parents, so the code's explicit
+        // mkdir is defense against tool behavior the code does not own —
+        // what this test pins is the landing, with REAL git against a local
+        // bare origin: no shim anywhere.)
+        const clonesRoot = join(testDir, "clones-p1");
+        setClonesRootForTests(clonesRoot);
+        const origin = join(testDir, "origin-p1.git");
+        execFileSync("git", ["init", "--bare", "-q", origin]);
+        const payload = [repoObject("first-use", { ssh_url: origin })];
+        const payloadPath = join(testDir, "payload-p1.json");
+        writeFileSync(payloadPath, JSON.stringify(payload));
+        // True first use: neither the org parent nor the destination exists.
+        expect(existsSync(join(clonesRoot, org, "first-use"))).toBe(false);
+
+        armFakeGh({ payloadPath });
+        let result: ReturnType<typeof importFromOrg>;
+        try {
+          result = importFromOrg(org, { onProgress: () => {} });
+        } finally {
+          disarmFakeGh();
+        }
+
+        expect(result).toEqual({ cloned: 1, skipped: 0, errors: [] });
+        expect(existsSync(join(clonesRoot, org, "first-use", ".git"))).toBe(true);
+      });
     });
 
     it("returns null rather than a scratch clone when nothing else matches", () => {

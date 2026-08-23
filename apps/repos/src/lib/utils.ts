@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { getDb } from "../db/database.js";
 import { listAllRepos, nonDerivedCheckoutSql, repoLookupPathState } from "../db/repos.js";
 import { computeClonePath } from "./worktrees.js";
@@ -453,6 +454,11 @@ export function importFromOrg(org: string, opts: { onProgress?: (msg: string) =>
         continue;
       }
       opts.onProgress?.(`  Cloning ${ghRepo.name}...`);
+      // The org segment of the computed destination is not created by the
+      // install-time `~/.hasna/repos` bootstrap, and a first-use import must
+      // not depend on the clone tool's own parent-directory behavior. Create
+      // the parent explicitly; the destination itself is the clone's job.
+      mkdirSync(dirname(dest), { recursive: true });
       execFileSync("git", ["clone", ghRepo.sshUrl, dest], { timeout: 60000, stdio: ["pipe", "pipe", "pipe"] });
       cloned++;
     } catch (err) {

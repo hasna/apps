@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { getHookQueuePath } from "./config.js";
 
 export const HOOK_MARKER_START = "# >>> hasna repos auto-index >>>";
@@ -220,12 +220,77 @@ function settleQueueTake(): void {
  * drainer racing another drainer's take fails the rename with ENOENT and
  * leaves the fresh queue file for the next drain.
  */
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists under another user's ownership — treat
+    // it as alive rather than sweeping a live take.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function addQueueLines(raw: string, repos: Set<string>): void {
+  const queue = raw.trim();
+  if (!queue) return;
+  for (const line of queue.split("\n")) {
+    const parts = line.split("\t");
+    const repoPath = parts[parts.length - 1]?.trim();
+    if (!repoPath) continue;
+    repos.add(resolve(repoPath));
+  }
+}
+
+/**
+ * Recover the `.consumed.<pid>` files a drainer that died between its rename
+ * and its read left behind. A restart only ever claims the original queue
+ * path, so without this those taken-but-unread events are lost forever. The
+ * pid-suffixed consumed name is private by design, so a sibling consumed
+ * file whose pid is dead is an orphan by definition, and one whose pid is
+ * live belongs to a drainer mid-take and must be left untouched. Files in
+ * the shared (pid-less) slot are never touched either — they are the
+ * pre-pid-suffix artifact this design replaced.
+ */
+function recoverOrphanedConsumedFiles(queuePath: string, repos: Set<string>): void {
+  // readdirSync yields basenames; the consumed files are siblings of the
+  // queue file, named `<queue-basename>.consumed.<pid>`.
+  const prefix = `${basename(queuePath)}.consumed.`;
+  const dir = dirname(queuePath);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    const pid = Number(entry.slice(prefix.length));
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    if (pidIsAlive(pid)) continue;
+    const orphanPath = join(dir, entry);
+    let raw = "";
+    try {
+      raw = readFileSync(orphanPath, "utf-8");
+    } catch {
+      // Unreadable orphan: the removal below still clears it so a dead pid
+      // never shadows the queue; nothing was parsed from it.
+    } finally {
+      rmSync(orphanPath, { force: true });
+    }
+    addQueueLines(raw, repos);
+  }
+}
+
 export function drainHookQueue(queuePath = getHookQueuePath()): string[] {
+  const repos = new Set<string>();
+  recoverOrphanedConsumedFiles(queuePath, repos);
+
   const consumedPath = `${queuePath}.consumed.${process.pid}`;
   try {
     renameSync(queuePath, consumedPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return Array.from(repos);
     throw error;
   }
 
@@ -239,22 +304,12 @@ export function drainHookQueue(queuePath = getHookQueuePath()): string[] {
     // design removes it between the rename and the read. Tolerate a missing
     // file anyway: a throw here would escape the auto-index worker's bare
     // setInterval callback and terminate the worker process.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return Array.from(repos);
     throw error;
   } finally {
     rmSync(consumedPath, { force: true });
   }
 
-  const queue = raw.trim();
-  if (!queue) return [];
-
-  const repos = new Set<string>();
-  for (const line of queue.split("\n")) {
-    const parts = line.split("\t");
-    const repoPath = parts[parts.length - 1]?.trim();
-    if (!repoPath) continue;
-    repos.add(resolve(repoPath));
-  }
-
+  addQueueLines(raw, repos);
   return Array.from(repos);
 }

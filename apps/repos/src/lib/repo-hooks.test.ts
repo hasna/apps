@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { execSync, spawn } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
@@ -320,6 +320,43 @@ describe("repo-hooks", () => {
 
     expect(exitCode).toBe(0);
     expect(JSON.parse(readFileSync(resultPath, "utf-8"))).toEqual([]);
+  });
+
+  it("recovers hook events orphaned in a dead drainer's consumed file (release-review P1)", () => {
+    const queuePath = process.env["HASNA_REPOS_HOOK_QUEUE_PATH"]!;
+    // A drainer that died between its rename and its read leaves the events
+    // it took in `.consumed.<pid>` forever: a restart only ever claims the
+    // original queue path. Recover exactly that class — a real dead pid
+    // (spawnSync reaps the child, so its pid answers ESRCH).
+    const deadPid = spawnSync("true").pid;
+    const orphanPath = `${queuePath}.consumed.${deadPid}`;
+    writeFileSync(orphanPath, "2026-04-08T13:00:00Z\t/tmp/repo-orphan\n");
+    writeFileSync(queuePath, "2026-04-08T13:00:01Z\t/tmp/repo-live\n");
+
+    expect(drainHookQueue(queuePath)).toEqual([
+      resolve("/tmp/repo-orphan"),
+      resolve("/tmp/repo-live"),
+    ]);
+    expect(existsSync(orphanPath)).toBe(false);
+    expect(existsSync(queuePath)).toBe(false);
+  });
+
+  it("leaves a live drainer's consumed file alone (negative control)", () => {
+    const queuePath = process.env["HASNA_REPOS_HOOK_QUEUE_PATH"]!;
+    // A sibling consumed file whose pid is alive belongs to a drainer that
+    // is mid-take; sweeping it would double-process its events. It must
+    // survive the drain byte-for-byte.
+    const child = spawn("sleep", ["30"]);
+    const livePath = `${queuePath}.consumed.${child.pid}`;
+    writeFileSync(livePath, "2026-04-08T13:00:00Z\t/tmp/repo-live-drainer\n");
+    writeFileSync(queuePath, "2026-04-08T13:00:01Z\t/tmp/repo-b\n");
+
+    try {
+      expect(drainHookQueue(queuePath)).toEqual([resolve("/tmp/repo-b")]);
+      expect(readFileSync(livePath, "utf-8")).toBe("2026-04-08T13:00:00Z\t/tmp/repo-live-drainer\n");
+    } finally {
+      child.kill();
+    }
   });
 
   it("returns appends that land during a drain on the next drain", () => {

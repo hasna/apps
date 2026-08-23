@@ -49,7 +49,8 @@
  * `worktree remove` makes against raw paths.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { AmbiguousRepoNameError, getRepo } from "../db/repos.js";
 import { getConfig } from "./config.js";
 import { scanRepoPaths } from "./scanner.js";
@@ -110,6 +111,7 @@ export type RepoLifecycleErrorCode =
   | "REPO_HAS_NO_REMOTE"
   | "TARGET_PATH_OCCUPIED"
   | "CLONE_REGISTER_FAILED"
+  | "CLONE_VERIFY_FAILED"
   | "GH_UNAVAILABLE"
   | "GH_FAILED";
 
@@ -377,9 +379,25 @@ async function cloneAndRegister(credential: ResolvedCredential, spec: RepoSpec):
       hint: "The verb never removes an occupant. The destination is computed; remove the path yourself if it is genuinely stale.",
     });
   }
+  // The org segment of the computed destination is not created by the
+  // install-time `~/.hasna/repos` bootstrap; create the parent explicitly
+  // (idempotent) so a first-use clone never depends on the clone tool's own
+  // parent-directory behavior.
+  mkdirSync(dirname(destination), { recursive: true });
   runGh(credential, ["repo", "clone", `${spec.org}/${spec.name}`, destination], {
     timeout: GH_CLONE_TIMEOUT_MS,
   });
+  // A `gh repo clone` that exited 0 without a checkout must not produce a
+  // registry row for a directory that does not exist: scanRepoPaths upserts
+  // whatever path it is handed, so the registration check below would
+  // otherwise bless a phantom row as "registered". Verify the checkout
+  // actually landed before the scan is allowed to index anything.
+  if (!existsSync(join(destination, ".git"))) {
+    fail("CLONE_VERIFY_FAILED", `clone reported success but no checkout exists at ${destination}`, {
+      path: destination,
+      hint: "The clone verb reports success only when the checkout actually landed; inspect the clone error and retry.",
+    });
+  }
   await scanRepoPaths([destination]);
   const registered = getRepo(destination) !== null;
   if (!registered) {
