@@ -283,7 +283,7 @@ jobs:
 
       - name: Build (affected)
         run: |
-          bunx turbo run build --affected
+          bunx turbo run build --affected --concurrency=1
           rc=$?
           if [ $rc -ne 0 ]; then
             echo "--- dirty-tree diagnostics (turbo rc=$rc; repos provenance gate refuses a dirty tree) ---"
@@ -292,6 +292,16 @@ jobs:
           exit $rc
         env:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
+          # Serial execution only: the heavy members (todos/mementos
+          # dashboards, multi-entry bundles, tsc) each peak at 8-14GB. The
+          # job-level NODE_OPTIONS=--max-old-space-size=14336 (#966) removes
+          # node's 4GB default old-space cap; at uncapped parallelism the
+          # aggregate still exceeded the 16GB runner (measured OOMs on PR
+          # runs 32627899668 and 32628694226), and at --concurrency=1 the
+          # todos bundle died at its own 8GB cap on run 32629922346
+          # (8056/8224 MB). One heavy process at a time with the 14GB cap is
+          # what fits the runner. Never set the cap below 8GB: the todos
+          # multi-entry bundle dies there.
 
       - name: Test (affected)
         # Serial execution: the runner (4 cores) kills test-spawned subprocesses
