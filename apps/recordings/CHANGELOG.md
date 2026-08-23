@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.10
+
+### Patch Changes
+
+- 50473b8: fix: main CI recovery — regenerate per-app lockfiles after the #856/#923 version waves (frozen-lockfile class), repin projects' dependencies to the published conversations 0.7.4 / mementos 0.14.85 / todos 0.15.41 (the wave-pinned 0.7.5/0.14.86/0.15.43 were never published), sync recordings' Info.plist to 0.3.9 and secrets' runtime version literal to 0.3.4, and clear the publish-guard internal-infra string violations across connectors/emails/skills/secrets/telephony plus the guard's over-broad ARN/domain content patterns.
+
 ## 0.3.9
 
 ### Patch Changes
@@ -91,7 +97,6 @@ setup (one of the two set) fails closed instead of silently reading the
 wrong dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` |
 `http`) wins over the auto-selection. `defaultApiBaseUrl` is removed: a hosted
 client is selected only by a configured API URL, never by a defaulted hostname.
-
 
 ## 0.3.0 — unreleased
 
