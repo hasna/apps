@@ -68,7 +68,30 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   return server;
 }
 
+function printHelp(): void {
+  console.log(`Usage: dispatch-mcp [options]
+
+MCP server for @hasna/dispatch
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command`);
+}
+
 async function main(): Promise<void> {
+  // Binds-before-version class (todos row 8a43ca44): --help/--version must
+  // answer BEFORE the server is built or any transport is connected. They
+  // previously fell through to StdioServerTransport.connect, entered MCP
+  // stdio mode, printed nothing, and exited rc=0 silently when stdin closed.
+  const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(getPackageVersion());
+    process.exit(0);
+  }
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
