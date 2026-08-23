@@ -16,7 +16,7 @@ describe("hasna.contract.json", () => {
   });
 
   test("pins the vendored storage kit version", () => {
-    expect(contract.kitVersion).toBe("0.13.3");
+    expect(contract.kitVersion).toBe("0.13.4");
   });
 
   test("service metadata exposes the versioned health/ready/version + v1 paths", () => {
