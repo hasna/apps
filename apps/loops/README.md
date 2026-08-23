@@ -1144,6 +1144,39 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 - Failed ad-hoc manual `run-now` slots are single attempts and do not schedule retries. Due-slot and retry-slot manual runs use normal retry behavior.
 - Running rows have leases. If a daemon dies, a later daemon marks expired running rows as `abandoned`.
 
+## Runner Key Provisioning
+
+Runner routes (`runs.claim`, `runs.heartbeat`, `runs.finalize`, …) require a
+**machine-kind** API key bound to a tenant and to a machine principal whose id
+equals the runner's machine id — a hand-minted client key is rejected with
+`403 wrong_token_kind`. `loops-serve provision-runner-key` is the repeatable
+path that provisions exactly that binding, and it is idempotent: when the
+runner principal already exists as an active machine principal holding an
+active, unexpired machine-kind key, it prints the existing key's id and
+expiresAt and mints nothing (a second token is never minted).
+
+```bash
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=<database-url> \
+HASNA_LOOPS_API_SIGNING_KEY=<signing-secret> \
+loops-serve provision-runner-key \
+  --runner-id "$(hostname)" \   # must equal the runner's machine id
+  --tenant-id <tenant-id> \     # or set HASNA_LOOPS_TENANT_ID
+  --token-out /run/loops/runner.env   # mode 600; or --print-token
+```
+
+stdout carries exactly `{"runnerId","kid","expiresAt"}` — the minted token
+itself goes only to the `--token-out` file (created mode 600) or, when
+`--print-token` is passed explicitly, to stdout as its own trailing line. The
+token is never logged. Defaults: roles `worker,service`, scope `loops:runner`,
+ttl 365 days. Rerunning with the same `--runner-id` is a no-op (same kid) and
+delivers no token — pass a fresh `--token-out` path or `--print-token` only
+when a new key was actually minted.
+
+On the hosted control plane this runs as a one-off command in the migrator
+EC2/ECS task family (same `HASNA_LOOPS_MIGRATOR_DATABASE_URL` and
+`HASNA_LOOPS_API_SIGNING_KEY` the migrate verb uses), and the emitted file is
+installed into the station's mode-600 runner env.
+
 ## Runner Claim Scope
 
 A loop that names no machine is claimable by any runner. That is the default and

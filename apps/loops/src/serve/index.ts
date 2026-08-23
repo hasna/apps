@@ -6,6 +6,8 @@
 // serve process. Storage is the generated @hasna/contracts kit pool wrapping the
 // real `PostgresLoopStorage` backend. Every authenticated request gets one
 // dedicated transaction with tenant RLS context.
+import { openSync, writeSync, closeSync, fchmodSync } from "node:fs";
+import { hostname } from "node:os";
 import { Command } from "commander";
 import { createLoopsApiServer } from "../api/index.js";
 import { TenantApiAuthenticator } from "../lib/auth/tenant-auth.js";
@@ -26,6 +28,13 @@ import {
   POSTGRES_TENANT_UNSAFE_SERVICE_MEMBERSHIPS_SQL,
 } from "../lib/storage/postgres-schema.js";
 import { loadTenantBackfillBundle, parseTenantBackfillBundle } from "../lib/storage/tenant-backfill.js";
+import {
+  RUNNER_KEY_DEFAULT_ROLES,
+  RUNNER_KEY_DEFAULT_SCOPES,
+  RUNNER_KEY_DEFAULT_TTL_SECONDS,
+  provisionRunnerKey,
+  type ProvisionRunnerKeyOutcome,
+} from "../lib/storage/provision-runner-key.js";
 import {
   loadApprovedTenantBackfillBundle,
   logTenantBackfillS3Success,
@@ -1003,6 +1012,133 @@ program
     logTenantBackfillS3Success(result);
   });
 
+program
+  .command("provision-runner-key")
+  .description(
+    "provision or confirm one machine runner principal + machine-kind API key (idempotent; token to --token-out file or --print-token, never logged)",
+  )
+  .option("--runner-id <id>", "runner principal id (default: container hostname; must equal the runner's machine id)")
+  .option("--tenant-id <id>", "tenant id (default: env HASNA_LOOPS_TENANT_ID)")
+  .option("--roles <csv>", "comma-separated membership roles (default: worker,service)")
+  .option("--scope <csv>", "comma-separated key scopes (default: loops:runner)")
+  .option("--ttl-seconds <n>", "key lifetime in seconds (default: 31536000 = 365 days)", (value) => Number(value))
+  .option("--token-out <path>", "write the minted token to this file (mode 600) — required unless --print-token")
+  .option("--print-token", "print the minted token to stdout after the JSON summary (explicit opt-in; never used otherwise)")
+  .action((opts: ProvisionRunnerKeyCliOptions) => {
+    void runProvisionRunnerKeyCommand(opts).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({ evt: "loops_serve_command_failed", errorType: "error", message }));
+      process.exitCode = 1;
+    });
+  });
+
+// ---------------------------------------------------------------------------
+// provision-runner-key — one repeatable path that mints a machine-kind runner
+// token bound to a tenant + machine principal, so runner provisioning never
+// depends on hand-minting at deploy time again. Idempotent: an existing active
+// machine key for the runner is confirmed, never doubled. The minted token is
+// delivered ONLY to an explicit destination (--token-out file, mode 600, or
+// --print-token) and is never written to logs. stdout carries exactly
+// { runnerId, kid, expiresAt }.
+// ---------------------------------------------------------------------------
+
+export interface ProvisionRunnerKeyCliOptions {
+  runnerId?: string;
+  tenantId?: string;
+  roles?: string;
+  scope?: string;
+  ttlSeconds?: number;
+  tokenOut?: string;
+  printToken?: boolean;
+}
+
+export function splitCsv(value: string | undefined): string[] {
+  if (!value || value.trim() === "") return [];
+  return value.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+/** Write the token to a file at mode 600 (fchmod after open, so umask cannot widen it). */
+export function writeTokenFile(path: string, token: string): void {
+  const fd = openSync(path, "w", 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeSync(fd, `${token}\n`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export async function runProvisionRunnerKeyCommand(
+  opts: ProvisionRunnerKeyCliOptions,
+  env: Record<string, string | undefined> = process.env,
+): Promise<{ runnerId: string; kid: string; expiresAt: string | null; provisioned: boolean }> {
+  const executor = buildExecutor("loops-provision-runner-key", "migrator");
+  try {
+    return await runProvisionRunnerKeyWithClient(opts, env, executor.queryClient);
+  } finally {
+    await executor.close();
+  }
+}
+
+/**
+ * Command body with an injectable client — the seam the CLI tests use. All
+ * validation and delivery behavior lives here so the unit tests exercise the
+ * exact stdout/file/print-token contract without a database.
+ */
+export async function runProvisionRunnerKeyWithClient(
+  opts: ProvisionRunnerKeyCliOptions,
+  env: Record<string, string | undefined>,
+  client: PoolQueryClient,
+): Promise<{ runnerId: string; kid: string; expiresAt: string | null; provisioned: boolean }> {
+  const runnerId = (opts.runnerId ?? "").trim() || hostname();
+  const tenantId = (opts.tenantId ?? "").trim() || env.HASNA_LOOPS_TENANT_ID?.trim() || "";
+  if (!tenantId) {
+    throw new Error("provision-runner-key requires --tenant-id <id> or HASNA_LOOPS_TENANT_ID");
+  }
+  const parsedRoles = splitCsv(opts.roles);
+  const roles = parsedRoles.length > 0 ? parsedRoles : [...RUNNER_KEY_DEFAULT_ROLES];
+  const parsedScopes = splitCsv(opts.scope);
+  const scopes = parsedScopes.length > 0 ? parsedScopes : [...RUNNER_KEY_DEFAULT_SCOPES];
+  const ttlSeconds = opts.ttlSeconds ?? RUNNER_KEY_DEFAULT_TTL_SECONDS;
+  const signingSecret = env.HASNA_LOOPS_API_SIGNING_KEY?.trim() || "";
+  if (!signingSecret) {
+    throw new Error("provision-runner-key requires HASNA_LOOPS_API_SIGNING_KEY");
+  }
+  const tokenOut = opts.tokenOut?.trim();
+  if (opts.printToken && tokenOut) {
+    throw new Error("provision-runner-key accepts either --token-out <path> or --print-token, not both");
+  }
+  if (!opts.printToken && !tokenOut) {
+    throw new Error("provision-runner-key requires --token-out <path> or --print-token to deliver the minted token; stdout carries only the JSON summary");
+  }
+
+  const outcome = await provisionRunnerKey(client, {
+    runnerId,
+    tenantId,
+    roles,
+    scopes,
+    ttlSeconds,
+    signingSecret,
+  });
+  const summary = { runnerId: outcome.runnerId, kid: outcome.kid, expiresAt: outcome.expiresAt };
+  console.log(JSON.stringify(summary));
+  if (outcome.status === "provisioned") {
+    // Token delivery is the ONE place the value may leave the process, and
+    // only because the operator explicitly asked for it. It never touches a
+    // log line: not here, not in the module, not in any error path.
+    if (opts.printToken) {
+      console.log(outcome.token);
+    } else {
+      writeTokenFile(tokenOut!, outcome.token);
+    }
+  } else {
+    console.warn(
+      `provision-runner-key: runner '${outcome.runnerId}' already has an active machine key (kid ${outcome.kid}, expires ${outcome.expiresAt ?? "never"}); no new token minted`,
+    );
+  }
+  return { ...summary, provisioned: outcome.status === "provisioned" };
+}
+
 const dbCredentials = program
   .command("db-credentials")
   .description("reconcile provider-managed database credential secrets");
@@ -1039,6 +1175,7 @@ if (import.meta.main) {
     "migrate",
     "tenant-backfill",
     "tenant-backfill-s3",
+    "provision-runner-key",
     "db-credentials",
     "shared-to-dedicated-transfer",
     "version",
