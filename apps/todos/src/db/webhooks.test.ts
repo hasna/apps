@@ -308,6 +308,67 @@ describe("validateWebhookUrl", () => {
   });
 });
 
+describe("deliverWebhook redirect handling", () => {
+  it("must not follow a 3xx redirect from a webhook URL (SSRF via redirect)", async () => {
+    // Regression for todos row 3f81aefd: the fetch() in deliverWebhook used
+    // Bun's default redirect:"follow", so a public HTTPS webhook URL answering
+    // 307 transparently re-issued the full POST body + X-Webhook-Signature HMAC
+    // header at the redirect target — bypassing the SSRF URL/IP validation,
+    // which only ever inspects the original URL. The fix pins redirect:"manual".
+    //
+    // The delivery-time SSRF checks block localhost/private IPs by design, so a
+    // real local redirector is unreachable through the real code path; the
+    // network hop is stubbed with a fetch recorder that simulates Bun's
+    // redirect-following behaviour (a second call to the Location target) when
+    // redirect:"manual" is absent. The configured URL uses the reserved
+    // ".invalid" TLD (RFC 2606 — never resolves): Bun.dns.lookup throws
+    // ENOTFOUND, which the delivery path treats as pass-through, so the test
+    // stays hermetic — no sockets, no real DNS.
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetchCalls.push({ url, init });
+      if (init?.redirect === "manual") {
+        // Fixed behaviour: the 3xx is returned to the caller, never followed.
+        return Promise.resolve(new Response(null, { status: 307, headers: { Location: "http://127.0.0.1:9/meta" } }));
+      }
+      // Buggy behaviour (Bun default follow): the same POST — body and
+      // signature header included — is re-issued at the redirect target.
+      fetchCalls.push({ url: "http://127.0.0.1:9/meta", init });
+      return Promise.resolve(new Response("INTERNAL_TARGET_HIT", { status: 200 }));
+    }) as typeof fetch;
+
+    try {
+      const wh = createWebhook(
+        { url: "https://redirector.invalid/hook", events: ["task.created"], secret: "s3cr3t" },
+        db,
+      );
+      await dispatchWebhook("task.created", { id: "t-1", title: "secret task" }, db);
+
+      // deliverWebhook is fire-and-forget from dispatchWebhook; bounded poll
+      // until the delivery row lands.
+      const deadline = Date.now() + 2000;
+      while (listDeliveries(wh.id, 50, db).length === 0 && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+
+      // The redirect target received nothing: fetch was invoked exactly once,
+      // for the configured URL only, with redirect pinned to manual.
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0]!.url).toBe("https://redirector.invalid/hook");
+      expect(fetchCalls[0]!.init?.redirect).toBe("manual");
+
+      // The delivery is recorded as the blocked 3xx, not as a followed 200.
+      const deliveries = listDeliveries(wh.id, 50, db);
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]!.status_code).toBe(307);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("createWebhook URL validation", () => {
   it("should reject HTTP URL", () => {
     expect(() => createWebhook({ url: "http://example.com" }, db)).toThrow("Invalid webhook URL");
