@@ -10,8 +10,19 @@ describe("server image build context", () => {
     const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
     const lockfile = readFileSync(join(root, "bun.lock"), "utf8");
 
-    expect(packageJson.dependencies["@hasna/contracts"]).toBe("0.5.2");
-    expect(lockfile).toContain('"@hasna/contracts": ["@hasna/contracts@0.5.2"');
+    // The build context is exactly `COPY package.json bun.lock` +
+    // `bun install --frozen-lockfile`, so the contracts version the image
+    // installs is whatever this manifest declares and this lockfile resolves.
+    // Derive the expectation from the manifest rather than restating a version
+    // number here: a hardcoded pin goes stale on the next contracts bump and
+    // then fails as a false defect about the build context (measured — this
+    // assertion still named 0.5.2 while the manifest declared 0.13.4).
+    expect(packageJson.dependencies).toHaveProperty("@hasna/contracts");
+    const contractsVersion = packageJson.dependencies["@hasna/contracts"];
+    // An exact pin, never a range: the runner copies the contracts CLI out of
+    // the deps stage, so the installed version must be the declared one.
+    expect(contractsVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(lockfile).toContain(`"@hasna/contracts": ["@hasna/contracts@${contractsVersion}"`);
     expect(packageJson.overrides?.["fast-uri"]).toBe("3.1.2");
     expect(lockfile).toContain('"fast-uri": ["fast-uri@3.1.2"');
     expect(lockfile).not.toContain('"fast-uri": ["fast-uri@3.1.0"');
