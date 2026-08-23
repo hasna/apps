@@ -618,7 +618,7 @@
     },
     "apps/domains": {
       "name": "@hasna/domains",
-      "version": "0.0.43",
+      "version": "0.0.44",
       "bin": {
         "domains": "dist/cli/index.js",
         "domains-mcp": "dist/mcp/index.js",
@@ -720,7 +720,7 @@
     },
     "apps/emails": {
       "name": "@hasna/emails",
-      "version": "1.4.7",
+      "version": "1.4.8",
       "bin": {
         "emails": "dist/cli/index.js",
         "emails-mcp": "dist/mcp/index.js",
@@ -736,7 +736,7 @@
         "@aws-sdk/client-sts": "^3.1072.0",
         "@aws-sdk/credential-provider-ini": "^3.972.55",
         "@hasna/contracts": "0.13.4",
-        "@hasna/domains": "0.0.43",
+        "@hasna/domains": "0.0.44",
         "@hasna/events": "^0.1.16",
         "@hasna/mcp-harness": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.29.0",

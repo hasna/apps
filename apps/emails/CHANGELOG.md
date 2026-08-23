@@ -1,3 +1,10 @@
+## 1.4.8
+
+### Patch Changes
+
+- Updated dependencies [12662e9]
+  - @hasna/domains@0.0.44
+
 ## 1.4.7
 
 ### Patch Changes
