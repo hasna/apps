@@ -33,6 +33,16 @@
  *   manifest devDeps the lockfile root entry does not record — lane passes).
  *   So RULE 2 compares dependencies only, exactly as strict as the lane.
  *
+ * RULE 3 — REGISTRY @hasna/* EDGES BEHIND THE PUBLISHED VERSION (see the
+ *   implementation comment). A dependency edge resolving a @hasna/* package
+ *   from the registry below its npm-published max, while the consumer's
+ *   recorded range admits the max, is a stale pin — the class the fleet
+ *   version-skew audit files as "local X behind Y" (@hasna/events 0.1.15
+ *   behind 0.1.16, T-00100). The comparison is npm-backed and fails open on
+ *   npm unavailability, deliberately: an offline comparison against the
+ *   workspace version would fire on every version wave from manifest bump to
+ *   publish and deadlock the release cadence.
+ *
  * EXCEPTIONS — deliberate and attributable. Each names a manifest pin to a
  * version that is NOT on the npm registry; the owning release lane must publish
  * (or repin) before the app can leave this registry, and the lockfile cannot be
@@ -103,6 +113,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execSync } from "node:child_process";
 
 /** Apps skipped by RULE 2 — see the EXCEPTIONS block in the header for each. */
 const UNRESOLVABLE_PINS = new Set<string>([
@@ -111,6 +122,9 @@ const UNRESOLVABLE_PINS = new Set<string>([
   "economy",
   "testers",
 ]);
+
+/** npm published-max probe, injectable so the self-test stays offline. */
+type PublishedProbe = (pkg: string) => string | null;
 
 /** Load a bun.lock v1 document (JSON with trailing commas tolerated). */
 function parseLockfile(file: string): any {
@@ -130,6 +144,143 @@ function memberDirs(root: string): string[] {
 
 function manifestOf(root: string, member: string): any {
   return JSON.parse(fs.readFileSync(path.join(root, "apps", member, "package.json"), "utf8"));
+}
+
+/** Minimal semver — enough for the @hasna/* pin shapes recorded in bun.lock. */
+function parseVersion(v: string): [number, number, number] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/.exec(v.trim());
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function versionCmp(a: [number, number, number], b: [number, number, number]): number {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Does `range` admit `version`? Supports the shapes recorded for @hasna/*
+ * dependencies in this repo's lockfiles: exact ("0.1.8"), caret ("^0.1.7"),
+ * tilde ("~0.1.7"), star ("*"), and explicit two-bound ranges
+ * (">=0.1.7 <0.2.0"). Unknown shapes return false — RULE 3 fails open, so it
+ * can only flag skew it can prove.
+ */
+function satisfiesRange(range: string, version: string): boolean {
+  const v = parseVersion(version);
+  if (!v) return false;
+  const spec = range.trim();
+  if (spec === "*" || spec === "x" || spec === "X") return true;
+  const exact = /^(\d+)\.(\d+)\.(\d+)$/.exec(spec);
+  if (exact) return versionCmp(v, [Number(exact[1]), Number(exact[2]), Number(exact[3])]) === 0;
+  const caret = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(spec);
+  if (caret) {
+    const maj = Number(caret[1]);
+    const min = Number(caret[2]);
+    const pat = Number(caret[3]);
+    const floor: [number, number, number] = [maj, min, pat];
+    const ceil: [number, number, number] = maj > 0 ? [maj + 1, 0, 0] : min > 0 ? [maj, min + 1, 0] : [maj, min, pat + 1];
+    return versionCmp(v, floor) >= 0 && versionCmp(v, ceil) < 0;
+  }
+  const tilde = /^~(\d+)\.(\d+)\.(\d+)$/.exec(spec);
+  if (tilde) {
+    const maj = Number(tilde[1]);
+    const min = Number(tilde[2]);
+    const pat = Number(tilde[3]);
+    const floor: [number, number, number] = [maj, min, pat];
+    const ceil: [number, number, number] = [maj, min + 1, 0];
+    return versionCmp(v, floor) >= 0 && versionCmp(v, ceil) < 0;
+  }
+  const bounded = /^>=(\d+\.\d+\.\d+)\s+<(\d+\.\d+\.\d+)$/.exec(spec);
+  if (bounded) {
+    const lo = parseVersion(bounded[1])!;
+    const hi = parseVersion(bounded[2])!;
+    return versionCmp(v, lo) >= 0 && versionCmp(v, hi) < 0;
+  }
+  return false;
+}
+
+/** Resolve the max published version of a package; null when npm is unreachable. */
+function defaultPublishedProbe(pkg: string): string | null {
+  try {
+    const out = execSync(`npm view ${pkg} version`, {
+      encoding: "utf8",
+      timeout: 15000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return parseVersion(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * RULE 3 — REGISTRY @hasna/* EDGES BEHIND THE PUBLISHED VERSION.
+ *
+ * A dependency edge that resolves a @hasna/* package FROM THE REGISTRY to a
+ * version BELOW the max published on npm, while the edge's recorded declared
+ * range (read from the consumer's metadata block in the same lockfile)
+ * ADMITS the published max, is a stale pin: a fresh resolution would pick
+ * the published max and the frozen install lags the registry. This is the
+ * class the fleet version-skew audit files as "local X behind Y" — measured
+ * 2026-08-23: @hasna/events resolves 0.1.15 for the @hasna/accounts,
+ * @hasna/sandboxes and @hasna/files/@hasna/connectors edges while 0.1.16 is
+ * published and all three consumers declare "^0.1.7" (todos T-00100).
+ * Deliberate exact pins ("0.1.8", "0.1.14") do not admit the published max
+ * and stay silent.
+ *
+ * The comparison is against npm, deliberately: an offline comparison against
+ * the workspace member's own version would fire on every version wave from
+ * the manifest bump to the publish (the wave regenerates the lock while the
+ * bumped version is still unpublished, so registry edges legitimately resolve
+ * below it), deadlocking the release cadence. npm unreachability fails open
+ * with a stderr note — a hard npm gate would break offline check runs; the
+ * audit lane re-enforces this class with network.
+ *
+ * bun's own frozen check does NOT cover this class: the stale 0.1.15
+ * satisfies every recorded range, so `bun install --frozen-lockfile` passes
+ * while the local resolution lags the published 0.1.16 by one patch.
+ */
+function checkRegistryEdges(root: string, published: PublishedProbe = defaultPublishedProbe): string[] {
+  const lock = path.join(root, "bun.lock");
+  if (!fs.existsSync(lock)) return [];
+  const doc = parseLockfile(lock);
+  const problems: string[] = [];
+  const entries = doc.packages ?? {};
+  for (const [key, tuple] of Object.entries(entries)) {
+    if (!Array.isArray(tuple) || tuple.length < 2) continue;
+    // Edge keys are "<consumer>/<dep-spec>"; the dep spec itself contains a
+    // "/" for scoped names ("@hasna/accounts/@hasna/events"), so the consumer
+    // boundary is the LAST "/@" — the slash before the scoped dep spec.
+    const slash = key.lastIndexOf("/@");
+    if (slash < 0) continue; // hoisted top-level entry, not a dependency edge
+    const depSpec = key.slice(slash + 1);
+    if (!depSpec.startsWith("@hasna/")) continue;
+    const resolved = String(tuple[0]);
+    const rm = /^@hasna\/[^/@]+@(\d+\.\d+\.\d+)$/.exec(resolved);
+    if (!rm) continue; // workspace: resolution — the workspace entry's own domain
+    const consumer = entries[key.slice(0, slash)];
+    if (!Array.isArray(consumer) || consumer.length < 3 || typeof consumer[2] !== "object" || consumer[2] === null) {
+      continue;
+    }
+    const declared = consumer[2].dependencies?.[depSpec] ?? consumer[2].optionalDependencies?.[depSpec];
+    if (typeof declared !== "string") continue;
+    const maxPublished = published(depSpec);
+    if (maxPublished === null) {
+      console.error(`check-frozen-locks: npm unreachable — skipped published-version check for ${depSpec}`);
+      continue;
+    }
+    if (!satisfiesRange(declared, maxPublished)) continue; // deliberate pin or unknown shape — not provable skew
+    const resolvedV = parseVersion(rm[1])!;
+    const maxV = parseVersion(maxPublished)!;
+    if (versionCmp(resolvedV, maxV) < 0) {
+      problems.push(
+        `root bun.lock ${key}: resolves ${resolved} — behind published ${depSpec}@${maxPublished} while declared "${declared}" admits it`,
+      );
+    }
+  }
+  return problems;
 }
 
 function compareEntry(label: string, entry: any, manifest: any, fields: readonly ("dependencies" | "devDependencies")[]): string[] {
@@ -206,12 +357,15 @@ function checkAppLockfiles(root: string): string[] {
   return problems;
 }
 
-export function runCheck(root: string): string[] {
-  return [...checkRootLockfile(root), ...checkAppLockfiles(root)];
+export function runCheck(root: string, published: PublishedProbe = defaultPublishedProbe): string[] {
+  return [...checkRootLockfile(root), ...checkAppLockfiles(root), ...checkRegistryEdges(root, published)];
 }
 
 function selfTest(): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "check-frozen-locks-"));
+  // Offline probe: fixture @hasna/* packages are not real on npm, so RULE 3
+  // stays silent unless a discriminating stub is supplied below.
+  const offlineProbe: PublishedProbe = () => null;
   try {
     // Fixture: two members, one with an own lockfile.
     fs.mkdirSync(path.join(dir, "apps", "alpha"), { recursive: true });
@@ -261,7 +415,7 @@ function selfTest(): void {
     };
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaLock, null, 2));
 
-    const clean = runCheck(dir);
+    const clean = runCheck(dir, offlineProbe);
     if (clean.length !== 0) {
       throw new Error(`positive control failed — known-good fixture reported: ${clean.join("; ")}`);
     }
@@ -271,7 +425,7 @@ function selfTest(): void {
     staleLock.workspaces["apps/alpha"].version = "1.1.0";
     staleLock.workspaces["apps/alpha"].dependencies["@hasna/beta"] = "^0.8.0";
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(staleLock, null, 2));
-    const rootHits = runCheck(dir);
+    const rootHits = runCheck(dir, offlineProbe);
     const rootFired =
       rootHits.some((p) => p.includes("version 1.1.0")) &&
       rootHits.some((p) => p.includes('dependencies["@hasna/beta"]'));
@@ -284,7 +438,7 @@ function selfTest(): void {
     const staleAppLock = JSON.parse(JSON.stringify(alphaLock));
     staleAppLock.workspaces[""].dependencies["lodash"] = "^3.0.0";
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(staleAppLock, null, 2));
-    const appHits = runCheck(dir);
+    const appHits = runCheck(dir, offlineProbe);
     const appFired = appHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("lodash"));
     if (!appFired) {
       throw new Error(`negative control 2 failed — stale app lockfile not reported: ${appHits.join("; ")}`);
@@ -309,12 +463,52 @@ function selfTest(): void {
         packages: {},
       }),
     );
-    const exceptedHits = runCheck(dir);
+    const exceptedHits = runCheck(dir, offlineProbe);
     if (exceptedHits.some((p) => p.includes("apps/economy"))) {
       throw new Error(`exception control failed — economy should be exempt: ${exceptedHits.join("; ")}`);
     }
 
-    console.log("self-test PASS — positive control clean, both negative controls fired, exception respected");
+    // RULE 3 controls — registry @hasna/* edge behind the published max must
+    // fire; an edge AT the published max and a deliberate exact pin must not.
+    // Stub probe: @hasna/beta's published max is 0.1.16 (mirrors the measured
+    // @hasna/events 0.1.15-behind-0.1.16 case, todos T-00100).
+    const r3Published: PublishedProbe = (pkg) => (pkg === "@hasna/beta" ? "0.1.16" : null);
+    // Clear fixture leftovers from the earlier controls so RULE 1/2 stay quiet.
+    fs.rmSync(path.join(dir, "apps", "economy"), { recursive: true, force: true });
+    fs.rmSync(path.join(dir, "apps", "alpha", "bun.lock"), { force: true });
+    const r3Lock = JSON.parse(JSON.stringify(goodLock));
+    r3Lock.packages = {
+      "@hasna/alpha": ["@hasna/alpha@1.2.0", "", { "dependencies": { "@hasna/beta": "^0.1.7", lodash: "^4.0.0" } }, "sha-alpha"],
+      "@hasna/alpha/@hasna/beta": ["@hasna/beta@0.1.15", "", { "dependencies": {} }, "sha-stale"],
+    };
+    fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r3Lock, null, 2));
+    const r3Hits = runCheck(dir, r3Published);
+    if (!r3Hits.some((p) => p.includes("@hasna/alpha/@hasna/beta") && p.includes("0.1.16"))) {
+      throw new Error(`negative control 3 failed — stale registry edge not reported: ${r3Hits.join("; ")}`);
+    }
+
+    // Edge at the published max must stay silent.
+    const r3Current = JSON.parse(JSON.stringify(r3Lock));
+    r3Current.packages["@hasna/alpha/@hasna/beta"][0] = "@hasna/beta@0.1.16";
+    fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r3Current, null, 2));
+    const r3CurrentHits = runCheck(dir, r3Published);
+    if (r3CurrentHits.some((p) => p.includes("@hasna/alpha/@hasna/beta"))) {
+      throw new Error(`positive control 2 failed — edge at published max reported: ${r3CurrentHits.join("; ")}`);
+    }
+
+    // Deliberate exact pin below the published max must stay silent.
+    const r3Exact = JSON.parse(JSON.stringify(r3Lock));
+    r3Exact.packages["@hasna/alpha/@hasna/beta"][0] = "@hasna/beta@0.1.15";
+    r3Exact.packages["@hasna/alpha"][2].dependencies["@hasna/beta"] = "0.1.15";
+    fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r3Exact, null, 2));
+    const r3ExactHits = runCheck(dir, r3Published);
+    if (r3ExactHits.some((p) => p.includes("@hasna/alpha/@hasna/beta"))) {
+      throw new Error(`exact-pin control failed — deliberate old pin reported: ${r3ExactHits.join("; ")}`);
+    }
+
+    console.log(
+      "self-test PASS — positive controls clean, negative controls 1-3 + exact-pin control fired/silent as required, exception respected",
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
