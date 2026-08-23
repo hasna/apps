@@ -1,7 +1,32 @@
 #!/usr/bin/env bun
 import { captureSnapshot, getSnapshotEnvelope, listSnapshots, planSnapshotRestore } from "../runtime.js";
+import { getPackageVersion } from "../version.js";
 
 const port = Number(process.env.SNAPSHOTS_PORT ?? process.env.PORT ?? 7337);
+
+function printHelp(): void {
+  console.log(`Usage: snapshots-serve [options]
+
+HTTP server for @hasna/snapshots
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  --port <n>     HTTP port via SNAPSHOTS_PORT or PORT (default: ${port})`);
+}
+
+const serveArgs = process.argv.slice(2);
+// Control surfaces (todos row cbb7ca3d): --version/--help must answer
+// BEFORE the bind. Previously `snapshots-serve --version` ignored argv and
+// bound the HTTP port.
+if (serveArgs.includes("--help") || serveArgs.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
+if (serveArgs.includes("--version") || serveArgs.includes("-V")) {
+  console.log(getPackageVersion());
+  process.exit(0);
+}
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value, null, 2), {
