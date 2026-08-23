@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { acquireLock, tryBulkAcquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, listLocksEnriched, releaseStaleAgentLocks } from "./locks";
+import { acquireLock, bulkAcquireLock, tryBulkAcquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, listLocksEnriched, releaseStaleAgentLocks } from "./locks";
 import { closeDb, getDb } from "./db";
+import { LocalStore } from "./store/index.js";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -437,5 +438,82 @@ describe("tryBulkAcquireLock", () => {
     const result = tryBulkAcquireLock([], "any-agent");
     expect(result.acquired).toBe(true);
     expect(result.locks).toHaveLength(0);
+  });
+});
+
+describe("bulkAcquireLock conflict signalling (O15-00369)", () => {
+  test("raw bulkAcquireLock throws a real Error carrying the conflict metadata, never a plain object", () => {
+    acquireLock("channel", "bulk-conflict-signal", "agent-other");
+
+    let thrown: unknown;
+    try {
+      bulkAcquireLock(
+        [{ resource_type: "channel", resource_id: "bulk-conflict-signal" }],
+        "bulk-requester",
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeDefined();
+    // Regression: this used to be a bare `{ _bulkConflict: ... }` plain object,
+    // which escaped the Store boundary as a rejection with no .message and
+    // failed `instanceof Error`, silently losing the failure reason in generic
+    // error handling (logging e.message, Sentry-style Error checks).
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message.length).toBeGreaterThan(0);
+
+    const e = thrown as Error & {
+      _bulkConflict: boolean;
+      resource_type: string;
+      resource_id: string;
+      held_by: string;
+    };
+    expect(e._bulkConflict).toBe(true);
+    expect(e.resource_type).toBe("channel");
+    expect(e.resource_id).toBe("bulk-conflict-signal");
+    expect(e.held_by).toBe("agent-other");
+
+    // Atomicity: the holder's lock is untouched and the requester holds nothing.
+    expect(checkLock("channel", "bulk-conflict-signal")!.agent_id).toBe("agent-other");
+  });
+
+  test("LocalStore.bulkAcquireLock rejects with an Error, never a plain object", async () => {
+    acquireLock("channel", "bulk-store-conflict", "agent-other");
+
+    const store = new LocalStore();
+    let rejection: unknown;
+    try {
+      await store.bulkAcquireLock(
+        [{ resource_type: "channel", resource_id: "bulk-store-conflict" }],
+        "bulk-requester",
+      );
+    } catch (err) {
+      rejection = err;
+    }
+
+    expect(rejection).toBeDefined();
+    // Regression: the local transport surfaced the raw plain-object throw at the
+    // store boundary (store/index.ts wired bulkAcquireLock straight to the lib),
+    // while the cloud transport rejects with HasnaHttpError — a real Error.
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message.length).toBeGreaterThan(0);
+  });
+
+  test("tryBulkAcquireLock still converts a raw conflict throw into the result object", () => {
+    acquireLock("channel", "bulk-try-still-works", "agent-other");
+
+    const result = tryBulkAcquireLock(
+      [{ resource_type: "channel", resource_id: "bulk-try-still-works" }],
+      "bulk-requester",
+    );
+
+    expect(result.acquired).toBe(false);
+    expect(result.locks).toHaveLength(0);
+    expect(result.blocked_by).toEqual({
+      resource_type: "channel",
+      resource_id: "bulk-try-still-works",
+      held_by: "agent-other",
+    });
   });
 });

@@ -23,6 +23,25 @@ export interface BulkAcquireResult {
   blocked_by?: { resource_type: string; resource_id: string; held_by: string };
 }
 
+/**
+ * Signalled by `bulkAcquireLock` when a resource in the batch is held by
+ * another agent. A real Error (with `.message` and `instanceof Error`) so the
+ * rejection survives generic error handling on any transport, while the
+ * `_bulkConflict` marker and the resource metadata let callers convert it into
+ * the structured `BulkAcquireResult` failure shape via `tryBulkAcquireLock`.
+ */
+export class BulkLockConflictError extends Error {
+  readonly _bulkConflict = true as const;
+  constructor(
+    readonly resource_type: string,
+    readonly resource_id: string,
+    readonly held_by: string,
+  ) {
+    super(`bulk acquire conflict: ${resource_type}/${resource_id} is held by ${held_by}`);
+    this.name = "BulkLockConflictError";
+  }
+}
+
 export interface EnrichedLock extends ResourceLock {
   locked_seconds_ago: number;
   expires_in_seconds: number;
@@ -108,8 +127,14 @@ export function bulkAcquireLock(
       const conflicting = existingLocks.find((lock) => lock.agent_id.toLowerCase() !== agentId.toLowerCase());
 
       if (conflicting) {
-        // Conflict — abort the entire transaction by throwing (SQLite rolls back)
-        throw { _bulkConflict: true, resource_type, resource_id, held_by: conflicting.agent_id };
+        // Conflict — abort the entire transaction by throwing (SQLite rolls back).
+        // Must be a real Error: a bare plain-object throw escaped the Store
+        // boundary on the local transport and generic error handling
+        // (logging e.message, `instanceof Error` checks) silently lost the
+        // failure reason there. The `_bulkConflict` marker + metadata ride on
+        // the error so tryBulkAcquireLock keeps converting it to the result
+        // object, matching the cloud transport's rejection with HasnaHttpError.
+        throw new BulkLockConflictError(resource_type, resource_id, conflicting.agent_id);
       }
 
       const expiresAt = new Date(Date.now() + expiry_ms).toISOString().slice(0, -1);
