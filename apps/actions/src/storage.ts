@@ -395,15 +395,19 @@ export interface JsonStoreLockOwner {
   startedAt: string;
 }
 
-async function readLockOwner(lockPath: string): Promise<JsonStoreLockOwner | null> {
+async function readOwnerFile(path: string): Promise<JsonStoreLockOwner | null> {
   try {
-    const raw = await readFile(join(lockPath, JSON_STORE_LOCK_OWNER_FILE), "utf8");
+    const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw) as JsonStoreLockOwner;
     if (typeof parsed.token !== "string" || typeof parsed.pid !== "number") return null;
     return parsed;
   } catch {
     return null;
   }
+}
+
+async function readLockOwner(lockPath: string): Promise<JsonStoreLockOwner | null> {
+  return readOwnerFile(join(lockPath, JSON_STORE_LOCK_OWNER_FILE));
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -418,51 +422,66 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * Atomically vacates a stale lock so a successor can acquire it. POSIX offers no
- * conditional delete, so a plain `rm` after a stale check has a check-then-act
- * window: a waiter preempted between its validation and its removal can delete a
- * successor's FRESH lock. Rename is atomic — only one waiter can win the move
- * (losers see ENOENT and retry) — and the caller then re-verifies what it actually
- * moved: if it is not the validated dead-owner lock, the moved lock is restored by
- * an atomic rename back, never deleted.
+ * Atomically takes over a validated stale lock WITHOUT ever emptying the canonical
+ * lock path. POSIX offers no conditional delete, so a plain `rm` after a stale check
+ * has a check-then-act window: a waiter preempted between its validation and its
+ * removal could delete a successor's FRESH lock. Only the owner FILE is moved
+ * (renamed to the quarantine path) — the lock DIRECTORY itself never leaves the
+ * canonical path, so a third writer's `mkdir` keeps failing EEXIST at every instant
+ * and nobody can acquire into a gap while a live owner continues. The moved file is
+ * re-verified: if it is exactly the validated dead owner, the caller's owner is
+ * installed and the takeover is complete; anything else — a live successor's owner
+ * file moved by a delayed breaker — is restored atomically, never deleted. An owner
+ * file that vanishes first (ENOENT) or is unreadable is never grounds for takeover.
  *
- * @returns true when the validated stale lock was moved (and deleted) and the
- *          caller may retry its acquire; false when the lock vanished first
- *          (another waiter took over — the caller just retries).
+ * @returns true when the caller now holds the lock; false when the takeover did not
+ *          land (owner vanished first, or the moved file was not the validated dead
+ *          owner) and the caller must retry its acquire.
  */
-export async function vacateStaleJsonStoreLock(
+export async function takeOverJsonStoreLock(
   lockPath: string,
   validatedOwner: JsonStoreLockOwner,
+  myOwner: JsonStoreLockOwner,
   quarantinePath: string,
 ): Promise<boolean> {
+  const ownerFile = join(lockPath, JSON_STORE_LOCK_OWNER_FILE);
   try {
-    await rename(lockPath, quarantinePath);
+    await rename(ownerFile, quarantinePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-  const moved = await readLockOwner(quarantinePath);
+  // The moved artifact is the owner FILE itself at the quarantine path (the lock
+  // directory never moves), so read the quarantine path directly.
+  const moved = await readOwnerFile(quarantinePath);
   if (moved !== null && moved.token === validatedOwner.token) {
-    // The lock we moved is exactly the validated stale lock: dispose of it.
+    // The file we moved is exactly the validated stale owner: install ours. If the
+    // install cannot land, restore the dead owner's file so a later breaker can
+    // retry, then surface the failure (fail closed: no takeover without an owner).
+    try {
+      await writeFile(ownerFile, JSON.stringify(myOwner));
+    } catch (error) {
+      await rename(quarantinePath, ownerFile).catch(() => undefined);
+      throw error;
+    }
     await rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
     return true;
   }
-  // We moved something else — a successor's fresh lock, or a lock with no readable
-  // owner. Restore it atomically; never delete a lock we cannot prove dead.
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      await rename(quarantinePath, lockPath);
+  // We moved something else — a live successor's owner file, or one with no readable
+  // owner. Restore it atomically; never delete a lock we cannot prove dead. The
+  // restore target lives inside the always-present lock directory, so it can only
+  // fail with ENOENT if the directory itself vanished — the holder released
+  // concurrently — in which case the moved file is an orphan of a released lock and
+  // is safe to dispose of.
+  try {
+    await rename(quarantinePath, ownerFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      await rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
       return false;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY"
-        && (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      // lockPath was re-occupied in the interim; give the occupant a moment and retry.
-      await new Promise((resolve) => setTimeout(resolve, 5 + attempt * 5));
     }
+    throw error;
   }
-  // Restore could not land within the retry budget; the moved lock stays at the
-  // quarantine path rather than being deleted. This requires a third waiter to
-  // install inside a sub-millisecond window; it fails closed (no deletion).
   return false;
 }
 
@@ -481,9 +500,11 @@ export async function releaseJsonStoreLockIfOwned(lockPath: string, token: strin
  * Serializes a read-modify-write cycle with an atomic `mkdir` lock. The JSON store
  * writes whole files, so two processes appending disjoint records without a lock
  * both read the old file and the later rename silently drops the earlier writer's
- * records. A stale lock (holder died mid-cycle) is broken on age when the holder's
- * process is no longer alive; a stale lock whose holder is still alive is never
- * broken, and release only ever removes a lock this process still owns.
+ * records. A stale lock (holder died mid-cycle) is taken over on age when the
+ * holder's process is no longer alive; a stale lock whose holder is still alive is
+ * never broken, a lock whose owner file is missing or unreadable is never taken
+ * over, the canonical lock path never empties during a takeover (only the owner
+ * file moves), and release only ever removes a lock this process still owns.
  */
 async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
   await mkdir(dataDir, { recursive: true });
@@ -514,13 +535,21 @@ async function withJsonStoreLock<T>(dataDir: string, fn: () => Promise<T>): Prom
         const info = await stat(lockPath);
         if (Date.now() - info.mtimeMs > JSON_STORE_LOCK_STALE_MS) {
           const existing = await readLockOwner(lockPath);
+          // A lock whose owner file is missing or unreadable is never broken: the
+          // owner can be momentarily absent inside another breaker's takeover
+          // window, and a missing owner is never grounds to enter a live critical
+          // section. Only a provably dead recorded holder may be taken over.
           if (existing !== null && !isProcessAlive(existing.pid)) {
-            const vacated = await vacateStaleJsonStoreLock(
+            const tookOver = await takeOverJsonStoreLock(
               lockPath,
               existing,
+              owner,
               join(dataDir, `${JSON_STORE_LOCK_DIRNAME}.quarantine-${token}`),
             );
-            if (vacated) continue;
+            // The takeover installs our owner file and leaves the lock directory in
+            // place, so retrying `mkdir` would spin on EEXIST forever: holding the
+            // lock is the terminal success of this acquire attempt.
+            if (tookOver) break;
           }
         }
       } catch {
