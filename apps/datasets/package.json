@@ -62,7 +62,7 @@
     "prepack": "bun run verify:release",
     "prepublishOnly": "bun run verify:release",
     "postinstall": "mkdir -p $HOME/.hasna/datasets 2>/dev/null || true",
-    "build:js": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts src/schemas.ts src/render.ts src/project-panel.ts --outdir dist --target bun"
+    "build:js": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts src/schemas.ts src/render.ts src/project-panel.ts --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist"
   },
   "keywords": [
     "datasets",

@@ -81,6 +81,7 @@ function memberPackages(root: string): string[] {
     .readdirSync(apps, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
+    .sort()
     .filter((name) => fs.existsSync(path.join(apps, name, "package.json")))
     .map((name) => path.join(apps, name));
 }
@@ -251,6 +252,54 @@ function packFileNames(pkgDir: string): string[] {
   return files.map((f) => f.path ?? "");
 }
 
+/**
+ * Whether a member's types contract requires packed `.d.ts` files — a
+ * top-level `types` field or any `exports` entry carrying a `types` key that
+ * names a `.d.ts` path. Such a member MUST ship at least one `.d.ts` in its
+ * packed tarball; a tarball with zero declarations breaks every typed
+ * consumer while the entry scan still reports "0 internal-infra strings"
+ * (row 312913f1: prepare scripts that ran clean+build without the
+ * declaration emit destroyed the .d.ts their own prepack had just produced).
+ * Members whose declared types are their shipped TypeScript SOURCE (e.g.
+ * @hasna/monitor: types: ./src/index.ts, no dist, prepack scans only) are
+ * exempt — the `.ts` files ARE the types contract, and they pack no `.d.ts`
+ * by design.
+ */
+function declaresTypes(pkgDir: string): boolean {
+  let pkg: any;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+  } catch {
+    return false;
+  }
+  const declared: string[] = [];
+  if (typeof pkg.types === "string" && pkg.types.length > 0) declared.push(pkg.types);
+  const exp = pkg.exports;
+  if (exp && typeof exp === "object") {
+    for (const value of Object.values(exp)) {
+      if (value && typeof value === "object" && typeof (value as any).types === "string") {
+        declared.push((value as any).types);
+      }
+    }
+  }
+  return declared.some((t) => t.endsWith(".d.ts"));
+}
+
+/**
+ * Whether a member's tarball reflects a REAL build — it contains built JS
+ * output. The declarations check fires only then: a member whose dist was
+ * never built at guard time (prepack = artifact-scan only, CI builds only
+ * the five prepare:ordered members) packs no JS either, and flagging it
+ * would be a false positive (measured: crawl, guardrails, markdown,
+ * telephony, todos — builds all end in `tsc --emitDeclarationOnly`, their
+ * dist simply does not exist in the guard's checkout). A tarball WITH built
+ * JS but zero `.d.ts` is a build whose declarations were destroyed or never
+ * emitted — exactly the class to fail.
+ */
+function packsBuiltJs(names: string[]): boolean {
+  return names.some((n) => n.endsWith(".js"));
+}
+
 function run(root: string): number {
   const pkgs = memberPackages(root);
   if (pkgs.length === 0) {
@@ -265,6 +314,13 @@ function run(root: string): number {
     } catch (e: any) {
       failed = true;
       console.error(`PUBLISH-GUARD FAILED in ${pkg}: ${e.message}`);
+      continue;
+    }
+    if (declaresTypes(pkg) && packsBuiltJs(names) && !names.some((n) => n.endsWith(".d.ts"))) {
+      failed = true;
+      console.error(
+        `PUBLISH-GUARD FAILED in ${pkg}: package.json declares .d.ts type paths (types field or exports.*.types) and the tarball packs built JS but 0 .d.ts — a prepare script is destroying the declarations its prepack emitted`,
+      );
       continue;
     }
     const nameHits = scanNames(names);
@@ -290,6 +346,7 @@ function fixturePackage(
   files: string[],
   broken: boolean,
   contents?: Record<string, string>,
+  extra?: { scripts?: Record<string, string>; fields?: Record<string, unknown> },
 ): void {
   const dir = path.join(appsRoot, name);
   fs.mkdirSync(dir, { recursive: true });
@@ -299,6 +356,7 @@ function fixturePackage(
     version: "0.0.0",
     files: ["data"],
   };
+  if (extra?.fields) Object.assign(pkg, extra.fields);
   if (broken) {
     // A prepack that fails makes `npm pack` exit non-zero: there is no JSON
     // document to parse at all. The guard must FAIL, never pass. The fixture
@@ -307,6 +365,8 @@ function fixturePackage(
     // guard must surface BOTH so a prepack failure names its cause (the
     // stderr marker is the shape machines' verify:pack failures take).
     pkg.scripts = { prepack: "echo broken-prepack-output && echo broken-prepack-stderr >&2 && exit 1" };
+  } else if (extra?.scripts) {
+    pkg.scripts = extra.scripts;
   }
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
   for (const f of files) {
@@ -480,6 +540,114 @@ function selfTest(): number {
     check(
       "placeholder ARN/domain templates in CONTENT stay SILENT (rc=0, no violation)",
       template.rc === 0 && !templateOut.includes("PUBLISH-GUARD VIOLATION"),
+    );
+
+    // Pack-order checks (row 312913f1). The guard packs every member by
+    // iterating the apps directory, so pack order MUST be deterministic —
+    // lexicographic — across checkouts. Before the fix the order was the raw
+    // `readdirSync` seed, which is a filesystem property and not a contract:
+    // the CI checkout (ext4 hash order) seeded browser BEFORE mementos and
+    // the guard passed, while the local checkout seeded mementos before
+    // browser and the guard failed at browser's prepack (TS7016, mementos'
+    // dist declarations wiped by its own prepare). PASSING state: the
+    // returned order equals the lexicographic order of the member names,
+    // whatever order the fixture directories were created in. FAILING state:
+    // any seed order — measured red pre-fix on this very fixture (the
+    // insertion order in which the fixture directories were created), and
+    // the CI-vs-local divergence in the wild.
+    const sortRoot = path.join(root, "sort-root");
+    fs.mkdirSync(sortRoot, { recursive: true });
+    for (const name of ["zeta", "alpha", "memento", "browser"]) {
+      fixturePackage(path.join(sortRoot, "apps"), name, ["ok.txt"], false);
+    }
+    const memberNames = memberPackages(sortRoot).map((p) => path.basename(p));
+    check(
+      "memberPackages returns lexicographically sorted member order (readdir seed independent)",
+      JSON.stringify(memberNames) === JSON.stringify([...memberNames].sort()) &&
+        JSON.stringify(memberNames) === JSON.stringify(["alpha", "browser", "memento", "zeta"]),
+    );
+
+    // Declarations-presence checks (row 312913f1). A member that declares
+    // types in package.json but whose tarball packs ZERO .d.ts ships a
+    // types-less package to every consumer while the guard reports "0
+    // internal-infra strings" — the measured class: prepare scripts that ran
+    // clean+build without the declaration emit, destroying the .d.ts their
+    // own prepack had just produced. The fixture below mimics exactly that:
+    // prepack emits dist/index.d.ts, prepare deletes it and rebuilds JS only.
+    const wiperRoot = path.join(root, "wiper-root");
+    fs.mkdirSync(wiperRoot, { recursive: true });
+    fixturePackage(
+      path.join(wiperRoot, "apps"),
+      "self-test-wiper",
+      [],
+      false,
+      undefined,
+      {
+        fields: { files: ["dist"], types: "dist/index.d.ts" },
+        scripts: {
+          prepack:
+            "mkdir -p dist && printf 'export const x = 1;\\n' > dist/index.js && printf 'export declare const x: number;\\n' > dist/index.d.ts",
+          prepare:
+            "rm -rf dist && mkdir -p dist && printf 'export const x = 1;\\n' > dist/index.js",
+        },
+      },
+    );
+    const wiper = capture(() => run(wiperRoot));
+    const wiperOut = wiper.lines.join("\n");
+    check(
+      "member declaring types that packs 0 .d.ts (prepare wipes prepack's declarations) FAILS the guard (rc=1)",
+      wiper.rc === 1 &&
+        wiperOut.includes("PUBLISH-GUARD FAILED") &&
+        wiperOut.includes("self-test-wiper") &&
+        wiperOut.includes(".d.ts"),
+    );
+
+    const keepRoot = path.join(root, "keep-root");
+    fs.mkdirSync(keepRoot, { recursive: true });
+    fixturePackage(
+      path.join(keepRoot, "apps"),
+      "self-test-kept-dts",
+      [],
+      false,
+      undefined,
+      {
+        fields: { files: ["dist"], types: "dist/index.d.ts" },
+        scripts: {
+          prepack:
+            "mkdir -p dist && printf 'export const x = 1;\\n' > dist/index.js && printf 'export declare const x: number;\\n' > dist/index.d.ts",
+          prepare:
+            "mkdir -p dist && printf 'export const x = 1;\\n' > dist/index.js && printf 'export declare const x: number;\\n' > dist/index.d.ts",
+        },
+      },
+    );
+    const kept = capture(() => run(keepRoot));
+    const keptOut = kept.lines.join("\n");
+    check(
+      "member declaring types that packs .d.ts (prepare keeps prepack's declarations) PASSES (rc=0, non-vacuous)",
+      kept.rc === 0 && /\d+ tarball entries/.test(keptOut) && !keptOut.includes("PUBLISH-GUARD FAILED"),
+    );
+
+    // A member declaring types whose dist was never built at guard time
+    // (prepack does not build; CI builds only prepare:ordered members) packs
+    // no built JS — the declarations check must NOT fire on it (measured
+    // false-positive class: crawl, guardrails, markdown, telephony, todos —
+    // their builds all end in tsc emit, their dist simply does not exist in
+    // the guard's checkout).
+    const unbuiltRoot = path.join(root, "unbuilt-root");
+    fs.mkdirSync(unbuiltRoot, { recursive: true });
+    fixturePackage(
+      path.join(unbuiltRoot, "apps"),
+      "self-test-unbuilt",
+      ["ok.txt"],
+      false,
+      undefined,
+      { fields: { types: "dist/index.d.ts" } },
+    );
+    const unbuilt = capture(() => run(unbuiltRoot));
+    const unbuiltOut = unbuilt.lines.join("\n");
+    check(
+      "member declaring types with NO built JS in the tarball (dist never built) PASSES (rc=0, non-vacuous)",
+      unbuilt.rc === 0 && /\d+ tarball entries/.test(unbuiltOut) && !unbuiltOut.includes("PUBLISH-GUARD FAILED"),
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

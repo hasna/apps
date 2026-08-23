@@ -94,7 +94,7 @@
     "prepublishOnly": "bun run build && bun run typecheck && bun test --timeout 120000 && bun run test:boundary && bun run check:supply-chain",
     "check:packed:scan": "bun run scripts/check-packed-boundary.mjs",
     "prepack": "bun run check:packed:scan",
-    "build:js": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/serve/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/sdk/http.ts src/lib/store.ts src/lib/runtime-config.ts src/lib/runtime-status.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/serve/index.js dist/runner/index.js dist/mcp/index.js"
+    "build:js": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/serve/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/sdk/http.ts src/lib/store.ts src/lib/runtime-config.ts src/lib/runtime-status.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/serve/index.js dist/runner/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist"
   },
   "keywords": [
     "loops",
