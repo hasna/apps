@@ -172,6 +172,46 @@ describe("provisionRunnerKey (hermetic)", () => {
     expect(check?.sql).toContain("key.expires_at IS NULL OR key.expires_at > now()");
     expect(check?.sql).toContain("principal.kind = 'machine'");
     expect(check?.sql).toContain("principal.status = 'active'");
+    // The no-op must be bound to the REQUESTED binding: an active key in a
+    // different tenant, or one whose membership lacks a requested role or
+    // whose scopes do not cover the requested scopes, is NOT a no-op — it
+    // must be disabled and re-minted for the requested binding.
+    expect(check?.sql).toContain("key.tenant_id = $2");
+    expect(check?.sql).toContain("key.scopes @> $3::jsonb");
+    expect(check?.sql).toContain("tenant_memberships");
+    expect(check?.sql).toContain("mr.role = ANY($4)");
+    expect(check?.sql).toContain("ms.status = 'active'");
+    expect(check?.params?.[1]).toBe(TENANT);
+    expect(check?.params?.[2]).toBe(JSON.stringify(["loops:runner"]));
+    expect(check?.params?.[3]).toEqual(["worker", "service"]);
+  });
+
+  test("deliverToken is invoked with the minted token inside the transaction (never on already_provisioned)", async () => {
+    const delivered: string[] = [];
+    const { client } = mockClient(null);
+    const outcome = await provisionRunnerKey(client, options({ deliverToken: (token) => delivered.push(token) }));
+    expect(outcome.status).toBe("provisioned");
+    if (outcome.status !== "provisioned") return;
+    expect(delivered).toEqual([outcome.token]);
+
+    const deliveredOnNoop: string[] = [];
+    const { client: noopClient } = mockClient({ kid: "existingkey1", expires_at: new Date(NOW_MS + 3_600_000).toISOString() });
+    const noop = await provisionRunnerKey(noopClient, options({ deliverToken: (token) => deliveredOnNoop.push(token) }));
+    expect(noop.status).toBe("already_provisioned");
+    expect(deliveredOnNoop).toHaveLength(0);
+  });
+
+  test("a throwing deliverToken aborts the provisioning call (rolls the transaction back on a real client)", async () => {
+    const { client, statements } = mockClient(null);
+    await expect(
+      provisionRunnerKey(
+        client,
+        options({ deliverToken: () => { throw new Error("token-out write failed: disk full"); } }),
+      ),
+    ).rejects.toThrow("disk full");
+    // The mint itself ran before delivery — the failure is in delivery, and
+    // the caller must see it propagate so nothing is treated as provisioned.
+    expect(statements.some((s) => s.sql.includes("INSERT INTO api_keys"))).toBe(true);
   });
 
   test("validation rejects malformed input before any statement runs", async () => {
@@ -457,6 +497,118 @@ liveSuite("provisionRunnerKey (live Postgres)", () => {
     );
     expect(rows).toHaveLength(1);
     if (first.status === "provisioned") throw new Error("second run must not mint");
+  });
+
+  test("a failing token delivery rolls the mint back — a re-run mints a fresh key instead of stranding a lost key", async () => {
+    const failedRunner = `${TEST_RUNNER}-delivery-fail`;
+    await expect(
+      provisionRunnerKey(executor!.queryClient, {
+        runnerId: failedRunner,
+        tenantId: TEST_TENANT,
+        roles: ["worker", "service"],
+        scopes: ["loops:runner"],
+        ttlSeconds: 3600,
+        signingSecret: SIGNING_SECRET,
+        deliverToken: () => {
+          throw new Error("token-out write failed: disk full");
+        },
+      }),
+    ).rejects.toThrow("disk full");
+
+    // The mint was rolled back: no key exists, so the re-run provisions
+    // fresh rather than reporting already_provisioned for a key whose
+    // plaintext was lost.
+    const afterFailure = await executor!.queryClient.many<{ kid: string }>(
+      `SELECT kid FROM api_keys WHERE principal_id = $1 AND token_kind = 'machine'`,
+      [failedRunner],
+    );
+    expect(afterFailure).toHaveLength(0);
+
+    const delivered: string[] = [];
+    const recovered = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: failedRunner,
+      tenantId: TEST_TENANT,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+      deliverToken: (token) => delivered.push(token),
+    });
+    expect(recovered.status).toBe("provisioned");
+    if (recovered.status !== "provisioned") return;
+    expect(delivered).toEqual([recovered.token]);
+
+    const keys = await executor!.queryClient.many<{ kid: string }>(
+      `SELECT kid FROM api_keys WHERE principal_id = $1 AND token_kind = 'machine'`,
+      [failedRunner],
+    );
+    expect(keys).toHaveLength(1);
+    expect(keys[0].kid).toBe(recovered.kid);
+  });
+
+  test("an existing key for a DIFFERENT tenant is not a no-op — a fresh key is minted for the requested tenant", async () => {
+    const secondTenant = `${TEST_TENANT}-b`;
+    const movingRunner = `${TEST_RUNNER}-tenant-move`;
+    await loadTenantBackfillBundle(executor!.queryClient, {
+      schema: "open-loops.tenant-backfill/v1",
+      tenants: [{ id: secondTenant, slug: secondTenant, name: "Provision Test Tenant B", status: "active" }],
+      principals: [],
+      memberships: [],
+      keyBindings: [],
+      rowAssignments: [],
+    });
+
+    const first = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: movingRunner,
+      tenantId: TEST_TENANT,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+    });
+    expect(first.status).toBe("provisioned");
+
+    // Same runner, second tenant: the tenant-A key must NOT satisfy the
+    // no-op check — a fresh machine key bound to tenant B is minted, and the
+    // tenant-A key is disabled so exactly one active key remains.
+    const second = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: movingRunner,
+      tenantId: secondTenant,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+    });
+    expect(second.status).toBe("provisioned");
+    if (second.status !== "provisioned") return;
+
+    const keys = await executor!.queryClient.many<{
+      kid: string;
+      tenant_id: string;
+      disabled_at: string | null;
+    }>(
+      `SELECT kid, tenant_id, disabled_at FROM api_keys
+        WHERE principal_id = $1 AND token_kind = 'machine'
+        ORDER BY issued_at`,
+      [movingRunner],
+    );
+    expect(keys).toHaveLength(2);
+    const active = keys.filter((key) => key.disabled_at === null);
+    expect(active).toHaveLength(1);
+    expect(active[0].kid).toBe(second.kid);
+    expect(active[0].tenant_id).toBe(secondTenant);
+
+    // A re-run for tenant B is now a true no-op.
+    const third = await provisionRunnerKey(executor!.queryClient, {
+      runnerId: movingRunner,
+      tenantId: secondTenant,
+      roles: ["worker", "service"],
+      scopes: ["loops:runner"],
+      ttlSeconds: 3600,
+      signingSecret: SIGNING_SECRET,
+    });
+    expect(third.status).toBe("already_provisioned");
+    expect(third.kid).toBe(second.kid);
   });
 
   test("suspended-principal reactivation disables the old key — exactly one active key afterward", async () => {
