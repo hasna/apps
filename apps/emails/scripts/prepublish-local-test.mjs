@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const tmpHome = mkdtempSync(join(tmpdir(), "emails-prepublish-"));
 const legacyProduct = ["MAIL", "ERY"].join("");
 const legacyKeys = [
   [legacyProduct, "MODE"],
@@ -20,17 +19,47 @@ const legacyKeys = [
   ["HASNA", legacyProduct, "ENV", "FILE"],
   ["EMAILS", "STORAGE", "MODE"],
   ["HASNA", "EMAILS", "STORAGE", "MODE"],
+  // The hosted Emails API env the client reads (src/lib/client-env.ts,
+  // src/store-resolution.ts). EMAILS_SELF_HOSTED_URL and
+  // EMAILS_CLIENT_ENV_SECRET are the keys that turn "a local database AND an
+  // API" into the deliberate both-configured hard boot error, so any machine
+  // carrying them saw every prepublish gate fail (O15-00516). The credential
+  // keys are scrubbed too: with the URL gone they are inert, but a local-test
+  // environment must not carry a live operator credential at all.
+  ["EMAILS", "SELF", "HOSTED", "URL"],
+  ["EMAILS", "CLIENT", "ENV", "SECRET"],
+  ["EMAILS", "SELF", "HOSTED", "API", "KEY"],
+  ["EMAILS", "SESSION", "TOKEN"],
+  ["EMAILS", "IDP", "TOKEN"],
 ];
 
-const env = { ...process.env, HOME: tmpHome, EMAILS_MODE: "local", EMAILS_DB_PATH: ":memory:" };
-for (const key of legacyKeys) delete env[key.join("_")];
+const scrubbedKeys = legacyKeys.map((parts) => parts.join("_"));
 
-try {
-  const result = spawnSync("bun", ["test"], {
-    stdio: "inherit",
-    env,
-  });
-  process.exitCode = result.status ?? 1;
-} finally {
-  rmSync(tmpHome, { recursive: true, force: true });
+/**
+ * The environment the prepublish local-test suite runs in: the process env with
+ * a fresh HOME, the local store forced, and every hosted/legacy client env key
+ * scrubbed. Exported so the regression test
+ * (scripts/prepublish-local-test.test.ts) can assert the scrub without
+ * spawning a test suite.
+ */
+export function buildPrepublishTestEnv(
+  processEnv = process.env,
+  home = process.env.HOME,
+) {
+  const env = { ...processEnv, HOME: home, EMAILS_MODE: "local", EMAILS_DB_PATH: ":memory:" };
+  for (const key of scrubbedKeys) delete env[key];
+  return env;
+}
+
+if (import.meta.main) {
+  const tmpHome = mkdtempSync(join(tmpdir(), "emails-prepublish-"));
+  try {
+    const result = spawnSync("bun", ["test"], {
+      stdio: "inherit",
+      env: buildPrepublishTestEnv(process.env, tmpHome),
+    });
+    process.exitCode = result.status ?? 1;
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
 }
