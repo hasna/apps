@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.105
+
+### Patch Changes
+
+- Pin @hasna/browser to the last published version 0.5.16. Release blocker: the version wave bumped the pin to 0.5.27/0.5.29, which were never published (registry latest is 0.5.16, published 2026-07-24), making the candidate uninstallable (ETARGET). Restores the deliberate 0.0.100-era pin (commit 5989eed); all 17 symbols imported from @hasna/browser by testers source are verified present in the published 0.5.16 dist.
+
 ## 0.0.104
 
 ### Patch Changes
