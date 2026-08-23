@@ -33,6 +33,7 @@ import {
   parsePageOffset,
   showingLabel,
 } from "../../lib/compact-output.js";
+import { resolveConfiguredRunRouting } from "../../lib/run-routing.js";
 
 export function registerRuntime(parent: Command) {
   // Run
@@ -279,30 +280,28 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       return;
     }
   }
-  const isHostedRuntime = false;
+  const routing = resolveConfiguredRunRouting(skill);
   const runContext = createSkillRun({
     skill: skill.name,
     args,
     prompt,
-    remote: isHostedRuntime,
+    remote: routing.route === "remote",
   });
 
-  if (isHostedRuntime) {
-      const { getApiKey } = await import("../../lib/auth-store.js");
-      const apiKey = getApiKey();
-      if (!apiKey) {
-        const error = `${skill.name} is a hosted skill. Run: skills auth login`;
-        writeRunLogs(runContext, "", error + "\n");
-        const run = completeSkillRun(runContext, { status: "failed", error });
-        if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, run }, null, 2));
-        else console.error(chalk.red(error));
-        process.exitCode = 1;
-        return;
-      }
+  if (routing.route === "error") {
+    const error = routing.error;
+    writeRunLogs(runContext, "", error + "\n");
+    const run = completeSkillRun(runContext, { status: "failed", error });
+    if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, run }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
 
+  if (routing.route === "remote") {
       try {
         const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
-        const client = new RemoteSkillsClient(apiKey);
+        const client = new RemoteSkillsClient(routing.apiKey);
         const run = await client.submitRun(skill.name, {}, args);
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");

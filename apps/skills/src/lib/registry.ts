@@ -6,6 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { DATA_DIR_ENV, getDataDir, loadConfig } from "./config.js";
 import { listPortableSkillMetas } from "./portable-skills.js";
+import { isHostedMetadataSkillDir } from "./hosted-skill-set.js";
 import { mergeSkillRegistryLists } from "./registry-merge.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import { SKILLS } from "./registry-data/index.js";
@@ -78,6 +79,9 @@ function discoverSkillsInDir(dir: string, source: SkillSource = "custom"): Skill
         category: fm.category || "Development Tools",
         tags: fm.tags || [],
         ...(fm.kind ? { kind: fm.kind } : {}),
+        // Server-owned is a property of the published contract (package.json
+        // skills.runtime/skills.source), derived from the skill directory.
+        ...(isHostedMetadataSkillDir(join(dir, entry.name)) ? { serverOwned: true } : {}),
         source,
       });
     }

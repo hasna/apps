@@ -45,6 +45,7 @@ import {
 } from "../lib/compact-output.js";
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
+import { resolveConfiguredRunRouting } from "../lib/run-routing.js";
 
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("scaffold_skill", {
@@ -276,7 +277,6 @@ export function registerOperationTools(server: McpServer): void {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
     }
 
-    const { getApiKey } = await import("../lib/auth-store.js");
     const {
       ARTICLE_GENERATION_SLUG,
       validateBlogArticleRunOptions,
@@ -291,26 +291,28 @@ export function registerOperationTools(server: McpServer): void {
       }
     }
 
-    const apiKey = getApiKey();
-    const hostedRuntime = false;
+    const routing = resolveConfiguredRunRouting(skill);
     const runContext = createSkillRun({
       skill: skillName,
       args: runArgs,
-      remote: hostedRuntime,
+      remote: routing.route === "remote",
     });
 
 
-    if (hostedRuntime && !apiKey) {
-      const error = `${skillName} is a hosted skill. Run: skills auth login`;
+    if (routing.route === "error") {
+      const error = routing.error;
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error });
-      return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
+      const suggestions = routing.code === "REMOTE_REQUIRES_ORIGIN"
+        ? ["skills setup --api-url <url>", "skills auth login"]
+        : ["skills auth login"];
+      return mcpError(routing.code, `${error}. Local run metadata: ${run.paths.runDir}/run.json`, suggestions);
     }
 
-    if (hostedRuntime && apiKey) {
+    if (routing.route === "remote") {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
-        const client = new RemoteSkillsClient(apiKey);
+        const client = new RemoteSkillsClient(routing.apiKey);
         const run = await client.submitRun(skillName, runInput, runArgs);
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
