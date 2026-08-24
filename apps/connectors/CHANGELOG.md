@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.3
+
+### Patch Changes
+
+- Remove 23 registrable domains that were unregistered yet hardcoded as default endpoints in shipped connector code, each contacted with the user's API key as an Authorization: Bearer token. A connector now sends API keys only to endpoints the user registered (todos 6109cc1b, PR #1106).
+
 ## 1.4.2
 
 ### Patch Changes
