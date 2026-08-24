@@ -333,20 +333,41 @@ function captureMacApps(now: string): CaptureResult {
     return diagnostic("apps", "warning", "Unable to query macOS application processes.", result.stderr.trim());
   }
   const names = result.stdout.split(",").map((name) => name.trim()).filter(Boolean);
-  const resources = names.map((name) => ({
-    id: `app:${slugPart(name)}`,
-    kind: "app" as const,
-    name,
-    source: "macos-apps",
-    attributes: {
-      name,
-      platform: "darwin",
-      restore_supported: true,
-      restore_command: ["open", "-a", name]
-    },
-    observedAt: now
-  }));
+  const resources = macAppResources(names, now);
   return { resources, diagnostics: [] };
+}
+
+/**
+ * Build macOS app resources from System Events app names, deduplicating by
+ * resource id. System Events can report the same app more than once — e.g. two
+ * processes of the same app (Ghostty on station04) — and duplicate ids inside
+ * one capture violate the snapshot_resources composite primary key
+ * (snapshot_id, resource_id), failing the whole save. Mirrors the seen-set
+ * dedupe of the process-path fallback (captureMacAppsFromProcesses), which
+ * dedupes by app path.
+ */
+export function macAppResources(names: string[], now: string): SnapshotResource[] {
+  const seen = new Set<string>();
+  const resources: SnapshotResource[] = [];
+  for (const name of names) {
+    const id = `app:${slugPart(name)}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    resources.push({
+      id,
+      kind: "app" as const,
+      name,
+      source: "macos-apps",
+      attributes: {
+        name,
+        platform: "darwin",
+        restore_supported: true,
+        restore_command: ["open", "-a", name]
+      },
+      observedAt: now
+    });
+  }
+  return resources;
 }
 
 function captureMacAppsFromProcesses(now: string): CaptureResult {
