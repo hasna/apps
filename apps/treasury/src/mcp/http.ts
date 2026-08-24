@@ -2,6 +2,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { authenticateToken, bearerToken, isApiAuthConfigured, type ApiPrincipal } from "../server/auth.js";
 import { buildServer, localOwnerPrincipal } from "./index.js";
+import { resolveServerBackend } from "../config.js";
 
 export const DEFAULT_MCP_HTTP_PORT = 8890; // treasury pinned MCP HTTP port (§5.3)
 export const MCP_HTTP_NAME = "treasury";
@@ -117,6 +118,11 @@ export async function handleMcpHttpRequest(
  * up "successfully" and 401'ing every caller at request time.
  */
 export function assertMcpServeSafety(hostname: string): void {
+  // Fail closed on removed storage-mode variables BEFORE any listener binds
+  // (0.1.3 release-review P1). resolveServerBackend() rejects legacy
+  // *_STORAGE_MODE / *_MODE variables; it must run before Bun.serve, or a
+  // removed-mode config would serve instead of refusing startup.
+  resolveServerBackend();
   const loopback = hostname === "127.0.0.1" || hostname === "localhost";
   if (!loopback && !isApiAuthConfigured()) {
     throw new Error(

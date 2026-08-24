@@ -15,6 +15,11 @@ export function getPort(): number {
  * never silently serve open.
  */
 export function assertServeSafety(): void {
+  // Fail closed on removed storage-mode variables BEFORE any listener binds
+  // (0.1.3 release-review P1). resolveServerBackend() rejects legacy
+  // *_STORAGE_MODE / *_MODE variables; previously it ran only in the post-bind
+  // banner, so a removed-mode config bound a live socket then threw.
+  resolveServerBackend();
   const host = getBindHost();
   const openOk = isLoopback(host);
   if (!openOk && !isApiAuthConfigured()) {
