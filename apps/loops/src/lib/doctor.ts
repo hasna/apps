@@ -129,7 +129,7 @@ export function runDoctor(store: Store): DoctorReport {
       : { id: "daemon", status: status.stale ? "warn" : "ok", message: status.stale ? "daemon pid file is stale" : "daemon is not running" },
   );
 
-  const failedRuns = store.countRuns("failed");
+  const failedRuns = store.countRuns({ status: "failed" });
   const restartInterruptedRuns = store
     .listRuns({ status: "skipped", limit: 1_000 })
     .filter((run) => run.error?.startsWith(RESTART_INTERRUPTED_RUN_PREFIX)).length;

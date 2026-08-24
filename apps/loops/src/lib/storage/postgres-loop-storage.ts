@@ -1893,13 +1893,28 @@ export class PostgresLoopStorage implements LoopStorageContract {
   }
 
   async countRuns(...args: M<"countRuns">["args"]): Promise<M<"countRuns">["result"]> {
-    const status = args[0];
-    const row = status
-      ? await this.client.get<{ count: number }>(
-          "SELECT COUNT(*)::int AS count FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND status = $1",
-          [status],
-        )
-      : await this.client.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id()", []);
+    // Mirrors listRuns' filters exactly (LOO3-00143 P1): the CLI's pagination
+    // envelope must count the FILTERED population, never the global run table.
+    const opts = args[0] ?? {};
+    const labels = normalizeLoopLabels(opts.labels);
+    const params: unknown[] = [];
+    const bind = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    const filters: string[] = [];
+    if (opts.loopId) filters.push(`loop_runs.loop_id = ${bind(opts.loopId)}`);
+    if (opts.status) filters.push(`loop_runs.status = ${bind(opts.status)}`);
+    for (const label of labels) {
+      filters.push(`label_loops.labels_json @> ${bind(JSON.stringify([label]))}::jsonb`);
+    }
+    const join = labels.length
+      ? " JOIN loops AS label_loops ON label_loops.tenant_id = loop_runs.tenant_id AND label_loops.id = loop_runs.loop_id"
+      : "";
+    const row = await this.client.get<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM loop_runs${join} WHERE loop_runs.tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""}`,
+      params,
+    );
     return row?.count ?? 0;
   }
 

@@ -214,10 +214,10 @@ export function daemonStatus(store: Store, path: string = pidFilePath()): Daemon
     },
     runs: {
       total: store.countRuns(),
-      running: store.countRuns("running"),
-      failed: store.countRuns("failed"),
-      succeeded: store.countRuns("succeeded"),
-      abandoned: store.countRuns("abandoned"),
+      running: store.countRuns({ status: "running" }),
+      failed: store.countRuns({ status: "failed" }),
+      succeeded: store.countRuns({ status: "succeeded" }),
+      abandoned: store.countRuns({ status: "abandoned" }),
     },
     logPath: daemonLogPath(),
   };

@@ -238,7 +238,7 @@ describe("daemon", () => {
       await expectMarkerNeverWritten(gate, marker);
       expect(run?.status).toBe("skipped");
       expect(run?.error).toStartWith(RESTART_INTERRUPTED_RUN_PREFIX);
-      expect(store.countRuns("failed")).toBe(0);
+      expect(store.countRuns({ status: "failed" })).toBe(0);
       expect(existsSync(marker)).toBe(false);
     } finally {
       if (!controller.signal.aborted) controller.abort();

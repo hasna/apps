@@ -339,9 +339,9 @@ describe("loops CLI", () => {
 
     expect(runCli(dataDir, ["--json", "run-now", "browser"]).status).toBe(0);
     expect(
-      JSON.parse(runCli(dataDir, ["--json", "runs", "--label", "browserplan"]).stdout).map(
-        (run: { loopName: string }) => run.loopName,
-      ),
+      (JSON.parse(runCli(dataDir, ["--json", "runs", "--label", "browserplan"]).stdout) as {
+        runs: Array<{ loopName: string }>;
+      }).runs.map((run: { loopName: string }) => run.loopName),
     ).toEqual(["browser"]);
 
     expect(JSON.parse(runCli(dataDir, ["--json", "labels", "add", "browser", "urgent"]).stdout).labels).toEqual([
@@ -357,6 +357,163 @@ describe("loops CLI", () => {
       "browserplan",
     ]);
     expect(JSON.parse(runCli(dataDir, ["--json", "labels", "clear", "browser"]).stdout).labels).toEqual([]);
+  });
+
+  test("runs --json emits a pagination envelope and --offset enumerates past the 1000-row page cap (LOO3-00143)", () => {
+    const dataDir = freshDataDir("loops-cli-runs-envelope-");
+    const create = runCli(dataDir, ["--json", "create", "command", "bulk", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+    const loopId = (JSON.parse(create.stdout) as { id: string }).id;
+
+    // Bulk-insert >1000 runs directly in one transaction (the hosted control
+    // plane clamps a list page at 1000; the local store passes the limit
+    // through, so this simulates a population larger than one clamped page).
+    const db = new Database(join(dataDir, "loops.db"));
+    const insertRun = db.query(
+      `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at, exit_code, duration_ms, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, 'succeeded', ?, ?, 0, 1, ?, ?)`,
+    );
+    db.exec("BEGIN");
+    const base = Date.UTC(2024, 0, 1);
+    for (let i = 0; i < 1010; i += 1) {
+      const createdAt = new Date(base + i * 1000).toISOString();
+      insertRun.run(`bulk-run-${String(i).padStart(4, "0")}`, loopId, "bulk", createdAt, createdAt, createdAt, createdAt, createdAt);
+    }
+    db.exec("COMMIT");
+    db.close();
+
+    type RunsEnvelope = { runs: Array<{ id: string }>; count: number; has_more: boolean; next_offset: number };
+
+    // First page fills the requested page, so has_more must be true and the
+    // response must be an envelope, not the bare array the CLI used to emit.
+    const page1 = JSON.parse(runCli(dataDir, ["--json", "runs", "--limit", "500"]).stdout) as RunsEnvelope;
+    expect(Array.isArray(page1)).toBe(false);
+    expect(page1.runs).toHaveLength(500);
+    expect(page1.count).toBe(1010);
+    expect(page1.has_more).toBe(true);
+    expect(page1.next_offset).toBe(500);
+
+    // Second page via --offset.
+    const page2 = JSON.parse(runCli(dataDir, ["--json", "runs", "--limit", "500", "--offset", "500"]).stdout) as RunsEnvelope;
+    expect(page2.runs).toHaveLength(500);
+    expect(page2.has_more).toBe(true);
+    expect(page2.next_offset).toBe(1000);
+
+    // Third page reaches past the 1000-row boundary the hosted API clamps at —
+    // the exact population that was previously unreachable with a silent floor.
+    const page3 = JSON.parse(runCli(dataDir, ["--json", "runs", "--limit", "500", "--offset", "1000"]).stdout) as RunsEnvelope;
+    expect(page3.runs).toHaveLength(10);
+    expect(page3.has_more).toBe(false);
+    // next_offset only advances while has_more (LOO3-00143 P1): exhausted page
+    // stays at the current offset instead of advertising a further page.
+    expect(page3.next_offset).toBe(1000);
+
+    // The three pages are disjoint and cover the whole population.
+    const ids = [...page1.runs, ...page2.runs, ...page3.runs].map((run) => run.id);
+    expect(new Set(ids).size).toBe(1010);
+
+    // Requesting more than exists returns the full set with has_more=false
+    // (positive control: has_more is false when the full set fits).
+    const full = JSON.parse(runCli(dataDir, ["--json", "runs", "--limit", "1500"]).stdout) as RunsEnvelope;
+    expect(full.runs).toHaveLength(1010);
+    expect(full.has_more).toBe(false);
+    expect(full.next_offset).toBe(0); // no advance while has_more is false
+  });
+
+  test("runs --json envelope count reflects the FILTERED loop population, not the global run table (LOO3-00143 P1)", () => {
+    const dataDir = freshDataDir("loops-cli-runs-envelope-filtered-");
+    const createAlpha = runCli(dataDir, ["--json", "create", "command", "alpha", "--at", futureAt(), "--cmd", "true"]);
+    const createBeta = runCli(dataDir, ["--json", "create", "command", "beta", "--at", futureAt(), "--cmd", "true"]);
+    expect(createAlpha.status).toBe(0);
+    expect(createBeta.status).toBe(0);
+    const alphaId = (JSON.parse(createAlpha.stdout) as { id: string }).id;
+    const betaId = (JSON.parse(createBeta.stdout) as { id: string }).id;
+
+    // loop B (beta) has 5 runs; the DB holds 1015 total. count must be the
+    // FILTERED population (5), never the global 1015 — the exact repro from
+    // the cycle-1 NO_GO (count came from the unfiltered global run table, so
+    // has_more stayed true forever after the filtered set was exhausted).
+    const db = new Database(join(dataDir, "loops.db"));
+    const insertRun = db.query(
+      `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at, exit_code, duration_ms, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, 'succeeded', ?, ?, 0, 1, ?, ?)`,
+    );
+    db.exec("BEGIN");
+    const base = Date.UTC(2024, 0, 1);
+    let i = 0;
+    for (; i < 1010; i += 1) {
+      const createdAt = new Date(base + i * 1000).toISOString();
+      insertRun.run(`alpha-run-${String(i).padStart(4, "0")}`, alphaId, "alpha", createdAt, createdAt, createdAt, createdAt, createdAt);
+    }
+    for (let j = 0; j < 5; j += 1, i += 1) {
+      const createdAt = new Date(base + i * 1000).toISOString();
+      insertRun.run(`beta-run-${String(j).padStart(4, "0")}`, betaId, "beta", createdAt, createdAt, createdAt, createdAt, createdAt);
+    }
+    db.exec("COMMIT");
+    db.close();
+
+    type RunsEnvelope = { runs: Array<{ id: string }>; count: number; has_more: boolean; next_offset: number };
+
+    // The unfiltered listing still reports the global population.
+    const global = JSON.parse(runCli(dataDir, ["--json", "runs"]).stdout) as RunsEnvelope;
+    expect(global.count).toBe(1015);
+
+    // page1 filtered to loop B: all 5 of B's runs fit on the page, so count
+    // == 5 (NOT 1015) and has_more is FALSE — the buggy unfiltered count kept
+    // has_more true here.
+    const page1 = JSON.parse(runCli(dataDir, ["--json", "runs", "beta"]).stdout) as RunsEnvelope;
+    expect(page1.runs).toHaveLength(5);
+    expect(page1.count).toBe(5);
+    expect(page1.has_more).toBe(false);
+    expect(page1.next_offset).toBe(0); // no advance while has_more is false
+
+    // page2 past the filtered set: runs empty, count still 5, has_more FALSE —
+    // the 'has_more stays true forever' symptom is gone.
+    const page2 = JSON.parse(runCli(dataDir, ["--json", "runs", "beta", "--offset", "5"]).stdout) as RunsEnvelope;
+    expect(page2.runs).toHaveLength(0);
+    expect(page2.count).toBe(5);
+    expect(page2.has_more).toBe(false);
+    expect(page2.next_offset).toBe(5); // no advance: the filtered set is exhausted
+
+    // A genuinely truncated page DOES set has_more true and next_offset advances.
+    const page1t = JSON.parse(runCli(dataDir, ["--json", "runs", "beta", "--limit", "2"]).stdout) as RunsEnvelope;
+    expect(page1t.runs).toHaveLength(2);
+    expect(page1t.count).toBe(5);
+    expect(page1t.has_more).toBe(true);
+    expect(page1t.next_offset).toBe(2);
+    const page2t = JSON.parse(runCli(dataDir, ["--json", "runs", "beta", "--limit", "2", "--offset", "2"]).stdout) as RunsEnvelope;
+    expect(page2t.runs).toHaveLength(2);
+    expect(page2t.count).toBe(5);
+    expect(page2t.has_more).toBe(true);
+    expect(page2t.next_offset).toBe(4);
+    const page3t = JSON.parse(runCli(dataDir, ["--json", "runs", "beta", "--limit", "2", "--offset", "4"]).stdout) as RunsEnvelope;
+    expect(page3t.runs).toHaveLength(1);
+    expect(page3t.count).toBe(5);
+    expect(page3t.has_more).toBe(false);
+    expect(page3t.next_offset).toBe(4); // exhausted: no advance
+  });
+
+  test("runs --json envelope reports the full set fits and accepts --offset 0 (LOO3-00143)", () => {
+    const dataDir = freshDataDir("loops-cli-runs-envelope-small-");
+    const create = runCli(dataDir, ["--json", "create", "command", "small", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+    expect(runCli(dataDir, ["--json", "run-now", "small"]).status).toBe(0);
+
+    type RunsEnvelope = { runs: Array<{ id: string }>; count: number; has_more: boolean; next_offset: number };
+    const parsed = JSON.parse(runCli(dataDir, ["--json", "runs"]).stdout) as RunsEnvelope;
+    expect(parsed.runs).toHaveLength(1);
+    expect(parsed.count).toBe(1);
+    expect(parsed.has_more).toBe(false);
+    expect(parsed.next_offset).toBe(0); // no advance while has_more is false
+
+    // An explicit offset of 0 is a legal offset and yields the same first page.
+    const fromZero = JSON.parse(runCli(dataDir, ["--json", "runs", "--offset", "0"]).stdout) as RunsEnvelope;
+    expect(fromZero.runs).toHaveLength(1);
+    expect(fromZero.next_offset).toBe(0);
+
+    // A negative offset is rejected.
+    const bad = runCli(dataDir, ["--json", "runs", "--offset", "-1"]);
+    expect(bad.status).not.toBe(0);
   });
 
   test("show surfaces unserved execution state for a machine-pinned loop no runner serves (BUG 96c837b0)", () => {
@@ -10463,7 +10620,9 @@ describe("loops CLI", () => {
     expect(dryValue.backups.pruned).toHaveLength(2);
     expect(dryValue.strayFiles).toEqual([join(dataDir, "leftover.tmp")]);
     expect(existsSync(join(dataDir, "leftover.tmp"))).toBe(true);
-    expect(JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout)).toHaveLength(1);
+    expect(
+      (JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout) as { runs: unknown[] }).runs,
+    ).toHaveLength(1);
 
     const both = runCli(dataDir, ["--json", "gc", "--dry-run", "--apply"]);
     expect(both.status).toBe(1);
@@ -10477,7 +10636,7 @@ describe("loops CLI", () => {
     expect(existsSync(join(dataDir, "leftover.tmp"))).toBe(false);
     const remaining = backupNames.filter((name) => existsSync(join(backupsDir, name)));
     expect(remaining).toEqual(backupNames.slice(2));
-    expect(JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout)).toEqual([]);
+    expect((JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout) as { runs: unknown[] }).runs).toEqual([]);
     expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(1);
   });
 });

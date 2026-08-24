@@ -76,7 +76,7 @@ describe("SqliteLoopStorage", () => {
         exitCode: 0,
       }, { claimedBy: "runner-a", claimToken: first!.claimToken, now: new Date("2026-01-01T00:00:00.200Z") });
       expect(finalized?.status).toBe("succeeded");
-      expect(await storage.countRuns("succeeded")).toBe(1);
+      expect(await storage.countRuns({ status: "succeeded" })).toBe(1);
     } finally {
       await storage.close();
     }

@@ -506,8 +506,8 @@ export class LoopsClient {
       });
     }
 
-    /** Count runs (total-row verification) */
-    async countRuns(query?: { "status"?: string }, init?: RequestInit): Promise<CountResponse> {
+    /** Count runs (total-row verification; accepts the same filters as listRuns) */
+    async countRuns(query?: { "loopId"?: string; "status"?: string; "labels"?: Array<string> }, init?: RequestInit): Promise<CountResponse> {
       return this.request("GET", `/v1/runs/count`, {
         body: undefined,
         query,

@@ -351,7 +351,7 @@ describe("loops-runner", () => {
       expect(result).toMatchObject({ ok: true, claimed: 1 });
       expect(result.completed[0]).toMatchObject({ status: "succeeded", claimedBy: "runner-once" });
       expect(await storage.getLoop(loop.id)).toMatchObject({ status: "stopped", nextRunAt: undefined });
-      expect(await storage.countRuns("succeeded")).toBe(1);
+      expect(await storage.countRuns({ status: "succeeded" })).toBe(1);
     } finally {
       server.stop(true);
       await storage.close();
@@ -401,8 +401,8 @@ describe("loops-runner", () => {
         nextRunAt: "2026-01-01T00:01:00.000Z",
         retryScheduledFor: undefined,
       });
-      expect(await storage.countRuns("skipped")).toBe(1);
-      expect(await storage.countRuns("failed")).toBe(0);
+      expect(await storage.countRuns({ status: "skipped" })).toBe(1);
+      expect(await storage.countRuns({ status: "failed" })).toBe(0);
     } finally {
       server.stop(true);
       await storage.close();
