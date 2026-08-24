@@ -26,6 +26,7 @@
   "scripts": {
     "clean": "rm -rf bin/ dist/",
     "build": "bun run clean && bun build ./src/cli/index.ts --outdir ./bin --target bun && bun build ./src/index.ts ./src/sdk/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "prepare": "bun run build",
     "test": "bun test --timeout 30000",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run typecheck && bun run test && bun run build"

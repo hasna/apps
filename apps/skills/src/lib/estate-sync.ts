@@ -16,7 +16,6 @@
  * other (canonical gzip).
  */
 import { createEstateSync, type EstateSyncClient, type PullArtifactOptions, type PushArtifactResult } from "@hasna/estate-sync";
-import { resolveSigningKey } from "./skill-bundles.js";
 import { packSkillBundle } from "./skill-bundle.js";
 
 /** The estate prefix tenant for skills. Matches the verdict's `<app>` prefix. */
@@ -34,7 +33,9 @@ export interface SkillsEstateSyncConfig {
  * `HASNA_SKILLS_S3_BUCKET` is required (there is no vendor default — a sync with
  * nowhere to go must fail loudly, never silently fall back to a local file).
  * `HASNA_SKILLS_S3_PREFIX` defaults to the skills base prefix `skills/`. The
- * signing key is the skills bundle signing key when set.
+ * index signing key is `ESTATE_SYNC_SIGNING_KEY` — the ONE name the shared
+ * engine and every adapter read (loops and skills), so a key wired into the
+ * publisher/worker env signs and verifies the same indexes.
  */
 export function resolveSkillsEstateSyncConfig(
   env: Record<string, string | undefined> = process.env,
@@ -44,7 +45,7 @@ export function resolveSkillsEstateSyncConfig(
     throw new Error("HASNA_SKILLS_S3_BUCKET is required for estate-sync");
   }
   const prefix = clean(env.HASNA_SKILLS_S3_PREFIX) ?? SKILLS_ESTATE_PREFIX;
-  const signingKey = resolveSigningKey(env) ?? undefined;
+  const signingKey = clean(env.ESTATE_SYNC_SIGNING_KEY);
   return {
     bucket,
     prefix,

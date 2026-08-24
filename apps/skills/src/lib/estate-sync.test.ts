@@ -62,7 +62,7 @@ describe("skills estate-sync adapter", () => {
     const config = resolveSkillsEstateSyncConfig({
       HASNA_SKILLS_S3_BUCKET: BUCKET,
       HASNA_SKILLS_S3_PREFIX: "skills",
-      SKILLS_SIGNING_KEY: SIGNING_KEY,
+      ESTATE_SYNC_SIGNING_KEY: SIGNING_KEY,
     });
     expect(config.bucket).toBe(BUCKET);
     expect(config.prefix).toBe("skills");
