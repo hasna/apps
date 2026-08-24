@@ -229,6 +229,16 @@ export interface KnowledgeHttpStore {
   ): Promise<KnowledgeItemVersionList | null>;
   /** One prior snapshot by version number. */
   getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
+  /**
+   * Secret-hygiene purge of retained prior versions. `null` when the entry is
+   * absent. Without `version`, every retained prior version is deleted; with
+   * `version`, only that one. The live row is never a target, and the operation
+   * never reads or returns the retained body.
+   */
+  purgeVersions(
+    idOrShort: string,
+    options?: { version?: number },
+  ): Promise<{ ok: boolean; purged: number; current_version: number }>;
 }
 
 function toQuery(options: KnowledgeHttpListOptions): Record<
@@ -401,6 +411,27 @@ function wrap(client: HasnaStorageClient): KnowledgeHttpStore {
       try {
         return await client.transport.get<KnowledgeItemVersion>(
           `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${version}`,
+        );
+      } catch (error) {
+        if (isNotFound(error)) return null;
+        throw error;
+      }
+    },
+
+    /**
+     * Secret-hygiene purge of retained prior versions. `null` — not an empty
+     * purge — when the entry is absent. With no `version`, every retained prior
+     * version is deleted; with `version`, only that one. The live row is never
+     * a target, and the operation never reads or returns the retained body.
+     */
+    async purgeVersions(idOrShort: string, options: { version?: number } = {}) {
+      try {
+        const path = options.version === undefined
+          ? `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions`
+          : `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${options.version}`;
+        return await client.transport.request<{ ok: boolean; purged: number; current_version: number }>(
+          'DELETE',
+          path,
         );
       } catch (error) {
         if (isNotFound(error)) return null;

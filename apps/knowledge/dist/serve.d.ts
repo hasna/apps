@@ -78,6 +78,14 @@ export declare class VersionConflictError extends Error {
     readonly code = "version_conflict";
     constructor(expected: number, current: number);
 }
+/** A purge target is the live row, not a retained prior version. */
+export declare class CannotPurgeLiveVersionError extends Error {
+    readonly version: number;
+    readonly current: number;
+    readonly id: string;
+    readonly code = "cannot_purge_live_version";
+    constructor(version: number, current: number, id: string);
+}
 /**
  * One immutable snapshot of an entry, and a page of them. The shapes live in
  * store.ts next to KnowledgeItem so the CLI and SDK clients can consume them
@@ -133,6 +141,28 @@ export declare class NoteRepo {
     }, guardedTenantId?: string): Promise<NoteVersionList | null>;
     /** One prior snapshot by version number, or `null` if that version is absent. */
     getVersion(idOrShort: string, version: number, guardedTenantId?: string): Promise<NoteVersion | null>;
+    /**
+     * Permanently purge retained prior versions of an entry — the secret-hygiene
+     * capability that redacts history that must stop being reachable.
+     *
+     * The operation deletes by id/version and NEVER reads the retained body, so a
+     * credential sitting in history cannot be rendered as a side effect of
+     * removing it. The live row is never a purge target.
+     *
+     * Returns `null` — not an empty purge — when the entry itself is absent, the
+     * same contract as {@link listVersions}. With no `version` option, every
+     * retained prior version is deleted; with `version`, only that one.
+     *
+     * Deleting a retained version is consistent with the schema's own guard: the
+     * append-only trigger blocks UPDATE of `knowledge_item_versions`, while
+     * DELETE is deliberately allowed (it already cascades from item deletion).
+     */
+    purgeVersions(idOrShort: string, options?: {
+        version?: number;
+    }, guardedTenantId?: string): Promise<{
+        purged: number;
+        current_version: number;
+    } | null>;
     delete(idOrShort: string): Promise<boolean>;
 }
 export interface KnowledgeServeGuardedAuthority extends KnowledgeAuthorityBinding {

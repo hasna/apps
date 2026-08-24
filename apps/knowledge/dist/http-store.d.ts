@@ -162,6 +162,19 @@ export interface KnowledgeHttpStore {
     }): Promise<KnowledgeItemVersionList | null>;
     /** One prior snapshot by version number. */
     getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
+    /**
+     * Secret-hygiene purge of retained prior versions. `null` when the entry is
+     * absent. Without `version`, every retained prior version is deleted; with
+     * `version`, only that one. The live row is never a target, and the operation
+     * never reads or returns the retained body.
+     */
+    purgeVersions(idOrShort: string, options?: {
+        version?: number;
+    }): Promise<{
+        ok: boolean;
+        purged: number;
+        current_version: number;
+    }>;
 }
 /**
  * Resolve the HTTP knowledge store from the environment. The canonical API URL
