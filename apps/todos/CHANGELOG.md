@@ -10,7 +10,7 @@
 
 - f8338ff: ensureCloudSchema retries are throttled with a min-interval cooldown (O15-00479 follow-up to PR #931). Sustained schema failure re-ran the idempotent DDL sequence on every /v1 request, saturating the connection pool under lock contention. Calls inside the min-interval window (default 10s, `HASNA_TODOS_SCHEMA_RETRY_MIN_MS`) rethrow the recorded failure without re-running the DDL; the memo stays cleared so the first call after the interval retries.
 
-- d9ce925: Sync push's destination preflight now throws a typed `ResourceConflictError` (`SNAPSHOT_DESTINATION_CONFLICT`) instead of a generic `Error`. The preflight (an existing task-list slug or project task_list_id on a different object_id) previously entered the mirror/outbox retry queues as a generic error, so a persistent destination collision kept retrying — feeding the same duplicate-key retry storm the 23505 classifier removes. The typed error is parked immediately by the retry machinery, matching the 23505 path.
+- cd86caf: Sync push's destination preflight now throws a typed `ResourceConflictError` (`SNAPSHOT_DESTINATION_CONFLICT`) instead of a generic `Error`. The preflight (an existing task-list slug or project task_list_id on a different object_id) previously entered the mirror/outbox retry queues as a generic error, so a persistent destination collision kept retrying — feeding the same duplicate-key retry storm the 23505 classifier removes. The typed error is parked immediately by the retry machinery, matching the 23505 path.
 
 ## 0.15.47
 
