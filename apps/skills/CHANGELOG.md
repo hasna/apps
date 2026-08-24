@@ -11,6 +11,15 @@
 ### Patch Changes
 
 - 5e23b61: Pin the `./storage` subpath compatibility contract: export `storageCapabilities` (version, values, types) from both `./storage` and the main entrypoint, and add `src/storage-boundary.test.ts`, which imports the subpath like a packed consumer and asserts every contract member is present while the retired deployment-mode surface (`getStorageMode` / `getSkillsStorageMode` / `SkillsStorageMode`) stays absent — so a future removal fails the OSS suite loudly instead of breaking embedders silently, as the 0.1.61 `getStorageMode` removal did. `docs/architecture/upstream-boundary.md` now documents the supported storage contract and the status-function replacement for the removed mode concept.
+- b90f22c3: Config-driven hosted run routing (reactivates the premium run-routing path): the execution route is selected from configuration via `src/lib/run-routing.ts` instead of the retired deployment-mode concept, and the CLI `runtime` command and the MCP operation tools surface the selected route.
+- 76343d81: Metadata-only pull installs corpus entries atomically — stage, swap, rollback — so a failed pull no longer leaves a half-installed corpus.
+- 1ea53d85: The cancel endpoint fences cancellation through `createCancelService`, so a concurrent cancel cannot race the terminal run transition.
+- 18a53ec4: `createRun` gains an idempotency pre-read inside the RLS context.
+- 7cc1f287: A bundle object the store refuses to publish is discarded instead of being left orphaned.
+- bee13f24: Log-write failures no longer abort the terminal run transition.
+- 2485d65d: An absent skill kind is content, never a pointer stub.
+- 50473b80: Green-main CI reconciliation — per-app lockfile regeneration, published-dependency repins, version-literal alignment, and publish-guard clears.
+- 78f8357f: Sandboxed execution + credential-delivery decision record (`docs/architecture`).
 
 ## 0.1.64
 
