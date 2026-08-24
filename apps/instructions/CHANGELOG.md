@@ -1,3 +1,29 @@
+## 0.6.0
+
+### Minor Changes
+
+- e91a13c: feat: per-endpoint provider-context injection for coding-agent harnesses (task 2500c381, ask-fable ruling 2026-08-24). New `instructions provider-context resolve` command resolves the effective endpoint (from `$ANTHROPIC_BASE_URL` / `--endpoint` / Codex `model_providers`) against an explicit origin registry (deepseek-anthropic, openrouter-cc, openrouter-codex, anthropic-native), renders exactly ONE bounded identity fragment into `<home>/.hasna/provider-context/<key>.md` plus a sha256 manifest, and emits a per-launch audit line. Unknown endpoints exit non-zero with a named reason and render the invariant fragment, so a lane never runs with zero identity context. Fixes the owner-reported bug where Claude Code launched against DeepSeek's Anthropic-compatible endpoint fabricated Claude-Code model identity ("it doesn't know it's deepseek and it's using the claude code models"). Nothing is generated or fetched at launch; fragments tell the agent to read its own env/config (no rot-prone hardcoded model catalogs). No credential values. Companion skill wiring (claude-code-deepseek / claude-code-openrouter / codex-openrouter) injected at launch via `--append-system-prompt-file` (Claude) or task-prefix envelope (Codex).
+
+### Patch Changes
+
+- 4127f83: feat: global station-profile injector (owner request 2026-08-24). New `instructions station-profile refresh|show|path|preview` commands generate a compact (<600 B) per-station block — station id/name, hostname, platform/arch, user, home, workspace, best-effort live status, and installed @hasna/_ + @hasna-internal/_ package counts (top-N names) — cached at `~/.hasna/instructions/station-profile.md`. Every `session plan`/`session apply` now injects the cached block as a machine-layer source by default (opt out with `--no-station-profile`); renders without a cache are byte-identical to before. Idempotent refresh (writes only on change), additive (never touches existing files), no secrets, macOS + Linux safe.
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.15.0
+
+## 0.5.0
+
+### Minor Changes
+
+- e91a13c: feat: per-endpoint provider-context injection for coding-agent harnesses (task 2500c381, ask-fable ruling 2026-08-24). New `instructions provider-context resolve` command resolves the effective endpoint (from `$ANTHROPIC_BASE_URL` / `--endpoint` / Codex `model_providers`) against an explicit origin registry (deepseek-anthropic, openrouter-cc, openrouter-codex, anthropic-native), renders exactly ONE bounded identity fragment into `<home>/.hasna/provider-context/<key>.md` plus a sha256 manifest, and emits a per-launch audit line. Unknown endpoints exit non-zero with a named reason and render the invariant fragment, so a lane never runs with zero identity context. Fixes the owner-reported bug where Claude Code launched against DeepSeek's Anthropic-compatible endpoint fabricated Claude-Code model identity ("it doesn't know it's deepseek and it's using the claude code models"). Nothing is generated or fetched at launch; fragments tell the agent to read its own env/config (no rot-prone hardcoded model catalogs). No credential values. Companion skill wiring (claude-code-deepseek / claude-code-openrouter / codex-openrouter) injected at launch via `--append-system-prompt-file` (Claude) or task-prefix envelope (Codex).
+
+### Patch Changes
+
+- 4127f83: feat: global station-profile injector (owner request 2026-08-24). New `instructions station-profile refresh|show|path|preview` commands generate a compact (<600 B) per-station block — station id/name, hostname, platform/arch, user, home, workspace, best-effort live status, and installed @hasna/_ + @hasna-internal/_ package counts (top-N names) — cached at `~/.hasna/instructions/station-profile.md`. Every `session plan`/`session apply` now injects the cached block as a machine-layer source by default (opt out with `--no-station-profile`); renders without a cache are byte-identical to before. Idempotent refresh (writes only on change), additive (never touches existing files), no secrets, macOS + Linux safe.
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.14.0
+
 ## 0.4.43
 
 ### Patch Changes

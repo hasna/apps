@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 225833c: Power-outage recovery verdict (2026-08-24): tmux panes now carry resume identity, opencode2 is restartable-detected, and restore has a freshness gate.
+
+  - Capture: each tmux pane's `resume_identity` attribute resolves the newest opencode2 `session_v2` row whose `directory` matches the pane cwd (read-only, from `~/.local/share/opencode/opencode.db`) and the newest Claude Code JSONL under `~/.claude/projects/<slug>/` whose recorded `cwd` matches (content match, never the lossy slug). Configurable via `HASNA_SNAPSHOTS_OPENCODE_DB` / `HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR`; missing sources become info diagnostics.
+  - Restartable detector: `opencode2 --continue/-c/--session/-s` (OpenCode v2 resume forms) is now detected alongside the classic `--resume` agents.
+  - Restore: new `--max-age <duration>` gate (env `HASNA_SNAPSHOTS_MAX_AGE`) refuses snapshots older than the configured limit with a logged, audit-trailed `restore.max-age-refused` error; the limit is recorded on the plan and re-checked at apply time.
+  - Capture concurrency (station04 P1 2026-08-24): captures against one store are serialized by a short-lived SQLite lease (`capture_leases`; env `HASNA_SNAPSHOTS_CAPTURE_LEASE_TTL_MS` / `HASNA_SNAPSHOTS_CAPTURE_LEASE_WAIT_MS`), and `saveSnapshot` is idempotent — a concurrent duplicate (same-second id collision between the \*/5 cron and a manual capture) becomes a no-op instead of a `UNIQUE constraint failed: snapshot_resources` transaction failure. The store also sets `busy_timeout` before the WAL switch so concurrent store opens cannot fail with "database is locked".
+
+### Patch Changes
+
+- fa3a2fd: `snapshots capture` fails on macOS with "UNIQUE constraint failed: snapshot_resources.snapshot_id, snapshot_resources.resource_id" when System Events reports the same app more than once in one capture (station04 runs two Ghostty processes, so `osascript` returns `ghostty` twice and both map to the id `app:ghostty`). The osascript path of `captureMacApps` mapped every name to an id with no dedupe, so the second insert of the same (snapshot_id, resource_id) pair violated the composite primary key inside the save transaction and no snapshot was written.
+
+  - `captureMacApps` now builds resources through a new exported `macAppResources(names, now)` helper that dedupes by resource id (a seen-set), mirroring the existing dedupe of the process-path fallback (which dedupes by app path) and the Linux `wmctrl` path (which dedupes by window class).
+  - The defensive save-side dedupe (`ON CONFLICT(snapshot_id, resource_id) DO NOTHING`, landed in 0.1.6) already makes such duplicates a silent no-op; this removes the duplicate at the capture source so captures never emit them.
+  - Regression tests: the station04 two-`ghostty` fixture collapses to one resource; case-variant names that slug to one id collapse; distinct apps stay distinct; a mixed duplicate list emits zero duplicate ids; an empty list emits nothing.
+
+- 70cfd55: Capture freshness now keys off capture-RUN recency instead of newest-UNIQUE-snapshot age (todos 27f3d817). `snapshots capture` dedups identical state by design, so on a stable machine the newest unique snapshot ages past the 900s freshness threshold while the \*/5 capture cron is alive — the deployed freshness alarm was posting [INCIDENT] every 5 minutes on station02/03/04.
+
+  - `snapshots capture` now records a capture run on EVERY attempt, including when the capture dedups (new `capture_runs` table; every attempt writes a row with `created_at`, snapshot id, duplicate-of, resource/diagnostic counts, and status).
+  - New `snapshots runs` verb lists capture runs (most recent first).
+  - New `snapshots freshness` verb reports `ok` based on the age of the latest capture run against the threshold (default 900s, `--threshold`), alongside the newest-snapshot ages for context. Exit code: 0 fresh, 1 stale/no-runs verdict, 2 could not determine.
+  - Canonical deployed wrapper `ops/snapshots-freshness.sh` posts INCIDENT only on a genuine verdict (no runs ever, or last run stale). A "could not read the status" (exit 2) is logged and NOT posted, so a transient CLI/DB read error no longer produces a false "NO snapshots exist in the local store" INCIDENT.
+
+## 0.2.0
+
+### Minor Changes
+
+- 225833c: Power-outage recovery verdict (2026-08-24): tmux panes now carry resume identity, opencode2 is restartable-detected, and restore has a freshness gate.
+
+  - Capture: each tmux pane's `resume_identity` attribute resolves the newest opencode2 `session_v2` row whose `directory` matches the pane cwd (read-only, from `~/.local/share/opencode/opencode.db`) and the newest Claude Code JSONL under `~/.claude/projects/<slug>/` whose recorded `cwd` matches (content match, never the lossy slug). Configurable via `HASNA_SNAPSHOTS_OPENCODE_DB` / `HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR`; missing sources become info diagnostics.
+  - Restartable detector: `opencode2 --continue/-c/--session/-s` (OpenCode v2 resume forms) is now detected alongside the classic `--resume` agents.
+  - Restore: new `--max-age <duration>` gate (env `HASNA_SNAPSHOTS_MAX_AGE`) refuses snapshots older than the configured limit with a logged, audit-trailed `restore.max-age-refused` error; the limit is recorded on the plan and re-checked at apply time.
+  - Capture concurrency (station04 P1 2026-08-24): captures against one store are serialized by a short-lived SQLite lease (`capture_leases`; env `HASNA_SNAPSHOTS_CAPTURE_LEASE_TTL_MS` / `HASNA_SNAPSHOTS_CAPTURE_LEASE_WAIT_MS`), and `saveSnapshot` is idempotent — a concurrent duplicate (same-second id collision between the \*/5 cron and a manual capture) becomes a no-op instead of a `UNIQUE constraint failed: snapshot_resources` transaction failure. The store also sets `busy_timeout` before the WAL switch so concurrent store opens cannot fail with "database is locked".
+
+### Patch Changes
+
+- fa3a2fd: `snapshots capture` fails on macOS with "UNIQUE constraint failed: snapshot_resources.snapshot_id, snapshot_resources.resource_id" when System Events reports the same app more than once in one capture (station04 runs two Ghostty processes, so `osascript` returns `ghostty` twice and both map to the id `app:ghostty`). The osascript path of `captureMacApps` mapped every name to an id with no dedupe, so the second insert of the same (snapshot_id, resource_id) pair violated the composite primary key inside the save transaction and no snapshot was written.
+
+  - `captureMacApps` now builds resources through a new exported `macAppResources(names, now)` helper that dedupes by resource id (a seen-set), mirroring the existing dedupe of the process-path fallback (which dedupes by app path) and the Linux `wmctrl` path (which dedupes by window class).
+  - The defensive save-side dedupe (`ON CONFLICT(snapshot_id, resource_id) DO NOTHING`, landed in 0.1.6) already makes such duplicates a silent no-op; this removes the duplicate at the capture source so captures never emit them.
+  - Regression tests: the station04 two-`ghostty` fixture collapses to one resource; case-variant names that slug to one id collapse; distinct apps stay distinct; a mixed duplicate list emits zero duplicate ids; an empty list emits nothing.
+
+- 70cfd55: Capture freshness now keys off capture-RUN recency instead of newest-UNIQUE-snapshot age (todos 27f3d817). `snapshots capture` dedups identical state by design, so on a stable machine the newest unique snapshot ages past the 900s freshness threshold while the \*/5 capture cron is alive — the deployed freshness alarm was posting [INCIDENT] every 5 minutes on station02/03/04.
+
+  - `snapshots capture` now records a capture run on EVERY attempt, including when the capture dedups (new `capture_runs` table; every attempt writes a row with `created_at`, snapshot id, duplicate-of, resource/diagnostic counts, and status).
+  - New `snapshots runs` verb lists capture runs (most recent first).
+  - New `snapshots freshness` verb reports `ok` based on the age of the latest capture run against the threshold (default 900s, `--threshold`), alongside the newest-snapshot ages for context. Exit code: 0 fresh, 1 stale/no-runs verdict, 2 could not determine.
+  - Canonical deployed wrapper `ops/snapshots-freshness.sh` posts INCIDENT only on a genuine verdict (no runs ever, or last run stale). A "could not read the status" (exit 2) is logged and NOT posted, so a transient CLI/DB read error no longer produces a false "NO snapshots exist in the local store" INCIDENT.
+
 ## 0.1.6
 
 ### Patch Changes

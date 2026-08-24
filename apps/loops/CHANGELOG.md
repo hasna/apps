@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.3
+
+### Patch Changes
+
+- 90cd2d5: fix: runner fails loudly and terminally on permanent control-plane denials (wrong_token_kind)
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.15.0
+
+## 0.6.2
+
+### Patch Changes
+
+- 90cd2d5: fix: runner fails loudly and terminally on permanent control-plane denials (wrong_token_kind)
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.14.0
+
 ## 0.6.1
 
 ### Patch Changes

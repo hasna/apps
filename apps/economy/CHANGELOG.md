@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.28
+
+### Patch Changes
+
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.15.0
+  - @hasna/projects@1.0.3
+
+## 0.3.27
+
+### Patch Changes
+
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.14.0
+  - @hasna/projects@1.0.2
+
 ## 0.3.26
 
 ### Patch Changes
