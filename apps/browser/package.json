@@ -67,7 +67,7 @@
     "@hasna/mementos": "0.14.86",
     "@hasna/secrets": "0.3.7",
     "@hasna/sessions": "0.12.19",
-    "@hasna/skills": "0.1.66",
+    "@hasna/skills": "0.1.64",
     "@hasna/todos": "0.15.48",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@onkernel/sdk": "0.67.0",
