@@ -161,13 +161,22 @@ jobs:
         working-directory: apps/secrets
         run: bun run typecheck
 
-      - name: Test
-        working-directory: apps/secrets
-        run: bun test
-
+      # Build MUST run before Test on this fresh ubuntu-latest runner.
+      # apps/secrets/dist/ is gitignored and not committed, and the runner has no
+      # global `secrets` binary, so at Test time the host-protocol suite resolves
+      # the CLI it shells from dist/index.js (`resolveSecretsBin()` — "what CI's
+      # turbo build produces before the test phase"). Running Test before Build
+      # fails the suite on every tag push and blocks the publish this ceremony
+      # exists to reach. This is the same build-then-test order ci.yml uses for
+      # the affected build+test graph. Reordering is free: `bun run build` and
+      # `bun test` are independent steps in the same job.
       - name: Build
         working-directory: apps/secrets
         run: bun run build
+
+      - name: Test
+        working-directory: apps/secrets
+        run: bun test
 
       # No NODE_AUTH_TOKEN, and no token of any kind. npm detects the Actions
       # OIDC environment and exchanges the id-token for a short-lived,

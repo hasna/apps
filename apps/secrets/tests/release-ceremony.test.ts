@@ -67,4 +67,23 @@ describe("secrets npm release ceremony (monorepo)", () => {
   it("runs package-scoped steps inside apps/secrets", () => {
     expect(readRootWorkflow()).toContain("working-directory: apps/secrets");
   });
+
+  it("builds before testing so the host-protocol suite can resolve dist/index.js on a fresh runner", () => {
+    // On this release runner there is no committed dist/ (apps/secrets/dist is
+    // gitignored) and no global `secrets` binary, so at Test time the
+    // host-protocol suite shells the CLI it needs from dist/index.js — the
+    // product of the Build step. Running Test before Build therefore fails the
+    // suite on every tag push and blocks the publish this ceremony exists to
+    // reach. This guard pins the same build-then-test order ci.yml already uses
+    // for the affected build+test graph. It is FALSE on the pre-fix tree
+    // (Test at ~line 164 preceded Build at ~line 168) and TRUE after the
+    // reorder, so it cannot pass vacuously.
+    const yaml = readRootWorkflow();
+    const stepNames = [...yaml.matchAll(/^\s{6}- name: (.+)$/gm)].map((m) => m[1]);
+    const buildIdx = stepNames.indexOf("Build");
+    const testIdx = stepNames.indexOf("Test");
+    expect(buildIdx).toBeGreaterThanOrEqual(0);
+    expect(testIdx).toBeGreaterThanOrEqual(0);
+    expect(buildIdx).toBeLessThan(testIdx);
+  });
 });
