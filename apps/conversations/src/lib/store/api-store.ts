@@ -19,7 +19,8 @@ import { AGENT_LIST_ORDER, CHANNEL_LIST_ORDER, SEARCH_RECENT_ORDER, describeMess
 import { normalizeExactIsoTimestamp, normalizeSince } from "../since.js";
 import { resolveReadLimit, resolveReadWindow } from "../message-window.js";
 import { parseProject } from "../projects.js";
-import { attachSendRedaction } from "../content-safety.js";
+import { assertNoSensitiveContent, attachSendRedaction } from "../content-safety.js";
+import { normalizeEmoji } from "../reactions.js";
 import { normalizeMessageUuid } from "../message-reference.js";
 import { encodeAttachmentUploads, prepareAttachmentSources } from "../attachments.js";
 import {
@@ -749,8 +750,23 @@ export class ApiStore implements ConversationsStore {
 
   // ── reactions ────────────────────────────────────────────────────────────────
   addReaction: ConversationsStore["addReaction"] = async (messageId, agent, emoji) => {
-    const body = await this.post<{ reaction: unknown }>(`/messages/${encodeURIComponent(String(messageId))}/reactions`, { agent, emoji });
-    return body.reaction as never;
+    // Store-boundary content-safety gate: reject a credential-shaped emoji
+    // client-side BEFORE it reaches the hosted route (the server enforces the
+    // same assert; this keeps the failure local and the value out of the wire).
+    assertNoSensitiveContent(normalizeEmoji(emoji), "Reaction emoji");
+    const body = await this.post<{ toggled?: string; reaction?: unknown }>(`/messages/${encodeURIComponent(String(messageId))}/reactions`, { agent, emoji });
+    return {
+      toggled: body.toggled === "removed" ? "removed" : "added",
+      reaction: body.reaction ?? null,
+    } as never;
+  };
+  toggleReaction: ConversationsStore["toggleReaction"] = async (messageId, agent, emoji) => {
+    assertNoSensitiveContent(normalizeEmoji(emoji), "Reaction emoji");
+    const body = await this.post<{ toggled?: string; reaction?: unknown }>(`/messages/${encodeURIComponent(String(messageId))}/reactions`, { agent, emoji });
+    return {
+      toggled: body.toggled === "removed" ? "removed" : "added",
+      reaction: body.reaction ?? null,
+    } as never;
   };
   removeReaction: ConversationsStore["removeReaction"] = async (messageId, agent, emoji) => {
     try {

@@ -176,6 +176,7 @@ export function previewAsCompatibilityMessage(preview: MessagePreview): Message 
     thread_status: preview.thread_status ?? null,
     reply_count: preview.reply_count,
     truncated: true,
+    reactions: preview.reactions,
   };
 }
 

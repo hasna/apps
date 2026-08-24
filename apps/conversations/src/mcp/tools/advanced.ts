@@ -50,12 +50,12 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   // ---- Reaction aliases + tools ----
 
   registerMcpTool(server, "react", {
-    description: "Add an emoji reaction (alias for add_reaction). Quick acknowledgment without a full reply.",
+    description: "Toggle an emoji reaction on a message (alias for add_reaction). The same actor re-adding the same emoji removes it.",
     inputSchema: { message_id: z.coerce.number(), emoji: z.string(), from: z.string().optional() },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const reaction = await getStore().addReaction(args.message_id, agent, args.emoji);
-    return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
+    const result = await getStore().addReaction(args.message_id, agent, args.emoji);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
 
   registerMcpTool(server, "unreact", {
@@ -68,7 +68,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   });
 
   registerMcpTool(server, "add_reaction", {
-    description: "Add an emoji reaction to a message.",
+    description: "Toggle an emoji reaction on a message. The same actor re-adding the same emoji removes it; returns {toggled: \"added\"|\"removed\", reaction}.",
     inputSchema: {
       message_id: z.coerce.number(),
       emoji: z.string(),
@@ -77,8 +77,8 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const { message_id, emoji, from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
-    const reaction = await getStore().addReaction(message_id, agent, emoji);
-    return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
+    const result = await getStore().addReaction(message_id, agent, emoji);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
 
   registerMcpTool(server, "remove_reaction", {

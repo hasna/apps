@@ -36,6 +36,12 @@ export interface Message {
   reply_count?: number;
   truncated?: boolean;
   /**
+   * Additive grouped emoji reactions (emoji → count + actors) populated by the
+   * store on read/digest/show envelopes. Absent when the read path did not
+   * fetch reactions, so serialization is byte-identical to pre-reaction reads.
+   */
+  reactions?: ReactionSummary[];
+  /**
    * Present ONLY when the stored body differs from what the author submitted.
    * Set by the store funnel on every write path, so absence means "checked and
    * clean" rather than "never checked". Never persisted — it describes this
@@ -76,6 +82,8 @@ export interface MessagePreview {
   truncated: boolean;
   redacted: boolean;
   relevance_score?: number;
+  /** Additive grouped emoji reactions; see {@link Message.reactions}. */
+  reactions?: ReactionSummary[];
 }
 
 export interface MessagePreviewPage {
@@ -142,6 +150,22 @@ export interface Reaction {
   emoji: string;
   created_at: string;
 }
+
+/** Grouped reactions for one message: one row per emoji with its actors. */
+export interface ReactionSummary {
+  emoji: string;
+  count: number;
+  agents: string[];
+}
+
+/**
+ * Result of a Slack-style toggle reaction: the same actor re-adding the same
+ * emoji removes it. `reaction` is the inserted row on "added" and null on
+ * "removed".
+ */
+export type ReactionToggleResult =
+  | { toggled: "added"; reaction: Reaction }
+  | { toggled: "removed"; reaction: null };
 
 export interface Attachment {
   name: string;

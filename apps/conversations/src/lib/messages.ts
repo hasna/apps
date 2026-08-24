@@ -12,6 +12,7 @@ import type {
   SearchMessagesPage,
   MessagePreview,
   MessagePreviewPage,
+  ReactionSummary,
   ExportMessagesOptions,
   MessageExportArtifact,
   ListThreadsOptions,
@@ -20,6 +21,7 @@ import type {
   ThreadSummary,
 } from "../types.js";
 import { normalizeExactIsoTimestamp } from "./since.js";
+import { getReactionSummariesForMessages } from "./reactions.js";
 import { createHash, randomUUID } from "crypto";
 import {
   copyFileSync,
@@ -642,6 +644,20 @@ function validateReadPreviewFilters(opts: ReadMessagePreviewsOptions): void {
 }
 
 /** Bounded collection read. Full bodies remain available only by exact id. */
+/**
+ * Attach the grouped emoji reactions to a set of previews/digest messages with
+ * ONE grouped query. `reactions` stays absent (additive optional) when a
+ * message has none, so serialization is byte-identical to pre-reaction reads.
+ */
+function attachReactionsToPreviews(messages: Array<{ id: number; reactions?: ReactionSummary[] }>): void {
+  if (messages.length === 0) return;
+  const summaries = getReactionSummariesForMessages(messages.map((m) => m.id));
+  for (const message of messages) {
+    const list = summaries.get(message.id);
+    if (list) message.reactions = list;
+  }
+}
+
 export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): MessagePreviewPage {
   validateReadPreviewFilters(opts);
   const startedAt = performance.now();
@@ -743,6 +759,7 @@ export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): Mess
     max_bytes: opts.max_bytes,
     timeout_ms: timeoutMs,
   });
+  attachReactionsToPreviews(page.messages);
   assertCollectionDeadline(startedAt, timeoutMs);
   return page;
 }
@@ -921,7 +938,11 @@ export function markChannelRead(channelName: string, reader: string): number {
 export function getMessageById(id: number): Message | null {
   const db = getDb();
   const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as Record<string, unknown> | null;
-  return row ? parseMessage(row) : null;
+  if (!row) return null;
+  const message = parseMessage(row);
+  const summaries = getReactionSummariesForMessages([id]).get(id);
+  if (summaries) message.reactions = summaries;
+  return message;
 }
 
 export function getMessageAttachment(
@@ -975,7 +996,11 @@ export function getMessageByUuid(uuid: string): Message | null {
   if (!normalized) return null;
   const db = getDb();
   const row = db.prepare("SELECT * FROM messages WHERE uuid = ?").get(normalized) as Record<string, unknown> | null;
-  return row ? parseMessage(row) : null;
+  if (!row) return null;
+  const message = parseMessage(row);
+  const summaries = getReactionSummariesForMessages([message.id]).get(message.id);
+  if (summaries) message.reactions = summaries;
+  return message;
 }
 
 export function markReadByIds(ids: number[], agent?: string): number {
@@ -1021,6 +1046,8 @@ export interface DigestMessage {
   to?: string | null;
   reply_to?: number | null;
   unread: boolean;
+  /** Additive grouped emoji reactions; absent on reaction-free messages. */
+  reactions?: ReactionSummary[];
 }
 
 export interface DigestResult {
@@ -1575,7 +1602,12 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
   if (opts.mark_read && assembly.markableEntries.length > 0) {
     markedRead = markDigestEntriesRead(assembly.markableEntries, opts.reader);
   }
-  return assembly.rebuild(markedRead);
+  const result = assembly.rebuild(markedRead);
+  // Additive decoration: reactions are attached AFTER byte-packing so they do
+  // not perturb the digest's byte budget / digest_id (inbox preview carries no
+  // size change from reactions).
+  attachReactionsToPreviews(result.messages);
+  return result;
 }
 
 export function createMessageExport(opts: ExportMessagesOptions = {}): MessageExportArtifact {

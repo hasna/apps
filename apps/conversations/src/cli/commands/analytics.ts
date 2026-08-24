@@ -9,6 +9,7 @@ import { checkForUpdate } from "../../lib/version-check.js";
 import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
 import { SESSION_LIST_ORDER } from "../../lib/list-order.js";
 import { emitCliError } from "../cli-error.js";
+import { parseMessageReference } from "../../lib/message-reference.js";
 import { printErrorLine, printJson, printLine } from "../../lib/stdout.js";
 
 export function registerAnalyticsCommands(program: Command): void {
@@ -501,31 +502,25 @@ export function registerAnalyticsCommands(program: Command): void {
   // ---- react ----
   program
     .command("react")
-    .description("Add an emoji reaction to a message")
-    .argument("<id>", "Message ID", parseInt)
+    .description("Toggle an emoji reaction on a message (same actor + emoji adds then removes)")
+    .argument("<message>", "Numeric message ID or UUID")
     .argument("<emoji>", "Emoji to react with")
     .option("--from <agent>", "Agent identity override")
     .option("-j, --json", "Output as JSON")
-    .action(async (id, emoji, opts) => {
-      if (!Number.isInteger(id) || id <= 0) {
-        printErrorLine(chalk.red("Message ID must be a positive integer."));
-        process.exit(1);
-      }
-      if (!(await getStore().getMessageById(id))) {
-        printErrorLine(chalk.red(`Message #${id} not found.`));
-        process.exit(1);
-      }
+    .action(async (messageArg, emoji, opts) => {
+      const id = await resolveReactionMessageId(messageArg, opts);
       const agent = resolveIdentity(opts.from);
-      let reaction;
+      let result;
       try {
-        reaction = await getStore().addReaction(id, agent, emoji);
+        result = await getStore().addReaction(id, agent, emoji);
       } catch (error) {
         emitCliError(error instanceof Error ? error.message : String(error), opts);
       }
       if (opts.json) {
-        printJson(reaction);
+        printJson(result);
       } else {
-        printLine(chalk.green(`${emoji} reaction added to message #${id}`));
+        const verb = result.toggled === "added" ? "added to" : "removed from";
+        printLine(chalk.green(`${emoji} reaction ${verb} message #${id}`));
       }
       closeDb();
     });
@@ -533,7 +528,7 @@ export function registerAnalyticsCommands(program: Command): void {
   // ---- unreact ----
   program
     .command("unreact")
-    .description("Remove an emoji reaction from a message")
+    .description("Explicitly remove an emoji reaction from a message")
     .argument("<id>", "Message ID", parseInt)
     .argument("<emoji>", "Emoji to remove")
     .option("--from <agent>", "Agent identity override")
@@ -554,12 +549,15 @@ export function registerAnalyticsCommands(program: Command): void {
     });
 
   // ---- reactions ----
-  program
-    .command("reactions")
-    .description("Show emoji reactions on a message")
-    .argument("<id>", "Message ID", parseInt)
+  const reactionsCmd = program.command("reactions").description("Emoji reactions on a message");
+
+  reactionsCmd
+    .command("list")
+    .description("Show grouped emoji reactions (emoji, count, actors) on a message")
+    .argument("<message>", "Numeric message ID or UUID")
     .option("-j, --json", "Output as JSON")
-    .action(async (id, opts) => {
+    .action(async (messageArg, opts) => {
+      const id = await resolveReactionMessageId(messageArg, opts);
       const summary = await getStore().getReactionSummary(id);
       if (opts.json) {
         printJson(summary);
@@ -567,10 +565,50 @@ export function registerAnalyticsCommands(program: Command): void {
         if (summary.length === 0) {
           printLine(chalk.dim(`No reactions on message #${id}`));
         } else {
-          const parts = summary.map((r) => `${r.emoji} ${r.count}`).join("  ");
+          const parts = summary.map((r) => `${r.emoji} ${r.count} (${r.agents.join(", ")})`).join("  ");
           printLine(`Message #${id}: ${parts}`);
         }
       }
       closeDb();
     });
+
+  reactionsCmd
+    .command("remove")
+    .description("Explicitly remove an emoji reaction from a message")
+    .argument("<message>", "Numeric message ID or UUID")
+    .argument("<emoji>", "Emoji to remove")
+    .option("--from <agent>", "Agent identity override")
+    .option("-j, --json", "Output as JSON")
+    .action(async (messageArg, emoji, opts) => {
+      const id = await resolveReactionMessageId(messageArg, opts);
+      const agent = resolveIdentity(opts.from);
+      const removed = await getStore().removeReaction(id, agent, emoji);
+      if (opts.json) {
+        printJson({ removed });
+      } else {
+        if (removed) {
+          printLine(chalk.green(`${emoji} reaction removed from message #${id}`));
+        } else {
+          printLine(chalk.dim(`No ${emoji} reaction found on message #${id}`));
+        }
+      }
+      closeDb();
+    });
+}
+
+/**
+ * Resolve a message reference (numeric id or UUID) to a numeric message id.
+ * UUIDs are resolved through the store's show path; ids are used directly.
+ */
+async function resolveReactionMessageId(messageArg: string, opts: { json?: boolean }): Promise<number> {
+  const ref = parseMessageReference(String(messageArg));
+  if (!ref) {
+    emitCliError("Message reference must be a positive numeric ID or UUID.", opts);
+  }
+  if (ref.kind === "id") return ref.id;
+  const message = await getStore().getMessageByUuid(ref.uuid);
+  if (!message) {
+    emitCliError(`Message ${String(messageArg)} not found.`, opts);
+  }
+  return message.id;
 }

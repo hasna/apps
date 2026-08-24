@@ -39,6 +39,24 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("idx_messages_search");
   });
 
+  test("reactions table is per-actor rows with FK cascade and per-actor unique toggle key", () => {
+    const sql = PG_MIGRATIONS[0].toLowerCase();
+    const start = sql.indexOf("create table if not exists reactions");
+    expect(start).toBeGreaterThan(-1);
+    const end = sql.indexOf(");", start);
+    const table = sql.slice(start, end);
+    expect(table).toContain("message_id bigint not null references messages(id) on delete cascade");
+    expect(table).toContain("agent text not null");
+    expect(table).toContain("emoji text not null");
+    expect(table).toContain("created_at");
+    // The unique key drives the Slack-style toggle: INSERT ... ON CONFLICT
+    // DO NOTHING yields no row for the same (message, agent, emoji), which is
+    // how re-adding the same emoji becomes a removal.
+    expect(table).toContain("unique(message_id, agent, emoji)");
+    // The grouped envelope helper queries by message id in bulk.
+    expect(sql).toContain("idx_reactions_message");
+  });
+
   test("first migration sets up full-text search", () => {
     const sql = PG_MIGRATIONS[0].toLowerCase();
     expect(sql).toContain("search_vector");

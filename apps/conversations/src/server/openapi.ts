@@ -113,6 +113,42 @@ export const openapiSpec = {
           blocking: { type: "boolean" },
           reply_to: { type: "integer", nullable: true },
           created_at: { type: "string" },
+          reactions: {
+            type: "array",
+            items: { $ref: "#/components/schemas/ReactionSummary" },
+            description: "Additive grouped emoji reactions on read/digest/show envelopes; absent when none.",
+          },
+        },
+      },
+      Reaction: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "message_id", "agent", "emoji", "created_at"],
+        properties: {
+          id: { type: "integer" },
+          message_id: { type: "integer" },
+          agent: { type: "string" },
+          emoji: { type: "string" },
+          created_at: { type: "string" },
+        },
+      },
+      ReactionSummary: {
+        type: "object",
+        additionalProperties: false,
+        required: ["emoji", "count", "agents"],
+        properties: {
+          emoji: { type: "string" },
+          count: { type: "integer" },
+          agents: { type: "array", items: { type: "string" } },
+        },
+      },
+      ReactionToggleResult: {
+        type: "object",
+        additionalProperties: false,
+        required: ["toggled"],
+        properties: {
+          toggled: { type: "string", enum: ["added", "removed"] },
+          reaction: { $ref: "#/components/schemas/Reaction", nullable: true },
         },
       },
       MessagePreview: {
@@ -153,6 +189,11 @@ export const openapiSpec = {
           truncated: { type: "boolean" },
           redacted: { type: "boolean" },
           relevance_score: { type: "number" },
+          reactions: {
+            type: "array",
+            items: { $ref: "#/components/schemas/ReactionSummary" },
+            description: "Additive grouped emoji reactions on read/digest/show envelopes; absent when none.",
+          },
         },
       },
       MessagePreviewPage: {
@@ -848,6 +889,71 @@ export const openapiSpec = {
           { name: "from", in: "query", schema: { type: "string" } },
         ],
         responses: { "200": { description: "deleted", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/messages/{id}/reactions": {
+      get: {
+        operationId: "listReactions",
+        summary: "List emoji reactions on a message, or the grouped summary with ?summary=true",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          { name: "summary", in: "query", schema: { type: "boolean" }, description: "Return the grouped {emoji, count, agents} summary instead of raw rows." },
+        ],
+        responses: {
+          "200": {
+            description: "reactions",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: true,
+                  properties: {
+                    reactions: { type: "array", items: { $ref: "#/components/schemas/Reaction" } },
+                    summary: { type: "array", items: { $ref: "#/components/schemas/ReactionSummary" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        operationId: "react",
+        summary: "Toggle an emoji reaction (same actor + emoji adds then removes)",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["emoji"],
+                properties: {
+                  agent: { type: "string", description: "Defaults to the authenticated identity." },
+                  emoji: { type: "string", description: "Unicode emoji; stored NFKC-normalized." },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "added", content: { "application/json": { schema: { $ref: "#/components/schemas/ReactionToggleResult" } } } },
+          "200": { description: "removed", content: { "application/json": { schema: { $ref: "#/components/schemas/ReactionToggleResult" } } } },
+          "400": { description: "agent and emoji are required" },
+        },
+      },
+      delete: {
+        operationId: "removeReaction",
+        summary: "Explicitly remove an emoji reaction (404 when absent)",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          { name: "agent", in: "query", schema: { type: "string" }, description: "Defaults to the authenticated identity." },
+          { name: "emoji", in: "query", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "removed", content: { "application/json": { schema: okObject } } },
+          "404": { description: "Reaction not found" },
+        },
       },
     },
     "/v1/messages/{id}/attachments/{name}": {

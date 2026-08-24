@@ -19,6 +19,7 @@ function makeFakeClient(
   const channelAliases: Record<string, string> = {};
   const channelMembers = new Set<string>();
   const messages: any[] = [];
+  const reactions: any[] = [];
   const messageAttachments: any[] = [];
   const messageMentions: any[] = [];
   const channelSubscriptions: any[] = [];
@@ -223,6 +224,44 @@ function makeFakeClient(
           (a, b) => String(a.agent).localeCompare(String(b.agent)) || String(a.channel).localeCompare(String(b.channel)),
         );
       }
+      if (/FROM reactions\s+WHERE message_id = ANY/i.test(sql)) {
+        // Envelope grouped query: message_id = ANY($1::bigint[]) GROUP BY message_id, emoji
+        const ids = new Set<number>(((_p as any[])[0] as number[] | undefined) ?? []);
+        const byMessage = new Map<number, { emoji: string; agents: string[] }[]>();
+        for (const reaction of reactions) {
+          const messageId = Number(reaction.message_id);
+          if (!ids.has(messageId)) continue;
+          const list = byMessage.get(messageId) ?? [];
+          const existing = list.find((entry) => entry.emoji === String(reaction.emoji));
+          if (existing) existing.agents.push(String(reaction.agent));
+          else list.push({ emoji: String(reaction.emoji), agents: [String(reaction.agent)] });
+          byMessage.set(messageId, list);
+        }
+        return [...byMessage.entries()].flatMap(([messageId, list]) =>
+          list.map((entry) => ({ message_id: messageId, emoji: entry.emoji, agents: entry.agents.join(","), count: entry.agents.length })),
+        );
+      }
+      if (/FROM reactions/i.test(sql) && /GROUP BY/i.test(sql)) {
+        // Grouped summary: SELECT emoji, string_agg(agent, ',') ... GROUP BY emoji
+        const messageId = Number((_p as any[])[0] ?? 0);
+        const grouped = new Map<string, { emoji: string; agents: string[] }>();
+        for (const reaction of reactions) {
+          if (Number(reaction.message_id) !== messageId) continue;
+          const entry = grouped.get(String(reaction.emoji)) ?? { emoji: String(reaction.emoji), agents: [] as string[] };
+          entry.agents.push(String(reaction.agent));
+          grouped.set(String(reaction.emoji), entry);
+        }
+        return [...grouped.values()]
+          .map((entry) => ({ emoji: entry.emoji, agents: entry.agents.join(","), count: entry.agents.length }))
+          .sort((a, b) => b.count - a.count);
+      }
+      if (/FROM reactions/i.test(sql)) {
+        const messageId = Number((_p as any[])[0] ?? 0);
+        return reactions
+          .filter((reaction) => Number(reaction.message_id) === messageId)
+          .slice()
+          .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || Number(a.id) - Number(b.id));
+      }
       return [];
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
@@ -274,6 +313,19 @@ function makeFakeClient(
           }
         }
         return { rows: [], rowCount: before - resourceLocks.length };
+      }
+      if (/DELETE FROM reactions/i.test(sql)) {
+        const [messageId, who, emoji] = p as any[];
+        const before = reactions.length;
+        for (let index = reactions.length - 1; index >= 0; index--) {
+          const reaction = reactions[index];
+          if (Number(reaction.message_id) === Number(messageId)
+            && String(reaction.agent) === String(who)
+            && String(reaction.emoji) === String(emoji)) {
+            reactions.splice(index, 1);
+          }
+        }
+        return { rows: [], rowCount: before - reactions.length };
       }
       if (/DELETE FROM agent_presence\s+WHERE id = ANY/i.test(sql)) {
         const ids = new Set((p[0] as string[]) ?? []);
@@ -717,6 +769,30 @@ function makeFakeClient(
         messages.push(row);
         return row;
       }
+      if (/INSERT INTO reactions/i.test(sql) && /ON CONFLICT/i.test(sql)) {
+        const [messageId, who, emoji] = p as any[];
+        const existing = reactions.find(
+          (reaction) => Number(reaction.message_id) === Number(messageId)
+            && String(reaction.agent) === String(who)
+            && String(reaction.emoji) === String(emoji),
+        );
+        if (existing) return undefined; // ON CONFLICT DO NOTHING -> no row (toggle removes)
+        const row = {
+          id: nextId++,
+          message_id: Number(messageId),
+          agent: String(who),
+          emoji: String(emoji),
+          created_at: new Date().toISOString(),
+        };
+        reactions.push(row);
+        return row;
+      }
+      if (/SELECT \* FROM reactions WHERE message_id = \$1/i.test(sql)) {
+        const messageId = Number(p[0] ?? 0);
+        return reactions
+          .filter((reaction) => Number(reaction.message_id) === messageId)
+          .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || Number(a.id) - Number(b.id));
+      }
       if (/INSERT INTO channel_project_linkage_receipts/i.test(sql)) {
         const rollback = /'rollback'/i.test(sql);
         const row = rollback
@@ -1051,6 +1127,7 @@ function makeFakeClient(
         channelAliases,
       channelMembers,
       messages,
+      reactions,
       messageAttachments,
       messageMentions,
       agentPresence,
@@ -3299,7 +3376,9 @@ describe("conversations-serve", () => {
       headers: { "x-api-key": rwKey },
     });
     expect(response.status).toBe(200);
-    const query = activeFakeClient!.__debug.manyCalls.at(-1)!;
+    // The reactions envelope is a separate grouped query that lands AFTER the
+    // message projection, so assert on the last MESSAGE query, not the last call.
+    const query = [...activeFakeClient!.__debug.manyCalls].reverse().find((c) => /FROM messages/i.test(c.sql))!;
     expect(query.sql).toContain("id > $");
     expect(query.sql).toContain("ORDER BY id ASC");
     expect(query.sql).not.toContain("ORDER BY created_at");
@@ -3310,7 +3389,7 @@ describe("conversations-serve", () => {
       headers: { "x-api-key": rwKey },
     });
     expect(valid.status).toBe(200);
-    const searchQuery = activeFakeClient!.__debug.manyCalls.at(-1)!;
+    const searchQuery = [...activeFakeClient!.__debug.manyCalls].reverse().find((c) => /FROM messages/i.test(c.sql))!;
     expect(searchQuery.sql).toContain("created_at >= $");
     expect(searchQuery.params).toContain("2026-08-02T12:00:00.000Z");
 
@@ -4851,5 +4930,200 @@ describe("H6 hosted /v1 outbox emission (Conversations→Events)", () => {
     } finally {
       isoServer.stop(true);
     }
+  });
+});
+
+describe("emoji reactions on /v1/messages/:id/reactions", () => {
+  async function seedReactionMessage(from = "alice", to = "bob", content = "react me"): Promise<number> {
+    const row = {
+      id: activeFakeClient!.__debug.messages.length + 1000,
+      uuid: `uuid-reaction-${activeFakeClient!.__debug.messages.length + 1000}`,
+      session_id: "react-session",
+      from_agent: from,
+      to_agent: to,
+      channel: null,
+      project_id: null,
+      content,
+      priority: "normal",
+      working_dir: null,
+      repository: null,
+      branch: null,
+      metadata: null,
+      blocking: false,
+      reply_to: null,
+      created_at: new Date().toISOString(),
+    };
+    activeFakeClient!.__debug.messages.push(row);
+    return row.id;
+  }
+
+  test("POST toggles: first add returns added, same actor re-add returns removed", async () => {
+    const id = await seedReactionMessage();
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+
+    const added = await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST", headers, body: JSON.stringify({ emoji: "👍", agent: "bob" }),
+    });
+    expect(added.status).toBe(201);
+    const addedBody = await added.json() as any;
+    expect(addedBody.toggled).toBe("added");
+    expect(addedBody.reaction.emoji).toBe("👍");
+    expect(addedBody.reaction.agent).toBe("bob");
+    expect(addedBody.reaction.message_id).toBe(id);
+
+    const removed = await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST", headers, body: JSON.stringify({ emoji: "👍", agent: "bob" }),
+    });
+    expect(removed.status).toBe(200);
+    const removedBody = await removed.json() as any;
+    expect(removedBody.toggled).toBe("removed");
+    expect(removedBody.reaction).toBeNull();
+
+    const summary = await fetch(`${base}/v1/messages/${id}/reactions?summary=true`, { headers: { "x-api-key": roKey } });
+    expect((await summary.json() as any).summary).toEqual([]);
+  });
+
+  test("POST defaults agent to the authenticated identity", async () => {
+    const id = await seedReactionMessage();
+    const added = await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ emoji: "❤️" }),
+    });
+    expect(added.status).toBe(201);
+    const body = await added.json() as any;
+    expect(body.reaction.agent).toBe("test"); // minted rwKey agent
+  });
+
+  test("GET summary and raw list report per-actor rows grouped by emoji", async () => {
+    const id = await seedReactionMessage();
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+    for (const agent of ["bob", "charlie"]) {
+      await fetch(`${base}/v1/messages/${id}/reactions`, { method: "POST", headers, body: JSON.stringify({ emoji: "👍", agent }) });
+    }
+    await fetch(`${base}/v1/messages/${id}/reactions`, { method: "POST", headers, body: JSON.stringify({ emoji: "❤️", agent: "alice" }) });
+
+    const summaryRes = await fetch(`${base}/v1/messages/${id}/reactions?summary=true`, { headers: { "x-api-key": roKey } });
+    const summary = (await summaryRes.json() as any).summary;
+    expect(summary).toHaveLength(2);
+    const thumbs = summary.find((s: any) => s.emoji === "👍");
+    expect(thumbs.count).toBe(2);
+    expect(thumbs.agents.sort()).toEqual(["bob", "charlie"]);
+
+    const listRes = await fetch(`${base}/v1/messages/${id}/reactions`, { headers: { "x-api-key": roKey } });
+    const list = (await listRes.json() as any).reactions;
+    expect(list).toHaveLength(3);
+  });
+
+  test("DELETE is idempotent: removes once, then 404", async () => {
+    const id = await seedReactionMessage();
+    await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ emoji: "🚀", agent: "bob" }),
+    });
+    const del = await fetch(`${base}/v1/messages/${id}/reactions?agent=bob&emoji=%F0%9F%9A%80`, {
+      method: "DELETE", headers: { "x-api-key": rwKey },
+    });
+    expect(del.status).toBe(200);
+    expect((await del.json() as any).removed).toBe(true);
+
+    const again = await fetch(`${base}/v1/messages/${id}/reactions?agent=bob&emoji=%F0%9F%9A%80`, {
+      method: "DELETE", headers: { "x-api-key": rwKey },
+    });
+    expect(again.status).toBe(404);
+  });
+
+  test("server normalizes emoji with NFKC so composed/decomposed spellings toggle", async () => {
+    const id = await seedReactionMessage();
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+    // é composed then decomposed — NFKC-equal, so the second is a removal.
+    const composed = await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST", headers, body: JSON.stringify({ emoji: "é", agent: "bob" }),
+    });
+    expect((await composed.json() as any).toggled).toBe("added");
+    const decomposed = await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST", headers, body: JSON.stringify({ emoji: "é", agent: "bob" }),
+    });
+    expect((await decomposed.json() as any).toggled).toBe("removed");
+  });
+
+  test("single-message GET carries the additive reactions envelope", async () => {
+    const id = await seedReactionMessage();
+    await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ emoji: "👍", agent: "bob" }),
+    });
+    const show = await fetch(`${base}/v1/messages/${id}`, { headers: { "x-api-key": roKey } });
+    expect(show.status).toBe(200);
+    const message = (await show.json() as any).message;
+    expect(message.reactions).toBeTruthy();
+    expect(message.reactions[0].emoji).toBe("👍");
+    expect(message.reactions[0].count).toBe(1);
+  });
+
+  test("POST rejects a credential-shaped emoji (400, nothing stored)", async () => {
+    const id = await seedReactionMessage();
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+    const res = await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST", headers, body: JSON.stringify({ emoji: "glpat-abcdefghijklmnopqrstuvwxyz0123", agent: "bob" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(JSON.stringify(body)).toMatch(/sensitive content/i);
+    expect(JSON.stringify(body)).not.toContain("glpat-abcdefghijklmnopqrstuvwxyz0123");
+    const list = await (await fetch(`${base}/v1/messages/${id}/reactions`, { headers: { "x-api-key": roKey } })).json() as any;
+    expect(list.reactions).toEqual([]);
+  });
+
+  test("a credential-shaped emoji seeded into the store is REDACTED on GET /reactions (raw + summary) and the show envelope", async () => {
+    const id = await seedReactionMessage();
+    const bad = "glpat-abcdefghijklmnopqrstuvwxyz0123";
+    // Bypass the write assert to simulate a malicious emoji that somehow
+    // reached the store: seed the raw row straight into the fake PG client.
+    activeFakeClient!.__debug.reactions.push({
+      id: activeFakeClient!.__debug.reactions.length + 1,
+      message_id: id,
+      agent: "bob",
+      emoji: bad,
+      created_at: new Date().toISOString(),
+    });
+
+    const roHeaders = { "x-api-key": roKey };
+
+    // raw list
+    const raw = (await (await fetch(`${base}/v1/messages/${id}/reactions`, { headers: roHeaders })).json() as any).reactions;
+    expect(raw).toHaveLength(1);
+    expect(raw[0].emoji).toContain("[REDACTED");
+    expect(raw[0].emoji).not.toContain(bad);
+
+    // grouped summary
+    const summary = (await (await fetch(`${base}/v1/messages/${id}/reactions?summary=true`, { headers: roHeaders })).json() as any).summary;
+    expect(summary).toHaveLength(1);
+    expect(summary[0].emoji).toContain("[REDACTED");
+    expect(summary[0].emoji).not.toContain(bad);
+
+    // show envelope
+    const show = (await (await fetch(`${base}/v1/messages/${id}`, { headers: roHeaders })).json() as any).message;
+    expect(show.reactions).toBeTruthy();
+    expect(show.reactions[0].emoji).toContain("[REDACTED");
+    expect(show.reactions[0].emoji).not.toContain(bad);
+  });
+
+  test("real emoji survive redaction on GET /reactions and the show envelope", async () => {
+    const id = await seedReactionMessage();
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+    await fetch(`${base}/v1/messages/${id}/reactions`, { method: "POST", headers, body: JSON.stringify({ emoji: "👍", agent: "bob" }) });
+    await fetch(`${base}/v1/messages/${id}/reactions`, { method: "POST", headers, body: JSON.stringify({ emoji: "👩‍💻", agent: "alice" }) });
+
+    const roHeaders = { "x-api-key": roKey };
+    const expected = ["👩‍💻", "👍"].sort();
+    const raw = (await (await fetch(`${base}/v1/messages/${id}/reactions`, { headers: roHeaders })).json() as any).reactions;
+    expect(raw.map((r: any) => r.emoji).sort()).toEqual(expected);
+    const summary = (await (await fetch(`${base}/v1/messages/${id}/reactions?summary=true`, { headers: roHeaders })).json() as any).summary;
+    expect(summary.map((s: any) => s.emoji).sort()).toEqual(expected);
+    const show = (await (await fetch(`${base}/v1/messages/${id}`, { headers: roHeaders })).json() as any).message;
+    expect(show.reactions.map((s: any) => s.emoji).sort()).toEqual(expected);
   });
 });

@@ -1625,6 +1625,42 @@ async function assertNoDuplicateWorkStatusTransitionPg(
   if (violation !== null) throw new Error(violation);
 }
 
+/**
+ * Attach grouped emoji reactions to a set of messages/previews with ONE
+ * grouped `message_id = ANY($1::bigint[])` query (the envelope pattern used by
+ * read/digest/show). Additive: messages without reactions keep the field
+ * absent, so serialization is byte-identical to pre-reaction reads.
+ */
+async function attachReactionSummariesPg(
+  client: TypedQueryClient,
+  messages: Array<{ id: number; reactions?: unknown }>,
+): Promise<void> {
+  if (messages.length === 0) return;
+  const ids = messages.map((m) => Number(m.id));
+  const rows = await client.many<{ message_id: string | number; emoji: string; agents: string; count: string | number }>(
+    `SELECT message_id, emoji, string_agg(agent, ',') AS agents, COUNT(*)::int AS count
+     FROM reactions
+     WHERE message_id = ANY($1::bigint[])
+     GROUP BY message_id, emoji
+     ORDER BY message_id, count DESC, MIN(created_at) ASC`,
+    [ids],
+  );
+  const byId = new Map<number, Array<{ emoji: string; count: number; agents: string[] }>>();
+  for (const row of rows) {
+    const key = Number(row.message_id);
+    const list = byId.get(key) ?? [];
+    // Redact the emoji here so reactions attached to ANY response (show,
+    // read/digest/since collection) are already redacted before the reader sees
+    // them — defense in depth for a stored emoji that bypassed the write gate.
+    list.push({ emoji: redactSensitiveText(String(row.emoji)), count: Number(row.count), agents: String(row.agents).split(",") });
+    byId.set(key, list);
+  }
+  for (const message of messages) {
+    const list = byId.get(Number(message.id));
+    if (list) message.reactions = list;
+  }
+}
+
 async function handleV1(
   path: string,
   method: string,
@@ -2018,16 +2054,16 @@ async function handleV1(
        FROM messages ${where} ORDER BY ${orderBy} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     ));
-    return json(packMessagePreviewPage(
-      fetched.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)),
-      {
-        limit: collection.limit,
-        cursor: collection.offset,
-        max_bytes: collection.maxBytes,
-        timeout_ms: collection.timeoutMs,
-        query: q,
-      },
-    ));
+    const previews = fetched.map((row) => buildCollectionMessagePreview(row, collection.previewBytes));
+    const page = packMessagePreviewPage(previews, {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+      query: q,
+    });
+    await attachReactionSummariesPg(client, page.messages);
+    return json(page);
   }
 
   // ---- mark messages read (per-agent receipts + global read_at) ----
@@ -3256,32 +3292,46 @@ async function handleV1(
            GROUP BY emoji ORDER BY count DESC, MIN(created_at) ASC`,
           [id],
         );
-        return json({ summary: rows.map((r) => ({ emoji: r.emoji, count: Number(r.count), agents: String(r.agents).split(",") })) });
+        // Run the assembled response through the redactor so a stored emoji that
+        // somehow survived the write gate cannot reach a reader verbatim.
+        return json(redactSensitiveValue({ summary: rows.map((r) => ({ emoji: r.emoji, count: Number(r.count), agents: String(r.agents).split(",") })) }));
       }
       const rows = await client.many(
         `SELECT * FROM reactions WHERE message_id = $1 ORDER BY created_at ASC, id ASC`,
         [id],
       );
-      return json({ reactions: rows });
+      return json(redactSensitiveValue({ reactions: rows }));
     }
     if (method === "POST") {
       const body = await readJson(req);
       const who = str(body.agent) ?? agent ?? undefined;
       const emoji = str(body.emoji);
       if (!who || !emoji) return json({ error: "agent and emoji are required" }, 400);
+      // Slack-style toggle: the same actor re-adding the same emoji removes it.
+      // The unique (message_id, agent, emoji) key makes ON CONFLICT DO NOTHING
+      // return no row on the second add, and the DELETE below becomes the
+      // removal. Agent defaults to the authenticated identity.
+      const norm = emoji.normalize("NFKC");
+      // Content-safety gate at the ROUTE boundary, mirroring the message-content
+      // assert: a credential-shaped/token-shaped string must never be stored in
+      // the emoji field, where every read path would otherwise serve it verbatim
+      // (P1: hosted-redaction bypass). Propagates to the top-level 400 handler.
+      assertNoSensitiveContent(norm, "Reaction emoji");
       const row = await client.get(
         `INSERT INTO reactions (message_id, agent, emoji) VALUES ($1,$2,$3)
-         ON CONFLICT (message_id, agent, emoji) DO UPDATE SET agent = EXCLUDED.agent
+         ON CONFLICT (message_id, agent, emoji) DO NOTHING
          RETURNING *`,
-        [id, who, emoji],
+        [id, who, norm],
       );
-      return json({ reaction: row }, 201);
+      if (row) return json(redactSensitiveValue({ toggled: "added", reaction: row }), 201);
+      await client.query(`DELETE FROM reactions WHERE message_id = $1 AND agent = $2 AND emoji = $3`, [id, who, norm]);
+      return json(redactSensitiveValue({ toggled: "removed", reaction: null }));
     }
     if (method === "DELETE") {
       const who = str(url.searchParams.get("agent")) ?? agent ?? undefined;
       const emoji = str(url.searchParams.get("emoji"));
       if (!who || !emoji) return json({ error: "agent and emoji are required" }, 400);
-      const res = await client.query(`DELETE FROM reactions WHERE message_id = $1 AND agent = $2 AND emoji = $3`, [id, who, emoji]);
+      const res = await client.query(`DELETE FROM reactions WHERE message_id = $1 AND agent = $2 AND emoji = $3`, [id, who, emoji.normalize("NFKC")]);
       if (res.rowCount === 0) return json({ error: "Reaction not found" }, 404);
       return json({ removed: true });
     }
@@ -3535,6 +3585,10 @@ async function handleV1(
         ? await client.get(`SELECT * FROM messages WHERE id = $1`, [ref.id])
         : await client.get(`SELECT * FROM messages WHERE uuid = $1`, [ref.uuid]);
       if (!row) return json({ error: "Message not found" }, 404);
+      // Attach reactions BEFORE redaction so a stored emoji that somehow
+      // survived the write gate is redacted by redactResponse along with the
+      // message content (P1: reactions must not bypass the hosted redactor).
+      await attachReactionSummariesPg(client, [row as { id: number; reactions?: unknown }]);
       return json({ message: redactResponse(row) });
     }
     if (ref.kind !== "id") {
