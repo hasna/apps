@@ -1439,8 +1439,12 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'project-panel') {
     const projectRef = flags.project ?? positional[1];
     if (!projectRef) throw new Error('Usage: knowledge project-panel --project <id|name|slug> [--json|--contract]');
+    // Only resolve the project's registered collection over the hosted route.
+    // In local mode the cwd-derived inventory is the intended source and the
+    // local project-links authority would create a knowledge.db as a side effect.
     const panel = await createKnowledgeProjectPanel(projectRef, {
       service,
+      projectLinksAuthority: usesKnowledgeHttpTransport() ? projectLinksAuthority() : undefined,
       limit: flags.limit,
       storePath: usesKnowledgeHttpTransport() ? undefined : storePath,
       includeArchived: flags.includeArchived || flags.archived,

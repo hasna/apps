@@ -7,11 +7,17 @@ import {
   type ResourceKind,
 } from '@hasna/contracts';
 import { createKnowledgeService, type KnowledgeInventoryResult, type KnowledgeService } from './service';
+import {
+  KnowledgeProjectLinksError,
+  type KnowledgeProjectLinksAuthority,
+  type KnowledgeProjectResource,
+} from './project-links';
 
 const SOURCE_PACKAGE = '@hasna/knowledge';
 
 export interface KnowledgeProjectPanelOptions {
   service?: KnowledgeService;
+  projectLinksAuthority?: KnowledgeProjectLinksAuthority;
   scope?: string;
   cwd?: string;
   limit?: number;
@@ -212,10 +218,135 @@ function inventoryItems(inventory: KnowledgeInventoryResult, limit: number): Pro
   return items.slice(0, limit);
 }
 
+// A project that has registered a knowledge collection (project-resources) must
+// surface ITS bound items, never the cwd-derived local store or the global
+// fallback. Builds the panel from the registered collection and its bound items.
+function registeredCollectionPanel(
+  projectRef: string,
+  projectId: string,
+  resources: KnowledgeProjectResource[],
+  limit: number,
+  generatedAt: string,
+): ProjectPanel {
+  const collection = resources.find((resource) => resource.kind === 'collection');
+  const itemResources = resources.filter((resource) => resource.kind === 'item');
+  const activeItemResources = itemResources.filter((resource) => resource.metadata?.archived !== true);
+  const latest = itemResources
+    .map((resource) => toTimestamp(asString(resource.metadata?.updated_at, resource.revision)))
+    .filter(Boolean)
+    .sort((left, right) => (right as string).localeCompare(left as string))[0];
+  const freshness = freshnessFor(latest);
+  const state = activeItemResources.length === 0 ? 'empty' : 'ready';
+  const items: ProjectPanelInput['items'] = activeItemResources.slice(0, limit).map((boundItem) => {
+    const tags = Array.isArray(boundItem.metadata?.tags) ? (boundItem.metadata.tags as string[]) : [];
+    const archived = boundItem.metadata?.archived === true;
+    return {
+      id: `item_${boundItem.id}`,
+      title: boundItem.title,
+      status: archived ? 'archived' : 'active',
+      priority: 'medium',
+      timestamp: toTimestamp(asString(boundItem.metadata?.updated_at, boundItem.revision)),
+      resourceRefs: [resource('knowledge', boundItem.id, boundItem.title, `knowledge://item/${encodeURIComponent(boundItem.id)}`, tags)],
+      metadata: {
+        source: 'project_collection',
+        collection_id: boundItem.collection_id,
+        archived,
+        tags,
+      },
+    };
+  });
+  const activeItems = activeItemResources.length;
+  const draft: ProjectPanelInput = {
+    schema: SCHEMA_IDS.projectPanel,
+    id: `knowledge_panel_${projectId}`,
+    createdAt: generatedAt,
+    projectId,
+    provider: {
+      kind: 'knowledge',
+      id: `knowledge_${projectId}`,
+      name: 'Knowledge',
+      sourcePackage: SOURCE_PACKAGE,
+      externalId: collection ? `knowledge:collection:${collection.id}` : `project://${projectId}`,
+    },
+    kind: 'knowledge',
+    title: 'Knowledge',
+    summary: state === 'empty'
+      ? 'No knowledge items are bound to this project.'
+      : `${activeItems} active note(s) bound to this project's knowledge collection.`,
+    state,
+    generatedAt,
+    freshness,
+    metrics: [
+      { id: 'active_items', label: 'Active notes', value: activeItems, status: activeItems > 0 ? 'good' : 'unknown' },
+      { id: 'sources', label: 'Sources', value: 0, status: 'unknown' },
+      { id: 'chunks', label: 'Chunks', value: 0, status: 'unknown' },
+      { id: 'wiki_pages', label: 'Wiki pages', value: 0, status: 'unknown' },
+      { id: 'artifacts', label: 'Artifacts', value: 0, status: 'unknown' },
+      { id: 'vector_entries', label: 'Vector entries', value: 0, status: 'unknown' },
+      { id: 'unresolved', label: 'Unresolved', value: 0, status: 'good' },
+    ],
+    items,
+    actions: [
+      resource('action', 'knowledge:inventory', 'Inspect knowledge inventory'),
+      resource('action', 'knowledge:context-pack', 'Build cited context pack'),
+      resource('action', 'knowledge:ingest', 'Ingest project source'),
+    ],
+    resourceRefs: [
+      resource('project', projectId, projectRef, `project://${projectId}`),
+      ...(collection
+        ? [resource('knowledge', collection.id, collection.title ?? 'Knowledge collection', `knowledge://collection/${encodeURIComponent(collection.id)}`)]
+        : []),
+      resource('knowledge', `home_${projectId}`, 'Knowledge workspace', `knowledge://workspace/${encodeURIComponent(projectId)}`),
+      resource('artifact', `db_${projectId}`, 'Knowledge database', `knowledge://db/${encodeURIComponent(projectId)}`),
+    ],
+    renderFragment: {
+      renderer: 'json_render',
+      title: 'Knowledge',
+      spec: {
+        component: 'project.knowledge.summary',
+        metrics: ['active_items', 'sources', 'chunks', 'wiki_pages', 'unresolved'],
+        itemLimit: limit,
+      },
+    },
+    metadata: {
+      scope: 'project',
+      home: collection ? `knowledge:collection:${collection.id}` : `project://${projectId}`,
+      json_store_exists: false,
+      latest_activity_at: latest,
+      project_links: 'registered',
+      collection_id: collection?.id,
+      collection_slug: asString(collection?.metadata?.slug, projectId),
+      membership_rule: asString(collection?.metadata?.membership_rule),
+      member_count: asNumber(collection?.metadata?.member_count),
+    },
+  };
+
+  return parseContract(SCHEMA_IDS.projectPanel, draft);
+}
+
 export async function createKnowledgeProjectPanel(projectRef: string, options: KnowledgeProjectPanelOptions = {}): Promise<ProjectPanel> {
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify(projectRef);
+
+  // When a project-links authority is available, resolve the project's
+  // registered collection and surface its bound items. A project with a
+  // registered collection must never fall through to the cwd-derived local
+  // store or the global fallback. An unregistered project (NOT_FOUND) keeps
+  // the legacy inventory path so nothing else regresses.
+  if (options.projectLinksAuthority) {
+    try {
+      const resources = await options.projectLinksAuthority.readAllProjectResources(projectRef);
+      if (resources.some((resource) => resource.kind === 'collection')) {
+        return registeredCollectionPanel(projectRef, projectId, resources, limit, generatedAt);
+      }
+    } catch (error) {
+      if (!(error instanceof KnowledgeProjectLinksError) || error.code !== 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND') {
+        throw error;
+      }
+    }
+  }
+
   const service = options.service ?? createKnowledgeService({ scope: options.scope ?? 'project', cwd: options.cwd });
   // Route through the unified inventory dispatch so the panel reflects the shared
   // server corpus over HTTP and the local catalog otherwise — never the local

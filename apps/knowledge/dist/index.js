@@ -29739,10 +29739,110 @@ function inventoryItems(inventory, limit) {
   }
   return items.slice(0, limit);
 }
+function registeredCollectionPanel(projectRef, projectId, resources, limit, generatedAt) {
+  const collection = resources.find((resource2) => resource2.kind === "collection");
+  const itemResources = resources.filter((resource2) => resource2.kind === "item");
+  const activeItemResources = itemResources.filter((resource2) => resource2.metadata?.archived !== true);
+  const latest = itemResources.map((resource2) => toTimestamp(asString5(resource2.metadata?.updated_at, resource2.revision))).filter(Boolean).sort((left, right) => right.localeCompare(left))[0];
+  const freshness = freshnessFor(latest);
+  const state = activeItemResources.length === 0 ? "empty" : "ready";
+  const items = activeItemResources.slice(0, limit).map((boundItem) => {
+    const tags = Array.isArray(boundItem.metadata?.tags) ? boundItem.metadata.tags : [];
+    const archived = boundItem.metadata?.archived === true;
+    return {
+      id: `item_${boundItem.id}`,
+      title: boundItem.title,
+      status: archived ? "archived" : "active",
+      priority: "medium",
+      timestamp: toTimestamp(asString5(boundItem.metadata?.updated_at, boundItem.revision)),
+      resourceRefs: [resource("knowledge", boundItem.id, boundItem.title, `knowledge://item/${encodeURIComponent(boundItem.id)}`, tags)],
+      metadata: {
+        source: "project_collection",
+        collection_id: boundItem.collection_id,
+        archived,
+        tags
+      }
+    };
+  });
+  const activeItems = activeItemResources.length;
+  const draft = {
+    schema: SCHEMA_IDS.projectPanel,
+    id: `knowledge_panel_${projectId}`,
+    createdAt: generatedAt,
+    projectId,
+    provider: {
+      kind: "knowledge",
+      id: `knowledge_${projectId}`,
+      name: "Knowledge",
+      sourcePackage: SOURCE_PACKAGE,
+      externalId: collection ? `knowledge:collection:${collection.id}` : `project://${projectId}`
+    },
+    kind: "knowledge",
+    title: "Knowledge",
+    summary: state === "empty" ? "No knowledge items are bound to this project." : `${activeItems} active note(s) bound to this project's knowledge collection.`,
+    state,
+    generatedAt,
+    freshness,
+    metrics: [
+      { id: "active_items", label: "Active notes", value: activeItems, status: activeItems > 0 ? "good" : "unknown" },
+      { id: "sources", label: "Sources", value: 0, status: "unknown" },
+      { id: "chunks", label: "Chunks", value: 0, status: "unknown" },
+      { id: "wiki_pages", label: "Wiki pages", value: 0, status: "unknown" },
+      { id: "artifacts", label: "Artifacts", value: 0, status: "unknown" },
+      { id: "vector_entries", label: "Vector entries", value: 0, status: "unknown" },
+      { id: "unresolved", label: "Unresolved", value: 0, status: "good" }
+    ],
+    items,
+    actions: [
+      resource("action", "knowledge:inventory", "Inspect knowledge inventory"),
+      resource("action", "knowledge:context-pack", "Build cited context pack"),
+      resource("action", "knowledge:ingest", "Ingest project source")
+    ],
+    resourceRefs: [
+      resource("project", projectId, projectRef, `project://${projectId}`),
+      ...collection ? [resource("knowledge", collection.id, collection.title ?? "Knowledge collection", `knowledge://collection/${encodeURIComponent(collection.id)}`)] : [],
+      resource("knowledge", `home_${projectId}`, "Knowledge workspace", `knowledge://workspace/${encodeURIComponent(projectId)}`),
+      resource("artifact", `db_${projectId}`, "Knowledge database", `knowledge://db/${encodeURIComponent(projectId)}`)
+    ],
+    renderFragment: {
+      renderer: "json_render",
+      title: "Knowledge",
+      spec: {
+        component: "project.knowledge.summary",
+        metrics: ["active_items", "sources", "chunks", "wiki_pages", "unresolved"],
+        itemLimit: limit
+      }
+    },
+    metadata: {
+      scope: "project",
+      home: collection ? `knowledge:collection:${collection.id}` : `project://${projectId}`,
+      json_store_exists: false,
+      latest_activity_at: latest,
+      project_links: "registered",
+      collection_id: collection?.id,
+      collection_slug: asString5(collection?.metadata?.slug, projectId),
+      membership_rule: asString5(collection?.metadata?.membership_rule),
+      member_count: asNumber2(collection?.metadata?.member_count)
+    }
+  };
+  return parseContract(SCHEMA_IDS.projectPanel, draft);
+}
 async function createKnowledgeProjectPanel(projectRef, options = {}) {
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify3(projectRef);
+  if (options.projectLinksAuthority) {
+    try {
+      const resources = await options.projectLinksAuthority.readAllProjectResources(projectRef);
+      if (resources.some((resource2) => resource2.kind === "collection")) {
+        return registeredCollectionPanel(projectRef, projectId, resources, limit, generatedAt);
+      }
+    } catch (error) {
+      if (!(error instanceof KnowledgeProjectLinksError) || error.code !== "KNOWLEDGE_PROJECT_LINKS_NOT_FOUND") {
+        throw error;
+      }
+    }
+  }
   const service = options.service ?? createKnowledgeService({ scope: options.scope ?? "project", cwd: options.cwd });
   const inventory = await service.resolveInventory({
     limit,
