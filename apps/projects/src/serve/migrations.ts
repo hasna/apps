@@ -1,4 +1,4 @@
-// Migration runner for projects-serve (Amendment A1 pure-remote Postgres).
+// Migration runner for projects-serve's PostgreSQL backend.
 //
 // Source of truth is the SQL files in the repo `migrations/` directory, applied
 // in filename order through the vendored storage kit's MigrationLedger (which
@@ -197,7 +197,7 @@ export async function runMigrationLedgerWithCompatibility(
   return { ...result, applied };
 }
 
-/** Apply all pending migrations against the given cloud client. */
+/** Apply all pending migrations against the given PostgreSQL client. */
 export async function runProjectsMigrations(
   client: TypedQueryClient,
   opts: { dryRun?: boolean } = {},

@@ -8,21 +8,21 @@ import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 import { closeDatabase } from "../db/database.js";
 import { __resetProjectStore } from "../store/project-store.js";
-import { API_MODE_ENV_KEYS } from "../testing/spawn-env.js";
+import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
 
 describe("projects MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
   let root: string;
   let previousDbPath: string | undefined;
-  let previousApiEnv: Partial<Record<(typeof API_MODE_ENV_KEYS)[number], string | undefined>>;
+  let previousApiEnv: Partial<Record<(typeof HOSTED_API_ENV_KEYS)[number], string | undefined>>;
 
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
     previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
     previousApiEnv = {};
-    for (const key of API_MODE_ENV_KEYS) {
+    for (const key of HOSTED_API_ENV_KEYS) {
       previousApiEnv[key] = process.env[key];
       delete process.env[key];
     }
@@ -56,7 +56,7 @@ describe("projects MCP HTTP transport", () => {
     } else {
       process.env.HASNA_PROJECTS_DB_PATH = previousDbPath;
     }
-    for (const key of API_MODE_ENV_KEYS) {
+    for (const key of HOSTED_API_ENV_KEYS) {
       const value = previousApiEnv[key];
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

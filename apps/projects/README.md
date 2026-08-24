@@ -106,7 +106,7 @@ projects oss matrix --root /home/me/opensource --prefix open- --json
 projects oss matrix --root /home/me/opensource --limit 50 --no-prs --no-tasks
 projects store inspect my-app --json
 projects store ensure my-app --json
-projects store ensure wks_exact_stable_id --dry-run --json  # required target form in API mode
+projects store ensure wks_exact_stable_id --dry-run --json  # required target form on the hosted backend
 projects store migrate my-app --json          # dry-run plan
 projects store migrate my-app --apply --json  # explicit move/update
 projects link my-app --github-url https://github.com/hasna/my-app --todos-project-id todo_123 --todos-task-list-id list_123
@@ -231,7 +231,7 @@ folder name.
 the current primary path is canonical. `projects store ensure` creates missing
 workspace/data directories, initializes the machine-local `project.db`, and
 only sets the canonical path as primary when the project had no primary path.
-In API mode, ensure requires the complete stable `wks_...` id, reads the full
+On the hosted backend, ensure requires the complete stable `wks_...` id, reads the full
 project through the producer-bounded guarded endpoint, and uses the guarded
 conditional update/receipt path for a missing primary path. Slugs and partial
 ids are refused before transport; the station-local store is never created from
@@ -288,14 +288,16 @@ board:
 }
 ```
 
-Cloud-backed runtime support is the storage flip. By default the client reads
-and writes the local SQLite registry (`HASNA_PROJECTS_DB_PATH` or
-`~/.hasna/projects/projects.db`). When `HASNA_PROJECTS_API_URL` and
-`HASNA_PROJECTS_API_KEY` are set, all registry reads and writes go to the
-hosted API instead; the flip does not move per-project canvases, data records,
-loop links, or asset files out of `$HASNA_PROJECTS_HOME/data/<workspace_id>/`.
-See the Storage Sync section and `docs/cloud-storage-readiness-contract.md` for
-the flip contract.
+Hosted-backend support uses the same connection rule as Storage Sync. By
+default the client reads and writes the local SQLite registry
+(`HASNA_PROJECTS_DB_PATH` or `~/.hasna/projects/projects.db`). When
+`HASNA_PROJECTS_API_URL` and `HASNA_PROJECTS_API_KEY` are both set, all
+registry reads and writes go to the hosted API instead; this does not move
+per-project canvases, data records, loop links, or asset files out of
+`$HASNA_PROJECTS_HOME/data/<workspace_id>/`. Setting only one API variable
+fails closed.
+See the Storage Sync section and
+`docs/hosted-backend-readiness-contract.md` for the connection contract.
 
 `projects dashboard *` is the Projects-owned viewer surface for agent-managed
 project folders. It standardizes `.hasna/project/` inside the project path,
@@ -345,44 +347,39 @@ contexts.
 ## Storage Sync
 
 Projects reads and writes either the local SQLite registry or the hosted HTTP
-API, selected entirely by environment.
+API. The client selects the connection from API URL and API key presence.
 
 Local is the default. The client stores the project registry in SQLite at
 `HASNA_PROJECTS_DB_PATH` (or `~/.hasna/projects/projects.db`) and never touches
 Postgres.
 
-The flip routes all registry reads and writes to the hosted API:
+Set both variables to route all registry reads and writes to the hosted API:
 
 ```bash
 export HASNA_PROJECTS_API_URL="<base URL of the projects server>"  # /v1 is appended
 export HASNA_PROJECTS_API_KEY="<API key with projects:read and projects:write>"
 ```
 
-`HASNA_PROJECTS_STORAGE_MODE=cloud` makes the intent explicit. The deprecated
-aliases `self_hosted`, `remote`, and `hybrid` all map to `cloud` (the hyphen
-form `self-hosted` is accepted too). Without any explicit mode, the joint
-presence of `HASNA_PROJECTS_API_URL` plus `HASNA_PROJECTS_API_KEY` IS the flip
-signal and infers cloud. The unprefixed keys `PROJECTS_API_URL`,
-`PROJECTS_API_KEY`, and `PROJECTS_STORAGE_MODE` are accepted, and
-`HASNA_PROJECTS_MODE` / `PROJECTS_MODE` are valid mode keys.
+The client has one local connection and one HTTP connection. The HTTP
+connection is selected only when `HASNA_PROJECTS_API_URL` and
+`HASNA_PROJECTS_API_KEY` are both present. The unprefixed keys
+`PROJECTS_API_URL` and `PROJECTS_API_KEY` are accepted as aliases.
 
-In cloud mode every registry command goes to `<API_URL>/v1` with the API key as
-a bearer token. The client carries only the API key — never a database DSN —
-and the key value is never logged, returned, or embedded in output.
+On the HTTP connection every registry command goes to `<API_URL>/v1` with the
+API key as a bearer token. The client carries only the API key — never a
+database DSN — and the key value is never logged, returned, or embedded in
+output.
 
-Misconfiguration is fail-closed. Cloud requested without
-`HASNA_PROJECTS_API_KEY` or without `HASNA_PROJECTS_API_URL` refuses to route,
-and commands hard-fail instead of silently reading the local dataset. An
-unknown mode value is an error: `Unknown storage mode: <value>. Use local or
-cloud.` Unsetting either half of the flip pair returns the client to local
-storage.
+Configuration is fail-closed. Setting only one of the API URL and API key
+refuses to route, and commands hard-fail instead of silently reading the local
+dataset. Setting neither uses the local SQLite registry.
 
-The flip moves the global project registry only. Machine-local side effects
-(tmux sessions, git operations, directory creation, rendering) and per-project
-data stay on-box in both modes: canvases, data records, loop links, and asset
-files live in `$HASNA_PROJECTS_HOME/data/<workspace_id>/`.
+The HTTP connection moves the global project registry only. Machine-local side
+effects (tmux sessions, git operations, directory creation, rendering) and
+per-project data stay on-box either way: canvases, data records, loop links,
+and asset files live in `$HASNA_PROJECTS_HOME/data/<workspace_id>/`.
 
-The server side of the flip is `projects-serve`. It runs against PostgreSQL and
+The server side of the hosted connection is `projects-serve`. It runs against PostgreSQL and
 requires `HASNA_PROJECTS_DATABASE_URL` (or `PROJECTS_DATABASE_URL` /
 `DATABASE_URL`), failing fast without it. API keys are verified per request and
 scoped: `projects:read` for reads, `projects:write` for writes. See the HTTP
@@ -404,7 +401,7 @@ Add to an MCP client config:
 }
 ```
 
-## HTTP mode
+## Streamable HTTP (MCP)
 
 MCP uses stdio by default. A long-lived Streamable HTTP transport is also available on `127.0.0.1`:
 
@@ -510,7 +507,7 @@ Global registry DB path: `~/.hasna/projects/projects.db`
 
 Per-project app data path: `~/.hasna/projects/data/<workspace_id>/project.db`
 
-Cloud readiness contract: `docs/cloud-storage-readiness-contract.md`
+Hosted-backend readiness contract: `docs/hosted-backend-readiness-contract.md`
 
 Per-project app tables:
 
@@ -548,10 +545,10 @@ import {
 
 Per-project store helpers are also available from `@hasna/projects/project-store`.
 
-## HTTP API (`projects-serve`) & self_hosted SDK
+## HTTP API (`projects-serve`) & hosted SDK
 
-`projects-serve` is the self-hosted HTTP surface. It talks to cloud Postgres
-directly (Amendment A1, pure-remote — no local cache or sync in the service).
+`projects-serve` is the HTTP surface for `@hasna/projects`. It talks directly
+to PostgreSQL with no local cache or sync in the service.
 
 ```sh
 # apply migrations, then serve
@@ -561,7 +558,7 @@ HASNA_PROJECTS_DATABASE_URL=<postgres-connection-string> HASNA_PROJECTS_API_SIGN
 
 Endpoints:
 
-- `GET /health`, `GET /ready`, `GET /version` → `{status, version, mode}` (unauthenticated)
+- `GET /health`, `GET /ready`, `GET /version` → `{status, version}` (unauthenticated)
 - `GET /openapi.json` → the OpenAPI 3.1 document
 - `/v1/*` (API key required, header `x-api-key` or `Authorization: Bearer`):
   - `GET|POST /v1/projects`, `GET|PATCH|DELETE /v1/projects/{id}`,
@@ -578,7 +575,7 @@ The typed client is generated from the serve OpenAPI (`bun run sdk:generate`):
 ```ts
 import { ProjectsClient, createProjectsClientFromEnv } from "@hasna/projects/sdk";
 
-// self_hosted convention: PROJECTS_API_URL + PROJECTS_API_KEY (never a DSN)
+// Hosted connection: PROJECTS_API_URL + PROJECTS_API_KEY (never a DSN)
 const projects = createProjectsClientFromEnv();
 const created = await projects.createProject({ name: "My Project", tags: ["demo"] });
 const list = await projects.listProjects({ tag: "demo" });

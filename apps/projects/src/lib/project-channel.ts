@@ -645,15 +645,15 @@ export function ensureProjectChannel(
 
 /**
  * Minimal structural view of the projects Store used by the store-routed
- * ensure. `ProjectStore` (local + api) is assignable to this.
+ * ensure. `ProjectStore` (local + HTTP) is assignable to this.
  *
  * Ensure no longer writes the channel link, so this carries no `updateProject`:
  * the only thing routed through the Store is the audit event, which must land
- * wherever the project actually lives (the cloud in api mode) rather than in a
+ * wherever the project actually lives (the hosted backend) rather than in a
  * local sqlite file that does not contain the project.
  */
 export interface ProjectChannelStore {
-  readonly mode: "local" | "api";
+  readonly transport: "local" | "http";
   recordEvent(
     idOrSlug: string,
     input: { event_type: string; source: EventSource; agentId?: string; command?: string; after?: JsonObject | null },
@@ -673,7 +673,7 @@ export interface StoreEnsureChannelOptions {
 /**
  * Store-routed variant of {@link ensureProjectChannel}. The channel derivation
  * is pure and the conversations channel creation is a machine-local side effect
- * (the local `conversations` client itself routes to the shared cloud); the
+ * (the local `conversations` client itself routes to the shared hosted service); the
  * audit event goes through the Store so it lands wherever the project actually
  * lives. Nothing here writes the project record. Never throws for
  * conversations/derivation failures; reports them via `status: "error"`.
@@ -711,7 +711,7 @@ export async function ensureProjectChannelViaStore(
 
   // No store read-back: with the link write gone there is nothing to re-read.
   // `linked` is answered by the record we were handed, and re-fetching it would
-  // only add a network round-trip in api/cloud mode whose transient failure
+  // only add a network round-trip in the hosted backend whose transient failure
   // would report a fully created channel as an error.
   const updated = project;
 

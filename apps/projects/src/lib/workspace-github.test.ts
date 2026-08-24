@@ -24,7 +24,6 @@ beforeEach(() => {
   process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
   delete process.env["HASNA_PROJECTS_API_URL"];
   delete process.env["HASNA_PROJECTS_API_KEY"];
-  delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
   closeDatabase();
   __resetProjectStore();
 });

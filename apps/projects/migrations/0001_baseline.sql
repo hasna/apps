@@ -1,4 +1,4 @@
--- projects-serve baseline schema (Postgres / cloud, Amendment A1 pure-remote).
+-- projects-serve baseline schema for the PostgreSQL backend.
 -- Generated from src/db/pg-migrations.ts PG_MIGRATIONS. Applied via the kit
 -- MigrationLedger (schema_migrations) by src/serve/migrations.ts. Do not edit
 -- applied migrations in place — the ledger checksum guards against drift.

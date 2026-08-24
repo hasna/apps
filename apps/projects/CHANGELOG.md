@@ -38,8 +38,8 @@
 
 ### Patch Changes
 
-- a3bcfa7: API-mode budget reads reject with an error instead of returning a hardcoded empty list (fixes 9ddd325c), so a failed or unauthorized budget read can no longer present as a healthy zero.
-- 95342c1: Local `listEvents` bounds the result and returns newest-first, matching the api transport (fixes d731c1f8).
+- a3bcfa7: HTTP transport budget reads reject with an error instead of returning a hardcoded empty list (fixes 9ddd325c), so a failed or unauthorized budget read can no longer present as a healthy zero.
+- 95342c1: Local `listEvents` bounds the result and returns newest-first, matching the HTTP transport (fixes d731c1f8).
 - Updated dependencies [5ff8f02]
   - @hasna/conversations@0.7.5
 
@@ -47,7 +47,7 @@
 
 ### Patch Changes
 
-- e95d7bf: Budget reads parse `reset_at` as the zoneless UTC string it is stored as (fixes 654283bf), so budget state round-trips correctly in api mode.
+- e95d7bf: Budget reads parse `reset_at` as the zoneless UTC string it is stored as (fixes 654283bf), so budget state round-trips correctly over the HTTP transport.
 - abb96c5: The registry DB opens with `busy_timeout=5000` so concurrent writers wait instead of failing with SQLITE_BUSY (fixes 4d266bd1).
 - Updated dependencies [5275dde]
 - Updated dependencies [1c859c2]
@@ -122,24 +122,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Cloud mode now requires an explicit API URL: with `HASNA_PROJECTS_STORAGE_MODE=cloud`
-  and an API key but no `HASNA_PROJECTS_API_URL` (or the legacy URL env keys), the
-  client reports a misconfiguration warning naming the missing variable instead of
-  guessing a hardcoded default host. This removes the hardcoded host from the
-  published artifact per the monorepo publish-guard rule; the host must be configured
+- The hosted backend now requires an explicit API URL when an API key is present
+  without `HASNA_PROJECTS_API_URL` (or the supported URL alias). The client reports
+  a misconfiguration warning naming the missing variable instead of guessing a
+  hardcoded default host. This removes the hardcoded host from the published
+  artifact per the monorepo publish-guard rule; the host must be configured
   explicitly.
 
 ### Patch
 
 - First release from the hasna/apps monorepo. The package was imported from
   hasna/projects with history preserved (import capsule 86a604070, import merge
-  ff0c8e055); apart from the cloud-mode URL change above there are no functional
+  ff0c8e055); apart from the hosted-connection URL change above there are no functional
   changes since 0.1.131 — the rest of the delta is the import itself plus the
   monorepo workspace wiring (tsconfig bun-types→bun, ajv declared as a
   devDependency, changelog headings reconciled to 0.1.131). This patch establishes
   version ownership under the monorepo.
 
 ## [Unreleased]
+
+### Changed
+
+- Projects now selects the local SQLite registry or hosted HTTP API solely from
+  API URL and API key presence. A partial pair fails closed, and the server
+  health/version responses no longer expose the legacy deployment selector.
 
 ### Added
 
@@ -609,8 +615,8 @@ fails against that build.
 
 ### Fixed
 
-- **`projects create` no longer drops registry flags in api/cloud mode
-  ([#27](https://github.com/hasna/projects/issues/27)).** The api branch
+- **`projects create` no longer drops registry flags in the hosted backend
+  ([#27](https://github.com/hasna/projects/issues/27)).** The hosted branch
   forwarded only `name`/`slug`/`description`/`kind`/`root`/`recipe`/`tags` plus
   the raw `--metadata-json`/`--integrations-json` blobs, so `--path`,
   `--git-remote` and every management/integration flag (`--stage`,
@@ -619,26 +625,26 @@ fails against that build.
   `--todos-project-id`, `--todos-task-list-id`, `--brief-id`, `--brief-path`)
   were silently ignored, producing a bare row that then had to be repaired with
   `projects update --path`. Registry input is now parsed and merged once, ahead
-  of the store branch, and forwarded to the cloud create exactly as it is for a
+  of the store branch, and forwarded to the hosted create exactly as it is for a
   local create.
 
 ### Changed
 
 - **`projects create` now fails before creating a row when machine-local
-  runtime flags are requested in api/cloud mode
+  runtime flags are requested in the hosted backend
   ([#27](https://github.com/hasna/projects/issues/27)).** `--mkdir`,
   `--git-init`, `--marker`, `--tmux-session`, `--tmux-windows-json` and
-  `--tmux-profile` cannot be applied to a remote project row, and no api-mode
+  `--tmux-profile` cannot be applied to a hosted project row, and no hosted-backend
   command can apply them afterwards. Instead of creating the row and silently
   skipping the runtime work (leaving a partial, row-only project), the command
   now exits non-zero with a `local-only operation ...` message naming the
   offending flags, and issues no create request at all. Use `--dry-run` to
   preview the full local plan.
-- **Tests no longer inherit the operator shell's cloud selectors.** A new
+- **Tests no longer inherit the operator shell's hosted API selectors.** A new
   `testSpawnEnv()` helper (and the matching in-process guard) strips
   `HASNA_PROJECTS_API_URL`/`HASNA_PROJECTS_API_KEY` unless a test opts into api
-  mode explicitly, so `bun test` exercises the local store instead of silently
-  running against — and creating real rows in — the live cloud registry.
+  connection explicitly, so `bun test` exercises the local store instead of silently
+  running against — and creating real rows in — the live hosted registry.
 
 ## [0.1.93]
 
@@ -661,10 +667,10 @@ fails against that build.
   tmux format-literal guard as explicit paths, and window creation still
   succeeds when the lookup fails.
 - **`projects channel --ensure` no longer reports total failure after its side
-  effects landed (api/cloud mode).** `ensureProjectChannelViaStore` performs
+  effects landed (the hosted backend).** `ensureProjectChannelViaStore` performs
   three independent mutations — create the Conversations channel, persist
   `integrations.conversations_channel`, append a `channel_ensured` audit event.
-  The final step POSTs to `/projects/:id/events`, which the cloud API does not
+  The final step POSTs to `/projects/:id/events`, which the hosted API does not
   serve, so a fully completed ensure exited 1 with a raw
   `Hasna request failed: POST /projects/<id>/events -> 404` while the channel
   and the project link were already committed. Agents then treated a linked
@@ -730,7 +736,7 @@ JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
   diverged from the deployed `@hasna/projects@0.1.89`: the published
   `ProjectStore` seam refactor (0.1.85–0.1.89 — unify the registry behind one
   `ProjectStore` and route all CLI + MCP registry / status / dashboard /
-  GitHub-import / coordination / cloud-api writes and the prompt-agent through
+   GitHub-import / coordination / hosted API writes and the prompt-agent through
   the Store to kill split-brain, plus the production Docker prod-deps image fix)
   was live on npm but never landed on `main`, while a set of `main`-only
   CLI/UX fixes had never been published. This release merges the published tag
@@ -747,29 +753,29 @@ JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
 - `projects sessions` with no target reports recent project start sessions
   aggregated across all projects instead of failing with `Project not found`.
 - `projects events record` fails fast with a clear local-only message in
-  api/cloud mode instead of silently writing local sqlite or leaking a raw
+  the hosted backend instead of silently writing local sqlite or leaking a raw
   upstream `404` for `POST /projects/:id/events`.
 - Generic project canvas blocks + canvas geometry hardening, dashboard render
   manifest imports and linked-canvas surfacing, the dashboard Todos provider
   link, subcommand `--help`/`-h` routing to commander, shell completion derived
   from the live CLI surface, and `projects create --dry-run` no-persist
-  semantics in cloud mode.
+  semantics in the hosted backend.
 
 ## [0.1.89]
 
 ### Fixed
 
-- **Prompt-agent cloud-write split-brain**: in api/cloud mode the LLM
+- **Prompt-agent cloud-write split-brain**: in the hosted backend the LLM
   prompt-agent (`projects agent "..."` / MCP `projects_agent_prompt`) now
-  routes every shared-registry mutation through the `ProjectStore` (cloud
-  HTTP `<url>/v1`) instead of writing directly to local sqlite. Previously
+  routes every shared-registry mutation through the `ProjectStore` (hosted HTTP
+  `<url>/v1`) instead of writing directly to local sqlite. Previously
   only `projects_create` used the store; `update`, `archive`, `unarchive`,
   `delete`, `tag`, `untag`, `integration_unlink` and `event_record` wrote to
-  the local island while the project lived in the cloud, and target
+  the local island while the project lived in the hosted registry, and target
   resolution read local. The per-project local-only sub-resources
   (`agents_assign`, `locations_add`) now surface the store's
-  `LocalOnlyOperationError` as a clean tool error in cloud mode rather than
-  silently writing local sqlite. Local mode behaviour is unchanged.
+  `LocalOnlyOperationError` as a clean tool error in the hosted backend rather than
+  silently writing local sqlite. Local connection behavior is unchanged.
 
 ## [0.1.84] - 2026-07-07
 
@@ -842,13 +848,13 @@ JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
 
 ### Added
 
-- **`projects-serve` HTTP API** — a new self-hosted HTTP surface for the project
+- **`projects-serve` HTTP API** — a new hosted HTTP surface for the project
   domain. Unauthenticated probes `GET /health`, `/ready`, `/version` (each
-  returns `{status, version, mode}`) plus `GET /openapi.json`, and an
+  returns `{status, version}`) plus `GET /openapi.json`, and an
   API-key-guarded versioned `/v1` covering project (workspace) CRUD
   (`/v1/projects` list/create/get/patch/delete + `/archive`, `/unarchive`,
-  `/events`) and roots/agents/recipes. Amendment A1 pure-remote: the service
-  reads and writes cloud Postgres directly through the vendored storage kit,
+  `/events`) and roots/agents/recipes. Amendment A1 direct PostgreSQL: the service
+  reads and writes PostgreSQL directly through the vendored storage kit,
   with no local cache or sync engine.
 - **API-key authentication** via `@hasna/contracts/auth` (`verifyApiKey`) —
   stateless HMAC-verified `hasna_projects_*` tokens with `projects:read` /
@@ -856,8 +862,8 @@ JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
 - **Generated SDK** (`@hasna/projects/sdk`) — a typed, dependency-free
   `ProjectsClient` generated from the serve OpenAPI document
   (`bun run sdk:generate`), plus `createProjectsClientFromEnv()` for the
-  `PROJECTS_API_URL` + `PROJECTS_API_KEY` self_hosted convention.
-- **Cloud storage + migrations** — vendored `@hasna/contracts` storage kit under
+  `PROJECTS_API_URL` + `PROJECTS_API_KEY` hosted convention.
+- **Hosted PostgreSQL storage + migrations** — vendored `@hasna/contracts` storage kit under
   `src/generated/storage-kit`, a `migrations/` directory, and a migration runner
   (`projects-serve migrate`) driven by the kit's checksum-guarded ledger.
 - **Container + deploy** — ARM64 Bun `Dockerfile`, `docker-compose.yml`,

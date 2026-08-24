@@ -98,7 +98,7 @@ function mutationResult(input: GuardedProjectMutationRequest, project: Workspace
 
 function apiStore(project: Workspace, updates: GuardedProjectMutationRequest[], failUpdate = false): ProjectStore {
   return {
-    mode: "api",
+    transport: "http",
     baseUrl: "https://projects.example.test/v1",
     async guardedReadProject(input: GuardedProjectReadRequest) {
       return {

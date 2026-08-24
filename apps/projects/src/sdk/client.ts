@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.129
+// Source: Projects API 1.0.0
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -62,6 +62,16 @@ export interface ProjectResourceLinkMutationRequest { "operation_id": string; "s
 export interface ProjectResourceLinkMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "mode": "add" | "reconcile"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": ProjectResourceLinkSnapshot; "after": ProjectResourceLinkSnapshot | null; "receipt": GuardedProjectMutationReceipt | null; "response_control": GuardedResponseControl }
 
 export interface WorkspaceLocation { "id": string; "workspace_id": string; "path": string; "machine_id": string; "label": string; "kind": string; "is_primary": boolean; "exists_at_create": boolean; "metadata": Record<string, unknown>; "created_at": string }
+
+export interface AddWorkspaceLocation { "path": string; "machine_id"?: string; "label"?: string; "kind"?: string; "is_primary"?: boolean; "metadata"?: Record<string, unknown> }
+
+export interface WorkspaceAgentAssignment { "id": string; "workspace_id": string; "agent_id": string; "role": string; "assigned_by"?: string | null; "metadata": Record<string, unknown>; "created_at": string; "agent"?: Agent }
+
+export interface AssignWorkspaceAgent { "agent_id": string; "role"?: string; "assigned_by"?: string; "metadata"?: Record<string, unknown> }
+
+export interface WorkspaceLock { "id": string; "lock_key": string; "workspace_id"?: string | null; "agent_id"?: string | null; "reason"?: string | null; "created_at": string; "expires_at"?: string | null }
+
+export interface AcquireWorkspaceLock { "lock_key": string; "workspace_id"?: string; "agent_id"?: string; "reason"?: string; "ttl_seconds"?: number }
 
 export interface ProjectQuarantineSnapshot { "project": Workspace; "project_digest": string; "resource_links": Array<ProjectResourceLink>; "resource_link_collection_digest": string; "workspace_locations": Array<WorkspaceLocation>; "workspace_location_collection_digest": string }
 
@@ -125,6 +135,18 @@ export interface RecipeList { "recipes": Array<Recipe>; "count": number }
 
 export interface EventList { "events": Array<WorkspaceEvent>; "count": number }
 
+export interface LocationList { "locations": Array<WorkspaceLocation>; "count": number }
+
+export interface LocationAdded { "project": Workspace; "location": WorkspaceLocation }
+
+export interface AgentAssignmentList { "assignments": Array<WorkspaceAgentAssignment>; "count": number }
+
+export interface AgentAssignment { "assignment": WorkspaceAgentAssignment }
+
+export interface LockList { "locks": Array<WorkspaceLock>; "count": number }
+
+export interface LockRelease { "released": boolean }
+
 export interface RecordEvent { "event_type": string; "source"?: string; "agent_id"?: string; "prompt"?: string; "command"?: string; "before"?: Record<string, unknown> | null; "after"?: Record<string, unknown> | null; "metadata"?: Record<string, unknown> }
 
 export interface EventRecorded { "event": WorkspaceEvent }
@@ -133,7 +155,7 @@ export interface DeleteResult { "deleted": boolean; "hard"?: boolean; "id"?: str
 
 export interface Health { "status": string; "version": string }
 
-export interface LegacyVersionResponse { "status": string; "version": string; "mode": string }
+export interface LegacyVersionResponse { "status": string; "version": string }
 
 export interface Error { "error": string; "reason"?: string }
 
@@ -173,7 +195,14 @@ export class ProjectsClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -237,6 +266,33 @@ export class ProjectsClient {
       });
     }
 
+    /** List active project mutation locks */
+    async listLocks(init?: RequestInit): Promise<LockList> {
+      return this.request("GET", `/v1/locks`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Acquire a project mutation lock */
+    async acquireLock(body: AcquireWorkspaceLock, init?: RequestInit): Promise<Lock> {
+      return this.request("POST", `/v1/locks`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Release a project mutation lock (holder-scoped by lock id; key-only DELETE is the force path) */
+    async releaseLock(key: string, query?: { "lock_id"?: string }, init?: RequestInit): Promise<LockRelease> {
+      return this.request("DELETE", `/v1/locks/${encodeURIComponent(String(key))}`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** List projects (workspaces) */
     async listProjects(query?: { "status"?: string; "kind"?: string; "root_id"?: string; "query"?: string; "tag"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<WorkspaceList> {
       return this.request("GET", `/v1/projects`, {
@@ -276,6 +332,24 @@ export class ProjectsClient {
     /** Update a project */
     async updateProject(id: string, body: UpdateWorkspace, init?: RequestInit): Promise<Workspace> {
       return this.request("PATCH", `/v1/projects/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List a project's agent assignments */
+    async listProjectAgents(id: string, init?: RequestInit): Promise<AgentAssignmentList> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/agents`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Assign a registered agent to a project role */
+    async assignProjectAgent(id: string, body: AssignWorkspaceAgent, init?: RequestInit): Promise<AgentAssignment> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/agents`, {
         body,
         query: undefined,
         init,
@@ -393,6 +467,24 @@ export class ProjectsClient {
     /** Conditionally roll back one accepted guarded mutation receipt */
     async rollbackGuardedProjectMutation(id: string, body: GuardedProjectMutationRollbackRequest, init?: RequestInit): Promise<GuardedProjectMutationResult> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/guarded-metadata/rollback`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List a project's registered folder locations */
+    async listProjectLocations(id: string, init?: RequestInit): Promise<LocationList> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/locations`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Register an extra folder location for a project */
+    async addProjectLocation(id: string, body: AddWorkspaceLocation, init?: RequestInit): Promise<LocationAdded> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/locations`, {
         body,
         query: undefined,
         init,

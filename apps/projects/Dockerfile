@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # projects-serve — ARM64 (Graviton) container image, Bun runtime.
-# Amendment A1 pure-remote: the serve talks to cloud Postgres directly.
+# The serve talks directly to PostgreSQL through the HTTP API.
 
 # ---- builder: install runtime deps + bundle the dist artifacts ----
 # Bun pinned to the monorepo's own version (package.json "packageManager" /

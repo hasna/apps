@@ -89,7 +89,7 @@ function makeHarness(initialProjects: Workspace[], initialChannels: Conversation
   }
 
   const store = {
-    mode: "local",
+    transport: "local",
     baseUrl: null,
     async listProjectsComplete() {
       const rows = [...projects.values()].sort((a, b) => a.name.localeCompare(b.name));

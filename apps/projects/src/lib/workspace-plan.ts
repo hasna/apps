@@ -191,7 +191,7 @@ function deriveWorkspacePath(input: CreateWorkspaceInput, root: Root | null, slu
  * Registry-level defaults for a new project: the canonical workspace path and
  * the slug-derived conversations channel.
  *
- * Extracted so local planning and the api/cloud PostgreSQL store compute them
+ * Extracted so local planning and the hosted backend PostgreSQL store compute them
  * identically. The server calls this only after allocating the exact persisted
  * slug; clients must not precompute slug-dependent values that the server would
  * then mistake for explicit operator choices.

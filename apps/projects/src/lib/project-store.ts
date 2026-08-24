@@ -351,7 +351,7 @@ export async function ensureProjectStoreForTarget(
     timeBudgetMs?: number;
   } = {},
 ): Promise<ProjectStoreEnsureResult> {
-  if (store.mode === "local") {
+  if (store.transport === "local") {
     const project = await store.resolveTarget(target);
     return ensureProjectStore(project, options);
   }
@@ -671,7 +671,7 @@ export function migrateProjectToStore(
 }
 
 /**
- * Store-routed migration for api/cloud mode. The file half (moving the
+ * Store-routed migration for the hosted backend. The file half (moving the
  * machine-local primary directory into the canonical workspace store) runs on
  * the invoking machine — the server cannot move files on a client box — while
  * the registry half (previous + canonical locations, migration event) routes
@@ -795,11 +795,11 @@ export async function migrateProjectToStoreViaStore(
 }
 
 /**
- * Machine-local runtime half of a cloud create (api mode). The registry row is
+ * Machine-local runtime half of a hosted create (the hosted backend). The registry row is
  * created through the Store by the caller; this applies the on-invoking-box
  * effects — directory, git init, marker, tmux session — with events routed to
  * the hosted project through `store.recordEvent`. Tmux profiles resolve through
- * the machine-local store methods (the established api-mode precedent: tmux is
+ * the machine-local store methods (the established hosted-backend precedent: tmux is
  * a runtime resource of THIS box even when the registry is cloud).
  */
 export async function applyMachineLocalCreationRuntime(

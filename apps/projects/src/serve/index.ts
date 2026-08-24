@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// projects-serve — self-hosted HTTP API for @hasna/projects.
+// projects-serve — HTTP API for @hasna/projects.
 //
-// Amendment A1 pure-remote: reads and writes go directly to cloud Postgres via
-// the vendored storage kit. Two entrypoints:
+// Reads and writes go directly to PostgreSQL via the vendored storage kit.
+// Two entrypoints:
 //   projects-serve            start the HTTP server
 //   projects-serve migrate    apply pending migrations then exit (ECS one-shot)
 
@@ -52,7 +52,7 @@ export function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
 export function printHelp(): void {
   console.log(`usage: projects-serve [migrate] [--port <n>]
 
-projects-serve — self-hosted HTTP API for @hasna/projects.
+projects-serve — HTTP API for @hasna/projects.
 
 commands:
   migrate [--dry-run]   apply pending migrations, then exit
@@ -65,7 +65,7 @@ options:
 `);
 }
 
-/** Resolve the cloud Postgres connection string from the fleet-standard envs. */
+/** Resolve the PostgreSQL connection string from the fleet-standard envs. */
 export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const url =
     env.HASNA_PROJECTS_DATABASE_URL ||
@@ -180,11 +180,10 @@ async function main(): Promise<void> {
         console.error(`api_auth deny kid=${e.kid ?? "-"} reason=${e.reason ?? "-"} ${e.method} ${e.path}`);
       }
     },
-    mode: "cloud",
   });
 
   Bun.serve({ hostname, port, fetch: handler, idleTimeout: 60 });
-  console.error(`projects-serve v${version} listening on http://${hostname}:${port} (cloud/pure-remote)`);
+  console.error(`projects-serve v${version} listening on http://${hostname}:${port}`);
 }
 
 if (import.meta.main) {

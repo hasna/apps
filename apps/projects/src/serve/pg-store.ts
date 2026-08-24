@@ -1,10 +1,10 @@
-// Postgres-backed store for projects-serve (Amendment A1 pure-remote).
+// PostgreSQL-backed store for projects-serve.
 //
-// This is the cloud data-access layer the HTTP API wraps. It mirrors the domain
+// This is the server data-access layer the HTTP API wraps. It mirrors the domain
 // semantics of src/db/workspaces.ts (the local SQLite core) — id/slug rules,
 // tag merging, JSON-encoded columns, event journaling — but executes async SQL
-// against cloud Postgres through the vendored storage kit's TypedQueryClient.
-// There is NO sync engine and NO local cache here (pure remote): every call
+// against PostgreSQL through the vendored storage kit's TypedQueryClient.
+// There is NO sync engine and NO local cache here: every call
 // hits the database.
 
 import { nanoid } from "nanoid";
