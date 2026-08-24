@@ -11,12 +11,15 @@
     "sessions-mcp",
     "sessions-serve"
   ],
+  "hosting": [
+    "user-hosted"
+  ],
   "serviceSurfaces": [
     {
-      "name": "http",
+      "name": "http-api",
+      "kind": "api",
       "status": "supported",
       "bin": "sessions-serve",
-      "mcpBin": "sessions-mcp",
       "authMode": "api-key",
       "health": {
         "method": "GET",
@@ -35,18 +38,44 @@
       },
       "apiBasePath": "/v1",
       "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "clientClassName": "SessionsClient",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "sessions-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "sessions",
+      "authMode": "local-only"
     }
   ],
   "storage": {
+    "backend": "sqlite",
     "engines": [
       "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_SESSIONS_",
     "aliasEnvPrefix": "SESSIONS_",
-    "backend": "sqlite",
-    "databaseUrlSecretRef": "hasna/oss/sessions/database-url",
-    "sqlitePath": "~/.hasna/sessions/sessions.db"
+    "sqlitePath": "~/.hasna/sessions/sessions.db",
+    "pgTestGate": {
+      "envVar": "SESSIONS_TEST_DATABASE_URL",
+      "command": "bun run test:pg"
+    }
   },
   "metadata": {
     "serve": {
@@ -75,6 +104,11 @@
       "codex",
       "codewith",
       "gemini"
-    ]
+    ],
+    "release": {
+      "artifactScan": {
+        "script": "scan-artifact"
+      }
+    }
   }
 }
