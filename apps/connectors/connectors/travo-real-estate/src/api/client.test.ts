@@ -26,9 +26,6 @@ describe('ConnectorClient', () => {
   test('uses custom base URL', () => {
     const client = new ConnectorClient({
       apiKey: 'key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example/v2',
     });
     expect(client.getBaseUrl()).toBe('https://custom.example/v2');

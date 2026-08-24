@@ -26,9 +26,6 @@ describe('ConnectorClient', () => {
   test('uses custom base URL and strips trailing slash', () => {
     const client = new ConnectorClient({
       apiKey: 'test-key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2/',
     });
     expect(client.getBaseUrl()).toBe('https://custom.example.com/v2');

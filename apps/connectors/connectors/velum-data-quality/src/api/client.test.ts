@@ -140,8 +140,6 @@ describe('Velum Data Quality API client', () => {
 
     const connector = new Connector({
       apiKey: 'velum-test-key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2',
     });
     await connector.checks.list();
