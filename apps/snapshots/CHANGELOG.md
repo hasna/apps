@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+### Patch Changes
+
+- dedupe macOS app names in capture by resource id (new macAppResources helper mirrors the fallback seen-set); System Events reporting the same app twice (two Ghostty processes on station04) previously produced duplicate `app:ghostty` ids that violated the snapshot_resources composite primary key and failed every capture (PR #1109, merged fa3a2fda).
+
 ## 0.1.6
 
 ### Patch Changes
