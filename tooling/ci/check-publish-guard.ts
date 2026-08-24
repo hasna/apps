@@ -300,6 +300,36 @@ function packsBuiltJs(names: string[]): boolean {
   return names.some((n) => n.endsWith(".js"));
 }
 
+/**
+ * The declared `bin` entries of a member that are ABSENT from the packed file
+ * list. The `bin` map is the consumer-executable contract: a shipped tarball
+ * that lost an entry installs a CLI that does not exist. Measured class
+ * (2026-08-24, npm 10): @hasna/skills' `prepare` ran `build:js`, which began
+ * with the shared `clean` (`rm -rf bin/ dist/`) — npm 10 executes `prepare`
+ * during `npm pack` even under `--ignore-scripts`, so the packlist was
+ * computed AFTER prepare had deleted the bin entries its own prepack had just
+ * built, and the release guard reported every declared bin packed=false.
+ * npm 11 skips prepare under `--ignore-scripts`, so the CI gate went green
+ * locally while the outer pack's tarball STILL shipped bin-less (measured:
+ * 0 bin/ paths in the npm 11 dry-run manifest). The check is version-
+ * independent because it inspects the pack list, not the lifecycle.
+ */
+function missingDeclaredBins(pkgDir: string, names: string[]): string[] {
+  let pkg: any;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+  } catch {
+    return [];
+  }
+  const bin = pkg.bin;
+  if (!bin) return [];
+  const declared: string[] =
+    typeof bin === "string" ? [bin] : Object.values(bin).filter((v): v is string => typeof v === "string");
+  return declared
+    .map((p) => p.replace(/^\.\//, ""))
+    .filter((p) => p.length > 0 && !names.includes(p));
+}
+
 function run(root: string): number {
   const pkgs = memberPackages(root);
   if (pkgs.length === 0) {
@@ -320,6 +350,21 @@ function run(root: string): number {
       failed = true;
       console.error(
         `PUBLISH-GUARD FAILED in ${pkg}: package.json declares .d.ts type paths (types field or exports.*.types) and the tarball packs built JS but 0 .d.ts — a prepare script is destroying the declarations its prepack emitted`,
+      );
+      continue;
+    }
+    // Declared-bin coverage. Gated on packsBuiltJs exactly like the .d.ts
+    // check: a member whose dist was never built at guard time (prepack =
+    // artifact-scan only) packs no JS at all and its absent bin is a
+    // build-state artifact, not a regression — flagging it would be a false
+    // positive on the measured unbuilt class (crawl, guardrails, markdown,
+    // telephony). A tarball WITH built JS but missing declared bin entries is
+    // a build whose executables were destroyed or never emitted.
+    const missingBins = missingDeclaredBins(pkg, names);
+    if (missingBins.length > 0 && packsBuiltJs(names)) {
+      failed = true;
+      console.error(
+        `PUBLISH-GUARD FAILED in ${pkg}: package.json declares bin entries that the tarball does not pack (${missingBins.join(", ")}) — a prepare script is deleting the executables its prepack emitted`,
       );
       continue;
     }
@@ -625,6 +670,58 @@ function selfTest(): number {
     check(
       "member declaring types that packs .d.ts (prepare keeps prepack's declarations) PASSES (rc=0, non-vacuous)",
       kept.rc === 0 && /\d+ tarball entries/.test(keptOut) && !keptOut.includes("PUBLISH-GUARD FAILED"),
+    );
+
+    // Declared-bin coverage checks (2026-08-24, npm 10). A member whose
+    // package.json declares a bin entry but whose tarball packs NONE of them
+    // ships a CLI that does not exist — the measured class: @hasna/skills'
+    // prepare ran build:js, which began with the shared clean (`rm -rf bin/
+    // dist/`), and npm 10 executes prepare during npm pack even under
+    // --ignore-scripts, so the packlist lost every declared bin. The fixture
+    // mimics exactly that: prepare deletes bin/ after prepack (not present
+    // here) built it. data/ok.js keeps the tarball a real build so the
+    // packsBuiltJs gate is on.
+    const binWiperRoot = path.join(root, "bin-wiper-root");
+    fs.mkdirSync(binWiperRoot, { recursive: true });
+    fixturePackage(
+      path.join(binWiperRoot, "apps"),
+      "self-test-bin-wiper",
+      ["ok.js"],
+      false,
+      undefined,
+      {
+        fields: { files: ["bin", "data"], bin: { x: "bin/x.js" } },
+        scripts: { prepare: "rm -rf bin && mkdir -p bin" },
+      },
+    );
+    const binWiper = capture(() => run(binWiperRoot));
+    const binWiperOut = binWiper.lines.join("\n");
+    check(
+      "member declaring bin entries that the tarball does not pack (prepare wipes bin/) FAILS the guard (rc=1, entry named)",
+      binWiper.rc === 1 &&
+        binWiperOut.includes("PUBLISH-GUARD FAILED") &&
+        binWiperOut.includes("self-test-bin-wiper") &&
+        binWiperOut.includes("bin/x.js"),
+    );
+
+    const binKeepRoot = path.join(root, "bin-keep-root");
+    fs.mkdirSync(binKeepRoot, { recursive: true });
+    fixturePackage(
+      path.join(binKeepRoot, "apps"),
+      "self-test-bin-kept",
+      ["ok.js"],
+      false,
+      undefined,
+      {
+        fields: { files: ["bin", "data"], bin: { x: "bin/x.js" } },
+        scripts: { prepare: "mkdir -p bin && printf 'console.log(1)\\n' > bin/x.js" },
+      },
+    );
+    const binKept = capture(() => run(binKeepRoot));
+    const binKeptOut = binKept.lines.join("\n");
+    check(
+      "member declaring bin entries that the tarball packs (prepare keeps bin/) PASSES (rc=0, non-vacuous)",
+      binKept.rc === 0 && /\d+ tarball entries/.test(binKeptOut) && !binKeptOut.includes("PUBLISH-GUARD FAILED"),
     );
 
     // A member declaring types whose dist was never built at guard time
