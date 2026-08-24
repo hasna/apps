@@ -512,6 +512,59 @@ Goal active Objective: Copied from a real Codewith pane
     }
   });
 
+  test("recognizes a bun/secrets-exec-wrapped Claude Code pane from a BSD/macOS process-group listing", () => {
+    // Regression fixture for bug 5a3319ca: BSD ps (macOS) returns flat
+    // process-group rows without the GNU `\_` forest markers. Measured on
+    // station06 hq:learning 2026-08-24 — the exact wrapper and child rows a
+    // portable `ps -g <pgid>` probe returns.
+    const macGroupRows = [
+      "28526 11845 Ss+  bun /Users/andreihasna/.bun/bin/secrets exec hasnaxyz/openrouter/live/api_key --as OPENROUTER_API_KEY -- bash -c set -eu; export ANTHROPIC_BASE_URL=https://openrouter.ai/api; export ANTHROPIC_AUTH_TOKEN=\"${OPENROUTER_API_KEY}\"; export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1; exec claude --dangerously-skip-permissions",
+      "28621 28526 S+   claude --dangerously-skip-permissions",
+    ].join("\n");
+    // The exact station06 hq:learning capture shape (active composer, busy).
+    const visible = `
+· Wandering… (7m 28s · ↓ 7.4k tokens)
+  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 monitor · esc to interrupt · ← for agents
+`;
+    const result = detectAgentTargetFromSignals({
+      paneCommand: "bun",
+      visible,
+      processTree: macGroupRows,
+    });
+    expect(result).toMatchObject({
+      targetKind: "agent",
+      agentKind: "claude",
+      composerState: "active",
+      canReceivePrompt: false,
+      canQueuePrompt: true,
+      submitKeys: ["Enter"],
+      recommendedSubmitKey: "Enter",
+    });
+  });
+
+  test("refuses a bun pane whose process group holds no agent process", () => {
+    const processTree = [
+      "8123 1 Ss  bun /Users/andreihasna/.bun/bin/secrets exec hasnaxyz/openrouter/live/api_key --as OPENROUTER_API_KEY -- bash -c 'node /srv/transcript-viewer.js'",
+      "8124 8123 S+  node /srv/transcript-viewer.js",
+    ].join("\n");
+    const result = detectAgentTargetFromSignals({
+      paneCommand: "bun",
+      visible: "❯ copied text from a transcript\n",
+      processTree,
+    });
+    expect(result).toMatchObject({
+      targetKind: "unknown",
+      agentKind: "unknown",
+      canReceivePrompt: false,
+    });
+    expect(result.reason).toContain("not a recognized agent composer (bun)");
+  });
+
   test("detects direct Claude Code and OpenCode panes", () => {
     const claude = detectAgentTargetFromSignals({
       paneCommand: "claude",

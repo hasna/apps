@@ -227,7 +227,17 @@ export class Tmux {
     return res.exitCode === 0 ? res.stdout.replace(/\n$/, "") : "";
   }
 
-  /** Best-effort process tree for the pane's process group. */
+  /**
+   * Best-effort process tree for the pane's process group.
+   *
+   * Uses process-group selection (`ps -g`) instead of GNU-only `--forest` so
+   * the probe runs identically on BSD/macOS hosts (bug 5a3319ca): BSD ps
+   * rejects `--forest` with "illegal option", which left the fallback `-p`
+   * showing only the wrapper row and caused dispatch to refuse
+   * bun/secrets-exec-wrapped Claude Code panes on macOS stations. The tmux
+   * pane pid is the pane's process-group leader, so `-g` returns the wrapper,
+   * the agent child, and the rest of the group on both ps families.
+   */
   processTree(
     target: string,
     panePid?: string,
@@ -240,14 +250,14 @@ export class Tmux {
       const maxLines = String(Math.max(1, Math.trunc(opts.maxLines ?? 80)));
       const maxLineChars = String(Math.max(80, Math.trunc(opts.maxLineChars ?? 1000)));
       const script =
-        'ps -o pid=,ppid=,stat=,command= --forest -g "$1" 2>/dev/null | head -n "$2" | cut -c "1-$3"';
+        'ps -o pid=,ppid=,stat=,command= -g "$1" 2>/dev/null | head -n "$2" | cut -c "1-$3"';
       const group = this.runner.run(["sh", "-c", script, "dispatch-process-tree", pid, maxLines, maxLineChars]);
       if (group.exitCode === 0 && group.stdout.trim()) return group.stdout;
       const singleScript = 'ps -o pid=,ppid=,stat=,command= -p "$1" 2>/dev/null | head -n "$2" | cut -c "1-$3"';
       const single = this.runner.run(["sh", "-c", singleScript, "dispatch-process-tree", pid, maxLines, maxLineChars]);
       return single.exitCode === 0 ? single.stdout : "";
     }
-    const group = this.runner.run(["ps", "-o", "pid=,ppid=,stat=,command=", "--forest", "-g", pid]);
+    const group = this.runner.run(["ps", "-o", "pid=,ppid=,stat=,command=", "-g", pid]);
     if (group.exitCode === 0 && group.stdout.trim()) return group.stdout;
     const single = this.runner.run(["ps", "-o", "pid=,ppid=,stat=,command=", "-p", pid]);
     return single.exitCode === 0 ? single.stdout : "";
