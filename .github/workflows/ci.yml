@@ -102,6 +102,21 @@ jobs:
       - name: Name-conformance gate (@hasna/* only, name == directory)
         run: bun tooling/ci/check-names.ts
 
+      # Dependency-direction gate: no member may DECLARE a dependency on the
+      # private @hasna-internal/* scope (or any other private scope). The
+      # pack-time publish-guard refuses a private-scope string inside a packed
+      # tarball, but only after a prepare/build and only on the packed
+      # artifact; this source-level gate refuses the DECLARATION directly in
+      # the tree, so a private-scope dependency cannot arrive unseen at first
+      # commit. Self-test runs first and separately, because a predicate that
+      # cannot fire reports a clean corpus, and a clean corpus is what success
+      # looks like. (todos H5-00003)
+      - name: Dependency-direction gate self-test
+        run: bun tooling/ci/check-dependency-direction.ts --self-test
+
+      - name: Dependency-direction gate (no private-scope dependencies)
+        run: bun tooling/ci/check-dependency-direction.ts
+
       # Contract-manifest gate: runs `contracts repo-conformance` per
       # publishable member (same validator, resolution and exception registry
       # as the standard-adherence suite) and refuses unrecorded violations.
