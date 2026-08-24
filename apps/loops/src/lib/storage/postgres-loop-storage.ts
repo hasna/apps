@@ -1131,6 +1131,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return this.client.transaction(async (c) => {
       const loop = await this.requireLoopIn(c, idOrName);
       await this.setWorkItemsForLoop(c, loop.id, "cancelled", "loop deleted", nowIso());
+      // O15-00624: run_receipts (tenant_id, loop_id) REFERENCES loops carries no
+      // ON DELETE action, so a loop that produced terminal receipts cannot be
+      // deleted — the FK violation aborts the transaction and DELETE
+      // /loops/<id> returns 500 on the hosted control plane. Delete the loop's
+      // receipts explicitly (like the sqlite store deletes loop_runs children);
+      // the 0015_run_receipts_loop_cascade migration then aligns the schema
+      // with this behavior for fresh installs.
+      await c.execute(
+        `DELETE FROM run_receipts WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $1`,
+        [loop.id],
+      );
       // loop_runs.loop_id REFERENCES loops ON DELETE CASCADE handles children.
       const res = await c.query(`DELETE FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id = $1`, [loop.id]);
       return res.rowCount > 0;

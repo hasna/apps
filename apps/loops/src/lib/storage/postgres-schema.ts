@@ -1920,4 +1920,36 @@ GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;`,
 ALTER TABLE loops ADD COLUMN IF NOT EXISTS expires_after_runs INTEGER;
     `,
   ),
+  // O15-00624: run_receipts (tenant_id, loop_id) REFERENCES loops was added
+  // without an ON DELETE action (migration 0010_tenant_enforce), so deleting a
+  // loop that produced terminal receipts violates the FK and DELETE
+  // /loops/<id> returns 500 on the hosted control plane. Express the intended
+  // semantics — receipts are per-loop run artifacts and go with the loop,
+  // mirroring loop_runs ON DELETE CASCADE. The deleteLoop storage path also
+  // deletes the loop's receipts explicitly, so an existing database that has
+  // not run this migration works the moment the new binary deploys.
+  //
+  // NOT VALID is deliberate: the constraint's referential predicate is
+  // byte-identical to the one it replaces (which the FK trigger has enforced
+  // on every write since 0010), so skipping the existing-rows scan is sound —
+  // and a validating ADD would fail anyway: migration 0010's
+  // $auth_function_acl$ revokes EXECUTE on open_loops_current_tenant_id from
+  // every role except open_loops_runtime, so the ALTER's internal FK
+  // validation (run as open_loops_owner under FORCE RLS) cannot evaluate the
+  // tenant_isolation policy.
+  migration(
+    "0015_run_receipts_loop_cascade",
+    `
+GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
+SET ROLE open_loops_owner;
+
+ALTER TABLE run_receipts DROP CONSTRAINT run_receipts_tenant_id_loop_id_fkey;
+ALTER TABLE run_receipts ADD CONSTRAINT run_receipts_tenant_id_loop_id_fkey
+  FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE CASCADE NOT VALID;
+
+RESET ROLE;
+REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
+GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
+    `,
+  ),
 ]);
