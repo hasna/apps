@@ -14,6 +14,10 @@
       "types": "./types/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./sdk": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./storage": {
       "types": "./types/storage.d.ts",
       "import": "./dist/storage.js"
