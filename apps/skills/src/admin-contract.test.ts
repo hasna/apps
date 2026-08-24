@@ -44,6 +44,21 @@ describe("skills admin API contract", () => {
     expect(SkillsAdminGrantEntitlementRequestSchema.safeParse({ ...base, skillId: "skill-1", slug: "skill-slug" }).success).toBeFalse();
   });
 
+  test("binds each named suspend and resume operation to its literal mutation", () => {
+    const cases = [
+      ["orgsSuspend", true, false],
+      ["orgsResume", false, true],
+      ["usersSuspend", true, false],
+      ["usersResume", false, true],
+    ] as const;
+
+    for (const [operationId, accepted, rejected] of cases) {
+      const schema = SKILLS_ADMIN_OPERATIONS[operationId].bodySchema;
+      expect(schema.safeParse({ suspended: accepted, reason: "contract test" }).success).toBeTrue();
+      expect(schema.safeParse({ suspended: rejected, reason: "contract test" }).success).toBeFalse();
+    }
+  });
+
   test("response schemas tolerate additive fields but retain required fields", () => {
     const fixture = {
       account: {

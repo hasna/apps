@@ -234,9 +234,16 @@ export const SkillsAdminShowOrganizationResponseSchema = z.object({
   subscription: SkillsAdminSubscriptionSchema.nullable(),
 }).passthrough();
 
-export const SkillsAdminSuspendOrganizationRequestSchema = z.object({
-  suspended: z.boolean(),
+const skillsAdminSuspensionReasonShape = {
   reason: z.string().min(1),
+};
+export const SkillsAdminSuspendOrganizationRequestSchema = z.object({
+  suspended: z.literal(true),
+  ...skillsAdminSuspensionReasonShape,
+}).strict();
+export const SkillsAdminResumeOrganizationRequestSchema = z.object({
+  suspended: z.literal(false),
+  ...skillsAdminSuspensionReasonShape,
 }).strict();
 export const SkillsAdminSuspendOrganizationResponseSchema = z.object({
   ok: z.literal(true),
@@ -255,7 +262,14 @@ export const SkillsAdminSetUserRoleResponseSchema = z.object({
   ok: z.literal(true),
   user: SkillsAdminUserRoleSchema,
 }).passthrough();
-export const SkillsAdminSuspendUserRequestSchema = SkillsAdminSuspendOrganizationRequestSchema;
+export const SkillsAdminSuspendUserRequestSchema = z.object({
+  suspended: z.literal(true),
+  ...skillsAdminSuspensionReasonShape,
+}).strict();
+export const SkillsAdminResumeUserRequestSchema = z.object({
+  suspended: z.literal(false),
+  ...skillsAdminSuspensionReasonShape,
+}).strict();
 export const SkillsAdminSuspendUserResponseSchema = z.object({
   ok: z.literal(true),
   user: z.object({ id: identifier, email: z.string().min(1), metadata }).passthrough(),
@@ -387,11 +401,11 @@ export const SKILLS_ADMIN_OPERATIONS = {
   orgsList: operation({ ...contractDefaults, method: "GET", path: "/api/v1/admin/orgs", querySchema: SkillsAdminPaginationQuerySchema, responseSchema: SkillsAdminListOrganizationsResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 429, 500, 502, 503, 504] }),
   orgsShow: operation({ ...contractDefaults, method: "GET", path: "/api/v1/admin/orgs/:id", pathSchema: SkillsAdminPathIdSchema, responseSchema: SkillsAdminShowOrganizationResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 404, 429, 500, 502, 503, 504] }),
   orgsSuspend: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/orgs/:id/suspend", pathSchema: SkillsAdminPathIdSchema, bodySchema: SkillsAdminSuspendOrganizationRequestSchema, responseSchema: SkillsAdminSuspendOrganizationResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 404, 429, 500, 502, 503, 504] }),
-  orgsResume: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/orgs/:id/suspend", pathSchema: SkillsAdminPathIdSchema, bodySchema: SkillsAdminSuspendOrganizationRequestSchema, responseSchema: SkillsAdminSuspendOrganizationResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 404, 429, 500, 502, 503, 504] }),
+  orgsResume: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/orgs/:id/suspend", pathSchema: SkillsAdminPathIdSchema, bodySchema: SkillsAdminResumeOrganizationRequestSchema, responseSchema: SkillsAdminSuspendOrganizationResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 404, 429, 500, 502, 503, 504] }),
   usersList: operation({ ...contractDefaults, method: "GET", path: "/api/v1/admin/users", querySchema: SkillsAdminOrganizationQuerySchema, responseSchema: SkillsAdminListUsersResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 429, 500, 502, 503, 504] }),
   usersRoleSet: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/users/:id/role", pathSchema: SkillsAdminPathIdSchema, bodySchema: SkillsAdminSetUserRoleRequestSchema, responseSchema: SkillsAdminSetUserRoleResponseSchema, successStatuses: [200], errorStatuses: [400, 401, 403, 404, 429, 500, 502, 503, 504] }),
   usersSuspend: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/users/:id/suspend", pathSchema: SkillsAdminPathIdSchema, bodySchema: SkillsAdminSuspendUserRequestSchema, responseSchema: SkillsAdminSuspendUserResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 404, 429, 500, 502, 503, 504] }),
-  usersResume: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/users/:id/suspend", pathSchema: SkillsAdminPathIdSchema, bodySchema: SkillsAdminSuspendUserRequestSchema, responseSchema: SkillsAdminSuspendUserResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 404, 429, 500, 502, 503, 504] }),
+  usersResume: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/users/:id/suspend", pathSchema: SkillsAdminPathIdSchema, bodySchema: SkillsAdminResumeUserRequestSchema, responseSchema: SkillsAdminSuspendUserResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 404, 429, 500, 502, 503, 504] }),
   entitlementsList: operation({ ...contractDefaults, method: "GET", path: "/api/v1/admin/entitlements", querySchema: SkillsAdminOrganizationQuerySchema, responseSchema: SkillsAdminListEntitlementsResponseSchema, successStatuses: [200], errorStatuses: [401, 403, 429, 500, 502, 503, 504] }),
   entitlementsGrant: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/entitlements/grant", bodySchema: SkillsAdminGrantEntitlementRequestSchema, responseSchema: SkillsAdminGrantEntitlementResponseSchema, successStatuses: [201], errorStatuses: [400, 401, 403, 429, 500, 502, 503, 504] }),
   entitlementsRevoke: operation({ ...contractDefaults, method: "POST", path: "/api/v1/admin/entitlements/revoke", bodySchema: SkillsAdminRevokeEntitlementRequestSchema, responseSchema: SkillsAdminRevokeEntitlementResponseSchema, successStatuses: [200], errorStatuses: [400, 401, 403, 404, 429, 500, 502, 503, 504] }),
