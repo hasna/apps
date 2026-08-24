@@ -43,12 +43,19 @@ describe("thread identity", () => {
     // threads already stored under that encoding keep resolving — a format
     // change would split existing histories (cycle-1 re-review P1).
     expect(newThreadId("augustus", "silvanus")).toBe("t_augustus__silvanus");
-    // Collision freedom: the `a`/`b__c` vs `a__b`/`c` collision class is
-    // eliminated by rejecting names containing the separator.
-    expect(() => service.registerAgent("a__b")).toThrow(/may not contain "__"/);
+    // Collision freedom: both collision classes are eliminated by rejecting
+    // names containing the underscore — `a`/`b__c` vs `a__b`/`c` (separator in
+    // the name) and `0_`/`a` vs `0`/`_a` (boundary underscores, both forming
+    // `t_0___a`), the final-review P1.
+    expect(() => service.registerAgent("a__b")).toThrow(/may not contain "_"/);
+    expect(() => service.registerAgent("0_")).toThrow(/may not contain "_"/);
+    expect(() => service.registerAgent("_a")).toThrow(/may not contain "_"/);
     await expect(
       service.send({ from_agent: "a", to_agent: "b__c", content: "hi" }),
-    ).rejects.toThrow(/may not contain "__"/);
+    ).rejects.toThrow(/may not contain "_"/);
+    await expect(
+      service.send({ from_agent: "0_", to_agent: "a", content: "hi" }),
+    ).rejects.toThrow(/may not contain "_"/);
   });
 });
 

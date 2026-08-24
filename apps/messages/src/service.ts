@@ -77,9 +77,11 @@ export interface MessagesStore {
  * The format is the legacy `t_<a>__<b>` (sorted) — changing it would split
  * threads already stored under the old encoding, so it is stable. Collision
  * freedom comes from the name constraint instead: agent names may not contain
- * the `__` separator (enforced in normalizeAgentName), so `a`/`b__c` and
- * `a__b`/`c` cannot both be valid name pairs and the join is injective on
- * the valid domain.
+ * the underscore at all (enforced in normalizeAgentName). Without that, the
+ * join is ambiguous in two ways: `a`/`b__c` vs `a__b`/`c` (names containing
+ * the separator), and `0_`/`a` vs `0`/`_a` (names with boundary underscores
+ * both forming `0___a`). With underscores banned, the `__` separator can only
+ * ever be the join, so the encoding is injective on the valid domain.
  */
 export function threadKeyFor(agentA: string, agentB: string): string {
   const [a, b] = [agentA, agentB].sort();
@@ -92,12 +94,14 @@ export function newThreadId(agentA: string, agentB: string): string {
 
 function normalizeAgentName(name: string): string {
   const normalized = name.trim().toLowerCase();
-  // The thread key joins the sorted pair with "__"; a name containing the
-  // separator would make `a`/`b__c` and `a__b`/`c` collide on one thread and
-  // merge unrelated DM histories. Rejecting the separator keeps the legacy
-  // thread-id format stable (no migration) AND collision-free.
-  if (normalized.includes("__")) {
-    throw new Error(`agent name may not contain "__": ${name}`);
+  // The thread key joins the sorted pair with "__". An underscore anywhere in
+  // a name makes the join ambiguous — `a`/`b__c` vs `a__b`/`c` (separator in
+  // the name) and `0_`/`a` vs `0`/`_a` (boundary underscores both forming
+  // `0___a`) would merge unrelated DM histories. Rejecting the underscore
+  // entirely keeps the legacy thread-id format stable (no migration) AND
+  // collision-free: with no underscore in any name, `__` can only be the join.
+  if (normalized.includes("_")) {
+    throw new Error(`agent name may not contain "_" (underscore): ${name}`);
   }
   return normalized;
 }
