@@ -5,7 +5,7 @@ import chalk from "chalk";
 import { existsSync, lstatSync, readFileSync, readSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { applyConfigsWithReport, expandPath } from "../lib/apply.js";
+import { applyConfigsWithReport, expandPath, normalizeTargetPath } from "../lib/apply.js";
 import { findConfigsByTargetPath, findDuplicateTargetPathGroups, findReferenceConfigsByName, findDuplicateReferenceNameGroups } from "../lib/config-target-identity.js";
 import { diffConfig, syncKnown, syncToDisk, syncProject, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
 import { syncFromDir } from "../lib/sync-dir.js";
@@ -15,6 +15,7 @@ import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
+import type { ClaudeOwnedAuthority } from "../lib/session-authority.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
@@ -300,6 +301,20 @@ async function collectSessionSources(
   });
 }
 
+/**
+ * Registered Instructions configs that own a Claude-home AGENTS.md
+ * (category=rules, agent=claude, kind=file, target basename AGENTS.md). The
+ * session-render authority guard recognizes these as managed by this pipeline
+ * when their stored content matches the disk file, instead of failing closed
+ * on every AGENTS.md at the Claude home.
+ */
+async function loadOwnedClaudeAuthorities(store: ConfigStore): Promise<ClaudeOwnedAuthority[]> {
+  const configs = await store.listConfigs({ category: "rules", agent: "claude", kind: "file" });
+  return configs
+    .filter((config) => config.target_path && basename(normalizeTargetPath(config.target_path)) === "AGENTS.md")
+    .map((config) => ({ slug: config.slug, targetPath: config.target_path!, content: config.content }));
+}
+
 async function buildSessionRenderPlan(
   opts: {
     profile: string;
@@ -329,6 +344,7 @@ async function buildSessionRenderPlan(
   assetPlanMode: "dry-run" | "apply" = "dry-run",
 ): Promise<SessionRenderPlan> {
   const station = opts.stationProfile === false ? null : stationProfileSource();
+  const ownedClaudeAuthorities = tool === "claude" ? await loadOwnedClaudeAuthorities(store) : undefined;
   if (!opts.compileProfile) {
     if (opts.providerVariant) throw new Error("--provider-variant requires --compile-profile.");
     const sources = await collectSessionSources(opts, tool, store);
@@ -342,6 +358,7 @@ async function buildSessionRenderPlan(
       codewithNativeImports: opts.codewithNativeImports,
       allowEmptySources: opts.allowEmptySources,
       sources,
+      ownedClaudeAuthorities,
     });
   }
   if (!opts.providerVersion?.trim()) throw new Error("--provider-version is required with --compile-profile.");
@@ -374,6 +391,7 @@ async function buildSessionRenderPlan(
     ...(opts.assetSurface ? { asset_surface: opts.assetSurface } : {}),
     allow_asset_installers: opts.allowAssetInstallers,
     extra_sources: station ? [station] : undefined,
+    ownedClaudeAuthorities,
     graph_context: {
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.path ? { path: opts.path } : {}),
@@ -1551,7 +1569,8 @@ sessionCmd.command("apply")
       const store = resolveConfigStore();
       const plan = await buildSessionRenderPlan(opts, tool, store, "apply");
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
-      const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force });
+      const ownedClaudeAuthorities = tool === "claude" ? await loadOwnedClaudeAuthorities(store) : undefined;
+      const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force, ownedClaudeAuthorities });
       if (opts.json) {
         printJson({
           ...result,

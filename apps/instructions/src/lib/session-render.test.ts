@@ -245,6 +245,54 @@ describe("session render planner", () => {
     expect(plan.manifestFile.content).not.toContain("Never use git worktrees");
   });
 
+  test("renders when Claude target AGENTS.md is owned by a registered config", () => {
+    const targetHome = join(tmpRoot, "claude-owned-agents");
+    mkdirSync(targetHome, { recursive: true });
+    const ownedContent = "# Managed Claude AGENTS.md\nRendered by the instructions pipeline.\n";
+    writeFileSync(join(targetHome, "AGENTS.md"), ownedContent);
+
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome,
+      sources: [globalRulesStandard],
+      ownedClaudeAuthorities: [
+        { slug: "agents-md-1", targetPath: join(targetHome, "AGENTS.md"), content: ownedContent },
+      ],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.writable).toBe(true);
+    expect(plan.authorityConflicts).toEqual([]);
+    expect(plan.manifest.authorityConflicts).toEqual([]);
+  });
+
+  test("blocks when Claude target AGENTS.md owned config drifts from disk", () => {
+    const targetHome = join(tmpRoot, "claude-owned-drift");
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "AGENTS.md"), "# Disk content\nChanged outside the pipeline.\n");
+
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome,
+      sources: [globalRulesStandard],
+      ownedClaudeAuthorities: [
+        { slug: "agents-md-1", targetPath: join(targetHome, "AGENTS.md"), content: "# Stored content\nAs registered.\n" },
+      ],
+    });
+
+    expect(plan.blocked).toBe(true);
+    expect(plan.writable).toBe(false);
+    expect(plan.files).toEqual([]);
+    expect(plan.authorityConflicts).toHaveLength(1);
+    expect(plan.authorityConflicts[0]).toMatchObject({
+      relativePath: "AGENTS.md",
+      kind: "unknown-unmanaged-authority",
+      provenance: { detection: "owned-config-drift" },
+    });
+  });
+
   test("fresh Claude target emits current worktree rule without legacy authority", () => {
     const plan = planSessionRender({
       tool: "claude",

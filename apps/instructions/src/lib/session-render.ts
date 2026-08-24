@@ -35,7 +35,11 @@ import {
   type CursorAuthorityConflict,
   type CursorAuthorityObservation,
 } from "./cursor-authority.js";
-import { detectClaudeAuthorityConflicts, type ClaudeAuthorityConflict } from "./session-authority.js";
+import {
+  detectClaudeAuthorityConflicts,
+  type ClaudeAuthorityConflict,
+  type ClaudeOwnedAuthority,
+} from "./session-authority.js";
 import {
   CODEWITH_NATIVE_IMPORTS_ENV,
   SESSION_INSTRUCTION_LAYERS,
@@ -269,6 +273,14 @@ export interface SessionRenderInput {
   assetPlan?: AssetPlan;
   /** Pinned source bytes keyed by source config id; never serialized into the plan or manifest. */
   assetContents?: Readonly<Record<string, string>>;
+  /**
+   * Registered Instructions configs (category=rules, agent=claude, kind=file)
+   * whose target_path is a Claude-home AGENTS.md. When the Claude target's
+   * AGENTS.md is owned by one of these and the disk content matches the stored
+   * content, the authority guard passes instead of failing closed on an owned
+   * file. Anything else (unmanaged, owned but drifting) still fails closed.
+   */
+  ownedClaudeAuthorities?: ClaudeOwnedAuthority[];
 }
 
 export interface SessionRenderFile {
@@ -2094,7 +2106,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   const authorityConflicts = input.tool === "cursor" && targetKind !== "blocked"
     ? detectCursorAuthorityConflicts(authorityObservations[0])
     : input.tool === "claude" && targetKind !== "blocked"
-      ? detectClaudeAuthorityConflicts(targetHome)
+      ? detectClaudeAuthorityConflicts(targetHome, input.ownedClaudeAuthorities)
       : [];
   const blockers = [
     ...targetBlockers,

@@ -28,7 +28,10 @@ import {
   detectCursorAuthorityConflicts,
   observeCursorGlobalAuthorityAtPath,
 } from "./cursor-authority.js";
-import { detectClaudeAuthorityConflicts } from "./session-authority.js";
+import {
+  detectClaudeAuthorityConflicts,
+  type ClaudeOwnedAuthority,
+} from "./session-authority.js";
 
 export type SessionApplyAction = "create" | "update" | "delete" | "unchanged" | "conflict";
 
@@ -89,6 +92,12 @@ export interface SessionRollbackReceipt {
 export interface SessionApplyOptions {
   dryRun?: boolean;
   force?: boolean;
+  /**
+   * Registered Instructions configs that own a Claude-home AGENTS.md (see
+   * ClaudeOwnedAuthority). Passed to the apply-time authority recheck so an
+   * owned, consistent AGENTS.md does not read as "changed after planning".
+   */
+  ownedClaudeAuthorities?: ClaudeOwnedAuthority[];
   test_hooks?: {
     before_apply_writes?: (context: {
       plan: SessionRenderPlan;
@@ -203,7 +212,7 @@ function applySessionRenderUnlocked(
   assertCursorAuthorityUnchanged(plan);
 
   const targetHome = assertSafeTargetHome(plan.targetHome);
-  assertClaudeAuthorityStillClear(plan, targetHome);
+  assertClaudeAuthorityStillClear(plan, targetHome, options.ownedClaudeAuthorities);
   const payloadFiles = [...plan.files, ...(plan.assetFiles ?? [])];
   const files = [...payloadFiles, plan.manifestFile];
   const manifestPath = resolvePlannedFilePath(plan, plan.manifestFile, targetHome);
@@ -338,9 +347,13 @@ function assertCursorAuthorityUnchanged(plan: SessionRenderPlan): void {
   }
 }
 
-function assertClaudeAuthorityStillClear(plan: SessionRenderPlan, targetHome: string): void {
+function assertClaudeAuthorityStillClear(
+  plan: SessionRenderPlan,
+  targetHome: string,
+  ownedClaudeAuthorities: ClaudeOwnedAuthority[] | undefined,
+): void {
   if (plan.tool !== "claude" || plan.targetKind === "blocked") return;
-  const conflicts = detectClaudeAuthorityConflicts(targetHome);
+  const conflicts = detectClaudeAuthorityConflicts(targetHome, ownedClaudeAuthorities);
   if (conflicts.length === 0) return;
   const summary = conflicts
     .map((conflict) => `${conflict.relativePath}: ${conflict.reason}`)
