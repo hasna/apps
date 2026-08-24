@@ -32,8 +32,24 @@ program
 program
   .command("interactive", { isDefault: true })
   .alias("i")
+  // A stray first argument means a verb that does not exist: commander
+  // dispatches an unknown top-level word to the default command, and letting
+  // it fall through to the TUI (or its non-TTY discovery render) is a silent
+  // rc=0 for a phantom verb (BUG e3997558). Reject it loudly, naming the
+  // verbs that DO exist, derived from the program rather than hardcoded so
+  // the message cannot rot.
+  .allowExcessArguments(true)
   .description("Interactive skill browser (TUI)")
-  .action(() => {
+  .action((_options: unknown, command: Command) => {
+    const stray = command.args[0];
+    if (stray !== undefined) {
+      const verbs = program.commands
+        .map((c) => c.name())
+        .filter((n) => n !== "interactive")
+        .sort();
+      console.error(chalk.red(`error: unknown command '${stray}'. Valid commands: ${verbs.join(", ")}`));
+      process.exit(1);
+    }
     if (!isTTY) {
       console.log(JSON.stringify(loadBasicRegistry().map(getCompactSkillDiscovery)));
       process.exit(0);
