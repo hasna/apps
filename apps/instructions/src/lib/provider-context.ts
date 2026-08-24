@@ -108,7 +108,7 @@ export function normalizeEndpointOrigin(endpoint: string): { host: string; pathP
   } catch {
     // Not a URL at all — a bare host is acceptable for matching (e.g. "openrouter.ai").
     if (!/^[a-z0-9.-]+$/i.test(url)) return null;
-    return { host: url.toLowerCase().replace(/:.*$/, ""), pathPrefix: "" };
+    return { host: url.toLowerCase(), pathPrefix: "" };
   }
   if (parsed.username || parsed.password) return null; // embedded credentials rejected
   const host = parsed.hostname.toLowerCase();
@@ -220,15 +220,24 @@ export interface ProviderContextRenderOptions {
  * fragment into `<home>/.hasna/provider-context/<key>.md`, write/refresh the manifest,
  * and return the resolution + audit fields. Never requires network; unknown endpoints
  * still render the invariant so the lane is never empty.
+ *
+ * Credential safety: a raw endpoint that FAILS normalization (embedded credentials,
+ * unparseable) is NEVER echoed anywhere — not in the reason, not in the manifest.
+ * The reason uses a fixed marker and the manifest records `rawEndpoint: null`. Only an
+ * endpoint that passed `normalizeEndpointOrigin` (userinfo-free) is recorded.
  */
 export function resolveAndRenderProviderContext(
   opts: ProviderContextRenderOptions
 ): ProviderContextResolution {
   const entry = matchProviderEndpoint(opts.origin);
   const endpointKey = entry ? entry.key : PROVIDER_CONTEXT_INVARIANT_ID;
+  const originAccepted = opts.origin !== null;
+  const recordedEndpoint = originAccepted ? opts.rawEndpoint : null;
   const reason =
     entry === null && opts.rawEndpoint
-      ? `endpoint "${opts.rawEndpoint}" is not in the provider-context registry; using the invariant fragment`
+      ? originAccepted
+        ? `endpoint "${opts.rawEndpoint}" is not in the provider-context registry; using the invariant fragment`
+        : "endpoint rejected (embedded credentials or unparseable); using the invariant fragment"
       : null;
 
   const content = renderProviderFragment(entry);
@@ -255,7 +264,7 @@ export function resolveAndRenderProviderContext(
     sha256: fragmentSha256,
     provider: entry ? entry.provider : "unknown",
     wireProtocol: entry ? entry.wireProtocol : "unknown",
-    rawEndpoint: opts.rawEndpoint || null,
+    rawEndpoint: recordedEndpoint,
     rawModel: opts.rawModel || null,
   };
   manifest.fragments = fragmentsObj;

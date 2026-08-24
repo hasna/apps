@@ -152,6 +152,29 @@ describe("resolveAndRenderProviderContext", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  test("unknown endpoint rejects embedded credentials: reason is a fixed marker, manifest rawEndpoint is null", () => {
+    const home = tempHome();
+    const homeDir = join(home, "home");
+    const credentialed = "https://user:sk-FAKE0000notarealkey@openrouter.ai/api";
+    const res = resolveAndRenderProviderContext({
+      origin: normalizeEndpointOrigin(credentialed),
+      rawEndpoint: credentialed,
+      rawModel: "m",
+      homeDir,
+    });
+    // origin rejected => no registry entry
+    expect(res.entry).toBeNull();
+    expect(res.endpointKey).toBe(PROVIDER_CONTEXT_INVARIANT_ID);
+    // reason must NOT echo the raw endpoint (no userinfo, no credential value)
+    expect(res.reason).not.toContain("sk-FAKE0000notarealkey");
+    expect(res.reason).not.toContain("user:");
+    expect(res.reason).toContain("embedded credentials");
+    // manifest must NOT persist the raw endpoint value
+    const manifest = JSON.parse(readFileSync(join(homeDir, PROVIDER_CONTEXT_DIR, "manifest.json"), "utf8"));
+    expect(manifest.fragments["invariant"].rawEndpoint).toBeNull();
+    rmSync(home, { recursive: true, force: true });
+  });
+
   test("audit line carries key, fragment, sha256, model — no secrets", () => {
     const res: Parameters<typeof providerContextAuditLine>[0] = {
       entry: null,
