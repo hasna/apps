@@ -246,11 +246,91 @@ describe("Tmux command construction", () => {
     expect(r.lastArgv()).toEqual([
       "sh",
       "-c",
-      'ps -o pid=,ppid=,stat=,command= --forest -g "$1" 2>/dev/null | head -n "$2" | cut -c "1-$3"',
+      'ps -o pid=,ppid=,stat=,command= -g "$1" 2>/dev/null | head -n "$2" | cut -c "1-$3"',
       "dispatch-process-tree",
       "123",
       "12",
       "400",
+    ]);
+  });
+
+  test("bounded processTree uses a portable process-group ps script that runs on BSD/macOS hosts, not only GNU --forest", () => {
+    // Regression for bug 5a3319ca (todos 5a3319ca-53b2-4c57-8c56-ca9676472252):
+    // the previous script passed GNU-only `--forest`, which BSD ps on macOS
+    // rejects with "illegal option" (suppressed by 2>/dev/null), so the probe
+    // fell back to `ps -p` and returned only the wrapper row — never the
+    // claude child — and dispatch refused the pane ("target is not a
+    // recognized agent composer (bun)"). Measured on station06 hq:learning
+    // 2026-08-24: `ps -o pid=,ppid=,stat=,command= -g <pgid>` returns the full
+    // process group on both GNU and BSD ps.
+    const r = new MockRunner();
+    const macGroupRows = [
+      "28526 11845 Ss+  bun /Users/andreihasna/.bun/bin/secrets exec hasnaxyz/openrouter/live/api_key --as OPENROUTER_API_KEY -- bash -c 'export ANTHROPIC_BASE_URL=https://openrouter.ai/api; exec claude --dangerously-skip-permissions'",
+      "28621 28526 S+   claude --dangerously-skip-permissions",
+    ].join("\n");
+    r.responder = (argv) => {
+      if (argv[0] === "sh") {
+        // Emulate BSD ps: `--forest` errors (GNU-only), `-g` group rows work.
+        const script = argv[2] ?? "";
+        if (script.includes("--forest")) {
+          return { stdout: "", stderr: "ps: illegal option -- -", exitCode: 1, source: "local" };
+        }
+        if (script.includes(' -g ')) {
+          return { stdout: `${macGroupRows}\n`, stderr: "", exitCode: 0, source: "local" };
+        }
+        if (script.includes(' -p ')) {
+          return {
+            stdout:
+              "28526 11845 Ss+  bun /Users/andreihasna/.bun/bin/secrets exec hasnaxyz/openrouter/live/api_key --as OPENROUTER_API_KEY -- bash -c 'export ANTHROPIC_BASE_URL=https://openrouter.ai/api; exec claude --dangerously-skip-permissions'\n",
+            stderr: "",
+            exitCode: 0,
+            source: "local",
+          };
+        }
+      }
+      return { stdout: "", stderr: "", exitCode: 0, source: "local" };
+    };
+
+    const out = new Tmux(r).processTree("s:w", "28526", { maxLines: 12, maxLineChars: 400 });
+
+    // The claude child must be present in the returned tree — the previous
+    // script returned only the bun wrapper row on a BSD host.
+    expect(out).toContain("claude --dangerously-skip-permissions");
+    expect(out).not.toContain("--forest");
+    expect(r.lastArgv()).toEqual([
+      "sh",
+      "-c",
+      'ps -o pid=,ppid=,stat=,command= -g "$1" 2>/dev/null | head -n "$2" | cut -c "1-$3"',
+      "dispatch-process-tree",
+      "28526",
+      "12",
+      "400",
+    ]);
+  });
+
+  test("unbounded processTree also avoids the GNU-only --forest flag", () => {
+    const r = new MockRunner();
+    r.responder = (argv) => {
+      if (argv[0] === "ps") {
+        return {
+          stdout: "28526 11845 Ss+  bun /Users/andreihasna/.bun/bin/secrets exec hasnaxyz/openrouter/live/api_key --as OPENROUTER_API_KEY -- bash -c 'exec claude --dangerously-skip-permissions'\n28621 28526 S+   claude --dangerously-skip-permissions\n",
+          stderr: "",
+          exitCode: 0,
+          source: "local",
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0, source: "local" };
+    };
+
+    const out = new Tmux(r).processTree("s:w", "28526");
+
+    expect(out).toContain("claude");
+    expect(r.lastArgv()).toEqual([
+      "ps",
+      "-o",
+      "pid=,ppid=,stat=,command=",
+      "-g",
+      "28526",
     ]);
   });
 
