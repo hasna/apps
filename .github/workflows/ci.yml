@@ -398,9 +398,9 @@ jobs:
           bun install --frozen-lockfile --ignore-scripts
           bun run prepare:ordered
           # todos carries no lifecycle scripts (the release gate forbids them:
-          # the final npm publish pack must equal the verified pack), so it is
-          # not a prepare:ordered member — build its dist explicitly so the
-          # guard's npm pack --dry-run scans the real payload.
+          # the pack that reaches the registry must equal the verified pack), so
+          # it is not a prepare:ordered member — build its dist explicitly so
+          # the guard's npm pack --dry-run scans the real payload.
           bun run --filter @hasna/todos build
 
       # The guard dry-runs `npm pack --json` per member and parses the real
