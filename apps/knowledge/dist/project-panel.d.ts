@@ -1,7 +1,9 @@
 import { type ProjectPanel } from '@hasna/contracts';
 import { type KnowledgeService } from './service';
+import { type KnowledgeProjectLinksAuthority } from './project-links';
 export interface KnowledgeProjectPanelOptions {
     service?: KnowledgeService;
+    projectLinksAuthority?: KnowledgeProjectLinksAuthority;
     scope?: string;
     cwd?: string;
     limit?: number;
