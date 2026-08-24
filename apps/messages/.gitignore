@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build outputs (generated at prepack; not tracked, like sibling members)
+dist/
+bin/
+.build/
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# npm pack output
+*.tgz
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
