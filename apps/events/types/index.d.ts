@@ -7,6 +7,7 @@ export * from "./storage.js";
 export * from "./filter.js";
 export * from "./signing.js";
 export * from "./transports.js";
+export * from "./ssrf.js";
 export * from "./catalog.js";
 export * from "./app-event.js";
 export { redactPaths, redactSensitiveKeys } from "./redaction.js";

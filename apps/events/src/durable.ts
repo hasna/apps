@@ -9,9 +9,11 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  renameSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { channelMatchesEvent } from "./filter.js";
 import { createEvent } from "./index.js";
 import { redactPaths, redactSensitiveKeys } from "./redaction.js";
@@ -222,6 +224,8 @@ export interface DurableSpoolImportResult {
   imported: number;
   deduped: number;
   queued: number;
+  /** Records quarantined because they were malformed or identity-mismatched. */
+  quarantined: number;
 }
 
 export interface DurableRetryDeadOptions {
@@ -363,6 +367,8 @@ export class DurableEventsBroker {
       fetchImpl: options.fetchImpl,
       secretResolver: options.secretResolver ?? defaultWebhookSecretResolver,
       now: this.now,
+      tls: options.tls,
+      webhookTargetPolicy: options.webhookTargetPolicy,
     };
     mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
     chmodSync(this.dataDir, 0o700);
@@ -513,13 +519,13 @@ export class DurableEventsBroker {
 
   importSpool(options: DurableSpoolImportOptions = {}): DurableSpoolImportResult {
     const inboxDir = join(this.dataDir, "spool", "inbox");
-    if (!existsSync(inboxDir)) return { scanned: 0, imported: 0, deduped: 0, queued: 0 };
+    if (!existsSync(inboxDir)) return { scanned: 0, imported: 0, deduped: 0, queued: 0, quarantined: 0 };
     const limit = normalizePositiveInteger(options.limit, 100, "limit");
     const names = readdirSync(inboxDir)
       .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
       .sort()
       .slice(0, limit);
-    const result: DurableSpoolImportResult = { scanned: names.length, imported: 0, deduped: 0, queued: 0 };
+    const result: DurableSpoolImportResult = { scanned: names.length, imported: 0, deduped: 0, queued: 0, quarantined: 0 };
     for (const name of names) {
       const path = join(inboxDir, name);
       let event: EventEnvelope;
@@ -527,9 +533,15 @@ export class DurableEventsBroker {
         event = parseSpoolEnvelope(readFileSync(path, "utf8"));
       } catch (error) {
         if (isNodeError(error, "ENOENT")) continue;
-        throw error;
+        quarantineSpoolRecord(this.dataDir, path, "malformed");
+        result.quarantined += 1;
+        continue;
       }
-      if (spoolFileName(event) !== name) throw new Error("Durable event spool filename does not match its identity");
+      if (spoolFileName(event) !== name) {
+        quarantineSpoolRecord(this.dataDir, path, "identity-mismatch");
+        result.quarantined += 1;
+        continue;
+      }
       const enqueued = this.enqueue(event);
       if (enqueued.deduped) result.deduped += 1;
       else result.imported += 1;
@@ -1062,6 +1074,39 @@ function syncDirectory(path: string): void {
   } finally {
     closeSync(descriptor);
   }
+}
+
+interface QuarantineRecord {
+  quarantinedAt: string;
+  originalName: string;
+  reason: "malformed" | "identity-mismatch";
+}
+
+/**
+ * Moves a poison spool record aside to `spool/quarantine/` with bounded safe
+ * metadata, so one corrupt or identity-mismatched record cannot halt the
+ * import lane. The record keeps its original name (plus a uniqueness suffix);
+ * the sidecar carries only the timestamp, the original name, and the reason —
+ * never the (possibly malformed or secret-bearing) payload.
+ */
+function quarantineSpoolRecord(dataDir: string, path: string, reason: QuarantineRecord["reason"]): void {
+  const spoolDir = join(dataDir, "spool");
+  const quarantineDir = join(spoolDir, "quarantine");
+  mkdirSync(quarantineDir, { recursive: true, mode: 0o700 });
+  chmodSync(spoolDir, 0o700);
+  chmodSync(quarantineDir, 0o700);
+  const name = basename(path);
+  const base = name.replace(/\.json$/, "");
+  const suffix = `${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const destination = join(quarantineDir, `${base}.${suffix}.json`);
+  renameSync(path, destination);
+  const metadata: QuarantineRecord = {
+    quarantinedAt: new Date().toISOString(),
+    originalName: name,
+    reason,
+  };
+  writeFileSync(join(quarantineDir, `${base}.${suffix}.meta.json`), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+  syncDirectory(quarantineDir);
 }
 
 function isNodeError(error: unknown, code: string): boolean {

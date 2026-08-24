@@ -27,6 +27,7 @@ export * from "./storage.js";
 export * from "./filter.js";
 export * from "./signing.js";
 export * from "./transports.js";
+export * from "./ssrf.js";
 export * from "./catalog.js";
 export * from "./app-event.js";
 export { redactPaths, redactSensitiveKeys } from "./redaction.js";
@@ -91,6 +92,8 @@ export class EventsClient {
       fetchImpl: options.fetchImpl,
       secretResolver: options.secretResolver,
       now: options.now,
+      tls: options.tls,
+      webhookTargetPolicy: options.webhookTargetPolicy,
     };
     this.catalog = options.catalog ?? defaultEventTypeCatalog;
     this.validateCatalogTypes = options.validateCatalogTypes ?? false;

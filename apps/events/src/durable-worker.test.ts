@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DurableEventSpool } from "./durable-spool.js";
@@ -67,6 +67,55 @@ describe("runDurableWorker", () => {
       dead: 0,
     });
     expect(broker.status().counts).toMatchObject({ pending: 0, leased: 0, delivered: 1 });
+    broker.close();
+  });
+
+  test("survives a poison spool record and still delivers later valid records", async () => {
+    const dataDir = await temporaryDataDir();
+    const spool = new DurableEventSpool({ dataDir });
+    const inboxDir = spool.inboxDir;
+    await Bun.write(join(inboxDir, `${"a".repeat(64)}.json`), "not-json");
+
+    const broker = new DurableEventsBroker({
+      dataDir,
+      secretResolver: () => "runtime-only-test-secret",
+      fetchImpl: async () => new Response("queued", { status: 202 }),
+    });
+    broker.addChannel({
+      id: "notes-created",
+      enabled: true,
+      transport: "webhook",
+      filters: [{ source: "notes", type: "note.created" }],
+      webhook: { url: "https://example.invalid", secretRef: "env:HASNA_NOTES_WEBHOOK_SECRET" },
+    });
+
+    const controller = new AbortController();
+    const worker = runDurableWorker({
+      broker,
+      signal: controller.signal,
+      workerId: "poison-worker",
+      debounceMs: 5,
+      reconcileMs: 60_000,
+      watchRestartMs: 10,
+    });
+    await spool.enqueue({
+      id: "notes:note:after-poison-worker:created",
+      source: "notes",
+      type: "note.created",
+      time: "2020-01-01T00:00:00.000Z",
+      dedupeKey: "notes:note:after-poison-worker:created",
+      schemaVersion: "notes.v1",
+      data: { noteId: "after-poison-worker" },
+      metadata: {},
+    });
+
+    await waitFor(() => broker.status().counts.delivered === 1, 5_000);
+    controller.abort();
+    const result = await worker;
+    expect(result).toMatchObject({ imported: 1, delivered: 1, dead: 0 });
+    expect(broker.status().counts).toMatchObject({ pending: 0, leased: 0, delivered: 1 });
+    const quarantined = await readdir(join(dataDir, "spool", "quarantine"));
+    expect(quarantined.some((name) => name.endsWith(".meta.json"))).toBe(true);
     broker.close();
   });
 

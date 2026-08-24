@@ -163,9 +163,13 @@ Global options (must precede the command group):
   -v, --version            Show version
 
 Environment:
-  HASNA_EVENTS_DIR          Primary data-directory override
-  HASNA_EVENTS_HOME         Legacy data-directory fallback
-  Default directory         ${getEventsDataDir()}`);
+  HASNA_EVENTS_DIR                               Primary data-directory override
+  HASNA_EVENTS_HOME                              Legacy data-directory fallback
+  HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS     Admin allowlist for intentional private webhook
+                                                 ingress (comma-separated hostnames or IPs).
+                                                 Webhook targets default-deny private/special-use
+                                                 addresses.
+  Default directory                              ${getEventsDataDir()}`);
 }
 
 function printChannelsHelp(options: RunEventsCliOptions = {}): void {
@@ -296,7 +300,10 @@ export async function runEventsCli(argv = process.argv.slice(2), options: RunEve
       printDurableHelp(options);
       return;
     }
-    const broker = new DurableEventsBroker({ dataDir: parsed.dir ?? getEventsDataDir() });
+    const broker = new DurableEventsBroker({
+      dataDir: parsed.dir ?? getEventsDataDir(),
+      webhookTargetPolicy: webhookTargetPolicyFromEnv(),
+    });
     try {
       await handleDurable(broker, command, tail, parsed);
     } finally {
@@ -306,7 +313,7 @@ export async function runEventsCli(argv = process.argv.slice(2), options: RunEve
   }
 
   const store = new JsonEventsStore(parsed.dir);
-  const client = new EventsClient({ store });
+  const client = new EventsClient({ store, webhookTargetPolicy: webhookTargetPolicyFromEnv() });
 
   if (group === "channels") {
     if (!command || command === "--help" || command === "-h") {
@@ -430,7 +437,7 @@ async function handleDurable(
   if (command === "import") {
     const args = [...tail];
     const result = broker.importSpool({ limit: numberOption(takeOption(args, "--limit")) });
-    output(parsed, result, () => console.log(`Imported ${result.imported}, deduped ${result.deduped}, queued ${result.queued}`));
+    output(parsed, result, () => console.log(`Imported ${result.imported}, deduped ${result.deduped}, queued ${result.queued}, quarantined ${result.quarantined}`));
     return;
   }
 
@@ -688,6 +695,19 @@ function severityOption(value: string | undefined) {
 function replaySummary(events: number, deliveries: number, nextCursor: string | undefined): string {
   const suffix = nextCursor ? `, next cursor: ${nextCursor}` : "";
   return `Replayed ${events} event(s), ${deliveries} delivery result(s)${suffix}`;
+}
+
+/**
+ * The webhook-target SSRF guard default-denies private/special-use addresses.
+ * `HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS` is the narrow administrator
+ * allowlist (comma-separated hostnames or IP addresses) for intentional
+ * private ingress such as a loopback receiver on the same machine.
+ */
+function webhookTargetPolicyFromEnv(): { allowPrivateHosts: string[] } | undefined {
+  const value = process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
+  if (!value) return undefined;
+  const hosts = value.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return hosts.length > 0 ? { allowPrivateHosts: hosts } : undefined;
 }
 
 if (import.meta.main) {
