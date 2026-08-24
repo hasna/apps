@@ -2066,10 +2066,12 @@ program
   .command("runs [idOrName]")
   .description("list recent runs, optionally for one loop")
   .option("--limit <n>", "limit", "50")
+  .option("--offset <n>", "offset into the run list for pagination (default: 0)", "0")
   .option("--label <label>", "require the loop's current label; repeatable or comma-separated", collectValues, [] as string[])
   .option("--show-output", "show stdout/stderr")
   .action(runAction((idOrName, opts) => withStore(async (store) => {
     const limit = positiveInteger(opts.limit, "--limit") ?? 50;
+    const offset = nonNegativeInteger(opts.offset, "--offset") ?? 0;
     let loop: Loop | undefined;
     if (idOrName) {
       try {
@@ -2081,9 +2083,19 @@ program
         throw error;
       }
     }
-    const runs = await store.listRuns({ loopId: loop?.id, labels: normalizeLoopLabels(opts.label), limit });
-    if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
-    else {
+    const runs = await store.listRuns({ loopId: loop?.id, labels: normalizeLoopLabels(opts.label), limit, offset });
+    if (isJson()) {
+      // Envelope so a truncated page (e.g. the hosted control plane clamping
+      // a page at its 1000-row cap) is observable: the old bare array made
+      // every 'no runs remain' claim a silent floor.
+      const count = await store.countRuns();
+      print({
+        runs: runs.map((run) => publicRun(run, opts.showOutput)),
+        count,
+        has_more: offset + runs.length < count,
+        next_offset: offset + runs.length,
+      });
+    } else {
       for (const run of runs) {
         console.log(
           `${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}`,
