@@ -469,6 +469,11 @@ export interface ConversationsStore {
   readDigest: Async<typeof messagesLib.readDigest>;
   exportMessages: Async<typeof messagesLib.createMessageExport>;
   getThreadReplies: Async<typeof messagesLib.getThreadReplies>;
+  // threads (task bf381fad): collection, expand, lifecycle, and per-agent unread
+  listThreads: Async<typeof messagesLib.listThreads>;
+  getThreadExpand: Async<typeof messagesLib.getThreadExpand>;
+  setThreadStatus: Async<typeof messagesLib.setThreadStatus>;
+  getThreadUnreadCount: Async<typeof messagesLib.getThreadUnreadCount>;
   /**
    * Unread blocking messages for one agent.
    *
@@ -718,6 +723,10 @@ export class LocalStore implements ConversationsStore {
       opts.timeout_ms,
     );
   getThreadReplies: ConversationsStore["getThreadReplies"] = async (...a) => messagesLib.getThreadReplies(...a);
+  listThreads: ConversationsStore["listThreads"] = async (...a) => messagesLib.listThreads(...a);
+  getThreadExpand: ConversationsStore["getThreadExpand"] = async (...a) => messagesLib.getThreadExpand(...a);
+  setThreadStatus: ConversationsStore["setThreadStatus"] = async (...a) => messagesLib.setThreadStatus(...a);
+  getThreadUnreadCount: ConversationsStore["getThreadUnreadCount"] = async (...a) => messagesLib.getThreadUnreadCount(...a);
   getUnreadBlockers: ConversationsStore["getUnreadBlockers"] = async (agent, opts = {}) => {
     const page = await this.getUnreadBlockerPreviews(agent, { ...opts, max_bytes: COLLECTION_MAX_MAX_BYTES, timeout_ms: 5_000 });
     return page.messages.map(previewAsCompatibilityMessage);

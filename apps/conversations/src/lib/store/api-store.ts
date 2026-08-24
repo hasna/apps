@@ -1291,6 +1291,51 @@ export class ApiStore implements ConversationsStore {
     );
     return body.messages.map(previewAsCompatibilityMessage) as never;
   };
+  listThreads: ConversationsStore["listThreads"] = async (opts) => {
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    const limit = resolveCollectionLimit(opts.limit ?? 50);
+    const cursor = resolveCollectionOffset(opts.offset);
+    const query: Q = {
+      channel: normalizeChannelName(opts.channel),
+      limit,
+      cursor,
+      detail: "preview",
+      timeout_ms: timeoutMs,
+    };
+    if (opts.from) query.from = opts.from;
+    // The server already builds each thread root as a full MessagePreview; the
+    // client passes the thread summaries through unchanged.
+    const body = await this.getBounded<{
+      threads?: Array<Record<string, unknown>>;
+      count?: number;
+      has_more?: boolean;
+      next_cursor?: number | null;
+    }>("/threads", query, timeoutMs);
+    return {
+      threads: body.threads ?? [],
+      count: Number(body.count ?? (body.threads ?? []).length),
+    } as never;
+  };
+  getThreadExpand: ConversationsStore["getThreadExpand"] = async (messageRef) => {
+    const body = await this.get<{ root?: Record<string, unknown>; replies?: Array<Record<string, unknown>>; thread_status?: string; reply_count?: number }>(
+      `/threads/${encodeURIComponent(String(messageRef))}`,
+    );
+    return body as never;
+  };
+  setThreadStatus: ConversationsStore["setThreadStatus"] = async (messageRef, status) => {
+    const body = await this.post<{ message?: Record<string, unknown> }>(
+      `/threads/${encodeURIComponent(String(messageRef))}/status`,
+      { status },
+    );
+    return body.message as never;
+  };
+  getThreadUnreadCount: ConversationsStore["getThreadUnreadCount"] = async (messageRef, agent) => {
+    const body = await this.get<{ unread_count?: number }>(
+      `/threads/${encodeURIComponent(String(messageRef))}/unread`,
+      { agent },
+    );
+    return Number(body.unread_count ?? 0) as never;
+  };
   getUnreadBlockers: ConversationsStore["getUnreadBlockers"] = async (agent, opts) => {
     const page = await this.getUnreadBlockerPreviews(agent, { ...opts, max_bytes: COLLECTION_MAX_MAX_BYTES });
     return page.messages.map(previewAsCompatibilityMessage) as never;

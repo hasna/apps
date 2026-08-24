@@ -21,6 +21,18 @@ export interface Message {
   blocking: boolean;
   attachments: Attachment[] | null;
   reply_to: number | null;
+  /**
+   * Root message id of the reply chain this message belongs to. NULL for a
+   * root (reply_to IS NULL); for a reply it equals the id of the thread root
+   * reached by walking the reply_to chain (task bf381fad). Optional only for
+   * literals built outside a DB row; stored reads always carry it.
+   */
+  thread_id?: number | null;
+  /**
+   * Thread lifecycle state on the ROOT message only ('open' | 'closed').
+   * NULL for replies and for roots that have never received a reply.
+   */
+  thread_status?: "open" | "closed" | null;
   reply_count?: number;
   truncated?: boolean;
   /**
@@ -52,6 +64,8 @@ export interface MessagePreview {
   unread: boolean;
   blocking: boolean;
   reply_to: number | null;
+  thread_id?: number | null;
+  thread_status?: "open" | "closed" | null;
   reply_count?: number;
   attachment_count: number;
   has_attachments: boolean;
@@ -83,6 +97,43 @@ export interface MessagePreviewPage {
 /** Re-exported from content-safety so `Message` stays self-describing. */
 export type { SendRedactionNotice } from "./lib/content-safety.js";
 import type { SendRedactionNotice } from "./lib/content-safety.js";
+
+export type ThreadStatus = "open" | "closed";
+
+export interface ListThreadsOptions {
+  channel: string;
+  /** Reader identity — when present, each thread carries that agent's unread count. */
+  from?: string;
+  since?: string;
+  limit?: number;
+  offset?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+}
+
+export interface ThreadSummary {
+  root: MessagePreview;
+  /** Total descendant replies in the thread (the full reply_to chain, not just direct children). */
+  reply_count: number;
+  last_activity_at: string;
+  thread_status: ThreadStatus;
+  /** Present only when the list was scoped to a reader (`from`). */
+  unread_count?: number;
+}
+
+export interface ThreadReplyNode {
+  message: Message;
+  /** Nesting depth: 0 = direct reply to the root, 1 = reply to a reply, ... */
+  depth: number;
+}
+
+export interface ThreadExpandResult {
+  root: Message;
+  thread_status: ThreadStatus;
+  reply_count: number;
+  replies: ThreadReplyNode[];
+}
 
 export interface Reaction {
   id: number;

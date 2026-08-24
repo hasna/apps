@@ -627,10 +627,17 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/FROM messages WHERE id = \$1 AND uuid = \$2/i.test(sql)) {
         return messages.find((row) => row.id === p[0] && row.uuid === p[1]) ?? null;
       }
-      if (/SELECT id, uuid, session_id, channel FROM messages WHERE uuid/i.test(sql)) {
+      if (/SELECT id, uuid, session_id, channel, reply_to, thread_id FROM messages WHERE uuid/i.test(sql)) {
         const found = messages.find((row) => row.uuid === (p as any[])[0]);
         return found
-          ? { id: found.id, uuid: found.uuid, session_id: found.session_id, channel: found.channel }
+          ? {
+              id: found.id,
+              uuid: found.uuid,
+              session_id: found.session_id,
+              channel: found.channel,
+              reply_to: found.reply_to ?? null,
+              thread_id: found.thread_id ?? null,
+            }
           : null;
       }
       // Parent-existence probe for reply_to validation on POST /messages.
@@ -678,6 +685,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
           metadata,
           blocking,
           reply_to,
+          thread_id,
         ] = p as any[];
         const row = {
           id: nextId++,
@@ -695,6 +703,8 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
           metadata,
           blocking,
           reply_to: reply_to ?? null,
+          thread_id: thread_id ?? null,
+          thread_status: null,
           created_at: new Date().toISOString(),
         };
         messages.push(row);
@@ -793,6 +803,12 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
             const message = messages.find((row) => row.id === second);
             if (!message) return { rows: [], rowCount: 0 };
             message.attachments = first;
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE messages SET thread_status = \$1 WHERE id = \$2/i.test(sql)) {
+            const message = messages.find((row) => row.id === second);
+            if (!message) return { rows: [], rowCount: 0 };
+            message.thread_status = first;
             return { rows: [], rowCount: 1 };
           }
           if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {

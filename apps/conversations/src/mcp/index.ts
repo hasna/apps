@@ -22,6 +22,7 @@ import { registerChannelBridge } from "./channel.js";
 import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
 import { registerTaskTools } from "./tools/tasks.js";
+import { registerThreadTools } from "./tools/threads.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 import pkg from "../../package.json";
@@ -85,6 +86,7 @@ export function buildServer(forHttp = false): McpServer {
   registerAdvancedTools(srv, pkg.version);
   registerTaskTools(srv);
   registerTmuxTools(srv);
+  registerThreadTools(srv);
 
   if (!forHttp) {
     serverDisposers.set(srv, [registerChannelBridge(srv)]);
