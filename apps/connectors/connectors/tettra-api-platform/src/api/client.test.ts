@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { ConnectorClient, DEFAULT_BASE_URL } from './client';
+import { ConnectorClient } from './client';
 import { ItemsApi } from './items';
 import { ConnectorApiError } from '../types';
 
@@ -51,9 +51,8 @@ describe('ConnectorClient', () => {
     expect(() => new ConnectorClient({})).toThrow('API key or token is required');
   });
 
-  test('uses default base URL when not provided', () => {
-    const client = new ConnectorClient({ apiKey: 'key' });
-    expect(client.getBaseUrl()).toBe(DEFAULT_BASE_URL);
+    test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 
   test('uses custom base URL when provided', () => {
@@ -99,21 +98,21 @@ describe('ConnectorClient', () => {
 describe('ItemsApi', () => {
   test('listItems calls GET /items on default base URL', async () => {
     const recorded = installFetch(() => [{ id: '1' }]);
-    const client = new ConnectorClient({ apiKey: 'key' });
+    const client = new ConnectorClient({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
     const items = new ItemsApi(client);
     const result = await items.list();
 
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items`);
     expect(recorded[0].headers.Authorization).toBe('Bearer key');
     expect(result).toEqual([{ id: '1' }]);
   });
 
   test('getItem calls GET /items/:itemId with encoded id', async () => {
     const recorded = installFetch(() => ({ id: 'abc/def' }));
-    const client = new ConnectorClient({ apiKey: 'key' });
+    const client = new ConnectorClient({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
     const items = new ItemsApi(client);
     await items.get('abc/def');
 
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items/abc%2Fdef`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items/abc%2Fdef`);
   });
 });

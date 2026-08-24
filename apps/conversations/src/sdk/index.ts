@@ -486,6 +486,42 @@ export class ConversationsClient {
       });
     }
 
+    /** List reply threads in a channel */
+    async listThreads(query?: { "channel": string; "from"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/threads`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Expand one thread into its full nested reply tree */
+    async expandThread(id: number, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/threads/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Close or reopen a thread */
+    async setThreadStatus(id: number, body: { "status": "open" | "closed" }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/threads/${encodeURIComponent(String(id))}/status`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Per-agent unread count for one thread */
+    async getThreadUnread(id: number, query?: { "agent": string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/v1/threads/${encodeURIComponent(String(id))}/unread`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** Package version and artifact-baked source SHA */
     async getVersion(init?: RequestInit): Promise<{ "status": string; "version": string; "app": string; "build_sha": string | null }> {
       return this.request("GET", `/version`, {

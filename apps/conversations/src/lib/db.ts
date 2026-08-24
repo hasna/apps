@@ -1041,6 +1041,36 @@ export function getDb(): Database {
     db.exec("ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages(id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)");
   }
+  // Thread collection (task bf381fad): thread_id marks every reply with its
+  // chain ROOT (the message reached by walking reply_to up); thread_status
+  // carries the open/closed lifecycle on the root. Existing rows are backfilled
+  // by walking the reply_to chains, so pre-thread data becomes groupable.
+  if (!colNames2.includes("thread_id")) {
+    db.exec("ALTER TABLE messages ADD COLUMN thread_id INTEGER REFERENCES messages(id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id)");
+  }
+  if (!colNames2.includes("thread_status")) {
+    db.exec("ALTER TABLE messages ADD COLUMN thread_status TEXT");
+  }
+  // Backfill thread_id for pre-thread rows by walking the reply_to chains to
+  // their ROOT. Guarded so the recursive scan runs only when work exists — on
+  // a fully-backfilled store the CTE would otherwise recompute the whole graph
+  // on every init.
+  const unthreaded = db.prepare(
+    "SELECT COUNT(*) AS n FROM messages WHERE reply_to IS NOT NULL AND thread_id IS NULL",
+  ).get() as { n: number } | undefined;
+  if (Number(unthreaded?.n ?? 0) > 0) {
+    db.exec(`
+      WITH RECURSIVE chain AS (
+        SELECT id, id AS root_id FROM messages WHERE reply_to IS NULL
+        UNION ALL
+        SELECT m.id, c.root_id FROM messages m JOIN chain c ON m.reply_to = c.id
+      )
+      UPDATE messages
+      SET thread_id = (SELECT chain.root_id FROM chain WHERE chain.id = messages.id)
+      WHERE reply_to IS NOT NULL AND thread_id IS NULL
+    `);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS message_scope_rewrite_guard (
       token INTEGER PRIMARY KEY CHECK (token = 1),

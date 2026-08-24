@@ -601,3 +601,205 @@ describe('entry versioning — HTTP surface', () => {
     expect(doc.paths['/v1/notes/{id}/versions/{version}']).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Retained-version purge / scrub — the secret-hygiene capability.
+//
+// The 2026-08 redaction remediation (todos OPE60-00006) redacted the LIVE
+// content of 77 'Hasna OSS boundary' items, but the retained VERSION HISTORY
+// still carried the credential-shaped value, re-exposed by `knowledge versions
+// --json` and `knowledge diff --rev` into agent transcripts. No verb purged a
+// retained version. These tests pin the purge capability:
+//
+//   1. PURGE REMOVES THE VALUE. A retained version that holds a credential-
+//      shaped body stops being reachable — `getVersion` and `listVersions`
+//      return nothing for it — so neither the versions read path nor the diff
+//      read path can render it.
+//   2. NEGATIVE CONTROL. An ordinary retained version, purged or not, is
+//      preserved exactly; purging one version never touches its siblings, and
+//      the live row is never a purge target.
+//   3. ZERO FINDINGS. After purge, the serialized read paths contain zero
+//      occurrences of the credential-shaped fixture.
+//
+// The fixture value below is SYNTHETIC — 12+ alphanumerics after `sk-`, the
+// openai_api_key detector shape — created for the test, never a live key.
+// ---------------------------------------------------------------------------
+
+describe('entry versioning — purge retained versions (secret hygiene)', () => {
+  const CRED = 'sk-testsecretkeyvalue1234567890';
+
+  /**
+   * An entry whose retained history holds the credential-shaped value.
+   *
+   * create -> v1 content includes CRED; two raw-SQL updates leave v1 and v2
+   * retained (v1 = CRED-bearing, v2 = clean) and the live row at v3 = clean.
+   */
+  async function seedWithLeakedHistory() {
+    const { db, client, repo } = await harness();
+    const key = keyFor(['knowledge:read', 'knowledge:write']);
+    const handler = handlerFor(client);
+    const item = await repo.create({ title: 'boundary', content: `${CRED} first body` });
+    await db.query(`UPDATE knowledge_items SET content = $2 WHERE id = $1`, [item.id, 'clean second body']);
+    await db.query(`UPDATE knowledge_items SET content = $2 WHERE id = $1`, [item.id, 'clean current body']);
+    return { db, handler, key, item, repo };
+  }
+
+  test('purge of one retained version removes exactly that version and preserves the rest', async () => {
+    const { db, repo, item } = await seedWithLeakedHistory();
+    // sanity: v1 (CRED-bearing) and v2 are retained before the purge
+    expect((await versionRows(db, item.id)).map((r) => r.version)).toEqual([1, 2]);
+    expect((await repo.getVersion(item.id, 1))!.content).toContain(CRED);
+
+    const result = await repo.purgeVersions(item.id, { version: 1 });
+    expect(result).toMatchObject({ purged: 1, current_version: 3 });
+
+    // The credential-bearing version is no longer reachable.
+    expect(await repo.getVersion(item.id, 1)).toBeNull();
+    const rows = await versionRows(db, item.id);
+    expect(rows.map((r) => r.version)).toEqual([2]);
+    expect(rows.map((r) => String(r.content)).join('\n')).not.toContain(CRED);
+
+    // Negative control: the ordinary retained version is preserved verbatim.
+    expect((await repo.getVersion(item.id, 2))!.content).toBe('clean second body');
+    const list = await repo.listVersions(item.id);
+    expect(list!.items.map((i) => i.version)).toEqual([2]);
+  });
+
+  test('purge of every retained version empties history but preserves the live row', async () => {
+    const { db, repo, item } = await seedWithLeakedHistory();
+    const result = await repo.purgeVersions(item.id);
+    expect(result).toMatchObject({ purged: 2, current_version: 3 });
+
+    expect(await versionRows(db, item.id)).toHaveLength(0);
+    expect(await repo.getVersion(item.id, 1)).toBeNull();
+    expect(await repo.getVersion(item.id, 2)).toBeNull();
+    const list = await repo.listVersions(item.id);
+    expect(list!.items).toHaveLength(0);
+    expect(list!.total).toBe(0);
+
+    // Current content is untouched — purge never targets the live row.
+    const live = await repo.get(item.id);
+    expect(live!.content).toBe('clean current body');
+  });
+
+  test('purge refuses the live/current version and deletes nothing', async () => {
+    const { db, repo, item } = await seedWithLeakedHistory();
+    await expect(repo.purgeVersions(item.id, { version: 3 })).rejects.toThrow(/live version/);
+    expect((await versionRows(db, item.id)).map((r) => r.version)).toEqual([1, 2]);
+  });
+
+  test('purge of a version that is not retained is a zero-row no-op', async () => {
+    const { db, repo, item } = await seedWithLeakedHistory();
+    const result = await repo.purgeVersions(item.id, { version: 9 });
+    expect(result).toMatchObject({ purged: 0, current_version: 3 });
+    expect((await versionRows(db, item.id)).map((r) => r.version)).toEqual([1, 2]);
+  });
+
+  test('purge of an absent entry returns null, like the other version verbs', async () => {
+    const { repo } = await harness();
+    expect(await repo.purgeVersions('k_absent')).toBeNull();
+  });
+
+  test('DELETE /v1/notes/{id}/versions purges all retained versions', async () => {
+    const { handler, key, item } = await seedWithLeakedHistory();
+    const res = await handler(new Request(`http://x/v1/notes/${item.id}/versions`, {
+      method: 'DELETE',
+      headers: { 'x-api-key': key },
+    }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, purged: 2, current_version: 3 });
+
+    const list = await handler(new Request(`http://x/v1/notes/${item.id}/versions`, {
+      headers: { 'x-api-key': key },
+    }));
+    const body = await list.json() as { total: number; items: unknown[] };
+    expect(body.total).toBe(0);
+    expect(body.items).toHaveLength(0);
+  });
+
+  test('DELETE /v1/notes/{id}/versions/{n} purges one version, preserving siblings', async () => {
+    const { handler, key, item } = await seedWithLeakedHistory();
+    const res = await handler(new Request(`http://x/v1/notes/${item.id}/versions/1`, {
+      method: 'DELETE',
+      headers: { 'x-api-key': key },
+    }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, purged: 1, current_version: 3 });
+
+    const one = await handler(new Request(`http://x/v1/notes/${item.id}/versions/1`, {
+      headers: { 'x-api-key': key },
+    }));
+    expect(one.status).toBe(404);
+    // Negative control: the clean sibling survives the purge.
+    const two = await handler(new Request(`http://x/v1/notes/${item.id}/versions/2`, {
+      headers: { 'x-api-key': key },
+    }));
+    expect(two.status).toBe(200);
+  });
+
+  test('DELETE on the live version is refused and changes nothing', async () => {
+    const { db, handler, key, item } = await seedWithLeakedHistory();
+    const res = await handler(new Request(`http://x/v1/notes/${item.id}/versions/3`, {
+      method: 'DELETE',
+      headers: { 'x-api-key': key },
+    }));
+    expect(res.status).toBe(409);
+    expect((await versionRows(db, item.id)).map((r) => r.version)).toEqual([1, 2]);
+  });
+
+  test('DELETE version routes require knowledge:write', async () => {
+    const { handler, item } = await seedWithLeakedHistory();
+    const res = await handler(new Request(`http://x/v1/notes/${item.id}/versions`, {
+      method: 'DELETE',
+      headers: { 'x-api-key': keyFor(['knowledge:read']) },
+    }));
+    expect(res.status).toBe(403);
+  });
+
+  test('DELETE versions of an absent entry is 404, not a purge', async () => {
+    const { handler, key } = await seedWithLeakedHistory();
+    const res = await handler(new Request('http://x/v1/notes/k_absent/versions', {
+      method: 'DELETE',
+      headers: { 'x-api-key': key },
+    }));
+    expect(res.status).toBe(404);
+  });
+
+  test('after purge, the versions and diff read paths expose zero occurrences of the credential', async () => {
+    const { handler, key, item } = await seedWithLeakedHistory();
+    await handler(new Request(`http://x/v1/notes/${item.id}/versions/1`, {
+      method: 'DELETE',
+      headers: { 'x-api-key': key },
+    }));
+
+    // The versions read path (the data `knowledge versions --json` renders).
+    const list = await handler(new Request(`http://x/v1/notes/${item.id}/versions`, {
+      headers: { 'x-api-key': key },
+    }));
+    expect(JSON.stringify(await list.json())).not.toContain(CRED);
+
+    // The diff read path: the purged side no longer resolves, the surviving
+    // side is the clean v2. Neither can render the credential.
+    const one = await handler(new Request(`http://x/v1/notes/${item.id}/versions/1`, {
+      headers: { 'x-api-key': key },
+    }));
+    expect(one.status).toBe(404);
+    const two = await handler(new Request(`http://x/v1/notes/${item.id}/versions/2`, {
+      headers: { 'x-api-key': key },
+    }));
+    const twoBody = await two.json() as { content: string | null };
+    expect(twoBody.content).not.toContain(CRED);
+  });
+
+  test('the OpenAPI document advertises the purge DELETE operations on the version routes', async () => {
+    const { handler } = await seedWithLeakedHistory();
+    const res = await handler(new Request('http://x/openapi.json'));
+    const doc = await res.json() as any;
+    const versions = doc.paths['/v1/notes/{id}/versions'];
+    expect(versions.delete).toBeDefined();
+    expect(versions.delete.operationId).toBe('purgeNoteVersions');
+    const one = doc.paths['/v1/notes/{id}/versions/{version}'];
+    expect(one.delete).toBeDefined();
+    expect(one.delete.operationId).toBe('purgeNoteVersion');
+  });
+});

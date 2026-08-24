@@ -5,7 +5,17 @@ import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import { applyRunnerEnvFile } from "./env-file.js";
-import { logRunnerCommandFailure, LoopsApiError, runRunnerLoop, runRunnerOnce, runnerStatus, RunnerRefusalError } from "./index.js";
+import {
+  RUNNER_PERMANENT_DENIAL_EXIT_CODE,
+  RunnerPermanentDenialError,
+  logRunnerCommandFailure,
+  LoopsApiError,
+  runRunnerLoop,
+  runRunnerOnce,
+  runnerPermanentDenial,
+  runnerStatus,
+  RunnerRefusalError,
+} from "./index.js";
 
 function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>, principalId: string, now?: () => Date) {
   const principal = {
@@ -889,5 +899,60 @@ describe("runner env-file integration", () => {
     expect(result.stopped).toBe(true);
     expect(result.iterations).toBe(0);
     expect(sleeps).toEqual([]);
+  });
+
+  test("a wrong_token_kind claim denial surfaces as an actionable permanent denial", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "wrong_token_kind" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+
+    await expect(runRunnerOnce({
+      apiUrl: "http://127.0.0.1:1",
+      apiKey: "test-token",
+      runnerId: "runner-denied",
+      env: {},
+      fetchImpl,
+    })).rejects.toMatchObject({
+      name: "RunnerPermanentDenialError",
+      reason: "wrong_token_kind",
+      route: "/v1/runners/claim",
+    });
+    const denial = runnerPermanentDenial(Object.assign(new Error("wrong_token_kind"), { reason: "wrong_token_kind", route: "/v1/runners/claim" }));
+    expect(denial).toBeInstanceOf(RunnerPermanentDenialError);
+    expect(denial?.message).toMatch(/machine.*service/i);
+    expect(denial?.message).toMatch(/loops:runner/i);
+    expect(denial?.message).toMatch(/wrong_token_kind/);
+  });
+
+  test("permanent-denial exit code is distinct from a generic failure", () => {
+    expect(RUNNER_PERMANENT_DENIAL_EXIT_CODE).toBe(4);
+    expect(RUNNER_PERMANENT_DENIAL_EXIT_CODE).not.toBe(1);
+  });
+
+  test("transient server failures are NOT classified as permanent denials", () => {
+    expect(runnerPermanentDenial(new Error("loops-api request failed: 503"))).toBeUndefined();
+    expect(runnerPermanentDenial(new Error("wrong_token_kind"))).toBeUndefined();
+    expect(runnerPermanentDenial(null)).toBeUndefined();
+    expect(runnerPermanentDenial("wrong_token_kind")).toBeUndefined();
+  });
+
+  test("runRunnerLoop stops immediately on a permanent denial instead of retrying forever", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "wrong_token_kind" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+
+    const result = await runRunnerLoop({
+      apiUrl: "http://127.0.0.1:1",
+      apiKey: "test-token",
+      runnerId: "runner-loop-denied",
+      env: {},
+      fetchImpl,
+      pollIntervalMs: 5,
+      maxIterations: 100,
+    });
+    expect(result).toMatchObject({ ok: false, permanent: true, errors: 1, iterations: 1 });
+    expect(result.permanentMessage).toMatch(/machine.*service/i);
   });
 });

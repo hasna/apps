@@ -27,7 +27,7 @@ bun run dev raw request --path /items --method GET
 
 ## API Details
 
-- **Base URL**: `https://api.sucuriapiplatform.com/v1` (override via `SUCURI_API_PLATFORM_BASE_URL` or profile `baseUrl`)
+- **Base URL**: no default (must be configured) (override via `SUCURI_API_PLATFORM_BASE_URL` or profile `baseUrl`)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **Endpoints**:
   - `GET /items` — list items

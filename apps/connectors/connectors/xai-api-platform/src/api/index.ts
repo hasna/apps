@@ -57,4 +57,4 @@ export class XaiApiPlatform {
   }
 }
 
-export { XaiApiPlatformClient, DEFAULT_BASE_URL } from './client';
+export { XaiApiPlatformClient } from './client';

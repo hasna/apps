@@ -31,7 +31,7 @@ bun run dev search --data '{"query":"gateway"}'
 | Variable | Description |
 |----------|-------------|
 | `TYK_API_PLATFORM_API_KEY` | API key |
-| `TYK_API_PLATFORM_BASE_URL` | Optional base URL (default: `https://api.tykapiplatform.com/v1`) |
+| `TYK_API_PLATFORM_BASE_URL` | Optional base URL (default: `configured.example.com/v1`) |
 
 ## Library Usage
 

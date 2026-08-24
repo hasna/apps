@@ -3,7 +3,6 @@ export * from './types';
 export {
   ConnectorClient,
   StabilityApiPlatformClient,
-  DEFAULT_BASE_URL,
   encodePathSegment,
 } from './api';
 export {

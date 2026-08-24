@@ -19,6 +19,8 @@
  *   DELETE /v1/notes/{id} delete a knowledge item                      (auth: knowledge:write)
  *   GET  /v1/notes/{id}/versions            entry history              (auth: knowledge:read)
  *   GET  /v1/notes/{id}/versions/{version}  one prior snapshot         (auth: knowledge:read)
+ *   DELETE /v1/notes/{id}/versions          purge ALL retained history (auth: knowledge:write)
+ *   DELETE /v1/notes/{id}/versions/{n}      purge ONE retained version (auth: knowledge:write)
  */
 import { readFileSync } from 'node:fs';
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type ApiKeyPrincipal } from '@hasna/contracts/auth';
@@ -230,6 +232,15 @@ export class VersionConflictError extends Error {
   constructor(readonly expected: number, readonly current: number) {
     super(`version_conflict: expected version ${expected}, stored version is ${current}`);
     this.name = 'VersionConflictError';
+  }
+}
+
+/** A purge target is the live row, not a retained prior version. */
+export class CannotPurgeLiveVersionError extends Error {
+  readonly code = 'cannot_purge_live_version';
+  constructor(readonly version: number, readonly current: number, readonly id: string) {
+    super(`cannot purge version ${version} of ${id}: it is the live version (the item is at version ${current}), not a retained prior version`);
+    this.name = 'CannotPurgeLiveVersionError';
   }
 }
 
@@ -647,6 +658,55 @@ export class NoteRepo {
       [existing.id, version],
     );
     return row ? rowToVersion(row) : null;
+  }
+
+  /**
+   * Permanently purge retained prior versions of an entry — the secret-hygiene
+   * capability that redacts history that must stop being reachable.
+   *
+   * The operation deletes by id/version and NEVER reads the retained body, so a
+   * credential sitting in history cannot be rendered as a side effect of
+   * removing it. The live row is never a purge target.
+   *
+   * Returns `null` — not an empty purge — when the entry itself is absent, the
+   * same contract as {@link listVersions}. With no `version` option, every
+   * retained prior version is deleted; with `version`, only that one.
+   *
+   * Deleting a retained version is consistent with the schema's own guard: the
+   * append-only trigger blocks UPDATE of `knowledge_item_versions`, while
+   * DELETE is deliberately allowed (it already cascades from item deletion).
+   */
+  async purgeVersions(
+    idOrShort: string,
+    options?: { version?: number },
+    guardedTenantId?: string,
+  ): Promise<{ purged: number; current_version: number } | null> {
+    const existing = await this.get(idOrShort, guardedTenantId);
+    if (!existing) return null;
+    const currentVersion = existing.version ?? 1;
+
+    if (options?.version !== undefined) {
+      const version = options.version;
+      if (!Number.isInteger(version) || version < 1) {
+        throw new Error(`version must be a positive integer, got ${version}`);
+      }
+      // Only the EXACT live version is refused — a version past the current one
+      // is simply not retained, and must no-op (purged 0) rather than error.
+      if (version === currentVersion) {
+        throw new CannotPurgeLiveVersionError(version, currentVersion, existing.id);
+      }
+      const deleted = await this.client.query<{ version: number }>(
+        `DELETE FROM knowledge_item_versions WHERE item_id = $1 AND version = $2 RETURNING version`,
+        [existing.id, version],
+      );
+      return { purged: deleted.rows.length, current_version: currentVersion };
+    }
+
+    const deleted = await this.client.query<{ version: number }>(
+      `DELETE FROM knowledge_item_versions WHERE item_id = $1 RETURNING version`,
+      [existing.id],
+    );
+    return { purged: deleted.rows.length, current_version: currentVersion };
   }
 
   async delete(idOrShort: string): Promise<boolean> {
@@ -2833,6 +2893,17 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
           },
           required: ['item_id', 'current_version', 'total', 'items'],
         },
+        NotePurgeReceipt: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            id: { type: 'string' },
+            purged: { type: 'integer' },
+            current_version: { type: 'integer' },
+            message: { type: 'string' },
+          },
+          required: ['ok', 'id', 'purged', 'current_version'],
+        },
       },
     },
     security: [{ apiKey: [] }],
@@ -3191,6 +3262,21 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
             '404': { description: 'No such entry. An entry that exists but was never edited returns 200 with an empty list.' },
           },
         },
+        delete: {
+          operationId: 'purgeNoteVersions',
+          summary: 'Permanently purge every retained prior version of a knowledge item',
+          description:
+            'Secret-hygiene operation: deletes the retained history so a credential-shaped value '
+            + 'in a prior snapshot stops being reachable. Never returns or renders the retained body. '
+            + 'The live row is untouched.',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            '200': { description: 'Purge receipt: purged count and the untouched current version.', content: { 'application/json': { schema: { $ref: '#/components/schemas/NotePurgeReceipt' } } } },
+            '404': { description: 'No such entry.' },
+          },
+        },
       },
       '/v1/notes/{id}/versions/{version}': {
         get: {
@@ -3203,6 +3289,22 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
           responses: {
             '200': { content: { 'application/json': { schema: { $ref: '#/components/schemas/NoteVersion' } } } },
             '404': { description: 'No such entry, or no such version of it.' },
+          },
+        },
+        delete: {
+          operationId: 'purgeNoteVersion',
+          summary: 'Permanently purge ONE retained prior version of a knowledge item',
+          description:
+            'Secret-hygiene operation. Deleting the live/current version is refused with 409. '
+            + 'A version that is not retained returns 200 with purged: 0. Never returns the body.',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'version', in: 'path', required: true, schema: { type: 'integer' } },
+          ],
+          responses: {
+            '200': { description: 'Purge receipt: purged count and the untouched current version.', content: { 'application/json': { schema: { $ref: '#/components/schemas/NotePurgeReceipt' } } } },
+            '404': { description: 'No such entry.' },
+            '409': { description: 'The version is the live row, not a retained prior version.' },
           },
         },
       },
@@ -4611,27 +4713,70 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       // route's `[^/]+` can never swallow them.
       const versionListMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions$/);
       if (versionListMatch) {
-        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-        const principal = await authOrThrow(req, ['knowledge:read']);
-        const history = await repo.listVersions(decodeURIComponent(versionListMatch[1]!), {
-          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
-          offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined,
-        }, principal.tid);
-        // null = no such entry (404). An entry with no edits yields 200 and an
-        // empty list — the two must never collapse into one answer.
-        return history ? json(history) : json({ error: 'not_found' }, 404);
+        if (method === 'GET') {
+          const principal = await authOrThrow(req, ['knowledge:read']);
+          const history = await repo.listVersions(decodeURIComponent(versionListMatch[1]!), {
+            limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+            offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined,
+          }, principal.tid);
+          // null = no such entry (404). An entry with no edits yields 200 and an
+          // empty list — the two must never collapse into one answer.
+          return history ? json(history) : json({ error: 'not_found' }, 404);
+        }
+        if (method === 'DELETE') {
+          // Secret-hygiene purge of every retained prior version. Never reads
+          // the retained body; the live row is untouched.
+          const principal = await authOrThrow(req, ['knowledge:write']);
+          const id = decodeURIComponent(versionListMatch[1]!);
+          const purged = await repo.purgeVersions(id, {}, principal.tid);
+          if (!purged) return json({ error: 'not_found' }, 404);
+          return json({
+            ok: true,
+            id,
+            purged: purged.purged,
+            current_version: purged.current_version,
+            message: `${id} purged ${purged.purged} retained version(s); live content at version ${purged.current_version} untouched`,
+          }, 200);
+        }
+        return json({ error: 'method_not_allowed' }, 405);
       }
 
       const versionOneMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions\/(\d+)$/);
       if (versionOneMatch) {
-        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-        const principal = await authOrThrow(req, ['knowledge:read']);
-        const snapshot = await repo.getVersion(
-          decodeURIComponent(versionOneMatch[1]!),
-          Number(versionOneMatch[2]),
-          principal.tid,
-        );
-        return snapshot ? json(snapshot) : json({ error: 'not_found' }, 404);
+        if (method === 'GET') {
+          const principal = await authOrThrow(req, ['knowledge:read']);
+          const snapshot = await repo.getVersion(
+            decodeURIComponent(versionOneMatch[1]!),
+            Number(versionOneMatch[2]),
+            principal.tid,
+          );
+          return snapshot ? json(snapshot) : json({ error: 'not_found' }, 404);
+        }
+        if (method === 'DELETE') {
+          // Secret-hygiene purge of ONE retained prior version.
+          const principal = await authOrThrow(req, ['knowledge:write']);
+          const id = decodeURIComponent(versionOneMatch[1]!);
+          const version = Number(versionOneMatch[2]);
+          try {
+            const purged = await repo.purgeVersions(id, { version }, principal.tid);
+            if (!purged) return json({ error: 'not_found' }, 404);
+            return json({
+              ok: true,
+              id,
+              purged: purged.purged,
+              current_version: purged.current_version,
+              message: purged.purged === 0
+                ? `no retained version ${version} of ${id}`
+                : `${id} purged retained version ${version}; live content at version ${purged.current_version} untouched`,
+            }, 200);
+          } catch (error) {
+            if (error instanceof CannotPurgeLiveVersionError) {
+              return json({ error: error.code, version: error.version, current_version: error.current }, 409);
+            }
+            throw error;
+          }
+        }
+        return json({ error: 'method_not_allowed' }, 405);
       }
 
       const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);

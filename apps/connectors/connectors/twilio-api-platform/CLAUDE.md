@@ -4,7 +4,7 @@ Guidance for working with the Twilio Api Platform connector.
 
 ## Overview
 
-`connect-twilio-api-platform` is a TypeScript CLI and library for the Twilio Api Platform REST API (`https://api.twilioapiplatform.com/v1`). This is distinct from `connect-twilio` (classic Twilio SMS/voice at `api.twilio.com`).
+`connect-twilio-api-platform` is a TypeScript CLI and library for the Twilio Api Platform REST API (`configured.example.com/v1`). This is distinct from `connect-twilio` (classic Twilio SMS/voice at `api.twilio.com`).
 
 ## Commands
 

@@ -15,11 +15,11 @@ describe('ConnectorClient', () => {
   });
 
   test('requires apiKey', () => {
-    expect(() => new ConnectorClient({ apiKey: '' })).toThrow('API key is required');
+    expect(() => new ConnectorClient({ apiKey: '', baseUrl: 'https://configured.example.com/v1' })).toThrow('API key is required');
   });
 
   test('creates client with valid config', () => {
-    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key' });
+    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key', baseUrl: 'https://configured.example.com/v1' });
     expect(client.getApiKeyPreview()).toBe('travo-...-key');
   });
 
@@ -33,12 +33,12 @@ describe('ConnectorClient', () => {
   });
 
   test('builds default listings URL', () => {
-    const client = new ConnectorClient({ apiKey: 'key' });
-    expect(client.buildRequestUrl('/listings')).toBe('https://api.travo-real-estate.com/v1/listings');
+    const client = new ConnectorClient({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
+    expect(client.buildRequestUrl('/listings')).toBe('https://configured.example.com/v1/listings');
   });
 
   test('sends Bearer authorization header', async () => {
-    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key' });
+    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key', baseUrl: 'https://configured.example.com/v1' });
     const captured: Array<{ url: string; init?: RequestInit }> = [];
 
     globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
@@ -50,12 +50,12 @@ describe('ConnectorClient', () => {
     }) as any;
 
     await client.get('/listings');
-    expect(captured[0]?.url).toBe('https://api.travo-real-estate.com/v1/listings');
+    expect(captured[0]?.url).toBe('https://configured.example.com/v1/listings');
     expect(new Headers(captured[0]?.init?.headers).get('Authorization')).toBe('Bearer travo-real-estate-key');
   });
 
   test('GET listing by ID uses encoded path', async () => {
-    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key' });
+    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key', baseUrl: 'https://configured.example.com/v1' });
     const captured: string[] = [];
 
     globalThis.fetch = mock(async (input: string | URL | Request) => {
@@ -64,11 +64,11 @@ describe('ConnectorClient', () => {
     }) as any;
 
     await client.get('/listings/item-1');
-    expect(captured[0]).toBe('https://api.travo-real-estate.com/v1/listings/item-1');
+    expect(captured[0]).toBe('https://configured.example.com/v1/listings/item-1');
   });
 
   test('GET events endpoint', async () => {
-    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key' });
+    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key', baseUrl: 'https://configured.example.com/v1' });
     const captured: string[] = [];
 
     globalThis.fetch = mock(async (input: string | URL | Request) => {
@@ -77,11 +77,11 @@ describe('ConnectorClient', () => {
     }) as any;
 
     await client.get('/events', { limit: 10 });
-    expect(captured[0]).toBe('https://api.travo-real-estate.com/v1/events?limit=10');
+    expect(captured[0]).toBe('https://configured.example.com/v1/events?limit=10');
   });
 
   test('POST search endpoint', async () => {
-    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key' });
+    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key', baseUrl: 'https://configured.example.com/v1' });
     const captured: Array<{ url: string; init?: RequestInit }> = [];
 
     globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
@@ -93,13 +93,13 @@ describe('ConnectorClient', () => {
     }) as any;
 
     await client.post('/search', { query: 'apartment' });
-    expect(captured[0]?.url).toBe('https://api.travo-real-estate.com/v1/search');
+    expect(captured[0]?.url).toBe('https://configured.example.com/v1/search');
     expect(captured[0]?.init?.method).toBe('POST');
     expect(captured[0]?.init?.body).toBe(JSON.stringify({ query: 'apartment' }));
   });
 
   test('throws ConnectorApiError on HTTP error', async () => {
-    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key' });
+    const client = new ConnectorClient({ apiKey: 'travo-real-estate-key', baseUrl: 'https://configured.example.com/v1' });
 
     globalThis.fetch = mock(async () =>
       new Response('Unauthorized', { status: 401, statusText: 'Unauthorized' })
@@ -128,7 +128,7 @@ describe('TravoRealEstate', () => {
   });
 
   test('listListings and getListing hit expected paths', async () => {
-    const connector = new TravoRealEstate({ apiKey: 'travo-real-estate-key' });
+    const connector = new TravoRealEstate({ apiKey: 'travo-real-estate-key', baseUrl: 'https://configured.example.com/v1' });
     const captured: string[] = [];
 
     globalThis.fetch = mock(async (input: string | URL | Request) => {
@@ -139,8 +139,8 @@ describe('TravoRealEstate', () => {
     await connector.listListings();
     await connector.getListing('item-1');
 
-    expect(captured[0]).toBe('https://api.travo-real-estate.com/v1/listings');
-    expect(captured[1]).toBe('https://api.travo-real-estate.com/v1/listings/item-1');
+    expect(captured[0]).toBe('https://configured.example.com/v1/listings');
+    expect(captured[1]).toBe('https://configured.example.com/v1/listings/item-1');
   });
 });
 
@@ -150,5 +150,9 @@ describe('ConnectorApiError', () => {
     expect(err.statusCode).toBe(401);
     expect(err.responseBody).toBe('{"error":"invalid_key"}');
     expect(err.name).toBe('ConnectorApiError');
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

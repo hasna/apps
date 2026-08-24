@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { ConnectorClient, DEFAULT_BASE_URL } from './client';
+import { ConnectorClient } from './client';
 import { Connector } from './index';
 import { ConnectorApiError } from '../types';
 
@@ -38,10 +38,9 @@ describe('ConnectorClient', () => {
       expect(client.getBaseUrl()).toBe(TEST_BASE_URL);
     });
 
-    test('uses default base URL when not provided', () => {
-      const client = new ConnectorClient({ apiKey: 'key' });
-      expect(client.getBaseUrl()).toBe(DEFAULT_BASE_URL);
-    });
+      test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
+  });
 
     test('strips trailing slashes from base URL', () => {
       const client = new ConnectorClient({ apiKey: 'key', baseUrl: 'https://api.example.com/v1///' });
@@ -56,7 +55,7 @@ describe('ConnectorClient', () => {
     });
 
     test('returns *** for short keys', () => {
-      const client = new ConnectorClient({ apiKey: 'short' });
+      const client = new ConnectorClient({ apiKey: 'short', baseUrl: 'https://configured.example.com/v1' });
       expect(client.getApiKeyPreview()).toBe('***');
     });
   });
@@ -198,10 +197,32 @@ describe('Connector API modules', () => {
   test('raw.request uses configured base URL override', async () => {
     const connector = new Connector({
       apiKey: 'key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://override.example.com/v1',
     });
     await connector.raw.request({ path: '/items', method: 'GET' });
     const [url] = getFetchMock().mock.calls[0];
     expect(url).toBe('https://override.example.com/v1/items');
+  });
+
+  test('sends the API key only to the configured base URL', async () => {
+    const recorded: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      recorded.push(typeof input === 'string' ? input : input.toString());
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'application/json' }),
+        async text() { return JSON.stringify({ ok: true }); },
+        async json() { return { ok: true }; },
+      } as Response;
+    }) as typeof fetch;
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
+    await client.request('/ping');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].startsWith('https://configured.example.com/v1/')).toBe(true);
+    expect(recorded[0]).not.toContain('api.vercelapiplatform.com');
   });
 });

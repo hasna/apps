@@ -24,7 +24,7 @@ bun run dev streams list
 | Variable | Description |
 |----------|-------------|
 | `SSE_TRIGGER_API_KEY` | API key (overrides profile) |
-| `SSE_TRIGGER_BASE_URL` | Override base URL (default `https://api.sse-trigger.com/v1`) |
+| `SSE_TRIGGER_BASE_URL` | Override base URL (no default - must be configured) |
 
 ## CLI Commands
 

@@ -8,8 +8,7 @@ export {
   DocumentsApi,
   EventsApi,
   SearchApi,
-  DEFAULT_BASE_URL,
-} from './api';
+  } from './api';
 
 export {
   getApiKey,

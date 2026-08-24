@@ -2,7 +2,6 @@ export { Connector } from './api';
 export * from './types';
 export {
   ConnectorClient,
-  DEFAULT_BASE_URL,
   ItemsApi,
   EventsApi,
   SearchApi,

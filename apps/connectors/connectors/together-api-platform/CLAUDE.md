@@ -8,7 +8,7 @@ connect-together-api-platform is a TypeScript connector for the Together Api Pla
 
 ## API Reference
 
-- **Base URL**: `https://api.togetherapiplatform.com/v1`
+- **Base URL**: no default (must be configured)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **API Docs**: https://www.ycombinator.com/companies/together-api-platform
 

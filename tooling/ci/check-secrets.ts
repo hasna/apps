@@ -31,7 +31,12 @@ const PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "github-pat", re: /ghp[_]/ },
   { name: "approle-secret", re: /secret[-]token[:]/ },
   { name: "ctx7sk-key", re: /ctx7sk[-]/i },
-  { name: "xai-key", re: /xai[-]/i },
+  // Narrowed 2026-08-24 (PR #1106): the bare /xai-/i form matched the package's
+  // own name "connect-xai-api-platform" (the literal xai-api prefix) and blocked
+  // the branch on a false positive at xai-api-platform/CLAUDE.md:592. A key
+  // VALUE is the prefix plus 8+ alphanumerics (the seeded self-test control
+  // "xai-" + "e".repeat(12) still fires); "connect-xai-api-platform" does not.
+  { name: "xai-key", re: /xai[-][A-Za-z0-9]{8,}/i },
   { name: "google-api-key", re: /AIza[a-zA-Z0-9]/ },
   { name: "aws-access-key", re: /AKIA[A-Z0-9]/ },
 ];

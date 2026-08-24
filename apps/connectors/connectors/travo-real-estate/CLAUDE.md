@@ -6,7 +6,7 @@ Guidance for working with the Travo Data (`travo-real-estate`) connector.
 
 REST API connector for Travo Data real estate listings, events, and search.
 
-- **Base URL**: `https://api.travo-real-estate.com/v1`
+- **Base URL**: no default (must be configured)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **Category**: Data & Analytics
 

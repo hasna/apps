@@ -14,7 +14,19 @@ beforeAll(async () => {
   serverProc = Bun.spawn(
     ["bun", "run", "src/server/index.ts", "--port", String(PORT)],
     {
-      env: isolatedStoreEnv(":memory:", { extra: projectAuthorityTestEnv() }),
+      env: isolatedStoreEnv(":memory:", {
+        extra: {
+          ...projectAuthorityTestEnv(),
+          // This suite exercises route behaviour with no API key configured.
+          // The server now fails closed on state-changing requests without a
+          // key, so opt in to unauthenticated writes explicitly (security P1,
+          // todos d836c304), and name the test server's own origin on the
+          // state-changing allowlist — the Host header carries the random
+          // test port, not the default 19428.
+          MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES: "1",
+          MEMENTOS_CORS_ORIGIN: `http://localhost:${PORT}`,
+        },
+      }),
       stdout: "pipe",
       stderr: "pipe",
       cwd: new URL("../../", import.meta.url).pathname.replace(/\/$/, ""),

@@ -256,4 +256,30 @@ describe("CLI set --stdin — value off argv", () => {
     const { exitCode } = await runCli(["set", STDIN_KEY, "--stdin"], { stdin: "" });
     expect(exitCode).toBe(1);
   });
+
+  // The pipe/echo/heredoc convention appends line endings to the piped input.
+  // EVERY shape below must store the value the caller intended — never a
+  // trailing line ending — because byte-exact consumers (a site gate is the
+  // measured case: 401 on the verbatim value, authenticated on the stripped
+  // one) fail on any residue. The doubled shapes are the regression this locks:
+  // a file or heredoc with a trailing blank line delivers `value\n\n`, and a
+  // one-newline trim leaves `value\n` in the vault.
+  it("stores byte-identical values for every pipe line-ending shape", async () => {
+    const shapes = [
+      { name: "bare", input: FIXTURE_VALUE },
+      { name: "lf", input: `${FIXTURE_VALUE}\n` },
+      { name: "crlf", input: `${FIXTURE_VALUE}\r\n` },
+      { name: "lf-lf", input: `${FIXTURE_VALUE}\n\n` },
+      { name: "crlf-crlf", input: `${FIXTURE_VALUE}\r\n\r\n` },
+    ];
+    for (const shape of shapes) {
+      const key = `${STDIN_KEY}-${shape.name}`;
+      const set = await runCli(["set", key, "--stdin", "--type", "token"], { stdin: shape.input });
+      expect(set.exitCode, `${shape.name}: set failed`).toBe(0);
+      const check = await runCli(["get", key, "--check"]);
+      expect(check.exitCode, `${shape.name}: check failed`).toBe(0);
+      expect(check.stdout, `${shape.name}: stored length`).toContain(`length=${FIXTURE_VALUE.length}`);
+      expect(check.stdout, `${shape.name}: stored digest`).toContain(`sha256=${FIXTURE_SHA256}`);
+    }
+  });
 });

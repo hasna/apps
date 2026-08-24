@@ -18,7 +18,7 @@ bun run dev -- --help # Show CLI help
 
 ## API Details
 
-- **Base URL**: `https://api.velum-data-quality.com/v1` (configurable via `VELUM_DATA_QUALITY_BASE_URL`)
+- **Base URL**: no default (must be configured) (configurable via `VELUM_DATA_QUALITY_BASE_URL`)
 - **Auth**: Bearer token: `Authorization: Bearer <API_KEY>`
 
 ## API Resources

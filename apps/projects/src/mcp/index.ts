@@ -99,7 +99,11 @@ Options:
   --http         serve MCP over Streamable HTTP on 127.0.0.1 (also MCP_HTTP=1)
   --port <n>     HTTP port (default 8871, or MCP_HTTP_PORT)
   -V, --version  output the version number
-  -h, --help     display help for command`);
+  -h, --help     display help for command
+
+Environment:
+  PROJECTS_MCP_TOKEN  Bearer token required on every HTTP route when set
+                      (default-off); DNS-rebinding protection is always on`);
 }
 
 const args = process.argv.slice(2);

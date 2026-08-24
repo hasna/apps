@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { StabilityApiPlatform, DEFAULT_BASE_URL } from './index';
+import { ConnectorClient } from './client';
+import { StabilityApiPlatform } from './index';
 
 const realFetch = globalThis.fetch;
 
@@ -45,60 +46,60 @@ afterEach(() => {
 
 describe('StabilityApiPlatform client', () => {
   test('requires api key', () => {
-    expect(() => new StabilityApiPlatform({ apiKey: '' })).toThrow('API key is required');
+    expect(() => new StabilityApiPlatform({ apiKey: '', baseUrl: 'https://configured.example.com/v1' })).toThrow('API key is required');
   });
 
   test('listItems sends bearer auth to /v1/items', async () => {
     const recorded = installFetch();
-    const client = new StabilityApiPlatform({ apiKey: 'stability-api-platform-key' });
+    const client = new StabilityApiPlatform({ apiKey: 'stability-api-platform-key', baseUrl: 'https://configured.example.com/v1' });
 
     await client.listItems();
 
     expect(recorded).toHaveLength(1);
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items`);
     expect(recorded[0].method).toBe('GET');
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer stability-api-platform-key');
   });
 
   test('getItem encodes item id in URL path', async () => {
     const recorded = installFetch();
-    const client = new StabilityApiPlatform({ apiKey: 'stability-api-platform-key' });
+    const client = new StabilityApiPlatform({ apiKey: 'stability-api-platform-key', baseUrl: 'https://configured.example.com/v1' });
 
     await client.getItem('item-1');
 
     expect(recorded).toHaveLength(1);
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items/item-1`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items/item-1`);
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer stability-api-platform-key');
   });
 
   test('createItem POSTs JSON body to /items', async () => {
     const recorded = installFetch();
-    const client = new StabilityApiPlatform({ apiKey: 'test-key' });
+    const client = new StabilityApiPlatform({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
 
     await client.createItem({ name: 'widget' });
 
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items`);
     expect(recorded[0].method).toBe('POST');
     expect(JSON.parse(recorded[0].body!)).toEqual({ name: 'widget' });
   });
 
   test('listEvents GETs /events', async () => {
     const recorded = installFetch();
-    const client = new StabilityApiPlatform({ apiKey: 'test-key' });
+    const client = new StabilityApiPlatform({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
 
     await client.listEvents({ limit: 5 });
 
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/events?limit=5`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/events?limit=5`);
     expect(recorded[0].method).toBe('GET');
   });
 
   test('search POSTs to /search', async () => {
     const recorded = installFetch();
-    const client = new StabilityApiPlatform({ apiKey: 'test-key' });
+    const client = new StabilityApiPlatform({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
 
     await client.search({ q: 'hello' });
 
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/search`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/search`);
     expect(recorded[0].method).toBe('POST');
     expect(JSON.parse(recorded[0].body!)).toEqual({ q: 'hello' });
   });
@@ -120,5 +121,9 @@ describe('StabilityApiPlatform client', () => {
     expect(() => StabilityApiPlatform.fromEnv()).toThrow('STABILITY_API_PLATFORM_API_KEY');
 
     if (original) process.env.STABILITY_API_PLATFORM_API_KEY = original;
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

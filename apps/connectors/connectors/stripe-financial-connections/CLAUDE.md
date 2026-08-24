@@ -54,7 +54,7 @@ connect-stripe-financial-connections raw --path /items --method GET
 
 ## Authentication
 
-Bearer Token authentication. API base URL defaults to `https://api.stripefinancialconnections.com/v1`.
+Bearer Token authentication. API base URL has no default (must be configured).
 
 ## Data Storage
 
@@ -70,7 +70,7 @@ Profile JSON structure:
 ```json
 {
   "apiKey": "your-api-key",
-  "baseUrl": "https://api.stripefinancialconnections.com/v1"
+  "baseUrl": "configured.example.com/v1"
 }
 ```
 

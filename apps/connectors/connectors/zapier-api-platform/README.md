@@ -1,6 +1,6 @@
 # @hasna/connect-zapier-api-platform
 
-TypeScript connector for the [Zapier API Platform](https://api.zapierapiplatform.com/v1).
+TypeScript connector for the [Zapier API Platform](configured.example.com/v1).
 
 ## Features
 

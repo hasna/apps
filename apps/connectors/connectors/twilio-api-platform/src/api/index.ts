@@ -1,7 +1,7 @@
 import type { TwilioApiPlatformConfig, TwilioApiPlatformResponse } from '../types';
 import { TwilioApiPlatformClient, type RequestOptions } from './client';
 
-export { TwilioApiPlatformClient, DEFAULT_BASE_URL } from './client';
+export { TwilioApiPlatformClient } from './client';
 
 export class TwilioApiPlatform {
   private readonly client: TwilioApiPlatformClient;

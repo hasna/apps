@@ -6,8 +6,6 @@ import {
   type WriteBinaryFileConfig,
 } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.write-binary-file.com/v1';
-
 export function encodePathSegment(value: string): string {
   return encodeURIComponent(value);
 }
@@ -32,7 +30,10 @@ export class WriteBinaryFileClient {
       throw new Error('API key is required');
     }
     this.apiKey = config.apiKey;
-    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
+    if (!config.baseUrl) {
+      throw new Error('baseUrl is required: no default endpoint is configured; set baseUrl (profile, config, or the connector BASE_URL environment variable)');
+    }
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
   }
 
   private buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): string {

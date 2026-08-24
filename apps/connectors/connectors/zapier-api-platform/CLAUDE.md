@@ -8,7 +8,7 @@ connect-zapier-api-platform is a TypeScript connector for the Zapier API Platfor
 
 ## API Reference
 
-- **Base URL**: `https://api.zapierapiplatform.com/v1`
+- **Base URL**: no default (must be configured)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **Override**: `ZAPIER_API_PLATFORM_BASE_URL` environment variable
 

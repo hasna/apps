@@ -14,6 +14,10 @@ import type {
   MessagePreviewPage,
   ExportMessagesOptions,
   MessageExportArtifact,
+  ListThreadsOptions,
+  ThreadExpandResult,
+  ThreadStatus,
+  ThreadSummary,
 } from "../types.js";
 import { normalizeExactIsoTimestamp } from "./since.js";
 import { createHash, randomUUID } from "crypto";
@@ -139,7 +143,10 @@ export function parseMessage(row: Record<string, unknown>): Message {
   const rawUuid = typeof row.uuid === "string" ? row.uuid.trim() : "";
   const uuid = normalizeMessageUuid(rawUuid) ?? rawUuid;
   const replyToRaw = row.reply_to === undefined || row.reply_to === null ? null : Number(row.reply_to);
+  const threadIdRaw = row.thread_id === undefined || row.thread_id === null ? null : Number(row.thread_id);
   const replyCount = row.reply_count === undefined || row.reply_count === null ? undefined : Number(row.reply_count);
+  const threadStatus =
+    row.thread_status === "open" || row.thread_status === "closed" ? row.thread_status : null;
 
   return redactMessage({
     ...row,
@@ -149,6 +156,8 @@ export function parseMessage(row: Record<string, unknown>): Message {
     attachments,
     blocking: !!row.blocking,
     reply_to: replyToRaw || null,
+    thread_id: threadIdRaw || null,
+    thread_status: threadStatus,
     ...(replyCount === undefined ? {} : { reply_count: replyCount }),
   } as Message);
 }
@@ -388,10 +397,19 @@ export function sendMessage(opts: SendMessageOptions): Message {
       let replyTo: number | null = null;
       let channelName = requestedChannel;
       let sessionId: string;
+      let threadId: number | null = null;
+      let threadRootId: number | null = null;
       if (requestedReplyUuid) {
         const parent = db.prepare(
-          "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = ?"
-        ).get(requestedReplyUuid) as { id: number; uuid: string; session_id: string; channel: string | null } | null;
+          "SELECT id, uuid, session_id, channel, reply_to, thread_id FROM messages WHERE uuid = ?"
+        ).get(requestedReplyUuid) as {
+          id: number;
+          uuid: string;
+          session_id: string;
+          channel: string | null;
+          reply_to: number | null;
+          thread_id: number | null;
+        } | null;
         if (!parent) {
           throw new Error(`reply_to_uuid message ${requestedReplyUuid} not found.`);
         }
@@ -414,6 +432,11 @@ export function sendMessage(opts: SendMessageOptions): Message {
         replyTo = parent.id;
         channelName = parentChannel;
         sessionId = parent.session_id;
+        // The parent's own reply_to tells us whether IT is the root. A reply
+        // joins the parent's thread: the root is the parent when the parent is
+        // a root, otherwise the parent's recorded thread root (task bf381fad).
+        threadId = parent.reply_to === null ? parent.id : parent.thread_id ?? resolveThreadRootIdFor(parent.id, db);
+        threadRootId = threadId;
       } else {
         sessionId = channelName
           ? `channel:${channelName}`
@@ -447,8 +470,8 @@ export function sendMessage(opts: SendMessageOptions): Message {
       }
 
       const row = db.prepare(`
-        INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to, thread_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
       `).get(
         msgUuid,
@@ -465,8 +488,17 @@ export function sendMessage(opts: SendMessageOptions): Message {
         metadata,
         blocking,
         replyTo,
+        threadId,
       ) as Record<string, unknown>;
       const stored = parseMessage(row);
+
+      // A reply promotes its root into a live thread: mark it open so the
+      // thread lifecycle (close/reopen) has a status to toggle.
+      if (threadRootId !== null) {
+        db.prepare(
+          "UPDATE messages SET thread_status = 'open' WHERE id = ? AND thread_status IS NULL",
+        ).run(threadRootId);
+      }
 
       if (stagingDir) {
         const attachmentsDir = join(getAttachmentsDir(), String(stored.id));
@@ -535,6 +567,27 @@ export function sendMessage(opts: SendMessageOptions): Message {
   fireWebhooks(message);
 
   return message;
+}
+
+/**
+ * Walk a message's reply_to chain up to its root. Used only as a fallback for
+ * rows whose thread_id was not populated (legacy rows pre-backfill); normal
+ * writes and the backfill set thread_id directly.
+ */
+function resolveThreadRootIdFor(messageId: number, db: Database): number {
+  let current = messageId;
+  const seen = new Set<number>();
+  while (!seen.has(current)) {
+    seen.add(current);
+    const row = db.prepare("SELECT reply_to, thread_id FROM messages WHERE id = ?").get(current) as
+      | { reply_to: number | null; thread_id: number | null }
+      | undefined;
+    if (!row) break;
+    if (row.thread_id !== null) return row.thread_id;
+    if (row.reply_to === null) return current;
+    current = row.reply_to;
+  }
+  return current;
 }
 
 function previewProjectionColumns(alias = ""): string {
@@ -1745,6 +1798,150 @@ export function getThreadReplies(messageId: number): Message[] {
     limit: 100,
     max_bytes: COLLECTION_MAX_MAX_BYTES,
   }).messages.map(previewAsCompatibilityMessage);
+}
+
+const THREAD_DESCENDANT_MATCH = (alias: string): string =>
+  `(${alias}.thread_id = m.id OR (${alias}.thread_id IS NULL AND ${alias}.reply_to = m.id))`;
+
+/**
+ * Thread collection (task bf381fad): roots in a channel that have received at
+ * least one reply, with the FULL descendant reply count (the nested reply_to
+ * chain), the last activity across the chain, the thread lifecycle status, and
+ * — when a reader is supplied — that reader's per-thread unread count derived
+ * from its per-message read receipts (message_read_receipts).
+ */
+export function listThreads(opts: ListThreadsOptions): { threads: ThreadSummary[]; count: number } {
+  const db = getDb();
+  const channel = normalizeChannelName(opts.channel);
+  const limit = Math.min(resolveCollectionLimit(opts.limit ?? 50), 100);
+  const offset = resolveCollectionOffset(opts.offset);
+  const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+  const reader = opts.from ? opts.from.trim().toLowerCase() : null;
+
+  const descendant = THREAD_DESCENDANT_MATCH("r");
+  const replyCountSelect = `, (SELECT COUNT(*) FROM messages r WHERE ${descendant}) AS reply_count`;
+  const lastActivitySelect = `, (SELECT MAX(r.created_at) FROM messages r WHERE ${descendant}) AS last_activity_at`;
+  const unreadSelect = reader
+    ? `, (SELECT COUNT(*) FROM messages r WHERE ${descendant} AND lower(r.from_agent) != ? AND
+           NOT EXISTS (SELECT 1 FROM message_read_receipts rc WHERE rc.message_id = r.id AND rc.agent = ?)) AS unread_count`
+    : "";
+
+  // SQLite binds positionally: the unread subquery's two placeholders appear in
+  // the SELECT text BEFORE the channel placeholder in WHERE, so the reader
+  // params must precede the channel param in the array.
+  const params: (string | number)[] = reader ? [reader, reader, channel] : [channel];
+
+  const rows = db.prepare(
+    `SELECT ${previewProjectionColumns("m")}, m.thread_id, m.thread_status
+            ${replyCountSelect}${lastActivitySelect}${unreadSelect}
+     FROM messages m
+     WHERE m.channel = ? AND m.reply_to IS NULL
+       AND EXISTS (SELECT 1 FROM messages r WHERE ${descendant})
+     ORDER BY last_activity_at DESC, m.id DESC
+     LIMIT ${limit} OFFSET ${offset}`,
+  ).all(...params) as Record<string, unknown>[];
+
+  const threads: ThreadSummary[] = rows.map((row) => {
+    const summary: ThreadSummary = {
+      root: buildMessagePreview(row, previewBytes),
+      reply_count: Math.max(0, Number(row.reply_count) || 0),
+      last_activity_at: String(row.last_activity_at ?? row.created_at ?? ""),
+      thread_status: row.thread_status === "closed" ? "closed" : "open",
+    };
+    if (reader && row.unread_count != null) summary.unread_count = Math.max(0, Number(row.unread_count) || 0);
+    return summary;
+  });
+
+  const totalRow = db.prepare(
+    `SELECT COUNT(*) AS n FROM messages m
+     WHERE m.channel = ? AND m.reply_to IS NULL
+       AND EXISTS (SELECT 1 FROM messages r WHERE ${descendant})`,
+  ).get(channel) as { n: number } | undefined;
+
+  return { threads, count: Number(totalRow?.n ?? threads.length) };
+}
+
+/** Resolve a numeric message reference to its thread root id (walking reply chains). */
+export function resolveThreadRootId(messageRef: number, db: Database = getDb()): number | null {
+  const row = db.prepare("SELECT id, reply_to, thread_id FROM messages WHERE id = ?").get(messageRef) as
+    | { id: number; reply_to: number | null; thread_id: number | null }
+    | undefined;
+  if (!row) return null;
+  if (row.reply_to === null) return row.id;
+  return row.thread_id ?? resolveThreadRootIdFor(row.id, db);
+}
+
+/**
+ * Expand one thread: the root message plus every descendant reply ordered by
+ * creation, each annotated with its nesting depth (0 = direct reply to the
+ * root). A reference to a REPLY resolves to its chain root, so any member of a
+ * thread can be handed to `expand`.
+ */
+export function getThreadExpand(messageRef: number): ThreadExpandResult {
+  const db = getDb();
+  const rootId = resolveThreadRootId(messageRef, db);
+  if (rootId === null) throw new Error(`Message ${messageRef} not found.`);
+
+  const rootRow = db.prepare(`SELECT * FROM messages WHERE id = ?`).get(rootId) as Record<string, unknown> | undefined;
+  if (!rootRow) throw new Error(`Thread root ${rootId} not found.`);
+  const root = parseMessage(rootRow);
+
+  const replyRows = db.prepare(
+    `SELECT * FROM messages
+     WHERE (thread_id = ? OR (thread_id IS NULL AND reply_to = ?))
+     ORDER BY created_at ASC, id ASC`,
+  ).all(rootId, rootId) as Record<string, unknown>[];
+
+  const depthById = new Map<number, number>();
+  const replies = replyRows.map((row) => {
+    const message = parseMessage(row);
+    if (message.reply_to === rootId) {
+      depthById.set(message.id, 0);
+    } else if (message.reply_to !== null && depthById.has(message.reply_to)) {
+      depthById.set(message.id, (depthById.get(message.reply_to) ?? 0) + 1);
+    } else {
+      depthById.set(message.id, 0);
+    }
+    return { message, depth: depthById.get(message.id) ?? 0 };
+  });
+
+  return {
+    root,
+    thread_status: root.thread_status === "closed" ? "closed" : "open",
+    reply_count: replies.length,
+    replies,
+  };
+}
+
+/** Close or reopen a thread by toggling thread_status on its root. */
+export function setThreadStatus(messageRef: number, status: ThreadStatus): Message {
+  const db = getDb();
+  const rootId = resolveThreadRootId(messageRef, db);
+  if (rootId === null) throw new Error(`Message ${messageRef} not found.`);
+  const updated = db.prepare(
+    "UPDATE messages SET thread_status = ? WHERE id = ? RETURNING *",
+  ).get(status, rootId) as Record<string, unknown> | undefined;
+  if (!updated) throw new Error(`Thread root ${rootId} not found.`);
+  return parseMessage(updated);
+}
+
+/** Per-agent unread count for one thread: foreign replies with no read receipt. */
+export function getThreadUnreadCount(messageRef: number, agent: string): number {
+  const db = getDb();
+  const rootId = resolveThreadRootId(messageRef, db);
+  if (rootId === null) throw new Error(`Message ${messageRef} not found.`);
+  const normalized = agent.trim().toLowerCase();
+  // THREAD_DESCENDANT_MATCH references `m.id` (the collection query aliases the
+  // root table `messages m`); this single-thread verb's FROM is `messages r`
+  // only, so the root id is bound directly — mirroring the PG handler at
+  // /v1/threads/{id}/unread. The two backend queries must not diverge.
+  const row = db.prepare(
+    `SELECT COUNT(*) AS n FROM messages r
+     WHERE (r.thread_id = ? OR (r.thread_id IS NULL AND r.reply_to = ?))
+       AND lower(r.from_agent) != ?
+       AND NOT EXISTS (SELECT 1 FROM message_read_receipts rc WHERE rc.message_id = r.id AND rc.agent = ?)`,
+  ).get(rootId, rootId, normalized, normalized) as { n: number } | undefined;
+  return Number(row?.n ?? 0);
 }
 
 /**

@@ -128,6 +128,44 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
     const updated = await store.update(created.id, { content: 'b' }, { expectedVersion: created.version });
     expect(updated!.version).toBe(2);
   });
+
+  test('purge removes retained history over HTTP and preserves the live row', async () => {
+    // The fixture value is SYNTHETIC — the openai_api_key detector shape,
+    // created for this test, never a live key.
+    const store = httpStore();
+    const created = await store.create({ title: 'Purge subject', content: 'sk-testsecretkeyvalue1234567890 body v1' });
+    await store.update(created.id, { content: 'clean v2' });
+    await store.update(created.id, { content: 'clean v3' });
+
+    const history = await store.listVersions(created.id);
+    expect(history!.items.map((v) => v.content)).toEqual(['clean v2', 'sk-testsecretkeyvalue1234567890 body v1']);
+
+    const purged = await store.purgeVersions(created.id);
+    expect(purged).toMatchObject({ purged: 2, current_version: 3 });
+
+    const after = await store.listVersions(created.id);
+    expect(after!.items).toEqual([]);
+    expect(after!.total).toBe(0);
+    expect(await store.getVersion(created.id, 1)).toBeNull();
+    expect(await store.getVersion(created.id, 2)).toBeNull();
+    // The live row is never a purge target.
+    expect((await store.get(created.id))!.content).toBe('clean v3');
+  });
+
+  test('purge of a single version over HTTP keeps the clean siblings', async () => {
+    const store = httpStore();
+    const created = await store.create({ title: 'Purge one', content: 'sk-testsecretkeyvalue1234567890 v1' });
+    await store.update(created.id, { content: 'clean v2' });
+    await store.update(created.id, { content: 'clean v3' });
+
+    const purged = await store.purgeVersions(created.id, { version: 1 });
+    expect(purged).toMatchObject({ purged: 1, current_version: 3 });
+
+    expect(await store.getVersion(created.id, 1)).toBeNull();
+    // Negative control: the clean sibling v2 survives the purge.
+    expect((await store.getVersion(created.id, 2))!.content).toBe('clean v2');
+    expect((await store.get(created.id))!.content).toBe('clean v3');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -419,6 +457,69 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
   // coverage this duplicates from the other direction (real HTTP transport
   // fixture vs. a bare temp file), which is why both are kept rather than
   // one being deleted in favour of the other.
+  test('versions purge removes a credential-bearing retained version; versions/diff then expose zero occurrences', async () => {
+    // The fixture value is SYNTHETIC — the openai_api_key detector shape,
+    // created for this test, never a live key. After purge, neither the
+    // versions read path nor the diff read path may contain it.
+    const store = httpStore();
+    const created = await store.create({ title: 'Boundary leak', content: 'sk-testsecretkeyvalue1234567890 body' });
+    await store.update(created.id, { content: 'clean v2' });
+    const cliEnv = cloudEnv as Record<string, string>;
+
+    // Sanity: the leak IS reachable before the purge, so the post-purge zero
+    // is a measurement and not an inert check.
+    const before = await runCli(['versions', '--id', created.id, '--json'], cliEnv);
+    expect(before.exitCode).toBe(0);
+    expect(before.stdout).toContain('sk-testsecretkeyvalue1234567890');
+
+    const purge = await runCli(['versions', 'purge', '--id', created.id, '--yes', '--json'], cliEnv);
+    expect(purge.exitCode).toBe(0);
+    expect(JSON.parse(purge.stdout)).toMatchObject({ ok: true, purged: 1, current_version: 2 });
+
+    // `versions --id` (incl. --json) exposes zero occurrences of the value.
+    const versions = await runCli(['versions', '--id', created.id, '--json'], cliEnv);
+    expect(versions.exitCode).toBe(0);
+    expect(versions.stdout).not.toContain('sk-testsecretkeyvalue1234567890');
+
+    // `diff --rev 2` needs the purged v1 as its left side; with it gone the
+    // command refuses without rendering anything.
+    const diff = await runCli(['diff', '--id', created.id, '--rev', '2', '--json'], cliEnv);
+    expect(diff.exitCode).toBe(1);
+    expect(diff.stdout).not.toContain('sk-testsecretkeyvalue1234567890');
+    expect(diff.stderr).not.toContain('sk-testsecretkeyvalue1234567890');
+    expect(diff.stderr).toContain('No version 1 retained');
+  }, budget(60_000));
+
+  test('versions purge refuses without --yes and changes nothing', async () => {
+    const store = httpStore();
+    const created = await store.create({ title: 'Confirm purge', content: 'a' });
+    await store.update(created.id, { content: 'b' });
+    const cliEnv = cloudEnv as Record<string, string>;
+
+    const purge = await runCli(['versions', 'purge', '--id', created.id, '--json'], cliEnv);
+    expect(purge.exitCode).toBe(1);
+    expect(purge.stderr).toContain('--yes');
+
+    // History is untouched by the refused purge.
+    const after = await runCli(['versions', '--id', created.id, '--json'], cliEnv);
+    expect(after.exitCode).toBe(0);
+    expect((JSON.parse(after.stdout) as { total: number }).total).toBe(1);
+  }, budget(60_000));
+
+  test('versions purge against a store with no history says so instead of pretending', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-purge-local-'));
+    const path = join(dir, 'db.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        items: [{ id: 'k_local', short_id: 'local', title: 'T', content: 'c', url: null, tags: [], created_at: 'x', updated_at: 'x' }],
+      }),
+    );
+    const purge = await runCli(['versions', 'purge', '--id', 'k_local', '--yes', '--store', path, '--json']);
+    expect(purge.exitCode).toBe(1);
+    expect(purge.stderr).toMatch(/no version line/i);
+  }, budget(60_000));
+
   test('--if-version against the local JSON store ENFORCES the guard — a matching version writes, a stale one is refused', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-ifversion-local-'));
     const path = join(dir, 'db.json');

@@ -594,6 +594,8 @@ function parseJsonArray(value: unknown): unknown[] | null {
 function parseServerMessage(row: Record<string, unknown>): Record<string, unknown> {
   const id = row.id == null ? row.id : Number(row.id);
   const replyTo = row.reply_to == null ? null : Number(row.reply_to);
+  const threadId = row.thread_id == null ? null : Number(row.thread_id);
+  const threadStatus = row.thread_status === "open" || row.thread_status === "closed" ? row.thread_status : null;
   const replyCount = row.reply_count == null ? undefined : Number(row.reply_count);
   return {
     ...row,
@@ -602,6 +604,8 @@ function parseServerMessage(row: Record<string, unknown>): Record<string, unknow
     attachments: parseJsonArray(row.attachments),
     blocking: !!row.blocking,
     reply_to: replyTo || null,
+    thread_id: threadId || null,
+    thread_status: threadStatus,
     ...(replyCount === undefined ? {} : { reply_count: replyCount }),
   };
 }
@@ -2575,10 +2579,12 @@ async function handleV1(
       uuid: string;
       session_id: string;
       channel: string | null;
+      reply_to: number | null;
+      thread_id: number | null;
     } | null = null;
     if (replyUuid) {
       replyParent = await client.get(
-        "SELECT id, uuid, session_id, channel FROM messages WHERE uuid = $1",
+        "SELECT id, uuid, session_id, channel, reply_to, thread_id FROM messages WHERE uuid = $1",
         [replyUuid],
       );
       if (!replyParent) return json({ error: `reply_to_uuid message ${replyUuid} not found` }, 400);
@@ -2678,6 +2684,16 @@ async function handleV1(
     // it in this authenticated tenant/store. Numeric-only reply identities are
     // refused above because a wrong id can name a different reachable message.
     const replyTo = replyParent ? Number(replyParent.id) : null;
+    // Thread membership (task bf381fad): a reply joins its parent's thread, so
+    // thread_id is the chain ROOT — the parent itself when the parent is a
+    // root, otherwise the parent's recorded root. Mirrors the local
+    // sendMessage computation so both backends agree.
+    let threadId: number | null = null;
+    let threadRootId: number | null = null;
+    if (replyParent) {
+      threadId = replyParent.reply_to === null ? Number(replyParent.id) : replyParent.thread_id ?? null;
+      threadRootId = threadId;
+    }
     const row = await client.transaction(async (tx) => {
       let projectId = requestedProjectId;
       if (channelName) {
@@ -2714,10 +2730,10 @@ async function handleV1(
         await assertNoDuplicateWorkStatusTransitionPg(tx, content);
       }
       const inserted = await tx.get<Record<string, unknown>>(
-        `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to, thread_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
-                   working_dir, repository, branch, metadata, blocking, reply_to, created_at`,
+                   working_dir, repository, branch, metadata, blocking, reply_to, thread_id, created_at`,
         [
           messageUuid,
           sessionId,
@@ -2733,9 +2749,19 @@ async function handleV1(
           metadata,
           blocking,
           replyTo,
+          threadId,
         ],
       );
       if (!inserted) return null;
+
+      // A reply promotes its root into a live thread (same semantics as the
+      // local sendMessage): mark it open so close/reopen has a status to toggle.
+      if (threadRootId !== null) {
+        await tx.query(
+          "UPDATE messages SET thread_status = 'open' WHERE id = $1 AND thread_status IS NULL",
+          [threadRootId],
+        );
+      }
 
       if (attachmentUploads.length > 0) {
         const metadata = attachmentUploads.map((attachment) => ({
@@ -3232,6 +3258,184 @@ async function handleV1(
       if (res.rowCount === 0) return json({ error: "Reaction not found" }, 404);
       return json({ removed: true });
     }
+  }
+
+  // ---- thread collection (task bf381fad) ----
+  // GET /threads?channel=<name>&from=<agent> — thread roots with the full
+  // descendant reply count, last activity, lifecycle status, and (with `from`)
+  // the reader's per-thread unread count derived from read receipts.
+  if (sub === "threads" && method === "GET") {
+    const channelParam = strictQueryString(url.searchParams, "channel");
+    const reader = strictQueryString(url.searchParams, "from");
+    const collection = collectionReadOptions(url);
+    const channel = channelParam ? normalizeChannelName(channelParam) : null;
+    if (!channel) return json({ error: "channel is required" }, 400);
+    const descendant = `(r.thread_id = m.id OR (r.thread_id IS NULL AND r.reply_to = m.id))`;
+    const params: unknown[] = [channel];
+    let unreadSelect = "";
+    if (reader) {
+      params.push(reader.toLowerCase(), reader.toLowerCase());
+      const readerIdx = params.length - 1;
+      unreadSelect = `, (SELECT count(*) FROM messages r WHERE ${descendant} AND lower(r.from_agent) != $${readerIdx}
+           AND NOT EXISTS (SELECT 1 FROM message_read_receipts rc WHERE rc.message_id = r.id AND rc.agent = $${params.length}))::int AS unread_count`;
+    }
+    const limitIdx = params.length + 1;
+    const offsetIdx = params.length + 2;
+    params.push(collection.limit + 1, collection.offset);
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg("m")}, m.thread_id, m.thread_status,
+              (SELECT count(*) FROM messages r WHERE ${descendant})::int AS reply_count,
+              (SELECT max(r.created_at) FROM messages r WHERE ${descendant}) AS last_activity_at
+              ${unreadSelect}
+       FROM messages m
+       WHERE m.channel = $1 AND m.reply_to IS NULL
+         AND EXISTS (SELECT 1 FROM messages r WHERE ${descendant})
+       ORDER BY last_activity_at DESC, m.id DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params,
+    ));
+    const threads = rows.map((row) => {
+      const summary: Record<string, unknown> = {
+        root: buildCollectionMessagePreview(row, collection.previewBytes),
+        reply_count: Math.max(0, Number(row.reply_count) || 0),
+        last_activity_at: row.last_activity_at ?? row.created_at ?? "",
+        thread_status: row.thread_status === "closed" ? "closed" : "open",
+      };
+      if (reader && row.unread_count != null) summary.unread_count = Math.max(0, Number(row.unread_count) || 0);
+      return summary;
+    });
+    const hasMore = threads.length > collection.limit;
+    if (hasMore) threads.pop();
+    const total = await client.get<{ n: string | number }>(
+      `SELECT count(*) AS n FROM messages m
+       WHERE m.channel = $1 AND m.reply_to IS NULL
+         AND EXISTS (SELECT 1 FROM messages r WHERE ${descendant})`,
+      [channel],
+    );
+    return json({ channel, threads, count: Number(total?.n ?? threads.length), has_more: hasMore, next_cursor: hasMore ? collection.offset + threads.length : null });
+  }
+
+  // POST /threads/<id>/status {"status":"open"|"closed"} — close/reopen a thread.
+  const threadStatusMatch = sub.match(/^threads\/(\d+)\/status$/);
+  if (threadStatusMatch && method === "POST") {
+    const ref = Number(threadStatusMatch[1]);
+    const body = await readJson(req);
+    const status = body.status;
+    if (status !== "open" && status !== "closed") {
+      return json({ error: "status must be 'open' or 'closed'" }, 400);
+    }
+    const resolved = await client.get<{ id: number; reply_to: number | null; thread_id: number | null }>(
+      "SELECT id, reply_to, thread_id FROM messages WHERE id = $1",
+      [ref],
+    );
+    if (!resolved) return json({ error: `Message ${ref} not found` }, 404);
+    let rootId = resolved.reply_to === null ? resolved.id : resolved.thread_id ?? null;
+    if (rootId === null) {
+      // Walk the reply chain to the root for legacy rows without thread_id.
+      let current: { id: number; reply_to: number | null } | null = resolved;
+      const seen = new Set<number>();
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        if (current.reply_to === null) { rootId = current.id; break; }
+        current = await client.get<{ id: number; reply_to: number | null }>(
+          "SELECT id, reply_to FROM messages WHERE id = $1",
+          [current.reply_to],
+        );
+      }
+    }
+    if (rootId === null) return json({ error: `Message ${ref} not found` }, 404);
+    const updated = await client.get<Record<string, unknown>>(
+      "UPDATE messages SET thread_status = $1 WHERE id = $2 RETURNING *",
+      [status, rootId],
+    );
+    if (!updated) return json({ error: `Thread root ${rootId} not found` }, 404);
+    return json({ message: parseServerMessage(updated) });
+  }
+
+  // GET /threads/<id> — full reply tree for one thread.
+  const threadMatch = sub.match(/^threads\/(\d+)$/);
+  if (threadMatch && method === "GET") {
+    const ref = Number(threadMatch[1]);
+    const resolved = await client.get<{ id: number; reply_to: number | null; thread_id: number | null }>(
+      "SELECT id, reply_to, thread_id FROM messages WHERE id = $1",
+      [ref],
+    );
+    if (!resolved) return json({ error: `Message ${ref} not found` }, 404);
+    let rootId = resolved.reply_to === null ? resolved.id : resolved.thread_id ?? null;
+    if (rootId === null) {
+      let current: { id: number; reply_to: number | null } | null = resolved;
+      const seen = new Set<number>();
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        if (current.reply_to === null) { rootId = current.id; break; }
+        current = await client.get<{ id: number; reply_to: number | null }>(
+          "SELECT id, reply_to FROM messages WHERE id = $1",
+          [current.reply_to],
+        );
+      }
+    }
+    if (rootId === null) return json({ error: `Message ${ref} not found` }, 404);
+    const rootRow = await client.get<Record<string, unknown>>("SELECT * FROM messages WHERE id = $1", [rootId]);
+    if (!rootRow) return json({ error: `Thread root ${rootId} not found` }, 404);
+    const replyRows = await client.many<Record<string, unknown>>(
+      `SELECT * FROM messages
+       WHERE (thread_id = $1 OR (thread_id IS NULL AND reply_to = $1))
+       ORDER BY created_at ASC, id ASC`,
+      [rootId],
+    );
+    const depthById = new Map<number, number>();
+    const replies = replyRows.map((row) => {
+      const message = parseServerMessage(row);
+      const mid = Number(message.id);
+      if (message.reply_to === rootId || (message.reply_to !== null && !depthById.has(Number(message.reply_to)))) {
+        depthById.set(mid, 0);
+      } else if (message.reply_to !== null && depthById.has(Number(message.reply_to))) {
+        depthById.set(mid, (depthById.get(Number(message.reply_to)) ?? 0) + 1);
+      }
+      return { message, depth: depthById.get(mid) ?? 0 };
+    });
+    const root = parseServerMessage(rootRow);
+    return json({
+      root,
+      thread_status: root.thread_status === "closed" ? "closed" : "open",
+      reply_count: replies.length,
+      replies,
+    });
+  }
+
+  // GET /threads/<id>/unread?agent=<agent> — per-agent unread count for a thread.
+  const threadUnreadMatch = sub.match(/^threads\/(\d+)\/unread$/);
+  if (threadUnreadMatch && method === "GET") {
+    const ref = Number(threadUnreadMatch[1]);
+    const reader = str(url.searchParams.get("agent"));
+    if (!reader) return json({ error: "agent is required" }, 400);
+    const resolved = await client.get<{ id: number; reply_to: number | null; thread_id: number | null }>(
+      "SELECT id, reply_to, thread_id FROM messages WHERE id = $1",
+      [ref],
+    );
+    if (!resolved) return json({ error: `Message ${ref} not found` }, 404);
+    let rootId = resolved.reply_to === null ? resolved.id : resolved.thread_id ?? null;
+    if (rootId === null) {
+      let current: { id: number; reply_to: number | null } | null = resolved;
+      const seen = new Set<number>();
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        if (current.reply_to === null) { rootId = current.id; break; }
+        current = await client.get<{ id: number; reply_to: number | null }>(
+          "SELECT id, reply_to FROM messages WHERE id = $1",
+          [current.reply_to],
+        );
+      }
+    }
+    if (rootId === null) return json({ error: `Message ${ref} not found` }, 404);
+    const count = await client.get<{ n: string | number }>(
+      `SELECT count(*) AS n FROM messages r
+       WHERE (r.thread_id = $1 OR (r.thread_id IS NULL AND r.reply_to = $1))
+         AND lower(r.from_agent) != $2
+         AND NOT EXISTS (SELECT 1 FROM message_read_receipts rc WHERE rc.message_id = r.id AND rc.agent = $2)`,
+      [rootId, reader.toLowerCase()],
+    );
+    return json({ thread_id: rootId, unread_count: Number(count?.n ?? 0), agent: reader.toLowerCase() });
   }
 
   // ---- thread replies ----

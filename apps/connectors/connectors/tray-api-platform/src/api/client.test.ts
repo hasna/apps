@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { ConnectorClient } from './client';
 import { Connector } from './index';
-import { DEFAULT_BASE_URL } from './client';
 
 const realFetch = globalThis.fetch;
 
@@ -62,12 +62,12 @@ describe('Tray API Platform client', () => {
   test('listItems sends Bearer auth and GET /items', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('GET');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/items`);
+      expect(entry.url).toBe(`https://configured.example.com/v1/items`);
       expect(entry.headers.authorization).toBe('Bearer test-api-key');
       return { items: [] };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.items.list();
     expect(result).toEqual({ items: [] });
     expect(recorded).toHaveLength(1);
@@ -76,12 +76,12 @@ describe('Tray API Platform client', () => {
   test('getItem encodes item ID and calls GET /items/:id', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('GET');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/items/item%2F123`);
+      expect(entry.url).toBe(`https://configured.example.com/v1/items/item%2F123`);
       expect(entry.headers.authorization).toBe('Bearer test-api-key');
       return { id: 'item/123' };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.items.get('item/123');
     expect(result).toEqual({ id: 'item/123' });
     expect(recorded).toHaveLength(1);
@@ -90,12 +90,12 @@ describe('Tray API Platform client', () => {
   test('createItem POSTs JSON body to /items', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('POST');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/items`);
+      expect(entry.url).toBe(`https://configured.example.com/v1/items`);
       expect(entry.body).toBe(JSON.stringify({ name: 'widget' }));
       return { id: 'new-item' };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: 'https://configured.example.com/v1' });
     await connector.items.create({ name: 'widget' });
     expect(recorded).toHaveLength(1);
   });
@@ -117,12 +117,12 @@ describe('Tray API Platform client', () => {
   test('listEvents sends GET /events', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('GET');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/events`);
+      expect(entry.url).toBe(`https://configured.example.com/v1/events`);
       expect(entry.headers.authorization).toBe('Bearer test-api-key');
       return { events: [] };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.events.list();
     expect(result).toEqual({ events: [] });
     expect(recorded).toHaveLength(1);
@@ -131,12 +131,12 @@ describe('Tray API Platform client', () => {
   test('search POSTs JSON body to /search', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('POST');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/search`);
+      expect(entry.url).toBe(`https://configured.example.com/v1/search`);
       expect(entry.body).toBe(JSON.stringify({ query: 'widget' }));
       return { results: [] };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.search.search({ query: 'widget' });
     expect(result).toEqual({ results: [] });
     expect(recorded).toHaveLength(1);
@@ -145,12 +145,12 @@ describe('Tray API Platform client', () => {
   test('rawRequest supports custom path and method', async () => {
     const recorded = installFetch((entry) => {
       expect(entry.method).toBe('POST');
-      expect(entry.url).toBe(`${DEFAULT_BASE_URL}/custom/path`);
+      expect(entry.url).toBe(`https://configured.example.com/v1/custom/path`);
       expect(entry.body).toBe(JSON.stringify({ action: 'ping' }));
       return { ok: true };
     });
 
-    const connector = new Connector({ apiKey: 'test-api-key' });
+    const connector = new Connector({ apiKey: 'test-api-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.rawRequest({
       method: 'POST',
       path: '/custom/path',
@@ -162,5 +162,9 @@ describe('Tray API Platform client', () => {
 
   test('requires API key', () => {
     expect(() => new Connector({})).toThrow('API key or token is required');
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

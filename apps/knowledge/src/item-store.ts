@@ -155,6 +155,17 @@ export interface ItemStore {
   ): Promise<KnowledgeItemVersionList | null>;
   /** One prior snapshot by version number. */
   getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
+  /**
+   * Permanently purge retained prior versions of an entry — the secret-hygiene
+   * capability that makes a credential-bearing retained version stop being
+   * reachable. `null` means NO SUCH ENTRY. Without `version`, every retained
+   * prior version is deleted; with `version`, only that one. The live row is
+   * never a target, and the operation never reads or returns the retained body.
+   */
+  purgeVersions(
+    idOrShort: string,
+    options?: { version?: number },
+  ): Promise<{ purged: number; current_version: number } | null>;
 }
 
 function matchesId(item: KnowledgeItem, idOrShort: string): boolean {
@@ -248,6 +259,10 @@ class LocalItemStore implements ItemStore {
   }
 
   async getVersion(): Promise<KnowledgeItemVersion | null> {
+    throw new VersionHistoryUnsupportedError(this.storePath);
+  }
+
+  async purgeVersions(): Promise<{ purged: number; current_version: number } | null> {
     throw new VersionHistoryUnsupportedError(this.storePath);
   }
 
@@ -370,6 +385,10 @@ class ApiItemStore implements ItemStore {
 
   async getVersion(idOrShort: string, version: number) {
     return this.http.getVersion(idOrShort, version);
+  }
+
+  async purgeVersions(idOrShort: string, options: { version?: number } = {}) {
+    return this.http.purgeVersions(idOrShort, options);
   }
 
   get location(): string {

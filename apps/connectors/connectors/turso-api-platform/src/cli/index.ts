@@ -55,7 +55,7 @@ authCmd
 authCmd
   .command('set-base-url')
   .description('Set custom API base URL')
-  .argument('<url>', 'Base URL (e.g. https://api.tursoapiplatform.com/v1)')
+  .argument('<url>', 'Base URL (e.g. https://configured.example.com/v1)')
   .action((url: string) => {
     setBaseUrl(url);
     console.log(chalk.green(`Base URL saved to profile "${getCurrentProfile()}"`));
@@ -76,7 +76,7 @@ authCmd
 
     console.log(chalk.bold('Configuration:'));
     console.log(`  Profile: ${chalk.cyan(getCurrentProfile())}`);
-    console.log(`  Base URL: ${chalk.white(baseUrl || 'https://api.tursoapiplatform.com/v1 (default)')}`);
+    console.log(`  Base URL: ${chalk.white(baseUrl || 'none configured')}`);
     console.log(`  API Key: ${chalk.green('Set')}`);
 
     try {

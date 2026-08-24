@@ -3,11 +3,13 @@ import { WuBookrateApiError } from '../types';
 
 export class WuBookrateClient {
   private readonly apiKey: string;
-  private readonly baseUrl = 'https://api.wubookratechecker.com/v1';
+  private readonly baseUrl: string;
 
   constructor(config: WuBookrateConfig) {
     if (!config.apiKey) throw new Error('Wu Bookrate Checker apiKey is required');
+    if (!config.baseUrl) throw new Error('baseUrl is required: no default endpoint is configured; set baseUrl (profile, config, or the connector BASE_URL environment variable)');
     this.apiKey = config.apiKey;
+    this.baseUrl = config.baseUrl;
   }
 
   async request<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {

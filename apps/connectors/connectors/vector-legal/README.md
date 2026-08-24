@@ -50,7 +50,7 @@ const docs = await client.documents.list();
 | Variable | Description |
 |----------|-------------|
 | `VECTOR_LEGAL_API_KEY` | API key |
-| `VECTOR_LEGAL_BASE_URL` | Optional base URL (default `https://api.vector-legal.com/v1`) |
+| `VECTOR_LEGAL_BASE_URL` | Optional base URL (no default - must be configured) |
 
 ## License
 

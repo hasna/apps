@@ -53,7 +53,7 @@ connect-tyk-api-platform raw --path /search --method POST --data '{"query":"test
 | Variable | Description |
 |----------|-------------|
 | `TYK_API_PLATFORM_API_KEY` | API key (overrides profile config) |
-| `TYK_API_PLATFORM_BASE_URL` | API base URL (default: `https://api.tykapiplatform.com/v1`) |
+| `TYK_API_PLATFORM_BASE_URL` | API base URL (default: `configured.example.com/v1`) |
 
 ## Authentication
 
@@ -73,7 +73,7 @@ Profile JSON structure:
 ```json
 {
   "apiKey": "your-api-key",
-  "baseUrl": "https://api.tykapiplatform.com/v1"
+  "baseUrl": "configured.example.com/v1"
 }
 ```
 

@@ -1,6 +1,6 @@
 # @hasna/connect-tettra-api-platform
 
-TypeScript connector and CLI for the [Tettra Api Platform](https://api.tettraapiplatform.com/v1) API.
+TypeScript connector and CLI for the [Tettra Api Platform](configured.example.com/v1) API.
 
 ## Install
 
@@ -13,7 +13,7 @@ bun install
 ```bash
 export TETTRA_API_PLATFORM_API_KEY=your-api-key
 # optional
-export TETTRA_API_PLATFORM_BASE_URL=https://api.tettraapiplatform.com/v1
+export TETTRA_API_PLATFORM_BASE_URL=https://configured.example.com/v1
 ```
 
 Or use the CLI profile:

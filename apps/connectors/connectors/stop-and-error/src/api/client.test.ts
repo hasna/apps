@@ -51,11 +51,11 @@ afterEach(() => {
 describe('StopAndErrorClient', () => {
   const mockConfig = {
     apiKey: 'test-api-key-12345',
-    baseUrl: 'https://api.stop-and-error.com/v1',
+    baseUrl: 'https://configured.example.com/v1',
   };
 
   test('throws when api key is missing', () => {
-    expect(() => new StopAndErrorClient({ apiKey: '' })).toThrow('API key is required');
+    expect(() => new StopAndErrorClient({ apiKey: '', baseUrl: 'https://configured.example.com/v1' })).toThrow('API key is required');
   });
 
   test('getApiKeyPreview masks long keys', () => {
@@ -65,7 +65,7 @@ describe('StopAndErrorClient', () => {
 
   test('listErrors GET /errors with bearer auth', async () => {
     const recorded = installFetch((req) => {
-      expect(req.url).toBe('https://api.stop-and-error.com/v1/errors?limit=10');
+      expect(req.url).toBe('https://configured.example.com/v1/errors?limit=10');
       expect(req.method).toBe('GET');
       expect(req.headers.authorization).toBe('Bearer test-api-key-12345');
       return { data: [{ id: 'err_1', message: 'boom' }] };
@@ -78,7 +78,7 @@ describe('StopAndErrorClient', () => {
 
   test('getError GET /errors/{id}', async () => {
     const recorded = installFetch((req) => {
-      expect(req.url).toBe('https://api.stop-and-error.com/v1/errors/err_42');
+      expect(req.url).toBe('https://configured.example.com/v1/errors/err_42');
       expect(req.method).toBe('GET');
       return { id: 'err_42', message: 'failed node' };
     });
@@ -90,7 +90,7 @@ describe('StopAndErrorClient', () => {
 
   test('createError POST /errors with body', async () => {
     const recorded = installFetch((req) => {
-      expect(req.url).toBe('https://api.stop-and-error.com/v1/errors');
+      expect(req.url).toBe('https://configured.example.com/v1/errors');
       expect(req.method).toBe('POST');
       expect(req.headers.authorization).toBe('Bearer test-api-key-12345');
       const body = JSON.parse(req.body!);
@@ -106,7 +106,7 @@ describe('StopAndErrorClient', () => {
 
   test('listEvents GET /events', async () => {
     const recorded = installFetch((req) => {
-      expect(req.url).toBe('https://api.stop-and-error.com/v1/events?errorId=err_1');
+      expect(req.url).toBe('https://configured.example.com/v1/events?errorId=err_1');
       expect(req.method).toBe('GET');
       return { data: [{ id: 'evt_1', type: 'error.created' }] };
     });
@@ -118,7 +118,7 @@ describe('StopAndErrorClient', () => {
 
   test('search POST /search with query body', async () => {
     const recorded = installFetch((req) => {
-      expect(req.url).toBe('https://api.stop-and-error.com/v1/search');
+      expect(req.url).toBe('https://configured.example.com/v1/search');
       expect(req.method).toBe('POST');
       const body = JSON.parse(req.body!);
       expect(body.query).toBe('timeout');
@@ -147,12 +147,16 @@ describe('StopAndErrorClient', () => {
 
   test('rawRequest supports custom path and method', async () => {
     const recorded = installFetch((req) => {
-      expect(req.url).toBe('https://api.stop-and-error.com/v1/custom?foo=bar');
+      expect(req.url).toBe('https://configured.example.com/v1/custom?foo=bar');
       expect(req.method).toBe('PUT');
       return { ok: true };
     });
     const connector = new StopAndError(mockConfig);
     await connector.rawRequest({ method: 'PUT', path: '/custom', params: { foo: 'bar' } });
     expect(recorded).toHaveLength(1);
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new StopAndErrorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

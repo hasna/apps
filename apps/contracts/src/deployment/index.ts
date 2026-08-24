@@ -17,6 +17,19 @@ export {
 } from "../deployment";
 
 export {
+  ACCOUNT_BOUND_PROVIDERS,
+  CANONICAL_RESOURCE_KINDS,
+  DEPLOYMENT_ENVELOPE_RATIFICATION_GATE,
+  DEPLOYMENT_ENVELOPE_SCHEMA_ID,
+  ENVIRONMENT_ALIAS_MAP,
+  ENVELOPE_PROVIDERS,
+  RESOURCE_KIND_MAPPINGS,
+  RESOURCE_KIND_SOURCE_VOCABULARIES,
+  type DeploymentEnvelope,
+  type DeploymentEnvelopePrimitives,
+} from "../deployment-envelope";
+
+export {
   ArtifactAttestationRefSchema,
   ArtifactAttestationSchema,
   BuildArtifactRefSchema,
@@ -33,6 +46,11 @@ export {
   DeploymentRequestRefSchema,
   DeploymentRequestSchema,
   DeploymentSchemaRegistry,
+  DeploymentEnvelopeSchema,
+  EnvelopeActionSchema,
+  EnvelopeEnvironmentSchema,
+  EnvelopePhaseSchema,
+  EnvelopeResourceSchema,
   EnvironmentBindingRefSchema,
   EnvironmentBindingSchema,
   IntentSnapshotRefSchema,

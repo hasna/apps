@@ -24,7 +24,7 @@ bun run dev raw request --path /streams
 
 ## API Details
 
-- **Base URL**: `https://api.sse-trigger.com/v1`
+- **Base URL**: no default (must be configured)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **Endpoints**:
   - `GET /streams` — list streams
@@ -54,7 +54,7 @@ Profile JSON:
 ```json
 {
   "apiKey": "your-key",
-  "baseUrl": "https://api.sse-trigger.com/v1"
+  "baseUrl": "configured.example.com/v1"
 }
 ```
 

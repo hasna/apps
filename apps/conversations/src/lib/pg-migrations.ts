@@ -1184,4 +1184,27 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (12) ON CONFLICT DO NOTHING;
   `,
+  // Migration 13: thread collection (task bf381fad). thread_id marks every
+  // reply with its chain ROOT (walking reply_to up); thread_status carries the
+  // open/closed lifecycle on the root. The backfill walks existing reply_to
+  // chains so pre-thread rows become groupable; guarded by `thread_id IS NULL`
+  // so re-running the migration never recomputes on top of new writes.
+  `
+  ALTER TABLE messages ADD COLUMN IF NOT EXISTS thread_id BIGINT REFERENCES messages(id);
+  ALTER TABLE messages ADD COLUMN IF NOT EXISTS thread_status TEXT;
+  CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
+
+  WITH RECURSIVE thread_chain AS (
+    SELECT id, id AS root_id FROM messages WHERE reply_to IS NULL
+    UNION ALL
+    SELECT m.id, c.root_id FROM messages m JOIN thread_chain c ON m.reply_to = c.id
+  )
+  UPDATE messages SET thread_id = thread_chain.root_id
+  FROM thread_chain
+  WHERE thread_chain.id = messages.id
+    AND messages.reply_to IS NOT NULL
+    AND messages.thread_id IS NULL;
+
+  INSERT INTO _migrations (id) VALUES (13) ON CONFLICT DO NOTHING;
+  `,
 ];

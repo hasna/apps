@@ -5106,6 +5106,16 @@ function wrap(client) {
           return null;
         throw error;
       }
+    },
+    async purgeVersions(idOrShort, options = {}) {
+      try {
+        const path = options.version === undefined ? `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions` : `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${options.version}`;
+        return await client.transport.request("DELETE", path);
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
     }
   };
 }
@@ -16378,6 +16388,9 @@ class LocalItemStore {
   async getVersion() {
     throw new VersionHistoryUnsupportedError(this.storePath);
   }
+  async purgeVersions() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
+  }
   get location() {
     return this.storePath;
   }
@@ -16490,6 +16503,9 @@ class ApiItemStore {
   }
   async getVersion(idOrShort, version) {
     return this.http.getVersion(idOrShort, version);
+  }
+  async purgeVersions(idOrShort, options = {}) {
+    return this.http.purgeVersions(idOrShort, options);
   }
   get location() {
     return this.http.baseUrl;
@@ -24970,6 +24986,20 @@ class VersionConflictError extends Error {
     this.name = "VersionConflictError";
   }
 }
+
+class CannotPurgeLiveVersionError extends Error {
+  version;
+  current;
+  id;
+  code = "cannot_purge_live_version";
+  constructor(version, current, id) {
+    super(`cannot purge version ${version} of ${id}: it is the live version (the item is at version ${current}), not a retained prior version`);
+    this.version = version;
+    this.current = current;
+    this.id = id;
+    this.name = "CannotPurgeLiveVersionError";
+  }
+}
 function parseJsonColumn(value, fallback) {
   if (value == null)
     return fallback;
@@ -25279,6 +25309,25 @@ class NoteRepo {
       return null;
     const row = await this.client.get(`SELECT * FROM knowledge_item_versions WHERE item_id = $1 AND version = $2`, [existing.id, version]);
     return row ? rowToVersion(row) : null;
+  }
+  async purgeVersions(idOrShort, options, guardedTenantId) {
+    const existing = await this.get(idOrShort, guardedTenantId);
+    if (!existing)
+      return null;
+    const currentVersion = existing.version ?? 1;
+    if (options?.version !== undefined) {
+      const version = options.version;
+      if (!Number.isInteger(version) || version < 1) {
+        throw new Error(`version must be a positive integer, got ${version}`);
+      }
+      if (version === currentVersion) {
+        throw new CannotPurgeLiveVersionError(version, currentVersion, existing.id);
+      }
+      const deleted2 = await this.client.query(`DELETE FROM knowledge_item_versions WHERE item_id = $1 AND version = $2 RETURNING version`, [existing.id, version]);
+      return { purged: deleted2.rows.length, current_version: currentVersion };
+    }
+    const deleted = await this.client.query(`DELETE FROM knowledge_item_versions WHERE item_id = $1 RETURNING version`, [existing.id]);
+    return { purged: deleted.rows.length, current_version: currentVersion };
   }
   async delete(idOrShort) {
     const existing = await this.get(idOrShort);
@@ -27036,6 +27085,17 @@ function knowledgeOpenApi(version) {
             items: { type: "array", items: { $ref: "#/components/schemas/NoteVersion" } }
           },
           required: ["item_id", "current_version", "total", "items"]
+        },
+        NotePurgeReceipt: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            id: { type: "string" },
+            purged: { type: "integer" },
+            current_version: { type: "integer" },
+            message: { type: "string" }
+          },
+          required: ["ok", "id", "purged", "current_version"]
         }
       }
     },
@@ -27391,6 +27451,18 @@ function knowledgeOpenApi(version) {
             "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteVersionList" } } } },
             "404": { description: "No such entry. An entry that exists but was never edited returns 200 with an empty list." }
           }
+        },
+        delete: {
+          operationId: "purgeNoteVersions",
+          summary: "Permanently purge every retained prior version of a knowledge item",
+          description: "Secret-hygiene operation: deletes the retained history so a credential-shaped value " + "in a prior snapshot stops being reachable. Never returns or renders the retained body. " + "The live row is untouched.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } }
+          ],
+          responses: {
+            "200": { description: "Purge receipt: purged count and the untouched current version.", content: { "application/json": { schema: { $ref: "#/components/schemas/NotePurgeReceipt" } } } },
+            "404": { description: "No such entry." }
+          }
         }
       },
       "/v1/notes/{id}/versions/{version}": {
@@ -27404,6 +27476,20 @@ function knowledgeOpenApi(version) {
           responses: {
             "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteVersion" } } } },
             "404": { description: "No such entry, or no such version of it." }
+          }
+        },
+        delete: {
+          operationId: "purgeNoteVersion",
+          summary: "Permanently purge ONE retained prior version of a knowledge item",
+          description: "Secret-hygiene operation. Deleting the live/current version is refused with 409. " + "A version that is not retained returns 200 with purged: 0. Never returns the body.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "version", in: "path", required: true, schema: { type: "integer" } }
+          ],
+          responses: {
+            "200": { description: "Purge receipt: purged count and the untouched current version.", content: { "application/json": { schema: { $ref: "#/components/schemas/NotePurgeReceipt" } } } },
+            "404": { description: "No such entry." },
+            "409": { description: "The version is the live row, not a retained prior version." }
           }
         }
       },
@@ -28494,22 +28580,60 @@ function createServeHandler(deps) {
       }
       const versionListMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions$/);
       if (versionListMatch) {
-        if (method !== "GET")
-          return json({ error: "method_not_allowed" }, 405);
-        const principal = await authOrThrow(req, ["knowledge:read"]);
-        const history = await repo.listVersions(decodeURIComponent(versionListMatch[1]), {
-          limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
-          offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined
-        }, principal.tid);
-        return history ? json(history) : json({ error: "not_found" }, 404);
+        if (method === "GET") {
+          const principal = await authOrThrow(req, ["knowledge:read"]);
+          const history = await repo.listVersions(decodeURIComponent(versionListMatch[1]), {
+            limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+            offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined
+          }, principal.tid);
+          return history ? json(history) : json({ error: "not_found" }, 404);
+        }
+        if (method === "DELETE") {
+          const principal = await authOrThrow(req, ["knowledge:write"]);
+          const id = decodeURIComponent(versionListMatch[1]);
+          const purged = await repo.purgeVersions(id, {}, principal.tid);
+          if (!purged)
+            return json({ error: "not_found" }, 404);
+          return json({
+            ok: true,
+            id,
+            purged: purged.purged,
+            current_version: purged.current_version,
+            message: `${id} purged ${purged.purged} retained version(s); live content at version ${purged.current_version} untouched`
+          }, 200);
+        }
+        return json({ error: "method_not_allowed" }, 405);
       }
       const versionOneMatch = path.match(/^\/v1\/notes\/([^/]+)\/versions\/(\d+)$/);
       if (versionOneMatch) {
-        if (method !== "GET")
-          return json({ error: "method_not_allowed" }, 405);
-        const principal = await authOrThrow(req, ["knowledge:read"]);
-        const snapshot = await repo.getVersion(decodeURIComponent(versionOneMatch[1]), Number(versionOneMatch[2]), principal.tid);
-        return snapshot ? json(snapshot) : json({ error: "not_found" }, 404);
+        if (method === "GET") {
+          const principal = await authOrThrow(req, ["knowledge:read"]);
+          const snapshot = await repo.getVersion(decodeURIComponent(versionOneMatch[1]), Number(versionOneMatch[2]), principal.tid);
+          return snapshot ? json(snapshot) : json({ error: "not_found" }, 404);
+        }
+        if (method === "DELETE") {
+          const principal = await authOrThrow(req, ["knowledge:write"]);
+          const id = decodeURIComponent(versionOneMatch[1]);
+          const version = Number(versionOneMatch[2]);
+          try {
+            const purged = await repo.purgeVersions(id, { version }, principal.tid);
+            if (!purged)
+              return json({ error: "not_found" }, 404);
+            return json({
+              ok: true,
+              id,
+              purged: purged.purged,
+              current_version: purged.current_version,
+              message: purged.purged === 0 ? `no retained version ${version} of ${id}` : `${id} purged retained version ${version}; live content at version ${purged.current_version} untouched`
+            }, 200);
+          } catch (error) {
+            if (error instanceof CannotPurgeLiveVersionError) {
+              return json({ error: error.code, version: error.version, current_version: error.current }, 409);
+            }
+            throw error;
+          }
+        }
+        return json({ error: "method_not_allowed" }, 405);
       }
       const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);
       if (noteMatch) {

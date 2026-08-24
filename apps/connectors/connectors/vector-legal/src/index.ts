@@ -5,7 +5,6 @@ export * from './types';
 
 export {
   ConnectorClient,
-  DEFAULT_BASE_URL,
   DocumentsApi,
   EventsApi,
   SearchApi,

@@ -2,7 +2,7 @@ import { runSynthesis, rollbackSynthesis, getSynthesisStatus } from "../../lib/s
 import { listSynthesisRuns } from "../../db/synthesis.js";
 import { synthesizeProfile } from "../../lib/profile-synthesizer.js";
 import { addRoute } from "../router.js";
-import { json, readJson, getSearchParams } from "../helpers.js";
+import { json, readJson } from "../helpers.js";
 
 export function registerSystemSynthesisRoutes(): void {
   addRoute("POST", "/api/synthesis/run", async (req) => {
@@ -43,13 +43,17 @@ export function registerSystemSynthesisRoutes(): void {
     }
   });
 
-  addRoute("GET", "/api/profile/synthesize", async (_req: Request, url: URL) => {
-    const q = getSearchParams(url);
+  // POST (not GET): the handler writes a `_profile_*` cache memory and fires an
+  // LLM call (spend). GET is a CORS simple request — a hostile cross-origin
+  // page could trigger it with no preflight — so it must go through the
+  // state-changing origin/Host and auth gates instead.
+  addRoute("POST", "/api/profile/synthesize", async (req) => {
+    const body = ((await readJson(req)) ?? {}) as Record<string, unknown>;
     try {
       const result = await synthesizeProfile({
-        project_id: q["project_id"] || undefined,
-        agent_id: q["agent_id"] || undefined,
-        force_refresh: q["force_refresh"] === "true",
+        project_id: body["project_id"] as string | undefined,
+        agent_id: body["agent_id"] as string | undefined,
+        force_refresh: body["force_refresh"] === true,
       });
 
       if (!result) {
