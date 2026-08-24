@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { getProject } from "../../db/projects.js";
 import { listMemoriesPage } from "../../db/memories.js";
 import type { MemoryScope, MemoryCategory, MemoryStatus, MemoryFilter } from "../../types/index.js";
+import { redactMemoryForOutput } from "../../lib/redact.js";
 import {
   resolveAgentFilter,
   DEFAULT_COMPACT_LIMIT,
@@ -109,14 +110,22 @@ export function registerListCommand(program: Command): void {
             ? collected.slice(0, limit)
             : collected;
 
+        // Read-path redaction (I24-00018): the write path redacts value/summary
+        // but never the KEY, so a credential-shaped key stored by any write
+        // path reaches stdout verbatim across every format. Sanitize the full
+        // projected population once, before any format branch, so JSON, YAML,
+        // CSV and compact all emit value-safe text while coordination metadata
+        // (id, scope, category, importance, timestamps, attribution) survives.
+        const sanitized = memories.map(redactMemoryForOutput);
+
         if (fmt === "json") {
-          outputJson(memories);
+          outputJson(sanitized);
           return;
         }
 
         if (fmt === "csv") {
           console.log("key,value,scope,category,importance,id");
-          for (const m of memories) {
+          for (const m of sanitized) {
             const v = m.value.replace(/"/g, '""');
             console.log(`"${m.key}","${v}",${m.scope},${m.category},${m.importance},${m.id.slice(0, 8)}`);
           }
@@ -124,25 +133,25 @@ export function registerListCommand(program: Command): void {
         }
 
         if (fmt === "yaml") {
-          outputYaml(memories);
+          outputYaml(sanitized);
           return;
         }
 
-        if (memories.length === 0) {
+        if (sanitized.length === 0) {
           console.log(chalk.yellow("No memories found."));
           return;
         }
 
-        console.log(chalk.bold(`${memories.length}${hasMore ? "+" : ""} memor${memories.length === 1 ? "y" : "ies"}:`));
-        for (const m of memories) {
+        console.log(chalk.bold(`${sanitized.length}${hasMore ? "+" : ""} memor${sanitized.length === 1 ? "y" : "ies"}:`));
+        for (const m of sanitized) {
           console.log(formatMemoryLine(m, {
             valueLength: opts.verbose ? 120 : 64,
             preferSummary: !opts.verbose,
           }));
         }
         printPageHint({
-          shown: memories.length,
-          limit: limit ?? memories.length,
+          shown: sanitized.length,
+          limit: limit ?? sanitized.length,
           offset,
           hasMore,
           command: "mementos list",

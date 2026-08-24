@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
-import { redactSecrets, containsSecrets } from "./redact.js";
+import { redactSecrets, containsSecrets, redactMemoryForOutput } from "./redact.js";
+import type { Memory } from "../types/index.js";
 
 const REDACTED = "[REDACTED]";
 
@@ -244,5 +245,100 @@ describe("containsSecrets", () => {
 
   it("returns true for .env secret pattern", () => {
     expect(containsSecrets("SECRET_KEY=super-secret-value-here")).toBe(true);
+  });
+});
+
+// ============================================================================
+// redactMemoryForOutput — read-path (list/search/show) display redaction
+// ============================================================================
+
+function makeMemory(overrides: Partial<Memory> = {}): Memory {
+  return {
+    id: "m-test-1",
+    key: "ordinary-key",
+    value: "ordinary value",
+    category: "fact",
+    scope: "private",
+    summary: null,
+    tags: [],
+    importance: 5,
+    source: "agent",
+    status: "active",
+    pinned: false,
+    agent_id: null,
+    project_id: null,
+    session_id: null,
+    machine_id: null,
+    flag: null,
+    when_to_use: null,
+    sequence_group: null,
+    sequence_order: null,
+    content_type: "text",
+    namespace: null,
+    created_by_agent: null,
+    updated_by_agent: null,
+    trust_score: null,
+    metadata: {},
+    access_count: 0,
+    version: 1,
+    expires_at: null,
+    valid_from: null,
+    valid_until: null,
+    ingested_at: null,
+    created_at: "2026-08-24 00:00:00",
+    updated_at: "2026-08-24 00:00:00",
+    accessed_at: null,
+    ...overrides,
+  };
+}
+
+describe("redactMemoryForOutput", () => {
+  const AWS_KEY = "AK" + "IAIOSFODNN7EXAMPLE"; // AKIA + 16 chars
+  const NPM_TOKEN = "npm_" + "a".repeat(36);
+
+  it("redacts a credential-shaped key (the write path never redacts keys)", () => {
+    const out = redactMemoryForOutput(makeMemory({ key: AWS_KEY }));
+    expect(out.key).toBe(REDACTED);
+    expect(out.key).not.toContain(AWS_KEY);
+  });
+
+  it("redacts credential-shaped value and summary", () => {
+    const out = redactMemoryForOutput(
+      makeMemory({ value: `token ${NPM_TOKEN}`, summary: `aws ${AWS_KEY}` }),
+    );
+    expect(out.value).not.toContain(NPM_TOKEN);
+    expect(out.summary).not.toContain(AWS_KEY);
+  });
+
+  it("redacts string leaves inside metadata while preserving structure", () => {
+    const out = redactMemoryForOutput(
+      makeMemory({ metadata: { url: "https://example.com", token: NPM_TOKEN, nested: { aws: AWS_KEY, n: 3 } } }),
+    );
+    expect(JSON.stringify(out.metadata)).not.toContain(NPM_TOKEN);
+    expect(JSON.stringify(out.metadata)).not.toContain(AWS_KEY);
+    expect(out.metadata.url).toBe("https://example.com");
+    expect(out.metadata.nested.n).toBe(3);
+  });
+
+  it("preserves ordinary keys, values and coordination metadata", () => {
+    const input = makeMemory({
+      key: "ordinary-key",
+      value: "ordinary value that must survive",
+      importance: 9,
+      scope: "shared",
+      category: "knowledge",
+      agent_id: "agent-chief-knowledge",
+      tags: ["coordination"],
+    });
+    const out = redactMemoryForOutput(input);
+    expect(out.key).toBe("ordinary-key");
+    expect(out.value).toBe("ordinary value that must survive");
+    expect(out.id).toBe(input.id);
+    expect(out.importance).toBe(9);
+    expect(out.scope).toBe("shared");
+    expect(out.category).toBe("knowledge");
+    expect(out.agent_id).toBe("agent-chief-knowledge");
+    expect(out.tags).toEqual(["coordination"]);
+    expect(out.created_at).toBe(input.created_at);
   });
 });
