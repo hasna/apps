@@ -1448,7 +1448,7 @@
     },
     "apps/secrets": {
       "name": "@hasna/secrets",
-      "version": "0.3.8",
+      "version": "0.3.9",
       "bin": {
         "secrets": "dist/index.js",
         "secrets-mcp": "dist/mcp-server.js",
