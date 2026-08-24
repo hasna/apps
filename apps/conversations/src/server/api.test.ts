@@ -36,6 +36,7 @@ function makeFakeClient(
     initialProjects.map((project) => [project.id, { ...project }]),
   );
   let nextId = 1;
+  let nextMessageCreatedAtAsDate = false;
   let failRenameAt: RegExp | null = null;
   let failChannelMemberInsert = false;
   const deferred = () => {
@@ -266,6 +267,13 @@ function makeFakeClient(
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
       queryCalls.push({ sql, params: [...p] });
+      if (/INSERT INTO conversations_event_outbox/i.test(sql)) {
+        const createdAt = p[4];
+        if (typeof createdAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(createdAt)) {
+          throw new Error(`invalid input syntax for type timestamp with time zone: ${String(createdAt)}`);
+        }
+        return { rows: [], rowCount: 1 };
+      }
       if (/DELETE FROM resource_locks WHERE expires_at < NOW\(\)/i.test(sql)) {
         const before = resourceLocks.length;
         const now = Date.now();
@@ -742,6 +750,12 @@ function makeFakeClient(
           reply_to,
           thread_id,
         ] = p as any[];
+        const createdAt = opts.messageCreatedAtAsDate
+          ? new Date()
+          : nextMessageCreatedAtAsDate
+            ? new Date("2026-08-24T17:30:31.000Z")
+            : new Date().toISOString();
+        nextMessageCreatedAtAsDate = false;
         const row = {
           id: nextId++,
           uuid,
@@ -764,7 +778,7 @@ function makeFakeClient(
           // JS Date object (see src/lib/content-safety.ts). The default fake
           // returns an ISO string; `messageCreatedAtAsDate` mimics pg so the
           // timestamp-serialization path is exercised like production.
-          created_at: opts.messageCreatedAtAsDate ? new Date() : new Date().toISOString(),
+          created_at: createdAt,
         };
         messages.push(row);
         return row;
@@ -1146,6 +1160,9 @@ function makeFakeClient(
       },
       failNextChannelMemberInsert() {
         failChannelMemberInsert = true;
+      },
+      returnNextMessageCreatedAtAsDate() {
+        nextMessageCreatedAtAsDate = true;
       },
       armProjectLinkageBulkRace() {
         const race = {
@@ -4930,6 +4947,31 @@ describe("H6 hosted /v1 outbox emission (Conversations→Events)", () => {
     } finally {
       isoServer.stop(true);
     }
+  });
+  test("message creation normalizes a PG Date before inserting the outbox timestamp", async () => {
+    const channelName = "h6-outbox-date-channel";
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: channelName, created_by: "test", description: "d" }),
+    });
+    expect(created.status).toBe(201);
+
+    activeFakeClient!.__debug.returnNextMessageCreatedAtAsDate();
+    const mark = activeFakeClient!.__debug.queryCalls.length;
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: "date outbox probe", channel: channelName }),
+    });
+
+    expect(sent.status).toBe(201);
+    const calls = outboxCalls(mark);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params[4]).toBe("2026-08-24T17:30:31.000Z");
+    const envelope = JSON.parse(String(calls[0]!.params[3])) as { time: string; data: { created_at: string } };
+    expect(envelope.time).toBe("2026-08-24T17:30:31.000Z");
+    expect(envelope.data.created_at).toBe("2026-08-24T17:30:31.000Z");
   });
 });
 
