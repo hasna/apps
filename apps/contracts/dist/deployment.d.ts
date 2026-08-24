@@ -18,6 +18,7 @@ export declare const DEPLOYMENT_SCHEMA_IDS: {
 };
 export type DeploymentSchemaId = (typeof DEPLOYMENT_SCHEMA_IDS)[keyof typeof DEPLOYMENT_SCHEMA_IDS];
 export declare const DEPLOYMENT_GENERATED_ARTIFACT_ROOT: "generated/deployment/v1";
+export declare function addDeploymentSafetyIssues(value: unknown, ctx: z.RefinementCtx, path?: Array<string | number>): void;
 export declare function canonicalizeDeploymentValue(value: unknown): unknown;
 export declare function stableDeploymentJson(value: unknown): string;
 export declare function sha256DeploymentValue(value: unknown): string;

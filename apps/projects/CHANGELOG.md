@@ -11,8 +11,8 @@
 - Updated dependencies [7575de8]
   - @hasna/contracts@0.14.0
   - @hasna/conversations@0.7.7
-  - @hasna/loops@0.6.3
-  - @hasna/todos@0.15.49
+  - @hasna/loops@>=0.6.0
+  - @hasna/todos@0.15.41
 
 ## 1.0.1
 
