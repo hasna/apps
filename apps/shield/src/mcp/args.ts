@@ -39,7 +39,7 @@ export function parseMcpArgs(argv: string[], version: string): ParsedMcpArgResul
         "",
         "Options:",
         "  --http         Serve MCP over Streamable HTTP on 127.0.0.1",
-        "  --port <n>     HTTP port (--http or MCP_HTTP=1; default: 8833)",
+        `  --port <n>     HTTP port (--http or MCP_HTTP=1; default: ${DEFAULT_MCP_HTTP_PORT})`,
         "  -h, --help     display help for command",
         "  -V, --version  output the version number",
         "",

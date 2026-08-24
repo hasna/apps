@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseMcpArgs, isHttpMode, resolveHttpPort } from "./args.js";
+import { DEFAULT_MCP_HTTP_PORT } from "./http.js";
 
 describe("parseMcpArgs", () => {
   it("returns help text for --help", () => {
@@ -7,6 +8,11 @@ describe("parseMcpArgs", () => {
     expect(parsed?.type).toBe("help");
     expect(parsed?.text).toContain("Usage: shield-mcp");
     expect(parsed?.text).toContain("--http");
+  });
+
+  it("documents the actual default port in help text", () => {
+    const parsed = parseMcpArgs(["--help"], "0.1.8");
+    expect(parsed?.text).toContain(`default: ${DEFAULT_MCP_HTTP_PORT}`);
   });
 
   it("returns version text for -V", () => {
