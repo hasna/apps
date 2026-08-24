@@ -14,6 +14,7 @@ import {
   resolveMemoryId,
   type GlobalOpts,
 } from "../helpers.js";
+import { redactMemoryForOutput, redactTextFragment } from "../../lib/redact.js";
 
 export function registerViewCommands(program: Command): void {
   const handleError = makeHandleError(program);
@@ -42,10 +43,17 @@ export function registerViewCommands(program: Command): void {
 
         touchMemory(memory.id);
 
+        // Read-path redaction (todos e12c7659): the write path redacts
+        // value/summary but never the KEY, so a credential-shaped key stored
+        // by any write path reaches stdout verbatim on this read. Project the
+        // display copy once, before the format branch, so JSON and human both
+        // emit value-safe text while coordination metadata survives.
+        const safe = redactMemoryForOutput(memory);
+
         if (globalOpts.json) {
-          outputJson(memory);
+          outputJson(safe);
         } else {
-          console.log(formatMemoryDetail(memory));
+          console.log(formatMemoryDetail(safe));
         }
       } catch (e) {
         handleError(e);
@@ -173,16 +181,25 @@ export function registerViewCommands(program: Command): void {
           process.exit(1);
         }
         const versions = getMemoryVersions(memory.id);
+        // Read-path redaction (todos e12c7659): the version history is a read
+        // surface; redact the echoed key and every version's value the same
+        // way show does.
+        const safeKey = redactTextFragment(memory.key);
+        const safeVersions = versions.map((v) => ({
+          ...v,
+          value: redactTextFragment(v.value),
+          summary: v.summary ? redactTextFragment(v.summary) : null,
+        }));
         if (globalOpts.json) {
-          outputJson({ memory: { id: memory.id, key: memory.key, current_version: memory.version }, versions });
+          outputJson({ memory: { id: memory.id, key: safeKey, current_version: memory.version }, versions: safeVersions });
           return;
         }
-        console.log(chalk.bold(`\nVersion history: ${memory.key} (current: v${memory.version})\n`));
-        if (versions.length === 0) {
+        console.log(chalk.bold(`\nVersion history: ${safeKey} (current: v${memory.version})\n`));
+        if (safeVersions.length === 0) {
           console.log(chalk.dim("  No previous versions."));
           return;
         }
-        for (const v of versions) {
+        for (const v of safeVersions) {
           console.log(`  ${chalk.cyan(`v${v.version}`)} ${chalk.dim(v.created_at.slice(0, 16))} scope=${v.scope} imp=${v.importance}`);
           console.log(`    ${v.value.slice(0, 120)}${v.value.length > 120 ? "..." : ""}`);
         }

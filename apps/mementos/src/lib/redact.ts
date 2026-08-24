@@ -83,11 +83,12 @@ function redactValueTree(value: unknown): unknown {
 
 /**
  * Return a display-safe copy of a memory for READ surfaces (list, search,
- * show). The write path redacts `value`/`summary` at save time but NEVER the
- * `key`, and values written before write-side redaction (or via a bypassing
- * write path) can sit raw in the store — so a credential-shaped token can
- * otherwise reach stdout verbatim and trip secret scanners
- * (package_registry_token on `npm_`, AWS-access-key-id on `AKIA`, ...).
+ * show, recall, tail, chain, versions). The write path redacts
+ * `value`/`summary` at save time but NEVER the `key`, and values written
+ * before write-side redaction (or via a bypassing write path) can sit raw in
+ * the store — so a credential-shaped token can otherwise reach stdout verbatim
+ * and trip secret scanners (package_registry_token on `npm_`,
+ * AWS-access-key-id on `AKIA`, ...).
  *
  * Free-text fields — `key`, `value`, `summary`, `when_to_use` and every
  * string leaf of `metadata` — are passed through {@link redactSecrets};
@@ -103,5 +104,35 @@ export function redactMemoryForOutput(memory: Memory): Memory {
     summary: memory.summary ? redactSecrets(memory.summary) : null,
     when_to_use: memory.when_to_use ? redactSecrets(memory.when_to_use) : null,
     metadata: redactValueTree(memory.metadata) as Record<string, unknown>,
+  };
+}
+
+/**
+ * Redact a string leaf that is NOT part of the Memory object but carries
+ * memory-derived text on a read surface — notably the highlight SNIPPETS of a
+ * search result. A query that matches inside a credential-shaped key produces
+ * a snippet window that spans the whole key, so redacting the memory alone is
+ * not enough for the search read path.
+ */
+export function redactTextFragment(text: string): string {
+  return redactSecrets(text);
+}
+
+/**
+ * A display-safe copy of a search result: the memory is passed through
+ * {@link redactMemoryForOutput} and every highlight snippet is passed through
+ * {@link redactTextFragment}. The result's own coordination fields (score,
+ * match_type, field names) survive unchanged.
+ */
+export function redactSearchResultForOutput<T extends { memory: Memory; highlights?: { field: string; snippet: string }[] }>(
+  result: T
+): T {
+  return {
+    ...result,
+    memory: redactMemoryForOutput(result.memory),
+    highlights: result.highlights?.map((h) => ({
+      field: h.field,
+      snippet: redactTextFragment(h.snippet),
+    })),
   };
 }
