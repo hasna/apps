@@ -367,6 +367,7 @@ export class DurableEventsBroker {
       fetchImpl: options.fetchImpl,
       secretResolver: options.secretResolver ?? defaultWebhookSecretResolver,
       now: this.now,
+      tls: options.tls,
       webhookTargetPolicy: options.webhookTargetPolicy,
     };
     mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });

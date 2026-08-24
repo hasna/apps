@@ -7,11 +7,14 @@ import { isIP } from "node:net";
  * The durable webhook transport must default-deny private and special-use
  * targets (IPv4/IPv6), refuse redirects that would reach a private target,
  * and prevent a DNS-rebinding window between validation and connection. The
- * connection is pinned to the validated address, and the original hostname is
- * carried in the `Host` header so TLS hostname verification keeps working.
+ * connection is pinned to the validated address at the transport level (the
+ * original URL hostname is preserved for TLS SNI and hostname verification,
+ * so a certificate issued for the hostname verifies normally).
  *
  * A narrow, admin-controlled allowlist (`allowPrivateHosts`) permits
  * intentional private ingress such as a loopback receiver on the same machine.
+ * Allowlisted hostnames are still resolved and pinned, so the rebinding window
+ * stays closed for them as well.
  */
 
 export interface LookupAddress {
@@ -130,7 +133,25 @@ export async function resolveWebhookTarget(
   const allowlist = (policy.allowPrivateHosts ?? []).map((entry) => normalizeHostname(entry.toLowerCase()));
 
   if (allowlist.includes(hostname)) {
-    return { hostname, addresses: [] };
+    // Allowlisted hostnames are still resolved and pinned so the DNS-rebinding
+    // window stays closed for them too. Private addresses are admitted because
+    // the hostname itself was allowlisted (intentional private ingress).
+    const version = isIP(hostname);
+    if (version === 4 || version === 6) {
+      return { hostname, addresses: [hostname] };
+    }
+    const lookup = policy.lookup ?? defaultTargetLookup;
+    let resolved: LookupAddress[];
+    try {
+      resolved = await lookup(hostname);
+    } catch {
+      throw new Error(`Webhook target ${hostname} could not be resolved`);
+    }
+    if (!Array.isArray(resolved) || resolved.length === 0) {
+      throw new Error(`Webhook target ${hostname} resolved to no addresses`);
+    }
+    const addresses = resolved.map((entry) => normalizeHostname(entry.address));
+    return { hostname, addresses };
   }
 
   const version = isIP(hostname);

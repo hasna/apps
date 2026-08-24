@@ -4,11 +4,14 @@
  * The durable webhook transport must default-deny private and special-use
  * targets (IPv4/IPv6), refuse redirects that would reach a private target,
  * and prevent a DNS-rebinding window between validation and connection. The
- * connection is pinned to the validated address, and the original hostname is
- * carried in the `Host` header so TLS hostname verification keeps working.
+ * connection is pinned to the validated address at the transport level (the
+ * original URL hostname is preserved for TLS SNI and hostname verification,
+ * so a certificate issued for the hostname verifies normally).
  *
  * A narrow, admin-controlled allowlist (`allowPrivateHosts`) permits
  * intentional private ingress such as a loopback receiver on the same machine.
+ * Allowlisted hostnames are still resolved and pinned, so the rebinding window
+ * stays closed for them as well.
  */
 export interface LookupAddress {
     address: string;

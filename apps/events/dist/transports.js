@@ -102,7 +102,22 @@ async function resolveWebhookTarget(url, policy = {}) {
   const hostname = normalizeHostname(url.hostname);
   const allowlist = (policy.allowPrivateHosts ?? []).map((entry) => normalizeHostname(entry.toLowerCase()));
   if (allowlist.includes(hostname)) {
-    return { hostname, addresses: [] };
+    const version2 = isIP(hostname);
+    if (version2 === 4 || version2 === 6) {
+      return { hostname, addresses: [hostname] };
+    }
+    const lookup2 = policy.lookup ?? defaultTargetLookup;
+    let resolved2;
+    try {
+      resolved2 = await lookup2(hostname);
+    } catch {
+      throw new Error(`Webhook target ${hostname} could not be resolved`);
+    }
+    if (!Array.isArray(resolved2) || resolved2.length === 0) {
+      throw new Error(`Webhook target ${hostname} resolved to no addresses`);
+    }
+    const addresses = resolved2.map((entry) => normalizeHostname(entry.address));
+    return { hostname, addresses };
   }
   const version = isIP(hostname);
   if (version === 4 || version === 6) {
@@ -236,7 +251,8 @@ function ipv6MatchesPrefix(groups, prefixGroups, prefixBits) {
 // src/transports.ts
 import { randomUUID } from "crypto";
 import { spawn } from "child_process";
-import { isIP as isIP2 } from "net";
+import { request as nodeHttpRequest } from "http";
+import { request as nodeHttpsRequest } from "https";
 function now() {
   return new Date().toISOString();
 }
@@ -267,9 +283,18 @@ function buildWebhookRequest(event, channel, options = {}) {
   }
   return { body, headers };
 }
+function normalizeWebhookUrl(raw) {
+  const url = new URL(raw);
+  if (url.username !== "" || url.password !== "") {
+    url.username = "";
+    url.password = "";
+  }
+  return url.toString();
+}
 async function dispatchWebhook(event, channel, options = {}) {
   if (!channel.webhook)
     throw new Error(`Channel ${channel.id} has no webhook config`);
+  const webhookUrl = normalizeWebhookUrl(channel.webhook.url);
   const startedAt = now();
   let secret = channel.webhook.secret;
   if (channel.webhook.secretRef) {
@@ -293,7 +318,7 @@ async function dispatchWebhook(event, channel, options = {}) {
   const controller = new AbortController;
   const timeout = setTimeout(() => controller.abort(), channel.webhook.timeoutMs ?? 15000);
   try {
-    const response = await (options.fetchImpl ?? fetch)(channel.webhook.url, {
+    const response = await (options.fetchImpl ?? fetch)(webhookUrl, {
       method: "POST",
       headers,
       body,
@@ -327,11 +352,59 @@ function isRedirectStatus(status) {
 function redirectKeepsBody(status) {
   return status === 307 || status === 308;
 }
-function buildPinnedRequest(target, address, headers) {
-  const host = isIP2(address) === 6 ? `[${address}]` : address;
-  const port = target.port ? `:${target.port}` : "";
-  const pinned = new URL(`${target.protocol}//${host}${port}${target.pathname}${target.search}${target.hash}`);
-  return { url: pinned, headers: { ...headers, Host: target.host } };
+async function pinnedNativeRequest(target, addresses, method, headers, body, signal, tls) {
+  const isHttps = target.protocol === "https:";
+  if (!isHttps && target.protocol !== "http:") {
+    throw new Error(`Webhook target uses unsupported protocol ${target.protocol}`);
+  }
+  const defaultPort = isHttps ? 443 : 80;
+  const port = target.port ? Number(target.port) : defaultPort;
+  const requestOptions = {
+    hostname: target.hostname,
+    port,
+    path: `${target.pathname}${target.search}`,
+    method,
+    headers,
+    ...tls?.ca ? { ca: tls.ca } : {},
+    lookup: (hostname, _options, callback) => {
+      const entries = addresses.map((address) => ({
+        address,
+        family: address.includes(":") ? 6 : 4
+      }));
+      callback(null, entries);
+    }
+  };
+  return new Promise((resolve, reject) => {
+    const request = isHttps ? nodeHttpsRequest(requestOptions, onResponse) : nodeHttpRequest(requestOptions, onResponse);
+    const onAbort = () => {
+      const error = new Error("The operation was aborted.");
+      error.name = "AbortError";
+      request.destroy(error);
+    };
+    if (signal.aborted)
+      onAbort();
+    else
+      signal.addEventListener("abort", onAbort, { once: true });
+    request.on("error", reject);
+    if (body !== undefined)
+      request.write(body);
+    request.end();
+    function onResponse(response) {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("error", reject);
+      response.on("end", () => {
+        const headersRecord = {};
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (typeof value === "string")
+            headersRecord[name] = value;
+          else if (Array.isArray(value))
+            headersRecord[name] = value.join(", ");
+        }
+        resolve(new Response(Buffer.concat(chunks), { status: response.statusCode ?? 200, headers: headersRecord }));
+      });
+    }
+  });
 }
 async function dispatchValidatedWebhook(event, channel, input) {
   const { body, headers, startedAt, options } = input;
@@ -343,29 +416,28 @@ async function dispatchValidatedWebhook(event, channel, input) {
   const controller = new AbortController;
   const timeout = setTimeout(() => controller.abort(), webhook.timeoutMs ?? 15000);
   try {
-    let target = new URL(webhook.url);
+    let target = new URL(normalizeWebhookUrl(webhook.url));
     let requestHeaders = headers;
     let method = "POST";
     let requestBody = body;
-    for (let hop = 0;hop <= maxRedirects; hop += 1) {
+    let redirectsFollowed = 0;
+    for (;; ) {
       const resolved = await resolveWebhookTarget(target, policy).catch((error) => {
         throw new Error(`Webhook target rejected by SSRF guard: ${error.message}`);
       });
-      let fetchUrl = target;
-      if (resolved.addresses.length > 0) {
-        const pinned = buildPinnedRequest(target, resolved.addresses[0], requestHeaders);
-        fetchUrl = pinned.url;
-        requestHeaders = pinned.headers;
-      }
-      const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
+      const response = options.fetchImpl ? await options.fetchImpl(target, {
         method,
         headers: requestHeaders,
         body: requestBody,
         signal: controller.signal,
         redirect: "manual"
-      });
+      }) : await pinnedNativeRequest(target, resolved.addresses, method, requestHeaders, requestBody, controller.signal, options.tls);
       const location = response.headers.get("location");
       if (isRedirectStatus(response.status) && location) {
+        if (redirectsFollowed >= maxRedirects) {
+          return failedAttempt(startedAt, `Webhook target exceeded ${maxRedirects} redirects`);
+        }
+        redirectsFollowed += 1;
         const next = new URL(location, target);
         target = next;
         if (!redirectKeepsBody(response.status)) {
@@ -386,7 +458,6 @@ async function dispatchValidatedWebhook(event, channel, input) {
         error: response.ok ? undefined : `Webhook returned HTTP ${response.status}`
       };
     }
-    return failedAttempt(startedAt, `Webhook target exceeded ${maxRedirects} redirects`);
   } catch (error) {
     return {
       attempt: 1,

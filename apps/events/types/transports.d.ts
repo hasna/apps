@@ -1,9 +1,23 @@
 import type { ChannelConfig, DeliveryAttempt, DeliveryResult, EventEnvelope } from "./types.js";
 import { type WebhookTargetPolicy } from "./ssrf.js";
+export interface TransportTlsOptions {
+    /**
+     * Override the certificate authorities used by the pinned native transport
+     * (for example a private PKI or a self-signed test certificate). Ignored on
+     * an injected `fetchImpl` path, where the operator owns TLS. Defaults to the
+     * runtime's standard CA store.
+     */
+    ca?: string | Buffer | Array<string | Buffer>;
+}
 export interface TransportDispatchOptions {
     fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     secretResolver?: WebhookSecretResolver;
     now?: () => Date;
+    /**
+     * TLS options for the pinned native transport (the default, non-injected
+     * fetch path). `ca` overrides the trusted certificate authorities.
+     */
+    tls?: TransportTlsOptions;
     /**
      * Webhook-target SSRF policy. When provided, the durable webhook transport
      * validates every target (and every redirect hop) against it. When omitted,

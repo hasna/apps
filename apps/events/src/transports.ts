@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { isIP } from "node:net";
+import { request as nodeHttpRequest, type RequestOptions as NodeRequestOptions } from "node:http";
+import { request as nodeHttpsRequest } from "node:https";
 import type { ChannelConfig, DeliveryAttempt, DeliveryResult, EventEnvelope } from "./types.js";
 import { signPayload } from "./signing.js";
 import {
@@ -9,10 +10,25 @@ import {
   type WebhookTargetPolicy,
 } from "./ssrf.js";
 
+export interface TransportTlsOptions {
+  /**
+   * Override the certificate authorities used by the pinned native transport
+   * (for example a private PKI or a self-signed test certificate). Ignored on
+   * an injected `fetchImpl` path, where the operator owns TLS. Defaults to the
+   * runtime's standard CA store.
+   */
+  ca?: string | Buffer | Array<string | Buffer>;
+}
+
 export interface TransportDispatchOptions {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   secretResolver?: WebhookSecretResolver;
   now?: () => Date;
+  /**
+   * TLS options for the pinned native transport (the default, non-injected
+   * fetch path). `ca` overrides the trusted certificate authorities.
+   */
+  tls?: TransportTlsOptions;
   /**
    * Webhook-target SSRF policy. When provided, the durable webhook transport
    * validates every target (and every redirect hop) against it. When omitted,
@@ -66,8 +82,25 @@ export function buildWebhookRequest(
   return { body, headers };
 }
 
+/**
+ * Strips embedded credentials from a webhook URL so both delivery paths (the
+ * pinned native transport and an injected `fetchImpl`) behave identically.
+ * Credentials in a webhook URL are unsupported: undici refuses them, and
+ * silently honoring them on one path but dropping them on another is the
+ * inconsistency this removes.
+ */
+function normalizeWebhookUrl(raw: string): string {
+  const url = new URL(raw);
+  if (url.username !== "" || url.password !== "") {
+    url.username = "";
+    url.password = "";
+  }
+  return url.toString();
+}
+
 export async function dispatchWebhook(event: EventEnvelope, channel: ChannelConfig, options: TransportDispatchOptions = {}): Promise<DeliveryAttempt> {
   if (!channel.webhook) throw new Error(`Channel ${channel.id} has no webhook config`);
+  const webhookUrl = normalizeWebhookUrl(channel.webhook.url);
   const startedAt = now();
   let secret = channel.webhook.secret;
   if (channel.webhook.secretRef) {
@@ -94,7 +127,7 @@ export async function dispatchWebhook(event: EventEnvelope, channel: ChannelConf
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), channel.webhook.timeoutMs ?? 15_000);
   try {
-    const response = await (options.fetchImpl ?? fetch)(channel.webhook.url, {
+    const response = await (options.fetchImpl ?? fetch)(webhookUrl, {
       method: "POST",
       headers,
       body,
@@ -131,11 +164,76 @@ function redirectKeepsBody(status: number): boolean {
   return status === 307 || status === 308;
 }
 
-function buildPinnedRequest(target: URL, address: string, headers: Record<string, string>): { url: URL; headers: Record<string, string> } {
-  const host = isIP(address) === 6 ? `[${address}]` : address;
-  const port = target.port ? `:${target.port}` : "";
-  const pinned = new URL(`${target.protocol}//${host}${port}${target.pathname}${target.search}${target.hash}`);
-  return { url: pinned, headers: { ...headers, Host: target.host } };
+/**
+ * Performs a single HTTP(S) request that is pinned to the validated address at
+ * the connection level while preserving the original hostname for TLS SNI and
+ * hostname verification. The URL hostname is never rewritten to the address, so
+ * a certificate issued for the hostname verifies normally on Node/undici and
+ * Bun alike; the custom `lookup` forces the connect to the validated address,
+ * which also closes the DNS-rebinding window (the connection never re-resolves).
+ */
+async function pinnedNativeRequest(
+  target: URL,
+  addresses: string[],
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  signal: AbortSignal,
+  tls?: TransportTlsOptions,
+): Promise<Response> {
+  const isHttps = target.protocol === "https:";
+  if (!isHttps && target.protocol !== "http:") {
+    throw new Error(`Webhook target uses unsupported protocol ${target.protocol}`);
+  }
+  const defaultPort = isHttps ? 443 : 80;
+  const port = target.port ? Number(target.port) : defaultPort;
+  const requestOptions: NodeRequestOptions = {
+    hostname: target.hostname,
+    port,
+    path: `${target.pathname}${target.search}`,
+    method,
+    headers,
+    ...(tls?.ca ? { ca: tls.ca } : {}),
+    lookup: (hostname, _options, callback) => {
+      // Pin the connection to the validated addresses. The hostname passed in
+      // is the URL hostname; we ignore it and connect to the validated set.
+      const entries = addresses.map((address) => ({
+        address,
+        family: address.includes(":") ? 6 : 4,
+      }));
+      callback(null, entries);
+    },
+  };
+  return new Promise<Response>((resolve, reject) => {
+    const request = isHttps ? nodeHttpsRequest(requestOptions, onResponse) : nodeHttpRequest(requestOptions, onResponse);
+    // Wire the abort manually: Bun's node:http compatibility ignores the
+    // `signal` request option, so a slow target would otherwise outlive the
+    // delivery timeout on the events runtime.
+    const onAbort = () => {
+      const error = new Error("The operation was aborted.");
+      error.name = "AbortError";
+      request.destroy(error);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    request.on("error", reject);
+    if (body !== undefined) request.write(body);
+    request.end();
+
+    function onResponse(response: import("node:http").IncomingMessage): void {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("error", reject);
+      response.on("end", () => {
+        const headersRecord: Record<string, string> = {};
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (typeof value === "string") headersRecord[name] = value;
+          else if (Array.isArray(value)) headersRecord[name] = value.join(", ");
+        }
+        resolve(new Response(Buffer.concat(chunks), { status: response.statusCode ?? 200, headers: headersRecord }));
+      });
+    }
+  });
 }
 
 async function dispatchValidatedWebhook(
@@ -151,34 +249,37 @@ async function dispatchValidatedWebhook(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), webhook.timeoutMs ?? 15_000);
   try {
-    // `target` stays the logical hostname URL for validation and redirect
-    // resolution; `fetchUrl` is the pinned connection target. Pinning rewrites
-    // the URL to the validated address (Host header carries the hostname), so
-    // relative redirects must resolve against the hostname URL, never the
-    // pinned IP URL.
-    let target = new URL(webhook.url);
+    // `target` is the logical hostname URL used for validation, redirect
+    // resolution, and TLS verification. The default path pins the connection
+    // to the validated address via `pinnedNativeRequest`; an injected
+    // `fetchImpl` receives the hostname URL and owns its own network boundary.
+    let target = new URL(normalizeWebhookUrl(webhook.url));
     let requestHeaders = headers;
     let method = "POST";
     let requestBody: string | undefined = body;
-    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+    let redirectsFollowed = 0;
+    for (;;) {
       const resolved = await resolveWebhookTarget(target, policy).catch((error: Error) => {
         throw new Error(`Webhook target rejected by SSRF guard: ${error.message}`);
       });
-      let fetchUrl = target;
-      if (resolved.addresses.length > 0) {
-        const pinned = buildPinnedRequest(target, resolved.addresses[0], requestHeaders);
-        fetchUrl = pinned.url;
-        requestHeaders = pinned.headers;
-      }
-      const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
-        method,
-        headers: requestHeaders,
-        body: requestBody,
-        signal: controller.signal,
-        redirect: "manual",
-      });
+      const response = options.fetchImpl
+        ? await options.fetchImpl(target, {
+            method,
+            headers: requestHeaders,
+            body: requestBody,
+            signal: controller.signal,
+            redirect: "manual",
+          })
+        : await pinnedNativeRequest(target, resolved.addresses, method, requestHeaders, requestBody, controller.signal, options.tls);
       const location = response.headers.get("location");
       if (isRedirectStatus(response.status) && location) {
+        // Refuse to follow a redirect once the bound is reached; this checks
+        // before issuing another request, so at most `maxRedirects` redirect
+        // responses are followed (initial request + maxRedirects follows).
+        if (redirectsFollowed >= maxRedirects) {
+          return failedAttempt(startedAt, `Webhook target exceeded ${maxRedirects} redirects`);
+        }
+        redirectsFollowed += 1;
         const next = new URL(location, target);
         target = next;
         if (!redirectKeepsBody(response.status)) {
@@ -201,7 +302,6 @@ async function dispatchValidatedWebhook(
         error: response.ok ? undefined : `Webhook returned HTTP ${response.status}`,
       };
     }
-    return failedAttempt(startedAt, `Webhook target exceeded ${maxRedirects} redirects`);
   } catch (error) {
     return {
       attempt: 1,

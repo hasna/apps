@@ -92,6 +92,7 @@ export class EventsClient {
       fetchImpl: options.fetchImpl,
       secretResolver: options.secretResolver,
       now: options.now,
+      tls: options.tls,
       webhookTargetPolicy: options.webhookTargetPolicy,
     };
     this.catalog = options.catalog ?? defaultEventTypeCatalog;

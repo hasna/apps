@@ -132,14 +132,16 @@ describe("webhook target SSRF guard", () => {
     expect(attempt.error).toMatch(/private or special-use/);
   });
 
-  test("dispatchWebhook pins the connection to the validated address, closing the rebinding window", async () => {
+  test("dispatchWebhook preserves the hostname URL (TLS verification) while validating every hop", async () => {
     let fetchedUrl: string | undefined;
-    let hostHeader: string | undefined;
     const policy: WebhookTargetPolicy = {
       lookup: async (hostname) => {
         expect(hostname).toBe("receiver.test");
         // The rebinding attack: system DNS changes to a private address after
-        // validation. The guard must connect to the validated public address.
+        // validation. The default native transport pins the connection to the
+        // validated address (covered by the HTTPS e2e tests); the URL hostname
+        // is preserved so TLS hostname verification and the Host header stay
+        // correct on Node/undici.
         return [{ address: "1.1.1.1", family: 4 }];
       },
     };
@@ -154,13 +156,54 @@ describe("webhook target SSRF guard", () => {
       webhookTargetPolicy: policy,
       fetchImpl: async (input) => {
         fetchedUrl = typeof input === "string" ? input : String(input);
-        hostHeader = new Headers({ host: "receiver.test" }).get("host") ?? undefined;
         return new Response("queued", { status: 202 });
       },
     });
     expect(attempt.status).toBe("success");
-    expect(fetchedUrl).toContain("1.1.1.1");
-    expect(fetchedUrl).not.toContain("receiver.test");
+    // The URL is the logical hostname, never rewritten to the pinned address.
+    expect(fetchedUrl).toContain("receiver.test");
+    expect(fetchedUrl).not.toContain("1.1.1.1");
+  });
+
+  test("allowlisted hostnames are still resolved and pinned (no rebinding window)", async () => {
+    const policy: WebhookTargetPolicy = {
+      allowPrivateHosts: ["receiver.internal"],
+      lookup: async (hostname) => {
+        expect(hostname).toBe("receiver.internal");
+        return [{ address: "10.0.0.7", family: 4 }];
+      },
+    };
+    const resolved = await resolveWebhookTarget(new URL("http://receiver.internal/hook"), policy);
+    expect(resolved.hostname).toBe("receiver.internal");
+    expect(resolved.addresses).toEqual(["10.0.0.7"]);
+  });
+
+  test("refuses a redirect once the redirect bound is reached, without an extra request", async () => {
+    const event = createEvent({ id: "ssrf-redirect-bound", source: "notes", type: "note.created" });
+    const policy: WebhookTargetPolicy = {
+      maxRedirects: 2,
+      lookup: async (hostname) => [{ address: "1.1.1.1", family: 4 }],
+    };
+    let fetchCount = 0;
+    const attempt = await dispatchWebhook(event, {
+      id: "redirect-bound",
+      enabled: true,
+      transport: "webhook",
+      webhook: { url: "http://receiver.test/hook" },
+      createdAt: event.time,
+      updatedAt: event.time,
+    }, {
+      webhookTargetPolicy: policy,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return new Response(null, { status: 302, headers: { location: `http://hop${fetchCount}.test/hook` } });
+      },
+    });
+    // Initial request + 2 followed redirects = 3 requests; the 3rd redirect is
+    // refused without a 4th request.
+    expect(fetchCount).toBe(3);
+    expect(attempt.status).toBe("failed");
+    expect(attempt.error).toBe("Webhook target exceeded 2 redirects");
   });
 
   test("dispatchWebhook revalidates every redirect hop and refuses a redirect to a private target", async () => {
