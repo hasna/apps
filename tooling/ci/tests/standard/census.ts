@@ -524,11 +524,39 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
  * describe, so the claim moves only with the manifest rewrite their
  * CONTRACTS_EXCEPTIONS remediation tasks own. */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
-  { member: "files", kitVersion: "0.4.2", pinned: "0.13.4" },
-  { member: "todos", kitVersion: "0.11.1", pinned: "0.13.4" },
+  { member: "files", kitVersion: "0.4.2", pinned: "0.14.0" },
+  { member: "todos", kitVersion: "0.11.1", pinned: "0.14.0" },
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
-  { member: "hooks", kitVersion: "0.8.4", pinned: "0.13.4" },
+  { member: "hooks", kitVersion: "0.8.4", pinned: "0.14.0" },
+  // Version wave 2026-08-24 (c4622d9094) pinned 26 members to contracts
+  // 0.14.0 without rewriting their hasna.contract.json kitVersion; each
+  // member's conformance passes at its declared kit, so the claim moves only
+  // with the manifest rewrite its CONTRACTS_EXCEPTIONS remediation task owns.
+  { member: "access", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "attachments", kitVersion: "0.8.2", pinned: "^0.14.0" },
+  { member: "calendar", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "consolidations", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "conversations", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
+  { member: "domains", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "economy", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "emails", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "holdings", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "instructions", kitVersion: "0.13.1", pinned: "0.14.0" },
+  { member: "knowledge", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "loops", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "machines", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "markdown", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "messages", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "projects", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "prompts", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "recordings", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "secrets", kitVersion: "0.13.3", pinned: "^0.14.0" },
+  { member: "servers", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "sessions", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "shield", kitVersion: "0.13.4", pinned: "0.14.0" },
+  { member: "testers", kitVersion: "0.13.4", pinned: "^0.14.0" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —
