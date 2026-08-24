@@ -53,7 +53,8 @@ export async function handleMcp(options: { register?: string; json: boolean }) {
     return;
   }
 
-  await import("../../mcp/index.js");
+  const { startMcpStdio } = await import("../../mcp/index.js");
+  await startMcpStdio();
 }
 
 async function registerMcpForAgent(agent: AgentTarget, command: string): Promise<McpRegistrationResult> {
