@@ -24,7 +24,7 @@
  *              chain gains it (and a stale chain entry is equally a failure).
  *   ORDER    — @hasna/contracts precedes every prepare member that depends on
  *              @hasna/contracts (the measured TS7016 edge: machines, mementos,
- *              attachments, datasets, loops all consume contracts types at
+ *              attachments, and loops all consume contracts types at
  *              prepare/build time).
  *   CI SHAPE — every `Install` step in .github/workflows/ci.yml runs
  *              `bun install --frozen-lockfile --ignore-scripts` and
