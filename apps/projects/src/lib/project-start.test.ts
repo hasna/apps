@@ -271,7 +271,7 @@ describe("project start service", () => {
     db.close();
   });
 
-  test("routes API-mode start writes through the hosted project store", async () => {
+  test("routes hosted-backend start writes through the hosted project store", async () => {
     const db = makeDb();
     const root = mkdtempSync(join(tmpdir(), "project-start-api-write-"));
     const binDir = join(root, "bin");

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import { PROJECT_REDACTED_VALUE } from "../lib/redaction.js";
-import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
+import { HOSTED_API_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 
 function runMcpCli(args: string[]) {
   return Bun.spawnSync({
@@ -23,7 +23,7 @@ function runMcpSession(messages: unknown[], env: Record<string, string>) {
   // present in `overrides`, so it cannot express that here.
   const isolated: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if ((API_MODE_ENV_KEYS as readonly string[]).includes(key)) continue;
+    if ((HOSTED_API_ENV_KEYS as readonly string[]).includes(key)) continue;
     isolated[key] = value;
   }
   return Bun.spawnSync({
@@ -413,7 +413,7 @@ describe("projects-mcp project-first surface", () => {
     }
   });
 
-  test("spawned MCP sessions strip api-mode env even from a raw process.env call site — writes land in the temp DB", async () => {
+  test("spawned MCP sessions strip hosted-backend env even from a raw process.env call site — writes land in the temp DB", async () => {
     const root = mkdtempSync(join(tmpdir(), "project-mcp-hermetic-"));
     const dbPath = join(root, "projects.db");
     const requests: string[] = [];

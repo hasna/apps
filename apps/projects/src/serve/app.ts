@@ -1,7 +1,7 @@
 // projects-serve HTTP application (framework-agnostic Bun.serve handler).
 //
-// Amendment A1 pure-remote: every /v1 request reads/writes cloud Postgres via
-// the ProjectsPgStore. Auth is @hasna/contracts API-key verification
+// Every /v1 request reads/writes PostgreSQL via the ProjectsPgStore. Auth is
+// @hasna/contracts API-key verification
 // (verifyApiKey), scoped projects:read for reads and projects:write for writes.
 
 import {
@@ -37,8 +37,6 @@ export interface ServeAppOptions {
   keyStatus?: (kid: string) => ApiKeyStatus | Promise<ApiKeyStatus>;
   allowUnregisteredKeys?: boolean;
   audit?: AuthAuditHook;
-  /** Reported by the legacy /version and root responses. Defaults to "cloud". */
-  mode?: string;
 }
 
 const READ_SCOPE = "projects:read";
@@ -109,7 +107,6 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
 export function createFetchHandler(options: ServeAppOptions): (req: Request) => Promise<Response> {
   const { store, version, contacts } = options;
   const appName = options.app ?? "projects";
-  const mode = options.mode ?? "cloud";
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: appName,
     signingSecret: options.signingSecret,
@@ -128,7 +125,7 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
       return jsonResponse({ status: "ok", version });
     }
     if (path === "/version" && method === "GET") {
-      return jsonResponse({ status: "ok", version, mode });
+      return jsonResponse({ status: "ok", version });
     }
     if (path === "/ready" && method === "GET") {
       try {
@@ -144,7 +141,7 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
       return jsonResponse(buildOpenApiSpec(version));
     }
     if (path === "/" && method === "GET") {
-      return jsonResponse({ name: `${appName}-serve`, version, mode, openapi: "/openapi.json" });
+      return jsonResponse({ name: `${appName}-serve`, version, openapi: "/openapi.json" });
     }
 
     // --- everything under /v1 requires auth ---
@@ -584,7 +581,7 @@ async function route(
   // Project mutation locks were an on-box coordination primitive; the pg
   // baseline has carried workspace_locks since 0001 and the hosted API now
   // exposes acquire/list/release so the lock commands work identically on a
-  // cloud project (fleet-visible, not machine-local).
+  // hosted project (fleet-visible, not machine-local).
   if (resource === "locks") {
     if (method === "GET" && !id) {
       const locks = await store.listLocks();

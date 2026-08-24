@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { API_MODE_ENV_KEYS, testSpawnEnv } from "./spawn-env.js";
+import { HOSTED_API_ENV_KEYS, testSpawnEnv } from "./spawn-env.js";
 
-const AUTHORITY_ENV_KEYS = API_MODE_ENV_KEYS.filter((key) => (
+const AUTHORITY_ENV_KEYS = HOSTED_API_ENV_KEYS.filter((key) => (
   key.includes("TODOS") || key.includes("MEMENTOS") || key.includes("CONVERSATIONS")
 ));
-const PROJECTS_API_ENV_KEYS = API_MODE_ENV_KEYS.filter((key) => (
+const PROJECTS_API_ENV_KEYS = HOSTED_API_ENV_KEYS.filter((key) => (
   key.includes("PROJECTS") && !key.endsWith("DB_PATH")
 ));
 
@@ -50,7 +50,7 @@ describe("testSpawnEnv authority isolation", () => {
         HASNA_PROJECTS_DB_PATH: "/fixture/projects.db",
       });
       expect(isolated.HASNA_PROJECTS_DB_PATH).toBe("/fixture/projects.db");
-      expect(PROJECTS_API_ENV_KEYS).toHaveLength(8);
+      expect(PROJECTS_API_ENV_KEYS).toHaveLength(4);
       expect(PROJECTS_API_ENV_KEYS.every((key) => isolated[key] === undefined)).toBe(true);
     } finally {
       for (const [key, value] of previous) {

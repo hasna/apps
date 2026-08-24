@@ -143,14 +143,14 @@ describe("project agent system prompt", () => {
 });
 
 // --------------------------------------------------------------------------
-// Cloud-mode split-brain regression: in api/cloud mode the prompt-agent's
-// shared-registry mutations MUST route through the ProjectStore (cloud HTTP),
-// never local sqlite. These tests inject a fake api-mode Store and assert the
-// tool handlers call the corresponding store method and surface the cloud
-// result — a local-sqlite write would instead throw / miss the cloud project.
+// Hosted-backend split-brain regression: in the hosted backend the prompt-agent's
+// shared-registry mutations MUST route through the ProjectStore (hosted HTTP),
+// never local sqlite. These tests inject a fake hosted-backend Store and assert the
+// tool handlers call the corresponding store method and surface the hosted backend
+// result — a local-sqlite write would instead throw / miss the hosted project.
 // --------------------------------------------------------------------------
 
-const LOCAL_ONLY_SENTINEL = "is a local-only operation and is not available in api/cloud mode.";
+const LOCAL_ONLY_SENTINEL = "is a local-only operation and is not available in the hosted backend.";
 
 function makeCloudProject(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -190,7 +190,7 @@ function makeFakeApiStore() {
   // Any method NOT explicitly modelled here would be undefined and throw if a
   // handler tried to call it — a strong signal it took an unexpected path.
   const store = {
-    mode: "api" as const,
+    transport: "http" as const,
     baseUrl: "https://projects.hasna.xyz/v1",
     listProjects: track("listProjects", () => []),
     matchRoots: track("matchRoots", () => []),
@@ -223,8 +223,8 @@ function makeFakeApiStore() {
       source: "agent",
       created_at: "2026-01-01T00:00:00.000Z",
     } as unknown as WorkspaceEvent)),
-    // Extra on-disk locations route through the Store in api mode: the hosted
-    // /v1 API carries the write, so the tool registers against the cloud row.
+    // Extra on-disk locations route through the Store in the hosted backend: the hosted
+    // /v1 API carries the write, so the tool registers against the hosted row.
     addLocation: track("addLocation", () => ({
       project: makeCloudProject({ primary_path: "/tmp/x" }),
       location: {
@@ -263,13 +263,13 @@ async function invoke(toolDef: unknown, input: Record<string, unknown>): Promise
   return (await execute(input, { toolCallId: "test", messages: [] })) as Record<string, unknown>;
 }
 
-describe("prompt-agent mutations route through the Store in api/cloud mode", () => {
+describe("prompt-agent mutations route through the Store in the hosted backend", () => {
   afterEach(() => {
     closeDatabase();
     delete process.env["HASNA_PROJECTS_DB_PATH"];
   });
 
-  test("projects_doctor repairs a cloud-only project without local resolution or locking", async () => {
+  test("projects_doctor repairs a hosted-only project without local resolution or locking", async () => {
     const root = mkdtempSync(join(tmpdir(), "project-agent-cloud-doctor-"));
     process.env["HASNA_PROJECTS_DB_PATH"] = join(root, "projects.db");
     const projectPath = join(root, "cloud-project");
@@ -306,7 +306,7 @@ describe("prompt-agent mutations route through the Store in api/cloud mode", () 
     const updateCall = calls.find((c) => c.method === "updateProject");
     expect(updateCall).toBeDefined();
     expect(updateCall!.args[0]).toBe("wks_cloud");
-    // api mode leaves attribution to the server (derived from the bearer key).
+    // the hosted backend leaves attribution to the server (derived from the bearer key).
     expect((updateCall!.args[1] as { agent_id?: string }).agent_id).toBeUndefined();
     expect(calls.some((c) => c.method === "resolveTarget")).toBe(true);
   });
@@ -478,12 +478,12 @@ describe("prompt-agent mutations route through the Store in api/cloud mode", () 
     expect((evCall!.args[1] as { event_type?: string }).event_type).toBe("note");
   });
 
-  test("projects_locations_add registers the location through the Store in api mode", async () => {
+  test("projects_locations_add registers the location through the Store in the hosted backend", async () => {
     const { store, calls } = makeFakeApiStore();
     const tools = apiTools(store);
     const result = await invoke(tools.projects_locations_add, { project: "cloud-proj", path: "/tmp/x" });
 
-    // The write routes through the Store to the hosted /v1 API — the cloud row
+    // The write routes through the Store to the hosted /v1 API — the hosted row
     // receives the location; nothing touches local sqlite.
     const addCall = calls.find((c) => c.method === "addLocation");
     expect(addCall).toBeDefined();

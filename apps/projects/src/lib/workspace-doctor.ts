@@ -40,7 +40,7 @@ export interface WorkspaceDoctorResult {
 export interface WorkspaceDoctorOptions {
   fix?: boolean;
   dryRun?: boolean;
-  storageMode?: "local" | "api";
+  transport?: "local" | "http";
 }
 
 function checkPath(workspace: Workspace): WorkspaceDoctorCheck {
@@ -87,8 +87,8 @@ function checkReferences(workspace: Workspace, db?: Database): WorkspaceDoctorCh
   return checks;
 }
 
-function checkLocations(workspace: Workspace, storageMode: "local" | "api", db?: Database): WorkspaceDoctorCheck {
-  if (storageMode === "api") {
+function checkLocations(workspace: Workspace, transport: "local" | "http", db?: Database): WorkspaceDoctorCheck {
+  if (transport === "http") {
     return {
       code: "WORKSPACE_LOCATIONS_LOCAL_ONLY",
       name: "locations",
@@ -145,12 +145,12 @@ function checkMigrationMap(workspace: Workspace, db?: Database): WorkspaceDoctor
 }
 
 export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOptions = {}, db?: Database): WorkspaceDoctorResult {
-  const storageMode = options.storageMode ?? "local";
+  const transport = options.transport ?? "local";
   const checks = [
     checkPath(workspace),
     checkMarker(workspace),
     ...checkReferences(workspace, db),
-    checkLocations(workspace, storageMode, db),
+    checkLocations(workspace, transport, db),
     checkAgentRuns(workspace, db),
     checkMigrationMap(workspace, db),
   ];
@@ -164,7 +164,7 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
         writeWorkspaceMarker(workspace, {
           source: "cli",
           command: "projects doctor --fix",
-          recordEvents: storageMode === "local",
+          recordEvents: transport === "local",
           db,
         });
       }

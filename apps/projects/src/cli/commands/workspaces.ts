@@ -41,7 +41,7 @@ import { productionProjectRegistrationAuthorities } from "../../lib/production-p
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
 import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
 
-// Drop keys whose value is `undefined` so a cloud PATCH only carries fields the
+// Drop keys whose value is `undefined` so a hosted PATCH only carries fields the
 // caller actually set (an explicit `null` still clears the field server-side).
 import { builtInWorkspaceRecipes } from "../../lib/workspace-defaults.js";
 import {
@@ -616,7 +616,7 @@ function parseNonNegativeNumber(value: string | undefined, label: string): numbe
   return parsed;
 }
 
-// Machine-local mutation lock routed through the Store. In api/cloud mode the
+// Machine-local mutation lock routed through the Store. In the hosted backend the
 // Store cannot hold a local lock (writes are atomic server-side and a local
 // lock would be invisible to the rest of the fleet), so it becomes a no-op.
 async function withWorkspaceLock<T>(
@@ -626,7 +626,7 @@ async function withWorkspaceLock<T>(
   reason: string,
   fn: () => T | Promise<T>,
 ): Promise<T> {
-  if (store.mode !== "local") return fn();
+  if (store.transport !== "local") return fn();
   const key = `workspace:${workspace.id}`;
   let lock: WorkspaceLock;
   try {
@@ -683,11 +683,11 @@ function resolveAgentId(idOrSlug: string | undefined): string {
 
 /**
  * Resolve the attributing agent for a mutation. Local resolves/creates an
- * on-box agent identity; api mode leaves attribution to the server (derived
- * from the bearer key), so we never create a local agent row in api mode.
+ * on-box agent identity; the hosted backend leaves attribution to the server (derived
+ * from the bearer key), so we never create a local agent row in the hosted backend.
  */
 function mutationAgentId(store: ProjectStore, optAgent?: string): string | undefined {
-  if (store.mode !== "local") return undefined;
+  if (store.transport !== "local") return undefined;
   return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
 }
 
@@ -2053,7 +2053,7 @@ function registerProjectCommands(program: Command): void {
       try {
         const store = resolveProjectStore();
         // Registry-level input is store-agnostic: parse/merge it once so api
-        // (cloud) creation honors exactly the same flags as local creation
+        // Hosted creation honors exactly the same flags as local creation
         // instead of silently dropping them.
         const tmuxWindows = parseTmuxWindowsJson(opts.tmuxWindowsJson);
         const baseMetadata = parseJsonObject(opts.metadataJson, "--metadata-json") ?? {};
@@ -2077,15 +2077,15 @@ function registerProjectCommands(program: Command): void {
           canvases_project_id: opts.canvasesProjectId,
           canvases_default_canvas_id: opts.canvasesDefaultCanvasId,
         }) ?? baseIntegrations;
-        // --dry-run must preview only and never persist. The api (cloud) Store
+        // --dry-run must preview only and never persist. The hosted Store
         // has no plan/preview endpoint, so when a dry-run is requested we skip
         // the remote create entirely and fall through to the local planner,
-        // which builds the plan without writing to any registry (local or cloud).
-        if (store.mode === "api" && !opts.dryRun) {
+        // which builds the plan without writing to any registry (local or hosted).
+        if (store.transport === "http" && !opts.dryRun) {
           // Machine-local runtime flags (directory/git/marker/tmux) apply on
-          // THIS machine while the row lives in the cloud registry — the same
-          // machine-local runtime precedent tmux profiles already follow in api
-          // mode. The registry half routes through the Store; the runtime half
+          // THIS machine while the row lives in the hosted registry — the same
+          // machine-local runtime precedent tmux profiles already follow in the
+          // hosted backend. The registry half routes through the Store; the runtime half
           // runs on the invoking box. The one input requirement is a primary
           // path (the runtime needs a directory to prepare), refused BEFORE the
           // create so a rejected request never leaves a partial row behind.
@@ -2095,13 +2095,13 @@ function registerProjectCommands(program: Command): void {
           if (runtimeRequested && !opts.path) {
 
             throw new Error(
-              "create with machine-local runtime flags (--mkdir/--git-init/--marker/--tmux-*) in api/cloud mode requires --path: the runtime half applies on this machine and needs a primary path. "
+              "create with machine-local runtime flags (--mkdir/--git-init/--marker/--tmux-*) in the hosted backend requires --path: the runtime half applies on this machine and needs a primary path. "
               + "No project was created. Re-run with --path, or preview the full local plan with --dry-run.",
             );
           }
-          // Cloud project rows are created through the Store. Root/recipe are
+          // Hosted project rows are created through the Store. Root/recipe are
           // shared registry resources: resolve slug->id through the Store so the
-          // intent is honored (not silently dropped) in api mode. Agent
+          // intent is honored (not silently dropped) in the hosted backend. Agent
           // attribution stays server-side (see mutationAgentId).
           const root = opts.root ? await resolveRoot(store, opts.root) : null;
           const recipe = opts.recipe ? await resolveRecipe(store, opts.recipe) : null;
@@ -2154,7 +2154,7 @@ function registerProjectCommands(program: Command): void {
               printObject({ project, runtime: { actions: runtime.actions, tmux: runtime.tmux } }, opts);
               return;
             }
-            console.log(chalk.green(`✓ Project created (cloud): ${project.slug}`));
+            console.log(chalk.green(`✓ Project created (hosted): ${project.slug}`));
             if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${project.primary_path}`);
             for (const action of runtime.actions) {
               console.log(`  ${chalk.dim(action.type + ":")} ${action.status} ${action.target}`);
@@ -2166,7 +2166,7 @@ function registerProjectCommands(program: Command): void {
             return;
           }
           if (wantsJson(opts)) { printObject({ project }, opts); return; }
-          console.log(chalk.green(`✓ Project created (cloud): ${project.slug}`));
+          console.log(chalk.green(`✓ Project created (hosted): ${project.slug}`));
           if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${project.primary_path}`);
           return;
         }
@@ -3949,8 +3949,8 @@ function registerProjectCommands(program: Command): void {
       try {
         const store = resolveProjectStore();
         const runDoctor = (project: Workspace) => opts.fix && !opts.dryRun
-          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }))
-          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }));
+          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }))
+          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }));
         const json = wantsJson(opts);
         const limit = json ? undefined : parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
         const results = idOrSlug
@@ -3983,10 +3983,10 @@ function registerProjectCommands(program: Command): void {
 
 /**
  * `store migrate` moves an existing machine-local primary path and rewrites the
- * location history. In api/cloud mode the file move still runs on the invoking
+ * location history. In the hosted backend the file move still runs on the invoking
  * machine (the server cannot move files on a client box), while the location
  * history and the migration event route through the Store to the hosted
- * project via `migrateProjectToStoreViaStore` — the same split the api-mode
+ * project via `migrateProjectToStoreViaStore` — the same split the hosted-backend
  * `store ensure` path already establishes.
  */
 
@@ -4072,8 +4072,8 @@ function registerStoreCommand(program: Command): void {
       try {
         const store = resolveProjectStore();
         const agentId = opts.agent
-          ? (store.mode === "local" ? resolveAgentId(opts.agent) : opts.agent)
-          : (store.mode === "local" ? ensureCliAgent().id : undefined);
+          ? (store.transport === "local" ? resolveAgentId(opts.agent) : opts.agent)
+          : (store.transport === "local" ? ensureCliAgent().id : undefined);
         const common = {
           dryRun: opts.dryRun,
           setPrimaryIfMissing: opts.primary,
@@ -4081,7 +4081,7 @@ function registerStoreCommand(program: Command): void {
           source: "cli" as const,
           command: process.argv.join(" "),
         };
-        const result = store.mode === "local"
+        const result = store.transport === "local"
           ? await (async () => {
               const project = await store.resolveTarget(projectIdOrSlug);
               const ensure = () => ensureCanonicalProjectStore(project, common);
@@ -4112,11 +4112,11 @@ function registerStoreCommand(program: Command): void {
         const store = resolveProjectStore();
         const project = await store.resolveTarget(projectIdOrSlug);
         const apply = Boolean(opts.apply || opts.yes);
-        // Local resolves/creates an on-box agent identity; api mode leaves
+        // Local resolves/creates an on-box agent identity; the hosted backend leaves
         // attribution to the server (derived from the bearer key).
-        const agentId = store.mode === "local" ? (opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id) : opts.agent;
+        const agentId = store.transport === "local" ? (opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id) : opts.agent;
         const result = apply
-          ? store.mode === "api"
+          ? store.transport === "http"
             ? await migrateProjectToStoreViaStore(store, project, {
                 apply: true,
                 agentId,

@@ -90,7 +90,7 @@ function fixture(options: { name?: string; slug?: string; metadata?: JsonObject 
 }
 
 describe("projects context-bundle", () => {
-  test("emits the strict Instructions v2 bundle for an exact project id", () => {
+  test("emits the strict Instructions v3 bundle for an exact project id", () => {
     const fx = fixture();
     try {
       const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
@@ -114,7 +114,7 @@ describe("projects context-bundle", () => {
         "schema",
         "station",
       ]);
-      expect(bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+      expect(bundle.schema).toBe("hasna.projects.project_context_bundle.v3");
       expect(bundle.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
       expect(bundle.revision).toBe("2026-08-08T09:10:11.123Z");
       expect(bundle.freshness).toBe("fresh");
@@ -125,8 +125,7 @@ describe("projects context-bundle", () => {
       });
       expect(bundle.authority).toEqual({
         owner: "projects",
-        mode: "local",
-        storage: "sqlite",
+        transport: "local",
         availability: "available",
       });
       expect(bundle.project).toEqual({
@@ -196,7 +195,7 @@ describe("projects context-bundle", () => {
         schema: string;
         project: Record<string, unknown>;
       };
-      expect(bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+      expect(bundle.schema).toBe("hasna.projects.project_context_bundle.v3");
       expect(bundle.project["id"]).toBe(fx.projectId);
       expect(bundle.project["slug"]).toBe("monthly-filing");
       expect(bundle.project["finance"]).toEqual({

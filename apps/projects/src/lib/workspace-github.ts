@@ -214,15 +214,15 @@ function setOrigin(path: string, remote: string): void {
 }
 
 // Import reservation locks are a machine-local coordination primitive: they
-// serialize concurrent local imports racing for the same slug/path. In api mode
-// the Store cannot acquire local locks (uniqueness is enforced cloud-side), so
+// serialize concurrent local imports racing for the same slug/path. In the hosted backend
+// the Store cannot acquire local locks (uniqueness is enforced by the hosted backend), so
 // we skip them rather than writing invisible local-sqlite locks (split-brain).
 async function acquireImportLocks(
   store: ProjectStore,
   specs: Array<{ key: string; reason: string }>,
   agentId?: string,
 ): Promise<WorkspaceLock[]> {
-  if (store.mode !== "local") return [];
+  if (store.transport !== "local") return [];
   const acquired: WorkspaceLock[] = [];
   try {
     for (const spec of specs) {
@@ -300,9 +300,9 @@ export async function planWorkspaceGitHubPublish(store: ProjectStore, workspace:
 export async function publishWorkspaceToGitHub(store: ProjectStore, workspace: Workspace, options: WorkspaceGitHubPublishOptions = {}): Promise<WorkspaceGitHubPublishResult> {
   const plan = await planWorkspaceGitHubPublish(store, workspace, options);
   if (options.dryRun) return plan;
-  // Authz: in api/cloud mode the server enforces the bearer key's scope; the
+  // Authz: in the hosted backend the server enforces the bearer key's scope; the
   // local agent-permission table is meaningless there, so only check on-box.
-  if (store.mode === "local") assertAgentPermission(options.agent_id, "github:publish");
+  if (store.transport === "local") assertAgentPermission(options.agent_id, "github:publish");
 
   const createArgs = ["repo", "create", plan.full_name, `--${plan.visibility}`];
   const description = options.description ?? workspace.description ?? undefined;
@@ -535,7 +535,7 @@ export async function importWorkspaceFromGitHub(store: ProjectStore, repoInput: 
 
   const locks = await acquireImportLocks(store, githubImportLocks(plan), options.agent_id);
   try {
-    // Dedup against the registry through the active Store (cloud in api mode,
+    // Dedup against the registry through the active Store (hosted backend,
     // sqlite in local) so imports never create duplicate rows on the wrong side.
     const projects = await store.listProjects({ limit: 10000 });
     const existingByIdentity = findExistingGitHubWorkspace(plan, projects);

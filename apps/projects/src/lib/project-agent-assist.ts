@@ -12,11 +12,11 @@
 // All functions are pure derivations over existing storage state; none mutate.
 //
 // STORE ROUTING: every registry read goes through the active ProjectStore, so
-// on a machine flipped to api/cloud these agent-orientation surfaces read the
-// SHARED cloud dataset (over HTTP + bearer key) instead of the stale local
+// on a machine flipped to the hosted backend these agent-orientation surfaces read the
+// SHARED hosted dataset (over HTTP + bearer key) instead of the stale local
 // sqlite island. Machine-local side effects (tmux inspection, on-disk doctor
 // checks, path/marker resolution) are NOT shared state and are gated on
-// `store.mode === "local"` by design — they describe THIS machine.
+// `store.transport === "local"` by design — they describe THIS machine.
 
 import { existsSync, statSync } from "node:fs";
 import { hostname } from "node:os";
@@ -64,7 +64,7 @@ interface ResolvedTarget {
   project: Workspace;
   source: ProjectResolverSource;
   marker: ProjectMarkerReference | null;
-  /** Full local resolution detail (local mode only); synthesized in api mode. */
+  /** Full local resolution detail (local transport only); synthesized in the hosted backend. */
   resolution: ProjectTargetResolution;
 }
 
@@ -72,15 +72,15 @@ interface ResolvedTarget {
 // surfaces we prefer an "unresolved" result over a thrown error so agents get
 // actionable output instead of a stack trace.
 //
-// In api/cloud mode we resolve through the Store (server-side id/slug lookup);
-// in local mode we use the richer on-disk resolver so path/marker sources and
+// In the hosted backend we resolve through the Store (server-side id/slug lookup);
+// in the local transport we use the richer on-disk resolver so path/marker sources and
 // marker references remain available in the trace.
 async function safeResolveProjectTarget(
   store: ProjectStore,
   target: string | undefined,
 ): Promise<ResolvedTarget | null> {
   try {
-    if (store.mode === "local") {
+    if (store.transport === "local") {
       const res = resolveRegisteredProjectTarget(target, { allowPath: true, allowMarker: true });
       if (!res) return null;
       return { project: res.project, source: res.source, marker: res.marker ?? null, resolution: res };
@@ -179,10 +179,10 @@ export async function buildProjectAgentContext(
   }
 
   // Doctor inspects THIS machine's on-disk project directory + local db; it is
-  // meaningless for a cloud project that does not live on this box, so it is
-  // gated on local mode.
+  // meaningless for a hosted project that does not live on this box, so it is
+  // gated on the local transport.
   let doctorBlock: ProjectAgentContext["doctor"] | undefined;
-  if (store.mode === "local") {
+  if (store.transport === "local") {
     try {
       const doc = doctorWorkspace(project, {}) as WorkspaceDoctorResult;
       doctorBlock = {
@@ -345,8 +345,8 @@ export async function suggestProjectNextActions(
     }
   }
 
-  // 2. doctor findings -> doctor --fix (machine-local; local mode only)
-  if (store.mode === "local") {
+  // 2. doctor findings -> doctor --fix (machine-local; local transport only)
+  if (store.transport === "local") {
     try {
       const doc = doctorWorkspace(project, {}) as WorkspaceDoctorResult;
       const fixable = doc.checks.filter((c) => c.fixable);
@@ -492,9 +492,9 @@ export async function explainProjectResolution(
   const normalizedTarget = target?.trim() || cwd;
   const steps: ProjectWhyStep[] = [];
   const suggestions: string[] = [];
-  const local = store.mode === "local";
+  const local = store.transport === "local";
 
-  // id-or-slug (routes through the Store: local sqlite or cloud API)
+  // id-or-slug (routes through the Store: local sqlite or hosted API)
   const byIdOrSlug = await store.getProject(normalizedTarget);
   steps.push({
     source: "id-or-slug",
@@ -522,9 +522,9 @@ export async function explainProjectResolution(
 
   const resolution = await safeResolveProjectTarget(store, normalizedTarget);
 
-  // path + marker are on-disk (machine-local) resolution steps; in api/cloud
-  // mode only verified canonical workspace paths resolve through their stable
-  // cloud project id; marker resolution remains machine-local.
+  // path + marker are on-disk (machine-local) resolution steps; in the hosted backend
+  // hosted transport only verified canonical workspace paths resolve through their stable
+  // hosted project id; marker resolution remains machine-local.
   let pathMatched: Workspace[] = [];
   let marker: ProjectMarkerReference | null = null;
   if (!local) {
@@ -537,10 +537,10 @@ export async function explainProjectResolution(
       detail: resolvedByPath
         ? `matched ${resolvedByPath.project.slug} (${resolvedByPath.project.id}) by verified canonical path ${resolvedByPath.resolution.path}`
         : pathLike
-          ? "no verified canonical workspace path match in api/cloud mode"
+          ? "no verified canonical workspace path match in the hosted backend"
           : "target is not path-like",
     });
-    steps.push({ source: "marker", tried: false, matched: false, detail: "marker resolution is machine-local (not used in api/cloud mode)" });
+    steps.push({ source: "marker", tried: false, matched: false, detail: "marker resolution is machine-local (not used in the hosted backend)" });
   } else {
     if (isProjectPathLike(normalizedTarget)) {
       const path = normalizeProjectPath(normalizedTarget);

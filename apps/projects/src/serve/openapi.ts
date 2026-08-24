@@ -85,7 +85,7 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
       title: "Projects API",
       version,
       description:
-        "Self-hosted HTTP API for @hasna/projects (workspace/project management). Amendment A1 pure-remote: reads and writes go directly to cloud Postgres. All /v1 routes require an API key (x-api-key or Authorization: Bearer).",
+        "HTTP API for @hasna/projects (workspace/project management). Reads and writes go directly to PostgreSQL. All /v1 routes require an API key (x-api-key or Authorization: Bearer).",
     },
     servers: [{ url: "/" }],
     components: {
@@ -1222,6 +1222,11 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           properties: { assignments: { type: "array", items: ref("WorkspaceAgentAssignment") }, count: { type: "integer" } },
           required: ["assignments", "count"],
         },
+        AgentAssignment: {
+          type: "object",
+          properties: { assignment: ref("WorkspaceAgentAssignment") },
+          required: ["assignment"],
+        },
         LockList: {
           type: "object",
           properties: { locks: { type: "array", items: ref("WorkspaceLock") }, count: { type: "integer" } },
@@ -1263,17 +1268,12 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
         },
         LegacyVersionResponse: {
           type: "object",
-          description: "Legacy compatibility response for /version.",
+          description: "Compatibility response for /version.",
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: {
-              type: "string",
-              deprecated: true,
-              description: "Deprecated compatibility field; do not use it for deployment branching.",
-            },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         Error: {
           type: "object",

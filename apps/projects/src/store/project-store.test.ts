@@ -21,46 +21,42 @@ describe("projects store resolution (client-flip)", () => {
   test("no env -> local store", () => {
     __resetProjectStore();
     const store = resolveProjectStore({});
-    expect(store.mode).toBe("local");
+    expect((store as unknown as { transport?: string }).transport).toBe("local");
     expect(store.baseUrl).toBeNull();
   });
 
-  test("self_hosted + url + key -> api store", () => {
+  test("url + key -> http store", () => {
     __resetProjectStore();
     const store = resolveProjectStore({
-      HASNA_PROJECTS_STORAGE_MODE: "self_hosted",
-      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+      HASNA_PROJECTS_API_URL: "https://projects.example.test",
       HASNA_PROJECTS_API_KEY: "k",
     });
-    expect(store.mode).toBe("api");
-    expect(store.baseUrl).toBe("https://projects.hasna.xyz/v1");
+    expect((store as unknown as { transport?: string }).transport).toBe("http");
+    expect(store.baseUrl).toBe("https://projects.example.test/v1");
   });
 
-  // Regression: the fleet flip writes ONLY HASNA_PROJECTS_API_URL +
-  // HASNA_PROJECTS_API_KEY (no STORAGE_MODE). Their joint presence must route to
-  // the api store, otherwise a flipped CLI silently keeps reading local sqlite.
-  test("url + key (no explicit mode) -> api store", () => {
+  test("url without key -> throws instead of silently using local", () => {
     __resetProjectStore();
-    const store = resolveProjectStore({
-      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" })).toThrow(/both/i);
+  });
+
+  test("key without url -> throws instead of silently using local", () => {
+    __resetProjectStore();
+    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" })).toThrow(/both/i);
+  });
+
+  test("legacy selector variables do not change transport", () => {
+    __resetProjectStore();
+    const legacySelector = ["HASNA_PROJECTS", "STORAGE", "MODE"].join("_");
+    const local = resolveProjectStore({ [legacySelector]: "legacy" });
+    expect((local as unknown as { transport?: string }).transport).toBe("local");
+    __resetProjectStore();
+    const hosted = resolveProjectStore({
+      [legacySelector]: "local",
+      HASNA_PROJECTS_API_URL: "https://projects.example.test",
       HASNA_PROJECTS_API_KEY: "k",
     });
-    expect(store.mode).toBe("api");
-  });
-
-  test("cloud requested but no key -> throws (never silently local)", () => {
-    __resetProjectStore();
-    expect(() => resolveProjectStore({ HASNA_PROJECTS_STORAGE_MODE: "self_hosted" })).toThrow();
-  });
-
-  test("cloud alias 'cloud' -> api store", () => {
-    __resetProjectStore();
-    const store = resolveProjectStore({
-      HASNA_PROJECTS_STORAGE_MODE: "cloud",
-      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
-      HASNA_PROJECTS_API_KEY: "k",
-    });
-    expect(store.mode).toBe("api");
+    expect((hosted as unknown as { transport?: string }).transport).toBe("http");
   });
 
   test("baseUrl never embeds the api key", () => {
@@ -381,7 +377,7 @@ describe("local Projects production producer verifier", () => {
   });
 });
 
-// Regression for the split-brain the review flagged: in api mode, roots, agents
+// Regression for the split-brain the review flagged: in the hosted backend, roots, agents
 // and recipes MUST route to `<url>/v1/...` over HTTP with the bearer key — never
 // to local sqlite. These drive the ApiProjectStore through a stub fetch and
 // assert both the request path and the response unwrapping.
@@ -459,7 +455,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/v1/roots/r9?detach=true" });
   });
 
-  // Regression for the review's write findings: in api mode an explicit event
+  // Regression for the review's write findings: in the hosted backend an explicit event
   // record MUST POST to the server, and the on-box-only sub-resources (agent
   // assignment, extra locations, mutation locks) MUST NOT silently touch local
   // sqlite — they route through the Store and refuse rather than split-brain.
@@ -473,7 +469,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls.at(-1)).toMatchObject({ method: "POST", path: "/v1/projects/proj1/events", auth: "Bearer secret-key" });
   });
 
-  test("registered locations read from the api endpoint in api mode", async () => {
+  test("registered locations read from the api endpoint in the hosted backend", async () => {
     const { store, calls } = stubStore(() => ({
       locations: [{
         id: "loc1",
@@ -503,7 +499,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls).toEqual([{ method: "GET", path: "/v1/projects/p/locations", auth: "Bearer secret-key" }]);
   });
 
-  test("project agent assignments and locks route through the api in api mode", async () => {
+  test("project agent assignments and locks route through the api in the hosted backend", async () => {
     const { store, calls } = stubStore((method, path, body) => {
       if (method === "GET" && path === "/v1/projects/p/agents") {
         return { assignments: [{ id: "wa1", workspace_id: "p", agent_id: "a1", role: "contributor", assigned_by: null, metadata: {}, created_at: "2026-08-01 00:00:00", agent: null }] };
@@ -529,7 +525,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls[2]).toMatchObject({ method: "DELETE", path: "/v1/locks/k?lock_id=lk1", auth: "Bearer secret-key" });
   });
 
-  test("forceReleaseLock DELETEs by key alone (admin force path) in api mode", async () => {
+  test("forceReleaseLock DELETEs by key alone (admin force path) in the hosted backend", async () => {
     const { store, calls } = stubStore((method, path) => {
       if (method === "DELETE" && path === "/v1/locks/k") return { released: true };
       return {};
@@ -539,7 +535,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls[0]).toMatchObject({ method: "DELETE", path: "/v1/locks/k", auth: "Bearer secret-key" });
   });
 
-  test("project agent assignment writes POST to the api in api mode", async () => {
+  test("project agent assignment writes POST to the api in the hosted backend", async () => {
     const { store, calls } = stubStore((method, _p, body) => {
       if (method === "POST") {
         return { assignment: { id: "wa2", workspace_id: "p", agent_id: (body as { agent_id: string }).agent_id, role: (body as { role: string }).role, assigned_by: null, metadata: {}, created_at: "2026-08-01 00:00:00", agent: null } };
@@ -551,7 +547,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls.at(-1)).toMatchObject({ method: "POST", path: "/v1/projects/p/agents", auth: "Bearer secret-key" });
   });
 
-  test("addLocation POSTs to /v1/projects/{id}/locations in api mode", async () => {
+  test("addLocation POSTs to /v1/projects/{id}/locations in the hosted backend", async () => {
     const { store, calls } = stubStore((method, _p, body) => {
       if (method === "POST") {
         const location = {
@@ -577,7 +573,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls.at(-1)!.body).toMatchObject({ path: "/x", label: "extra", machine_id: "machine01" });
   });
 
-  test("acquireLock POSTs to /v1/locks in api mode", async () => {
+  test("acquireLock POSTs to /v1/locks in the hosted backend", async () => {
     const { store, calls } = stubStore((method, _p, body) => {
       if (method === "POST") {
         return { lock: { id: "lk2", lock_key: (body as { lock_key: string }).lock_key, workspace_id: "p", agent_id: null, reason: null, created_at: "2026-08-01 00:00:00", expires_at: null } };
@@ -592,7 +588,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   // Regression for the vacuous-read defect (todos 4c17afb1): the per-project app
   // store is a machine-local sqlite FILE (data/<id>/project.db), and the server
-  // exposes no loop endpoints at all — so in api mode the ApiProjectStore used to
+  // exposes no loop endpoints at all — so in the hosted backend the ApiProjectStore used to
   // answer every app-store read from a hardcoded empty summary. `loops list`
   // returned `loops: []` and `store inspect` reported `exists: false` /
   // `loop_links: 0` against a file that demonstrably held rows, at rc=0.
@@ -605,7 +601,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
   // The `calls` assertion is load-bearing in the other direction: it proves the
   // rows came from the local store rather than from the network, so a stub that
   // merely returned data could not make these pass.
-  describe("machine-local app store resolves in api mode (todos 4c17afb1)", () => {
+  describe("machine-local app store resolves in the hosted backend (todos 4c17afb1)", () => {
     const project: ProjectStoreProject = {
       id: "wks_apiloops",
       name: "Api Loops",
@@ -708,7 +704,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
     // The instrument must be able to return a genuine zero, or the tests above
     // only prove it always returns rows. An empty store must still read empty.
-    test("negative control: an empty store still reports 0 links in api mode", async () => {
+    test("negative control: an empty store still reports 0 links in the hosted backend", async () => {
       await withTempHome(async () => {
         ensureProjectStore(project);
 
@@ -721,18 +717,18 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       });
     });
 
-    // Regression for the write half. Making the app store resolve in api mode
+    // Regression for the write half. Making the app store resolve in the hosted backend
     // also made createDataModel / createDataRecord / linkLoop reachable there,
     // and each routes through withLock(project.id, ...). workspace_locks
     // .workspace_id is FK-constrained to the machine-local `workspaces` table,
-    // so an api-created / cloud-only project -- which by definition has no local
+    // so an api-created / hosted-only project -- which by definition has no local
     // registry row -- failed with "FOREIGN KEY constraint failed" before ever
     // touching its project.db. The reads this PR fixes were fine; the writes it
     // newly enabled were not.
     //
     // `project` here is deliberately never inserted into the local `workspaces`
-    // table, which is exactly the cloud-only shape.
-    test("api-mode writes succeed for a cloud-only project with no local workspaces row", async () => {
+    // table, which is exactly the hosted-only shape.
+    test("hosted-backend writes succeed for a hosted-only project with no local workspaces row", async () => {
       await withTempHome(async () => {
         ensureProjectStore(project);
 
@@ -772,14 +768,14 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   });
 
-  // Regression (todos 9ddd325c): budget READS in api mode were hardcoded
-  // `return []` stubs, so cloud-mode callers (budgets list/remaining, the
+  // Regression (todos 9ddd325c): budget READS in the hosted backend were hardcoded
+  // `return []` stubs, so hosted-backend callers (budgets list/remaining, the
   // buildProjectAgentContext budget block, budget-check actions, the MCP tool)
   // got zero statuses, zero exhaustion, rc=0, and proceeded with no cap applied
   // while only the write path failed loudly. The hosted server models no budget
   // resource (route() falls through to 404), so reads must reject exactly like
   // createBudget/resetBudget/recordSpend — and must never touch the network.
-  test("budget reads reject in api mode instead of returning a hardcoded [] (todos 9ddd325c)", async () => {
+  test("budget reads reject in the hosted backend instead of returning a hardcoded [] (todos 9ddd325c)", async () => {
     const { store, calls } = stubStore(() => ({}));
     await expect(store.listBudgets()).rejects.toThrow(/local-only operation/i);
     await expect(store.getBudgetStatuses()).rejects.toThrow(/local-only operation/i);
@@ -789,7 +785,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  // Regression: resolving "." (or any path/marker target) in api mode must NOT
+  // Regression: resolving "." (or any path/marker target) in the hosted backend must NOT
   // hit the API — the URL parser collapses `/projects/.` to the collection
   // route `/projects/`, returning a LIST payload that then masqueraded as a
   // single project and crashed renderers reading `project.metadata.stage`.
@@ -803,7 +799,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     await expect(store.resolveTarget(".")).rejects.toThrow(/Project not found/);
   });
 
-  test("resolveTarget verifies an existing canonical workspace path against its stable cloud project id", async () => {
+  test("resolveTarget verifies an existing canonical workspace path against its stable hosted project id", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-api-context-path-"));
     const previousHome = process.env[PROJECTS_HOME_ENV];
     process.env[PROJECTS_HOME_ENV] = root;

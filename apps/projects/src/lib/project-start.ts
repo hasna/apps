@@ -335,12 +335,11 @@ export async function resolveProjectStartTarget(
   const normalizedTarget = target?.trim() || ".";
   const store = resolveProjectStore();
 
-  // Resolve an already-registered project through the active Store. In api/cloud
-  // mode this resolves the target by id/slug against the shared cloud registry
-  // (so cloud-only projects resolve). In local mode we keep the richer on-disk
-  // path/marker resolution, which is a machine-local convenience that the cloud
+  // Resolve an already-registered project through the active Store. On the hosted backend this resolves the target by id/slug against the shared hosted registry
+  // (so hosted-only projects resolve). On the local transport we keep the richer on-disk
+  // path/marker resolution, which is a machine-local convenience that the hosted backend
   // registry does not model.
-  if (store.mode === "local") {
+  if (store.transport === "local") {
     const existing = resolveRegisteredProjectTarget(normalizedTarget, { db: options.db });
     if (existing) {
       return {
@@ -364,10 +363,10 @@ export async function resolveProjectStartTarget(
         },
       };
     }
-    // Cloud registry can't resolve by path, but the on-disk marker is a
+    // Hosted registry cannot resolve by path, but the on-disk marker is a
     // machine-local pointer to a registered project. Read it and resolve the
     // referenced id/slug through the Store so `.`/path targets (e.g. running
-    // `projects status` from a project dir) work in api mode too.
+    // `projects status` from a project dir) work in the hosted backend too.
     const markerPath = normalizeProjectPath(normalizedTarget);
     if (isProjectPathLike(normalizedTarget) || isProjectDirectory(markerPath)) {
       const marker = readProjectMarker(markerPath);
@@ -469,10 +468,10 @@ export async function startProject(
     source: options.source ?? "cli",
     command: options.auditCommand,
     db: options.db,
-    recordEvents: store.mode === "local",
+    recordEvents: store.transport === "local",
   });
 
-  if (!options.dryRun && store.mode === "api") {
+  if (!options.dryRun && store.transport === "http") {
     await store.recordEvent(project.id, {
       event_type: "tmux_applied",
       source: options.source ?? "cli",
@@ -502,7 +501,7 @@ export async function startProject(
       source: options.source ?? "cli" as const,
       command: options.auditCommand,
     };
-    startedProject = store.mode === "local" && options.db
+    startedProject = store.transport === "local" && options.db
       ? updateWorkspace(project.id, patch, options.db)
       : await store.updateProject(project.id, patch);
   }
@@ -548,7 +547,7 @@ export async function startProject(
         attached,
       } as unknown as JsonObject,
     };
-    if (store.mode === "local" && options.db) {
+    if (store.transport === "local" && options.db) {
       recordWorkspaceEvent({
         workspace_id: project.id,
         agent_id: options.agentId,

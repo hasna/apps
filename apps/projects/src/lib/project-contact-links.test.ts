@@ -172,7 +172,7 @@ function terminalProjectMutation(
 }
 
 class FakeProjectStore {
-  readonly mode = "api" as const;
+  readonly transport = "http" as const;
   readonly mutations: ProjectResourceLinkMutationRequest[] = [];
   readonly rollbacks: ProjectResourceLinkRollbackRequest[] = [];
   read = projectRead();

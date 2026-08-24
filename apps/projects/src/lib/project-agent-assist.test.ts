@@ -31,7 +31,6 @@ beforeEach(() => {
   process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
   delete process.env["HASNA_PROJECTS_API_URL"];
   delete process.env["HASNA_PROJECTS_API_KEY"];
-  delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
   closeDatabase();
   __resetProjectStore();
 });
@@ -294,12 +293,12 @@ describe("project-agent-assist: runs", () => {
 });
 
 // Regression for the review's split-brain READ finding: on a machine flipped
-// to api/cloud, `projects context` / `projects next` MUST resolve and read the
-// SHARED cloud dataset through the Store's api transport — never the stale
+// to the hosted backend, `projects context` / `projects next` MUST resolve and read the
+// SHARED hosted dataset through the Store's HTTP transport — never the stale
 // local sqlite island. We seed a LOCAL project with the same slug but a
 // different id, drive the api store through a stub fetch, and assert the
-// api-mode context returns the CLOUD id (proving no local read leaked in).
-describe("project-agent-assist: api mode routes through the Store (no split-brain)", () => {
+// hosted-backend context returns the hosted ID (proving no local read leaked in).
+describe("project-agent-assist: the hosted backend routes through the Store (no split-brain)", () => {
   const CLOUD_ENV = {
     HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
     HASNA_PROJECTS_API_KEY: "secret-key",
@@ -336,7 +335,7 @@ describe("project-agent-assist: api mode routes through the Store (no split-brai
     updated_at: "2026-01-01T00:00:00Z",
   };
 
-  test("context resolves the cloud project over HTTP, not the local sqlite row", async () => {
+  test("context resolves the hosted project over HTTP, not the local sqlite row", async () => {
     // A stale local island row with the SAME slug but a different id.
     makeProject();
     const { store, calls } = apiStore((method, path) => {
@@ -346,11 +345,11 @@ describe("project-agent-assist: api mode routes through the Store (no split-brai
     });
     const ctx = await buildProjectAgentContext(store, { target: "agent-project" });
     expect(ctx.target.resolved).toBe(true);
-    expect(ctx.project?.["id"]).toBe("cloud-1"); // cloud row, not the local one
+    expect(ctx.project?.["id"]).toBe("cloud-1"); // hosted row, not the local one
     expect(calls.some((c) => c.includes("GET /v1/projects/agent-project"))).toBe(true);
   });
 
-  test("context resolves an existing canonical workspace path through its verified cloud id", async () => {
+  test("context resolves an existing canonical workspace path through its verified hosted id", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-agent-context-path-"));
     const previousHome = process.env[PROJECTS_HOME_ENV];
     process.env[PROJECTS_HOME_ENV] = root;
@@ -385,7 +384,7 @@ describe("project-agent-assist: api mode routes through the Store (no split-brai
     }
   });
 
-  test("next reads events over HTTP and skips machine-local doctor in api mode", async () => {
+  test("next reads events over HTTP and skips machine-local doctor in the hosted backend", async () => {
     makeProject();
     const { store, calls } = apiStore((method, path) => {
       if (method === "GET" && path === "/v1/projects/agent-project") return cloudProject;
@@ -394,7 +393,7 @@ describe("project-agent-assist: api mode routes through the Store (no split-brai
     });
     const res = await suggestProjectNextActions(store, { target: "agent-project" });
     expect(res.target.resolved).toBe(true);
-    // doctor findings are machine-local and must not appear for a cloud project.
+    // doctor findings are machine-local and must not appear for a hosted project.
     expect(res.actions.some((a) => a.id === "doctor-fix")).toBe(false);
     expect(calls.some((c) => c.includes("/v1/projects/cloud-1/events"))).toBe(true);
   });

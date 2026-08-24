@@ -963,10 +963,10 @@ async function runMockPrompt(
   };
 
   const store = resolveProjectStore();
-  if (store.mode === "api") {
-    // Cloud project rows are created through the Store (shared registry), never
-    // the local sqlite island. Machine-local runtime does not apply to a cloud
-    // row, so this mirrors the projects_create tool's api-mode path.
+  if (store.transport === "http") {
+    // Hosted project rows are created through the Store (shared registry), never
+    // the local sqlite island. Machine-local runtime does not apply to a hosted
+    // row, so this mirrors the projects_create tool's hosted-backend path.
     const nameKey = comparisonKey(workspaceInput.name);
     const cloudExisting = workspaceInput.name
       ? (await store.listProjects({ query: workspaceInput.name, limit: 25 })).find((workspace) => (
@@ -976,7 +976,7 @@ async function runMockPrompt(
     const projects: Workspace[] = [];
     let text: string;
     if (cloudExisting) {
-      text = `Project ${cloudExisting.slug} already exists in the cloud registry.`;
+      text = `Project ${cloudExisting.slug} already exists in the hosted registry.`;
     } else if (options.approve && !options.dryRun) {
       const project = await store.createProject({
         name: workspaceInput.name,
@@ -985,9 +985,9 @@ async function runMockPrompt(
         tags: workspaceInput.tags,
       });
       projects.push(project);
-      text = `Created project ${project.slug} in the cloud registry.`;
+      text = `Created project ${project.slug} in the hosted registry.`;
     } else {
-      text = `Plan: create cloud project "${workspaceInput.name}". Run with --yes to execute.`;
+      text = `Plan: create hosted project "${workspaceInput.name}". Run with --yes to execute.`;
     }
     const toolCalls: JsonObject[] = [{
       name: "projects_create",
@@ -1139,9 +1139,9 @@ interface WorkspaceAgentToolContext {
 /**
  * Build the prompt-agent tool set bound to the active ProjectStore. Extracted
  * from runWorkspaceAgentPrompt so the mutation handlers can be unit-tested
- * against a fake Store. In api/cloud mode every shared-registry mutation
+ * against a fake Store. In the hosted backend every shared-registry mutation
  * (create/update/archive/unarchive/delete/tag/untag/unlink/event/agent/location)
- * routes through the Store (cloud HTTP), never local sqlite; local mode is
+ * routes through the Store (hosted HTTP), never local sqlite; local transport is
  * byte-for-byte unchanged.
  */
 export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
@@ -1158,11 +1158,11 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
   } = ctx;
   let inspectedTmuxProfiles = false;
   // Attribution agent for a mutation: local uses the on-box actor agent;
-  // api/cloud leaves attribution to the server (derived from the bearer key),
-  // never sending a local agent id the cloud registry does not know.
-  const mutationAgentId = store.mode === "local" ? actorAgent.id : undefined;
-  // Resolve a caller-supplied target through the active Store (cloud-aware in
-  // api mode; on-disk path/marker aware in local mode). store.resolveTarget
+  // the hosted backend leaves attribution to the server (derived from the bearer key),
+  // never sending a local agent id the hosted registry does not know.
+  const mutationAgentId = store.transport === "local" ? actorAgent.id : undefined;
+  // Resolve a caller-supplied target through the active Store (hosted-aware in
+  // the hosted backend; on-disk path/marker aware in the local transport). store.resolveTarget
   // THROWS when nothing matches, whereas the prompt-agent tools expect a null
   // so they can surface their existing friendly "Project not found" error.
   const resolveStoreTargetOrNull = async (target: string | undefined): Promise<Workspace | null> => {
@@ -1547,7 +1547,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         };
         if (!approve) return projectPayload({ status: "planned", event: eventInput, note: "Run again with --yes to record this event." });
         // A project-scoped event routes through the Store so it lands wherever
-        // the project lives (cloud in api mode). A project-less system event has
+        // the project lives (hosted backend in the hosted backend). A project-less system event has
         // no shared-registry home and stays machine-local telemetry, as today.
         const event = workspace
           ? await store.recordEvent(workspace.id, {
@@ -1572,8 +1572,8 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
       execute: async (input) => {
         const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, storageMode: store.mode });
-        return projectPayload(input.fix && approve && store.mode === "local"
+        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, transport: store.transport });
+        return projectPayload(input.fix && approve && store.transport === "local"
           ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor)
           : doctor());
       },
@@ -2122,11 +2122,11 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         tmux_profile: z.string().optional().describe("Existing tmux profile id or slug to apply"),
       }),
       execute: async (input) => {
-        if (store.mode === "api") {
-          // Cloud project rows are created through the Store so they land in
+        if (store.transport === "http") {
+          // Hosted project rows are created through the Store so they land in
           // the shared registry (not the local sqlite island). Machine-local
           // runtime (directory/git/tmux/marker) and the on-box run ledger do
-          // not apply to a shared cloud row. Root/recipe are shared registry
+          // not apply to a shared hosted row. Root/recipe are shared registry
           // resources resolved through the Store so intent is honored.
           const rootId = forcedRootId ?? (input.root ? (await store.getRoot(input.root))?.id : undefined);
           if (input.root && !rootId) return { error: `Root not found: ${input.root}` };
@@ -2166,7 +2166,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
             return projectPayload({
               status: "planned",
               plan: { workspace: { name: input.name, slug: input.slug, kind: input.kind, root_id: rootId, recipe_id: recipeId } },
-              note: "Run again with --yes to create this project in the shared cloud registry. Machine-local runtime (directory/git/tmux) is not applied to cloud projects.",
+              note: "Run again with --yes to create this project in the shared hosted registry. Machine-local runtime (directory/git/tmux) is not applied to hosted projects.",
             });
           }
 

@@ -10,7 +10,7 @@ import {
 } from "./project-management.js";
 import { redactProjectValue } from "./redaction.js";
 
-export const PROJECT_CONTEXT_BUNDLE_SCHEMA = "hasna.projects.project_context_bundle.v2" as const;
+export const PROJECT_CONTEXT_BUNDLE_SCHEMA = "hasna.projects.project_context_bundle.v3" as const;
 const PROJECT_CONTEXT_BUNDLE_MAX_BYTES = 8 * 1024;
 const SAFE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@+-]*$/;
 const STRICT_ISO_PATTERN =
@@ -33,8 +33,7 @@ export interface ProjectContextBundleV1 {
   };
   authority: {
     owner: "projects";
-    mode: "local" | "api";
-    storage: "sqlite" | "cloud" | "self-hosted";
+    transport: "local" | "http";
     availability: "available";
   };
   project: {
@@ -108,15 +107,6 @@ function linkState(values: Array<string | null>): LinkState {
   if (present === 0) return "unlinked";
   if (present === values.length) return "linked";
   return "partial";
-}
-
-function contextStorage(
-  mode: ProjectStore["mode"],
-  env: Record<string, string | undefined>,
-): ProjectContextBundleV1["authority"]["storage"] {
-  if (mode === "local") return "sqlite";
-  const configured = stringValue(env["HASNA_PROJECTS_STORAGE_MODE"] ?? env["PROJECTS_STORAGE_MODE"]);
-  return configured === "self_hosted" || configured === "self-hosted" ? "self-hosted" : "cloud";
 }
 
 function stableStringify(value: unknown): string {
@@ -228,8 +218,7 @@ export async function buildProjectContextBundle(
     },
     authority: {
       owner: "projects",
-      mode: store.mode,
-      storage: contextStorage(store.mode, env),
+      transport: store.transport,
       availability: "available",
     },
     project: {

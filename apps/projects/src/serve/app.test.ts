@@ -333,26 +333,25 @@ function keyWith(scopes: string[]): string {
 }
 
 describe("projects-serve probes", () => {
-  test("GET /health returns status/version without retired deployment mode", async () => {
+  test("GET /health returns status/version", async () => {
     const res = await handler()(new Request("http://x/health"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ status: "ok", version: "9.9.9" });
   });
 
-  test("GET /version preserves the exact legacy compatibility response", async () => {
+  test("GET /version returns the compatibility response without a transport selector", async () => {
     const res = await handler()(new Request("http://x/version"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: "ok", version: "9.9.9", mode: "cloud" });
+    expect(await res.json()).toEqual({ status: "ok", version: "9.9.9" });
   });
 
-  test("GET / preserves the exact legacy compatibility response", async () => {
+  test("GET / returns the compatibility response without a transport selector", async () => {
     const res = await handler()(new Request("http://x/"));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       name: "projects-serve",
       version: "9.9.9",
-      mode: "cloud",
       openapi: "/openapi.json",
     });
   });
@@ -363,7 +362,7 @@ describe("projects-serve probes", () => {
     expect(await res.json()).toEqual({ status: "ready", version: "9.9.9" });
   });
 
-  test("GET /ready preserves degraded status without retired deployment mode", async () => {
+  test("GET /ready preserves degraded status", async () => {
     const store = fakeStore();
     store.ping = async () => false;
     const res = await handler(store)(new Request("http://x/ready"));
@@ -371,7 +370,7 @@ describe("projects-serve probes", () => {
     expect(await res.json()).toEqual({ status: "degraded", version: "9.9.9" });
   });
 
-  test("GET /ready preserves unavailable status without retired deployment mode", async () => {
+  test("GET /ready preserves unavailable status", async () => {
     const store = fakeStore();
     store.ping = async () => { throw new Error("database unavailable"); };
     const res = await handler(store)(new Request("http://x/ready"));
@@ -391,17 +390,12 @@ describe("projects-serve probes", () => {
     });
     expect(spec.components.schemas.LegacyVersionResponse).toEqual({
       type: "object",
-      description: "Legacy compatibility response for /version.",
+      description: "Compatibility response for /version.",
       properties: {
         status: { type: "string" },
         version: { type: "string" },
-        mode: {
-          type: "string",
-          deprecated: true,
-          description: "Deprecated compatibility field; do not use it for deployment branching.",
-        },
       },
-      required: ["status", "version", "mode"],
+      required: ["status", "version"],
     });
     expect(spec.paths["/version"].get.responses["200"].content["application/json"].schema).toEqual({
       $ref: "#/components/schemas/LegacyVersionResponse",
@@ -1705,7 +1699,7 @@ describe("projects-serve list envelope (truncation must be detectable)", () => {
 
 // Local-only-capability removal: the hosted /v1 API must carry the previously
 // on-box writes (project agent assignments, extra disk locations, mutation
-// locks) so a cloud project supports the same operations as a local one.
+// locks) so a hosted project supports the same operations as a local one.
 describe("projects-serve hosted writes for on-box sub-resources", () => {
   const writeHeaders = { "x-api-key": keyWith(["projects:*"]) };
 

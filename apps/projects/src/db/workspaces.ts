@@ -3453,8 +3453,8 @@ export function listStartedWorkspaceEvents(
 
 /**
  * The on-box agent-run ledger (agent_runs) FK-references the LOCAL workspaces
- * table. In api/cloud mode the referenced project lives only in the cloud
- * registry, so a cloud id would violate the FK. The ledger is a machine-local
+ * table. In the hosted backend the referenced project lives only in the hosted backend
+ * registry, so a hosted id would violate the FK. The ledger is a machine-local
  * record of a run that happened here; keep the workspace_id only when the row
  * exists on this box, otherwise store null (the run is still fully recorded).
  */

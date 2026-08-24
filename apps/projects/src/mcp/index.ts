@@ -290,7 +290,7 @@ function withoutRender<T extends Record<string, unknown>>(value: T): Omit<T, "re
 
 // Root/recipe are shared registry resources reachable through the Store in
 // BOTH transports; resolve slug->id through the Store so intent is never
-// silently dropped (and never resolved against stale local sqlite) in api mode.
+// silently dropped (and never resolved against stale local sqlite) in the hosted backend.
 async function rootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
   if (!idOrSlug) return undefined;
   const root = await store.getRoot(idOrSlug);
@@ -314,9 +314,9 @@ function agentId(idOrSlug: string | undefined): string {
 
 /**
  * Resolve a caller-supplied target to a single project through the active
- * Store. In api/cloud mode this resolves the project server-side (so cloud-only
- * projects resolve correctly and stale on-box rows are never used); in local
- * mode it uses the richer on-disk (path/marker/cwd) resolver. Returns null when
+ * Store. In the hosted backend this resolves the project server-side (so hosted-only
+ * projects resolve correctly and stale on-box rows are never used); on the local
+ * transport it uses the richer on-disk (path/marker/cwd) resolver. Returns null when
  * nothing matches so callers keep their existing not-found messaging.
  */
 async function findProjectTarget(
@@ -332,15 +332,15 @@ async function findProjectTarget(
 
 /**
  * Resolve the attributing agent for a mutation. Local resolves/creates an
- * on-box agent identity; api mode leaves attribution to the server (derived
- * from the bearer key), so we never create a local agent row in api mode.
+ * on-box agent identity; the hosted backend leaves attribution to the server (derived
+ * from the bearer key), so we never create a local agent row in the hosted backend.
  */
 function mcpMutationAgent(store: ProjectStore, optAgent?: string): string | undefined {
-  return store.mode === "local" ? agentId(optAgent) : undefined;
+  return store.transport === "local" ? agentId(optAgent) : undefined;
 }
 
-// Machine-local mutation lock routed through the Store. In api/cloud mode the
-// Store cannot hold a local lock (cloud writes are atomic server-side and the
+// Machine-local mutation lock routed through the Store. In the hosted backend the
+// Store cannot hold a local lock (hosted writes are atomic server-side and the
 // lock would be invisible fleet-wide), so it degrades to a no-op.
 async function withWorkspaceMutationLock<T>(
   store: ProjectStore,
@@ -349,7 +349,7 @@ async function withWorkspaceMutationLock<T>(
   reason: string,
   fn: () => T | Promise<T>,
 ): Promise<T> {
-  if (store.mode !== "local") return fn();
+  if (store.transport !== "local") return fn();
   const key = `workspace:${workspace.id}`;
   const lock = await store.acquireLock({ key, workspaceId: workspace.id, agentId: owner, reason, ttlSeconds: 600 });
   try {
@@ -717,7 +717,7 @@ server.tool(
       if (!project) return errorText(`Project not found: ${input.project}`);
       const agent = await store.getAgent(input.agent);
       if (!agent) return errorText(`Agent not found: ${input.agent}`);
-      const assignedBy = store.mode === "local"
+      const assignedBy = store.transport === "local"
         ? (input.assigned_by ? agentId(input.assigned_by) : ensureCliAgent().id)
         : undefined;
       const assignment = await store.assignAgent(project.id, {
@@ -1199,7 +1199,7 @@ server.tool(
       const store = resolveProjectStore();
       const project = await findProjectTarget(input.project, store);
       if (!project) return errorText(`Project not found: ${input.project}`);
-      const owner = store.mode === "local"
+      const owner = store.transport === "local"
         ? (input.agent ? agentId(input.agent) : ensureCliAgent().id)
         : undefined;
       const { project: updated, location } = await store.addLocation(project.id, {
@@ -1259,11 +1259,11 @@ server.tool(
   async (input) => {
     try {
       const store = resolveProjectStore();
-      if (store.mode === "api") {
-        // Cloud rows are created through the Store; machine-local runtime
-        // (directory/git/tmux) does not apply to a remote project row. Root/
+      if (store.transport === "http") {
+        // Hosted rows are created through the Store; machine-local runtime
+        // (directory/git/tmux) does not apply to a hosted project row. Root/
         // recipe are shared registry resources: resolve slug->id through the
-        // Store so intent is honored (not silently dropped) in api mode.
+        // Store so intent is honored (not silently dropped) in the hosted backend.
         const project = await store.createProject({
           name: input.name,
           slug: input.slug,
@@ -1919,7 +1919,7 @@ server.tool(
   },
   async (input) => {
     const store = resolveProjectStore();
-    const options = { fix: input.fix, dryRun: input.dry_run, storageMode: store.mode };
+    const options = { fix: input.fix, dryRun: input.dry_run, transport: store.transport };
     if (input.id) {
       const project = await findProjectTarget(input.id, store);
       if (!project) return errorText(`Project not found: ${input.id}`);
@@ -2016,7 +2016,7 @@ server.tool(
       const store = resolveProjectStore();
       const project = await findProjectTarget(input.project, store);
       if (!project) return errorText(`Project not found: ${input.project}`);
-      const attributedAgent = store.mode === "local"
+      const attributedAgent = store.transport === "local"
         ? (input.agent ? agentId(input.agent) : undefined)
         : undefined;
       const event = await store.recordEvent(project.id, {
@@ -2067,7 +2067,7 @@ server.tool(
       const store = resolveProjectStore();
       const project = await findProjectTarget(input.project, store);
       if (!project) return errorText(`Project not found: ${input.project}`);
-      const owner = store.mode === "local" ? (input.agent ? agentId(input.agent) : undefined) : undefined;
+      const owner = store.transport === "local" ? (input.agent ? agentId(input.agent) : undefined) : undefined;
       return jsonText(await store.acquireLock({
         key: input.key ?? `workspace:${project.id}`,
         workspaceId: project.id,

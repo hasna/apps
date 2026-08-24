@@ -393,12 +393,8 @@ describe("project reports server", () => {
 const REGISTRY_ENV_KEYS = [
   "HASNA_PROJECTS_API_URL",
   "HASNA_PROJECTS_API_KEY",
-  "HASNA_PROJECTS_STORAGE_MODE",
-  "HASNA_PROJECTS_MODE",
   "PROJECTS_API_URL",
   "PROJECTS_API_KEY",
-  "PROJECTS_STORAGE_MODE",
-  "PROJECTS_MODE",
   "HASNA_PROJECTS_DB_PATH",
   "HASNA_WORKSPACES_DB_PATH",
 ] as const;
@@ -467,8 +463,6 @@ describe("project reports server registry transport", () => {
       process.env["HASNA_PROJECTS_API_URL"] = "https://projects.test.invalid";
       process.env["HASNA_PROJECTS_API_KEY"] = "test-registry-key";
       delete process.env["HASNA_WORKSPACES_DB_PATH"];
-      delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
-      delete process.env["HASNA_PROJECTS_MODE"];
 
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

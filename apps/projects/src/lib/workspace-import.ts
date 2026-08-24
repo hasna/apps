@@ -95,11 +95,11 @@ function importLocks(preview: WorkspaceImportPreview): Array<{ key: string; reas
   return locks;
 }
 
-// Import reservation locks are machine-local coordination; in api mode the
-// Store cannot hold local locks (cloud enforces uniqueness), so they are
+// Import reservation locks are machine-local coordination; in the hosted backend the
+// Store cannot hold local locks (the hosted backend enforces uniqueness), so they are
 // skipped rather than written to invisible local sqlite (split-brain).
 async function acquireImportLocks(store: ProjectStore, specs: Array<{ key: string; reason: string }>, agentId?: string): Promise<WorkspaceLock[]> {
-  if (store.mode !== "local") return [];
+  if (store.transport !== "local") return [];
   const acquired: WorkspaceLock[] = [];
   try {
     for (const spec of specs) {
