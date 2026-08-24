@@ -605,8 +605,14 @@ export function diffMemory(
     if (globalOpts.json) {
       outputJson({ error: "No version history available", memory_id: memoryId });
     } else {
+      // Read-path redaction (todos e12c7659): the version snapshot is a SQLite
+      // trigger on UPDATE, so any pre-existing row that was never updated lands
+      // here — the common case for the exact population the read-path redaction
+      // exists to protect. The echoed key must be projected like every other
+      // read verb; the coordination fields (memory_id in the JSON arm, version)
+      // are preserved.
       console.log(chalk.yellow("No version history available."));
-      console.log(chalk.dim(`Memory "${current.key}" is at version ${current.version} but has no prior snapshots.`));
+      console.log(chalk.dim(`Memory "${redactCredentialKey(current.key)}" is at version ${current.version} but has no prior snapshots.`));
     }
     return;
   }

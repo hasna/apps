@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { resolve } from "node:path";
 import { getProject } from "../../db/projects.js";
 import { listMemoriesBounded } from "../../db/memories.js";
+import { redactMemoryForOutput } from "../../lib/redact.js";
 import type { MemoryCategory, MemoryScope, MemoryFilter } from "../../types/index.js";
 import {
   resolveAgentFilter,
@@ -44,8 +45,17 @@ export function registerExportCommand(program: Command): void {
         // pages (BUG 2796806b).
         const memories = listMemoriesBounded(filter, 10000).rows;
 
+        // Read-path redaction (todos e12c7659): `export` is a bulk read verb
+        // whose stdout lands in the session transcript, so every raw Memory
+        // field — key, value, summary, tags, when_to_use, metadata — would
+        // reach it verbatim. Project the full population through
+        // redactMemoryForOutput before the single JSON emit; coordination
+        // metadata (id, scope, category, importance, status, timestamps,
+        // attribution) survives.
+        const sanitized = memories.map(redactMemoryForOutput);
+
         // Export always outputs JSON
-        outputJson(memories);
+        outputJson(sanitized);
       } catch (e) {
         handleError(e);
       }

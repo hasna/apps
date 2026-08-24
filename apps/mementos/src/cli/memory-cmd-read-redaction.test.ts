@@ -75,6 +75,9 @@ interface SeedRow {
   importance?: number;
   sequence_group?: string;
   sequence_order?: number;
+  tags?: string[];
+  /** Set when the surface under test requires a non-NULL accessed_at (history). */
+  accessed_at?: string;
 }
 
 /** Insert rows straight into the isolated SQLite file (bypasses write-side
@@ -83,8 +86,8 @@ function seedRows(dbPath: string, rows: SeedRow[]): void {
   const db = new Database(dbPath);
   try {
     const insert = db.prepare(`
-      INSERT INTO memories (id, key, value, category, scope, summary, tags, importance, source, status, pinned, metadata, access_count, version, sequence_group, sequence_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, NULL, '[]', ?, 'agent', 'active', 0, '{}', 0, 1, ?, ?, datetime('now'), datetime('now'))
+      INSERT INTO memories (id, key, value, category, scope, summary, tags, importance, source, status, pinned, metadata, access_count, version, sequence_group, sequence_order, created_at, updated_at, accessed_at)
+      VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'agent', 'active', 0, '{}', 0, 1, ?, ?, datetime('now'), datetime('now'), ?)
     `);
     db.run("BEGIN");
     for (const r of rows) {
@@ -94,9 +97,11 @@ function seedRows(dbPath: string, rows: SeedRow[]): void {
         r.value,
         r.category ?? "fact",
         r.scope ?? "private",
+        JSON.stringify(r.tags ?? []),
         r.importance ?? 5,
         r.sequence_group ?? null,
         r.sequence_order ?? null,
+        r.accessed_at ?? null,
       );
     }
     db.run("COMMIT");
@@ -559,5 +564,148 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     expect(h.exitCode).toBe(0);
     expect(h.stdout).not.toContain(AWS_ACCESS_KEY);
     expect(h.stdout).toContain("[REDACTED]");
+  });
+
+  // ==========================================================================
+  // stale / history / export — read verbs missed by the earlier fixes (NO_GO
+  // findings): each rendered the raw stored key verbatim in JSON and/or human
+  // output. The version-snapshot is a trigger on UPDATE, so a row created by
+  // a bypassing write path and NEVER updated also reaches the `diff`
+  // no-version-history branch, which the earlier diff tests never seeded.
+  // ==========================================================================
+
+  test("diff (no version history) human: token-shaped key is redacted", async () => {
+    const { dbPath, env } = await seeded([
+      // No memory_versions row exists (the snapshot is a trigger on UPDATE),
+      // so `diff` hits the early-return branch that used to echo the raw key.
+      { id: "m-diff-nv", key: NPM_REGISTRY_TOKEN, value: "registry token no-version diff fixture" },
+    ]);
+
+    const { stdout, exitCode } = await runCli(env, "diff", "m-diff-nv");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("No version history available.");
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(stdout).toContain("[REDACTED]");
+    expect(stdout).toContain("is at version 1");
+  });
+
+  test("diff (no version history) JSON: coordination metadata only, no key", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-diffnvj-npm", key: AWS_ACCESS_KEY, value: "aws key no-version diff fixture" },
+    ]);
+
+    const { stdout, exitCode } = await runCli(env, "--json", "diff", "m-diffnvj-npm");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(AWS_ACCESS_KEY);
+    const parsed = JSON.parse(stdout) as { error: string; memory_id: string };
+    expect(parsed.error).toBe("No version history available");
+    expect(parsed.memory_id).toBe("m-diffnvj-npm");
+  });
+
+  test("stale JSON: token-shaped keys are redacted, coordination metadata kept", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-stale-npm", key: NPM_REGISTRY_TOKEN, value: "registry token stale fixture" },
+      { id: "m-stale-aws", key: AWS_ACCESS_KEY, value: "aws key stale fixture" },
+      { id: "m-stale-ok", key: ORDINARY_KEY, value: ORDINARY_VALUE, importance: 7 },
+    ]);
+
+    const { stdout, exitCode } = await runCli(env, "stale", "--format", "json", "--days", "0");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(stdout).not.toContain(AWS_ACCESS_KEY);
+    const parsed = JSON.parse(stdout) as {
+      stale_count: number;
+      returned: number;
+      memories: Array<Record<string, unknown>>;
+    };
+    expect(parsed.stale_count).toBe(3);
+    expect(parsed.memories.length).toBe(3);
+    const npm = parsed.memories.find((m) => m.id === "m-stale-npm");
+    expect(npm).toBeTruthy();
+    expect(String(npm!.key)).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(npm!.scope).toBe("private");
+    expect(npm!.category).toBe("fact");
+    expect(npm!.access_count).toBe(0);
+    const ok = parsed.memories.find((m) => m.id === "m-stale-ok");
+    expect(ok!.key).toBe(ORDINARY_KEY);
+    expect(ok!.value).toBe(ORDINARY_VALUE);
+  });
+
+  test("stale human: token-shaped keys are redacted", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-staleh-npm", key: NPM_REGISTRY_TOKEN, value: "registry token stale human fixture" },
+      { id: "m-staleh-ok", key: ORDINARY_KEY, value: ORDINARY_VALUE },
+    ]);
+
+    const { stdout, exitCode } = await runCli(env, "stale", "--days", "0");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(stdout).toContain("[REDACTED]");
+    expect(stdout).toContain(ORDINARY_KEY);
+    expect(stdout).toContain(ORDINARY_VALUE);
+  });
+
+  test("history JSON: token-shaped keys are redacted, coordination metadata kept", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-hist-npm", key: NPM_REGISTRY_TOKEN, value: "registry token history fixture", accessed_at: "2026-08-24T10:00:00.000Z" },
+      { id: "m-hist-ok", key: ORDINARY_KEY, value: ORDINARY_VALUE, importance: 7, accessed_at: "2026-08-24T09:00:00.000Z" },
+    ]);
+
+    const { stdout, exitCode } = await runCli(env, "--json", "history", "--limit", "100");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
+    expect(parsed.length).toBe(2);
+    const npm = parsed.find((m) => m.id === "m-hist-npm");
+    expect(npm).toBeTruthy();
+    expect(String(npm!.key)).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(npm!.scope).toBe("private");
+    expect(npm!.category).toBe("fact");
+    expect(npm!.importance).toBe(5);
+    const ok = parsed.find((m) => m.id === "m-hist-ok");
+    expect(ok!.key).toBe(ORDINARY_KEY);
+    expect(ok!.value).toBe(ORDINARY_VALUE);
+  });
+
+  test("history human: token-shaped keys are redacted", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-histh-npm", key: NPM_REGISTRY_TOKEN, value: "registry token history human fixture", accessed_at: "2026-08-24T10:00:00.000Z" },
+      { id: "m-histh-ok", key: ORDINARY_KEY, value: ORDINARY_VALUE, accessed_at: "2026-08-24T09:00:00.000Z" },
+    ]);
+
+    const { stdout, exitCode } = await runCli(env, "history", "--limit", "100");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(stdout).toContain("[REDACTED]");
+    expect(stdout).toContain(ORDINARY_KEY);
+    expect(stdout).toContain(ORDINARY_VALUE);
+  });
+
+  test("export: full population is projected — keys, values and tags redacted, metadata kept", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-exp-npm", key: NPM_REGISTRY_TOKEN, value: "registry token export fixture" },
+      { id: "m-exp-aws", key: AWS_ACCESS_KEY, value: "aws key export fixture" },
+      { id: "m-exp-tag", key: "tagged-key", value: "tagged export fixture", tags: [NPM_REGISTRY_TOKEN] },
+      { id: "m-exp-ok", key: ORDINARY_KEY, value: ORDINARY_VALUE, importance: 7 },
+    ]);
+
+    const { stdout, exitCode } = await runCli(env, "export");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(stdout).not.toContain(AWS_ACCESS_KEY);
+    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
+    expect(parsed.length).toBe(4);
+    const npm = parsed.find((m) => m.id === "m-exp-npm");
+    expect(npm).toBeTruthy();
+    expect(String(npm!.key)).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(npm!.scope).toBe("private");
+    expect(npm!.category).toBe("fact");
+    const tag = parsed.find((m) => m.id === "m-exp-tag");
+    const tags = tag!.tags as unknown[];
+    expect(tags.length).toBe(1);
+    expect(String(tags[0])).not.toContain(NPM_REGISTRY_TOKEN);
+    const ok = parsed.find((m) => m.id === "m-exp-ok");
+    expect(ok!.key).toBe(ORDINARY_KEY);
+    expect(ok!.value).toBe(ORDINARY_VALUE);
   });
 });
