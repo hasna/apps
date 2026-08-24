@@ -2,91 +2,245 @@
 /**
  * messages — the CLI surface of @hasna/messages.
  *
- * Interface layer over MessagesService (single domain implementation).
- * Local mode uses a SQLite store; --url/--api-key targets a running
- * messages-serve instance through the SDK client.
+ * Interface layer over the single domain implementation. Local mode uses a
+ * local SQLite store; --url / HASNA_MESSAGES_API_URL targets a running
+ * messages-serve instance through the SDK client. Agent identity is
+ * first-class: acting verbs take --agent, and `messages register` / `messages
+ * agents` manage the identity registry.
+ *
+ * The delivery repair is exposed as verbs: `messages send` records per-
+ * recipient delivery state 'stored'; `messages receive` drains the inbox
+ * (stored -> delivered); `messages read` marks it read; `messages delivery`
+ * shows the per-recipient state so a stored-but-undelivered message is
+ * distinguishable from a delivered one.
  */
 import { Command } from "commander";
-import { resolveCredential } from "@hasna/contracts/client";
+import {
+  createMessagesClient,
+  MESSAGES_API_KEY_ENV,
+  MESSAGES_API_URL_ENV,
+  resolveMessagesClientTransport,
+} from "../sdk";
 import { MessagesService } from "../service";
 import { SqliteMessagesStore } from "../server/sqlite-store";
-import { MessagesClient } from "../sdk";
 import { version } from "../version";
 
-function localService(): MessagesService {
-  return new MessagesService(new SqliteMessagesStore());
+function print(obj: unknown): void {
+  console.log(JSON.stringify(obj, null, 2));
 }
 
-function remoteClient(opts: { url?: string; apiKey?: string }): MessagesClient | null {
-  const url = opts.url ?? process.env.HASNA_MESSAGES_API_URL;
-  if (!url) return null;
-  // Credential via the @hasna/contracts client seam — never a bare env read.
-  const resolved = resolveCredential("messages", process.env as NodeJS.ProcessEnv, { apiKey: opts.apiKey });
-  return new MessagesClient({ baseUrl: url, apiKey: resolved?.apiKey });
+interface CliOpts {
+  url?: string;
+  apiKey?: string;
+}
+
+/** Resolve the client transport from CLI overrides + env. */
+function resolveStore(opts: CliOpts): { transport: "http" | "local"; local?: MessagesService; remote?: ReturnType<typeof createMessagesClient> } {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    [MESSAGES_API_URL_ENV]: opts.url ?? process.env[MESSAGES_API_URL_ENV],
+    [MESSAGES_API_KEY_ENV]: opts.apiKey ?? process.env[MESSAGES_API_KEY_ENV],
+  };
+  const report = resolveMessagesClientTransport(env);
+  if (report.transport === "http") {
+    return { transport: "http", remote: createMessagesClient(env) };
+  }
+  return { transport: "local", local: new MessagesService(new SqliteMessagesStore()) };
 }
 
 const program = new Command();
 
 program
   .name("messages")
-  .description("Direct agent-to-agent messaging with threads")
+  .description("Direct agent-to-agent messaging with threads (DMs + DM-threads)")
   .version(version);
+
+// --- identity --------------------------------------------------------------
+
+program
+  .command("register")
+  .description("Register (or return) an agent identity")
+  .requiredOption("--name <agent>", "agent name")
+  .option("--display-name <text>", "human/seat-friendly label")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { name: string; displayName?: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    if (store.transport === "http") {
+      print(await store.remote!.registerAgent(opts.name, opts.displayName));
+      return;
+    }
+    print({ agent: await store.local!.registerAgent(opts.name, opts.displayName) });
+  });
+
+program
+  .command("agents")
+  .description("List registered agent identities")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: CliOpts) => {
+    const store = resolveStore(opts);
+    const agents = store.transport === "http" ? (await store.remote!.listAgents()).agents : await store.local!.listAgents();
+    print(agents);
+  });
+
+program
+  .command("whoami")
+  .description("Show an agent identity (or register it if absent)")
+  .requiredOption("--agent <agent>", "agent name")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { agent: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    const agent = store.transport === "http"
+      ? (await store.remote!.registerAgent(opts.agent)).agent
+      : await store.local!.registerAgent(opts.agent);
+    print(agent);
+  });
+
+// --- messaging -------------------------------------------------------------
 
 program
   .command("send")
-  .description("Send a direct message from one agent to another")
+  .description("Send a direct message from one agent to another (per-recipient delivery state 'stored')")
   .requiredOption("--from <agent>", "sending agent")
   .requiredOption("--to <agent>", "receiving agent")
   .requiredOption("--content <text>", "message body")
   .option("--reply-to <id>", "message id being replied to (threads)")
   .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
   .option("--api-key <key>", "API key for the remote server")
-  .action(async (opts: { from: string; to: string; content: string; replyTo?: string; url?: string; apiKey?: string }) => {
-    const client = remoteClient(opts);
-    if (client) {
-      const result = await client.send(opts.from, opts.to, opts.content, opts.replyTo);
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-    const result = await localService().send({
-      from_agent: opts.from,
-      to_agent: opts.to,
-      content: opts.content,
-      reply_to: opts.replyTo ?? null,
-    });
-    console.log(JSON.stringify(result, null, 2));
+  .action(async (opts: { from: string; to: string; content: string; replyTo?: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    const result = store.transport === "http"
+      ? await store.remote!.send(opts.from, opts.to, opts.content, opts.replyTo)
+      : await store.local!.send({ from_agent: opts.from, to_agent: opts.to, content: opts.content, reply_to: opts.replyTo ?? null });
+    print(result);
   });
+
+program
+  .command("receive")
+  .description("Drain the agent's inbox: transition stored -> delivered and print the delivered messages")
+  .requiredOption("--agent <agent>", "the agent receiving")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { agent: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    const messages = store.transport === "http"
+      ? (await store.remote!.receive(opts.agent)).messages
+      : await store.local!.receive(opts.agent);
+    print(messages);
+  });
+
+program
+  .command("delivery")
+  .description("Show per-recipient delivery state for a thread (stored | delivered | read)")
+  .requiredOption("--id <threadId>", "thread id")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { id: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    const deliveries = store.transport === "http"
+      ? (await store.remote!.deliveryStatus(opts.id)).deliveries
+      : await store.local!.deliveryStatus(opts.id);
+    print(deliveries);
+  });
+
+// --- threads ---------------------------------------------------------------
 
 program
   .command("threads")
   .description("List threads involving an agent, with unread counts")
   .requiredOption("--agent <agent>", "the agent whose threads to list")
+  .option("--all", "include threads the agent has closed")
   .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
   .option("--api-key <key>", "API key for the remote server")
-  .action(async (opts: { agent: string; url?: string; apiKey?: string }) => {
-    const client = remoteClient(opts);
-    const threads = client
-      ? await client.threads(opts.agent)
-      : await localService().threads(opts.agent);
-    console.log(JSON.stringify(threads, null, 2));
+  .action(async (opts: { agent: string; all?: boolean } & CliOpts) => {
+    const store = resolveStore(opts);
+    const threads = store.transport === "http"
+      ? (await store.remote!.threads(opts.agent, !opts.all)).threads
+      : await store.local!.threads(opts.agent, { openOnly: !opts.all });
+    print(threads);
+  });
+
+program
+  .command("thread")
+  .description("Expand a thread: its messages with your per-message delivery state (does NOT mark read)")
+  .requiredOption("--id <threadId>", "thread id")
+  .requiredOption("--agent <agent>", "the agent expanding")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { id: string; agent: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    const result = store.transport === "http"
+      ? await store.remote!.thread(opts.id, opts.agent)
+      : await store.local!.expandThread(opts.id, opts.agent);
+    print(result);
+  });
+
+program
+  .command("unread")
+  .description("List threads with unread messages for an agent (and the total)")
+  .requiredOption("--agent <agent>", "the agent")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { agent: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    if (store.transport === "http") {
+      print(await store.remote!.unread(opts.agent));
+      return;
+    }
+    const threads = await store.local!.unreadThreads(opts.agent);
+    print({ threads, total: threads.reduce((sum, t) => sum + t.unread_count, 0) });
   });
 
 program
   .command("read")
-  .description("Read a thread's messages and mark it read from your side")
-  .requiredOption("--thread <id>", "thread id")
-  .requiredOption("--agent <agent>", "the agent reading")
-  .option("--limit <n>", "message count limit", "100")
+  .description("Mark a thread read from an agent's perspective (stored/delivered -> read)")
+  .requiredOption("--id <threadId>", "thread id")
+  .requiredOption("--agent <agent>", "the agent marking it read")
   .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
   .option("--api-key <key>", "API key for the remote server")
-  .action(async (opts: { thread: string; agent: string; limit: string; url?: string; apiKey?: string }) => {
-    const client = remoteClient(opts);
-    const messages = client
-      ? await client.threadMessages(opts.thread, Number(opts.limit))
-      : await localService().threadMessages(opts.thread, Number(opts.limit));
-    if (!client) await localService().markRead(opts.thread, opts.agent);
-    console.log(JSON.stringify(messages, null, 2));
+  .action(async (opts: { id: string; agent: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    if (store.transport === "http") {
+      await store.remote!.markRead(opts.id, opts.agent);
+    } else {
+      await store.local!.markRead(opts.id, opts.agent);
+    }
+    print({ ok: true, thread_id: opts.id, agent: opts.agent });
   });
+
+program
+  .command("close")
+  .description("Close a thread from an agent's perspective (excluded from the default list)")
+  .requiredOption("--id <threadId>", "thread id")
+  .requiredOption("--agent <agent>", "the agent closing it")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { id: string; agent: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    const thread = store.transport === "http"
+      ? (await store.remote!.closeThread(opts.id, opts.agent)).thread
+      : await store.local!.closeThread(opts.id, opts.agent);
+    print({ ok: true, thread });
+  });
+
+program
+  .command("reopen")
+  .description("Reopen a thread from an agent's perspective")
+  .requiredOption("--id <threadId>", "thread id")
+  .requiredOption("--agent <agent>", "the agent reopening it")
+  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action(async (opts: { id: string; agent: string } & CliOpts) => {
+    const store = resolveStore(opts);
+    const thread = store.transport === "http"
+      ? (await store.remote!.reopenThread(opts.id, opts.agent)).thread
+      : await store.local!.reopenThread(opts.id, opts.agent);
+    print({ ok: true, thread });
+  });
+
+// --- server ----------------------------------------------------------------
 
 program
   .command("serve")

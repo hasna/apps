@@ -50,4 +50,41 @@ describe("messages CLI", () => {
     const res = runCli(["send", "--from", "augustus"]);
     expect(res.status).not.toBe(0);
   });
+
+  test("delivery state machine over the CLI: stored -> delivered via receive -> read", async () => {
+    // Distinct agents isolate this test from the shared temp DB.
+    const sender = "caius";
+    const recipient = "titus";
+    const send = runCli(["send", "--from", sender, "--to", recipient, "--content", "delivery probe"]);
+    expect(send.status).toBe(0);
+    const sent = JSON.parse(send.stdout) as { message: { id: string; thread_id: string } };
+
+    // Before receive: per-recipient state 'stored'.
+    const before = JSON.parse(runCli(["delivery", "--id", sent.message.thread_id]).stdout) as Array<{ deliveries: Array<{ recipient: string; state: string }> }>;
+    expect(before[0]!.deliveries[0]!.state).toBe("stored");
+
+    // Receive drains -> delivered.
+    const received = JSON.parse(runCli(["receive", "--agent", recipient]).stdout) as Array<{ delivery: { state: string } }>;
+    expect(received).toHaveLength(1);
+    expect(received[0]!.delivery.state).toBe("delivered");
+
+    const after = JSON.parse(runCli(["delivery", "--id", sent.message.thread_id]).stdout) as Array<{ deliveries: Array<{ state: string }> }>;
+    expect(after[0]!.deliveries[0]!.state).toBe("delivered");
+
+    // Read -> unread clears.
+    expect(JSON.parse(runCli(["read", "--id", sent.message.thread_id, "--agent", recipient]).stdout).ok).toBe(true);
+    const unread = JSON.parse(runCli(["unread", "--agent", recipient]).stdout) as { total: number };
+    expect(unread.total).toBe(0);
+  });
+
+  test("thread close/reopen over the CLI", async () => {
+    const send = runCli(["send", "--from", "augustus", "--to", "silvanus", "--content", "close me"]);
+    const sent = JSON.parse(send.stdout) as { message: { thread_id: string } };
+    expect(runCli(["close", "--id", sent.message.thread_id, "--agent", "silvanus"]).status).toBe(0);
+    const open = JSON.parse(runCli(["threads", "--agent", "silvanus"]).stdout) as Array<{ id: string }>;
+    expect(open.map((t) => t.id)).not.toContain(sent.message.thread_id);
+    expect(runCli(["reopen", "--id", sent.message.thread_id, "--agent", "silvanus"]).status).toBe(0);
+    const reopened = JSON.parse(runCli(["threads", "--agent", "silvanus"]).stdout) as Array<{ id: string }>;
+    expect(reopened.map((t) => t.id)).toContain(sent.message.thread_id);
+  });
 });

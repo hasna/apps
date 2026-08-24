@@ -2,61 +2,157 @@
 /**
  * messages-mcp — the MCP surface of @hasna/messages.
  *
- * Thin interface layer over MessagesService (single domain implementation)
- * via the local SQLite store, or over the SDK client when
- * HASNA_MESSAGES_API_URL is set. Tools:
- *   messages_send, messages_threads, messages_read, messages_mark_read
+ * Thin interface layer over the single domain implementation: the local
+ * SQLite store by default, or the SDK client when HASNA_MESSAGES_API_URL is
+ * set. Tools:
+ *   messages_register, messages_agents, messages_send, messages_threads,
+ *   messages_thread, messages_unread, messages_thread_close,
+ *   messages_thread_reopen, messages_mark_read, messages_receive,
+ *   messages_delivery
+ *
+ * Binds-before-version (control surfaces answer --version/--help before any
+ * stdio framing — the same class as the recent control-surface fixes): the
+ * version/help checks run before the MCP server connects to stdio.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { resolveCredential } from "@hasna/contracts/client";
+import { createMessagesClient, resolveMessagesClientTransport, MessagesClient } from "../sdk";
 import { MessagesService } from "../service";
 import { SqliteMessagesStore } from "../server/sqlite-store";
-import { MessagesClient } from "../sdk";
+import { version } from "../version";
 
-function service(): MessagesService | MessagesClient {
-  const url = process.env.HASNA_MESSAGES_API_URL;
-  if (url) {
-    // Credential via the @hasna/contracts client seam — never a bare env read.
-    const resolved = resolveCredential("messages", process.env as NodeJS.ProcessEnv, {});
-    return new MessagesClient({ baseUrl: url, apiKey: resolved?.apiKey });
+// Binds-before-version: --version/-V/--help answer before the stdio framing
+// loop (silent-empty family).
+const EARLY_ARGV = process.argv.slice(2);
+if (EARLY_ARGV.includes("--version") || EARLY_ARGV.includes("-V")) {
+  console.log(version);
+  process.exit(0);
+}
+if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
+  console.log(`Usage: messages-mcp [options]
+
+Hasna Messages MCP server (stdio) — direct agent-to-agent DMs with threads.
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command`);
+  process.exit(0);
+}
+
+type Service = MessagesService | MessagesClient;
+
+function service(): Service {
+  const report = resolveMessagesClientTransport(process.env);
+  if (report.transport === "http") {
+    const client = createMessagesClient(process.env);
+    if (!client) throw new Error("HTTP transport resolved but no client could be created");
+    return client;
   }
   return new MessagesService(new SqliteMessagesStore());
 }
 
-async function send(svc: MessagesService | MessagesClient, args: { from: string; to: string; content: string; replyTo?: string }) {
-  if (svc instanceof MessagesClient) {
-    return svc.send(args.from, args.to, args.content, args.replyTo);
+async function registerAgent(svc: Service, name: string, displayName?: string) {
+  if (svc instanceof MessagesService) {
+    return { agent: await svc.registerAgent(name, displayName) };
   }
-  return svc.send({ from_agent: args.from, to_agent: args.to, content: args.content, reply_to: args.replyTo ?? null });
+  return svc.registerAgent(name, displayName);
 }
 
-async function threads(svc: MessagesService | MessagesClient, agent: string) {
-  if (svc instanceof MessagesClient) return svc.threads(agent);
-  return svc.threads(agent);
+async function listAgents(svc: Service) {
+  if (svc instanceof MessagesService) return { agents: await svc.listAgents() };
+  return svc.listAgents();
 }
 
-async function threadMessages(svc: MessagesService | MessagesClient, threadId: string, limit?: number) {
-  if (svc instanceof MessagesClient) return svc.threadMessages(threadId, limit);
-  return svc.threadMessages(threadId, limit);
+async function send(svc: Service, args: { from: string; to: string; content: string; replyTo?: string }) {
+  if (svc instanceof MessagesService) {
+    return svc.send({ from_agent: args.from, to_agent: args.to, content: args.content, reply_to: args.replyTo ?? null });
+  }
+  return svc.send(args.from, args.to, args.content, args.replyTo);
 }
 
-async function markRead(svc: MessagesService | MessagesClient, threadId: string, agent: string) {
-  if (svc instanceof MessagesClient) return svc.markRead(threadId, agent);
+async function threads(svc: Service, agent: string, openOnly: boolean) {
+  if (svc instanceof MessagesService) return { threads: await svc.threads(agent, { openOnly }) };
+  return svc.threads(agent, openOnly);
+}
+
+async function expandThread(svc: Service, threadId: string, agent: string) {
+  if (svc instanceof MessagesService) return svc.expandThread(threadId, agent);
+  return svc.thread(threadId, agent);
+}
+
+async function unread(svc: Service, agent: string) {
+  if (svc instanceof MessagesService) {
+    const list = await svc.unreadThreads(agent);
+    return { threads: list, total: list.reduce((sum, t) => sum + t.unread_count, 0) };
+  }
+  return svc.unread(agent);
+}
+
+async function closeThread(svc: Service, threadId: string, agent: string) {
+  if (svc instanceof MessagesService) return { thread: await svc.closeThread(threadId, agent) };
+  return svc.closeThread(threadId, agent);
+}
+
+async function reopenThread(svc: Service, threadId: string, agent: string) {
+  if (svc instanceof MessagesService) return { thread: await svc.reopenThread(threadId, agent) };
+  return svc.reopenThread(threadId, agent);
+}
+
+async function markRead(svc: Service, threadId: string, agent: string) {
+  if (svc instanceof MessagesService) return svc.markRead(threadId, agent);
   return svc.markRead(threadId, agent);
+}
+
+async function receive(svc: Service, agent: string) {
+  if (svc instanceof MessagesService) return { messages: await svc.receive(agent) };
+  return svc.receive(agent);
+}
+
+async function deliveryStatus(svc: Service, threadId: string) {
+  if (svc instanceof MessagesService) return { deliveries: await svc.deliveryStatus(threadId) };
+  return svc.deliveryStatus(threadId);
 }
 
 const server = new McpServer({
   name: "messages",
-  version: "0.1.0",
+  version,
 });
+
+server.registerTool(
+  "messages_register",
+  {
+    title: "Register an agent identity",
+    description: "Register (or return) an agent identity. Agent identity is first-class: messages are addressed by registered agent names.",
+    inputSchema: {
+      name: z.string().describe("Agent name"),
+      displayName: z.string().optional().describe("Human/seat-friendly label"),
+    },
+  },
+  async (args) => {
+    const result = await registerAgent(service(), args.name, args.displayName);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  },
+);
+
+server.registerTool(
+  "messages_agents",
+  {
+    title: "List agents",
+    description: "List registered agent identities.",
+    inputSchema: {},
+  },
+  async () => {
+    const result = await listAgents(service());
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  },
+);
 
 server.registerTool(
   "messages_send",
   {
     title: "Send a direct message",
-    description: "Send a direct message from one agent to another, creating or continuing a thread.",
+    description: "Send a direct message from one agent to another, creating or continuing a thread. The recipient's delivery state starts 'stored' — it becomes 'delivered' when they drain their inbox (messages_receive) and 'read' when they mark it read.",
     inputSchema: {
       from: z.string().describe("Sending agent"),
       to: z.string().describe("Receiving agent"),
@@ -74,27 +170,75 @@ server.registerTool(
   "messages_threads",
   {
     title: "List threads",
-    description: "List threads involving an agent, with unread counts.",
-    inputSchema: { agent: z.string().describe("The agent whose threads to list") },
+    description: "List threads involving an agent, with unread counts and closed state.",
+    inputSchema: {
+      agent: z.string().describe("The agent whose threads to list"),
+      openOnly: z.boolean().optional().describe("Exclude closed threads (default true)"),
+    },
   },
   async (args) => {
-    const result = await threads(service(), args.agent);
+    const result = await threads(service(), args.agent, args.openOnly ?? true);
     return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   },
 );
 
 server.registerTool(
-  "messages_read",
+  "messages_thread",
   {
-    title: "Read a thread",
-    description: "Read a thread's message history (oldest first).",
+    title: "Expand a thread",
+    description: "Expand a thread: its messages (oldest first) with the requesting agent's per-message delivery state. Does NOT mark anything read.",
     inputSchema: {
       threadId: z.string().describe("Thread id"),
-      limit: z.number().int().optional().describe("Message count limit"),
+      agent: z.string().describe("The agent expanding"),
     },
   },
   async (args) => {
-    const result = await threadMessages(service(), args.threadId, args.limit);
+    const result = await expandThread(service(), args.threadId, args.agent);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  },
+);
+
+server.registerTool(
+  "messages_unread",
+  {
+    title: "Unread threads",
+    description: "List threads with unread messages for an agent (and the total).",
+    inputSchema: { agent: z.string().describe("The agent") },
+  },
+  async (args) => {
+    const result = await unread(service(), args.agent);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  },
+);
+
+server.registerTool(
+  "messages_thread_close",
+  {
+    title: "Close a thread",
+    description: "Close a thread from an agent's perspective (excluded from the default thread list; reopen to bring it back).",
+    inputSchema: {
+      threadId: z.string().describe("Thread id"),
+      agent: z.string().describe("The agent closing it"),
+    },
+  },
+  async (args) => {
+    const result = await closeThread(service(), args.threadId, args.agent);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  },
+);
+
+server.registerTool(
+  "messages_thread_reopen",
+  {
+    title: "Reopen a thread",
+    description: "Reopen a thread from an agent's perspective.",
+    inputSchema: {
+      threadId: z.string().describe("Thread id"),
+      agent: z.string().describe("The agent reopening it"),
+    },
+  },
+  async (args) => {
+    const result = await reopenThread(service(), args.threadId, args.agent);
     return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   },
 );
@@ -103,7 +247,7 @@ server.registerTool(
   "messages_mark_read",
   {
     title: "Mark a thread read",
-    description: "Mark a thread read from an agent's perspective.",
+    description: "Mark a thread read from an agent's perspective (stored/delivered -> read).",
     inputSchema: {
       threadId: z.string().describe("Thread id"),
       agent: z.string().describe("The agent marking it read"),
@@ -112,6 +256,32 @@ server.registerTool(
   async (args) => {
     await markRead(service(), args.threadId, args.agent);
     return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }] };
+  },
+);
+
+server.registerTool(
+  "messages_receive",
+  {
+    title: "Receive (drain) delivered messages",
+    description: "Drain the agent's inbox: transition stored -> delivered for the agent's undelivered messages and return them. This is the delivery verb that distinguishes a stored-but-undelivered message from a delivered one.",
+    inputSchema: { agent: z.string().describe("The agent receiving") },
+  },
+  async (args) => {
+    const result = await receive(service(), args.agent);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  },
+);
+
+server.registerTool(
+  "messages_delivery",
+  {
+    title: "Delivery status",
+    description: "Show per-message per-recipient delivery state for a thread (stored | delivered | read). The sender's view of whether each message was actually delivered.",
+    inputSchema: { threadId: z.string().describe("Thread id") },
+  },
+  async (args) => {
+    const result = await deliveryStatus(service(), args.threadId);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   },
 );
 
