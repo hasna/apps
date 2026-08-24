@@ -585,7 +585,9 @@ describe("S3Client credential resolution — named AWS profile (regression: link
 
     const [opts] = mockS3ClientConstructor.mock.calls[0] as [{ credentials?: unknown }];
     expect(typeof opts.credentials).toBe("function");
-    await expect((opts.credentials as () => Promise<unknown>)()).rejects.toThrow();
+    await expect((opts.credentials as () => Promise<unknown>)()).rejects.toThrow(
+      `Could not resolve credentials using profile: [${missingProfile}]`
+    );
   });
 
   it("keeps the default credential chain when no profile or static keys are given", () => {

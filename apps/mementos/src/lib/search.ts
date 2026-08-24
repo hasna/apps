@@ -644,10 +644,14 @@ function scoreResults(
     });
   }
 
-  // Sort by score DESC, then importance DESC
+  // Sort by score DESC, then importance DESC, then id ASC. The id tiebreaker makes
+  // the order total: without it, equal-score/equal-importance rows keep the SQL row
+  // order (the underlying SELECT has no ORDER BY), which is unspecified — so
+  // offset/limit pagination could drift or overlap between calls.
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    return b.memory.importance - a.memory.importance;
+    if (b.memory.importance !== a.memory.importance) return b.memory.importance - a.memory.importance;
+    return a.memory.id.localeCompare(b.memory.id);
   });
 
   return scored;

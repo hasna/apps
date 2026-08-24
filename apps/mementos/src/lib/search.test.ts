@@ -414,6 +414,11 @@ describe("searchMemories", () => {
         importance: 5,
       });
     }
+    // Pin all five so the decay curve is bypassed and effective importance is
+    // EXACTLY equal. Without this the near-equal decay scores drift with
+    // Date.now() between calls, so the pre-tiebreaker SQL order decides the
+    // window — which is what made this test intermittently red in CI.
+    getDatabase(":memory:").run("UPDATE memories SET pinned = 1");
 
     const all = searchMemories("nuxt");
     expect(all.length).toBe(5);
@@ -429,6 +434,29 @@ describe("searchMemories", () => {
     const firstPageIds = new Set(firstPage.map(r => r.memory.id));
     expect(firstPageIds.has(page[0]!.memory.id)).toBe(false);
     expect(firstPageIds.has(page[1]!.memory.id)).toBe(false);
+    // Deterministic pagination: identical-score rows must sort stably, so repeating
+    // the same offset query returns the same order. (Regression for the missing id
+    // tiebreaker in scoreResults — without it, the underlying SQL has no ORDER BY
+    // and the offset window can drift between calls.)
+    const pageRepeat = searchMemories("nuxt", { offset: 2, limit: 2 });
+    expect(pageRepeat.map(r => r.memory.id)).toEqual(page.map(r => r.memory.id));
+  });
+
+  test("deterministic order for tied scores (id tiebreaker)", () => {
+    // Five memories with identical value and importance. Pinning bypasses the decay
+    // curve, so effective importance is EXACTLY equal for all five and the sort
+    // must fall through to the id tiebreaker. Without it their relative order comes
+    // from the SQL row order (the underlying SELECT has no ORDER BY), which is
+    // unrelated to id order — so offset/limit pagination drifts between calls.
+    for (let i = 0; i < 5; i++) {
+      createMemory({ key: `tie-item-${i}`, value: "nuxt framework", importance: 5 });
+    }
+    getDatabase(":memory:").run("UPDATE memories SET pinned = 1");
+
+    const all = searchMemories("nuxt");
+    expect(all.length).toBe(5);
+    const ids = all.map(r => r.memory.id);
+    expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b)));
   });
 
   // ============================================================================
