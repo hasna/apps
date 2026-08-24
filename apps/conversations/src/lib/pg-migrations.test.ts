@@ -146,4 +146,17 @@ describe("PG_MIGRATIONS", () => {
     const sql = PG_MIGRATIONS.join("\n").toLowerCase();
     expect(sql).toContain("add column if not exists prior_state jsonb");
   });
+
+  test("thread collection migration adds thread_id/thread_status and backfills reply chains", () => {
+    const joined = PG_MIGRATIONS.join("\n").toLowerCase();
+    expect(joined).toContain("add column if not exists thread_id bigint references messages(id)");
+    expect(joined).toContain("add column if not exists thread_status text");
+    expect(joined).toContain("idx_messages_thread_id");
+    // The backfill walks the reply_to chain to the ROOT (task bf381fad).
+    expect(joined).toContain("with recursive thread_chain");
+    expect(joined).toContain("update messages set thread_id = thread_chain.root_id");
+    expect(joined).toContain("messages.reply_to is not null");
+    expect(joined).toContain("messages.thread_id is null");
+    expect(joined).toContain("insert into _migrations (id) values (12)");
+  });
 });

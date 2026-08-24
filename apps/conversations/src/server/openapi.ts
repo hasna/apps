@@ -895,6 +895,55 @@ export const openapiSpec = {
         responses: { "200": { description: "message", content: { "application/json": { schema: okObject } } } },
       },
     },
+    "/v1/threads": {
+      get: {
+        operationId: "listThreads",
+        summary: "List reply threads in a channel",
+        description: "Each thread root with its full descendant reply count, last activity, open/closed status and — with `from` — the reader's unread count.",
+        parameters: [
+          { name: "channel", in: "query", required: true, schema: { type: "string" } },
+          { name: "from", in: "query", schema: { type: "string" } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+          { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
+        ],
+        responses: { "200": { description: "thread list", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/threads/{id}": {
+      get: {
+        operationId: "expandThread",
+        summary: "Expand one thread into its full nested reply tree",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        responses: { "200": { description: "thread root and nested replies", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/threads/{id}/status": {
+      post: {
+        operationId: "setThreadStatus",
+        summary: "Close or reopen a thread",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            required: ["status"],
+            properties: { status: { type: "string", enum: ["open", "closed"] } },
+          } } },
+        },
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        responses: { "200": { description: "updated thread root", content: { "application/json": { schema: okObject } } } },
+      },
+    },
+    "/v1/threads/{id}/unread": {
+      get: {
+        operationId: "getThreadUnread",
+        summary: "Per-agent unread count for one thread",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } },
+          { name: "agent", in: "query", required: true, schema: { type: "string" } },
+        ],
+        responses: { "200": { description: "unread count", content: { "application/json": { schema: okObject } } } },
+      },
+    },
     "/v1/channels": {
       get: {
         operationId: "listChannels",

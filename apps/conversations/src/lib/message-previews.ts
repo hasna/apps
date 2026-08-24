@@ -131,6 +131,12 @@ export function buildMessagePreview(row: Record<string, unknown>, previewBytes =
   if (row.uuid != null) message.uuid = boundedSafeString(row.uuid, 128);
   if (replyCount !== undefined) message.reply_count = replyCount;
   if (row.relevance_score != null) message.relevance_score = Number(row.relevance_score) || 0;
+  // Thread metadata rides only on rows whose projection actually selected it
+  // (the thread list), so the general byte-capped preview budget is unchanged.
+  if (row.thread_id !== undefined) message.thread_id = row.thread_id == null ? null : Number(row.thread_id);
+  if (row.thread_status !== undefined) {
+    message.thread_status = row.thread_status === "open" || row.thread_status === "closed" ? row.thread_status : null;
+  }
   return message;
 }
 
@@ -161,6 +167,8 @@ export function previewAsCompatibilityMessage(preview: MessagePreview): Message 
     blocking: preview.blocking,
     attachments: null,
     reply_to: preview.reply_to,
+    thread_id: preview.thread_id ?? null,
+    thread_status: preview.thread_status ?? null,
     reply_count: preview.reply_count,
     truncated: true,
   };
