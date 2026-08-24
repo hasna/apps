@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureAll, isRestartableCommand } from "../src/capture/index.js";
+import { captureAll, isRestartableCommand, macAppResources } from "../src/capture/index.js";
 import { claudeProjectSlug } from "../src/capture/resume.js";
 import { commandExists, runCommand } from "../src/util.js";
 
@@ -239,5 +239,46 @@ describe("tmux pane resume identity", () => {
       delete process.env.HASNA_SNAPSHOTS_OPENCODE_DB;
       delete process.env.HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR;
     }
+  });
+});
+
+describe("macAppResources", () => {
+  const now = "2026-08-24T15:00:00.000Z";
+
+  test("dedupes identical app names reported twice by System Events (station04 ghostty fixture)", () => {
+    // station04 runs two Ghostty processes, so System Events returns "ghostty"
+    // twice. Two resources with the same id "app:ghostty" in one capture
+    // violated the snapshot_resources primary key (snapshot_id, resource_id)
+    // and failed every save.
+    const resources = macAppResources(["ghostty", "ghostty"], now);
+
+    expect(resources).toHaveLength(1);
+    expect(resources[0]).toMatchObject({ id: "app:ghostty", name: "ghostty", source: "macos-apps" });
+    expect(resources[0]?.observedAt).toBe(now);
+  });
+
+  test("dedupes names that collide after slugging (case variants map to one id)", () => {
+    const resources = macAppResources(["Ghostty", "ghostty"], now);
+
+    expect(resources).toHaveLength(1);
+    expect(resources[0]?.id).toBe("app:ghostty");
+  });
+
+  test("keeps distinct apps distinct", () => {
+    const resources = macAppResources(["Ghostty", "Finder", "Safari"], now);
+
+    expect(resources.map((resource) => resource.id)).toEqual(["app:ghostty", "app:finder", "app:safari"]);
+  });
+
+  test("never emits a duplicate resource id within one capture", () => {
+    const resources = macAppResources(["ghostty", "Finder", "ghostty", "finder", "Safari", "Ghostty"], now);
+    const ids = resources.map((resource) => resource.id);
+
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(["app:ghostty", "app:finder", "app:safari"]);
+  });
+
+  test("returns no resources for an empty name list", () => {
+    expect(macAppResources([], now)).toEqual([]);
   });
 });
