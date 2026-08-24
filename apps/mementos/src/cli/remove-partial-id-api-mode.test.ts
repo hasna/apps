@@ -75,7 +75,17 @@ beforeAll(
   serverProc = Bun.spawn(
     ["bun", "run", "src/server/index.ts", "--port", String(PORT)],
     {
-      env: isolatedStoreEnv(DB_PATH),
+      // This suite exercises CLI partial-id resolution, not server auth: the
+      // server runs with no API key and accepts the stub-keyed CLI. The server
+      // now fails closed on state-changing requests without a configured key
+      // and allowlists origins on mutations, so opt in explicitly and name the
+      // loopback origin the CLI's curl uses (security P1, todos d836c304).
+      env: isolatedStoreEnv(DB_PATH, {
+        extra: {
+          MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES: "1",
+          MEMENTOS_CORS_ORIGIN: `http://127.0.0.1:${PORT}`,
+        },
+      }),
       stdout: "pipe",
       stderr: "pipe",
       cwd: new URL("../../", import.meta.url).pathname.replace(/\/$/, ""),
