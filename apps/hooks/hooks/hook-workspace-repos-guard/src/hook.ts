@@ -3,23 +3,28 @@
 /**
  * PreToolUse hook: workspace-repos-guard
  *
- * Guards the canonical repo-checkout root (knowledge k_mssu9jdq_dgnnu2):
- * $HOME/.hasna/repos/clones contains ONLY GitHub-org folders, and checkouts at
- * $HOME/.hasna/repos/clones/<org>/<repo>/ are read/context only.
+ * Guards the protected repo-checkout roots. During the migration window BOTH
+ * of these roots are protected: the canonical clones root
+ * $HOME/.hasna/repos/clones (knowledge k_mssu9jdq_dgnnu2) and the legacy root
+ * $HOME/workspace/repos. Each contains ONLY GitHub-org folders, and checkouts
+ * at <root>/<org>/<repo>/ are read/context only. The legacy root stays guarded
+ * until ~/workspace/repos is decommissioned fleet-wide.
  *
  * Structure-only guard — it deliberately does NOT duplicate the worktree-guard
  * hook, which owns edits-in-shared-checkouts semantics.
  *
  * BLOCKS:
- *   - any write to $HOME/.hasna/repos/clones itself (file tools and Bash),
- *   - any write that would create a top-level entry under clones/ (depth <= 1),
+ *   - any write to either protected root itself (file tools and Bash),
+ *   - any write that would create a top-level entry under either root
+ *     (depth <= 1),
  *   - any write whose second path segment is not an allowed GitHub org,
  *   - any delete (rm, rmdir, git clean, git rm, unlink, shred, trash, ...)
- *     anywhere under $HOME/.hasna/repos/clones, at any depth.
+ *     anywhere under either protected root, at any depth.
  *
  * ALLOWS (structure only):
  *   - reads, always,
- *   - writes deeper inside an allowed org folder (repos/<org>/<repo>/...).
+ *   - writes deeper inside an allowed org folder
+ *     (clones/<org>/<repo>/... or workspace/repos/<org>/<repo>/...).
  *
  * Home spellings (~, $HOME, ${HOME}, including quoted forms) are expanded
  * before classification in Bash targets, file-tool paths, cd operands and
@@ -60,6 +65,19 @@ function reposRoot(home: string): string {
   return join(home, ".hasna", "repos", "clones");
 }
 
+/**
+ * Legacy repo-checkout root, still live and populated during the migration
+ * window (see the header comment). Guarded identically to the canonical clones
+ * root until ~/workspace/repos is decommissioned fleet-wide.
+ */
+function legacyRoot(home: string): string {
+  return join(home, "workspace", "repos");
+}
+
+function protectedRoots(home: string): string[] {
+  return [reposRoot(home), legacyRoot(home)];
+}
+
 export function resolveAllowedOrgs(env: NodeJS.ProcessEnv = process.env): Set<string> {
   const raw = env.WORKSPACE_REPOS_GUARD_ORGS;
   if (typeof raw !== "string" || !raw.trim()) return new Set(DEFAULT_ORGS);
@@ -79,18 +97,18 @@ interface Verdict {
 }
 
 /**
- * Classify a single absolute target path against the repos root. Structure
- * only: a write at depth >= 2 inside an allowed org passes, and anything else
- * (deletes at any depth, writes at the root or org level, writes into a
- * non-allowed org) is blocked. Paths outside the repos root are not this
- * hook's concern and pass.
+ * Classify a single absolute target path against one protected repo-checkout
+ * root. Structure only: a write at depth >= 2 inside an allowed org passes,
+ * and anything else (deletes at any depth, writes at the root or org level,
+ * writes into a non-allowed org) is blocked. Paths outside this root are not
+ * this hook's concern and pass.
  */
 export function classifyPath(target: string, root: string, orgs: Set<string>, op: Operation): Verdict {
   if (op === "read") return { blocked: false };
   let rel = relative(root, target);
   if (rel === "") {
-    if (op === "delete") return { blocked: true, reason: `[${RULE}] delete of the repos root is forbidden: ${root}` };
-    return { blocked: true, reason: `[${RULE}] writes directly to the repos root are forbidden: ${root}` };
+    if (op === "delete") return { blocked: true, reason: `[${RULE}] delete of the protected repo-checkout root is forbidden: ${root}` };
+    return { blocked: true, reason: `[${RULE}] writes directly to the protected repo-checkout root are forbidden: ${root}` };
   }
   if (rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel)) {
     return { blocked: false };
@@ -98,13 +116,13 @@ export function classifyPath(target: string, root: string, orgs: Set<string>, op
   const segments = rel.split(sep).filter(Boolean);
 
   if (op === "delete") {
-    return { blocked: true, reason: `[${RULE}] delete under ~/.hasna/repos/clones is forbidden at any depth: ${target}` };
+    return { blocked: true, reason: `[${RULE}] delete under the protected repo-checkout root (${root}) is forbidden at any depth: ${target}` };
   }
 
   if (segments.length <= 1) {
     return {
       blocked: true,
-      reason: `[${RULE}] writing would create a top-level entry directly under repos/; only GitHub-org folders belong there: ${target}`,
+      reason: `[${RULE}] writing would create a top-level entry directly under the protected repo-checkout root (${root}); only GitHub-org folders belong there: ${target}`,
     };
   }
 
@@ -112,7 +130,7 @@ export function classifyPath(target: string, root: string, orgs: Set<string>, op
   if (!orgs.has(org)) {
     return {
       blocked: true,
-      reason: `[${RULE}] '${org}' is not an allowed GitHub org under ~/.hasna/repos/clones (allowed: ${[...orgs].join(", ")}): ${target}`,
+      reason: `[${RULE}] '${org}' is not an allowed GitHub org under the protected repo-checkout root (${root}); allowed: ${[...orgs].join(", ")}: ${target}`,
     };
   }
 
@@ -207,16 +225,18 @@ function regexEscape(text: string): string {
 }
 
 /**
- * Extract repos-clones targets from a Bash command. Recognises explicit
- * `~/...`, `$HOME/...`, `${HOME}/...` and literal-home references (expanded
- * before classification), plus a trailing relative operand (`.`, `..`, a bare
- * name) when the command `cd`s into the repos root or the command's cwd
- * already sits under it. Tokens outside the repos root are ignored; reads are
- * returned so callers can decide (they are never blocked).
+ * Extract protected-repo-checkout targets from a Bash command. Recognises
+ * explicit `~/...`, `$HOME/...`, `${HOME}/...` and literal-home references
+ * (expanded before classification) under EITHER protected root (the canonical
+ * clones root or the legacy workspace/repos root), plus a trailing relative
+ * operand (`.`, `..`, a bare name) when the command `cd`s into one of the
+ * protected roots or the command's cwd already sits under one. Tokens outside
+ * both protected roots are ignored; reads are returned so callers can decide
+ * (they are never blocked).
  */
 export function bashTargets(command: string, home: string, cwd: string): PathTarget[] {
   if (!command) return [];
-  const root = reposRoot(home);
+  const roots = protectedRoots(home);
   const segments = command.split(/\s*&&\s*|\s*\|\|\s*|;\s*|\n+/);
 
   const targets: PathTarget[] = [];
@@ -229,11 +249,14 @@ export function bashTargets(command: string, home: string, cwd: string): PathTar
     const cdMatch = segment.match(/(?:^|\s)cd(?:\s+(?:-[A-Za-z]+|--))*\s+([^\s;&|<>()\x60]+)/);
     if (cdMatch) {
       const cdTarget = expandHomeSpelling(cdMatch[1], home);
-      if (cdTarget && (cdTarget === root || cdTarget.startsWith(`${root}${sep}`))) cwdUnderRepos = cdTarget;
+      if (cdTarget && roots.some((root) => cdTarget === root || cdTarget.startsWith(`${root}${sep}`))) {
+        cwdUnderRepos = cdTarget;
+      }
     }
 
     const homeLiteral = regexEscape(home);
-    const prefixRe = new RegExp(`(?:~|\\$HOME"*|\\$\\{HOME\\}"*|${homeLiteral}"*)/\\.hasna/repos/clones`);
+    const suffix = roots.map((root) => regexEscape(root.slice(home.length + 1))).join("|");
+    const prefixRe = new RegExp(`(?:~|\\$HOME"*|\\$\\{HOME\\}"*|${homeLiteral}"*)/(?:${suffix})`);
     const re = new RegExp(`(${prefixRe.source})([^\\s"';&|<>()\x60]*|$)`, "g");
     let m: RegExpExecArray | null;
     let foundExplicit = false;
@@ -245,7 +268,8 @@ export function bashTargets(command: string, home: string, cwd: string): PathTar
 
     if (!foundExplicit && (op === "delete" || op === "write")) {
       const base =
-        cwdUnderRepos ?? (cwd === root || cwd.startsWith(`${root}${sep}`) ? cwd : null);
+        cwdUnderRepos ??
+        (roots.some((root) => cwd === root || cwd.startsWith(`${root}${sep}`)) ? cwd : null);
       if (base) {
         const relMatch = segment.match(/(?:^|\s)(\.\.?|[^\s"';&|<>()\x60/]+(?:\/[^\s"';&|<>()\x60]*)?)\s*$/);
         if (relMatch) {
@@ -281,7 +305,7 @@ export function evaluate(input: CodewithHookInput): { output: CodewithHookOutput
 
   const tool = typeof input.tool_name === "string" ? input.tool_name : "";
   const home = homedir();
-  const root = reposRoot(home);
+  const roots = protectedRoots(home);
   const orgs = resolveAllowedOrgs();
 
   if (tool === "Bash") {
@@ -290,9 +314,11 @@ export function evaluate(input: CodewithHookInput): { output: CodewithHookOutput
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     const targets = bashTargets(command, home, cwd);
     for (const target of targets) {
-      const verdict = classifyPath(target.path, root, orgs, target.op);
-      if (verdict.blocked) {
-        return { output: { decision: "block", reason: verdict.reason }, warnings };
+      for (const root of roots) {
+        const verdict = classifyPath(target.path, root, orgs, target.op);
+        if (verdict.blocked) {
+          return { output: { decision: "block", reason: verdict.reason }, warnings };
+        }
       }
     }
     return { output: { continue: true }, warnings };
@@ -306,9 +332,11 @@ export function evaluate(input: CodewithHookInput): { output: CodewithHookOutput
     if (!patch) return { output: { continue: true }, warnings };
     const targets = patchTargets(patch, cwd);
     for (const target of targets) {
-      const verdict = classifyPath(target.path, root, orgs, target.op);
-      if (verdict.blocked) {
-        return { output: { decision: "block", reason: verdict.reason }, warnings };
+      for (const root of roots) {
+        const verdict = classifyPath(target.path, root, orgs, target.op);
+        if (verdict.blocked) {
+          return { output: { decision: "block", reason: verdict.reason }, warnings };
+        }
       }
     }
     return { output: { continue: true }, warnings };
@@ -328,9 +356,11 @@ export function evaluate(input: CodewithHookInput): { output: CodewithHookOutput
 
   const expanded = expandHomeSpelling(raw, home);
   const target = isAbsolute(expanded) ? normalize(expanded) : resolve(cwd, expanded);
-  const verdict = classifyPath(target, root, orgs, "write");
-  if (verdict.blocked) {
-    return { output: { decision: "block", reason: verdict.reason }, warnings };
+  for (const root of roots) {
+    const verdict = classifyPath(target, root, orgs, "write");
+    if (verdict.blocked) {
+      return { output: { decision: "block", reason: verdict.reason }, warnings };
+    }
   }
   return { output: { continue: true }, warnings };
 }

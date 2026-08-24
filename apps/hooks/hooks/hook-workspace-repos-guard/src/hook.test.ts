@@ -5,6 +5,7 @@ import { evaluate, resolveAllowedOrgs } from "./hook";
 
 const HOME = homedir();
 const REPOS = join(HOME, ".hasna", "repos", "clones");
+const LEGACY = join(HOME, "workspace", "repos");
 
 function preToolUse(tool_name: string, tool_input: Record<string, unknown>, cwd = join(REPOS, "hasna", "apps")) {
   return { hook_event_name: "PreToolUse", tool_name, tool_input, cwd };
@@ -306,6 +307,159 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
       } finally {
         if (previous === undefined) delete process.env.WORKSPACE_REPOS_GUARD_ORGS;
         else process.env.WORKSPACE_REPOS_GUARD_ORGS = previous;
+      }
+    });
+  });
+
+  describe("legacy ~/workspace/repos root during the migration window — positive controls (must continue)", () => {
+    test("Write deep inside an allowed org checkout under the legacy root continues", () => {
+      const result = evaluate(preToolUse("Write", { file_path: join(LEGACY, "hasna", "apps", "apps", "foo", "src", "index.ts") }));
+      expect(result.output.continue).toBe(true);
+      expect(isBlocked(result)).toBeNull();
+    });
+
+    test("Bash write deep inside an allowed org checkout under the legacy root continues", () => {
+      const commands = [
+        `echo note > ${join(LEGACY, "hasna", "apps", "scratch.md")}`,
+        `git clone https://github.com/hasna/foo.git ${join(LEGACY, "hasna", "foo")}`,
+        `mkdir -p ${join(LEGACY, "hasnaxyz", "iapp-probe", "docs")}`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(result.output.continue).toBe(true);
+      }
+    });
+
+    test("tilde/$HOME spellings of deep allowed-org writes under the legacy root continue", () => {
+      const commands = [
+        `touch ~/workspace/repos/hasna/apps/foo.md`,
+        `echo x > ~/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
+        `mkdir -p "${HOME}/workspace/repos/hasnaxyz/iapp-probe/notes"`,
+        `touch "$HOME"/workspace/repos/hasna/apps/x.txt`,
+        `echo x > "\${HOME}"/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(result.output.continue).toBe(true);
+      }
+    });
+
+    test("file-tool tilde/$HOME paths deep inside an allowed org under the legacy root continue", () => {
+      const results = [
+        evaluate(preToolUse("Write", { file_path: `~/workspace/repos/hasna/apps/src/x.ts` })),
+        evaluate(preToolUse("Edit", { file_path: `$HOME/workspace/repos/hasnaxyz/iapp-probe/n.ipynb` })),
+        evaluate(preToolUse("Write", { file_path: `"${HOME}/workspace/repos/hasna/apps/notes.md"` })),
+        evaluate(preToolUse("Write", { file_path: `"$HOME"/workspace/repos/hasna/apps/notes2.md` })),
+      ];
+      for (const result of results) {
+        expect(result.output.continue).toBe(true);
+      }
+    });
+  });
+
+  describe("legacy ~/workspace/repos root during the migration window — negative controls restored (must block)", () => {
+    test("rm -rf of the legacy root itself is blocked", () => {
+      const result = evaluate(preToolUse("Bash", { command: `rm -rf ~/workspace/repos` }));
+      const reason = isBlocked(result);
+      expect(reason).not.toBeNull();
+      expect(reason).toContain("workspace-repos-guard");
+    });
+
+    test("rm -rf deep inside an allowed org checkout under the legacy root is blocked", () => {
+      const result = evaluate(preToolUse("Bash", { command: `rm -rf ~/workspace/repos/hasna/apps` }));
+      expect(isBlocked(result)).not.toBeNull();
+    });
+
+    test("tilde/$HOME spellings of the legacy root are blocked", () => {
+      const commands = [
+        `rm -rf ~/workspace/repos`,
+        `rm -rf ~/workspace/repos/hasna/apps`,
+        `rm -rf $HOME/workspace/repos/hasna`,
+        `rm -rf "${HOME}/workspace/repos"`,
+        `rm -rf "$HOME"/workspace/repos`,
+        `rm -rf "$HOME"/workspace/repos/hasna/apps`,
+        `rm -rf "\${HOME}"/workspace/repos/hasna`,
+        `rm -rf "${HOME}"/workspace/repos/hasna`,
+        `touch ~/workspace/repos/stray.txt`,
+        `mkdir -p ~/workspace/repos/notanorg`,
+        `echo x > ~/workspace/repos/notanorg/f.ts`,
+        `mv /tmp/x ~/workspace/repos`,
+        `truncate -s 0 ~/workspace/repos/stray.log`,
+        `rsync -a /tmp/x ~/workspace/repos/`,
+        `scp f.txt ~/workspace/repos/`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(isBlocked(result), `expected BLOCK for: ${command}`).not.toBeNull();
+      }
+    });
+
+    test("file-tool tilde/$HOME spellings under the legacy root are blocked", () => {
+      const results = [
+        evaluate(preToolUse("Write", { file_path: `~/workspace/repos/stray.txt` })),
+        evaluate(preToolUse("Write", { file_path: `$HOME/workspace/repos/notanorg/f.ts` })),
+        evaluate(preToolUse("Edit", { file_path: `~/workspace/repos/hasna` })),
+        evaluate(preToolUse("Write", { file_path: `~/workspace/repos` })),
+        evaluate(preToolUse("Write", { file_path: `"$HOME"/workspace/repos/stray.txt` })),
+      ];
+      for (const result of results) {
+        expect(isBlocked(result)).not.toBeNull();
+      }
+    });
+
+    test("subshell-grouped cd + rm under the legacy root is blocked", () => {
+      const commands = [
+        `(cd ~/workspace/repos && rm -rf hasna)`,
+        `(cd ${LEGACY} && rm -rf hasna)`,
+        `( cd ${LEGACY} && touch stray.txt )`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(isBlocked(result), `expected BLOCK for: ${command}`).not.toBeNull();
+      }
+    });
+
+    test("cwd-relative deletes under the legacy root without an explicit cd are blocked", () => {
+      const fromRoot = evaluate(preToolUse("Bash", { command: `rm -rf .` }, LEGACY));
+      expect(isBlocked(fromRoot)).not.toBeNull();
+      const fromOrg = evaluate(preToolUse("Bash", { command: `rm -rf .` }, join(LEGACY, "hasna")));
+      expect(isBlocked(fromOrg)).not.toBeNull();
+    });
+
+    test("git clean inside a legacy checkout is blocked", () => {
+      const result = evaluate(preToolUse("Bash", { command: `git -C ${join(LEGACY, "hasna", "apps")} clean -fd` }));
+      expect(isBlocked(result)).not.toBeNull();
+    });
+
+    test("top-level non-org folder creation under the legacy root is blocked", () => {
+      const commands = [
+        `mkdir -p ${join(LEGACY, "notanorg")}`,
+        `mkdir -p ${join(LEGACY, "notanorg", "sub")}`,
+        `touch ${join(LEGACY, "neworg", "x")}`,
+        `mv ${join(LEGACY, "hasna", "apps", "a")} ${join(LEGACY, "anotherorg")}`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(isBlocked(result)).not.toBeNull();
+      }
+    });
+
+    test("Bash write into a non-allowed org folder under the legacy root is blocked", () => {
+      const result = evaluate(preToolUse("Bash", { command: `echo x > ${join(LEGACY, "notanorg", "deep", "f.ts")}` }));
+      expect(isBlocked(result)).not.toBeNull();
+    });
+
+    test("mutating verbs writing under the legacy root are blocked", () => {
+      const commands = [
+        `sed -i 's/x/y/' ~/workspace/repos/stray.txt`,
+        `python3 -c "open('~/workspace/repos/stray.txt','w')"`,
+        `truncate -s 0 ${join(LEGACY, "notanorg", "f.ts")}`,
+        `rsync -a ${join(LEGACY, "hasna")} /tmp/out`,
+        `scp -r ${join(LEGACY, "hasna")} other:/tmp/`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(isBlocked(result), `expected BLOCK for: ${command}`).not.toBeNull();
       }
     });
   });

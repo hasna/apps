@@ -2,19 +2,22 @@
 
 Codewith-native hook installed as `hooks run workspace-repos-guard`.
 
-PreToolUse guard for the canonical repo-checkout root (knowledge
-`k_mssu9jdq_dgnnu2`): `$HOME/.hasna/repos/clones` contains ONLY GitHub-org
-folders. Checkouts at `$HOME/.hasna/repos/clones/<org>/<repo>/` are
-read/context only.
+PreToolUse guard for the protected repo-checkout roots. During the migration
+window BOTH roots are guarded: the canonical clones root (knowledge
+`k_mssu9jdq_dgnnu2`) `$HOME/.hasna/repos/clones`, and the still-live legacy
+root `$HOME/workspace/repos`. Each contains ONLY GitHub-org folders, and
+checkouts at `<root>/<org>/<repo>/` are read/context only. The legacy root
+stays guarded until `~/workspace/repos` is decommissioned fleet-wide.
 
 ## What it blocks
 
-- Any write to `$HOME/.hasna/repos/clones` itself (file tools and Bash).
-- Any write that would create a top-level entry directly under the clones
-  root (depth 1 — a stray folder or file at the org level).
+- Any write to either protected root itself (`$HOME/.hasna/repos/clones` or
+  `$HOME/workspace/repos`), via file tools and Bash.
+- Any write that would create a top-level entry directly under either root
+  (depth 1 — a stray folder or file at the org level).
 - Any write whose second path segment is not an allowed GitHub org.
 - Any delete (`rm`, `rmdir`, `git clean`, `git rm`, `unlink`, `shred`,
-  `trash`, ...) anywhere under `$HOME/.hasna/repos/clones`, at any depth,
+  `trash`, ...) anywhere under either protected root, at any depth,
   including deep inside org checkouts.
 
 ## What it allows
