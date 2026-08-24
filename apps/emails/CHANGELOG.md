@@ -2,10 +2,10 @@
 
 ### Patch Changes
 
-- Updated dependencies [6176948]
-- Updated dependencies [7575de8]
-  - @hasna/contracts@0.14.0
-  - @hasna/domains@0.0.44
+- TUI self-hosted scan lists pages honestly and marks truncated counts (O15-00350, hasna/apps#999)
+- prepublish-local-test gate scrubs hosted API env before the local test run (O15-00516, hasna/apps#1012)
+- Reconcile the emailsModeEnvReferences ceiling 202 -> 203 (hasna/apps#1073)
+- No dependency changes vs 1.4.8: @hasna/contracts stays 0.13.4 and @hasna/domains stays 0.0.44 (the version wave's 0.14.0 pin was reverted by the reviewed kit-lockstep repair, hasna/apps#1148)
 
 ## 1.4.8
 
