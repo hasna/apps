@@ -39,10 +39,23 @@ if (args.includes("--version") || args.includes("-V")) {
   process.exit(0);
 }
 
+/**
+ * Start the Skills MCP server on stdio (newline-delimited JSON-RPC).
+ *
+ * Exported so the `skills mcp` CLI subcommand can start the server directly:
+ * a bare dynamic import of this module is inert, because `import.meta.main`
+ * is false when the module is not the process entry point — which made
+ * `skills mcp` exit rc=0 with zero bytes instead of starting the documented
+ * stdio server (BUG e3997558).
+ */
+export async function startMcpStdio(): Promise<void> {
+  const server = buildServer();
+  await server.connect(new StdioServerTransport());
+}
+
 async function main() {
   if (isMcpStdioMode(args)) {
-    const server = buildServer();
-    await server.connect(new StdioServerTransport());
+    await startMcpStdio();
     return;
   }
   // Default: shared Streamable HTTP server (one process per MCP, many agents).
