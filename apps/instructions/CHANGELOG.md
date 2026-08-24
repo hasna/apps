@@ -1,3 +1,9 @@
+## 0.4.43
+
+### Patch Changes
+
+- 8b70821: instructions-mcp/configs-mcp answer --version/-V/--help before any bind (todos row 7e5f8f3d). Previously `configs-mcp --version`/`--help` fell through to the shared Streamable HTTP server and bound :8853 with no output.
+
 ## 0.4.42
 
 ### Patch Changes

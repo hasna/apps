@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.33
+
+### Patch Changes
+
+- Updated dependencies [8b70821]
+  - @hasna/skills@0.1.66
+
 ## 0.5.32
 
 ### Patch Changes
