@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { isApiMode } from "../db/api-mode.js";
-import { redactTextFragment } from "../lib/redact.js";
+import { redactCredentialKey, redactTextFragment } from "../lib/redact.js";
 import { getMemory, getMemoryByKey } from "../db/memories.js";
 import { getAgent } from "../db/agents.js";
 import { getProject } from "../db/projects.js";
@@ -671,14 +671,14 @@ export function diffMemory(
     if (older.importance !== n.importance) changes.importance = { old: older.importance, new: n.importance };
     if (older.scope !== n.scope) changes.scope = { old: older.scope, new: n.scope };
     if (older.category !== n.category) changes.category = { old: older.category, new: n.category };
-    if (JSON.stringify(older.tags) !== JSON.stringify(newer.tags)) changes.tags = { old: older.tags.map(redactTextFragment), new: newer.tags.map(redactTextFragment) };
+    if (JSON.stringify(older.tags) !== JSON.stringify(newer.tags)) changes.tags = { old: older.tags.map(redactCredentialKey), new: newer.tags.map(redactCredentialKey) };
     if ((older.summary || null) !== (n.summary || null)) changes.summary = { old: older.summary ? redactTextFragment(older.summary) : null, new: n.summary ? redactTextFragment(String(n.summary)) : null };
     if (older.pinned !== n.pinned) changes.pinned = { old: older.pinned, new: n.pinned };
     if (older.status !== n.status) changes.status = { old: older.status, new: n.status };
 
     outputJson({
       memory_id: memoryId,
-      key: redactTextFragment(current.key),
+      key: redactCredentialKey(current.key),
       from_version: olderVersion,
       to_version: newerVersion,
       changes,
@@ -686,7 +686,7 @@ export function diffMemory(
     return;
   }
 
-  console.log(chalk.bold(`Diff for "${redactTextFragment(current.key)}" (${memoryId.slice(0, 8)})`));
+  console.log(chalk.bold(`Diff for "${redactCredentialKey(current.key)}" (${memoryId.slice(0, 8)})`));
   console.log(chalk.dim(`Version ${olderVersion} → ${newerVersion}`));
   console.log();
 
@@ -728,8 +728,8 @@ export function diffMemory(
     const removed = oldTags.filter((t: string) => !newTags.includes(t));
     const added = newTags.filter((t: string) => !oldTags.includes(t));
     console.log(`  ${chalk.bold("tags:")}`);
-    for (const t of removed) console.log(chalk.red(`    - ${redactTextFragment(t)}`));
-    for (const t of added) console.log(chalk.green(`    + ${redactTextFragment(t)}`));
+    for (const t of removed) console.log(chalk.red(`    - ${redactCredentialKey(t)}`));
+    for (const t of added) console.log(chalk.green(`    + ${redactCredentialKey(t)}`));
   }
 
   if (!hasChanges) {

@@ -15,7 +15,11 @@ import {
 } from "../types/index.js";
 import { getDatabase, now, uuid, resolvePartialId } from "./database.js";
 import { generateEmbedding, cosineSimilarity, serializeEmbedding, deserializeEmbedding } from "../lib/embeddings.js";
-import { redactSecrets } from "../lib/redact.js";
+import {
+  redactSecrets,
+  redactCredentialKey,
+  redactMemoryWriteInput,
+} from "../lib/redact.js";
 import { validateMemoryEnums, formatEnumViolation } from "../lib/enum-validation.js";
 import { hookRegistry } from "../lib/hooks.js";
 import { computeTrustScore } from "../lib/poisoning.js";
@@ -159,6 +163,17 @@ export function createMemory(
   if (reservedViolation) {
     throw new Error(reservedViolation);
   }
+
+  // Write-path redaction (todos e12c7659, CRITICAL): the write path historically
+  // redacted `value`/`summary` but NEVER the `key`, `tags`, `when_to_use` or
+  // `metadata` — so a credential-shaped key or tag stored via any write path
+  // reached stdout verbatim on every read. Redact the free-text input fields
+  // BEFORE storage (and before any lookup/guard below, so the upsert key stays
+  // internally consistent). Applied in the db layer so the CLI, SDK, MCP and
+  // server routes all funnel through it; idempotent, so a CLI-level application
+  // is safe.
+  input = redactMemoryWriteInput(input);
+
   if (!db && isApiMode()) {
     const { status, data } = apiJson<Memory>("POST", "/memories", { ...input, dedupe: dedupeMode });
     // A create is only successful if the server actually handed back the stored
@@ -491,8 +506,16 @@ export function bulkUpsertMemories(
   );
 
   for (const mem of memories) {
-    const key = mem["key"] as string | undefined;
     const id = (mem["id"] as string) || uuid();
+    // Write-path redaction (todos e12c7659, CRITICAL): the backfill path
+    // historically stored `key`, `tags`, `when_to_use` and `metadata` raw
+    // (only value/summary were redacted). Redact the free-text fields BEFORE
+    // storage so backfilled rows do not hold credential-shaped keys or tags
+    // raw — the same write-path contract as createMemory/updateMemory. The
+    // redacted key stays in the loop scope so the catch block can name the row
+    // without echoing the raw value.
+    const rawKey = mem["key"] as string | undefined;
+    const key = rawKey ? redactCredentialKey(rawKey) : undefined;
     try {
       if (!key) {
         rejected++;
@@ -536,7 +559,11 @@ export function bulkUpsertMemories(
           // leave tags empty on malformed input
         }
       }
-      const tagsJson = JSON.stringify(tags);
+      // Write-path redaction (todos e12c7659): never persist a credential-shaped
+      // tag raw. Tags are short identifiers, so use the conservative key/tag
+      // detector (a broad pattern would false-positive on benign tag text).
+      const safeTags = tags.map((t) => redactCredentialKey(String(t)));
+      const tagsJson = JSON.stringify(safeTags);
 
       // metadata may arrive as an object or a serialized JSON string
       let metadataJson = "{}";
@@ -546,6 +573,9 @@ export function bulkUpsertMemories(
       } else if (typeof rawMeta === "string" && rawMeta.trim()) {
         metadataJson = rawMeta;
       }
+      // Write-path redaction (todos e12c7659): redactSecrets only replaces
+      // matched substrings, so a serialized JSON string keeps its structure.
+      const safeMetadataJson = redactSecrets(metadataJson);
 
       const safeValue = redactSecrets(String(mem["value"] ?? ""));
       const safeSummary = mem["summary"] ? redactSecrets(String(mem["summary"])) : null;
@@ -583,10 +613,10 @@ export function bulkUpsertMemories(
         machineId,
         (mem["namespace"] as string) ?? null,
         (mem["created_by_agent"] as string) ?? agentId,
-        (mem["when_to_use"] as string) ?? null,
+        (mem["when_to_use"] ? redactSecrets(String(mem["when_to_use"])) : null),
         (mem["sequence_group"] as string) ?? null,
         (mem["sequence_order"] as number) ?? null,
-        metadataJson,
+        safeMetadataJson,
         (mem["access_count"] as number) ?? 0,
         (mem["version"] as number) ?? 1,
         (mem["expires_at"] as string) ?? null,
@@ -599,7 +629,7 @@ export function bulkUpsertMemories(
 
       if ((res?.changes ?? 0) > 0) {
         inserted++;
-        for (const tag of tags) {
+        for (const tag of safeTags) {
           try {
             insertTag.run(id, tag);
           } catch {
@@ -1346,6 +1376,14 @@ export function updateMemory(
   input: UpdateMemoryInput,
   db?: Database
 ): Memory {
+  // Write-path redaction (todos e12c7659, CRITICAL): mirror createMemory. The
+  // update path redacted `value` but historically stored `summary`, `tags`,
+  // `when_to_use` and `metadata` raw — a credential-shaped tag written via
+  // `update --tags` reached the store and then every read. Redact the
+  // free-text fields BEFORE storage (and before the version-move check, which
+  // only reads `version`).
+  input = redactMemoryWriteInput(input);
+
   if (!db && isApiMode()) {
     const { status, data } = apiJson<Memory>("PATCH", `/memories/${encodeURIComponent(id)}`, input, { allow404: true });
     if (status === 404) throw new MemoryNotFoundError(id);

@@ -14,7 +14,11 @@ import {
   resolveMemoryId,
   type GlobalOpts,
 } from "../helpers.js";
-import { redactMemoryForOutput, redactTextFragment } from "../../lib/redact.js";
+import {
+  redactCredentialKey,
+  redactMemoryForOutput,
+  redactVersionForOutput,
+} from "../../lib/redact.js";
 
 export function registerViewCommands(program: Command): void {
   const handleError = makeHandleError(program);
@@ -95,7 +99,7 @@ export function registerViewCommands(program: Command): void {
           // read-path redaction the other verbs use.
           outputJson(redactMemoryForOutput(updated));
         } else {
-          console.log(chalk.green(`Pinned: ${redactTextFragment(updated.key)} (${updated.id.slice(0, 8)})`));
+          console.log(chalk.green(`Pinned: ${redactCredentialKey(updated.key)} (${updated.id.slice(0, 8)})`));
         }
       } catch (e) {
         handleError(e);
@@ -135,7 +139,7 @@ export function registerViewCommands(program: Command): void {
           // stored row must not carry a credential-shaped key verbatim.
           outputJson(redactMemoryForOutput(updated));
         } else {
-          console.log(chalk.green(`Unpinned: ${redactTextFragment(updated.key)} (${updated.id.slice(0, 8)})`));
+          console.log(chalk.green(`Unpinned: ${redactCredentialKey(updated.key)} (${updated.id.slice(0, 8)})`));
         }
       } catch (e) {
         handleError(e);
@@ -162,9 +166,9 @@ export function registerViewCommands(program: Command): void {
         if (globalOpts.json) {
           // Read-path redaction (todos e12c7659): the stored key can be
           // credential-shaped; redact the echoed receipt like the other verbs.
-          outputJson({ archived: true, id: memory.id, key: redactTextFragment(memory.key) });
+          outputJson({ archived: true, id: memory.id, key: redactCredentialKey(memory.key) });
         } else {
-          console.log(chalk.green(`✓ Archived: ${chalk.bold(redactTextFragment(memory.key))} (${memory.id.slice(0, 8)})`));
+          console.log(chalk.green(`✓ Archived: ${chalk.bold(redactCredentialKey(memory.key))} (${memory.id.slice(0, 8)})`));
         }
       } catch (e) {
         console.error(chalk.red(`archive failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -190,14 +194,11 @@ export function registerViewCommands(program: Command): void {
         }
         const versions = getMemoryVersions(memory.id);
         // Read-path redaction (todos e12c7659): the version history is a read
-        // surface; redact the echoed key and every version's value the same
-        // way show does.
-        const safeKey = redactTextFragment(memory.key);
-        const safeVersions = versions.map((v) => ({
-          ...v,
-          value: redactTextFragment(v.value),
-          summary: v.summary ? redactTextFragment(v.summary) : null,
-        }));
+        // surface; redact the echoed key AND every version's free-text
+        // (value, summary, tags, when_to_use) the same way show does — version
+        // TAGS are storable raw and were previously emitted verbatim.
+        const safeKey = redactCredentialKey(memory.key);
+        const safeVersions = versions.map(redactVersionForOutput);
         if (globalOpts.json) {
           outputJson({ memory: { id: memory.id, key: safeKey, current_version: memory.version }, versions: safeVersions });
           return;

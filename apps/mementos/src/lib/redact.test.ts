@@ -341,6 +341,16 @@ describe("redactMemoryForOutput", () => {
     expect(out.tags).toEqual(["coordination"]);
     expect(out.created_at).toBe(input.created_at);
   });
+
+  it("redacts credential-shaped TAGS (tags are storable raw via save --tags)", () => {
+    const NPM_TOKEN = "npm_" + "a".repeat(36);
+    const out = redactMemoryForOutput(
+      makeMemory({ tags: [`tag-${NPM_TOKEN}`, "coordination", "knowledge"] }),
+    );
+    expect(out.tags.join(",")).not.toContain(NPM_TOKEN);
+    expect(out.tags.join(",")).toContain("coordination");
+    expect(out.tags.join(",")).toContain("knowledge");
+  });
 });
 
 // redactSearchResultForOutput / redactTextFragment — the search read path

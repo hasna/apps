@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { getMemory } from "../../db/memories.js";
 import { outputJson, makeHandleError, resolveMemoryId, type GlobalOpts } from "../helpers.js";
+import { redactMemoryForOutput } from "../../lib/redact.js";
 
 export function registerWhenToUseCommand(program: Command): void {
   const handleError = makeHandleError(program);
@@ -24,14 +25,19 @@ export function registerWhenToUseCommand(program: Command): void {
           process.exit(1);
         }
 
-        const whenToUse = memory.when_to_use ?? null;
+        // Read-path redaction (todos e12c7659): this verb was missed by the
+        // read-verb fix and rendered the raw stored key AND the raw when_to_use
+        // text verbatim — a credential-shaped key or guidance reaches stdout in
+        // both formats. Project the display copy once, before the format branch.
+        const safe = redactMemoryForOutput(memory);
+        const whenToUse = safe.when_to_use ?? null;
 
         if (globalOpts.json) {
-          outputJson({ id: memory.id, key: memory.key, when_to_use: whenToUse });
+          outputJson({ id: safe.id, key: safe.key, when_to_use: whenToUse });
           return;
         }
 
-        console.log(chalk.bold(`${memory.key} (${memory.id.slice(0, 8)})`));
+        console.log(chalk.bold(`${safe.key} (${safe.id.slice(0, 8)})`));
         if (whenToUse) {
           console.log(`  ${chalk.cyan("when_to_use:")} ${whenToUse}`);
         } else {
