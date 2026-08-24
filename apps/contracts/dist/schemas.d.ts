@@ -1,7 +1,7 @@
 import { DEPLOYMENT_SCHEMA_IDS } from "./deployment";
 import { z } from "zod";
 export declare const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-export declare const CONTRACTS_PACKAGE_VERSION = "0.13.4";
+export declare const CONTRACTS_PACKAGE_VERSION = "0.14.0";
 export declare const SCHEMA_IDS: {
     readonly actorRef: "hasna.actor_ref.v1";
     readonly resourceRef: "hasna.resource_ref.v1";
@@ -24,6 +24,7 @@ export declare const SCHEMA_IDS: {
     readonly scaffoldManifest: "hasna.scaffold_manifest.v1";
     readonly scaffoldInstallRecord: "hasna.scaffold_install_record.v1";
     readonly appCloudManifest: "hasna.app_cloud_manifest.v1";
+    readonly deploymentEnvelope: "hasna.deployment_envelope.v1";
     readonly noCloudEvidencePack: "hasna.no_cloud_evidence_pack.v1";
     readonly secureLocalStorePolicy: "hasna.secure_local_store_policy.v1";
     readonly serviceContract: "hasna.service_contract.v1";
@@ -7711,6 +7712,7 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
     path?: string | undefined;
     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
     uri?: string | undefined;
+    packageName?: string | undefined;
     resourceRef?: {
         id: string;
         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7720,7 +7722,6 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
         externalId?: string | undefined;
         sourcePackage?: string | undefined;
     } | undefined;
-    packageName?: string | undefined;
     schemaId?: string | undefined;
     integrity?: string | undefined;
 }, {
@@ -7731,6 +7732,7 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
     path?: string | undefined;
     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
     uri?: string | undefined;
+    packageName?: string | undefined;
     resourceRef?: {
         id: string;
         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7740,7 +7742,6 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
         sourcePackage?: string | undefined;
         tags?: string[] | undefined;
     } | undefined;
-    packageName?: string | undefined;
     schemaId?: string | undefined;
     integrity?: string | undefined;
 }>, {
@@ -7751,6 +7752,7 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
     path?: string | undefined;
     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
     uri?: string | undefined;
+    packageName?: string | undefined;
     resourceRef?: {
         id: string;
         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7760,7 +7762,6 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
         externalId?: string | undefined;
         sourcePackage?: string | undefined;
     } | undefined;
-    packageName?: string | undefined;
     schemaId?: string | undefined;
     integrity?: string | undefined;
 }, {
@@ -7771,6 +7772,7 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
     path?: string | undefined;
     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
     uri?: string | undefined;
+    packageName?: string | undefined;
     resourceRef?: {
         id: string;
         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7780,7 +7782,6 @@ export declare const RenderImportSchema: z.ZodEffects<z.ZodObject<{
         sourcePackage?: string | undefined;
         tags?: string[] | undefined;
     } | undefined;
-    packageName?: string | undefined;
     schemaId?: string | undefined;
     integrity?: string | undefined;
 }>;
@@ -7853,6 +7854,7 @@ export declare const RenderViewSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7862,7 +7864,6 @@ export declare const RenderViewSchema: z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }, {
@@ -7873,6 +7874,7 @@ export declare const RenderViewSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7882,7 +7884,6 @@ export declare const RenderViewSchema: z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }>, {
@@ -7893,6 +7894,7 @@ export declare const RenderViewSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7902,7 +7904,6 @@ export declare const RenderViewSchema: z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }, {
@@ -7913,6 +7914,7 @@ export declare const RenderViewSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -7922,7 +7924,6 @@ export declare const RenderViewSchema: z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }>, "many">>;
@@ -8022,6 +8023,7 @@ export declare const RenderViewSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8031,7 +8033,6 @@ export declare const RenderViewSchema: z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[];
@@ -8070,6 +8071,7 @@ export declare const RenderViewSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8079,7 +8081,6 @@ export declare const RenderViewSchema: z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[] | undefined;
@@ -8181,6 +8182,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8190,7 +8192,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }, {
@@ -8201,6 +8202,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8210,7 +8212,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }>, {
@@ -8221,6 +8222,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8230,7 +8232,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }, {
@@ -8241,6 +8242,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8250,7 +8252,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }>, "many">>;
@@ -8350,6 +8351,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8359,7 +8361,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -8398,6 +8399,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8407,7 +8409,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -8490,6 +8491,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8499,7 +8501,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }, {
@@ -8510,6 +8511,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8519,7 +8521,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }>, {
@@ -8530,6 +8531,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8539,7 +8541,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }, {
@@ -8550,6 +8551,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8559,7 +8561,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }>, "many">>;
@@ -8665,6 +8666,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8674,7 +8676,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[];
@@ -8693,6 +8694,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8702,7 +8704,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -8756,6 +8757,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8765,7 +8767,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -8818,6 +8819,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8827,7 +8829,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[] | undefined;
@@ -8865,6 +8866,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8874,7 +8876,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[];
@@ -8893,6 +8894,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8902,7 +8904,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -8956,6 +8957,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -8965,7 +8967,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -9018,6 +9019,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9027,7 +9029,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[] | undefined;
@@ -9301,6 +9302,7 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9310,7 +9312,6 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }, {
@@ -9321,6 +9322,7 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9330,7 +9332,6 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }>, {
@@ -9341,6 +9342,7 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9350,7 +9352,6 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }, {
@@ -9361,6 +9362,7 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9370,7 +9372,6 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }>, "many">>;
@@ -9384,6 +9385,7 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9393,7 +9395,6 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
             externalId?: string | undefined;
             sourcePackage?: string | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[];
@@ -9412,6 +9413,7 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
         path?: string | undefined;
         provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
         uri?: string | undefined;
+        packageName?: string | undefined;
         resourceRef?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9421,7 +9423,6 @@ export declare const ProjectRenderFragmentSchema: z.ZodObject<{
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
-        packageName?: string | undefined;
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[] | undefined;
@@ -9823,6 +9824,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9832,7 +9834,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }, {
@@ -9843,6 +9844,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9852,7 +9854,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }>, {
@@ -9863,6 +9864,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9872,7 +9874,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }, {
@@ -9883,6 +9884,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9892,7 +9894,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }>, "many">>;
@@ -9906,6 +9907,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9915,7 +9917,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -9934,6 +9935,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -9943,7 +9945,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -10048,6 +10049,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10057,7 +10059,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -10164,6 +10165,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10173,7 +10175,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -10278,6 +10279,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10287,7 +10289,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -10394,6 +10395,7 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10403,7 +10405,6 @@ export declare const ProjectPanelSchema: z.ZodEffects<z.ZodObject<{
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -10899,6 +10900,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10908,7 +10910,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }, {
@@ -10919,6 +10920,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10928,7 +10930,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }>, {
@@ -10939,6 +10940,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10948,7 +10950,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }, {
@@ -10959,6 +10960,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10968,7 +10970,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }>, "many">>;
@@ -10982,6 +10983,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -10991,7 +10993,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -11010,6 +11011,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -11019,7 +11021,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -11124,6 +11125,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -11133,7 +11135,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -11240,6 +11241,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -11249,7 +11251,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -11354,6 +11355,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -11363,7 +11365,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -11470,6 +11471,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -11479,7 +11481,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -11977,6 +11978,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -11986,7 +11988,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -12206,6 +12207,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -12215,7 +12217,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -12411,6 +12412,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -12420,7 +12422,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -12640,6 +12641,7 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -12649,7 +12651,6 @@ export declare const ProjectSnapshotSchema: z.ZodEffects<z.ZodObject<{
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -13525,7 +13526,6 @@ export declare const ScaffoldManifestSchema: z.ZodEffects<z.ZodObject<{
         uri?: string | undefined;
         summary?: string | undefined;
     }[] | undefined;
-    capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
     source?: {
         id: string;
         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -13535,6 +13535,7 @@ export declare const ScaffoldManifestSchema: z.ZodEffects<z.ZodObject<{
         sourcePackage?: string | undefined;
         tags?: string[] | undefined;
     } | undefined;
+    capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
     techStack?: string[] | undefined;
     env?: {
         key: string;
@@ -13661,7 +13662,6 @@ export declare const ScaffoldManifestSchema: z.ZodEffects<z.ZodObject<{
         uri?: string | undefined;
         summary?: string | undefined;
     }[] | undefined;
-    capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
     source?: {
         id: string;
         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -13671,6 +13671,7 @@ export declare const ScaffoldManifestSchema: z.ZodEffects<z.ZodObject<{
         sourcePackage?: string | undefined;
         tags?: string[] | undefined;
     } | undefined;
+    capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
     techStack?: string[] | undefined;
     env?: {
         key: string;
@@ -15313,7 +15314,7 @@ export declare const AppCloudResourceSchema: z.ZodObject<{
     machineScoped: z.ZodDefault<z.ZodBoolean>;
 }, "strict", z.ZodTypeAny, {
     id: string;
-    kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+    kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
     provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
     ownerPackage: string;
     machineScoped: boolean;
@@ -15322,7 +15323,7 @@ export declare const AppCloudResourceSchema: z.ZodObject<{
     region?: string | undefined;
 }, {
     id: string;
-    kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+    kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
     provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
     ownerPackage: string;
     accountId?: string | undefined;
@@ -15395,7 +15396,7 @@ export declare const AppCloudManifestSchema: z.ZodEffects<z.ZodObject<{
         machineScoped: z.ZodDefault<z.ZodBoolean>;
     }, "strict", z.ZodTypeAny, {
         id: string;
-        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
         provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
         ownerPackage: string;
         machineScoped: boolean;
@@ -15404,7 +15405,7 @@ export declare const AppCloudManifestSchema: z.ZodEffects<z.ZodObject<{
         region?: string | undefined;
     }, {
         id: string;
-        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
         provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
         ownerPackage: string;
         accountId?: string | undefined;
@@ -15462,7 +15463,7 @@ export declare const AppCloudManifestSchema: z.ZodEffects<z.ZodObject<{
     cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
     cloudResources: {
         id: string;
-        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
         provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
         ownerPackage: string;
         machineScoped: boolean;
@@ -15517,7 +15518,7 @@ export declare const AppCloudManifestSchema: z.ZodEffects<z.ZodObject<{
     } | undefined;
     cloudResources?: {
         id: string;
-        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
         provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
         ownerPackage: string;
         accountId?: string | undefined;
@@ -15548,7 +15549,7 @@ export declare const AppCloudManifestSchema: z.ZodEffects<z.ZodObject<{
     cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
     cloudResources: {
         id: string;
-        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
         provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
         ownerPackage: string;
         machineScoped: boolean;
@@ -15603,7 +15604,7 @@ export declare const AppCloudManifestSchema: z.ZodEffects<z.ZodObject<{
     } | undefined;
     cloudResources?: {
         id: string;
-        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+        kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
         provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
         ownerPackage: string;
         accountId?: string | undefined;
@@ -15965,7 +15966,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
             machineScoped: z.ZodDefault<z.ZodBoolean>;
         }, "strict", z.ZodTypeAny, {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -15974,7 +15975,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
             region?: string | undefined;
         }, {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -16032,7 +16033,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
         cloudResources: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -16087,7 +16088,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         } | undefined;
         cloudResources?: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -16118,7 +16119,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
         cloudResources: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -16173,7 +16174,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         } | undefined;
         cloudResources?: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -16505,7 +16506,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
         cloudResources: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -16642,7 +16643,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         } | undefined;
         cloudResources?: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -16755,7 +16756,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
         cloudResources: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -16892,7 +16893,7 @@ export declare const NoCloudEvidencePackSchema: z.ZodEffects<z.ZodObject<{
         } | undefined;
         cloudResources?: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -42184,7 +42185,7 @@ export declare const CommsEventEnvelopeSchema: z.ZodEffects<z.ZodObject<{
         uri?: string | undefined;
         summary?: string | undefined;
     }[];
-    scope: "machine" | "package" | "fleet";
+    scope: "machine" | "fleet" | "package";
     severity: "info" | "breaking" | "critical" | "notice";
     affected_packages: string[];
     affected_machines: string[];
@@ -42207,7 +42208,7 @@ export declare const CommsEventEnvelopeSchema: z.ZodEffects<z.ZodObject<{
     type: string;
     schema: "hasna.comms_event_envelope.v1";
     createdAt: string;
-    scope: "machine" | "package" | "fleet";
+    scope: "machine" | "fleet" | "package";
     severity: "info" | "breaking" | "critical" | "notice";
     dedupe_key: string;
     updatedAt?: string | null | undefined;
@@ -42262,7 +42263,7 @@ export declare const CommsEventEnvelopeSchema: z.ZodEffects<z.ZodObject<{
         uri?: string | undefined;
         summary?: string | undefined;
     }[];
-    scope: "machine" | "package" | "fleet";
+    scope: "machine" | "fleet" | "package";
     severity: "info" | "breaking" | "critical" | "notice";
     affected_packages: string[];
     affected_machines: string[];
@@ -42285,7 +42286,7 @@ export declare const CommsEventEnvelopeSchema: z.ZodEffects<z.ZodObject<{
     type: string;
     schema: "hasna.comms_event_envelope.v1";
     createdAt: string;
-    scope: "machine" | "package" | "fleet";
+    scope: "machine" | "fleet" | "package";
     severity: "info" | "breaking" | "critical" | "notice";
     dedupe_key: string;
     updatedAt?: string | null | undefined;
@@ -42357,7 +42358,7 @@ export declare const CommsChannelMetadataSchema: z.ZodEffects<z.ZodObject<{
     id: string;
     schema: "hasna.comms_channel_metadata.v1";
     createdAt: string;
-    class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+    class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
     owner?: string | undefined;
     updatedAt?: string | null | undefined;
     metadata?: Record<string, unknown> | undefined;
@@ -42368,7 +42369,7 @@ export declare const CommsChannelMetadataSchema: z.ZodEffects<z.ZodObject<{
     id: string;
     schema: "hasna.comms_channel_metadata.v1";
     createdAt: string;
-    class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+    class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
     owner?: string | undefined;
     updatedAt?: string | null | undefined;
     metadata?: Record<string, unknown> | undefined;
@@ -42379,7 +42380,7 @@ export declare const CommsChannelMetadataSchema: z.ZodEffects<z.ZodObject<{
     id: string;
     schema: "hasna.comms_channel_metadata.v1";
     createdAt: string;
-    class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+    class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
     owner?: string | undefined;
     updatedAt?: string | null | undefined;
     metadata?: Record<string, unknown> | undefined;
@@ -42390,7 +42391,7 @@ export declare const CommsChannelMetadataSchema: z.ZodEffects<z.ZodObject<{
     id: string;
     schema: "hasna.comms_channel_metadata.v1";
     createdAt: string;
-    class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+    class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
     owner?: string | undefined;
     updatedAt?: string | null | undefined;
     metadata?: Record<string, unknown> | undefined;
@@ -42542,7 +42543,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
             uri?: string | undefined;
             summary?: string | undefined;
         }[];
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         affected_packages: string[];
         affected_machines: string[];
@@ -42565,7 +42566,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
         type: string;
         schema: "hasna.comms_event_envelope.v1";
         createdAt: string;
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         dedupe_key: string;
         updatedAt?: string | null | undefined;
@@ -42620,7 +42621,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
             uri?: string | undefined;
             summary?: string | undefined;
         }[];
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         affected_packages: string[];
         affected_machines: string[];
@@ -42643,7 +42644,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
         type: string;
         schema: "hasna.comms_event_envelope.v1";
         createdAt: string;
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         dedupe_key: string;
         updatedAt?: string | null | undefined;
@@ -42704,7 +42705,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
             uri?: string | undefined;
             summary?: string | undefined;
         }[];
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         affected_packages: string[];
         affected_machines: string[];
@@ -42735,7 +42736,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
         type: string;
         schema: "hasna.comms_event_envelope.v1";
         createdAt: string;
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         dedupe_key: string;
         updatedAt?: string | null | undefined;
@@ -42798,7 +42799,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
             uri?: string | undefined;
             summary?: string | undefined;
         }[];
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         affected_packages: string[];
         affected_machines: string[];
@@ -42829,7 +42830,7 @@ export declare const CommsMessageMetadataSchema: z.ZodEffects<z.ZodObject<{
         type: string;
         schema: "hasna.comms_event_envelope.v1";
         createdAt: string;
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         dedupe_key: string;
         updatedAt?: string | null | undefined;
@@ -56720,6 +56721,817 @@ export declare const ProductProjectionRefSchema: z.ZodObject<{
         compiledAt?: any;
     }>;
 }>;
+export declare const DeploymentEnvelopeSchema: z.ZodEffects<z.ZodObject<{
+    status: z.ZodDefault<z.ZodEnum<["draft", "active"]>>;
+    ratification: z.ZodObject<{
+        gate: z.ZodLiteral<"one production deployment executed through this envelope with receipts and a passed live test">;
+        satisfied: z.ZodDefault<z.ZodBoolean>;
+        evidenceRefs: z.ZodDefault<z.ZodArray<z.ZodTypeAny, "many">>;
+    }, "strict", z.ZodTypeAny, {
+        evidenceRefs: any[];
+        gate: "one production deployment executed through this envelope with receipts and a passed live test";
+        satisfied: boolean;
+    }, {
+        gate: "one production deployment executed through this envelope with receipts and a passed live test";
+        evidenceRefs?: any[] | undefined;
+        satisfied?: boolean | undefined;
+    }>;
+    contractKitVersion: z.ZodLiteral<"1.0.0">;
+    identity: z.ZodObject<{
+        appId: z.ZodTypeAny;
+        packageName: z.ZodTypeAny;
+        projectsRef: z.ZodTypeAny;
+        repositoryRef: z.ZodTypeAny;
+    }, "strict", z.ZodTypeAny, {
+        appId?: any;
+        repositoryRef?: any;
+        packageName?: any;
+        projectsRef?: any;
+    }, {
+        appId?: any;
+        repositoryRef?: any;
+        packageName?: any;
+        projectsRef?: any;
+    }>;
+    audience: z.ZodEnum<["internal", "products"]>;
+    accountMapping: z.ZodArray<z.ZodObject<{
+        audience: z.ZodEnum<["internal", "products"]>;
+        accountId: z.ZodString;
+        region: z.ZodOptional<z.ZodString>;
+        purpose: z.ZodOptional<z.ZodString>;
+    }, "strict", z.ZodTypeAny, {
+        accountId: string;
+        audience: "internal" | "products";
+        region?: string | undefined;
+        purpose?: string | undefined;
+    }, {
+        accountId: string;
+        audience: "internal" | "products";
+        region?: string | undefined;
+        purpose?: string | undefined;
+    }>, "many">;
+    environments: z.ZodArray<z.ZodEffects<z.ZodObject<{
+        id: z.ZodString;
+        classification: z.ZodEnum<["development", "staging", "production", "disaster_recovery"]>;
+        legacyAlias: z.ZodOptional<z.ZodEnum<["dev", "staging", "prod"]>>;
+        binding: z.ZodTypeAny;
+        desiredConfig: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+    }, "strict", z.ZodTypeAny, {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig: Record<string, unknown>;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }, {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig?: Record<string, unknown> | undefined;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }>, {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig: Record<string, unknown>;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }, {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig?: Record<string, unknown> | undefined;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }>, "many">;
+    resourceGraph: z.ZodObject<{
+        resources: z.ZodArray<z.ZodEffects<z.ZodObject<{
+            id: z.ZodString;
+            provider: z.ZodEnum<["aws", "gcp", "azure", "cloudflare", "vercel", "railway", "flyio", "digitalocean", "other"]>;
+            kind: z.ZodEnum<["compute", "database", "object_storage", "cache", "queue", "topic", "worker", "cron", "function", "secret", "domain", "dns", "cdn", "network", "identity", "observability", "other"]>;
+            sourceVocabulary: z.ZodOptional<z.ZodEnum<["deployment_db", "app_cloud", "intent", "aws_plan"]>>;
+            sourceKind: z.ZodOptional<z.ZodString>;
+            ownerPackage: z.ZodTypeAny;
+            region: z.ZodOptional<z.ZodString>;
+            accountId: z.ZodOptional<z.ZodString>;
+            uri: z.ZodOptional<z.ZodTypeAny>;
+            dependsOn: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
+            desiredConfig: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+        }, "strict", z.ZodTypeAny, {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            dependsOn: string[];
+            desiredConfig: Record<string, unknown>;
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+        }, {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            dependsOn?: string[] | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+            desiredConfig?: Record<string, unknown> | undefined;
+        }>, {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            dependsOn: string[];
+            desiredConfig: Record<string, unknown>;
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+        }, {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            dependsOn?: string[] | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+            desiredConfig?: Record<string, unknown> | undefined;
+        }>, "many">;
+    }, "strict", z.ZodTypeAny, {
+        resources: {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            dependsOn: string[];
+            desiredConfig: Record<string, unknown>;
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+        }[];
+    }, {
+        resources: {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            dependsOn?: string[] | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+            desiredConfig?: Record<string, unknown> | undefined;
+        }[];
+    }>;
+    artifacts: z.ZodDefault<z.ZodArray<z.ZodTypeAny, "many">>;
+    deployProcedure: z.ZodObject<{
+        requestKind: z.ZodEnum<["deployment", "promotion", "rollback", "reconciliation"]>;
+        plan: z.ZodTypeAny;
+        phases: z.ZodArray<z.ZodObject<{
+            id: z.ZodString;
+            approvalScope: z.ZodEnum<["none", "plan", "action", "phase"]>;
+            actions: z.ZodArray<z.ZodObject<{
+                id: z.ZodString;
+                operationId: z.ZodString;
+                sideEffectClass: z.ZodTypeAny;
+                compensationOperationId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+                nonReversible: z.ZodDefault<z.ZodBoolean>;
+                approvalScope: z.ZodDefault<z.ZodEnum<["none", "action", "phase"]>>;
+                evidenceRequirement: z.ZodOptional<z.ZodString>;
+            }, "strict", z.ZodTypeAny, {
+                id: string;
+                operationId: string;
+                approvalScope: "action" | "none" | "phase";
+                nonReversible: boolean;
+                sideEffectClass?: any;
+                compensationOperationId?: string | null | undefined;
+                evidenceRequirement?: string | undefined;
+            }, {
+                id: string;
+                operationId: string;
+                sideEffectClass?: any;
+                approvalScope?: "action" | "none" | "phase" | undefined;
+                compensationOperationId?: string | null | undefined;
+                nonReversible?: boolean | undefined;
+                evidenceRequirement?: string | undefined;
+            }>, "many">;
+        }, "strict", z.ZodTypeAny, {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                approvalScope: "action" | "none" | "phase";
+                nonReversible: boolean;
+                sideEffectClass?: any;
+                compensationOperationId?: string | null | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }, {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                sideEffectClass?: any;
+                approvalScope?: "action" | "none" | "phase" | undefined;
+                compensationOperationId?: string | null | undefined;
+                nonReversible?: boolean | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }>, "many">;
+    }, "strict", z.ZodTypeAny, {
+        requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+        phases: {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                approvalScope: "action" | "none" | "phase";
+                nonReversible: boolean;
+                sideEffectClass?: any;
+                compensationOperationId?: string | null | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }[];
+        plan?: any;
+    }, {
+        requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+        phases: {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                sideEffectClass?: any;
+                approvalScope?: "action" | "none" | "phase" | undefined;
+                compensationOperationId?: string | null | undefined;
+                nonReversible?: boolean | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }[];
+        plan?: any;
+    }>;
+    monitorWiring: z.ZodObject<{
+        source: z.ZodEnum<["uptime", "monitor", "fleet", "none"]>;
+        importMode: z.ZodDefault<z.ZodEnum<["link_only", "active"]>>;
+        checks: z.ZodDefault<z.ZodArray<z.ZodObject<{
+            id: z.ZodString;
+            kind: z.ZodEnum<["availability", "deployment", "host", "process", "tls", "domain_expiry", "health", "readiness"]>;
+            endpoint: z.ZodOptional<z.ZodTypeAny>;
+            expectedStatuses: z.ZodDefault<z.ZodArray<z.ZodNumber, "many">>;
+            alarmClass: z.ZodOptional<z.ZodString>;
+        }, "strict", z.ZodTypeAny, {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses: number[];
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }, {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses?: number[] | undefined;
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }>, "many">>;
+    }, "strict", z.ZodTypeAny, {
+        checks: {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses: number[];
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }[];
+        source: "none" | "uptime" | "monitor" | "fleet";
+        importMode: "active" | "link_only";
+    }, {
+        source: "none" | "uptime" | "monitor" | "fleet";
+        checks?: {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses?: number[] | undefined;
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }[] | undefined;
+        importMode?: "active" | "link_only" | undefined;
+    }>;
+    rollback: z.ZodObject<{
+        profile: z.ZodString;
+        targetReceipt: z.ZodOptional<z.ZodTypeAny>;
+    }, "strict", z.ZodTypeAny, {
+        profile: string;
+        targetReceipt?: any;
+    }, {
+        profile: string;
+        targetReceipt?: any;
+    }>;
+    schema: z.ZodLiteral<"hasna.deployment_envelope.v1">;
+    id: z.ZodString;
+    createdAt: z.ZodTypeAny;
+    updatedAt: z.ZodOptional<z.ZodNullable<z.ZodTypeAny>>;
+    metadata: z.ZodOptional<z.ZodTypeAny>;
+}, "strict", z.ZodTypeAny, {
+    id: string;
+    status: "draft" | "active";
+    schema: "hasna.deployment_envelope.v1";
+    audience: "internal" | "products";
+    rollback: {
+        profile: string;
+        targetReceipt?: any;
+    };
+    contractKitVersion: "1.0.0";
+    identity: {
+        appId?: any;
+        repositoryRef?: any;
+        packageName?: any;
+        projectsRef?: any;
+    };
+    ratification: {
+        evidenceRefs: any[];
+        gate: "one production deployment executed through this envelope with receipts and a passed live test";
+        satisfied: boolean;
+    };
+    accountMapping: {
+        accountId: string;
+        audience: "internal" | "products";
+        region?: string | undefined;
+        purpose?: string | undefined;
+    }[];
+    environments: {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig: Record<string, unknown>;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }[];
+    resourceGraph: {
+        resources: {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            dependsOn: string[];
+            desiredConfig: Record<string, unknown>;
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+        }[];
+    };
+    artifacts: any[];
+    deployProcedure: {
+        requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+        phases: {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                approvalScope: "action" | "none" | "phase";
+                nonReversible: boolean;
+                sideEffectClass?: any;
+                compensationOperationId?: string | null | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }[];
+        plan?: any;
+    };
+    monitorWiring: {
+        checks: {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses: number[];
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }[];
+        source: "none" | "uptime" | "monitor" | "fleet";
+        importMode: "active" | "link_only";
+    };
+    createdAt?: any;
+    updatedAt?: any;
+    metadata?: any;
+}, {
+    id: string;
+    schema: "hasna.deployment_envelope.v1";
+    audience: "internal" | "products";
+    rollback: {
+        profile: string;
+        targetReceipt?: any;
+    };
+    contractKitVersion: "1.0.0";
+    identity: {
+        appId?: any;
+        repositoryRef?: any;
+        packageName?: any;
+        projectsRef?: any;
+    };
+    ratification: {
+        gate: "one production deployment executed through this envelope with receipts and a passed live test";
+        evidenceRefs?: any[] | undefined;
+        satisfied?: boolean | undefined;
+    };
+    accountMapping: {
+        accountId: string;
+        audience: "internal" | "products";
+        region?: string | undefined;
+        purpose?: string | undefined;
+    }[];
+    environments: {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig?: Record<string, unknown> | undefined;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }[];
+    resourceGraph: {
+        resources: {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            dependsOn?: string[] | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+            desiredConfig?: Record<string, unknown> | undefined;
+        }[];
+    };
+    deployProcedure: {
+        requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+        phases: {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                sideEffectClass?: any;
+                approvalScope?: "action" | "none" | "phase" | undefined;
+                compensationOperationId?: string | null | undefined;
+                nonReversible?: boolean | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }[];
+        plan?: any;
+    };
+    monitorWiring: {
+        source: "none" | "uptime" | "monitor" | "fleet";
+        checks?: {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses?: number[] | undefined;
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }[] | undefined;
+        importMode?: "active" | "link_only" | undefined;
+    };
+    status?: "draft" | "active" | undefined;
+    createdAt?: any;
+    updatedAt?: any;
+    metadata?: any;
+    artifacts?: any[] | undefined;
+}>, {
+    id: string;
+    status: "draft" | "active";
+    schema: "hasna.deployment_envelope.v1";
+    audience: "internal" | "products";
+    rollback: {
+        profile: string;
+        targetReceipt?: any;
+    };
+    contractKitVersion: "1.0.0";
+    identity: {
+        appId?: any;
+        repositoryRef?: any;
+        packageName?: any;
+        projectsRef?: any;
+    };
+    ratification: {
+        evidenceRefs: any[];
+        gate: "one production deployment executed through this envelope with receipts and a passed live test";
+        satisfied: boolean;
+    };
+    accountMapping: {
+        accountId: string;
+        audience: "internal" | "products";
+        region?: string | undefined;
+        purpose?: string | undefined;
+    }[];
+    environments: {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig: Record<string, unknown>;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }[];
+    resourceGraph: {
+        resources: {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            dependsOn: string[];
+            desiredConfig: Record<string, unknown>;
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+        }[];
+    };
+    artifacts: any[];
+    deployProcedure: {
+        requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+        phases: {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                approvalScope: "action" | "none" | "phase";
+                nonReversible: boolean;
+                sideEffectClass?: any;
+                compensationOperationId?: string | null | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }[];
+        plan?: any;
+    };
+    monitorWiring: {
+        checks: {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses: number[];
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }[];
+        source: "none" | "uptime" | "monitor" | "fleet";
+        importMode: "active" | "link_only";
+    };
+    createdAt?: any;
+    updatedAt?: any;
+    metadata?: any;
+}, {
+    id: string;
+    schema: "hasna.deployment_envelope.v1";
+    audience: "internal" | "products";
+    rollback: {
+        profile: string;
+        targetReceipt?: any;
+    };
+    contractKitVersion: "1.0.0";
+    identity: {
+        appId?: any;
+        repositoryRef?: any;
+        packageName?: any;
+        projectsRef?: any;
+    };
+    ratification: {
+        gate: "one production deployment executed through this envelope with receipts and a passed live test";
+        evidenceRefs?: any[] | undefined;
+        satisfied?: boolean | undefined;
+    };
+    accountMapping: {
+        accountId: string;
+        audience: "internal" | "products";
+        region?: string | undefined;
+        purpose?: string | undefined;
+    }[];
+    environments: {
+        id: string;
+        classification: "development" | "staging" | "production" | "disaster_recovery";
+        desiredConfig?: Record<string, unknown> | undefined;
+        legacyAlias?: "dev" | "prod" | "staging" | undefined;
+        binding?: any;
+    }[];
+    resourceGraph: {
+        resources: {
+            id: string;
+            kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+            provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+            accountId?: string | undefined;
+            uri?: any;
+            ownerPackage?: any;
+            region?: string | undefined;
+            dependsOn?: string[] | undefined;
+            sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+            sourceKind?: string | undefined;
+            desiredConfig?: Record<string, unknown> | undefined;
+        }[];
+    };
+    deployProcedure: {
+        requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+        phases: {
+            id: string;
+            approvalScope: "action" | "none" | "plan" | "phase";
+            actions: {
+                id: string;
+                operationId: string;
+                sideEffectClass?: any;
+                approvalScope?: "action" | "none" | "phase" | undefined;
+                compensationOperationId?: string | null | undefined;
+                nonReversible?: boolean | undefined;
+                evidenceRequirement?: string | undefined;
+            }[];
+        }[];
+        plan?: any;
+    };
+    monitorWiring: {
+        source: "none" | "uptime" | "monitor" | "fleet";
+        checks?: {
+            id: string;
+            kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+            expectedStatuses?: number[] | undefined;
+            alarmClass?: string | undefined;
+            endpoint?: any;
+        }[] | undefined;
+        importMode?: "active" | "link_only" | undefined;
+    };
+    status?: "draft" | "active" | undefined;
+    createdAt?: any;
+    updatedAt?: any;
+    metadata?: any;
+    artifacts?: any[] | undefined;
+}>, EnvelopeResourceSchema: z.ZodEffects<z.ZodObject<{
+    id: z.ZodString;
+    provider: z.ZodEnum<["aws", "gcp", "azure", "cloudflare", "vercel", "railway", "flyio", "digitalocean", "other"]>;
+    kind: z.ZodEnum<["compute", "database", "object_storage", "cache", "queue", "topic", "worker", "cron", "function", "secret", "domain", "dns", "cdn", "network", "identity", "observability", "other"]>;
+    sourceVocabulary: z.ZodOptional<z.ZodEnum<["deployment_db", "app_cloud", "intent", "aws_plan"]>>;
+    sourceKind: z.ZodOptional<z.ZodString>;
+    ownerPackage: z.ZodTypeAny;
+    region: z.ZodOptional<z.ZodString>;
+    accountId: z.ZodOptional<z.ZodString>;
+    uri: z.ZodOptional<z.ZodTypeAny>;
+    dependsOn: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
+    desiredConfig: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+}, "strict", z.ZodTypeAny, {
+    id: string;
+    kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+    provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+    dependsOn: string[];
+    desiredConfig: Record<string, unknown>;
+    accountId?: string | undefined;
+    uri?: any;
+    ownerPackage?: any;
+    region?: string | undefined;
+    sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+    sourceKind?: string | undefined;
+}, {
+    id: string;
+    kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+    provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+    accountId?: string | undefined;
+    uri?: any;
+    ownerPackage?: any;
+    region?: string | undefined;
+    dependsOn?: string[] | undefined;
+    sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+    sourceKind?: string | undefined;
+    desiredConfig?: Record<string, unknown> | undefined;
+}>, {
+    id: string;
+    kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+    provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+    dependsOn: string[];
+    desiredConfig: Record<string, unknown>;
+    accountId?: string | undefined;
+    uri?: any;
+    ownerPackage?: any;
+    region?: string | undefined;
+    sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+    sourceKind?: string | undefined;
+}, {
+    id: string;
+    kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+    provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+    accountId?: string | undefined;
+    uri?: any;
+    ownerPackage?: any;
+    region?: string | undefined;
+    dependsOn?: string[] | undefined;
+    sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+    sourceKind?: string | undefined;
+    desiredConfig?: Record<string, unknown> | undefined;
+}>, EnvelopeEnvironmentSchema: z.ZodEffects<z.ZodObject<{
+    id: z.ZodString;
+    classification: z.ZodEnum<["development", "staging", "production", "disaster_recovery"]>;
+    legacyAlias: z.ZodOptional<z.ZodEnum<["dev", "staging", "prod"]>>;
+    binding: z.ZodTypeAny;
+    desiredConfig: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+}, "strict", z.ZodTypeAny, {
+    id: string;
+    classification: "development" | "staging" | "production" | "disaster_recovery";
+    desiredConfig: Record<string, unknown>;
+    legacyAlias?: "dev" | "prod" | "staging" | undefined;
+    binding?: any;
+}, {
+    id: string;
+    classification: "development" | "staging" | "production" | "disaster_recovery";
+    desiredConfig?: Record<string, unknown> | undefined;
+    legacyAlias?: "dev" | "prod" | "staging" | undefined;
+    binding?: any;
+}>, {
+    id: string;
+    classification: "development" | "staging" | "production" | "disaster_recovery";
+    desiredConfig: Record<string, unknown>;
+    legacyAlias?: "dev" | "prod" | "staging" | undefined;
+    binding?: any;
+}, {
+    id: string;
+    classification: "development" | "staging" | "production" | "disaster_recovery";
+    desiredConfig?: Record<string, unknown> | undefined;
+    legacyAlias?: "dev" | "prod" | "staging" | undefined;
+    binding?: any;
+}>, EnvelopePhaseSchema: z.ZodObject<{
+    id: z.ZodString;
+    approvalScope: z.ZodEnum<["none", "plan", "action", "phase"]>;
+    actions: z.ZodArray<z.ZodObject<{
+        id: z.ZodString;
+        operationId: z.ZodString;
+        sideEffectClass: z.ZodTypeAny;
+        compensationOperationId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+        nonReversible: z.ZodDefault<z.ZodBoolean>;
+        approvalScope: z.ZodDefault<z.ZodEnum<["none", "action", "phase"]>>;
+        evidenceRequirement: z.ZodOptional<z.ZodString>;
+    }, "strict", z.ZodTypeAny, {
+        id: string;
+        operationId: string;
+        approvalScope: "action" | "none" | "phase";
+        nonReversible: boolean;
+        sideEffectClass?: any;
+        compensationOperationId?: string | null | undefined;
+        evidenceRequirement?: string | undefined;
+    }, {
+        id: string;
+        operationId: string;
+        sideEffectClass?: any;
+        approvalScope?: "action" | "none" | "phase" | undefined;
+        compensationOperationId?: string | null | undefined;
+        nonReversible?: boolean | undefined;
+        evidenceRequirement?: string | undefined;
+    }>, "many">;
+}, "strict", z.ZodTypeAny, {
+    id: string;
+    approvalScope: "action" | "none" | "plan" | "phase";
+    actions: {
+        id: string;
+        operationId: string;
+        approvalScope: "action" | "none" | "phase";
+        nonReversible: boolean;
+        sideEffectClass?: any;
+        compensationOperationId?: string | null | undefined;
+        evidenceRequirement?: string | undefined;
+    }[];
+}, {
+    id: string;
+    approvalScope: "action" | "none" | "plan" | "phase";
+    actions: {
+        id: string;
+        operationId: string;
+        sideEffectClass?: any;
+        approvalScope?: "action" | "none" | "phase" | undefined;
+        compensationOperationId?: string | null | undefined;
+        nonReversible?: boolean | undefined;
+        evidenceRequirement?: string | undefined;
+    }[];
+}>, EnvelopeActionSchema: z.ZodObject<{
+    id: z.ZodString;
+    operationId: z.ZodString;
+    sideEffectClass: z.ZodTypeAny;
+    compensationOperationId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    nonReversible: z.ZodDefault<z.ZodBoolean>;
+    approvalScope: z.ZodDefault<z.ZodEnum<["none", "action", "phase"]>>;
+    evidenceRequirement: z.ZodOptional<z.ZodString>;
+}, "strict", z.ZodTypeAny, {
+    id: string;
+    operationId: string;
+    approvalScope: "action" | "none" | "phase";
+    nonReversible: boolean;
+    sideEffectClass?: any;
+    compensationOperationId?: string | null | undefined;
+    evidenceRequirement?: string | undefined;
+}, {
+    id: string;
+    operationId: string;
+    sideEffectClass?: any;
+    approvalScope?: "action" | "none" | "phase" | undefined;
+    compensationOperationId?: string | null | undefined;
+    nonReversible?: boolean | undefined;
+    evidenceRequirement?: string | undefined;
+}>;
+export type DeploymentEnvelope = z.output<typeof DeploymentEnvelopeSchema>;
 export type ProductProjection = z.output<typeof ProductProjectionSchema>;
 export type IntentSnapshot = z.output<typeof IntentSnapshotSchema>;
 export type VerifiedSourceCandidate = z.output<typeof VerifiedSourceCandidateSchema>;
@@ -61764,6 +62576,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -61773,7 +62586,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }, {
@@ -61784,6 +62596,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -61793,7 +62606,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }>, {
@@ -61804,6 +62616,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -61813,7 +62626,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }, {
@@ -61824,6 +62636,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -61833,7 +62646,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }>, "many">>;
@@ -61847,6 +62659,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -61856,7 +62669,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -61875,6 +62687,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -61884,7 +62697,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -61989,6 +62801,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -61998,7 +62811,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -62105,6 +62917,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62114,7 +62927,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -62219,6 +63031,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62228,7 +63041,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -62335,6 +63147,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62344,7 +63157,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -62839,6 +63651,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62848,7 +63661,6 @@ declare const CoreContractSchemaRegistry: {
                         externalId?: string | undefined;
                         sourcePackage?: string | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }, {
@@ -62859,6 +63671,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62868,7 +63681,6 @@ declare const CoreContractSchemaRegistry: {
                         sourcePackage?: string | undefined;
                         tags?: string[] | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }>, {
@@ -62879,6 +63691,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62888,7 +63701,6 @@ declare const CoreContractSchemaRegistry: {
                         externalId?: string | undefined;
                         sourcePackage?: string | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }, {
@@ -62899,6 +63711,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62908,7 +63721,6 @@ declare const CoreContractSchemaRegistry: {
                         sourcePackage?: string | undefined;
                         tags?: string[] | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }>, "many">>;
@@ -62922,6 +63734,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62931,7 +63744,6 @@ declare const CoreContractSchemaRegistry: {
                         externalId?: string | undefined;
                         sourcePackage?: string | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[];
@@ -62950,6 +63762,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -62959,7 +63772,6 @@ declare const CoreContractSchemaRegistry: {
                         sourcePackage?: string | undefined;
                         tags?: string[] | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[] | undefined;
@@ -63064,6 +63876,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -63073,7 +63886,6 @@ declare const CoreContractSchemaRegistry: {
                         externalId?: string | undefined;
                         sourcePackage?: string | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[];
@@ -63180,6 +63992,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -63189,7 +64002,6 @@ declare const CoreContractSchemaRegistry: {
                         sourcePackage?: string | undefined;
                         tags?: string[] | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[] | undefined;
@@ -63294,6 +64106,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -63303,7 +64116,6 @@ declare const CoreContractSchemaRegistry: {
                         externalId?: string | undefined;
                         sourcePackage?: string | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[];
@@ -63410,6 +64222,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -63419,7 +64232,6 @@ declare const CoreContractSchemaRegistry: {
                         sourcePackage?: string | undefined;
                         tags?: string[] | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[] | undefined;
@@ -63917,6 +64729,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -63926,7 +64739,6 @@ declare const CoreContractSchemaRegistry: {
                         externalId?: string | undefined;
                         sourcePackage?: string | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[];
@@ -64146,6 +64958,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64155,7 +64968,6 @@ declare const CoreContractSchemaRegistry: {
                         sourcePackage?: string | undefined;
                         tags?: string[] | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[] | undefined;
@@ -64351,6 +65163,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64360,7 +65173,6 @@ declare const CoreContractSchemaRegistry: {
                         externalId?: string | undefined;
                         sourcePackage?: string | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[];
@@ -64580,6 +65392,7 @@ declare const CoreContractSchemaRegistry: {
                     path?: string | undefined;
                     provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                     uri?: string | undefined;
+                    packageName?: string | undefined;
                     resourceRef?: {
                         id: string;
                         kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64589,7 +65402,6 @@ declare const CoreContractSchemaRegistry: {
                         sourcePackage?: string | undefined;
                         tags?: string[] | undefined;
                     } | undefined;
-                    packageName?: string | undefined;
                     schemaId?: string | undefined;
                     integrity?: string | undefined;
                 }[] | undefined;
@@ -64724,6 +65536,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64733,7 +65546,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }, {
@@ -64744,6 +65556,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64753,7 +65566,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }>, {
@@ -64764,6 +65576,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64773,7 +65586,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }, {
@@ -64784,6 +65596,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64793,7 +65606,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }>, "many">>;
@@ -64893,6 +65705,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64902,7 +65715,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -64941,6 +65753,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -64950,7 +65763,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -65033,6 +65845,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65042,7 +65855,6 @@ declare const CoreContractSchemaRegistry: {
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }, {
@@ -65053,6 +65865,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65062,7 +65875,6 @@ declare const CoreContractSchemaRegistry: {
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }>, {
@@ -65073,6 +65885,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65082,7 +65895,6 @@ declare const CoreContractSchemaRegistry: {
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }, {
@@ -65093,6 +65905,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65102,7 +65915,6 @@ declare const CoreContractSchemaRegistry: {
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }>, "many">>;
@@ -65208,6 +66020,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65217,7 +66030,6 @@ declare const CoreContractSchemaRegistry: {
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -65236,6 +66048,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65245,7 +66058,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -65299,6 +66111,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65308,7 +66121,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -65361,6 +66173,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65370,7 +66183,6 @@ declare const CoreContractSchemaRegistry: {
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -65408,6 +66220,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65417,7 +66230,6 @@ declare const CoreContractSchemaRegistry: {
                 externalId?: string | undefined;
                 sourcePackage?: string | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[];
@@ -65436,6 +66248,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65445,7 +66258,6 @@ declare const CoreContractSchemaRegistry: {
                     externalId?: string | undefined;
                     sourcePackage?: string | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[];
@@ -65499,6 +66311,7 @@ declare const CoreContractSchemaRegistry: {
                 path?: string | undefined;
                 provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
                 uri?: string | undefined;
+                packageName?: string | undefined;
                 resourceRef?: {
                     id: string;
                     kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65508,7 +66321,6 @@ declare const CoreContractSchemaRegistry: {
                     sourcePackage?: string | undefined;
                     tags?: string[] | undefined;
                 } | undefined;
-                packageName?: string | undefined;
                 schemaId?: string | undefined;
                 integrity?: string | undefined;
             }[] | undefined;
@@ -65561,6 +66373,7 @@ declare const CoreContractSchemaRegistry: {
             path?: string | undefined;
             provider?: "custom" | "knowledge" | "render" | "actions" | "todos" | "files" | "mailery" | "conversations" | "mementos" | "reports" | "contracts" | undefined;
             uri?: string | undefined;
+            packageName?: string | undefined;
             resourceRef?: {
                 id: string;
                 kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -65570,7 +66383,6 @@ declare const CoreContractSchemaRegistry: {
                 sourcePackage?: string | undefined;
                 tags?: string[] | undefined;
             } | undefined;
-            packageName?: string | undefined;
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
@@ -67201,7 +68013,6 @@ declare const CoreContractSchemaRegistry: {
             uri?: string | undefined;
             summary?: string | undefined;
         }[] | undefined;
-        capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
         source?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -67211,6 +68022,7 @@ declare const CoreContractSchemaRegistry: {
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
+        capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
         techStack?: string[] | undefined;
         env?: {
             key: string;
@@ -67337,7 +68149,6 @@ declare const CoreContractSchemaRegistry: {
             uri?: string | undefined;
             summary?: string | undefined;
         }[] | undefined;
-        capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
         source?: {
             id: string;
             kind: "app" | "email" | "feedback" | "report" | "run" | "unknown" | "file" | "url" | "model" | "workflow" | "budget" | "task" | "project" | "repo" | "loop" | "action" | "event" | "integration" | "session" | "machine" | "tool" | "document" | "artifact" | "knowledge" | "conversation" | "dashboard" | "render" | "panel" | "commit" | "branch" | "pull_request" | "issue" | "comment" | "verification" | "finding" | "context_pack" | "proof_bundle" | "memento" | "eval" | "cost" | "alert" | "incident" | "release" | "rollout" | "announcement" | "audience";
@@ -67347,6 +68158,7 @@ declare const CoreContractSchemaRegistry: {
             sourcePackage?: string | undefined;
             tags?: string[] | undefined;
         } | undefined;
+        capabilities?: ("ci" | "docs" | "dashboard" | "other" | "worker" | "database" | "deployment" | "cli" | "mcp" | "library" | "sdk" | "rest_api" | "auth" | "billing" | "daemon" | "native" | "browser_extension" | "ai_provider" | "media_pipeline" | "data_pipeline" | "tests")[] | undefined;
         techStack?: string[] | undefined;
         env?: {
             key: string;
@@ -67915,7 +68727,7 @@ declare const CoreContractSchemaRegistry: {
             machineScoped: z.ZodDefault<z.ZodBoolean>;
         }, "strict", z.ZodTypeAny, {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -67924,7 +68736,7 @@ declare const CoreContractSchemaRegistry: {
             region?: string | undefined;
         }, {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -67982,7 +68794,7 @@ declare const CoreContractSchemaRegistry: {
         cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
         cloudResources: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -68037,7 +68849,7 @@ declare const CoreContractSchemaRegistry: {
         } | undefined;
         cloudResources?: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -68068,7 +68880,7 @@ declare const CoreContractSchemaRegistry: {
         cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
         cloudResources: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             machineScoped: boolean;
@@ -68123,7 +68935,7 @@ declare const CoreContractSchemaRegistry: {
         } | undefined;
         cloudResources?: {
             id: string;
-            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+            kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
             provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
             ownerPackage: string;
             accountId?: string | undefined;
@@ -68278,7 +69090,7 @@ declare const CoreContractSchemaRegistry: {
                 machineScoped: z.ZodDefault<z.ZodBoolean>;
             }, "strict", z.ZodTypeAny, {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 machineScoped: boolean;
@@ -68287,7 +69099,7 @@ declare const CoreContractSchemaRegistry: {
                 region?: string | undefined;
             }, {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 accountId?: string | undefined;
@@ -68345,7 +69157,7 @@ declare const CoreContractSchemaRegistry: {
             cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
             cloudResources: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 machineScoped: boolean;
@@ -68400,7 +69212,7 @@ declare const CoreContractSchemaRegistry: {
             } | undefined;
             cloudResources?: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 accountId?: string | undefined;
@@ -68431,7 +69243,7 @@ declare const CoreContractSchemaRegistry: {
             cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
             cloudResources: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 machineScoped: boolean;
@@ -68486,7 +69298,7 @@ declare const CoreContractSchemaRegistry: {
             } | undefined;
             cloudResources?: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 accountId?: string | undefined;
@@ -68818,7 +69630,7 @@ declare const CoreContractSchemaRegistry: {
             cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
             cloudResources: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 machineScoped: boolean;
@@ -68955,7 +69767,7 @@ declare const CoreContractSchemaRegistry: {
             } | undefined;
             cloudResources?: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 accountId?: string | undefined;
@@ -69068,7 +69880,7 @@ declare const CoreContractSchemaRegistry: {
             cloudBoundary: "none" | "app_owned" | "external_service" | "local_cache";
             cloudResources: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 machineScoped: boolean;
@@ -69205,7 +70017,7 @@ declare const CoreContractSchemaRegistry: {
             } | undefined;
             cloudResources?: {
                 id: string;
-                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "secret" | "bucket" | "cache" | "topic" | "object_store";
+                kind: "function" | "other" | "worker" | "scheduler" | "database" | "queue" | "cache" | "topic" | "secret" | "bucket" | "object_store";
                 provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "neon" | "supabase" | "postgres" | "s3" | "rds";
                 ownerPackage: string;
                 accountId?: string | undefined;
@@ -72090,7 +72902,7 @@ declare const CoreContractSchemaRegistry: {
             uri?: string | undefined;
             summary?: string | undefined;
         }[];
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         affected_packages: string[];
         affected_machines: string[];
@@ -72113,7 +72925,7 @@ declare const CoreContractSchemaRegistry: {
         type: string;
         schema: "hasna.comms_event_envelope.v1";
         createdAt: string;
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         dedupe_key: string;
         updatedAt?: string | null | undefined;
@@ -72168,7 +72980,7 @@ declare const CoreContractSchemaRegistry: {
             uri?: string | undefined;
             summary?: string | undefined;
         }[];
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         affected_packages: string[];
         affected_machines: string[];
@@ -72191,7 +73003,7 @@ declare const CoreContractSchemaRegistry: {
         type: string;
         schema: "hasna.comms_event_envelope.v1";
         createdAt: string;
-        scope: "machine" | "package" | "fleet";
+        scope: "machine" | "fleet" | "package";
         severity: "info" | "breaking" | "critical" | "notice";
         dedupe_key: string;
         updatedAt?: string | null | undefined;
@@ -72242,7 +73054,7 @@ declare const CoreContractSchemaRegistry: {
         id: string;
         schema: "hasna.comms_channel_metadata.v1";
         createdAt: string;
-        class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+        class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
         owner?: string | undefined;
         updatedAt?: string | null | undefined;
         metadata?: Record<string, unknown> | undefined;
@@ -72253,7 +73065,7 @@ declare const CoreContractSchemaRegistry: {
         id: string;
         schema: "hasna.comms_channel_metadata.v1";
         createdAt: string;
-        class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+        class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
         owner?: string | undefined;
         updatedAt?: string | null | undefined;
         metadata?: Record<string, unknown> | undefined;
@@ -72264,7 +73076,7 @@ declare const CoreContractSchemaRegistry: {
         id: string;
         schema: "hasna.comms_channel_metadata.v1";
         createdAt: string;
-        class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+        class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
         owner?: string | undefined;
         updatedAt?: string | null | undefined;
         metadata?: Record<string, unknown> | undefined;
@@ -72275,7 +73087,7 @@ declare const CoreContractSchemaRegistry: {
         id: string;
         schema: "hasna.comms_channel_metadata.v1";
         createdAt: string;
-        class: "product" | "package" | "fleet" | "loop-lane" | "initiative" | "personal";
+        class: "product" | "fleet" | "package" | "loop-lane" | "initiative" | "personal";
         owner?: string | undefined;
         updatedAt?: string | null | undefined;
         metadata?: Record<string, unknown> | undefined;
@@ -72410,7 +73222,7 @@ declare const CoreContractSchemaRegistry: {
                 uri?: string | undefined;
                 summary?: string | undefined;
             }[];
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             affected_packages: string[];
             affected_machines: string[];
@@ -72433,7 +73245,7 @@ declare const CoreContractSchemaRegistry: {
             type: string;
             schema: "hasna.comms_event_envelope.v1";
             createdAt: string;
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             dedupe_key: string;
             updatedAt?: string | null | undefined;
@@ -72488,7 +73300,7 @@ declare const CoreContractSchemaRegistry: {
                 uri?: string | undefined;
                 summary?: string | undefined;
             }[];
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             affected_packages: string[];
             affected_machines: string[];
@@ -72511,7 +73323,7 @@ declare const CoreContractSchemaRegistry: {
             type: string;
             schema: "hasna.comms_event_envelope.v1";
             createdAt: string;
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             dedupe_key: string;
             updatedAt?: string | null | undefined;
@@ -72572,7 +73384,7 @@ declare const CoreContractSchemaRegistry: {
                 uri?: string | undefined;
                 summary?: string | undefined;
             }[];
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             affected_packages: string[];
             affected_machines: string[];
@@ -72603,7 +73415,7 @@ declare const CoreContractSchemaRegistry: {
             type: string;
             schema: "hasna.comms_event_envelope.v1";
             createdAt: string;
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             dedupe_key: string;
             updatedAt?: string | null | undefined;
@@ -72666,7 +73478,7 @@ declare const CoreContractSchemaRegistry: {
                 uri?: string | undefined;
                 summary?: string | undefined;
             }[];
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             affected_packages: string[];
             affected_machines: string[];
@@ -72697,7 +73509,7 @@ declare const CoreContractSchemaRegistry: {
             type: string;
             schema: "hasna.comms_event_envelope.v1";
             createdAt: string;
-            scope: "machine" | "package" | "fleet";
+            scope: "machine" | "fleet" | "package";
             severity: "info" | "breaking" | "critical" | "notice";
             dedupe_key: string;
             updatedAt?: string | null | undefined;
@@ -75431,6 +76243,650 @@ declare const CoreContractSchemaRegistry: {
         metadata?: Record<string, unknown> | undefined;
         suppressionSyncedAt?: string | null | undefined;
     }>;
+    readonly "hasna.deployment_envelope.v1": z.ZodEffects<z.ZodObject<{
+        status: z.ZodDefault<z.ZodEnum<["draft", "active"]>>;
+        ratification: z.ZodObject<{
+            gate: z.ZodLiteral<"one production deployment executed through this envelope with receipts and a passed live test">;
+            satisfied: z.ZodDefault<z.ZodBoolean>;
+            evidenceRefs: z.ZodDefault<z.ZodArray<z.ZodTypeAny, "many">>;
+        }, "strict", z.ZodTypeAny, {
+            evidenceRefs: any[];
+            gate: "one production deployment executed through this envelope with receipts and a passed live test";
+            satisfied: boolean;
+        }, {
+            gate: "one production deployment executed through this envelope with receipts and a passed live test";
+            evidenceRefs?: any[] | undefined;
+            satisfied?: boolean | undefined;
+        }>;
+        contractKitVersion: z.ZodLiteral<"1.0.0">;
+        identity: z.ZodObject<{
+            appId: z.ZodTypeAny;
+            packageName: z.ZodTypeAny;
+            projectsRef: z.ZodTypeAny;
+            repositoryRef: z.ZodTypeAny;
+        }, "strict", z.ZodTypeAny, {
+            appId?: any;
+            repositoryRef?: any;
+            packageName?: any;
+            projectsRef?: any;
+        }, {
+            appId?: any;
+            repositoryRef?: any;
+            packageName?: any;
+            projectsRef?: any;
+        }>;
+        audience: z.ZodEnum<["internal", "products"]>;
+        accountMapping: z.ZodArray<z.ZodObject<{
+            audience: z.ZodEnum<["internal", "products"]>;
+            accountId: z.ZodString;
+            region: z.ZodOptional<z.ZodString>;
+            purpose: z.ZodOptional<z.ZodString>;
+        }, "strict", z.ZodTypeAny, {
+            accountId: string;
+            audience: "internal" | "products";
+            region?: string | undefined;
+            purpose?: string | undefined;
+        }, {
+            accountId: string;
+            audience: "internal" | "products";
+            region?: string | undefined;
+            purpose?: string | undefined;
+        }>, "many">;
+        environments: z.ZodArray<z.ZodEffects<z.ZodObject<{
+            id: z.ZodString;
+            classification: z.ZodEnum<["development", "staging", "production", "disaster_recovery"]>;
+            legacyAlias: z.ZodOptional<z.ZodEnum<["dev", "staging", "prod"]>>;
+            binding: z.ZodTypeAny;
+            desiredConfig: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+        }, "strict", z.ZodTypeAny, {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig: Record<string, unknown>;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }, {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig?: Record<string, unknown> | undefined;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }>, {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig: Record<string, unknown>;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }, {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig?: Record<string, unknown> | undefined;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }>, "many">;
+        resourceGraph: z.ZodObject<{
+            resources: z.ZodArray<z.ZodEffects<z.ZodObject<{
+                id: z.ZodString;
+                provider: z.ZodEnum<["aws", "gcp", "azure", "cloudflare", "vercel", "railway", "flyio", "digitalocean", "other"]>;
+                kind: z.ZodEnum<["compute", "database", "object_storage", "cache", "queue", "topic", "worker", "cron", "function", "secret", "domain", "dns", "cdn", "network", "identity", "observability", "other"]>;
+                sourceVocabulary: z.ZodOptional<z.ZodEnum<["deployment_db", "app_cloud", "intent", "aws_plan"]>>;
+                sourceKind: z.ZodOptional<z.ZodString>;
+                ownerPackage: z.ZodTypeAny;
+                region: z.ZodOptional<z.ZodString>;
+                accountId: z.ZodOptional<z.ZodString>;
+                uri: z.ZodOptional<z.ZodTypeAny>;
+                dependsOn: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
+                desiredConfig: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+            }, "strict", z.ZodTypeAny, {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                dependsOn: string[];
+                desiredConfig: Record<string, unknown>;
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+            }, {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                dependsOn?: string[] | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+                desiredConfig?: Record<string, unknown> | undefined;
+            }>, {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                dependsOn: string[];
+                desiredConfig: Record<string, unknown>;
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+            }, {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                dependsOn?: string[] | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+                desiredConfig?: Record<string, unknown> | undefined;
+            }>, "many">;
+        }, "strict", z.ZodTypeAny, {
+            resources: {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                dependsOn: string[];
+                desiredConfig: Record<string, unknown>;
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+            }[];
+        }, {
+            resources: {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                dependsOn?: string[] | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+                desiredConfig?: Record<string, unknown> | undefined;
+            }[];
+        }>;
+        artifacts: z.ZodDefault<z.ZodArray<z.ZodTypeAny, "many">>;
+        deployProcedure: z.ZodObject<{
+            requestKind: z.ZodEnum<["deployment", "promotion", "rollback", "reconciliation"]>;
+            plan: z.ZodTypeAny;
+            phases: z.ZodArray<z.ZodObject<{
+                id: z.ZodString;
+                approvalScope: z.ZodEnum<["none", "plan", "action", "phase"]>;
+                actions: z.ZodArray<z.ZodObject<{
+                    id: z.ZodString;
+                    operationId: z.ZodString;
+                    sideEffectClass: z.ZodTypeAny;
+                    compensationOperationId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+                    nonReversible: z.ZodDefault<z.ZodBoolean>;
+                    approvalScope: z.ZodDefault<z.ZodEnum<["none", "action", "phase"]>>;
+                    evidenceRequirement: z.ZodOptional<z.ZodString>;
+                }, "strict", z.ZodTypeAny, {
+                    id: string;
+                    operationId: string;
+                    approvalScope: "action" | "none" | "phase";
+                    nonReversible: boolean;
+                    sideEffectClass?: any;
+                    compensationOperationId?: string | null | undefined;
+                    evidenceRequirement?: string | undefined;
+                }, {
+                    id: string;
+                    operationId: string;
+                    sideEffectClass?: any;
+                    approvalScope?: "action" | "none" | "phase" | undefined;
+                    compensationOperationId?: string | null | undefined;
+                    nonReversible?: boolean | undefined;
+                    evidenceRequirement?: string | undefined;
+                }>, "many">;
+            }, "strict", z.ZodTypeAny, {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    approvalScope: "action" | "none" | "phase";
+                    nonReversible: boolean;
+                    sideEffectClass?: any;
+                    compensationOperationId?: string | null | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }, {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    sideEffectClass?: any;
+                    approvalScope?: "action" | "none" | "phase" | undefined;
+                    compensationOperationId?: string | null | undefined;
+                    nonReversible?: boolean | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }>, "many">;
+        }, "strict", z.ZodTypeAny, {
+            requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+            phases: {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    approvalScope: "action" | "none" | "phase";
+                    nonReversible: boolean;
+                    sideEffectClass?: any;
+                    compensationOperationId?: string | null | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }[];
+            plan?: any;
+        }, {
+            requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+            phases: {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    sideEffectClass?: any;
+                    approvalScope?: "action" | "none" | "phase" | undefined;
+                    compensationOperationId?: string | null | undefined;
+                    nonReversible?: boolean | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }[];
+            plan?: any;
+        }>;
+        monitorWiring: z.ZodObject<{
+            source: z.ZodEnum<["uptime", "monitor", "fleet", "none"]>;
+            importMode: z.ZodDefault<z.ZodEnum<["link_only", "active"]>>;
+            checks: z.ZodDefault<z.ZodArray<z.ZodObject<{
+                id: z.ZodString;
+                kind: z.ZodEnum<["availability", "deployment", "host", "process", "tls", "domain_expiry", "health", "readiness"]>;
+                endpoint: z.ZodOptional<z.ZodTypeAny>;
+                expectedStatuses: z.ZodDefault<z.ZodArray<z.ZodNumber, "many">>;
+                alarmClass: z.ZodOptional<z.ZodString>;
+            }, "strict", z.ZodTypeAny, {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses: number[];
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }, {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses?: number[] | undefined;
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }>, "many">>;
+        }, "strict", z.ZodTypeAny, {
+            checks: {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses: number[];
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }[];
+            source: "none" | "uptime" | "monitor" | "fleet";
+            importMode: "active" | "link_only";
+        }, {
+            source: "none" | "uptime" | "monitor" | "fleet";
+            checks?: {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses?: number[] | undefined;
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }[] | undefined;
+            importMode?: "active" | "link_only" | undefined;
+        }>;
+        rollback: z.ZodObject<{
+            profile: z.ZodString;
+            targetReceipt: z.ZodOptional<z.ZodTypeAny>;
+        }, "strict", z.ZodTypeAny, {
+            profile: string;
+            targetReceipt?: any;
+        }, {
+            profile: string;
+            targetReceipt?: any;
+        }>;
+        schema: z.ZodLiteral<"hasna.deployment_envelope.v1">;
+        id: z.ZodString;
+        createdAt: z.ZodTypeAny;
+        updatedAt: z.ZodOptional<z.ZodNullable<z.ZodTypeAny>>;
+        metadata: z.ZodOptional<z.ZodTypeAny>;
+    }, "strict", z.ZodTypeAny, {
+        id: string;
+        status: "draft" | "active";
+        schema: "hasna.deployment_envelope.v1";
+        audience: "internal" | "products";
+        rollback: {
+            profile: string;
+            targetReceipt?: any;
+        };
+        contractKitVersion: "1.0.0";
+        identity: {
+            appId?: any;
+            repositoryRef?: any;
+            packageName?: any;
+            projectsRef?: any;
+        };
+        ratification: {
+            evidenceRefs: any[];
+            gate: "one production deployment executed through this envelope with receipts and a passed live test";
+            satisfied: boolean;
+        };
+        accountMapping: {
+            accountId: string;
+            audience: "internal" | "products";
+            region?: string | undefined;
+            purpose?: string | undefined;
+        }[];
+        environments: {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig: Record<string, unknown>;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }[];
+        resourceGraph: {
+            resources: {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                dependsOn: string[];
+                desiredConfig: Record<string, unknown>;
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+            }[];
+        };
+        artifacts: any[];
+        deployProcedure: {
+            requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+            phases: {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    approvalScope: "action" | "none" | "phase";
+                    nonReversible: boolean;
+                    sideEffectClass?: any;
+                    compensationOperationId?: string | null | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }[];
+            plan?: any;
+        };
+        monitorWiring: {
+            checks: {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses: number[];
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }[];
+            source: "none" | "uptime" | "monitor" | "fleet";
+            importMode: "active" | "link_only";
+        };
+        createdAt?: any;
+        updatedAt?: any;
+        metadata?: any;
+    }, {
+        id: string;
+        schema: "hasna.deployment_envelope.v1";
+        audience: "internal" | "products";
+        rollback: {
+            profile: string;
+            targetReceipt?: any;
+        };
+        contractKitVersion: "1.0.0";
+        identity: {
+            appId?: any;
+            repositoryRef?: any;
+            packageName?: any;
+            projectsRef?: any;
+        };
+        ratification: {
+            gate: "one production deployment executed through this envelope with receipts and a passed live test";
+            evidenceRefs?: any[] | undefined;
+            satisfied?: boolean | undefined;
+        };
+        accountMapping: {
+            accountId: string;
+            audience: "internal" | "products";
+            region?: string | undefined;
+            purpose?: string | undefined;
+        }[];
+        environments: {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig?: Record<string, unknown> | undefined;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }[];
+        resourceGraph: {
+            resources: {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                dependsOn?: string[] | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+                desiredConfig?: Record<string, unknown> | undefined;
+            }[];
+        };
+        deployProcedure: {
+            requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+            phases: {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    sideEffectClass?: any;
+                    approvalScope?: "action" | "none" | "phase" | undefined;
+                    compensationOperationId?: string | null | undefined;
+                    nonReversible?: boolean | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }[];
+            plan?: any;
+        };
+        monitorWiring: {
+            source: "none" | "uptime" | "monitor" | "fleet";
+            checks?: {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses?: number[] | undefined;
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }[] | undefined;
+            importMode?: "active" | "link_only" | undefined;
+        };
+        status?: "draft" | "active" | undefined;
+        createdAt?: any;
+        updatedAt?: any;
+        metadata?: any;
+        artifacts?: any[] | undefined;
+    }>, {
+        id: string;
+        status: "draft" | "active";
+        schema: "hasna.deployment_envelope.v1";
+        audience: "internal" | "products";
+        rollback: {
+            profile: string;
+            targetReceipt?: any;
+        };
+        contractKitVersion: "1.0.0";
+        identity: {
+            appId?: any;
+            repositoryRef?: any;
+            packageName?: any;
+            projectsRef?: any;
+        };
+        ratification: {
+            evidenceRefs: any[];
+            gate: "one production deployment executed through this envelope with receipts and a passed live test";
+            satisfied: boolean;
+        };
+        accountMapping: {
+            accountId: string;
+            audience: "internal" | "products";
+            region?: string | undefined;
+            purpose?: string | undefined;
+        }[];
+        environments: {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig: Record<string, unknown>;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }[];
+        resourceGraph: {
+            resources: {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                dependsOn: string[];
+                desiredConfig: Record<string, unknown>;
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+            }[];
+        };
+        artifacts: any[];
+        deployProcedure: {
+            requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+            phases: {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    approvalScope: "action" | "none" | "phase";
+                    nonReversible: boolean;
+                    sideEffectClass?: any;
+                    compensationOperationId?: string | null | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }[];
+            plan?: any;
+        };
+        monitorWiring: {
+            checks: {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses: number[];
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }[];
+            source: "none" | "uptime" | "monitor" | "fleet";
+            importMode: "active" | "link_only";
+        };
+        createdAt?: any;
+        updatedAt?: any;
+        metadata?: any;
+    }, {
+        id: string;
+        schema: "hasna.deployment_envelope.v1";
+        audience: "internal" | "products";
+        rollback: {
+            profile: string;
+            targetReceipt?: any;
+        };
+        contractKitVersion: "1.0.0";
+        identity: {
+            appId?: any;
+            repositoryRef?: any;
+            packageName?: any;
+            projectsRef?: any;
+        };
+        ratification: {
+            gate: "one production deployment executed through this envelope with receipts and a passed live test";
+            evidenceRefs?: any[] | undefined;
+            satisfied?: boolean | undefined;
+        };
+        accountMapping: {
+            accountId: string;
+            audience: "internal" | "products";
+            region?: string | undefined;
+            purpose?: string | undefined;
+        }[];
+        environments: {
+            id: string;
+            classification: "development" | "staging" | "production" | "disaster_recovery";
+            desiredConfig?: Record<string, unknown> | undefined;
+            legacyAlias?: "dev" | "prod" | "staging" | undefined;
+            binding?: any;
+        }[];
+        resourceGraph: {
+            resources: {
+                id: string;
+                kind: "function" | "network" | "other" | "worker" | "cron" | "database" | "object_storage" | "queue" | "identity" | "compute" | "cache" | "topic" | "secret" | "domain" | "dns" | "cdn" | "observability";
+                provider: "aws" | "azure" | "other" | "gcp" | "cloudflare" | "vercel" | "railway" | "flyio" | "digitalocean";
+                accountId?: string | undefined;
+                uri?: any;
+                ownerPackage?: any;
+                region?: string | undefined;
+                dependsOn?: string[] | undefined;
+                sourceVocabulary?: "intent" | "deployment_db" | "app_cloud" | "aws_plan" | undefined;
+                sourceKind?: string | undefined;
+                desiredConfig?: Record<string, unknown> | undefined;
+            }[];
+        };
+        deployProcedure: {
+            requestKind: "reconciliation" | "deployment" | "promotion" | "rollback";
+            phases: {
+                id: string;
+                approvalScope: "action" | "none" | "plan" | "phase";
+                actions: {
+                    id: string;
+                    operationId: string;
+                    sideEffectClass?: any;
+                    approvalScope?: "action" | "none" | "phase" | undefined;
+                    compensationOperationId?: string | null | undefined;
+                    nonReversible?: boolean | undefined;
+                    evidenceRequirement?: string | undefined;
+                }[];
+            }[];
+            plan?: any;
+        };
+        monitorWiring: {
+            source: "none" | "uptime" | "monitor" | "fleet";
+            checks?: {
+                id: string;
+                kind: "health" | "host" | "readiness" | "deployment" | "availability" | "process" | "tls" | "domain_expiry";
+                expectedStatuses?: number[] | undefined;
+                alarmClass?: string | undefined;
+                endpoint?: any;
+            }[] | undefined;
+            importMode?: "active" | "link_only" | undefined;
+        };
+        status?: "draft" | "active" | undefined;
+        createdAt?: any;
+        updatedAt?: any;
+        metadata?: any;
+        artifacts?: any[] | undefined;
+    }>;
 };
 export declare const ContractSchemaRegistry: typeof CoreContractSchemaRegistry & typeof DeploymentSchemaRegistry;
 export type KnownSchemaId = keyof typeof ContractSchemaRegistry;
@@ -75468,6 +76924,7 @@ export type ContractBySchemaId = {
     [SCHEMA_IDS.rolloutRecord]: RolloutRecord;
     [SCHEMA_IDS.announcement]: Announcement;
     [SCHEMA_IDS.audience]: Audience;
+    [SCHEMA_IDS.deploymentEnvelope]: DeploymentEnvelope;
     [DEPLOYMENT_SCHEMA_IDS.productProjection]: ProductProjection;
     [DEPLOYMENT_SCHEMA_IDS.intentSnapshot]: IntentSnapshot;
     [DEPLOYMENT_SCHEMA_IDS.verifiedSourceCandidate]: VerifiedSourceCandidate;
@@ -75515,6 +76972,7 @@ export type ReleaseInput = z.input<typeof ReleaseSchema>;
 export type RolloutRecordInput = z.input<typeof RolloutRecordSchema>;
 export type AnnouncementInput = z.input<typeof AnnouncementSchema>;
 export type AudienceInput = z.input<typeof AudienceSchema>;
+export type DeploymentEnvelopeInput = z.input<typeof DeploymentEnvelopeSchema>;
 export type ActorPointerInput = z.input<typeof ActorPointerSchema>;
 export type ResourcePointerInput = z.input<typeof ResourcePointerSchema>;
 export type EvidencePointerInput = z.input<typeof EvidencePointerSchema>;
@@ -75566,6 +77024,7 @@ export type ContractInputBySchemaId = {
     [SCHEMA_IDS.rolloutRecord]: RolloutRecordInput;
     [SCHEMA_IDS.announcement]: AnnouncementInput;
     [SCHEMA_IDS.audience]: AudienceInput;
+    [SCHEMA_IDS.deploymentEnvelope]: DeploymentEnvelopeInput;
     [DEPLOYMENT_SCHEMA_IDS.productProjection]: ProductProjectionInput;
     [DEPLOYMENT_SCHEMA_IDS.intentSnapshot]: IntentSnapshotInput;
     [DEPLOYMENT_SCHEMA_IDS.verifiedSourceCandidate]: VerifiedSourceCandidateInput;

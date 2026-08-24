@@ -8817,6 +8817,7 @@ export {
   computeEnvironmentBindingEtag,
   computeDeploymentRecordDigest,
   canonicalizeDeploymentValue,
+  addDeploymentSafetyIssues,
   DEPLOYMENT_SCHEMA_IDS,
   DEPLOYMENT_GENERATED_ARTIFACT_ROOT,
   DEPLOYMENT_CONTRACT_VERSION

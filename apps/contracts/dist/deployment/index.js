@@ -8810,8 +8810,368 @@ function validateDeploymentContractSet(schemas3, input) {
 
 // src/schemas.ts
 import { createHash as createHash2 } from "crypto";
+
+// src/deployment-envelope.ts
+var DEPLOYMENT_ENVELOPE_SCHEMA_ID = "hasna.deployment_envelope.v1";
+var DEPLOYMENT_ENVELOPE_RATIFICATION_GATE = "one production deployment executed through this envelope with receipts and a passed live test";
+var CANONICAL_RESOURCE_KINDS = [
+  "compute",
+  "database",
+  "object_storage",
+  "cache",
+  "queue",
+  "topic",
+  "worker",
+  "cron",
+  "function",
+  "secret",
+  "domain",
+  "dns",
+  "cdn",
+  "network",
+  "identity",
+  "observability",
+  "other"
+];
+var RESOURCE_KIND_SOURCE_VOCABULARIES = [
+  "deployment_db",
+  "app_cloud",
+  "intent",
+  "aws_plan"
+];
+var RESOURCE_KIND_MAPPINGS = {
+  deployment_db: {
+    database: "database",
+    cache: "cache",
+    storage: "object_storage",
+    domain: "domain",
+    compute: "compute",
+    queue: "queue",
+    cdn: "cdn",
+    dns: "dns"
+  },
+  app_cloud: {
+    database: "database",
+    bucket: "object_storage",
+    object_store: "object_storage",
+    queue: "queue",
+    secret: "secret",
+    function: "function",
+    worker: "worker",
+    cache: "cache",
+    topic: "topic",
+    scheduler: "cron",
+    other: "other"
+  },
+  intent: {
+    database: "database",
+    object_storage: "object_storage",
+    queue: "queue",
+    cron: "cron",
+    worker: "worker"
+  },
+  aws_plan: {
+    "ecs-cluster": "compute",
+    "ecs-task-definition": "compute",
+    "ecs-service": "compute",
+    "rds-postgres": "database",
+    "s3-bucket": "object_storage",
+    "iam-task-role": "identity",
+    "iam-execution-role": "identity",
+    "cloudwatch-log-group": "observability",
+    "vpc-networking": "network",
+    "security-group": "network"
+  }
+};
+var ENVIRONMENT_ALIAS_MAP = {
+  dev: "development",
+  staging: "staging",
+  prod: "production"
+};
+var ENVELOPE_PROVIDERS = [
+  "aws",
+  "gcp",
+  "azure",
+  "cloudflare",
+  "vercel",
+  "railway",
+  "flyio",
+  "digitalocean",
+  "other"
+];
+var ACCOUNT_BOUND_PROVIDERS = new Set([
+  "aws",
+  "gcp",
+  "azure"
+]);
+var ENVELOPE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+var ENVELOPE_NAME = /^[a-z][a-z0-9._-]{0,127}$/;
+var ENVELOPE_OPERATION_ID = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
+function uniqueEnvelopeBy(values, key, ctx, path, label) {
+  const seen = new Set;
+  values.forEach((value, index) => {
+    const semanticId = key(value);
+    if (seen.has(semanticId)) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `${label} must be unique`,
+        path: [...path, index]
+      });
+    }
+    seen.add(semanticId);
+  });
+}
+function createDeploymentEnvelopeSchema(primitives) {
+  const EnvelopeIdSchema = exports_external.string().regex(ENVELOPE_ID);
+  const EnvelopeNameSchema = exports_external.string().regex(ENVELOPE_NAME);
+  const EnvelopeOperationIdSchema = exports_external.string().regex(ENVELOPE_OPERATION_ID);
+  const EnvelopeTimestampSchema = primitives.timestamp;
+  const EnvelopeMetadataSchema = primitives.metadata;
+  const EnvelopeUriSchema = primitives.uri;
+  const EnvelopeResourcePointerSchema = primitives.resourcePointer;
+  const EnvelopeEvidencePointerSchema = primitives.evidencePointer;
+  const envelopeBase = (schema) => ({
+    schema: exports_external.literal(schema),
+    id: EnvelopeIdSchema,
+    createdAt: EnvelopeTimestampSchema,
+    updatedAt: EnvelopeTimestampSchema.nullable().optional(),
+    metadata: EnvelopeMetadataSchema.optional()
+  });
+  const EnvelopeResourceSchema = exports_external.object({
+    id: EnvelopeNameSchema,
+    provider: exports_external.enum(ENVELOPE_PROVIDERS),
+    kind: exports_external.enum(CANONICAL_RESOURCE_KINDS),
+    sourceVocabulary: exports_external.enum(RESOURCE_KIND_SOURCE_VOCABULARIES).optional(),
+    sourceKind: exports_external.string().trim().min(1).optional(),
+    ownerPackage: primitives.npmPackageName,
+    region: exports_external.string().trim().min(1).optional(),
+    accountId: exports_external.string().trim().min(1).optional(),
+    uri: EnvelopeUriSchema.optional(),
+    dependsOn: exports_external.array(EnvelopeNameSchema).default([]),
+    desiredConfig: exports_external.record(exports_external.unknown()).default({})
+  }).strict().superRefine((value, ctx) => {
+    if (Boolean(value.sourceVocabulary) !== Boolean(value.sourceKind)) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "sourceVocabulary and sourceKind must be declared together",
+        path: ["sourceKind"]
+      });
+    }
+    if (value.sourceVocabulary && value.sourceKind) {
+      const mapping = RESOURCE_KIND_MAPPINGS[value.sourceVocabulary];
+      if (!mapping) {
+        ctx.addIssue({
+          code: exports_external.ZodIssueCode.custom,
+          message: "Unknown resource-kind source vocabulary",
+          path: ["sourceVocabulary"]
+        });
+      } else if (!(value.sourceKind in mapping)) {
+        ctx.addIssue({
+          code: exports_external.ZodIssueCode.custom,
+          message: `Unmapped resource kind ${value.sourceKind} in vocabulary ${value.sourceVocabulary}; unmapped kinds are rejected, never guessed`,
+          path: ["sourceKind"]
+        });
+      } else {
+        const mapped = mapping[value.sourceKind];
+        if (mapped !== value.kind) {
+          ctx.addIssue({
+            code: exports_external.ZodIssueCode.custom,
+            message: `Resource kind ${value.sourceKind} in vocabulary ${value.sourceVocabulary} maps to canonical kind ${mapped}, not ${value.kind}`,
+            path: ["kind"]
+          });
+        }
+      }
+    }
+    if (ACCOUNT_BOUND_PROVIDERS.has(value.provider) && !value.accountId) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `Provider ${value.provider} is account-bound and requires an accountId`,
+        path: ["accountId"]
+      });
+    }
+    if (!ACCOUNT_BOUND_PROVIDERS.has(value.provider)) {
+      if (!value.accountId && !value.uri && !value.region) {
+        ctx.addIssue({
+          code: exports_external.ZodIssueCode.custom,
+          message: `Provider ${value.provider} requires at least one of accountId, uri, or region`,
+          path: ["provider"]
+        });
+      }
+    }
+  });
+  const EnvelopeEnvironmentSchema = exports_external.object({
+    id: EnvelopeNameSchema,
+    classification: exports_external.enum([
+      "development",
+      "staging",
+      "production",
+      "disaster_recovery"
+    ]),
+    legacyAlias: exports_external.enum(["dev", "staging", "prod"]).optional(),
+    binding: primitives.environmentBindingRef,
+    desiredConfig: exports_external.record(exports_external.unknown()).default({})
+  }).strict().superRefine((value, ctx) => {
+    if (value.legacyAlias) {
+      const mapped = ENVIRONMENT_ALIAS_MAP[value.legacyAlias];
+      if (mapped !== value.classification) {
+        ctx.addIssue({
+          code: exports_external.ZodIssueCode.custom,
+          message: `Legacy alias ${value.legacyAlias} maps to canonical classification ${mapped}, not ${value.classification}`,
+          path: ["legacyAlias"]
+        });
+      }
+    }
+  });
+  const EnvelopeActionSchema = exports_external.object({
+    id: EnvelopeNameSchema,
+    operationId: EnvelopeOperationIdSchema,
+    sideEffectClass: primitives.providerSideEffectClass,
+    compensationOperationId: EnvelopeOperationIdSchema.nullable().optional(),
+    nonReversible: exports_external.boolean().default(false),
+    approvalScope: exports_external.enum(["none", "action", "phase"]).default("action"),
+    evidenceRequirement: exports_external.string().trim().min(1).optional()
+  }).strict();
+  const EnvelopePhaseSchema = exports_external.object({
+    id: EnvelopeNameSchema,
+    approvalScope: exports_external.enum(["none", "plan", "action", "phase"]),
+    actions: exports_external.array(EnvelopeActionSchema).min(1)
+  }).strict();
+  const EnvelopeMonitorCheckSchema = exports_external.object({
+    id: EnvelopeNameSchema,
+    kind: exports_external.enum([
+      "availability",
+      "deployment",
+      "host",
+      "process",
+      "tls",
+      "domain_expiry",
+      "health",
+      "readiness"
+    ]),
+    endpoint: EnvelopeUriSchema.optional(),
+    expectedStatuses: exports_external.array(exports_external.number().int().min(100).max(599)).default([]),
+    alarmClass: EnvelopeNameSchema.optional()
+  }).strict();
+  const DeploymentEnvelopeSchema = exports_external.object({
+    ...envelopeBase(DEPLOYMENT_ENVELOPE_SCHEMA_ID),
+    status: exports_external.enum(["draft", "active"]).default("draft"),
+    ratification: exports_external.object({
+      gate: exports_external.literal(DEPLOYMENT_ENVELOPE_RATIFICATION_GATE),
+      satisfied: exports_external.boolean().default(false),
+      evidenceRefs: exports_external.array(EnvelopeEvidencePointerSchema).default([])
+    }).strict(),
+    contractKitVersion: exports_external.literal(DEPLOYMENT_CONTRACT_VERSION),
+    identity: exports_external.object({
+      appId: primitives.appId,
+      packageName: primitives.npmPackageName,
+      projectsRef: EnvelopeResourcePointerSchema,
+      repositoryRef: EnvelopeResourcePointerSchema
+    }).strict(),
+    audience: exports_external.enum(["internal", "products"]),
+    accountMapping: exports_external.array(exports_external.object({
+      audience: exports_external.enum(["internal", "products"]),
+      accountId: exports_external.string().trim().min(1),
+      region: exports_external.string().trim().min(1).optional(),
+      purpose: exports_external.string().trim().min(1).optional()
+    }).strict()).min(1),
+    environments: exports_external.array(EnvelopeEnvironmentSchema).min(1),
+    resourceGraph: exports_external.object({
+      resources: exports_external.array(EnvelopeResourceSchema).min(1)
+    }).strict(),
+    artifacts: exports_external.array(primitives.buildArtifactRef).default([]),
+    deployProcedure: exports_external.object({
+      requestKind: exports_external.enum([
+        "deployment",
+        "promotion",
+        "rollback",
+        "reconciliation"
+      ]),
+      plan: primitives.deploymentPlanRef,
+      phases: exports_external.array(EnvelopePhaseSchema).min(1)
+    }).strict(),
+    monitorWiring: exports_external.object({
+      source: exports_external.enum(["uptime", "monitor", "fleet", "none"]),
+      importMode: exports_external.enum(["link_only", "active"]).default("link_only"),
+      checks: exports_external.array(EnvelopeMonitorCheckSchema).default([])
+    }).strict(),
+    rollback: exports_external.object({
+      profile: EnvelopeNameSchema,
+      targetReceipt: primitives.deploymentReceiptRef.optional()
+    }).strict()
+  }).strict().superRefine((value, ctx) => {
+    addDeploymentSafetyIssues(value, ctx);
+    if (value.status === "active") {
+      if (!value.ratification.satisfied) {
+        ctx.addIssue({
+          code: exports_external.ZodIssueCode.custom,
+          message: "Active envelopes require the ratification gate to be satisfied",
+          path: ["ratification", "satisfied"]
+        });
+      }
+      if (value.ratification.evidenceRefs.length === 0) {
+        ctx.addIssue({
+          code: exports_external.ZodIssueCode.custom,
+          message: "Active envelopes require ratification evidence refs",
+          path: ["ratification", "evidenceRefs"]
+        });
+      }
+    }
+    if (value.identity.projectsRef.kind !== "project") {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "The envelope requires a resolved Hasna Projects identity (projectsRef.kind must be project)",
+        path: ["identity", "projectsRef", "kind"]
+      });
+    }
+    uniqueEnvelopeBy(value.environments, (environment) => environment.id, ctx, ["environments"], "Environment ids");
+    uniqueEnvelopeBy(value.accountMapping, (mapping) => mapping.audience, ctx, ["accountMapping"], "Account mapping audiences");
+    uniqueEnvelopeBy(value.resourceGraph.resources, (resource) => resource.id, ctx, ["resourceGraph", "resources"], "Resource ids");
+    const resourceIds = new Set(value.resourceGraph.resources.map((resource) => resource.id));
+    value.resourceGraph.resources.forEach((resource, index) => {
+      for (const dependency of resource.dependsOn) {
+        if (!resourceIds.has(dependency)) {
+          ctx.addIssue({
+            code: exports_external.ZodIssueCode.custom,
+            message: "Resource dependency must resolve inside the graph",
+            path: ["resourceGraph", "resources", index, "dependsOn"]
+          });
+        }
+      }
+    });
+    uniqueEnvelopeBy(value.deployProcedure.phases, (phase) => phase.id, ctx, ["deployProcedure", "phases"], "Procedure phase ids");
+    value.deployProcedure.phases.forEach((phase, phaseIndex) => {
+      uniqueEnvelopeBy(phase.actions, (action) => action.id, ctx, ["deployProcedure", "phases", phaseIndex, "actions"], "Procedure action ids");
+      phase.actions.forEach((action, actionIndex) => {
+        const actionPath = [
+          "deployProcedure",
+          "phases",
+          phaseIndex,
+          "actions",
+          actionIndex
+        ];
+        const sideEffectClass = String(action.sideEffectClass);
+        if (sideEffectClass !== "none" && sideEffectClass !== "read_only" && !action.compensationOperationId && action.nonReversible !== true) {
+          ctx.addIssue({
+            code: exports_external.ZodIssueCode.custom,
+            message: "Side-effecting procedure actions require a compensation operation or an explicit non-reversible classification",
+            path: [...actionPath, "compensationOperationId"]
+          });
+        }
+      });
+    });
+  });
+  return {
+    DeploymentEnvelopeSchema,
+    EnvelopeResourceSchema,
+    EnvelopeEnvironmentSchema,
+    EnvelopePhaseSchema,
+    EnvelopeActionSchema
+  };
+}
+
+// src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "0.13.4";
+var CONTRACTS_PACKAGE_VERSION = "0.14.0";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -8834,6 +9194,7 @@ var SCHEMA_IDS = {
   scaffoldManifest: "hasna.scaffold_manifest.v1",
   scaffoldInstallRecord: "hasna.scaffold_install_record.v1",
   appCloudManifest: "hasna.app_cloud_manifest.v1",
+  deploymentEnvelope: "hasna.deployment_envelope.v1",
   noCloudEvidencePack: "hasna.no_cloud_evidence_pack.v1",
   secureLocalStorePolicy: "hasna.secure_local_store_policy.v1",
   serviceContract: "hasna.service_contract.v1",
@@ -13703,6 +14064,28 @@ var {
   LaunchEvidenceSchema,
   DeploymentSchemaRegistry
 } = DEPLOYMENT_SCHEMAS;
+var DEPLOYMENT_ENVELOPE_SCHEMAS = createDeploymentEnvelopeSchema({
+  timestamp: TimestampSchema,
+  metadata: MetadataSchema,
+  appId: AppIdSchema,
+  npmPackageName: NpmPackageNameSchema,
+  uri: UriSchema,
+  resourcePointer: ResourcePointerSchema,
+  evidencePointer: EvidencePointerSchema,
+  providerSideEffectClass: ProviderSideEffectClassSchema,
+  productProjectionRef: ProductProjectionRefSchema,
+  environmentBindingRef: EnvironmentBindingRefSchema,
+  buildArtifactRef: BuildArtifactRefSchema,
+  deploymentPlanRef: DeploymentPlanRefSchema,
+  deploymentReceiptRef: DeploymentReceiptRefSchema
+});
+var {
+  DeploymentEnvelopeSchema,
+  EnvelopeResourceSchema,
+  EnvelopeEnvironmentSchema,
+  EnvelopePhaseSchema,
+  EnvelopeActionSchema
+} = DEPLOYMENT_ENVELOPE_SCHEMAS;
 var CoreContractSchemaRegistry = {
   [SCHEMA_IDS.actorRef]: ActorRefSchema,
   [SCHEMA_IDS.resourceRef]: ResourceRefSchema,
@@ -13736,7 +14119,8 @@ var CoreContractSchemaRegistry = {
   [SCHEMA_IDS.release]: ReleaseSchema,
   [SCHEMA_IDS.rolloutRecord]: RolloutRecordSchema,
   [SCHEMA_IDS.announcement]: AnnouncementSchema,
-  [SCHEMA_IDS.audience]: AudienceSchema
+  [SCHEMA_IDS.audience]: AudienceSchema,
+  [SCHEMA_IDS.deploymentEnvelope]: DeploymentEnvelopeSchema
 };
 var ContractSchemaRegistry = {
   ...CoreContractSchemaRegistry,
@@ -13753,6 +14137,8 @@ export {
   canonicalizeDeploymentValue,
   VerifiedSourceCandidateSchema,
   VerifiedSourceCandidateRefSchema,
+  RESOURCE_KIND_SOURCE_VOCABULARIES,
+  RESOURCE_KIND_MAPPINGS,
   ProviderReceiptSchema,
   ProviderReceiptRefSchema,
   ProductProjectionSchema,
@@ -13762,6 +14148,12 @@ export {
   IntentSnapshotRefSchema,
   EnvironmentBindingSchema,
   EnvironmentBindingRefSchema,
+  EnvelopeResourceSchema,
+  EnvelopePhaseSchema,
+  EnvelopeEnvironmentSchema,
+  EnvelopeActionSchema,
+  ENVIRONMENT_ALIAS_MAP,
+  ENVELOPE_PROVIDERS,
   DeploymentSchemaRegistry,
   DeploymentRequestSchema,
   DeploymentRequestRefSchema,
@@ -13769,6 +14161,7 @@ export {
   DeploymentReceiptRefSchema,
   DeploymentPlanSchema,
   DeploymentPlanRefSchema,
+  DeploymentEnvelopeSchema,
   DeploymentAttemptSchema,
   DeploymentAttemptRefSchema,
   DeploymentApprovalDecisionSchema,
@@ -13776,9 +14169,13 @@ export {
   DeploymentActionSchema,
   DEPLOYMENT_SCHEMA_IDS,
   DEPLOYMENT_GENERATED_ARTIFACT_ROOT,
+  DEPLOYMENT_ENVELOPE_SCHEMA_ID,
+  DEPLOYMENT_ENVELOPE_RATIFICATION_GATE,
   DEPLOYMENT_CONTRACT_VERSION,
+  CANONICAL_RESOURCE_KINDS,
   BuildArtifactSchema,
   BuildArtifactRefSchema,
   ArtifactAttestationSchema,
-  ArtifactAttestationRefSchema
+  ArtifactAttestationRefSchema,
+  ACCOUNT_BOUND_PROVIDERS
 };
