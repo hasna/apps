@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+### Patch Changes
+
+- 70cfd55: capture-run-recency freshness fix (hasna/apps#1076) — release of the snapshot recency check so a stale capture run is surfaced rather than reported fresh (chore(release): bump @hasna/snapshots to 0.1.6).
+
 ## 0.1.5
 
 ### Patch Changes

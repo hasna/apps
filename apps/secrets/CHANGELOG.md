@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.10
+
+### Patch Changes
+
+- ff7c1fa: value-safe `copy` verb release (hasna/apps PR #685 / #1070, GO-reviewed). `secrets copy <old> <new>` reads the source and writes the destination in-process; the value never renders to any output surface (chore(secrets): version 0.3.10).
+
+## 0.3.9
+
+### Patch Changes
+
+- ae9f139: 0.3.8 published with a stale version literal (version.ts still said 0.3.7; unpublish blocked for the granular token). 0.3.9 ships the same scan-input fix with the literal in sync (chore(secrets): version 0.3.9).
+
+## 0.3.8
+
+### Patch Changes
+
+- 77673b6: `secrets scan input` scans every named path, never silently skips (AGE10-00616, hasna/apps#1069). Previously the verb accepted multiple paths but scanned only the first, reporting rc=0 while silently dropping the rest; now every named path is scanned, the exit code is the maximum severity across all inputs, and filesScanned reflects all units inspected (chore(secrets): version 0.3.8).
+
 ## 0.3.7
 
 ### Patch Changes
