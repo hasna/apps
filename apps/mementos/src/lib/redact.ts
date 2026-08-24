@@ -2,6 +2,8 @@
 // Secret redaction — auto-detect and replace secrets before storing memories
 // ============================================================================
 
+import type { Memory } from "../types/index.js";
+
 const REDACTED = "[REDACTED]";
 
 const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
@@ -59,4 +61,47 @@ export function containsSecrets(text: string): boolean {
     if (pattern.test(text)) return true;
   }
   return false;
+}
+
+/**
+ * Redact every string leaf of a JSON value (metadata, nested objects, arrays)
+ * in place of a plain JSON round-trip, which risks breaking when a value
+ * straddles the pattern boundary.
+ */
+function redactValueTree(value: unknown): unknown {
+  if (typeof value === "string") return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactValueTree);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactValueTree(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Return a display-safe copy of a memory for READ surfaces (list, search,
+ * show). The write path redacts `value`/`summary` at save time but NEVER the
+ * `key`, and values written before write-side redaction (or via a bypassing
+ * write path) can sit raw in the store — so a credential-shaped token can
+ * otherwise reach stdout verbatim and trip secret scanners
+ * (package_registry_token on `npm_`, AWS-access-key-id on `AKIA`, ...).
+ *
+ * Free-text fields — `key`, `value`, `summary`, `when_to_use` and every
+ * string leaf of `metadata` — are passed through {@link redactSecrets};
+ * coordination metadata (id, scope, category, importance, status, timestamps,
+ * agent/project/session/machine attribution, version, flags) is preserved
+ * unchanged so consumers can still coordinate on the row.
+ */
+export function redactMemoryForOutput(memory: Memory): Memory {
+  return {
+    ...memory,
+    key: redactSecrets(memory.key),
+    value: redactSecrets(memory.value),
+    summary: memory.summary ? redactSecrets(memory.summary) : null,
+    when_to_use: memory.when_to_use ? redactSecrets(memory.when_to_use) : null,
+    metadata: redactValueTree(memory.metadata) as Record<string, unknown>,
+  };
 }
