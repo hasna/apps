@@ -2,7 +2,7 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.6.2
+// Source: ConversationsClient 0.7.6
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
@@ -173,7 +173,7 @@ export class ConversationsClient {
     }
 
     /** Read a bounded, cursored page of notifications for the authenticated principal */
-    async readChannelNotifications(query?: { "agent"?: string; "channel"?: string; "since"?: string; "unread_only"?: boolean; "mark_read"?: boolean; "limit"?: number; "cursor"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<ChannelNotificationPage> {
+    async readChannelNotifications(query?: { "agent": string; "channel"?: string; "since"?: string; "unread_only"?: boolean; "mark_read"?: boolean; "limit"?: number; "cursor"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<ChannelNotificationPage> {
       return this.request("GET", `/v1/channel-notifications/inbox`, {
         body: undefined,
         query,

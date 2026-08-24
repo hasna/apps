@@ -1787,10 +1787,11 @@ async function handleV1(
 
   if (sub === "messages/blockers" && method === "GET") {
     if (!agent) return json({ error: "authenticated agent is required" }, 401);
-    const requestedAgent = str(url.searchParams.get("agent"));
-    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
-      return json({ error: "blocker agent must match the authenticated agent" }, 403);
-    }
+    // The API key is the fleet-level authorization principal; the declared
+    // byline is the identity that scopes the read (task 1871c67f). An
+    // explicit `agent` query scopes to that agent; an omitted one falls back
+    // to the key claim.
+    const scopeAgent = str(url.searchParams.get("agent")) ?? agent;
     const collection = collectionReadOptions(url);
     const context = deps.incidentProjector ?? null;
     if (!context) {
@@ -1844,7 +1845,7 @@ async function handleV1(
        SELECT ${messagePreviewProjectionPg("m")}
        FROM messages m JOIN eligible ON eligible.id = m.id
        ORDER BY m.created_at ASC, m.id ASC LIMIT $4 OFFSET $5`,
-      [context?.tenant_id ?? null, context?.authority_id ?? null, agent, collection.limit + 1, collection.offset],
+      [context?.tenant_id ?? null, context?.authority_id ?? null, scopeAgent, collection.limit + 1, collection.offset],
     ));
     return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
       limit: collection.limit,
@@ -2007,11 +2008,10 @@ async function handleV1(
   if (sub === "messages/read" && method === "POST") {
     const body = await readJson(req);
     if (!agent) return json({ error: "authenticated agent is required" }, 401);
-    const requestedReader = str(body.reader) ?? str(body.agent);
-    if (requestedReader && requestedReader.toLowerCase() !== agent.toLowerCase()) {
-      return json({ error: "reader must match the authenticated agent" }, 403);
-    }
-    const reader = agent;
+    // The API key is the fleet-level authorization principal; the declared
+    // reader is the identity that receipts are stamped under (task
+    // 1871c67f). An omitted reader falls back to the key claim.
+    const reader = str(body.reader) ?? str(body.agent) ?? agent;
     const ids = Array.isArray(body.ids)
       ? (body.ids as unknown[]).map(Number).filter((n) => Number.isFinite(n))
       : [];
@@ -3950,9 +3950,9 @@ async function handleChannelNotifications(
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
     if (!who) return json({ error: "agent is required" }, 400);
-    if (!agent || who.toLowerCase() !== agent.toLowerCase()) {
-      return json({ error: "notification agent must match the authenticated agent" }, 403);
-    }
+    // The API key is the fleet-level authorization principal; the queried
+    // `agent` is the identity the inbox is scoped to (task 1871c67f). The
+    // key claim never 403s a named seat's own inbox.
     const collection = collectionReadOptions(url);
     const presence = await client.get<{ id: string }>(
       `SELECT id FROM agent_presence WHERE LOWER(agent) = LOWER($1) ORDER BY last_seen_at DESC LIMIT 1`,

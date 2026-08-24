@@ -4219,29 +4219,61 @@ describe("H3 /v1/messages/read mention acknowledgements", () => {
     expect(mentionRow(firstId).notified_at).toBeUndefined();
   });
 
-  test("reader must match the authenticated agent", async () => {
+  test("a declared reader that differs from the API-key principal claim is accepted; receipts stamp under the declared reader", async () => {
+    // Fleet posture (task 1871c67f, corroborated by 98533aab): the store API
+    // key carries a fleet-level agent claim, while the CLI byline is
+    // caller-declared. The key authorizes; the byline is the identity. A
+    // declared reader that differs from the key claim must NOT 403 — the
+    // equality check deterministically broke every named seat's read path.
     const res = await fetch(`${base}/v1/messages/read`, {
       method: "POST",
       headers: { "x-api-key": rwKey, "content-type": "application/json" },
       body: JSON.stringify({ reader: "someone-else", mentions_only: true }),
     });
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ error: "reader must match the authenticated agent" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ marked: 0 });
+
+    // Receipts are stamped under the DECLARED reader, never the key claim.
+    const bulk = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ uuid: "h3-declared-reader-a", from: "seed", to: "alerts", channel: "alerts", content: "payload @someone-else #0" }],
+      }),
+    });
+    expect(bulk.status).toBe(200);
+    const source = activeFakeClient!.__debug.messages.find((m) => m.uuid === "h3-declared-reader-a");
+    const mention = activeFakeClient!.__debug.messageMentions.find((m) => m.message_id === source?.id);
+    expect(mention).toBeDefined();
+    expect(mention!.mentioned_agent).toBe("someone-else");
+    expect(mention!.notified_at).toBeUndefined();
+    const stamped = await fetch(`${base}/v1/messages/read`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ reader: "someone-else", mentions_only: true, mention_ids: [mention!.id] }),
+    });
+    expect(stamped.status).toBe(200);
+    expect(await stamped.json()).toEqual({ marked: 1 });
+    expect(mentionRow(mention!.id).notified_at).toBeDefined();
   });
 });
 
 /**
- * H4 — channel-notifications lifecycle and the authenticated-agent binding.
+ * H4 — channel-notifications lifecycle and the agent scoping.
  *
  * Agent-authored (SOL consult refused before delivering a final spec; its
  * preliminary findings named this authorization seam. Spec from independent
  * analysis of the channel-notifications router).
  *
- * The inbox route binds the queried `agent` to the API principal (403 on
- * mismatch) and does so BEFORE any SQL runs. The sibling routes take an
- * `agent` from body/path/query; their contract is pinned here at the
- * execution level: subscribe upsert, listing, unsubscribe 404 semantics,
- * read/read-all marking, and the pre-query 403 on the one route that binds.
+ * The inbox route takes the queried `agent` as the SCOPE, not as something
+ * that must equal the API-key principal claim. The fleet deployment model
+ * (task 1871c67f, corroborated by 98533aab) gives every store API key a
+ * fleet-level agent claim, while the CLI byline is caller-declared — so an
+ * equality check between the two deterministically 403'd every named seat.
+ * The key authorizes (tenant + scopes); the byline is the identity. The
+ * sibling routes take an `agent` from body/path/query; their contract is
+ * pinned here at the execution level: subscribe upsert, listing, unsubscribe
+ * 404 semantics, read/read-all marking, and the scoped inbox read.
  */
 describe("H4 channel-notifications lifecycle and binding", () => {
   function seedNotifChannel(name: string) {
@@ -4360,22 +4392,6 @@ describe("H4 channel-notifications lifecycle and binding", () => {
     expect(await again.json()).toEqual({ error: "Subscription not found" });
   });
 
-  test("inbox binds the queried agent to the API principal before any query runs", async () => {
-    const intruderKey = mintApiKey({
-      app: "conversations",
-      agent: "intruder",
-      scopes: ["conversations:read"],
-      signingSecret: SIGNING,
-    }).token;
-    const mark = activeFakeClient!.__debug.manyCalls.length;
-    const res = await fetch(`${base}/v1/channel-notifications/inbox?agent=watcher`, {
-      headers: { "x-api-key": intruderKey },
-    });
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "notification agent must match the authenticated agent" });
-    expect(activeFakeClient!.__debug.manyCalls.slice(mark)).toHaveLength(0);
-  });
-
   test("POST /read marks the named message ids as notified reads", async () => {
     seedNotifChannel("h4-read");
     await fetch(`${base}/v1/channel-notifications`, {
@@ -4419,6 +4435,165 @@ describe("H4 channel-notifications lifecycle and binding", () => {
     const snapshot = calls.find((call) => /INSERT INTO channel_notification_reads/i.test(call.sql));
     expect(snapshot).toBeDefined();
     expect(snapshot!.sql).toContain("AND m.channel = $");
+  });
+});
+
+/**
+ * H4b — /v1/messages/blockers scopes to the DECLARED agent under a
+ * fleet-claim key.
+ *
+ * Before task 1871c67f the blockers route rejected any `agent` query that
+ * differed from the API-key principal claim with a deterministic 403, and the
+ * client's default invocation omitted `agent` entirely — so every fleet seat
+ * saw either a 403 on `--from <seat>` or a fleet-wide unscoped read at rc=0.
+ * The key authorizes; the declared byline scopes. Omitted `agent` falls back
+ * to the key claim. A dedicated server carries an incident-projector stub so
+ * the canonical-read 503 guard is skipped (the shared fake client's
+ * over-broad COUNT(*) shim would otherwise 503 once any message is seeded).
+ */
+describe("H4b blockers declared-agent scoping", () => {
+  let blockerServer: ReturnType<typeof startApiServer>;
+  let blockerBase: string;
+  let blockerDebug: ReturnType<typeof makeFakeClient>["__debug"];
+
+  beforeAll(() => {
+    // A dedicated client (never the shared `activeFakeClient`) plus an
+    // incident-projector stub, so the canonical-read 503 guard is skipped —
+    // the shared fake client's over-broad COUNT(*) shim would otherwise 503
+    // once any message is seeded.
+    const blockerClient = makeFakeClient();
+    blockerDebug = blockerClient.__debug;
+    const keys = new ApiKeyStore(blockerClient as any);
+    const verifier = verifyApiKey({
+      app: "conversations",
+      signingSecret: SIGNING,
+      keyStatus: async (): Promise<ApiKeyStatus> => "active",
+    });
+    blockerServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: {
+        client: blockerClient as any,
+        keys,
+        verifier,
+        incidentProjector: { tenant_id: "test-tenant", authority_id: "test-authority" },
+      },
+    });
+    blockerBase = `http://127.0.0.1:${blockerServer.port}`;
+  });
+
+  afterAll(() => { blockerServer.stop(true); });
+
+  test("a fleet-claim key reading agent=<seat> is accepted and scopes the query to the seat", async () => {
+    const fleetKey = mintApiKey({
+      app: "conversations",
+      agent: "fleet",
+      scopes: ["conversations:read"],
+      signingSecret: SIGNING,
+    }).token;
+    const mark = blockerDebug.manyCalls.length;
+    const res = await fetch(`${blockerBase}/v1/messages/blockers?agent=agent-chief-staff`, {
+      headers: { "x-api-key": fleetKey },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { messages: unknown[] };
+    expect(Array.isArray(body.messages)).toBe(true);
+    // The scoped read ran (before the fix it 403'd before any query), bound
+    // to the DECLARED seat — $3 of the blockers SELECT.
+    const calls = blockerDebug.manyCalls.slice(mark);
+    const scoped = calls.find((call) => /FROM messages m JOIN eligible/i.test(call.sql));
+    expect(scoped).toBeDefined();
+    expect(scoped!.params[2]).toBe("agent-chief-staff");
+  });
+
+  test("an omitted agent falls back to the key claim (401 without a key)", async () => {
+    const fleetKey = mintApiKey({
+      app: "conversations",
+      agent: "fleet",
+      scopes: ["conversations:read"],
+      signingSecret: SIGNING,
+    }).token;
+    const res = await fetch(`${blockerBase}/v1/messages/blockers`, {
+      headers: { "x-api-key": fleetKey },
+    });
+    expect(res.status).toBe(200);
+    const noKey = await fetch(`${blockerBase}/v1/messages/blockers?agent=agent-chief-staff`);
+    expect(noKey.status).toBe(401);
+  });
+});
+
+/**
+ * H4c — /v1/channel-notifications/inbox scopes to the DECLARED agent under a
+ * fleet-claim key.
+ *
+ * Before task 1871c67f the inbox route 403'd ("notification agent must match
+ * the authenticated agent") whenever the queried agent differed from the
+ * API-key principal claim — deterministically, for every named seat. A
+ * dedicated client keeps the shim's message rows out of the inbox SELECT (its
+ * over-broad /FROM messages/ branch would otherwise feed the preview builder
+ * rows it cannot map).
+ */
+describe("H4c inbox declared-agent scoping", () => {
+  let inboxServer: ReturnType<typeof startApiServer>;
+  let inboxBase: string;
+  let inboxDebug: ReturnType<typeof makeFakeClient>["__debug"];
+
+  beforeAll(() => {
+    const inboxClient = makeFakeClient();
+    inboxDebug = inboxClient.__debug;
+    const keys = new ApiKeyStore(inboxClient as any);
+    const verifier = verifyApiKey({
+      app: "conversations",
+      signingSecret: SIGNING,
+      keyStatus: async (): Promise<ApiKeyStatus> => "active",
+    });
+    inboxServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: { client: inboxClient as any, keys, verifier },
+    });
+    inboxBase = `http://127.0.0.1:${inboxServer.port}`;
+  });
+
+  afterAll(() => { inboxServer.stop(true); });
+
+  test("a fleet-claim key reading the seat's own inbox is accepted and scoped to the declared agent", async () => {
+    // Fleet-claim key (agent 'fleet') reading agent=watcher: the key
+    // authorizes, the byline scopes. Before the fix this deterministically
+    // 403'd before any query ran — the clean-empty-inbox failure.
+    const fleetKey = mintApiKey({
+      app: "conversations",
+      agent: "fleet",
+      scopes: ["conversations:read"],
+      signingSecret: SIGNING,
+    }).token;
+    const mark = inboxDebug.manyCalls.length;
+    const res = await fetch(`${inboxBase}/v1/channel-notifications/inbox?agent=watcher`, {
+      headers: { "x-api-key": fleetKey },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { notifications: unknown[] };
+    expect(Array.isArray(body.notifications)).toBe(true);
+    // The scoped read actually ran (before the fix it 403'd before any query),
+    // and bound the DECLARED agent — not the key's 'fleet' claim.
+    const calls = inboxDebug.manyCalls.slice(mark);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.at(-1)!.params[0]).toBe("watcher");
+  });
+
+  test("an inbox without an agent is refused 400, and without a key 401", async () => {
+    const fleetKey = mintApiKey({
+      app: "conversations",
+      agent: "fleet",
+      scopes: ["conversations:read"],
+      signingSecret: SIGNING,
+    }).token;
+    const missing = await fetch(`${inboxBase}/v1/channel-notifications/inbox`, {
+      headers: { "x-api-key": fleetKey },
+    });
+    expect(missing.status).toBe(400);
+    const noKey = await fetch(`${inboxBase}/v1/channel-notifications/inbox?agent=watcher`);
+    expect(noKey.status).toBe(401);
   });
 });
 

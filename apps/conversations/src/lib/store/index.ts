@@ -472,23 +472,18 @@ export interface ConversationsStore {
   /**
    * Unread blocking messages for one agent.
    *
-   * `agent` is the identity to scope the read to. `opts.explicitFrom` tells
-   * the store whether the caller EXPLICITLY requested that agent (a `--from`
-   * / `from` flag) or resolved it as the reader's own identity. The hosted
-   * client forwards an explicitly requested agent to the server so a mismatch
-   * with the authenticated API principal fails loudly (403) instead of
-   * silently returning the principal's blockers; the default identity is
-   * never forwarded, because a drifted local identity would make the server
-   * reject a valid request. A `--from` for a different agent must fail
-   * loudly, never return another agent's blockers at rc=0.
+   * `agent` is the identity the read is scoped to, forwarded to the hosted
+   * server unconditionally (task 1871c67f): the API key authorizes, the
+   * byline scopes. Omitting it was the fleet-wide unscoped read every seat
+   * reported as "ZERO blockers".
    */
   getUnreadBlockers: (
     agent: string,
-    opts?: { limit?: number; offset?: number; explicitFrom?: boolean },
+    opts?: { limit?: number; offset?: number },
   ) => Promise<Message[]>;
   getUnreadBlockerPreviews: (
     agent: string,
-    opts?: { limit?: number; offset?: number; explicitFrom?: boolean; max_bytes?: number; preview_bytes?: number; timeout_ms?: number },
+    opts?: { limit?: number; offset?: number; max_bytes?: number; preview_bytes?: number; timeout_ms?: number },
   ) => Promise<MessagePreviewPage>;
   readMentionPreviews: Async<typeof messagesLib.readMentionPreviews>;
   getMessagesForAgent: Async<typeof messagesLib.getMessagesForAgent>;

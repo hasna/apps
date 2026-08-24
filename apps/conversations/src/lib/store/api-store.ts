@@ -1302,13 +1302,10 @@ export class ApiStore implements ConversationsStore {
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
     return await this.getBounded<MessagePreviewPage>("/messages/blockers", {
-      // Blocker reads are scoped by the authenticated API principal. The
-      // caller's DEFAULT identity is deliberately NOT forwarded: when the two
-      // identity surfaces have drifted, the server would reject a valid
-      // request (403). An EXPLICITLY requested agent (the CLI's --from flag)
-      // IS forwarded, so a request for someone else's blockers fails loudly
-      // at the server instead of silently returning the principal's blockers.
-      agent: opts.explicitFrom ? agent : undefined,
+      // The API key authorizes; the caller's byline is the identity that
+      // scopes the read (task 1871c67f). The byline is forwarded
+      // unconditionally — omitting it was the fleet-wide unscoped read.
+      agent,
       limit,
       cursor,
       max_bytes: maxBytes,
