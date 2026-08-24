@@ -98,6 +98,21 @@ export function markEventOutboxSpooled(db: EventOutboxDatabase, ids: string[]): 
   return Number(result?.changes ?? 0);
 }
 
+/**
+ * Dead-letters one outbox row whose envelope cannot be transported (for
+ * example a malformed envelope_json that cannot be parsed). Dead-lettered rows
+ * are skipped by every later drain instead of sitting 'pending' forever and
+ * being re-scanned (and re-failed) on each pass.
+ */
+export function markEventOutboxDead(db: EventOutboxDatabase, id: string): number {
+  const result = db.prepare(`
+    UPDATE conversations_event_outbox
+    SET status = 'dead'
+    WHERE id = ? AND status = 'pending'
+  `).run(id);
+  return Number(result?.changes ?? 0);
+}
+
 export function countEventOutboxByStatus(db: EventOutboxDatabase): Record<EventOutboxStatus, number> {
   const counts: Record<EventOutboxStatus, number> = { pending: 0, spooled: 0, delivered: 0, dead: 0 };
   const rows = db.prepare(`

@@ -15,6 +15,7 @@ import {
   ensureEventsOutboxSchema,
   insertEventOutboxRow,
   listPendingEventOutbox,
+  markEventOutboxDead,
   markEventOutboxSpooled,
   type EventOutboxDatabase,
 } from "./events-outbox.js";
@@ -110,6 +111,9 @@ export async function drainConversationEventOutbox(
     try {
       event = JSON.parse(row.envelope_json) as EventInput<ConversationEventData>;
     } catch {
+      // Malformed envelope: dead-letter instead of leaving it 'pending' forever
+      // (re-scanned and re-failed on every drain).
+      markEventOutboxDead(db, row.id);
       result.skipped += 1;
       continue;
     }

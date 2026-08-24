@@ -50,6 +50,23 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       manyCalls.push({ sql, params: [..._p] });
+      if (/SELECT td\.depends_on_id, t\.subject, t\.status FROM task_dependencies/i.test(sql)) {
+        // start-action blocked-dependency check: return incomplete deps of the task.
+        const taskId = Number(_p[0]);
+        const task = tasks.find((t) => Number(t.id) === taskId);
+        const deps: number[] = task?.depends_on ?? [];
+        return deps
+          .map((depId) => tasks.find((t) => Number(t.id) === Number(depId)))
+          .filter((dep): dep is any => dep !== undefined && dep.status !== "completed")
+          .map((dep) => ({ depends_on_id: Number(dep.id), subject: dep.subject, status: dep.status }));
+      }
+      if (/SELECT td\.task_id, t\.status FROM task_dependencies/i.test(sql)) {
+        // unblockDependents dependent list: tasks that depend on the completed id.
+        const depId = Number(_p[0]);
+        return tasks
+          .filter((t) => (t.depends_on ?? []).some((id: number) => Number(id) === depId))
+          .map((t) => ({ task_id: Number(t.id), status: t.status }));
+      }
       if (/SELECT uuid FROM messages WHERE uuid = ANY/i.test(sql)) {
         const uuids = new Set((_p[0] as string[] | undefined) ?? []);
         return messages
@@ -422,6 +439,45 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/set_config\('hasna\.conversations\.channel_scope_rewrite'/i.test(sql)) {
         scopeRewriteCalls.push({ sql, params: [...p] });
       }
+      if (/SELECT id FROM tasks WHERE/i.test(sql)) {
+        const key = p[0];
+        const task = tasks.find((t) =>
+          typeof key === "number" || /^\d+$/.test(String(key))
+            ? Number(t.id) === Number(key)
+            : t.uuid === key
+        );
+        return task ? { id: Number(task.id) } : null;
+      }
+      if (/SELECT status, priority, reporter FROM tasks WHERE id = \$1/i.test(sql)) {
+        const task = tasks.find((t) => Number(t.id) === Number(p[0]));
+        return task ? { status: task.status, priority: task.priority, reporter: task.reporter } : null;
+      }
+      if (/SELECT id, uuid, subject, status, priority, assignee, project_id FROM tasks WHERE id = \$1/i.test(sql)) {
+        const task = tasks.find((t) => Number(t.id) === Number(p[0]));
+        if (!task) return null;
+        return {
+          id: Number(task.id),
+          uuid: task.uuid,
+          subject: task.subject,
+          status: task.status,
+          priority: task.priority,
+          assignee: task.assignee ?? null,
+          project_id: task.project_id ?? null,
+        };
+      }
+      if (/SELECT \* FROM tasks WHERE id = \$1/i.test(sql)) {
+        return tasks.find((t) => Number(t.id) === Number(p[0])) ?? null;
+      }
+      if (/SELECT COUNT\(\*\)::int AS c FROM task_dependencies/i.test(sql)) {
+        const taskId = Number(p[0]);
+        const task = tasks.find((t) => Number(t.id) === taskId);
+        const deps: number[] = task?.depends_on ?? [];
+        const incomplete = deps.filter((depId: number) => {
+          const dep = tasks.find((t) => Number(t.id) === Number(depId));
+          return dep !== undefined && dep.status !== "completed";
+        });
+        return { c: incomplete.length };
+      }
       if (/SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE channel = \$1 AND agent = \$2/i.test(sql)) {
         return channelSubscriptions.find((row) => row.channel === p[0] && row.agent === p[1]) ?? null;
       }
@@ -696,6 +752,34 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       const tx = {
         async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
           const [first, second] = p as any[];
+          if (/INSERT INTO conversations_event_outbox/i.test(sql)) {
+            // The Conversations→Events outbox INSERT runs inside the task
+            // transaction; record it so tests can assert hosted outbox emission.
+            queryCalls.push({ sql, params: [...p] });
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE tasks SET status/i.test(sql)) {
+            // The id is the LAST param: `SET status='x' ... WHERE id = $1` has
+            // one param, the transition form `SET status='x', ... WHERE id = $2`
+            // has two.
+            const task = tasks.find((t) => Number(t.id) === Number(p[p.length - 1]));
+            if (!task) return { rows: [], rowCount: 0 };
+            const statusMatch = sql.match(/SET status = '([^']+)'/);
+            if (statusMatch) task.status = statusMatch[1];
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE tasks SET priority/i.test(sql)) {
+            const task = tasks.find((t) => Number(t.id) === Number(p[p.length - 1]));
+            if (!task) return { rows: [], rowCount: 0 };
+            task.priority = first;
+            return { rows: [], rowCount: 1 };
+          }
+          if (/UPDATE tasks SET assignee/i.test(sql)) {
+            const task = tasks.find((t) => Number(t.id) === Number(p[p.length - 1]));
+            if (!task) return { rows: [], rowCount: 0 };
+            task.assignee = first ?? null;
+            return { rows: [], rowCount: 1 };
+          }
           if (/INSERT INTO message_attachments/i.test(sql)) {
             let inserted = 0;
             for (let index = 0; index < p.length; index += 5) {
@@ -4419,5 +4503,95 @@ describe("H5 attachment download boundary", () => {
     });
     expect(res.status).toBe(200);
     expect(Buffer.from(await res.arrayBuffer())).toEqual(Buffer.from("read scope\n"));
+  });
+});
+
+/**
+ * H6 — hosted (PG) Conversations→Events outbox emission.
+ *
+ * The hosted api.ts writes `conversations_event_outbox` rows inside the SAME PG
+ * transaction as each mutation. These tests assert that emission on the hosted
+ * path matches the contract the local path pins: every task transition uses the
+ * shared past-tense action vocabulary (never the raw HTTP verb), an
+ * auto-unblocked dependent gets an `auto_unblocked` outbox row (the exact
+ * silent-divergence the webhook-delivery work closes), and message creation
+ * emits a message outbox row.
+ */
+describe("H6 hosted /v1 outbox emission (Conversations→Events)", () => {
+  function outboxCalls(mark: number): Array<{ sql: string; params: readonly unknown[] }> {
+    return activeFakeClient!.__debug.queryCalls.slice(mark).filter((c) => /INSERT INTO conversations_event_outbox/i.test(c.sql));
+  }
+
+  function outboxEnvelopes(mark: number): Array<{ data: Record<string, unknown> }> {
+    return outboxCalls(mark).map((c) => JSON.parse(String(c.params[3])) as { data: Record<string, unknown> });
+  }
+
+  function seedTask(partial: Record<string, unknown>): void {
+    activeFakeClient!.__debug.tasks.push({
+      id: partial.id, uuid: partial.uuid, subject: partial.subject,
+      status: partial.status ?? "pending", priority: partial.priority ?? "medium",
+      assignee: partial.assignee ?? null, reporter: partial.reporter ?? "alice",
+      project_id: partial.project_id ?? null, channel: null, parent_id: null,
+      depends_on: partial.depends_on ?? [], tags: null, metadata: null, description: null,
+      created_at: "2026-08-06T10:00:00.000Z", started_at: null, completed_at: null, cancelled_at: null, due_at: null,
+    });
+  }
+
+  test("hosted task transition emits the past-tense action in the outbox", async () => {
+    const mark = activeFakeClient!.__debug.queryCalls.length;
+    seedTask({ id: 1001, uuid: "h6-start-uuid", subject: "h6-start" });
+    const res = await fetch(`${base}/v1/tasks/1001/start`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ agent: "alice" }),
+    });
+    expect(res.status).toBe(200);
+    const envelopes = outboxEnvelopes(mark);
+    expect(envelopes).toHaveLength(1);
+    // The hosted path must emit the past-tense action the local path pins
+    // ("started"), never the raw HTTP verb ("start").
+    expect(envelopes[0]!.data.action).toBe("started");
+    expect(envelopes[0]!.data.transition_uuid).toBeTruthy();
+  });
+
+  test("hosted complete auto-unblocks dependents and emits an auto_unblocked outbox row", async () => {
+    const mark = activeFakeClient!.__debug.queryCalls.length;
+    seedTask({ id: 1002, uuid: "h6-complete-uuid", subject: "h6-complete" });
+    seedTask({ id: 1003, uuid: "h6-dep-uuid", subject: "h6-dependents", status: "blocked", depends_on: [1002] });
+    const res = await fetch(`${base}/v1/tasks/1002/complete`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ agent: "alice" }),
+    });
+    expect(res.status).toBe(200);
+    const envelopes = outboxEnvelopes(mark);
+    const actions = envelopes.map((e) => e.data.action);
+    // The completed task emits the past-tense action.
+    expect(actions).toContain("completed");
+    // The auto-unblocked dependent gets its OWN outbox row (local-path parity),
+    // and the dependent task actually flipped to pending.
+    expect(actions).toContain("auto_unblocked");
+    const dependent = activeFakeClient!.__debug.tasks.find((t) => Number(t.id) === 1003);
+    expect(dependent?.status).toBe("pending");
+  });
+
+  test("message creation emits a message outbox row (hosted emission is not silent)", async () => {
+    const channelName = "h6-outbox-channel";
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: channelName, created_by: "test", description: "d" }),
+    });
+    expect(created.status).toBe(201);
+    const mark = activeFakeClient!.__debug.queryCalls.length;
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: "outbox probe", channel: channelName }),
+    });
+    expect(sent.status).toBe(201);
+    const envelopes = outboxEnvelopes(mark);
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0]!.data.uuid).toBeTruthy();
   });
 });

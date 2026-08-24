@@ -1266,6 +1266,77 @@ function transitionDetailFor(
   }
 }
 
+/**
+ * Maps the hosted HTTP action names to the shared past-tense action vocabulary
+ * pinned by events-bridge.test.ts. The local emission path uses past-tense
+ * actions ("started","completed",...); the hosted path must emit the SAME
+ * vocabulary so the same transition yields the same data.action on both paths.
+ */
+const TASK_ACTION_TO_PAST_TENSE: Record<string, string> = {
+  start: "started",
+  complete: "completed",
+  cancel: "cancelled",
+  block: "blocked",
+  unblock: "unblocked",
+  reopen: "reopened",
+  assign: "assigned",
+  priority: "priority_changed",
+};
+
+interface TaskOutboxTask {
+  id: number;
+  uuid: string;
+  subject: string;
+  status: string;
+  priority: string;
+  assignee: string | null;
+  project_id: string | null;
+}
+
+/**
+ * Emits exactly one Conversations→Events outbox row inside the caller's PG
+ * transaction for a task transition (mirrors the local `emitTaskEvent` path).
+ * `action` must already be in the shared past-tense vocabulary. Idempotent by
+ * stable event id.
+ */
+async function emitTaskOutboxRow(
+  tx: TypedQueryClient,
+  task: TaskOutboxTask,
+  action: string,
+  oldStatus: string,
+  agent: string,
+  detail: string | null,
+  transitionUuid = randomUUID(),
+): Promise<void> {
+  const envelope = buildConversationEventEnvelope({
+    id: `conversations:task:${task.uuid}:activity:${transitionUuid}`,
+    type: TASK_UPDATED_TYPE,
+    time: new Date().toISOString(),
+    subject: task.subject,
+    data: {
+      task_id: task.id,
+      task_uuid: task.uuid,
+      subject: task.subject,
+      action,
+      old_status: oldStatus,
+      new_status: task.status,
+      agent,
+      detail,
+      priority: task.priority,
+      assignee: task.assignee,
+      project_id: task.project_id,
+      transition_uuid: transitionUuid,
+    },
+    appEvent: { kind: "task.updated", action },
+  });
+  await tx.query(
+    `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
+     VALUES ($1,$2,$3,$4,$5,'pending',0)
+     ON CONFLICT (id) DO NOTHING`,
+    [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
+  );
+}
+
 function parseTaskRow(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: Number(row.id),
@@ -1354,6 +1425,16 @@ async function unblockDependents(client: TypedQueryClient, completedId: number):
     if (Number(inc?.c ?? 0) === 0) {
       await client.query(`UPDATE tasks SET status = 'pending' WHERE id = $1`, [dep.task_id]);
       await logTaskActivity(client, Number(dep.task_id), "", "auto_unblocked", `dependency #${completedId} completed`);
+      // A committed dependent mutation must carry durable event intent (the
+      // same outbox row the local path emits for `auto_unblocked`). This runs
+      // inside the caller's transaction.
+      const task = await client.get<TaskOutboxTask>(
+        `SELECT id, uuid, subject, status, priority, assignee, project_id FROM tasks WHERE id = $1`,
+        [dep.task_id],
+      );
+      if (task) {
+        await emitTaskOutboxRow(client, task, "auto_unblocked", "blocked", "system", `dependency #${completedId} completed`);
+      }
     }
   }
 }
@@ -4438,42 +4519,16 @@ async function handleTasks(
         }
       }
 
-      // Atomic event capture in the SAME PG transaction as the transition.
-      const updated = await tx.get<{
-        id: number; uuid: string; subject: string; status: string; priority: string;
-        assignee: string | null; project_id: string | null;
-      }>(
+      // Atomic event capture in the SAME PG transaction as the transition. The
+      // action uses the shared past-tense vocabulary (events-bridge pins it),
+      // never the raw HTTP verb, so hosted and local emissions agree.
+      const updated = await tx.get<TaskOutboxTask>(
         `SELECT id, uuid, subject, status, priority, assignee, project_id FROM tasks WHERE id = $1`,
         [id],
       );
       if (updated) {
-        const envelope = buildConversationEventEnvelope({
-          id: `conversations:task:${updated.uuid}:activity:${transitionUuid}`,
-          type: TASK_UPDATED_TYPE,
-          time: now(),
-          subject: updated.subject,
-          data: {
-            task_id: updated.id,
-            task_uuid: updated.uuid,
-            subject: updated.subject,
-            action,
-            old_status: current?.status ?? "",
-            new_status: updated.status,
-            agent: actor,
-            detail: transitionDetailFor(action, current, body, requestedPriority),
-            priority: updated.priority,
-            assignee: updated.assignee,
-            project_id: updated.project_id,
-            transition_uuid: transitionUuid,
-          },
-          appEvent: { kind: "task.updated", action },
-        });
-        await tx.query(
-          `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
-           VALUES ($1,$2,$3,$4,$5,'pending',0)
-           ON CONFLICT (id) DO NOTHING`,
-          [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
-        );
+        const eventAction = TASK_ACTION_TO_PAST_TENSE[action] ?? action;
+        await emitTaskOutboxRow(tx, updated, eventAction, current?.status ?? "", actor, transitionDetailFor(action, current, body, requestedPriority), transitionUuid);
       }
     });
     return json({ task: await getEnrichedTask(client, id) });

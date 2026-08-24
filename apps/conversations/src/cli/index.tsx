@@ -20,7 +20,7 @@ import { registerTmuxCommands } from "./commands/tmux.js";
 import { registerAdminCommands } from "./commands/admin.js";
 import { registerProjectRegistrationCommands } from "./commands/project-registration.js";
 import pkg from "../../package.json";
-import { printErrorLine, printJsonLine } from "../lib/stdout.js";
+import { printErrorLine, printJsonLine, printLine } from "../lib/stdout.js";
 
 const program = new Command();
 
@@ -83,7 +83,7 @@ program
     const { drainConversationEventOutbox } = await import("../lib/events-bridge.js");
     const db = getDb();
     const result = await drainConversationEventOutbox(db, { limit: Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined });
-    console.log(`events-drain: scanned ${result.scanned}, transported ${result.transported}, skipped ${result.skipped}, spooled ${result.spooled}`);
+    printLine(`events-drain: scanned ${result.scanned}, transported ${result.transported}, skipped ${result.skipped}, spooled ${result.spooled}`);
   });
 
 // ---- default: TUI ----

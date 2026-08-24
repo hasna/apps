@@ -18,6 +18,7 @@ import {
 } from "./tasks.js";
 import {
   countEventOutboxByStatus,
+  insertEventOutboxRow,
   listPendingEventOutbox,
 } from "./events-outbox.js";
 import {
@@ -146,5 +147,26 @@ describe("Conversations → Events source outbox", () => {
     const again = await drainConversationEventOutbox(db, { dataDir: EVENTS_DIR });
     expect(again).toMatchObject({ scanned: 0, transported: 0, spooled: 0 });
     expect(readdirSync(join(EVENTS_DIR, "spool", "inbox")).filter((name) => name.endsWith(".json"))).toHaveLength(2);
+  });
+
+  test("malformed outbox envelopes are dead-lettered, not left pending forever", async () => {
+    const db = getDb();
+    insertEventOutboxRow(db, {
+      id: "conversations:task:malformed:activity:1",
+      source: "conversations",
+      type: TASK_UPDATED_TYPE,
+      envelope_json: "{ not valid json",
+      created_at: "2026-08-06T10:00:00.000Z",
+      status: "pending",
+      attempts: 0,
+    });
+    expect(countEventOutboxByStatus(db)).toMatchObject({ pending: 1 });
+    const result = await drainConversationEventOutbox(db, { dataDir: EVENTS_DIR });
+    expect(result).toMatchObject({ scanned: 1, transported: 0, skipped: 1, spooled: 0 });
+    // The malformed row is dead-lettered rather than stuck 'pending' forever.
+    expect(countEventOutboxByStatus(db)).toMatchObject({ pending: 0, dead: 1 });
+    // A later drain does not re-scan the dead row.
+    const again = await drainConversationEventOutbox(db, { dataDir: EVENTS_DIR });
+    expect(again.scanned).toBe(0);
   });
 });
