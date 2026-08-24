@@ -74,14 +74,14 @@ export interface MessagesStore {
  * Canonical, order-independent, collision-free thread key for a pair of
  * agents. "augustus" <-> "silvanus" is the same thread from either side.
  *
- * Each name's underscores are escaped (`_` -> `_u`) before the sorted join.
- * Names without underscores encode identically to the legacy format, so all
- * existing thread rows for underscore-free agents keep resolving unchanged.
- * For names that DO contain underscores, the escape makes the `__` join
- * unambiguous — the separator can never occur inside an escaped name (every
- * `_` is followed by `u`), so `0_`/`a` and `0`/`_a` can no longer collapse
- * onto one key. Legacy rows for underscore-named agents remain reachable via
- * the grandfather fallback in send().
+ * Each name's underscores are escaped (`_` -> `_u`) before the sorted join,
+ * making the `__` separator unambiguous inside the new id space: the escape
+ * can never contain `__` (every `_` is followed by `u`), so `0_`/`a` and
+ * `0`/`_a` no longer collapse onto one key. newThreadId prefixes the result
+ * with `t1_`, keeping the new id space disjoint from the legacy `t_` space
+ * (legacy names like `0_u` cannot collide with the escaped id of `0_`).
+ * Legacy rows are adopted by the grandfather fallback in send(), which uses
+ * the raw legacy id and verifies the stored participants.
  */
 export function threadKeyFor(agentA: string, agentB: string): string {
   const [a, b] = [agentA, agentB].sort();
@@ -94,7 +94,13 @@ function escapeKeyPart(name: string): string {
 }
 
 export function newThreadId(agentA: string, agentB: string): string {
-  return `t_${threadKeyFor(agentA, agentB)}`;
+  // The `t1_` prefix keeps the NEW id space disjoint from the legacy `t_`
+  // space: every legacy id is `t_<a>__<b>`, which never starts with `t1_`, so
+  // a primary escaped-id lookup can never match a legacy row of a different
+  // pair (a legacy name like `0_u` would otherwise collide with the escaped
+  // id of `0_`). Legacy rows are adopted via the grandfather fallback in
+  // send(), which uses the raw legacy id and verifies the participants.
+  return `t1_${threadKeyFor(agentA, agentB)}`;
 }
 
 function normalizeAgentName(name: string): string {

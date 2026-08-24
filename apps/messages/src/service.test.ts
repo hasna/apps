@@ -37,11 +37,7 @@ describe("thread identity", () => {
     expect(newThreadId(A, B)).toBe(newThreadId(B, A));
   });
 
-  test("thread key stays format-stable for plain names and collision-free for underscore names (REGRESSION: review P1s)", async () => {
-    // Format stability: underscore-free names encode identically to the
-    // legacy `t_<a>__<b>` (sorted), so existing thread rows keep resolving —
-    // no migration (cycle-1 re-review P1).
-    expect(newThreadId("augustus", "silvanus")).toBe("t_augustus__silvanus");
+  test("thread keys are injective and disjoint from the legacy id space (REGRESSION: review P1s)", async () => {
     // Collision freedom: `a`/`b__c` vs `a__b`/`c` and `0_`/`a` vs `0`/`_a`
     // must produce distinct keys (original P1 + final-review P1).
     expect(newThreadId("a", "b__c")).not.toBe(newThreadId("a__b", "c"));
@@ -49,6 +45,12 @@ describe("thread identity", () => {
     // The escape is order-independent like the legacy format.
     expect(newThreadId("0_", "a")).toBe(newThreadId("a", "0_"));
     expect(newThreadId("0", "_a")).toBe(newThreadId("_a", "0"));
+    // The new id space (t1_) is disjoint from the legacy space (t_): a legacy
+    // name containing the escape sequence cannot collide with the escaped id
+    // of a different pair — the re-review P1 (`0_u` legacy vs `0_` escaped).
+    expect(newThreadId("0_", "a")).toBe("t1_0_u__a");
+    expect(newThreadId("0_u", "a")).toBe("t1_0_uu__a");
+    expect(newThreadId("0_u", "a")).not.toBe(newThreadId("0_", "a"));
   });
 
   test("legacy underscore-named threads stay reachable via the grandfather fallback (REGRESSION: re-review P1)", async () => {
@@ -75,6 +77,32 @@ describe("thread identity", () => {
     const other = await service.send({ from_agent: "0", to_agent: "_a", content: "yo" });
     expect(other.message.thread_id).not.toBe(legacyId);
     expect(newThreadId("0", "_a")).toBe(other.message.thread_id);
+  });
+
+  test("escaped-id lookups cannot land in an unrelated legacy thread (REGRESSION: re-review 2 P1)", async () => {
+    const { service, db } = testService();
+    // Legacy row for pair ("0_u", "a") under the raw id t_0_u__a — which is
+    // byte-identical to the escaped id that "0_"/"a" would produce WITHOUT the
+    // t1_ prefix. The t1_ prefix must keep the pair ("0_", "a") out of it.
+    const legacyId = "t_0_u__a";
+    db.query(
+      "INSERT INTO threads (id, agent_a, agent_b, last_message_at, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(legacyId, "0_u", "a", new Date().toISOString(), new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "0_u", new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "a", new Date().toISOString());
+
+    // Sending as "0_" to "a" must create its OWN t1_ thread, never insert
+    // into the unrelated legacy row.
+    const first = await service.send({ from_agent: "0_", to_agent: "a", content: "one" });
+    expect(first.message.thread_id).toBe("t1_0_u__a");
+    expect((await service.threadMessages(legacyId)).length).toBe(0);
+
+    // The legacy pair ("0_u", "a") still reaches its own history.
+    const second = await service.send({ from_agent: "0_u", to_agent: "a", content: "two" });
+    expect(second.message.thread_id).toBe(legacyId);
+    const legacyMessages = await service.threadMessages(legacyId);
+    expect(legacyMessages).toHaveLength(1);
+    expect(legacyMessages[0]!.content).toBe("two");
   });
 });
 
