@@ -51,10 +51,10 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
     "@e2b/code-interpreter": "^1.5.1",
-    "@hasna/browser": "0.5.34",
-    "@hasna/contracts": "^0.14.0",
+    "@hasna/browser": "0.5.29",
+    "@hasna/contracts": "^0.13.4",
     "@hasna/events": "^0.1.13",
-    "@hasna/projects": "^1.0.2",
+    "@hasna/projects": "^1.0.0",
     "@hasna/sandboxes": "^0.1.40",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "ai": "^6.0.175",

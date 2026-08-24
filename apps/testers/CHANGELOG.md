@@ -6,9 +6,9 @@
 
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
-  - @hasna/contracts@0.14.0
-  - @hasna/projects@1.0.2
-  - @hasna/browser@0.5.34
+  - @hasna/contracts@^0.13.4
+  - @hasna/projects@^1.0.0
+  - @hasna/browser@0.5.29
 
 ## 0.0.108
 

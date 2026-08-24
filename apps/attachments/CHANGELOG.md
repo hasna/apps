@@ -13,7 +13,7 @@
 
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
-  - @hasna/contracts@0.14.0
+  - @hasna/contracts@^0.8.2
 
 ## 1.1.8
 
