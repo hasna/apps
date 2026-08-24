@@ -60,12 +60,20 @@
         "mode": "0644",
         "kind": "systemd-dropin",
         "lesson": "2026-07-28: the userspace memory guard computed swap depth and ignored it, printing healthy 3.5 minutes before the panic; earlyoom trips on the swap condition. Kill-drill proven on station02 2026-07-28."
+      },
+      {
+        "id": "slice-tests",
+        "source": "files/base/home/user-systemd/hasna-tests.slice",
+        "target": "~/.config/systemd/user/hasna-tests.slice",
+        "mode": "0644",
+        "kind": "systemd-user-unit",
+        "lesson": "Aggregate local tests require one active cgroup-v2 controller installed by normal station setup; package-derived limits live in its managed drop-in and earlyoom remains only the host backstop."
       }
     ],
     "packages": {
       "apt": ["earlyoom", "git", "curl", "unzip", "build-essential", "tmux", "sqlite3", "jq"],
       "bun": [
-        { "name": "@hasna/machines", "minVersion": "0.2.35", "lesson": "2026-07-30: package:bun:* reported ok at ANY version, so 12 of 42 drift items were version-blind \u2014 a station carrying a CLI from before a fix read identical to one updated an hour ago, and a test asserted a 9.9.9 fixture was ok. Each floor is a version that is PUBLISHED: clean means 'not running an older CLI than the one we shipped with'. It is a FLOOR, never a pin \u2014 a newer version is ok, and the renders install latest. A floor ABOVE the newest published version would be the same defect mirrored: a check that cannot pass instead of one that cannot fail, failing every station on a version nobody can install. @hasna/machines is floored at 0.2.35, the package version prepared for this release, which is what 'the shipped template floors globals at the version it shipped with' means when the template ships inside that package." },
+        { "name": "@hasna/machines", "minVersion": "0.2.36", "lesson": "2026-07-30: package:bun:* reported ok at ANY version, so 12 of 42 drift items were version-blind \u2014 a station carrying a CLI from before a fix read identical to one updated an hour ago, and a test asserted a 9.9.9 fixture was ok. Each floor is a version that is PUBLISHED: clean means 'not running an older CLI than the one we shipped with'. It is a FLOOR, never a pin \u2014 a newer version is ok, and the renders install latest. A floor ABOVE the newest published version would be the same defect mirrored: a check that cannot pass instead of one that cannot fail, failing every station on a version nobody can install. @hasna/machines is floored at 0.2.36, the package version prepared for this release, which is what 'the shipped template floors globals at the version it shipped with' means when the template ships inside that package." },
         { "name": "@hasna/todos", "minVersion": "0.13.3", "lesson": "Task state is fleet-shared: an old todos CLI on one station writes state every other station reads." },
         { "name": "@hasna/conversations", "minVersion": "0.5.13", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
         { "name": "@hasna/mementos", "minVersion": "0.14.69", "lesson": "Version floor for the shipped CLI set (published 2026-07-31)." },
@@ -80,8 +88,10 @@
       ]
     },
     "services": [
-      { "name": "earlyoom", "scope": "system", "expectEnabled": true, "expectActive": true }
+      { "name": "earlyoom", "scope": "system", "expectEnabled": true, "expectActive": true },
+      { "name": "hasna-tests.slice", "scope": "user", "expectEnabled": false, "expectActive": true }
     ],
+    "workstationTestProfile": true,
     "sysctls": {
       "vm.swappiness": "60",
       "vm.min_free_kbytes": "1048576",

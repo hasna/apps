@@ -35,6 +35,16 @@ import {
 } from "../commands/manifest.js";
 import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
 import {
+  applyWorkstationTestProfile,
+  createNodeWorkstationTestProfileStore,
+  createSystemdUserTestProfileController,
+  deriveWorkstationTestProfile,
+  readMachineTestAuthority,
+  readWorkstationTestProfile,
+  rollbackWorkstationTestProfile,
+  workstationTestProfilePaths,
+} from "../test-profile.js";
+import {
   buildStationTemplateSteps,
   checkExitCode,
   checkStationTemplate,
@@ -1726,6 +1736,55 @@ appsCommand
       installedState,
     });
     console.log(JSON.stringify(result, null, 2));
+  });
+
+const testProfileCommand = program
+  .command("test-profile")
+  .description("Manage the local aggregate workstation test controller profile");
+
+testProfileCommand
+  .command("check")
+  .description("Verify the current derived profile, managed drop-in, and active controller")
+  .option("-j, --json", "Print JSON output", false)
+  .action(() => {
+    const verification = readWorkstationTestProfile().verification;
+    console.log(JSON.stringify(verification, null, 2));
+    if (verification.admission !== "allowed") process.exitCode = 1;
+  });
+
+testProfileCommand
+  .command("apply")
+  .description("Apply and activate the current machine-derived aggregate test profile")
+  .option("--yes", "Confirm the reversible local profile mutation", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { yes?: boolean }) => {
+    if (!options.yes) throw new Error("test-profile apply requires --yes");
+    const profile = deriveWorkstationTestProfile(readMachineTestAuthority());
+    const paths = workstationTestProfilePaths({ homeDir: process.env["HOME"] ?? "" });
+    const result = applyWorkstationTestProfile({
+      profile,
+      paths,
+      store: createNodeWorkstationTestProfileStore(),
+      controller: createSystemdUserTestProfileController(),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.admission !== "allowed") process.exitCode = 1;
+  });
+
+testProfileCommand
+  .command("rollback")
+  .description("Restore the exact recorded profile preimage and prior runtime state")
+  .option("--yes", "Confirm the reversible local profile rollback", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { yes?: boolean }) => {
+    if (!options.yes) throw new Error("test-profile rollback requires --yes");
+    const result = rollbackWorkstationTestProfile({
+      paths: workstationTestProfilePaths({ homeDir: process.env["HOME"] ?? "" }),
+      store: createNodeWorkstationTestProfileStore(),
+      controller: createSystemdUserTestProfileController(),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status !== "rolled-back") process.exitCode = 1;
   });
 
 program

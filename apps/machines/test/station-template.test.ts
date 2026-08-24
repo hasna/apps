@@ -238,6 +238,66 @@ describe("overlay merge", () => {
     expect(steps.some((step) => step.id === "template-file-path-profile")).toBe(true);
   });
 
+  test("base setup installs, activates, and verifies the aggregate test slice controller", () => {
+    const effective = effectiveFor(["ec2"]);
+    expect(effective.workstationTestProfile).toBe(true);
+    const controllerUnit = effective.files.find((file) => file.id === "slice-tests");
+    expect(controllerUnit).toMatchObject({
+      target: "~/.config/systemd/user/hasna-tests.slice",
+      kind: "systemd-user-unit",
+    });
+    expect(controllerUnit?.content).toContain("Description=Aggregate controller for admitted local test scopes");
+    expect(controllerUnit?.content).not.toContain("[Install]");
+    expect(effective.services).toContainEqual({
+      name: "hasna-tests.slice",
+      scope: "user",
+      expectEnabled: false,
+      expectActive: true,
+    });
+
+    const physical = buildStationTemplateSteps(effective, { station: "station17" });
+    const writeIndex = physical.findIndex((step) => step.id === "template-file-slice-tests");
+    const reloadIndex = physical.findIndex((step) => step.id === "template-systemd-user-reload");
+    const activateIndex = physical.findIndex((step) => step.id === "template-service-hasna-tests.slice");
+    const profileIndex = physical.findIndex((step) => step.id === "template-workstation-test-profile");
+    expect(writeIndex).toBeGreaterThan(-1);
+    expect(reloadIndex).toBeGreaterThan(writeIndex);
+    expect(activateIndex).toBeGreaterThan(reloadIndex);
+    expect(physical[activateIndex]?.command).toBe("systemctl --user start 'hasna-tests.slice'");
+    expect(profileIndex).toBeGreaterThan(activateIndex);
+    expect(physical[profileIndex]?.command).toBe("machines test-profile apply --yes --json");
+
+    const cloud = renderCloudInit(effective, { station: "station17" });
+    expect(cloud).toContain(Buffer.from(controllerUnit!.content, "utf8").toString("base64"));
+    expect(cloud).toContain("systemctl --user start hasna-tests.slice");
+    expect(cloud).toContain("machines test-profile apply --yes --json");
+
+    const { root, home } = buildCleanFixture(["ec2"]);
+    const checked = checkStationTemplate(effective, {
+      rootDir: root,
+      homeDir: home,
+      commandProbe: conformingEc2Probe(),
+      workstationTestProfileVerification: { admission: "allowed", reasonCodes: [] },
+    });
+    expect(checked.items.find((item) => item.id === "file:slice-tests")?.status).toBe("ok");
+    expect(checked.items.find((item) => item.id === "service:hasna-tests.slice")?.status).toBe("ok");
+    expect(checked.items.find((item) => item.id === "workstation-test-profile")?.status).toBe("ok");
+
+    const refused = checkStationTemplate(effective, {
+      rootDir: root,
+      homeDir: home,
+      commandProbe: conformingEc2Probe(),
+      workstationTestProfileVerification: {
+        admission: "refused",
+        reasonCodes: ["aggregate_slice_inactive"],
+      },
+    });
+    expect(refused.items.find((item) => item.id === "workstation-test-profile")).toMatchObject({
+      status: "drift",
+      detail: expect.stringContaining("aggregate_slice_inactive"),
+    });
+  });
+
   test("physical overlay keeps tailscale — the 2026-07-30 ruling routes it, it does not delete it", () => {
     const effective = effectiveFor(["dgx-spark"]);
     expect(effective.tailscale?.join).toBe(true);
