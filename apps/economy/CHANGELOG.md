@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.26
+
+### Patch Changes
+
+- 8b70821: economy-otel answers --version/-V before any bind (todos row 7e5f8f3d). Previously `economy-otel --version` fell through to resolvePort()/Bun.serve and bound the OTLP listener (:4318) with no output.
+
 ## 0.3.25
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/controls",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Spend-authorization/approval control plane over wallets+payments: caps, allowlists, tiered approvals, segregation-of-duties, emergency freeze, immutable money audit. CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",

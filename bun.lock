@@ -197,7 +197,7 @@
     },
     "apps/bridge": {
       "name": "@hasna/bridge",
-      "version": "0.7.3",
+      "version": "0.7.4",
       "bin": {
         "bridge": "dist/cli/index.js",
         "bridge-mcp": "dist/mcp/index.js",
@@ -216,7 +216,7 @@
     },
     "apps/browser": {
       "name": "@hasna/browser",
-      "version": "0.5.32",
+      "version": "0.5.33",
       "bin": {
         "browser": "dist/cli/index.js",
         "browser-mcp": "dist/mcp/index.js",
@@ -230,7 +230,7 @@
         "@hasna/mementos": "0.14.86",
         "@hasna/secrets": "0.3.7",
         "@hasna/sessions": "0.12.19",
-        "@hasna/skills": "0.1.65",
+        "@hasna/skills": "0.1.66",
         "@hasna/todos": "0.15.48",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@onkernel/sdk": "0.67.0",
@@ -456,7 +456,7 @@
     },
     "apps/controls": {
       "name": "@hasna/controls",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "controls": "dist/cli/index.js",
         "controls-mcp": "dist/mcp/index.js",
@@ -514,7 +514,7 @@
     },
     "apps/crawl": {
       "name": "@hasna/crawl",
-      "version": "0.4.17",
+      "version": "0.4.18",
       "bin": {
         "crawl": "dist/cli/index.js",
         "crawl-mcp": "dist/mcp/index.js",
@@ -541,7 +541,7 @@
     },
     "apps/datasets": {
       "name": "@hasna/datasets",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "bin": {
         "datasets": "dist/cli/index.js",
         "datasets-mcp": "dist/mcp/index.js",
@@ -691,7 +691,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.25",
+      "version": "0.3.26",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -763,7 +763,7 @@
     },
     "apps/evals": {
       "name": "@hasna/evals",
-      "version": "0.2.4",
+      "version": "0.2.5",
       "bin": {
         "evals": "dist/cli/index.js",
         "evals-mcp": "dist/mcp/index.js",
@@ -884,7 +884,7 @@
     },
     "apps/holdings": {
       "name": "@hasna/holdings",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "bin": {
         "holdings": "dist/cli/index.js",
         "holdings-mcp": "dist/mcp/index.js",
@@ -943,7 +943,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.4.42",
+      "version": "0.4.43",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
@@ -1035,7 +1035,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
@@ -1230,7 +1230,7 @@
     },
     "apps/notes": {
       "name": "@hasna/notes",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "bin": {
         "notes": "bin/notes.mjs",
         "notes-mcp": "bin/notes-mcp.mjs",
@@ -1612,7 +1612,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.1.65",
+      "version": "0.1.66",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",
@@ -1763,7 +1763,7 @@
     },
     "apps/tai": {
       "name": "@hasna/tai",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "bin": {
         "tai": "./dist/cli/index.js",
         "tai-mcp": "./dist/mcp/index.js",
@@ -1933,7 +1933,7 @@
     },
     "apps/treasury": {
       "name": "@hasna/treasury",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "treasury": "dist/cli/index.js",
         "treasury-mcp": "dist/mcp/index.js",
