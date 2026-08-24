@@ -296,3 +296,51 @@ describe("runtime max-age gate", () => {
     }
   });
 });
+
+describe("runtime capture lease", () => {
+  test("capture proceeds without the lease and records the degraded path", async () => {
+    const path = dbPath();
+    const holder = new SnapshotStore({ path });
+    try {
+      expect(holder.acquireCaptureLease({ waitMs: 0, ttlMs: 60_000 })).toBe(true);
+      process.env.HASNA_SNAPSHOTS_CAPTURE_LEASE_WAIT_MS = "50";
+      try {
+        const result = await captureSnapshot({ dbPath: path, include: [], name: "lease-degraded" });
+        expect(result.resource_count).toBe(0);
+        expect(result.duplicate).toBe(false);
+      } finally {
+        delete process.env.HASNA_SNAPSHOTS_CAPTURE_LEASE_WAIT_MS;
+      }
+      const auditStore = new SnapshotStore({ path });
+      try {
+        const rows = auditStore.db
+          .query("SELECT payload FROM audit_events WHERE event_type = 'capture.lease-unavailable'")
+          .all() as Array<{ payload: string }>;
+        expect(rows).toHaveLength(1);
+        expect(JSON.parse(rows[0].payload)).toMatchObject({ message: "capture proceeded without the capture lease" });
+      } finally {
+        auditStore.close();
+      }
+    } finally {
+      holder.releaseCaptureLease();
+      holder.close();
+    }
+  });
+
+  test("sequential captures each acquire and release the lease cleanly", async () => {
+    const path = dbPath();
+    const first = await captureSnapshot({ dbPath: path, include: [], name: "lease-a" });
+    const second = await captureSnapshot({ dbPath: path, include: [], name: "lease-b" });
+
+    expect(first.resource_count).toBe(0);
+    expect(second.resource_count).toBe(0);
+    const store = new SnapshotStore({ path });
+    try {
+      const live = store.db.query("SELECT count(*) AS count FROM capture_leases WHERE lease_key = 'capture'").get() as { count: number };
+      expect(Number(live.count)).toBe(0); // no leaked lease rows
+      expect(store.listSnapshots().length).toBeGreaterThanOrEqual(1);
+    } finally {
+      store.close();
+    }
+  });
+});

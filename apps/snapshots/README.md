@@ -54,7 +54,18 @@ Resume-identity sources and the restore freshness gate can also be configured:
 HASNA_SNAPSHOTS_OPENCODE_DB=/path/to/opencode.db          # default ~/.local/share/opencode/opencode.db
 HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR=/path/to/projects    # default ~/.claude/projects
 HASNA_SNAPSHOTS_MAX_AGE=72h                              # default restore max-age (duration string)
+HASNA_SNAPSHOTS_CAPTURE_LEASE_TTL_MS=240000              # capture lease TTL (default 240s)
+HASNA_SNAPSHOTS_CAPTURE_LEASE_WAIT_MS=30000              # max wait for a live capture lease (default 30s)
 ```
+
+Captures against one store are serialized by a short-lived SQLite lease
+(`capture_leases` table, same watchdog pattern as the fleet's cron guards):
+a concurrent capture (e.g. the */5 cron firing while a manual capture is in
+flight) waits for the holder, and a crashed holder's lease self-expires
+after the TTL. If the lease cannot be acquired within the wait window the
+capture still proceeds — `saveSnapshot` is idempotent, so an overlapping
+duplicate snapshot becomes a no-op (recorded as a `capture.lease-unavailable`
+audit event) instead of a failed transaction.
 
 ## SDK
 

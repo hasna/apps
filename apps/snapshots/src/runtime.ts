@@ -21,6 +21,12 @@ export interface SnapshotEnvelope {
 
 export async function captureSnapshot(options: CaptureSnapshotOptions = {}): Promise<SnapshotEnvelope> {
   const store = new SnapshotStore({ path: options.dbPath });
+  // Capture lease: serializes concurrent captures against this store (the
+  // */5 cron firing while a manual capture is in flight — station04 P1
+  // 2026-08-24). A lease that cannot be acquired within the wait is not an
+  // error: saveSnapshot is idempotent, so an overlapping duplicate capture
+  // becomes a no-op instead of a failed transaction.
+  const leaseAcquired = store.acquireCaptureLease();
   try {
     const capture = await captureAll(options);
     const snapshot = store.saveSnapshot(capture.resources, {
@@ -28,6 +34,13 @@ export async function captureSnapshot(options: CaptureSnapshotOptions = {}): Pro
       diagnostics: capture.diagnostics,
       sourceStatuses: capture.sourceStatuses
     });
+    if (!leaseAcquired) {
+      console.warn("[snapshots] capture lease not acquired within the wait window; capture proceeded without serialization (saveSnapshot remains idempotent).");
+      store.recordAuditEvent("capture.lease-unavailable", null, {
+        snapshot_id: snapshot.id,
+        message: "capture proceeded without the capture lease"
+      });
+    }
     return {
       snapshot,
       resource_count: capture.resources.length,
@@ -35,6 +48,7 @@ export async function captureSnapshot(options: CaptureSnapshotOptions = {}): Pro
       duplicate: Boolean(snapshot.duplicateOf)
     };
   } finally {
+    store.releaseCaptureLease();
     store.close();
   }
 }
