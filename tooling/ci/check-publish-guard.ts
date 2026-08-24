@@ -289,9 +289,9 @@ function declaresTypes(pkgDir: string): boolean {
  * Whether a member's tarball reflects a REAL build — it contains built JS
  * output. The declarations check fires only then: a member whose dist was
  * never built at guard time (prepack = artifact-scan only, CI builds only
- * the five prepare:ordered members) packs no JS either, and flagging it
+ * the seven prepare:ordered members) packs no JS either, and flagging it
  * would be a false positive (measured: crawl, guardrails, markdown,
- * telephony, todos — builds all end in `tsc --emitDeclarationOnly`, their
+ * telephony — builds all end in `tsc --emitDeclarationOnly`, their
  * dist simply does not exist in the guard's checkout). A tarball WITH built
  * JS but zero `.d.ts` is a build whose declarations were destroyed or never
  * emitted — exactly the class to fail.
@@ -630,9 +630,9 @@ function selfTest(): number {
     // A member declaring types whose dist was never built at guard time
     // (prepack does not build; CI builds only prepare:ordered members) packs
     // no built JS — the declarations check must NOT fire on it (measured
-    // false-positive class: crawl, guardrails, markdown, telephony, todos —
-    // their builds all end in tsc emit, their dist simply does not exist in
-    // the guard's checkout).
+    // false-positive class: crawl, guardrails, markdown, telephony — their
+    // builds all end in tsc emit, their dist simply does not exist in the
+    // guard's checkout; todos and skills now build via the chain).
     const unbuiltRoot = path.join(root, "unbuilt-root");
     fs.mkdirSync(unbuiltRoot, { recursive: true });
     fixturePackage(
