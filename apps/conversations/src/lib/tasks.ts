@@ -1,6 +1,11 @@
 import { getDb } from "./db.js";
 import { randomUUID } from "crypto";
 import { fireTaskWebhooks } from "./webhooks.js";
+import {
+  emitConversationEvent,
+  TASK_CREATED_TYPE,
+  TASK_UPDATED_TYPE,
+} from "./events-bridge.js";
 import { normalizeChannelName } from "./channel-names.js";
 import type {
   Task,
@@ -74,6 +79,34 @@ function emitTaskEvent(task: Task, action: string, agent: string, oldStatus: str
     project_id: task.project_id,
     created_at: task.created_at,
   });
+
+  // Atomic event capture: the outbox row commits in the SAME transaction as
+  // the transition (the caller wraps the mutation + this call in one
+  // transaction). transition_uuid is persisted with the outbox row, so a
+  // legitimate blocked -> unblocked -> blocked sequence produces two distinct
+  // events (contract section 2 — never task_uuid + action alone).
+  const transitionUuid = randomUUID();
+  emitConversationEvent(getDb(), {
+    id: `conversations:task:${task.uuid}:activity:${transitionUuid}`,
+    type: TASK_UPDATED_TYPE,
+    time: new Date().toISOString(),
+    subject: task.subject,
+    data: {
+      task_id: task.id,
+      task_uuid: task.uuid,
+      subject: task.subject,
+      action,
+      old_status: oldStatus,
+      new_status: task.status,
+      agent,
+      detail: detail ?? null,
+      priority: task.priority,
+      assignee: task.assignee,
+      project_id: task.project_id,
+      transition_uuid: transitionUuid,
+    },
+    appEvent: { kind: "task.updated", action },
+  });
 }
 
 // ── Create / Read / List ──────────────────────────────────────────────────────
@@ -91,59 +124,87 @@ export function createTask(opts: CreateTaskOptions): Task {
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) : null;
   const due_at = opts.due_at || null;
 
-  const row = db.prepare(`
-    INSERT INTO tasks (uuid, subject, description, reporter, assignee, priority, project_id, channel, parent_id, tags, metadata, due_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    RETURNING *
-  `).get(
-    uuid,
-    opts.subject,
-    description,
-    opts.reporter,
-    assignee,
-    priority,
-    project_id,
-    channel,
-    parent_id,
-    tags,
-    metadata,
-    due_at,
-  ) as Record<string, unknown>;
+  const created = db.transaction(() => {
+    const row = db.prepare(`
+      INSERT INTO tasks (uuid, subject, description, reporter, assignee, priority, project_id, channel, parent_id, tags, metadata, due_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(
+      uuid,
+      opts.subject,
+      description,
+      opts.reporter,
+      assignee,
+      priority,
+      project_id,
+      channel,
+      parent_id,
+      tags,
+      metadata,
+      due_at,
+    ) as Record<string, unknown>;
 
-  const task = parseTask(row);
+    const task = parseTask(row);
 
-  // Set up dependencies
-  if (opts.depends_on && opts.depends_on.length > 0) {
-    const depIds = opts.depends_on;
-    const insertDep = db.prepare(
-      "INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)"
-    );
-    const depIdsResolved: number[] = [];
-    for (const depId of depIds) {
-      const exists = db.prepare("SELECT id, status FROM tasks WHERE id = ?").get(depId) as { id: number; status: string } | null;
-      if (!exists) throw new Error(`Dependency task #${depId} not found`);
-      insertDep.run(task.id, depId);
-      depIdsResolved.push(depId);
+    // Set up dependencies
+    if (opts.depends_on && opts.depends_on.length > 0) {
+      const depIds = opts.depends_on;
+      const insertDep = db.prepare(
+        "INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)"
+      );
+      const depIdsResolved: number[] = [];
+      for (const depId of depIds) {
+        const exists = db.prepare("SELECT id, status FROM tasks WHERE id = ?").get(depId) as { id: number; status: string } | null;
+        if (!exists) throw new Error(`Dependency task #${depId} not found`);
+        insertDep.run(task.id, depId);
+        depIdsResolved.push(depId);
+      }
+
+      // Update depends_on JSON blob on the task
+      db.prepare("UPDATE tasks SET depends_on = ? WHERE id = ?")
+        .run(JSON.stringify(depIdsResolved), task.id);
+
+      // Block if any dependency is not completed
+      const incompleteDeps = db.prepare(
+        "SELECT depends_on_id FROM task_dependencies WHERE task_id = ? AND depends_on_id IN (SELECT id FROM tasks WHERE status != 'completed')"
+      ).all(task.id);
+
+      if (incompleteDeps.length > 0) {
+        db.prepare("UPDATE tasks SET status = 'blocked' WHERE id = ?").run(task.id);
+      }
     }
 
-    // Update depends_on JSON blob on the task
-    db.prepare("UPDATE tasks SET depends_on = ? WHERE id = ?")
-      .run(JSON.stringify(depIdsResolved), task.id);
+    // Log creation
+    logActivity(task.id, opts.reporter, "created");
 
-    // Block if any dependency is not completed
-    const incompleteDeps = db.prepare(
-      "SELECT depends_on_id FROM task_dependencies WHERE task_id = ? AND depends_on_id IN (SELECT id FROM tasks WHERE status != 'completed')"
-    ).all(task.id);
+    const parsed = parseTask(db.prepare("SELECT * FROM tasks WHERE id = ?").get(task.id) as Record<string, unknown>);
 
-    if (incompleteDeps.length > 0) {
-      db.prepare("UPDATE tasks SET status = 'blocked' WHERE id = ?").run(task.id);
-    }
-  }
+    // Atomic event capture: the created outbox row commits in the SAME
+    // transaction as the task INSERT.
+    const transitionUuid = randomUUID();
+    emitConversationEvent(db, {
+      id: `conversations:task:${parsed.uuid}:activity:${transitionUuid}`,
+      type: TASK_CREATED_TYPE,
+      time: parsed.created_at,
+      subject: parsed.subject,
+      data: {
+        task_id: parsed.id,
+        task_uuid: parsed.uuid,
+        subject: parsed.subject,
+        action: "created",
+        status: parsed.status,
+        priority: parsed.priority,
+        assignee: parsed.assignee,
+        reporter: parsed.reporter,
+        project_id: parsed.project_id,
+        created_at: parsed.created_at,
+        transition_uuid: transitionUuid,
+      },
+      appEvent: { kind: "task.created" },
+    });
 
-  // Log creation
-  logActivity(task.id, opts.reporter, "created");
-
-  const created = parseTask(db.prepare("SELECT * FROM tasks WHERE id = ?").get(task.id) as Record<string, unknown>);
+    return parsed;
+  });
 
   fireTaskWebhooks({
     task_id: created.id,
@@ -259,11 +320,13 @@ export function startTask(id: number | string, agent?: string): Task | null {
 
   const now = new Date().toISOString();
   const oldStatus = task.status;
-  db.prepare("UPDATE tasks SET status = 'in_progress', started_at = ? WHERE id = ?").run(now, task.id);
-  logActivity(task.id, agent || task.reporter, "started");
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "started", agent || task.reporter, oldStatus);
-  return updated;
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'in_progress', started_at = ? WHERE id = ?").run(now, task.id);
+    logActivity(task.id, agent || task.reporter, "started");
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "started", agent || task.reporter, oldStatus);
+    return updated;
+  });
 }
 
 export function completeTask(id: number | string, agent?: string, opts?: { evidence?: string }): Task | null {
@@ -273,15 +336,17 @@ export function completeTask(id: number | string, agent?: string, opts?: { evide
 
   const now = new Date().toISOString();
   const oldStatus = task.status;
-  db.prepare("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?").run(now, task.id);
-  logActivity(task.id, agent || task.reporter, "completed", opts?.evidence);
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?").run(now, task.id);
+    logActivity(task.id, agent || task.reporter, "completed", opts?.evidence);
 
-  // Unblock any tasks that were waiting on this one
-  unblockDependents(task.id);
+    // Unblock any tasks that were waiting on this one
+    unblockDependents(task.id);
 
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "completed", agent || task.reporter, oldStatus, opts?.evidence);
-  return updated;
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "completed", agent || task.reporter, oldStatus, opts?.evidence);
+    return updated;
+  });
 }
 
 export function cancelTask(id: number | string, agent?: string, opts?: { reason?: string }): Task | null {
@@ -291,11 +356,13 @@ export function cancelTask(id: number | string, agent?: string, opts?: { reason?
 
   const now = new Date().toISOString();
   const oldStatus = task.status;
-  db.prepare("UPDATE tasks SET status = 'cancelled', cancelled_at = ? WHERE id = ?").run(now, task.id);
-  logActivity(task.id, agent || task.reporter, "cancelled", opts?.reason);
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "cancelled", agent || task.reporter, oldStatus, opts?.reason);
-  return updated;
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'cancelled', cancelled_at = ? WHERE id = ?").run(now, task.id);
+    logActivity(task.id, agent || task.reporter, "cancelled", opts?.reason);
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "cancelled", agent || task.reporter, oldStatus, opts?.reason);
+    return updated;
+  });
 }
 
 export function blockTask(id: number | string, agent?: string, opts?: { reason?: string }): Task | null {
@@ -304,11 +371,13 @@ export function blockTask(id: number | string, agent?: string, opts?: { reason?:
   if (!task) return null;
 
   const oldStatus = task.status;
-  db.prepare("UPDATE tasks SET status = 'blocked' WHERE id = ?").run(task.id);
-  logActivity(task.id, agent || task.reporter, "blocked", opts?.reason);
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "blocked", agent || task.reporter, oldStatus, opts?.reason);
-  return updated;
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'blocked' WHERE id = ?").run(task.id);
+    logActivity(task.id, agent || task.reporter, "blocked", opts?.reason);
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "blocked", agent || task.reporter, oldStatus, opts?.reason);
+    return updated;
+  });
 }
 
 export function unblockTask(id: number | string, agent?: string): Task | null {
@@ -326,11 +395,13 @@ export function unblockTask(id: number | string, agent?: string): Task | null {
 
   const oldStatus = task.status;
   const newStatus = incompleteDeps ? "blocked" : "pending";
-  db.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(newStatus, task.id);
-  logActivity(task.id, agent || task.reporter, "unblocked");
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "unblocked", agent || task.reporter, oldStatus);
-  return updated;
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(newStatus, task.id);
+    logActivity(task.id, agent || task.reporter, "unblocked");
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "unblocked", agent || task.reporter, oldStatus);
+    return updated;
+  });
 }
 
 export function reopenTask(id: number | string, agent?: string): Task | null {
@@ -339,20 +410,22 @@ export function reopenTask(id: number | string, agent?: string): Task | null {
   if (!task) return null;
 
   const oldStatus = task.status;
-  db.prepare("UPDATE tasks SET status = 'pending', completed_at = NULL, cancelled_at = NULL WHERE id = ?").run(task.id);
-  logActivity(task.id, agent || task.reporter, "reopened");
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'pending', completed_at = NULL, cancelled_at = NULL WHERE id = ?").run(task.id);
+    logActivity(task.id, agent || task.reporter, "reopened");
 
-  // Re-check dependencies
-  const incompleteDeps = db.prepare(`
-    SELECT 1 FROM task_dependencies td
-    JOIN tasks t ON t.id = td.depends_on_id
-    WHERE td.task_id = ? AND t.status != 'completed'
-    LIMIT 1
-  `).get(task.id);
+    // Re-check dependencies
+    const incompleteDeps = db.prepare(`
+      SELECT 1 FROM task_dependencies td
+      JOIN tasks t ON t.id = td.depends_on_id
+      WHERE td.task_id = ? AND t.status != 'completed'
+      LIMIT 1
+    `).get(task.id);
 
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "reopened", agent || task.reporter, oldStatus);
-  return updated;
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "reopened", agent || task.reporter, oldStatus);
+    return updated;
+  });
 }
 
 export function assignTask(id: number | string, assignee: string, agent?: string): Task | null {
@@ -360,11 +433,13 @@ export function assignTask(id: number | string, assignee: string, agent?: string
   const task = resolveTask(id);
   if (!task) return null;
 
-  db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(assignee, task.id);
-  logActivity(task.id, agent || task.reporter, "assigned", assignee);
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "assigned", agent || task.reporter, task.status);
-  return updated;
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(assignee, task.id);
+    logActivity(task.id, agent || task.reporter, "assigned", assignee);
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "assigned", agent || task.reporter, task.status);
+    return updated;
+  });
 }
 
 export function setTaskPriority(id: number | string, priority: TaskPriority, agent?: string): Task | null {
@@ -373,11 +448,13 @@ export function setTaskPriority(id: number | string, priority: TaskPriority, age
   if (!task) return null;
 
   const oldPriority = task.priority;
-  db.prepare("UPDATE tasks SET priority = ? WHERE id = ?").run(priority, task.id);
-  logActivity(task.id, agent || task.reporter, "priority_changed", `${oldPriority} -> ${priority}`);
-  const updated = getTaskById(task.id);
-  if (updated) emitTaskEvent(updated, "priority_changed", agent || task.reporter, task.status, `${oldPriority} -> ${priority}`);
-  return updated;
+  return db.transaction(() => {
+    db.prepare("UPDATE tasks SET priority = ? WHERE id = ?").run(priority, task.id);
+    logActivity(task.id, agent || task.reporter, "priority_changed", `${oldPriority} -> ${priority}`);
+    const updated = getTaskById(task.id);
+    if (updated) emitTaskEvent(updated, "priority_changed", agent || task.reporter, task.status, `${oldPriority} -> ${priority}`);
+    return updated;
+  });
 }
 
 // ── Comments ──────────────────────────────────────────────────────────────────
