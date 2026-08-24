@@ -109,6 +109,24 @@ describe("storage-kit generator", () => {
     expect(result.staleVersion).toBe("9.9.9");
   });
 
+  test("check fails when only the manifest records a stale kitVersion (template bytes still fresh)", () => {
+    const dir = makeTarget();
+    generateKit({ targetRepo: dir, version: "9.9.9" });
+    const kitDir = join(dir, KIT_TARGET_SUBDIR);
+    const manifestPath = join(kitDir, KIT_MANIFEST_FILE);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as KitManifest;
+    manifest.kitVersion = "9.9.8";
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+
+    const result = checkKit({ targetRepo: dir, version: "9.9.9" });
+    // Every template byte/hash still matches the fresh 9.9.9 render — only the
+    // manifest records an old kitVersion. The check must still fail, because a
+    // manifest-only stale version is drift that a hash comparison cannot see.
+    expect(result.files.every((f) => f.status === "ok")).toBe(true);
+    expect(result.staleVersion).toBe("9.9.8");
+    expect(result.ok).toBe(false);
+  });
+
   test("check fails when the kit minor line drifts from the declared dependency", () => {
     // The contacts shape: kit vendored at 0.4.2 while package.json declares ^0.8.5.
     const dir = makeTarget();
