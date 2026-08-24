@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+### Patch Changes
+
+- fix: runner fails loudly and terminally on permanent control-plane denials (wrong_token_kind)
+
 ## 0.6.1
 
 ### Patch Changes
