@@ -71,6 +71,13 @@ list of origins or `host[:port]`, default `http://localhost:19428`). Requests
 with a hostile `Origin` are refused with `403`, mirroring the preflight check
 that already applied to `OPTIONS`.
 
+A GET route whose handler writes state is treated exactly like a
+state-changing request, because GET is a CORS simple request that a hostile
+page can trigger with no preflight. `GET /v1/inject` and `GET /v1/memories/{id}`
+touch recency state, and `POST /v1/profile/synthesize` (a POST by design — it
+writes a `_profile_*` cache memory and may call an LLM) therefore all require
+an allowlisted `Origin` or `Host`; a hostile `Origin` is refused with `403`.
+
 ## Operational endpoints
 
 | Method and path | Behavior |
@@ -230,7 +237,7 @@ POST /v1/synthesis/run
 GET  /v1/synthesis/runs
 GET  /v1/synthesis/status
 POST /v1/synthesis/rollback/{run_id}
-GET  /v1/profile/synthesize
+POST /v1/profile/synthesize
 
 POST /v1/consolidate
 POST /v1/reflect

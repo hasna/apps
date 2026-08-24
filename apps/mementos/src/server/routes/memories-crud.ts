@@ -17,7 +17,7 @@ import type {
   CreateMemoryInput,
 } from "../../types/index.js";
 import { addRoute } from "../router.js";
-import { json, errorResponse, readJson, getSearchParams } from "../helpers.js";
+import { json, errorResponse, readJson, getSearchParams, checkWriteOriginOrHost } from "../helpers.js";
 import { getDatabase } from "../../db/database.js";
 import { validateMemoryEnums, formatEnumViolation } from "../../lib/enum-validation.js";
 import { MemoryNotFoundError, VersionConflictError, DuplicateMemoryError } from "../../types/index.js";
@@ -141,8 +141,13 @@ addRoute("POST", "/api/memories", async (req) => {
   }
 });
 
-// GET /api/memories/:id — get single memory
-addRoute("GET", "/api/memories/:id", (_req, _url, params) => {
+// GET /api/memories/:id — get single memory.
+// The handler calls touchMemory() (a recency write), so it is gated like a
+// state-changing request: GET is a CORS simple request and a hostile
+// cross-origin page must not be able to trigger the write.
+addRoute("GET", "/api/memories/:id", (req, _url, params) => {
+  const gate = checkWriteOriginOrHost(req);
+  if (gate) return gate;
   const memory = getMemory(params["id"]!);
   if (!memory) {
     return errorResponse("Memory not found", 404);

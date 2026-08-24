@@ -20,6 +20,11 @@ WORKDIR /app
 ENV NODE_ENV=production \
     MEMENTOS_HOST=0.0.0.0 \
     PORT=8080
+# NOTE: MEMENTOS_CORS_ORIGIN is deliberately NOT defaulted here — it must be
+# set by each deployment (docker-compose sets it to http://localhost:8080; the
+# cloud hasna-app Terraform module env must set its public origin). Without it
+# the default allowlist (http://localhost:19428) refuses 403 every
+# state-changing request this container receives.
 
 # Production dependencies only (pg, @hasna/contracts, ai sdk, etc.).
 # --ignore-scripts: dist is copied from the build stage; no rebuild here.

@@ -11,7 +11,11 @@ import { isolatedStoreEnv } from "../test-support/store-isolation.js";
 //     unauthenticated writes are explicitly opted in;
 //   - a state-changing route with no API key configured is refused (401) under
 //     the fail-closed default;
-//   - read routes stay open (local default unchanged).
+//   - read routes stay open (local default unchanged);
+//   - write-implicit GET routes (handlers that touch/update state or spend) are
+//     gated like state-changing requests: hostile Origin refused (403),
+//     allowlisted Origin/Host still works;
+//   - the spend-triggering GET /api/profile/synthesize is no longer a GET route.
 //
 // Two servers, distinct port ranges so they cannot collide:
 //   SERVER_A — fail-closed default: no key, no opt-in.
@@ -39,6 +43,9 @@ async function spawnServer(
         API_KEY_SIGNING_SECRET: "",
         HASNA_MEMENTOS_API_SIGNING_KEY: "",
         HASNA_API_SIGNING_KEY: "",
+        // Blank the Anthropic key so the profile-synthesize tests can never
+        // make a billed LLM call.
+        ANTHROPIC_API_KEY: "",
         ...extra,
       },
     }),
@@ -196,5 +203,120 @@ describe("Origin/Host allowlist on state-changing routes", () => {
       body: JSON.stringify(MEMORY_BODY),
     });
     expect(res.status).toBe(403);
+  });
+});
+
+// ============================================================================
+// Write-implicit GET routes — handlers that touch state (recency updates) or
+// trigger spend. GET is a CORS "simple request": a hostile cross-origin page
+// can trigger it with no preflight, so these routes must be gated exactly like
+// state-changing methods (allowlisted Origin, or allowlisted Host when no
+// Origin is present). See todos d836c304 remediation cycle 1.
+// ============================================================================
+
+describe("write-implicit GET routes are gated like state-changing requests", () => {
+  test("hostile Origin to GET /api/inject is refused (403)", async () => {
+    const res = await fetch(`${BASE_B}/api/inject`, {
+      headers: { Origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("hostile Origin to GET /api/inject is refused on the fail-closed server too (403)", async () => {
+    const res = await fetch(`${BASE_A}/api/inject`, {
+      headers: { Origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("allowlisted Origin GET /api/inject still works", async () => {
+    const res = await fetch(`${BASE_B}/api/inject`, {
+      headers: { Origin: `http://localhost:${PORT_B}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("matching Host GET /api/inject (non-browser client) still works", async () => {
+    const res = await fetch(`${BASE_B}/api/inject`);
+    expect(res.status).toBe(200);
+  });
+
+  test("hostile Origin to GET /api/memories/:id is refused (403)", async () => {
+    const created = await fetch(`${BASE_B}/api/memories`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://localhost:${PORT_B}`,
+      },
+      body: JSON.stringify(MEMORY_BODY),
+    });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+
+    const res = await fetch(`${BASE_B}/api/memories/${id}`, {
+      headers: { Origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("allowlisted GET /api/memories/:id still works", async () => {
+    const created = await fetch(`${BASE_B}/api/memories`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://localhost:${PORT_B}`,
+      },
+      body: JSON.stringify(MEMORY_BODY),
+    });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+
+    const res = await fetch(`${BASE_B}/api/memories/${id}`, {
+      headers: { Origin: `http://localhost:${PORT_B}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string };
+    expect(body.id).toBe(id);
+  });
+
+  test("profile synthesize is no longer exposed as GET (404)", async () => {
+    const res = await fetch(`${BASE_B}/api/profile/synthesize`);
+    expect(res.status).toBe(404);
+  });
+
+  test("hostile Origin to POST /api/profile/synthesize is refused (403)", async () => {
+    const res = await fetch(`${BASE_B}/api/profile/synthesize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://evil.example",
+      },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("allowlisted POST /api/profile/synthesize works (no billed LLM call)", async () => {
+    const res = await fetch(`${BASE_B}/api/profile/synthesize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://localhost:${PORT_B}`,
+      },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { profile: unknown };
+    // No preference/fact memories in this store — a null profile, never an error.
+    expect("profile" in body).toBe(true);
+  });
+
+  test("POST /api/profile/synthesize is refused without a key (fail-closed, 401)", async () => {
+    const res = await fetch(`${BASE_A}/api/profile/synthesize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(401);
   });
 });

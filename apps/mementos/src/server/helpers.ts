@@ -60,7 +60,19 @@ function hostOf(entry: string): string {
  */
 export function checkOriginOrHost(req: Request, method: string): Response | null {
   if (!isStateChangingMethod(method)) return null;
+  return checkWriteOriginOrHost(req);
+}
 
+/**
+ * The allowlist check itself: reject a request whose Origin (when present) or
+ * Host (when no Origin is present) is not on the configured allowlist.
+ *
+ * GET requests are CORS "simple requests" — a hostile cross-origin page can
+ * trigger one with no preflight — so a GET route whose handler writes state
+ * (a touch/recency update, a cache write, an LLM call) must be gated exactly
+ * like a state-changing method, even though its HTTP method is not one.
+ */
+export function checkWriteOriginOrHost(req: Request): Response | null {
   const allowlist = getAllowedOrigins();
   const allowedHosts = allowlist.map(hostOf);
 

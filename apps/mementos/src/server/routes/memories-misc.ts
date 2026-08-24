@@ -7,7 +7,7 @@ import {
 } from "../../lib/machine-visibility.js";
 import type { Memory, MemoryCategory, CreateMemoryInput } from "../../types/index.js";
 import { addRoute } from "../router.js";
-import { json, readJson, errorResponse, getSearchParams } from "../helpers.js";
+import { json, readJson, errorResponse, getSearchParams, checkWriteOriginOrHost } from "../helpers.js";
 
 // GET /api/health — simple health
 addRoute("GET", "/api/health", () => {
@@ -146,8 +146,13 @@ addRoute("POST", "/api/maintenance/cleanup", () => {
   return json(result);
 });
 
-// GET /api/inject — get injection context
-addRoute("GET", "/api/inject", (_req, url) => {
+// GET /api/inject — get injection context.
+// The handler calls touchMemory() on every returned memory (a recency write),
+// so it is gated like a state-changing request: GET is a CORS simple request
+// and a hostile cross-origin page must not be able to trigger the writes.
+addRoute("GET", "/api/inject", (req, url) => {
+  const gate = checkWriteOriginOrHost(req);
+  if (gate) return gate;
   const q = getSearchParams(url);
   const maxTokens = q["max_tokens"] ? parseInt(q["max_tokens"], 10) : 500;
   const minImportance = 3;
