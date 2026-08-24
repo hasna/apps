@@ -105,7 +105,6 @@ describe("runtime snapshot facade", () => {
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]?.name).toBe("empty baseline");
   });
-
   test("reads snapshot resources as both a flat list and a parent-child tree", () => {
     const path = dbPath();
     const resources: SnapshotResource[] = [
@@ -177,5 +176,171 @@ describe("runtime snapshot facade", () => {
     expect(listPolicies({ dbPath: path })).toEqual([
       expect.objectContaining({ selector: "kind:project", mode: "ignore" })
     ]);
+  });
+});
+
+describe("runtime max-age gate", () => {
+  const OLD_CREATED_AT = "2026-06-19T00:00:00.000Z";
+
+  function saveAgedSnapshot(path: string, id = "snap_old"): void {
+    const store = new SnapshotStore({ path });
+    try {
+      store.saveSnapshot(
+        [{
+          id: "project:aged",
+          kind: "project",
+          name: "aged",
+          source: "projects",
+          attributes: { path: join(mkdtempSync(join(tmpdir(), "snapshots-maxage-runtime-")), "project") },
+          observedAt: OLD_CREATED_AT
+        }],
+        { id, createdAt: OLD_CREATED_AT }
+      );
+    } finally {
+      store.close();
+    }
+  }
+
+  function captureStderr(fn: () => void): string[] {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (message?: unknown) => {
+      lines.push(String(message));
+    };
+    try {
+      fn();
+    } finally {
+      console.error = original;
+    }
+    return lines;
+  }
+
+  test("refuses an old snapshot with a logged, audited error", () => {
+    const path = dbPath();
+    saveAgedSnapshot(path);
+
+    const stderr = captureStderr(() => {
+      expect(() => planSnapshotRestore({ dbPath: path, id: "snap_old", maxAgeMs: 3_600_000 })).toThrow("max-age");
+    });
+
+    expect(stderr.some((line) => line.includes("[snapshots]") && line.includes("Refusing restore"))).toBe(true);
+    const auditStore = new SnapshotStore({ path });
+    try {
+      const rows = auditStore.db
+        .query("SELECT payload FROM audit_events WHERE event_type = 'restore.max-age-refused'")
+        .all() as Array<{ payload: string }>;
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(rows[0].payload)).toMatchObject({
+        snapshot_id: "snap_old",
+        snapshot_created_at: OLD_CREATED_AT
+      });
+    } finally {
+      auditStore.close();
+    }
+  });
+
+  test("HASNA_SNAPSHOTS_MAX_AGE applies as the configured limit", () => {
+    const path = dbPath();
+    saveAgedSnapshot(path);
+    process.env.HASNA_SNAPSHOTS_MAX_AGE = "1h";
+    try {
+      expect(() => planSnapshotRestore({ dbPath: path, id: "snap_old" })).toThrow("max-age");
+      expect(() => planSnapshotRestore({ dbPath: path, id: "snap_old", maxAgeMs: 365 * 86_400_000 })).not.toThrow();
+    } finally {
+      delete process.env.HASNA_SNAPSHOTS_MAX_AGE;
+    }
+  });
+
+  test("an explicit limit wins over the environment", () => {
+    const path = dbPath();
+    saveAgedSnapshot(path);
+    process.env.HASNA_SNAPSHOTS_MAX_AGE = "1h";
+    try {
+      expect(() => planSnapshotRestore({ dbPath: path, id: "snap_old", maxAgeMs: 365 * 86_400_000 })).not.toThrow();
+    } finally {
+      delete process.env.HASNA_SNAPSHOTS_MAX_AGE;
+    }
+  });
+
+  test("a malformed configured limit fails loudly instead of disabling the gate", () => {
+    const path = dbPath();
+    saveAgedSnapshot(path);
+    process.env.HASNA_SNAPSHOTS_MAX_AGE = "not-a-duration";
+    try {
+      expect(() => planSnapshotRestore({ dbPath: path, id: "snap_old" })).toThrow("Invalid duration");
+    } finally {
+      delete process.env.HASNA_SNAPSHOTS_MAX_AGE;
+    }
+  });
+
+  test("applying a saved plan re-checks the gate at apply time", () => {
+    const path = dbPath();
+    saveAgedSnapshot(path);
+
+    const plan = planSnapshotRestore({ dbPath: path, id: "snap_old" });
+    expect(() => applySavedRestorePlan({ dbPath: path, planId: plan.id, planHash: plan.planHash, apply: true, yes: true, maxAgeMs: 3_600_000 })).toThrow("max-age");
+
+    const stderr = captureStderr(() => {
+      expect(() => applySavedRestorePlan({ dbPath: path, planId: plan.id, planHash: plan.planHash, maxAgeMs: 3_600_000 })).toThrow("max-age");
+    });
+    expect(stderr.some((line) => line.includes("[snapshots]") && line.includes("Refusing restore"))).toBe(true);
+
+    const auditStore = new SnapshotStore({ path });
+    try {
+      const rows = auditStore.db
+        .query("SELECT payload FROM audit_events WHERE event_type = 'restore.max-age-refused'")
+        .all() as Array<{ payload: string }>;
+      expect(rows).toHaveLength(2);
+    } finally {
+      auditStore.close();
+    }
+  });
+});
+
+describe("runtime capture lease", () => {
+  test("capture proceeds without the lease and records the degraded path", async () => {
+    const path = dbPath();
+    const holder = new SnapshotStore({ path });
+    try {
+      expect(holder.acquireCaptureLease({ waitMs: 0, ttlMs: 60_000 })).toBe(true);
+      process.env.HASNA_SNAPSHOTS_CAPTURE_LEASE_WAIT_MS = "50";
+      try {
+        const result = await captureSnapshot({ dbPath: path, include: [], name: "lease-degraded" });
+        expect(result.resource_count).toBe(0);
+        expect(result.duplicate).toBe(false);
+      } finally {
+        delete process.env.HASNA_SNAPSHOTS_CAPTURE_LEASE_WAIT_MS;
+      }
+      const auditStore = new SnapshotStore({ path });
+      try {
+        const rows = auditStore.db
+          .query("SELECT payload FROM audit_events WHERE event_type = 'capture.lease-unavailable'")
+          .all() as Array<{ payload: string }>;
+        expect(rows).toHaveLength(1);
+        expect(JSON.parse(rows[0].payload)).toMatchObject({ message: "capture proceeded without the capture lease" });
+      } finally {
+        auditStore.close();
+      }
+    } finally {
+      holder.releaseCaptureLease();
+      holder.close();
+    }
+  });
+
+  test("sequential captures each acquire and release the lease cleanly", async () => {
+    const path = dbPath();
+    const first = await captureSnapshot({ dbPath: path, include: [], name: "lease-a" });
+    const second = await captureSnapshot({ dbPath: path, include: [], name: "lease-b" });
+
+    expect(first.resource_count).toBe(0);
+    expect(second.resource_count).toBe(0);
+    const store = new SnapshotStore({ path });
+    try {
+      const live = store.db.query("SELECT count(*) AS count FROM capture_leases WHERE lease_key = 'capture'").get() as { count: number };
+      expect(Number(live.count)).toBe(0); // no leaked lease rows
+      expect(store.listSnapshots().length).toBeGreaterThanOrEqual(1);
+    } finally {
+      store.close();
+    }
   });
 });

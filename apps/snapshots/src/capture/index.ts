@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { hostname, platform, release, userInfo } from "node:os";
 import type { CaptureDiagnostic, CaptureOptions, CaptureResult, CaptureSourceStatus, JsonObject, JsonValue, SnapshotResource } from "../types.js";
 import { commandExists, defaultDataDir, nowIso, redactJson, redactText, runCommand, runJsonCommand, runTmux, sha256, slugPart } from "../util.js";
+import { createResumeIdentityResolver } from "./resume.js";
 
 export async function captureAll(options: CaptureOptions = {}): Promise<CaptureResult> {
   const include = new Set(options.include ?? ["machine", "tmux", "projects", "processes", "sessions", "browser", "desktop", "apps"]);
@@ -121,6 +122,7 @@ function captureTmux(now: string, options: CaptureOptions = {}): CaptureResult {
     "-F",
     "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_active}\t#{pane_start_command}"
   ]);
+  const resumeResolver = panes.ok ? createResumeIdentityResolver() : undefined;
   if (panes.ok) {
     for (const line of panes.stdout.trim().split("\n").filter(Boolean)) {
       const [sessionName, windowIndex, windowName, paneIndex, paneId, panePath, paneCommand, paneActive, paneStartCommand = ""] = line.split("\t");
@@ -171,6 +173,7 @@ function captureTmux(now: string, options: CaptureOptions = {}): CaptureResult {
           current_command: paneCommand,
           start_command: redactText(paneStartCommand),
           restartable: isRestartableCommand(startCommand),
+          resume_identity: panePath ? resumeResolver?.resolve(panePath) ?? { opencode2: null, claude: null } : { opencode2: null, claude: null },
           content_tail: paneTail?.ok ? redactText(paneTail.stdout).slice(-16_000) : "",
           content_tail_skipped: paneTailLines === 0,
           active: paneActive === "1"
@@ -179,8 +182,10 @@ function captureTmux(now: string, options: CaptureOptions = {}): CaptureResult {
       });
     }
   }
+  const resumeDiagnostics = resumeResolver ? [...resumeResolver.diagnostics] : [];
+  resumeResolver?.close();
 
-  return { resources, diagnostics: [] };
+  return { resources, diagnostics: resumeDiagnostics };
 }
 
 function captureProjects(now: string): CaptureResult {
@@ -451,9 +456,18 @@ function safeStat(path: string) {
   }
 }
 
-function isRestartableCommand(command: string): boolean {
+/**
+ * Detect commands that can be safely restarted/resumed after a machine
+ * outage. The classic agents resume via `--resume`; opencode2 (OpenCode v2)
+ * resumes the last or a named session via `--continue`/`-c`/`--session`/`-s`
+ * (verified against the opencode2 CLI, 2026-08-24) and keeps its sessions in
+ * `~/.local/share/opencode/opencode.db` (table `session_v2`).
+ */
+export function isRestartableCommand(command: string): boolean {
   if (command.includes("HASNA_SNAPSHOTS_RESTARTABLE=1")) return true;
-  return /\b(codex|claude|codewith|coders)\b/.test(command) && /\b(--resume|resume)\b/.test(command);
+  const classicAgent = /\b(codex|claude|codewith|coders)\b/.test(command) && /\b(--resume|resume)\b/.test(command);
+  const opencode2 = /\bopencode2\b/.test(command) && /(?:--continue|-c|--session|-s)\b/.test(command);
+  return classicAgent || opencode2;
 }
 
 function tmuxPaneTailLines(options: CaptureOptions): number {

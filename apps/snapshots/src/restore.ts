@@ -11,8 +11,43 @@ import type {
   SnapshotRecord,
   StoredSnapshotResource
 } from "./types.js";
-import { commandExists, nowIso, runTmux, sha256, stableJson, tmuxCommand } from "./util.js";
+import { commandExists, formatDuration, nowIso, runTmux, sha256, stableJson, tmuxCommand } from "./util.js";
 import { resolvePolicy } from "./policy.js";
+
+/**
+ * Thrown when a restore/plan targets a snapshot older than the configured
+ * max-age gate. The runtime layer logs the refusal and records an audit
+ * event before propagating it (see runtime.ts).
+ */
+export class RestoreMaxAgeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RestoreMaxAgeError";
+  }
+}
+
+/**
+ * Restore freshness gate (verdict 2026-08-24): refuse snapshots older than
+ * the configured limit. The gate is inert unless `maxAgeMs` is set, so
+ * existing callers keep their behavior. `nowIso` exists for deterministic
+ * tests; it defaults to the current time.
+ */
+export function assertSnapshotWithinMaxAge(snapshot: SnapshotRecord, maxAgeMs: number | undefined, nowIsoValue?: string): void {
+  if (maxAgeMs === undefined || maxAgeMs === null || maxAgeMs <= 0) return;
+  const createdMs = Date.parse(snapshot.createdAt);
+  const nowMs = nowIsoValue ? Date.parse(nowIsoValue) : Date.now();
+  if (!Number.isFinite(createdMs) || !Number.isFinite(nowMs)) {
+    throw new RestoreMaxAgeError(
+      `Snapshot ${snapshot.id} has an unparseable createdAt (${snapshot.createdAt}); its age cannot be verified against the configured restore max-age (${formatDuration(maxAgeMs)}). Refusing restore.`
+    );
+  }
+  const ageMs = nowMs - createdMs;
+  if (ageMs > maxAgeMs) {
+    throw new RestoreMaxAgeError(
+      `Snapshot ${snapshot.id} (created ${snapshot.createdAt}, age ${formatDuration(ageMs)}) exceeds the configured restore max-age (${formatDuration(maxAgeMs)}). Refusing restore.`
+    );
+  }
+}
 
 export function createRestorePlan(
   snapshot: SnapshotRecord,
@@ -20,6 +55,7 @@ export function createRestorePlan(
   policies: RestorePolicy[] = [],
   options: RestoreExecutionOptions = {}
 ): RestorePlan {
+  assertSnapshotWithinMaxAge(snapshot, options.maxAgeMs);
   const request = normalizeRestoreRequest(options);
   const selection = selectResources(resources, request);
   const selectedResourceIds = new Set(selection.resources.map((resource) => resource.id));
@@ -479,6 +515,7 @@ function normalizeRestoreRequest(options: RestoreExecutionOptions): RestoreReque
   if (options.exclude?.length) request.exclude = uniqueStrings(options.exclude);
   if (options.applyPlanId) request.applyPlanId = options.applyPlanId;
   if (options.planHash) request.planHash = options.planHash;
+  if (options.maxAgeMs !== undefined) request.maxAgeMs = options.maxAgeMs;
   return request;
 }
 
@@ -726,7 +763,8 @@ function hashRestorePlan(plan: RestorePlan): string {
       targetMode: plan.request?.targetMode ?? "strict",
       tmuxMode: plan.request?.tmuxMode ?? "layout-only",
       applyPlanId: plan.request?.applyPlanId ?? null,
-      planHash: plan.request?.planHash ?? null
+      planHash: plan.request?.planHash ?? null,
+      maxAgeMs: plan.request?.maxAgeMs ?? null
     },
     operations: plan.operations.map((op) => ({
       id: op.id,

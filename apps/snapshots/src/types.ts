@@ -121,6 +121,12 @@ export interface RestoreRequest {
   tmuxMode?: TmuxRestoreMode;
   applyPlanId?: string;
   planHash?: string;
+  /**
+   * Restore freshness gate (milliseconds): refuse snapshots older than this
+   * limit. Undefined disables the gate. Recorded on the plan so re-applying
+   * a saved plan re-checks the same limit.
+   */
+  maxAgeMs?: number;
 }
 
 export interface RestoreAutopilotAssessment {
@@ -183,4 +189,6 @@ export interface RestoreExecutionOptions {
   tmuxMode?: TmuxRestoreMode;
   applyPlanId?: string;
   planHash?: string;
+  /** Restore freshness gate in milliseconds; see RestoreRequest.maxAgeMs. */
+  maxAgeMs?: number;
 }
