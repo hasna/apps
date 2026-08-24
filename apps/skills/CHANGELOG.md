@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.66
+
+### Patch Changes
+
+- 8b70821: skills-server answers --version/-V/--help before any bind (todos row 7e5f8f3d). Previously `skills-server --version`/`--help` fell through to resolveServerConfig()/startSkillsServer() and bound :8787 with no output.
+
 ## 0.1.65
 
 ### Patch Changes
