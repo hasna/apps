@@ -57,8 +57,19 @@ curl -H "Authorization: Bearer $MEMENTOS_API_KEY" \
 
 When no signing secret exists, the server falls back to the static
 `MEMENTOS_API_KEY`. That legacy mode requires the `Authorization: Bearer ...`
-header. When neither signing nor static key is configured, API access is open;
-this is suitable only for a trusted local listener.
+header.
+
+When neither signing nor static key is configured, the server fails closed on
+state-changing requests: `POST`/`PATCH`/`PUT`/`DELETE` are refused with `401`.
+Read routes stay open for a trusted local listener. A deployment that
+deliberately runs without a key may restore unauthenticated writes by setting
+`MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES=1`; absence is never treated as consent.
+
+Independent of authentication, every state-changing request must also carry an
+`Origin` or `Host` on the allowlist (`MEMENTOS_CORS_ORIGIN`, a comma-separated
+list of origins or `host[:port]`, default `http://localhost:19428`). Requests
+with a hostile `Origin` are refused with `403`, mirroring the preflight check
+that already applied to `OPTIONS`.
 
 ## Operational endpoints
 

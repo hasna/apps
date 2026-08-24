@@ -21,7 +21,7 @@ import { getMemoryStats } from "../db/analytics.js";
 // a direct RDS Postgres connection (CLAUDE.md §2). Opt in before any DB access.
 markServerContext();
 import { matchRoute } from "./router.js";
-import { CORS_HEADERS, getCorsHeaders, json, errorResponse, resolveDashboardDir, serveStaticFile, describeConstraintViolation } from "./helpers.js";
+import { CORS_HEADERS, getCorsHeaders, getAllowedOrigins, checkOriginOrHost, json, errorResponse, resolveDashboardDir, serveStaticFile, describeConstraintViolation } from "./helpers.js";
 import { checkApiKey } from "./auth.js";
 
 function pkgVersion(): string {
@@ -161,15 +161,21 @@ export function startServer(port: number): void {
       const url = new URL(req.url);
       const { pathname } = url;
 
-      // CORS preflight — only allow configured origin
+      // CORS preflight — only allow configured origins
       if (req.method === "OPTIONS") {
         const origin = req.headers.get("origin");
-        const allowedOrigin = process.env["MEMENTOS_CORS_ORIGIN"] ?? "http://localhost:19428";
-        if (origin && origin !== allowedOrigin) {
+        if (origin && !getAllowedOrigins().includes(origin)) {
           return new Response(null, { status: 403 });
         }
         return new Response(null, { status: 204, headers: getCorsHeaders(req) });
       }
+
+      // Host/Origin allowlist — the non-OPTIONS sibling of the preflight gate.
+      // A hostile page can forge a state-changing request with any Origin, so
+      // POST/PATCH/PUT/DELETE are refused unless the request's Origin (or Host
+      // for non-browser clients) is on the configured allowlist.
+      const originGate = checkOriginOrHost(req, req.method);
+      if (originGate) return originGate;
 
       // ----------------------------------------------------------------------
       // Unauthenticated operational probes: {status, version, backend}
