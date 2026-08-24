@@ -16,9 +16,17 @@ RUN bun run build:js
 RUN rm -rf node_modules && bun install --production --frozen-lockfile
 
 FROM --platform=linux/arm64 oven/bun:1.3.13-slim AS runtime
+# Amazon RDS global CA bundle so TLS verification to the shared cloud Postgres
+# succeeds (the storage kit resolves sslmode=require with server-certificate
+# verification enabled; without the RDS root in the trust store, the
+# migrate/serve handshake fails with 'self signed certificate in certificate
+# chain' — see O15-00661).
+COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-    PORT=8080
+    PORT=8080 \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
+    PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
 WORKDIR /app
 
 COPY --from=build /app/package.json ./package.json
