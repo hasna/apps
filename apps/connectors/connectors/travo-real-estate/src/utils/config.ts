@@ -4,7 +4,6 @@ import { join } from 'path';
 
 const CONNECTOR_NAME = 'connect-travo-real-estate';
 const DEFAULT_PROFILE = 'default';
-const DEFAULT_BASE_URL = 'https://api.travo-real-estate.com/v1';
 
 export interface ProfileConfig {
   apiKey?: string;
@@ -146,8 +145,8 @@ export function setApiKey(apiKey: string): void {
   saveProfile(config);
 }
 
-export function getBaseUrl(): string {
-  return process.env.TRAVO_REAL_ESTATE_BASE_URL || loadProfile().baseUrl || DEFAULT_BASE_URL;
+export function getBaseUrl(): string | undefined {
+  return process.env.TRAVO_REAL_ESTATE_BASE_URL || loadProfile().baseUrl;
 }
 
 export function setBaseUrl(baseUrl: string): void {
@@ -168,4 +167,3 @@ export function getActiveProfileName(): string {
   return getCurrentProfile();
 }
 
-export { DEFAULT_BASE_URL };

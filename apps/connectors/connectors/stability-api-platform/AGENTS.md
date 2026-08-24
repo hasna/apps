@@ -8,7 +8,7 @@ Bearer API key (`STABILITY_API_PLATFORM_API_KEY`). Dashboard auth type: apikey/b
 
 ## Endpoints
 
-Base URL: `https://api.stabilityapiplatform.com/v1`
+Base URL: no default (must be configured)
 
 Operations: list/create/get items, list events, search, raw request.
 

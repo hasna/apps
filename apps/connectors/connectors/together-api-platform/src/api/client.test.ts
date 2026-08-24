@@ -44,26 +44,26 @@ afterEach(() => {
 describe('TogetherApiPlatformClient', () => {
   test('listItems calls GET /v1/items with Bearer auth', async () => {
     const recorded = installFetch(() => ({}));
-    const client = new TogetherApiPlatformClient({ apiKey: 'together-api-platform-key' });
+    const client = new TogetherApiPlatformClient({ apiKey: 'together-api-platform-key', baseUrl: 'https://configured.example.com/v1' });
     await client.listItems();
-    expect(recorded[0].url).toBe('https://api.togetherapiplatform.com/v1/items');
+    expect(recorded[0].url).toBe('https://configured.example.com/v1/items');
     expect(recorded[0].method).toBe('GET');
     expect(authHeader(recorded)).toBe('Bearer together-api-platform-key');
   });
 
   test('getItem calls GET /v1/items/:itemId', async () => {
     const recorded = installFetch(() => ({}));
-    const client = new TogetherApiPlatformClient({ apiKey: 'together-api-platform-key' });
+    const client = new TogetherApiPlatformClient({ apiKey: 'together-api-platform-key', baseUrl: 'https://configured.example.com/v1' });
     await client.getItem('item-1');
-    expect(recorded[0].url).toBe('https://api.togetherapiplatform.com/v1/items/item-1');
+    expect(recorded[0].url).toBe('https://configured.example.com/v1/items/item-1');
     expect(authHeader(recorded)).toBe('Bearer together-api-platform-key');
   });
 
   test('search posts to /v1/search', async () => {
     const recorded = installFetch(() => ({}));
-    const client = new TogetherApiPlatformClient({ apiKey: 'test-key' });
+    const client = new TogetherApiPlatformClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.search({ q: 'hello' });
-    expect(recorded[0].url).toBe('https://api.togetherapiplatform.com/v1/search');
+    expect(recorded[0].url).toBe('https://configured.example.com/v1/search');
     expect(recorded[0].method).toBe('POST');
   });
 
@@ -78,6 +78,10 @@ describe('TogetherApiPlatformClient', () => {
   });
 
   test('requires API key', () => {
-    expect(() => new TogetherApiPlatformClient({ apiKey: '' })).toThrow('API key is required');
+    expect(() => new TogetherApiPlatformClient({ apiKey: '', baseUrl: 'https://configured.example.com/v1' })).toThrow('API key is required');
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new TogetherApiPlatformClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

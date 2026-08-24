@@ -9,7 +9,6 @@ export {
   EventsApi,
   SearchApi,
   RawApi,
-  DEFAULT_BASE_URL,
 } from './api';
 
 export {

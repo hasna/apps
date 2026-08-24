@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { ConnectorClient, DEFAULT_BASE_URL } from './client';
+import { ConnectorClient } from './client';
 import { BatchesApi } from './batches';
 import { Connector } from './index';
 import { ConnectorApiError } from '../types';
@@ -16,12 +16,11 @@ describe('ConnectorClient', () => {
   });
 
   test('requires apiKey', () => {
-    expect(() => new ConnectorClient({ apiKey: '' })).toThrow('API key is required');
+    expect(() => new ConnectorClient({ apiKey: '', baseUrl: 'https://configured.example.com/v1' })).toThrow('API key is required');
   });
 
-  test('uses default base URL', () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
-    expect(client.getBaseUrl()).toBe(DEFAULT_BASE_URL);
+    test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 
   test('uses custom base URL and strips trailing slash', () => {
@@ -33,24 +32,24 @@ describe('ConnectorClient', () => {
   });
 
   test('buildUrl constructs batches list endpoint', () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
-    expect(client.buildUrl('/batches')).toBe(`${DEFAULT_BASE_URL}/batches`);
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
+    expect(client.buildUrl('/batches')).toBe(`https://configured.example.com/v1/batches`);
   });
 
   test('buildUrl appends query parameters', () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     const url = client.buildUrl('/batches', { limit: 10, offset: 0 });
-    expect(url).toBe(`${DEFAULT_BASE_URL}/batches?limit=10&offset=0`);
+    expect(url).toBe(`https://configured.example.com/v1/batches?limit=10&offset=0`);
   });
 
   test('encodePathSegment encodes special characters', () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     expect(client.encodePathSegment('item/1')).toBe('item%2F1');
     expect(client.encodePathSegment('batch id')).toBe('batch%20id');
   });
 
   test('request sends Bearer authorization header', async () => {
-    const client = new ConnectorClient({ apiKey: 'split-in-batches-key' });
+    const client = new ConnectorClient({ apiKey: 'split-in-batches-key', baseUrl: 'https://configured.example.com/v1' });
     let capturedHeaders: Headers | undefined;
 
     globalThis.fetch = mock((_url, init) => {
@@ -66,7 +65,7 @@ describe('ConnectorClient', () => {
   });
 
   test('get batch builds encoded URL', async () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     let capturedUrl = '';
 
     globalThis.fetch = mock((url) => {
@@ -79,11 +78,11 @@ describe('ConnectorClient', () => {
     const batches = new BatchesApi(client);
     await batches.get('item/1');
 
-    expect(capturedUrl).toBe(`${DEFAULT_BASE_URL}/batches/item%2F1`);
+    expect(capturedUrl).toBe(`https://configured.example.com/v1/batches/item%2F1`);
   });
 
   test('post sends JSON body', async () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     let capturedInit: RequestInit | undefined;
 
     globalThis.fetch = mock((_url, init) => {
@@ -100,7 +99,7 @@ describe('ConnectorClient', () => {
   });
 
   test('throws ConnectorApiError on HTTP error', async () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
 
     globalThis.fetch = mock(() =>
       Promise.resolve(
@@ -112,7 +111,7 @@ describe('ConnectorClient', () => {
   });
 
   test('getApiKeyPreview masks long keys', () => {
-    const client = new ConnectorClient({ apiKey: 'abcdef1234567890' });
+    const client = new ConnectorClient({ apiKey: 'abcdef1234567890', baseUrl: 'https://configured.example.com/v1' });
     expect(client.getApiKeyPreview()).toBe('abcdef...7890');
   });
 });
@@ -128,7 +127,7 @@ describe('Connector', () => {
   });
 
   test('exposes API modules', () => {
-    const connector = new Connector({ apiKey: 'test-key' });
+    const connector = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     expect(connector.batches).toBeDefined();
     expect(connector.events).toBeDefined();
     expect(connector.search).toBeDefined();

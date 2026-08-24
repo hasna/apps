@@ -10,7 +10,7 @@ Guidance for AI agents working with the Vector Legal connector.
 
 - **Type**: Bearer API key
 - **Env**: `VECTOR_LEGAL_API_KEY`
-- **Optional**: `VECTOR_LEGAL_BASE_URL` (default `https://api.vector-legal.com/v1`)
+- **Optional**: `VECTOR_LEGAL_BASE_URL` (no default - must be set)
 
 ## API Surface
 

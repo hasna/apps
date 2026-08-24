@@ -1,11 +1,11 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { ConnectorClient, DEFAULT_BASE_URL } from './client';
+import { ConnectorClient } from './client';
 import { ConnectorApiError } from '../types';
 
 describe('ConnectorClient', () => {
   const mockConfig = {
     apiKey: 'test-api-key-12345',
-    baseUrl: 'https://api.spreadsheet-file.com/v1',
+    baseUrl: 'https://configured.example.com/v1',
   };
 
   describe('constructor', () => {
@@ -18,10 +18,9 @@ describe('ConnectorClient', () => {
       expect(client).toBeInstanceOf(ConnectorClient);
     });
 
-    test('uses default base URL when not provided', () => {
-      const client = new ConnectorClient({ apiKey: 'test-key' });
-      expect(client.getBaseUrl()).toBe(DEFAULT_BASE_URL);
-    });
+      test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
+  });
   });
 
   describe('getApiKeyPreview', () => {
@@ -31,7 +30,7 @@ describe('ConnectorClient', () => {
     });
 
     test('returns *** for short keys', () => {
-      const client = new ConnectorClient({ apiKey: 'short' });
+      const client = new ConnectorClient({ apiKey: 'short', baseUrl: 'https://configured.example.com/v1' });
       expect(client.getApiKeyPreview()).toBe('***');
     });
   });
@@ -64,7 +63,7 @@ describe('ConnectorClient', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = (global.fetch as ReturnType<typeof mock>).mock.calls[0];
-      expect(url).toBe('https://api.spreadsheet-file.com/v1/files');
+      expect(url).toBe('https://configured.example.com/v1/files');
       expect(options.method).toBe('GET');
       expect(options.headers.Authorization).toBe('Bearer test-api-key-12345');
       expect(options.headers.Accept).toBe('application/json');
@@ -101,7 +100,7 @@ describe('ConnectorClient', () => {
       await client.get('/files/file%2Fwith%2Fslash');
 
       const [url] = (global.fetch as ReturnType<typeof mock>).mock.calls[0];
-      expect(url).toBe('https://api.spreadsheet-file.com/v1/files/file%2Fwith%2Fslash');
+      expect(url).toBe('https://configured.example.com/v1/files/file%2Fwith%2Fslash');
     });
 
     test('post() makes POST request with JSON body', async () => {

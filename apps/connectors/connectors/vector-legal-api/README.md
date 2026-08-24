@@ -1,6 +1,6 @@
 # connect-vector-legal-api
 
-TypeScript connector for the [Vector Legal API](https://api.vector-legal.com/v1) — legal document management, events, and search.
+TypeScript connector for the [Vector Legal API](configured.example.com/v1) — legal document management, events, and search.
 
 ## Features
 
@@ -30,7 +30,7 @@ bun run dev documents list
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `VECTOR_LEGAL_API_KEY` | Yes | API key |
-| `VECTOR_LEGAL_API_BASE_URL` | No | Base URL (default: `https://api.vector-legal.com/v1`) |
+| `VECTOR_LEGAL_API_BASE_URL` | No | Base URL (default: `configured.example.com/v1`) |
 
 ## CLI
 

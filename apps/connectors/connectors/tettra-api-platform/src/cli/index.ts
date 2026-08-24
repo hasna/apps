@@ -192,7 +192,7 @@ configCmd
     console.log(chalk.bold(`Active Profile: ${profileName}`));
     info(`Config directory: ${getConfigDir()}`);
     info(`API Key: ${apiKey ? `${apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${baseUrl || chalk.gray('https://api.tettraapiplatform.com/v1 (default)')}`);
+    info(`Base URL: ${baseUrl || chalk.gray('none configured')}`);
   });
 
 configCmd

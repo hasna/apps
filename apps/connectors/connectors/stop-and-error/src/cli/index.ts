@@ -167,7 +167,7 @@ configCmd
     console.log(chalk.bold(`Active Profile: ${getCurrentProfile()}`));
     info(`Config directory: ${getConfigDir()}`);
     info(`API Key: ${apiKey ? `${apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${getBaseUrl() || chalk.gray('default (https://api.stop-and-error.com/v1)')}`);
+    info(`Base URL: ${getBaseUrl() || chalk.gray('none configured')}`);
   });
 
 configCmd
@@ -187,7 +187,7 @@ statusCmd.action(() => {
   console.log(chalk.bold('StopAndError Connector Status'));
   info(`Profile: ${getCurrentProfile()}`);
   info(`API Key: ${apiKey ? client!.getApiKeyPreview() : chalk.gray('not set')}`);
-  info(`Base URL: ${getBaseUrl() || 'https://api.stop-and-error.com/v1'}`);
+  info(`Base URL: ${getBaseUrl() || 'none configured'}`);
 });
 
 const errorsCmd = program.command('errors').description('Workflow error operations');

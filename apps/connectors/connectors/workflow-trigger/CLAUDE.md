@@ -56,7 +56,7 @@ src/
 
 ## API Details
 
-- **Base URL**: `https://api.workflow-trigger.com/v1` (override with `WORKFLOW_TRIGGER_BASE_URL`)
+- **Base URL**: no default (must be configured) (override with `WORKFLOW_TRIGGER_BASE_URL`)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **Endpoints**:
   - `GET /triggers` - List triggers

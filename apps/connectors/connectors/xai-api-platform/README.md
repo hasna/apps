@@ -46,7 +46,7 @@ connect-xai-api-platform raw --path /items [--method GET] [--query '{}'] [--body
 | Variable | Description |
 |----------|-------------|
 | `XAI_API_PLATFORM_API_KEY` | API key (Bearer token) |
-| `XAI_API_PLATFORM_BASE_URL` | Optional base URL (default: `https://api.xaiapiplatform.com/v1`) |
+| `XAI_API_PLATFORM_BASE_URL` | Optional base URL (default: `configured.example.com/v1`) |
 
 ## Library Usage
 

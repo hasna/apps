@@ -1,6 +1,6 @@
 export { XaiApiPlatform } from './api';
 export * from './types';
-export { XaiApiPlatformClient, DEFAULT_BASE_URL } from './api';
+export { XaiApiPlatformClient } from './api';
 
 export {
   getApiKey,

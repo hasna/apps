@@ -1,6 +1,6 @@
 # connect-spreadsheet-file
 
-TypeScript connector for the [SpreadsheetFile API](https://api.spreadsheet-file.com/v1) — spreadsheet workflow node operations.
+TypeScript connector for the [SpreadsheetFile API](configured.example.com/v1) — spreadsheet workflow node operations.
 
 ## Features
 
@@ -26,7 +26,7 @@ Set credentials via environment variables or CLI profile:
 ```bash
 export SPREADSHEET_FILE_API_KEY=your-api-key
 # optional
-export SPREADSHEET_FILE_BASE_URL=https://api.spreadsheet-file.com/v1
+export SPREADSHEET_FILE_BASE_URL=https://configured.example.com/v1
 ```
 
 Or use the CLI:
@@ -71,7 +71,7 @@ const file = await client.files.get('file-id');
 
 ## API
 
-- Base URL: `https://api.spreadsheet-file.com/v1`
+- Base URL: `configured.example.com/v1`
 - Auth: `Authorization: Bearer <api_key>`
 
 ## License

@@ -1,6 +1,6 @@
 # connect-stability-api-platform
 
-TypeScript connector for the [Stability Api Platform](https://api.stabilityapiplatform.com) REST API — items, events, search, and raw API access.
+TypeScript connector for the [Stability Api Platform](configured.example.com/v1) REST API — items, events, search, and raw API access.
 
 ## Install
 
@@ -32,7 +32,7 @@ const items = await client.listItems();
 | Variable | Description |
 |----------|-------------|
 | `STABILITY_API_PLATFORM_API_KEY` | Bearer API key |
-| `STABILITY_API_PLATFORM_BASE_URL` | Optional base URL override (default `https://api.stabilityapiplatform.com/v1`) |
+| `STABILITY_API_PLATFORM_BASE_URL` | Optional base URL override (no default - must be configured) |
 
 ## Configuration
 

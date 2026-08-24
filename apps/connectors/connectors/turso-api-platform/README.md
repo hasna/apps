@@ -1,6 +1,6 @@
 # Turso Api Platform Connector
 
-TypeScript connector and CLI for the [Turso Api Platform](https://api.tursoapiplatform.com) REST API.
+TypeScript connector and CLI for the [Turso Api Platform](configured.example.com/v1) REST API.
 
 ## Features
 
@@ -19,7 +19,7 @@ bun install
 
 ```bash
 connect-turso-api-platform auth set-key <api-key>
-connect-turso-api-platform auth set-base-url https://api.tursoapiplatform.com/v1
+connect-turso-api-platform auth set-base-url configured.example.com/v1
 connect-turso-api-platform auth status
 ```
 

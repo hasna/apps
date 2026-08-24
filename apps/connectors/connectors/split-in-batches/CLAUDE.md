@@ -18,7 +18,7 @@ bun test
 
 ## API Details
 
-- **Base URL**: `https://api.split-in-batches.com/v1` (override via profile or `SPLIT_IN_BATCHES_BASE_URL`)
+- **Base URL**: no default (must be configured) (override via profile or `SPLIT_IN_BATCHES_BASE_URL`)
 - **Auth**: Bearer token via `Authorization: Bearer <API_KEY>`
 
 ## API Resources

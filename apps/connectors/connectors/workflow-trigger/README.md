@@ -13,7 +13,7 @@ bun install
 ```bash
 export WORKFLOW_TRIGGER_API_KEY=your-api-key
 # optional:
-export WORKFLOW_TRIGGER_BASE_URL=https://api.workflow-trigger.com/v1
+export WORKFLOW_TRIGGER_BASE_URL=https://configured.example.com/v1
 ```
 
 Or use the CLI profile:

@@ -1,6 +1,6 @@
 # Travo Data Connector
 
-TypeScript CLI and library for the [Travo Data](https://api.travo-real-estate.com/v1) real estate API.
+TypeScript CLI and library for the [Travo Data](configured.example.com/v1) real estate API.
 
 ## Install
 

@@ -15,7 +15,7 @@ Copy `.env.example` to `.env` and set your API key:
 ```bash
 SPLIT_IN_BATCHES_API_KEY=your_api_key_here
 # Optional:
-# SPLIT_IN_BATCHES_BASE_URL=https://api.split-in-batches.com/v1
+# SPLIT_IN_BATCHES_BASE_URL=configured.example.com/v1
 ```
 
 Or use the CLI profile/config commands:

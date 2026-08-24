@@ -1,4 +1,4 @@
-export { Connector, ConnectorClient, DEFAULT_BASE_URL, ItemsApi, EventsApi, SearchApi, RawApi } from './api';
+export { Connector, ConnectorClient, ItemsApi, EventsApi, SearchApi, RawApi } from './api';
 export * from './types';
 
 export {

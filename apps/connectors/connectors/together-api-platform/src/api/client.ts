@@ -1,8 +1,6 @@
 import type { TogetherApiPlatformConfig } from '../types';
 import { TogetherApiPlatformApiError } from '../types';
 
-const DEFAULT_BASE_URL = 'https://api.togetherapiplatform.com/v1';
-
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   params?: Record<string, string | number | boolean | undefined>;
@@ -19,7 +17,10 @@ export class TogetherApiPlatformClient {
       throw new Error('API key is required');
     }
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl || DEFAULT_BASE_URL;
+    if (!config.baseUrl) {
+      throw new Error('baseUrl is required: no default endpoint is configured; set baseUrl (profile, config, or the connector BASE_URL environment variable)');
+    }
+    this.baseUrl = config.baseUrl;
   }
 
   private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
@@ -140,4 +141,3 @@ export class TogetherApiPlatformClient {
   }
 }
 
-export { DEFAULT_BASE_URL };

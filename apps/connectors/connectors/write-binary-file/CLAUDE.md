@@ -19,7 +19,7 @@ bun run typecheck
 
 API key bearer auth. Set via profile config, `WRITE_BINARY_FILE_API_KEY`, or `--api-key`.
 
-Default base URL: `https://api.write-binary-file.com/v1`
+Default base URL: none (must be configured)
 
 ## API Surface
 

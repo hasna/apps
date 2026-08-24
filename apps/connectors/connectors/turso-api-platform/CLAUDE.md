@@ -20,7 +20,7 @@ bun test
 
 Bearer token via `Authorization: Bearer <api_key>` header.
 
-Default base URL: `https://api.tursoapiplatform.com/v1`
+Default base URL: none (must be configured)
 
 Credentials stored in `~/.hasna/connectors/connect-turso-api-platform/profiles/`.
 

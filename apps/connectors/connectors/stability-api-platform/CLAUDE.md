@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Stability Api Platform connector — Bearer token REST client for `https://api.stabilityapiplatform.com/v1`.
+Stability Api Platform connector — Bearer token REST client for `configured.example.com/v1`.
 
 ## Commands
 

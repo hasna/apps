@@ -1,6 +1,6 @@
 // Weaviate API Platform Connector
 
-export { Connector, ConnectorClient, DEFAULT_BASE_URL } from './api';
+export { Connector, ConnectorClient } from './api';
 export * from './types';
 
 export {

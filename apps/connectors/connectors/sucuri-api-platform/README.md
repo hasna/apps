@@ -1,6 +1,6 @@
 # @hasna/connect-sucuri-api-platform
 
-TypeScript connector and CLI for the [Sucuri API Platform](https://api.sucuriapiplatform.com/v1).
+TypeScript connector and CLI for the [Sucuri API Platform](configured.example.com/v1).
 
 ## Install
 
@@ -13,7 +13,7 @@ bun add @hasna/connect-sucuri-api-platform
 ```bash
 export SUCURI_API_PLATFORM_API_KEY=your-api-key
 # optional
-export SUCURI_API_PLATFORM_BASE_URL=https://api.sucuriapiplatform.com/v1
+export SUCURI_API_PLATFORM_BASE_URL=https://configured.example.com/v1
 ```
 
 Or use the CLI profile/config commands:

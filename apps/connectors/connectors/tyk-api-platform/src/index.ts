@@ -1,4 +1,4 @@
-export { TykApiPlatform, TykApiPlatformClient, DEFAULT_BASE_URL } from './api';
+export { TykApiPlatform, TykApiPlatformClient } from './api';
 export * from './types';
 
 export {

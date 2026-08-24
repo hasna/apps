@@ -1,8 +1,6 @@
 import type { ConnectorConfig } from '../types';
 import { ConnectorApiError, parseApiError } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.vercelapiplatform.com/v1';
-
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   params?: Record<string, string | number | boolean | undefined>;
@@ -22,7 +20,10 @@ export class ConnectorClient {
       throw new Error('API key, token, or accessToken is required');
     }
     this.apiKey = key;
-    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    if (!config.baseUrl) {
+      throw new Error('baseUrl is required: no default endpoint is configured; set baseUrl (profile, config, or the connector BASE_URL environment variable)');
+    }
+    this.baseUrl = config.baseUrl.replace(/\/+$/, '');
   }
 
   getBaseUrl(): string {

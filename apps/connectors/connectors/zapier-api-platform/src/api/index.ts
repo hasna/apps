@@ -45,7 +45,7 @@ export class Connector {
   }
 }
 
-export { ConnectorClient, DEFAULT_BASE_URL } from './client';
+export { ConnectorClient } from './client';
 export { ItemsApi } from './items';
 export { EventsApi } from './events';
 export { SearchApi } from './search';
