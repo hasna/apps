@@ -1,6 +1,6 @@
 {
   "name": "@hasna/conversations",
-  "version": "0.7.7",
+  "version": "0.7.11", d0543fc67 (chore(conversations): bump version to 0.7.11 (digest cursor fix — hasna/apps#1097))
   "description": "Real-time CLI messaging for AI agents",
   "type": "module",
   "bin": {

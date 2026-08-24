@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.11
+
+### Patch Changes
+
+- 68167f7: Digest and `read --since-id` cursor walks now order by the authoritative time sequence (`created_at ASC, id ASC`) whenever a `since` filter is present, and resume at the `(created_at, id)` tuple position of the cursor message instead of at a bare `id > cursor`. Previously, on any channel whose message ids are not chronological with timestamps (measured on the incidents channel, 2026-08-24, todos febd88c6: id 730236 dated 2026-08-21T10:55Z while id 722262 is dated 2026-08-21T19:20Z), an id-ordered window walk handed back a newer-timestamp message first, a timestamp-watermark caller advanced its `since` past the gap, and the walk reported `has_more:false` while newer-timestamp messages remained unreached — breaking every cursor-based monitor (the conversations-inbox monitor went DEGRADED with "window ids are discontinuous"). Applied to the local SQLite digest (`countDigestMessages`/`queryDigestMessages`), the local `readMessagePreviews`/`countMessages`, and the hosted `/v1/messages` endpoint (server `api.ts`) so local and cloud walks behave identically. When the cursor message cannot be resolved (deleted mid-walk), the cursor condition is dropped and the walk re-reads from `since` — duplicates are detectable, loss is not. Regression tests in `src/lib/digest-nonchronological-id.test.ts`: a window walk over non-chronological ids reaches every newer-timestamp message exactly once and terminates cleanly (positive control), and a chronological-id walk still terminates cleanly (negative control). Deployment note: the hosted server must be redeployed with the new `api.ts` for cloud digest/read walks to see the fix; the client change alone covers local-store walks.
+
 ## 0.7.7
 
 ### Patch Changes
@@ -33,6 +39,12 @@
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
   - @hasna/contracts@0.14.0
+
+## 0.7.11
+
+### Patch Changes
+
+- 68167f7: Digest and `read --since-id` cursor walks now order by the authoritative time sequence (`created_at ASC, id ASC`) whenever a `since` filter is present, and resume at the `(created_at, id)` tuple position of the cursor message instead of at a bare `id > cursor`. Previously, on any channel whose message ids are not chronological with timestamps (measured on the incidents channel, 2026-08-24, todos febd88c6: id 730236 dated 2026-08-21T10:55Z while id 722262 is dated 2026-08-21T19:20Z), an id-ordered window walk handed back a newer-timestamp message first, a timestamp-watermark caller advanced its `since` past the gap, and the walk reported `has_more:false` while newer-timestamp messages remained unreached — breaking every cursor-based monitor (the conversations-inbox monitor went DEGRADED with "window ids are discontinuous"). Applied to the local SQLite digest (`countDigestMessages`/`queryDigestMessages`), the local `readMessagePreviews`/`countMessages`, and the hosted `/v1/messages` endpoint (server `api.ts`) so local and cloud walks behave identically. When the cursor message cannot be resolved (deleted mid-walk), the cursor condition is dropped and the walk re-reads from `since` — duplicates are detectable, loss is not. Regression tests in `src/lib/digest-nonchronological-id.test.ts`: a window walk over non-chronological ids reaches every newer-timestamp message exactly once and terminates cleanly (positive control), and a chronological-id walk still terminates cleanly (negative control). Deployment note: the hosted server must be redeployed with the new `api.ts` for cloud digest/read walks to see the fix; the client change alone covers local-store walks. d0543fc67 (chore(conversations): bump version to 0.7.11 (digest cursor fix — hasna/apps#1097))
 
 ## 0.7.6
 
