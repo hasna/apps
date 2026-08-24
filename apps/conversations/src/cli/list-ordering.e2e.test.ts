@@ -48,16 +48,19 @@ function runCli(args: string[], agent = "list-order-observer") {
 const HOOK_TIMEOUT_MS = 180_000;
 const CASE_TIMEOUT_MS = 60_000;
 
-const CHANNELS = ["ord-alpha", "ord-bravo", "ord-charlie", "ord-delta", "ord-echo"];
+const CHANNELS = ["ord-alpha", "ord-bravo", "ord-charlie", "ord-delta", "ord-echo", "ord-dm-alpha"];
 
 beforeAll(() => {
   for (const name of CHANNELS) {
     expect(runCli(["channel", "create", name]).exitCode).toBe(0);
   }
-  // Three DMs in a known chronological order. Sent one at a time so created_at
+  // The recipient-addressed DM surface was removed (staged behind the
+  // messages-app v1 release gate), so the chronological seed now lives in a
+  // channel instead of an agent-addressed DM. Sent one at a time so created_at
   // is strictly increasing and "oldest" is unambiguous.
+  expect(runCli(["channel", "join", "ord-dm-alpha"], "ord-reader").exitCode).toBe(0);
   for (const body of ["ord-first-message", "ord-second-message", "ord-third-message"]) {
-    expect(runCli(["send", body, "--to", "ord-reader"], "ord-writer").exitCode).toBe(0);
+    expect(runCli(["channel", "send", "ord-dm-alpha", body], "ord-writer").exitCode).toBe(0);
   }
   for (const body of ["ord-chan-first", "ord-chan-second", "ord-chan-third"]) {
     expect(runCli(["channel", "send", "ord-alpha", body], "ord-writer").exitCode).toBe(0);
@@ -82,7 +85,7 @@ describe("item 1 — ordering is disclosed on the text surface, and the disclosu
    * the window contains, so that is what the assertions now check.
    */
   test("read discloses created_at asc and returns the NEWEST rows, chronologically", () => {
-    const res = runCli(["read", "--to", "ord-reader", "--limit", "2"], "ord-reader");
+    const res = runCli(["read", "--channel", "ord-dm-alpha", "--limit", "2"], "ord-reader");
     expect(res.exitCode).toBe(0);
     // The disclosure — still true of the array that comes back.
     expect(res.stdout).toContain("sort=created_at asc");
