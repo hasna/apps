@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.10
+
+### Patch Changes
+
+- `secrets copy` — value-safe copy verb: copies a secret from one key to another without ever rendering the value (A18-00021/26/27, PR #1070, review GO).
+
+## 0.3.9
+
+### Patch Changes
+
+- `secrets scan input` now scans every named path; exit code is the max severity across all inputs (AGE10-00616). 0.3.8 was published with a stale version literal (version.ts still said 0.3.7; unpublish blocked for the granular token); 0.3.9 ships the same scan-input fix with the version literal corrected.
+
+## 0.3.8
+
+### Patch Changes
+
+- `secrets scan input` now scans every named path; exit code is the max severity across all inputs (AGE10-00616). Superseded by 0.3.9 (stale version literal corrected).
+
 ## 0.3.7
 
 ### Patch Changes

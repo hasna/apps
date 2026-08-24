@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+### Patch Changes
+
+- snapshots freshness now keys off capture-RUN recency (new capture_runs run-record; `snapshots freshness` verb); the deployed wrapper posts an INCIDENT only on a genuine stale or no-runs condition (PR #1076, merged 70cfd556).
+
 ## 0.1.5
 
 ### Patch Changes
