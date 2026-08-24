@@ -62,6 +62,7 @@ download caps, email gates, expiry beyond seven days, and `never` expiry.
 | `ATTACHMENTS_S3_BUCKET` | S3 bucket |
 | `ATTACHMENTS_S3_REGION` | Region; falls back to `AWS_REGION`, then `us-east-1` |
 | `ATTACHMENTS_S3_ACCESS_KEY_ID`, `ATTACHMENTS_S3_SECRET_ACCESS_KEY` | Optional explicit credentials |
+| `ATTACHMENTS_S3_PROFILE` | Optional named AWS profile (shared credentials/config files) to resolve S3 credentials from — mirrors `aws --profile <name>`; used when no explicit keys are set |
 | `ATTACHMENTS_S3_ENDPOINT` | S3-compatible endpoint |
 | `ATTACHMENTS_MAX_SIZE` | Maximum upload bytes |
 | `ATTACHMENTS_SKIP_MIGRATE=1` | Skips startup migrations |

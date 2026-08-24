@@ -31,6 +31,11 @@ import {
 import { dirname, join, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import {
+  CONTENT_PREVIEW_CHARS,
+  emitConversationEvent,
+  MESSAGE_CREATED_TYPE,
+} from "./events-bridge.js";
+import {
   normalizeChannelName,
   unknownChannelMessage,
   archivedChannelMessage,
@@ -482,6 +487,33 @@ export function sendMessage(opts: SendMessageOptions): Message {
           .run(JSON.stringify(attachmentInfos), stored.id);
         stored.attachments = attachmentInfos;
       }
+
+      // Atomic event capture: the outbox row commits in the SAME transaction
+      // as the message, so a committed message can never lack durable event
+      // intent (webhook-delivery contract, closes silent source/event
+      // divergence). Non-blocking — only a row write inside this transaction.
+      emitConversationEvent(db, {
+        id: `conversations:message:${msgUuid}:created`,
+        type: MESSAGE_CREATED_TYPE,
+        time: stored.created_at,
+        subject: channelName ?? toAgent ?? undefined,
+        data: {
+          id: stored.id,
+          uuid: stored.uuid,
+          from: stored.from_agent,
+          to: stored.to_agent,
+          channel: stored.channel,
+          project_id: stored.project_id,
+          session_id: stored.session_id,
+          priority: stored.priority,
+          blocking: stored.blocking,
+          reply_to: stored.reply_to,
+          reply_to_uuid: requestedReplyUuid ?? null,
+          created_at: stored.created_at,
+          content_preview: stored.content.slice(0, CONTENT_PREVIEW_CHARS),
+        },
+        appEvent: { kind: "message.created" },
+      });
 
       return stored;
     });

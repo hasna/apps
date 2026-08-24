@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { ListObjectsV2Command, S3Client as AWSS3Client } from "@aws-sdk/client-s3";
+import { fromIni } from "@aws-sdk/credential-provider-ini";
 import type { Attachment } from "../../core/db";
 import { getConfig, hasS3Config, CONFIG_PATH } from "../../core/config";
 import { resolveStore } from "../../core/store";
@@ -25,7 +26,9 @@ async function checkS3Connection(config: ReturnType<typeof getConfig>): Promise<
               secretAccessKey: s3.secretAccessKey,
             },
           }
-        : {};
+        : s3.profile
+          ? { credentials: fromIni({ profile: s3.profile }) }
+          : {};
     const client = new AWSS3Client({
       region: s3.region,
       ...staticCredentials,

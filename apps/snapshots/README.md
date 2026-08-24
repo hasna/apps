@@ -140,6 +140,8 @@ console.log(plan.kind, plan.path, plan.note);
 | --- | --- | --- | --- | --- |
 | Capture snapshot | `snapshots capture`, `snapshots daemon once` | `captureAll`, `SnapshotStore.saveSnapshot` | `capture_snapshot` | `POST /snapshots` |
 | List snapshots | `snapshots list` | `SnapshotStore.listSnapshots` | `list_snapshots` | `GET /snapshots` |
+| List capture runs | `snapshots runs` | `SnapshotStore.listCaptureRuns` | not exposed | not exposed |
+| Capture freshness | `snapshots freshness` | `freshness` | not exposed | not exposed |
 | Read snapshot/resources | `snapshots show`, `snapshots resources` | `SnapshotStore.getSnapshot`, `SnapshotStore.getSnapshotResources`, `SnapshotStore.listResources` | `get_snapshot` | `GET /snapshots/:id` |
 | Plan restore | `snapshots plan`, `snapshots restore` without `--apply` | `createRestorePlan`, `SnapshotStore.saveRestorePlan` | `plan_restore` | not exposed |
 | Apply restore | `snapshots restore --apply --yes` | `createRestorePlan(..., { apply: true, yes: true })` | intentionally not exposed | not exposed |
@@ -155,6 +157,8 @@ the CLI/SDK surfaces where callers must opt in explicitly.
 ```sh
 snapshots capture --name before-upgrade
 snapshots list
+snapshots runs --limit 5
+snapshots freshness --threshold 900
 snapshots show <snapshot-id>
 snapshots resources --limit 50
 snapshots resources <snapshot-id> --tree

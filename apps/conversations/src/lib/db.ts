@@ -1416,6 +1416,22 @@ export function getDb(): Database {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_id)");
 
+  // Conversations → Events source outbox (webhook-delivery contract). Written
+  // in the SAME transaction as the message/task mutation; drained by the outbox
+  // worker into the Events durable substrate.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conversations_event_outbox (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      type TEXT NOT NULL,
+      envelope_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'spooled', 'delivered', 'dead')),
+      attempts INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_event_outbox_pending ON conversations_event_outbox(status, created_at)");
+
   // FTS5 virtual table for full-text task search
   const hasTasksFts = db.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks_fts'"

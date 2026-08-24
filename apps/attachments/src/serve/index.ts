@@ -83,6 +83,9 @@ function buildConfigFromEnv(): AttachmentsConfig {
       region,
       accessKeyId: process.env.ATTACHMENTS_S3_ACCESS_KEY_ID?.trim() || "",
       secretAccessKey: process.env.ATTACHMENTS_S3_SECRET_ACCESS_KEY?.trim() || "",
+      ...(process.env.ATTACHMENTS_S3_PROFILE?.trim()
+        ? { profile: process.env.ATTACHMENTS_S3_PROFILE.trim() }
+        : {}),
       ...(process.env.ATTACHMENTS_S3_ENDPOINT ? { endpoint: process.env.ATTACHMENTS_S3_ENDPOINT } : {}),
     },
     storage: {

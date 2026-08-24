@@ -1,4 +1,4 @@
-import type { CaptureOptions, JsonObject, RestoreExecutionOptions, RestorePlan, SnapshotRecord } from "./types.js";
+import type { CaptureOptions, CaptureRunRecord, FreshnessStatus, JsonObject, RestoreExecutionOptions, RestorePlan, SnapshotRecord } from "./types.js";
 import { captureAll } from "./capture/index.js";
 import { SnapshotStore } from "./storage.js";
 import { RestoreMaxAgeError, assertSnapshotWithinMaxAge, createRestorePlan, executeRestorePlan, prepareRestorePlanForExecution } from "./restore.js";
@@ -30,9 +30,22 @@ export async function captureSnapshot(options: CaptureSnapshotOptions = {}): Pro
   try {
     const capture = await captureAll(options);
     const snapshot = store.saveSnapshot(capture.resources, {
+      createdAt: options.now,
       name: options.name,
       diagnostics: capture.diagnostics,
       sourceStatuses: capture.sourceStatuses
+    });
+    // Record a capture run on EVERY attempt — including when the capture dedups
+    // identical state. Freshness (capture liveness) keys off run recency, so a
+    // stable machine whose newest UNIQUE snapshot has not changed in hours stays
+    // green as long as the */5 capture cron is actually running.
+    store.recordCaptureRun({
+      createdAt: options.now,
+      snapshotId: snapshot.id,
+      duplicateOf: snapshot.duplicateOf ?? null,
+      resourceCount: capture.resources.length,
+      diagnosticCount: capture.diagnostics.length,
+      status: snapshot.duplicateOf ? "duplicate" : "created"
     });
     if (!leaseAcquired) {
       console.warn("[snapshots] capture lease not acquired within the wait window; capture proceeded without serialization (saveSnapshot remains idempotent).");
@@ -57,6 +70,84 @@ export function listSnapshots(options: RuntimeOptions & { limit?: number } = {})
   const store = new SnapshotStore({ path: options.dbPath });
   try {
     return store.listSnapshots(options.limit ?? 50);
+  } finally {
+    store.close();
+  }
+}
+
+export interface ListCaptureRunsOptions extends RuntimeOptions {
+  limit?: number;
+}
+
+export function listCaptureRuns(options: ListCaptureRunsOptions = {}): CaptureRunRecord[] {
+  const store = new SnapshotStore({ path: options.dbPath });
+  try {
+    return store.listCaptureRuns(options.limit ?? 10);
+  } finally {
+    store.close();
+  }
+}
+
+export interface FreshnessOptions extends RuntimeOptions {
+  threshold?: number;
+  now?: string;
+}
+
+function ageSeconds(nowMs: number, iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return null;
+  return Math.max(0, Math.floor((nowMs - at) / 1000));
+}
+
+export function freshness(options: FreshnessOptions = {}): FreshnessStatus {
+  const store = new SnapshotStore({ path: options.dbPath });
+  try {
+    const threshold = options.threshold ?? 900;
+    const nowMs = options.now ? Date.parse(options.now) : Date.now();
+    if (!Number.isFinite(nowMs)) throw new Error(`Invalid now: ${options.now}`);
+    const latestRun = store.latestCaptureRun();
+    const newestSnapshot = store.listSnapshots(1)[0];
+
+    const last_capture_run_at = latestRun?.createdAt ?? null;
+    const last_capture_run_age_seconds = ageSeconds(nowMs, last_capture_run_at);
+    const newest_snapshot_at = newestSnapshot?.createdAt ?? null;
+    const newest_snapshot_age_seconds = ageSeconds(nowMs, newest_snapshot_at);
+
+    if (!latestRun) {
+      // No capture run has ever been recorded: capture never ran (or the store is
+      // genuinely empty). This is the one legitimate "no snapshots" alert.
+      return {
+        ok: false,
+        reason: "no-capture-runs",
+        last_capture_run_at,
+        last_capture_run_age_seconds,
+        newest_snapshot_at,
+        newest_snapshot_age_seconds,
+        threshold
+      };
+    }
+    if ((last_capture_run_age_seconds ?? Infinity) > threshold) {
+      // The capture cron has not produced a run inside the threshold window.
+      return {
+        ok: false,
+        reason: "capture-run-stale",
+        last_capture_run_at,
+        last_capture_run_age_seconds,
+        newest_snapshot_at,
+        newest_snapshot_age_seconds,
+        threshold
+      };
+    }
+    return {
+      ok: true,
+      reason: "fresh",
+      last_capture_run_at,
+      last_capture_run_age_seconds,
+      newest_snapshot_at,
+      newest_snapshot_age_seconds,
+      threshold
+    };
   } finally {
     store.close();
   }

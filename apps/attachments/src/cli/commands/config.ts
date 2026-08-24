@@ -10,6 +10,7 @@ import {
   S3Client as AWSS3Client,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
+import { fromIni } from "@aws-sdk/credential-provider-ini";
 
 function maskSecret(value: string): string {
   if (!value) return "";
@@ -44,6 +45,7 @@ function configSetCommand(): Command {
     .option("--region <region>", "AWS region")
     .option("--access-key <accessKeyId>", "AWS access key ID")
     .option("--secret-key <secretAccessKey>", "AWS secret access key")
+    .option("--profile <profile>", "Named AWS profile to resolve credentials from (shared credentials/config files)")
     .option("--endpoint <endpoint>", "Custom S3 endpoint URL (for MinIO / LocalStack)")
     .option("--storage-backend <backend>", "Storage backend: auto, local, or s3")
     .option("--local-dir <path>", "Local object storage directory")
@@ -65,6 +67,7 @@ function configSetCommand(): Command {
         options.region ||
         options.accessKey ||
         options.secretKey ||
+        options.profile ||
         options.endpoint
       ) {
         partial.s3 = {};
@@ -72,6 +75,7 @@ function configSetCommand(): Command {
         if (options.region) partial.s3.region = options.region as string;
         if (options.accessKey) partial.s3.accessKeyId = options.accessKey as string;
         if (options.secretKey) partial.s3.secretAccessKey = options.secretKey as string;
+        if (options.profile) partial.s3.profile = options.profile as string;
         if (options.endpoint) partial.s3.endpoint = options.endpoint as string;
       }
 
@@ -175,7 +179,9 @@ function configTestCommand(): Command {
                   secretAccessKey: config.s3.secretAccessKey,
                 },
               }
-            : {}),
+            : config.s3.profile
+              ? { credentials: fromIni({ profile: config.s3.profile }) }
+              : {}),
           ...(config.s3.endpoint !== undefined
             ? { endpoint: config.s3.endpoint, forcePathStyle: true }
             : {}),

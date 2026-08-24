@@ -410,6 +410,15 @@ export function redactMessagesById(options: RedactMessagesOptions): RedactMessag
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
+      // The Conversations→Events source outbox persists a content preview in
+      // the envelope. A security redaction must scrub that preview too, or the
+      // sensitive content stays recoverable from the local store.
+      const scrubOutbox = db.prepare(`
+        UPDATE conversations_event_outbox
+        SET envelope_json = json_set(envelope_json, '$.data.content_preview', ?)
+        WHERE type = 'conversations.message.created'
+          AND json_extract(envelope_json, '$.data.uuid') = ?
+      `);
 
       for (const report of reports) {
         if (!report.exists) continue;
@@ -422,6 +431,7 @@ export function redactMessagesById(options: RedactMessagesOptions): RedactMessag
           redactedAt,
           report.id,
         );
+        scrubOutbox.run(replacementContent, report.message_uuid);
         insertAudit.run(
           auditId,
           report.id,
