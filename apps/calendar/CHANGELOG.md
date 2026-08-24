@@ -4,6 +4,7 @@
 
 ### Patch Changes
 
+- 2200ac82: harden the /v1 verifier-construction failure path — log the contracts configuration detail to the process console and return a bare 503 `service unavailable` to the caller instead of echoing the error text to every unauthenticated request (release review P1, publish-all lane 248f6ed8)
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
   - @hasna/contracts@0.14.0
