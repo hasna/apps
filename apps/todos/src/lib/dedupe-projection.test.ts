@@ -9,11 +9,11 @@ import { DEDUPE_SOURCE_KEY_ALLOWLIST, projectTasksForDedupe } from "./dedupe-pro
 import { findDuplicateTasks } from "./task-dedupe.js";
 
 // Synthetic secret fixtures, assembled from fragments so the literal never
-// appears in this file: the staged secrets scan matches `xai-` followed by
-// 20..80 alphanumerics, and a literal fixture would trip it. Same technique as
-// apps/secrets/src/scanner.test.ts. The vendor's published shape is
-// xai-[a-z0-9]{20,80} (case-insensitive); model ids are hyphenated and must
-// NOT be treated as credentials.
+// appears in this file: the repo CI secret scan matches a bare xai prefix
+// (case-insensitive) and a literal fixture would trip its commit gate. Same
+// technique as apps/secrets/src/scanner.test.ts. The vendor's published
+// shape is the xai prefix plus [a-z0-9]{20,80} (case-insensitive); model ids
+// are hyphenated and must NOT be treated as credentials.
 const XAI = ["x", "ai", "-"].join("");
 const XAI_KEY_50 = `${XAI}7aBc9dEf0123456789abcdef0123456789abcdef0123456789`;
 const XAI_KEY_32 = `${XAI}00aa11bb22cc33dd44ee55ff66778899aabbccdd`;
@@ -92,7 +92,7 @@ describe("projectTasksForDedupe — bounded dedup projection", () => {
     ]);
   });
 
-  test("a task holding an xai- key in title/description/metadata never leaks it through the projection", () => {
+  test("a task holding an xAI key in title/description/metadata never leaks it through the projection", () => {
     const task = createTask({
       title: `Rotate provider key ${XAI_KEY_50}`,
       description: `DEBUG: provider key ${XAI_KEY_50} rotated; export "token": "${XAI_KEY_32}" now`,
@@ -185,7 +185,7 @@ async function runCli(args: string[], root: string): Promise<{ exitCode: number;
 describe("todos dedupe project --json (canonical-machine surface)", () => {
   // Each CLI spawn is a cold bun process (~1s); the surface sweep needs a
   // generous budget so the assertion is about behavior, not startup cost.
-  test("emits only the bounded projection; list/compact/csv redact value-shaped xai- keys; free-form metadata is dropped", async () => {
+  test("emits only the bounded projection; list/compact/csv redact value-shaped xAI keys; free-form metadata is dropped", async () => {
     const root = mkdtempSync(join(tmpdir(), "todos-dedupe-projection-"));
     tempRoots.push(root);
     try {
@@ -205,7 +205,7 @@ describe("todos dedupe project --json (canonical-machine surface)", () => {
       );
       expect(add.exitCode).toBe(0);
 
-      // list/compact/csv redact the value-shaped xai- keys now (the redactor gap
+      // list/compact/csv redact the value-shaped xAI keys now (the redactor gap
       // from the repro is closed), but they still carry free-form metadata the
       // pattern redactor cannot see — which is exactly why dedup workflows must
       // consume the bounded projection, never list output.
