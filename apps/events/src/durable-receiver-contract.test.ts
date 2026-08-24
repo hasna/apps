@@ -56,9 +56,11 @@ describe("durable receiver acknowledgement contract", () => {
         schemaVersion: "notes.v1",
         data: { noteId: "receiver-duplicate" },
       });
+      const loopbackPolicy = { allowPrivateHosts: ["127.0.0.1"] };
       const dispatchOptions = {
         secretResolver: () => signingSecret,
         now: () => receiverNow,
+        webhookTargetPolicy: loopbackPolicy,
       };
       expect((await dispatchWebhook(duplicateEvent, channel, dispatchOptions)).status).toBe("success");
       expect((await dispatchWebhook(duplicateEvent, channel, dispatchOptions)).status).toBe("success");
@@ -67,12 +69,14 @@ describe("durable receiver acknowledgement contract", () => {
       const wrongSignature = await dispatchWebhook(duplicateEvent, channel, {
         secretResolver: () => "incorrect-test-secret",
         now: () => receiverNow,
+        webhookTargetPolicy: loopbackPolicy,
       });
       expect(wrongSignature).toMatchObject({ status: "failed", responseStatus: 401 });
 
       const expired = await dispatchWebhook(duplicateEvent, channel, {
         secretResolver: () => signingSecret,
         now: () => new Date(receiverNow.getTime() - 6 * 60 * 1_000),
+        webhookTargetPolicy: loopbackPolicy,
       });
       expect(expired).toMatchObject({ status: "failed", responseStatus: 401 });
 
@@ -80,6 +84,7 @@ describe("durable receiver acknowledgement contract", () => {
         dataDir: senderDir,
         now: () => receiverNow,
         secretResolver: () => signingSecret,
+        webhookTargetPolicy: loopbackPolicy,
       });
       sender.addChannel({
         id: "notes-created",

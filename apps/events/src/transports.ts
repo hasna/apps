@@ -1,12 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { isIP } from "node:net";
 import type { ChannelConfig, DeliveryAttempt, DeliveryResult, EventEnvelope } from "./types.js";
 import { signPayload } from "./signing.js";
+import {
+  normalizeMaxRedirects,
+  resolveWebhookTarget,
+  type WebhookTargetPolicy,
+} from "./ssrf.js";
 
 export interface TransportDispatchOptions {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   secretResolver?: WebhookSecretResolver;
   now?: () => Date;
+  /**
+   * Webhook-target SSRF policy. When provided, the durable webhook transport
+   * validates every target (and every redirect hop) against it. When omitted,
+   * the guard still applies on the default `fetch` path and is deferred to an
+   * injected `fetchImpl` (the operator who injects a fetch implementation owns
+   * the network boundary).
+   */
+  webhookTargetPolicy?: WebhookTargetPolicy;
 }
 
 export type WebhookSecretResolver = (reference: string) => string | undefined | Promise<string | undefined>;
@@ -69,6 +83,14 @@ export async function dispatchWebhook(event: EventEnvelope, channel: ChannelConf
   }
   const timestamp = (options.now?.() ?? new Date()).toISOString();
   const { body, headers } = buildWebhookRequest(event, channel, { secret, timestamp });
+
+  // SSRF guard applies on the default fetch path always, and on an injected
+  // fetchImpl when the caller supplies an explicit policy.
+  const validateTargets = options.webhookTargetPolicy !== undefined || options.fetchImpl === undefined;
+  if (validateTargets) {
+    return dispatchValidatedWebhook(event, channel, { body, headers, startedAt, options });
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), channel.webhook.timeoutMs ?? 15_000);
   try {
@@ -88,6 +110,98 @@ export async function dispatchWebhook(event: EventEnvelope, channel: ChannelConf
       responseBody,
       error: response.ok ? undefined : `Webhook returned HTTP ${response.status}`,
     };
+  } catch (error) {
+    return {
+      attempt: 1,
+      status: "failed",
+      startedAt,
+      completedAt: now(),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function redirectKeepsBody(status: number): boolean {
+  return status === 307 || status === 308;
+}
+
+function buildPinnedRequest(target: URL, address: string, headers: Record<string, string>): { url: URL; headers: Record<string, string> } {
+  const host = isIP(address) === 6 ? `[${address}]` : address;
+  const port = target.port ? `:${target.port}` : "";
+  const pinned = new URL(`${target.protocol}//${host}${port}${target.pathname}${target.search}${target.hash}`);
+  return { url: pinned, headers: { ...headers, Host: target.host } };
+}
+
+async function dispatchValidatedWebhook(
+  event: EventEnvelope,
+  channel: ChannelConfig,
+  input: { body: string; headers: Record<string, string>; startedAt: string; options: TransportDispatchOptions },
+): Promise<DeliveryAttempt> {
+  const { body, headers, startedAt, options } = input;
+  const webhook = channel.webhook;
+  if (!webhook) throw new Error(`Channel ${channel.id} has no webhook config`);
+  const policy = options.webhookTargetPolicy ?? {};
+  const maxRedirects = normalizeMaxRedirects(policy.maxRedirects);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), webhook.timeoutMs ?? 15_000);
+  try {
+    // `target` stays the logical hostname URL for validation and redirect
+    // resolution; `fetchUrl` is the pinned connection target. Pinning rewrites
+    // the URL to the validated address (Host header carries the hostname), so
+    // relative redirects must resolve against the hostname URL, never the
+    // pinned IP URL.
+    let target = new URL(webhook.url);
+    let requestHeaders = headers;
+    let method = "POST";
+    let requestBody: string | undefined = body;
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      const resolved = await resolveWebhookTarget(target, policy).catch((error: Error) => {
+        throw new Error(`Webhook target rejected by SSRF guard: ${error.message}`);
+      });
+      let fetchUrl = target;
+      if (resolved.addresses.length > 0) {
+        const pinned = buildPinnedRequest(target, resolved.addresses[0], requestHeaders);
+        fetchUrl = pinned.url;
+        requestHeaders = pinned.headers;
+      }
+      const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
+        method,
+        headers: requestHeaders,
+        body: requestBody,
+        signal: controller.signal,
+        redirect: "manual",
+      });
+      const location = response.headers.get("location");
+      if (isRedirectStatus(response.status) && location) {
+        const next = new URL(location, target);
+        target = next;
+        if (!redirectKeepsBody(response.status)) {
+          method = "GET";
+          requestBody = undefined;
+          requestHeaders = Object.fromEntries(
+            Object.entries(requestHeaders).filter(([name]) => name.toLowerCase() !== "content-type" && name.toLowerCase() !== "content-length"),
+          );
+        }
+        continue;
+      }
+      const responseBody = truncate(await response.text());
+      return {
+        attempt: 1,
+        status: response.ok ? "success" : "failed",
+        startedAt,
+        completedAt: now(),
+        responseStatus: response.status,
+        responseBody,
+        error: response.ok ? undefined : `Webhook returned HTTP ${response.status}`,
+      };
+    }
+    return failedAttempt(startedAt, `Webhook target exceeded ${maxRedirects} redirects`);
   } catch (error) {
     return {
       attempt: 1,

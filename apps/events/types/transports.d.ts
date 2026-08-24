@@ -1,8 +1,17 @@
 import type { ChannelConfig, DeliveryAttempt, DeliveryResult, EventEnvelope } from "./types.js";
+import { type WebhookTargetPolicy } from "./ssrf.js";
 export interface TransportDispatchOptions {
     fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     secretResolver?: WebhookSecretResolver;
     now?: () => Date;
+    /**
+     * Webhook-target SSRF policy. When provided, the durable webhook transport
+     * validates every target (and every redirect hop) against it. When omitted,
+     * the guard still applies on the default `fetch` path and is deferred to an
+     * injected `fetchImpl` (the operator who injects a fetch implementation owns
+     * the network boundary).
+     */
+    webhookTargetPolicy?: WebhookTargetPolicy;
 }
 export type WebhookSecretResolver = (reference: string) => string | undefined | Promise<string | undefined>;
 export interface BuildWebhookRequestOptions {

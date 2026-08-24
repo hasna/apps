@@ -35,6 +35,8 @@ export interface DurableSpoolImportResult {
     imported: number;
     deduped: number;
     queued: number;
+    /** Records quarantined because they were malformed or identity-mismatched. */
+    quarantined: number;
 }
 export interface DurableRetryDeadOptions {
     eventId?: string;

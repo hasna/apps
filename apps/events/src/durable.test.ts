@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DurableEventSpool } from "./durable-spool.js";
@@ -358,11 +359,98 @@ describe("DurableEventsBroker", () => {
       filters: [{ source: "notes", type: "note.created" }],
       webhook: { url: "https://example.invalid", secretRef: "env:HASNA_NOTES_WEBHOOK_SECRET" },
     });
-    expect(broker.importSpool()).toEqual({ scanned: 1, imported: 1, deduped: 0, queued: 1 });
+    expect(broker.importSpool()).toEqual({ scanned: 1, imported: 1, deduped: 0, queued: 1, quarantined: 0 });
     expect((await readdir(spool.inboxDir)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
     await spool.enqueue(event);
-    expect(broker.importSpool()).toEqual({ scanned: 1, imported: 0, deduped: 1, queued: 0 });
+    expect(broker.importSpool()).toEqual({ scanned: 1, imported: 0, deduped: 1, queued: 0, quarantined: 0 });
     expect(broker.status().counts.events).toBe(1);
+    broker.close();
+  });
+
+  test("quarantines a malformed spool record and keeps importing later valid records", async () => {
+    const dataDir = await temporaryDataDir();
+    const spool = new DurableEventSpool({ dataDir });
+    const inboxDir = spool.inboxDir;
+
+    const validEvent = {
+      id: "notes:note:after-poison:created",
+      source: "notes",
+      type: "note.created",
+      time: "2026-08-06T13:00:00.000Z",
+      dedupeKey: "notes:note:after-poison:created",
+      schemaVersion: "notes.v1",
+      data: { noteId: "after-poison" },
+      metadata: {},
+    };
+    await mkdir(inboxDir, { recursive: true });
+    const poisonName = `${createHash("sha256").update("poison-record", "utf8").digest("hex")}.json`;
+    const validName = `${createHash("sha256").update(validEvent.dedupeKey!, "utf8").digest("hex")}.json`;
+    await writeFile(join(inboxDir, poisonName), "this is not json", "utf8");
+    await writeFile(join(inboxDir, validName), `${JSON.stringify(validEvent)}\n`, "utf8");
+
+    const broker = new DurableEventsBroker({ dataDir });
+    broker.addChannel({
+      id: "notes-created",
+      enabled: true,
+      transport: "webhook",
+      filters: [{ source: "notes", type: "note.created" }],
+      webhook: { url: "https://example.invalid", secretRef: "env:HASNA_NOTES_WEBHOOK_SECRET" },
+    });
+    expect(broker.importSpool()).toEqual({ scanned: 2, imported: 1, deduped: 0, queued: 1, quarantined: 1 });
+    expect(broker.status().counts).toMatchObject({ events: 1, pending: 1 });
+
+    const quarantineDir = join(dataDir, "spool", "quarantine");
+    const quarantined = (await readdir(quarantineDir)).filter((name) => name.endsWith(".json") && !name.endsWith(".meta.json"));
+    expect(quarantined).toHaveLength(1);
+    const [metaName] = (await readdir(quarantineDir)).filter((name) => name.endsWith(".meta.json"));
+    const meta = JSON.parse(await readFile(join(quarantineDir, metaName!), "utf8"));
+    expect(meta).toMatchObject({ originalName: poisonName, reason: "malformed" });
+    expect(JSON.stringify(meta)).not.toContain("this is not json");
+    expect((await readdir(inboxDir)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
+    broker.close();
+
+    // A fresh broker (restart) stays healthy and continues importing later records.
+    const restart = new DurableEventsBroker({ dataDir });
+    expect(restart.status().counts).toMatchObject({ events: 1, pending: 1 });
+    await spool.enqueue(validEvent);
+    expect(restart.importSpool()).toEqual({ scanned: 1, imported: 0, deduped: 1, queued: 0, quarantined: 0 });
+    restart.close();
+  });
+
+  test("quarantines an identity-mismatched spool record without losing later valid records", async () => {
+    const dataDir = await temporaryDataDir();
+    const spool = new DurableEventSpool({ dataDir });
+    const inboxDir = spool.inboxDir;
+
+    const validEvent = {
+      id: "notes:note:after-mismatch:created",
+      source: "notes",
+      type: "note.created",
+      time: "2026-08-06T13:10:00.000Z",
+      dedupeKey: "notes:note:after-mismatch:created",
+      schemaVersion: "notes.v1",
+      data: { noteId: "after-mismatch" },
+      metadata: {},
+    };
+    await mkdir(inboxDir, { recursive: true });
+    const mismatchName = `${createHash("sha256").update("some-other-identity", "utf8").digest("hex")}.json`;
+    const validName = `${createHash("sha256").update(validEvent.dedupeKey!, "utf8").digest("hex")}.json`;
+    await writeFile(join(inboxDir, mismatchName), `${JSON.stringify(validEvent)}\n`, "utf8");
+    await writeFile(join(inboxDir, validName), `${JSON.stringify(validEvent)}\n`, "utf8");
+
+    const broker = new DurableEventsBroker({ dataDir });
+    broker.addChannel({
+      id: "notes-created",
+      enabled: true,
+      transport: "webhook",
+      filters: [{ source: "notes", type: "note.created" }],
+      webhook: { url: "https://example.invalid", secretRef: "env:HASNA_NOTES_WEBHOOK_SECRET" },
+    });
+    expect(broker.importSpool()).toEqual({ scanned: 2, imported: 1, deduped: 0, queued: 1, quarantined: 1 });
+    const quarantineDir = join(dataDir, "spool", "quarantine");
+    const [metaName] = (await readdir(quarantineDir)).filter((name) => name.endsWith(".meta.json"));
+    const meta = JSON.parse(await readFile(join(quarantineDir, metaName!), "utf8"));
+    expect(meta).toMatchObject({ originalName: mismatchName, reason: "identity-mismatch" });
     broker.close();
   });
 

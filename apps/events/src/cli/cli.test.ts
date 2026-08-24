@@ -152,6 +152,8 @@ describe("CLI smoke behavior", () => {
 
   test("adds, lists, tests, removes channels and emits, lists, replays events", async () => {
     const requests: string[] = [];
+    const previousAllowlist = process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
+    process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS = "127.0.0.1";
     const server = Bun.serve({
       port: 0,
       fetch: async (request) => {
@@ -218,6 +220,8 @@ describe("CLI smoke behavior", () => {
       expect(requests.length).toBeGreaterThanOrEqual(2);
     } finally {
       server.stop(true);
+      if (previousAllowlist === undefined) delete process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
+      else process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS = previousAllowlist;
     }
   });
 
@@ -270,6 +274,8 @@ describe("CLI smoke behavior", () => {
   test("configures, enqueues, and drains an exact durable webhook route", async () => {
     const previousSecret = process.env.HASNA_NOTES_WEBHOOK_SECRET;
     process.env.HASNA_NOTES_WEBHOOK_SECRET = "test-runtime-signing-material";
+    const previousAllowlist = process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
+    process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS = "127.0.0.1";
     let requests = 0;
     const server = Bun.serve({
       port: 0,
@@ -328,6 +334,8 @@ describe("CLI smoke behavior", () => {
       server.stop(true);
       if (previousSecret === undefined) delete process.env.HASNA_NOTES_WEBHOOK_SECRET;
       else process.env.HASNA_NOTES_WEBHOOK_SECRET = previousSecret;
+      if (previousAllowlist === undefined) delete process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
+      else process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS = previousAllowlist;
     }
   });
 

@@ -43,7 +43,7 @@ describe("transports", () => {
         webhook: { url: `http://127.0.0.1:${server.port}`, secret: "shared-secret" },
         createdAt: event.time,
         updatedAt: event.time,
-      }, { now: () => new Date(dispatchTime) });
+      }, { now: () => new Date(dispatchTime), webhookTargetPolicy: { allowPrivateHosts: ["127.0.0.1"] } });
 
       expect(attempt.status).toBe("success");
       expect(received?.headers.get("x-hasna-event-id")).toBe("evt_webhook");
@@ -147,7 +147,7 @@ process.stdin.on("end", () => {
         webhook: { url: `http://127.0.0.1:${server.port}` },
         createdAt: event.time,
         updatedAt: event.time,
-      });
+      }, { webhookTargetPolicy: { allowPrivateHosts: ["127.0.0.1"] } });
       expect(attempt.status).toBe("failed");
       expect(attempt.responseStatus).toBe(503);
       expect(attempt.error).toContain("HTTP 503");
@@ -185,6 +185,7 @@ process.stdin.on("end", () => {
       const attempt = await dispatchWebhook(event, channel, {
         secretResolver: async (reference) => reference === "env:HASNA_NOTES_WEBHOOK_SECRET" ? "runtime-secret" : undefined,
         now: () => new Date(event.time),
+        webhookTargetPolicy: { allowPrivateHosts: ["127.0.0.1"] },
       });
       expect(attempt.status).toBe("success");
       expect(verifyPayloadSignature("runtime-secret", event.time, body, signature)).toBe(true);
