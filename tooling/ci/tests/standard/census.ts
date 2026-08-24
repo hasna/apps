@@ -552,7 +552,6 @@ export const NO_VALIDATOR_PIN: string[] = [
   "slides",
   "tables",
   "test-guard",
-  "router",
   "releases",
   "ui",
 ];
