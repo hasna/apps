@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.8
+
+### Patch Changes
+
+- `secrets scan input` now scans every named path; exit code is the max severity across all inputs (AGE10-00616).
+
 ## 0.3.7
 
 ### Patch Changes
