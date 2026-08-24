@@ -108,8 +108,6 @@ describe('Tray API Platform client', () => {
 
     const connector = new Connector({
       apiKey: 'test-api-key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://tenant.example.com/v1/',
     });
     await connector.events.list();

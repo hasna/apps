@@ -71,9 +71,6 @@ describe('Vector Legal API client', () => {
     const recorded = installFetch();
     const client = new ConnectorClient({
       apiKey: 'vector-legal-key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2',
     });
     await client.get('/documents');

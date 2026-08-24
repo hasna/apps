@@ -71,9 +71,6 @@ describe('TogetherApiPlatformClient', () => {
     const recorded = installFetch(() => ({}));
     const client = new TogetherApiPlatformClient({
       apiKey: 'test-key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v1',
     });
     await client.listEvents();

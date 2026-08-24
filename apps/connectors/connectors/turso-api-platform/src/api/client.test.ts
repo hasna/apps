@@ -21,9 +21,6 @@ describe('TursoApiPlatformClient', () => {
   test('respects custom base URL', () => {
     const client = new TursoApiPlatformClient({
       apiKey: 'test-key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v1/',
     });
     expect(client.buildUrl('/items')).toBe('https://custom.example.com/v1/items');

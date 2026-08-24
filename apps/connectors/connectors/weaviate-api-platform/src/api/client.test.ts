@@ -72,8 +72,6 @@ describe('WeaviateApiPlatform client', () => {
     const recorded = installFetch();
     const client = new Connector({
       apiKey: 'test-api-key',
-      baseUrl: 'https://configured.example.com/v1',
-      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v1/',
     });
     await client.listEvents();
