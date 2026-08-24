@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.7.7
+
+### Patch Changes
+
+- 1126270: Hosted equality enforcement now scopes by the caller-declared byline instead of the API-key principal claim (todos 1871c67f). The fleet's store key carries the agent claim `fleet`, so the three equality-enforcing routes deterministically 403'd every named seat: `conversations context` and `notifications --from <seat>` failed with "notification agent must match the authenticated agent", `channel read --from <seat>` with "reader must match the authenticated agent", and `blockers` without `--from` silently omitted the agent and read fleet-wide at rc=0. The API key authorizes (tenant + scopes); the byline is the identity.
+
+  - Server: `/v1/messages/blockers` scopes the SQL to the declared `agent` (omitted: key claim); `/v1/messages/read` stamps receipts under the declared `reader` (omitted: key claim); `/v1/channel-notifications/inbox` scopes to the required `agent` query. The three "must match the authenticated agent" 403s are removed.
+  - Client: `getUnreadBlockers`/`getUnreadBlockerPreviews` forward the byline unconditionally; the `explicitFrom` plumbing is retired from the CLI, MCP tool, and store interface.
+  - Contract: openapi descriptions updated, inbox `agent` query now required; generated SDK refreshed.
+
+  Deployment note: the hosted server must be redeployed with the new `api.ts` for the fleet to see the fix; the client change alone does not restore a seat's notification inbox.
+
+- 8554afc: Conversations→Events outbox and timestamp correctness fixes:
+
+  - **Hosted create path binds ISO-8601 outbox timestamps** (message-create and task-create): `pg` returns `timestamptz` as a JS `Date`, and `String(date)` produced the JS `toString` format that Postgres refuses to parse (`invalid input syntax for type timestamp with time zone`) — every `conversations send` to the hosted API returned HTTP 400 (todos 445de05e, 041b4e3a).
+  - **Read-path preview serializer is Date-aware**: `boundedSafeString` now coerces a `Date` to `.toISOString()`, so cloud message reads emit ISO `created_at`/`edited_at`/`pinned_at` instead of `Date.toString()`.
+  - **Pending-outbox reads break same-ms `created_at` ties on insertion rowid** instead of the random uuid id, making blocked/unblocked (and any same-ms pair) delivery order deterministic (todos 156a9d7c).
+  - Regression tests: in-memory hosted message-create asserts the outbox `created_at` param is ISO; a hosted-PostgreSQL verifier exercises the real `/v1/messages` create path; an outbox-order test covers same-ms ties.
+
+  Deployment note: the hosted server must be redeployed with the new `api.ts` for the fleet to see the fix.
+
+- 68167f7: Cursor paging stopped early with `has_more:false` while newer-timestamp messages remained, on any channel whose message ids are not chronological with timestamps. Measured on the incidents channel (2026-08-24, todos febd88c6): id 730236 is dated 2026-08-21T10:55Z while id 722262 is dated 2026-08-21T19:20Z — a backfilled message receives a HIGHER id than its timestamp would suggest. An id-ordered window walk then hands back a message with a newer timestamp first, a timestamp-watermark caller advances its `since` past the gap, and the walk reports `has_more:false` while newer-timestamp messages remain unreached. This broke every cursor-based monitor on the fleet (the conversations-inbox monitor went DEGRADED with "window ids are discontinuous").
+
+  - The digest and the `read --since-id` cursor walks now order by the authoritative time sequence (`created_at ASC, id ASC`) whenever a `since` filter is present, and resume at the `(created_at, id)` tuple position of the cursor message instead of at a bare `id > cursor`. A timestamp-watermark caller therefore sees delivered timestamps advance monotonically and never steps past a message whose id is higher but whose timestamp falls before the advanced watermark.
+  - Applied to the local SQLite digest (`countDigestMessages`/`queryDigestMessages`), the local `readMessagePreviews`/`countMessages`, and the hosted `/v1/messages` endpoint (server `api.ts`) so local and cloud walks behave identically.
+  - When the cursor message cannot be resolved (deleted mid-walk), the cursor condition is dropped and the walk re-reads from `since` — duplicates are detectable, loss is not.
+  - Regression tests in `src/lib/digest-nonchronological-id.test.ts`: a window walk over non-chronological ids reaches every newer-timestamp message exactly once and terminates cleanly (positive control), and a chronological-id walk still terminates cleanly (negative control).
+
+  Deployment note: the hosted server must be redeployed with the new `api.ts` for cloud digest/read walks to see the fix; the client change alone covers local-store walks.
+
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.14.0
+
 ## 0.7.6
 
 ### Patch Changes

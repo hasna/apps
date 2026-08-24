@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- 6176948: feat(contracts): draft `hasna.deployment_envelope.v1` (todos c57e89eb). New schema composing the 13-schema `hasna.*deployment*.v1` family plus `hasna.app_cloud_manifest.v1` and app identity into one declarative deployment envelope: app identity, audience, environments, provider bindings, resource graph, artifacts, deploy procedure, monitor wiring, rollback, account mapping. New exports: `DeploymentEnvelopeSchema`, `EnvelopeResourceSchema`, `EnvelopeEnvironmentSchema`, `EnvelopePhaseSchema`, `EnvelopeActionSchema`, and `SCHEMA_IDS.deploymentEnvelope`. DRAFT by default: the schema enforces the written ratification gate (`DEPLOYMENT_ENVELOPE_RATIFICATION_GATE` — one production deployment executed through this envelope with receipts and a passed live test). The canonical resource-kind registry maps the four measured legacy vocabularies (`deployment_db`, `app_cloud`, `intent`, `aws_plan`); unmapped kinds are rejected, never guessed. Legacy environment vocabulary reconciles through `ENVIRONMENT_ALIAS_MAP`; legacy shapes that cannot be converted (alumia `storage.mode`, retired `deployment_mode`/`hosting` fields) are rejected by the strict schema.
+
+### Patch Changes
+
+- 7575de8: storage-kit check now fails when only the manifest records a stale kitVersion (todos row OPE61-00024). Previously checkKit() folded only template-file hash statuses, extras, and dependency-minor drift into `ok`, so a manifest-only stale version printed "ok storage-kit check" and exited 0 in the CLI. `staleVersion` is now part of the ok aggregate.
+  - @hasna/secrets@0.3.10
+
 ## 0.13.4
 
 ### Patch Changes

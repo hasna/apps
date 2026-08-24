@@ -1,6 +1,6 @@
 {
   "name": "@hasna/snapshots",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Runtime snapshot and restore layer for Hasna local open-source developer environments.",
   "type": "module",
   "main": "dist/index.js",

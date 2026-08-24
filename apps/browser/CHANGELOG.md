@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.34
+
+### Patch Changes
+
+- Updated dependencies [1126270]
+- Updated dependencies [8554afc]
+- Updated dependencies [68167f7]
+- Updated dependencies [947fa83]
+  - @hasna/conversations@0.7.7
+  - @hasna/skills@0.1.69
+  - @hasna/secrets@0.3.10
+  - @hasna/sessions@0.12.20
+  - @hasna/todos@0.15.49
+
 ## 0.5.33
 
 ### Patch Changes
