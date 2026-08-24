@@ -82,6 +82,26 @@ describe("registerMessagingCommands", () => {
     });
   });
 
+  test("send help usage line shows the documented channel-first positional order", () => {
+    // Regression for todos 5002ed12: the auto-generated usage line read
+    // "send [options] <message> [channel]" while the documented and
+    // e2e-tested positional form is channel-first (`send <channel> "<message>"`,
+    // see send-positional-channel.e2e.test.ts and the handler's swap when a
+    // second positional is present). The usage line must not contradict the
+    // parsing order.
+    const program = new Command();
+    registerMessagingCommands(program);
+
+    const send = program.commands.find((c) => c.name() === "send");
+    expect(send).toBeDefined();
+    const sendHelp = send?.helpInformation() ?? "";
+    const usageLine = sendHelp.split("\n").find((line) => line.startsWith("Usage:"));
+    expect(usageLine).toBeDefined();
+    expect(usageLine).toContain("<channel>");
+    expect(usageLine).toContain("<message>");
+    expect(usageLine!.indexOf("<channel>")).toBeLessThan(usageLine!.indexOf("<message>"));
+  });
+
   test("registers read command", () => {
     const program = new Command();
     registerMessagingCommands(program);
