@@ -1037,7 +1037,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
