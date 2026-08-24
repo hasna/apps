@@ -42,6 +42,28 @@ export interface SnapshotRecord {
   duplicateOf?: string;
 }
 
+export interface CaptureRunRecord {
+  id: string;
+  createdAt: string;
+  snapshotId: string | null;
+  duplicateOf: string | null;
+  resourceCount: number;
+  diagnosticCount: number;
+  status: "created" | "duplicate";
+}
+
+export type FreshnessReason = "fresh" | "capture-run-stale" | "no-capture-runs";
+
+export interface FreshnessStatus {
+  ok: boolean;
+  reason: FreshnessReason;
+  last_capture_run_at: string | null;
+  last_capture_run_age_seconds: number | null;
+  newest_snapshot_at: string | null;
+  newest_snapshot_age_seconds: number | null;
+  threshold: number;
+}
+
 export interface CaptureDiagnostic {
   source: string;
   level: "info" | "warning" | "error";

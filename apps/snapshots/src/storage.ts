@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import type {
   CaptureDiagnostic,
+  CaptureRunRecord,
   CaptureSourceStatus,
   JsonObject,
   RestorePlan,
@@ -114,12 +115,24 @@ export class SnapshotStore {
         expires_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS capture_runs (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        snapshot_id TEXT,
+        duplicate_of TEXT,
+        resource_count INTEGER NOT NULL,
+        diagnostic_count INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS snapshots_created_at_idx ON snapshots(created_at DESC);
       CREATE INDEX IF NOT EXISTS resources_last_seen_at_idx ON resources(last_seen_at DESC);
       CREATE INDEX IF NOT EXISTS snapshot_resources_lookup_idx ON snapshot_resources(snapshot_id, kind, name, resource_id);
       CREATE INDEX IF NOT EXISTS restore_plans_snapshot_idx ON restore_plans(snapshot_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS restore_runs_plan_idx ON restore_runs(plan_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS audit_events_type_idx ON audit_events(event_type, created_at DESC);
+      CREATE INDEX IF NOT EXISTS capture_runs_created_at_idx ON capture_runs(created_at DESC);
     `);
   }
 
@@ -309,6 +322,44 @@ export class SnapshotStore {
     return (this.db.query("SELECT * FROM snapshots ORDER BY created_at DESC LIMIT ?").all(limit) as Row[]).map(snapshotFromRow);
   }
 
+  recordCaptureRun(options: {
+    createdAt?: string;
+    snapshotId?: string | null;
+    duplicateOf?: string | null;
+    resourceCount: number;
+    diagnosticCount: number;
+    status: "created" | "duplicate";
+  }): CaptureRunRecord {
+    const createdAt = options.createdAt ?? nowIso();
+    const snapshotId = options.snapshotId ?? null;
+    const duplicateOf = options.duplicateOf ?? null;
+    const record: CaptureRunRecord = {
+      id: `run_${createdAt.replace(/[-:.TZ]/g, "").slice(0, 17)}_${sha256(
+        stableJson({ createdAt, snapshotId, duplicateOf, resourceCount: options.resourceCount, diagnosticCount: options.diagnosticCount, status: options.status, random: Math.random() })
+      ).slice(0, 8)}`,
+      createdAt,
+      snapshotId,
+      duplicateOf,
+      resourceCount: options.resourceCount,
+      diagnosticCount: options.diagnosticCount,
+      status: options.status
+    };
+    this.db
+      .query(
+        "INSERT INTO capture_runs (id, created_at, snapshot_id, duplicate_of, resource_count, diagnostic_count, status, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(record.id, record.createdAt, record.snapshotId, record.duplicateOf, record.resourceCount, record.diagnosticCount, record.status, JSON.stringify(record));
+    return record;
+  }
+
+  listCaptureRuns(limit = 10): CaptureRunRecord[] {
+    return (this.db.query("SELECT * FROM capture_runs ORDER BY created_at DESC LIMIT ?").all(limit) as Row[]).map(captureRunFromRow);
+  }
+
+  latestCaptureRun(): CaptureRunRecord | undefined {
+    return this.listCaptureRuns(1)[0];
+  }
+
   getSnapshot(id: string): SnapshotRecord | undefined {
     const row = this.db.query("SELECT * FROM snapshots WHERE id = ?").get(id) as Row | null;
     return row ? snapshotFromRow(row) : undefined;
@@ -449,6 +500,18 @@ function policyFromRow(row: Row): RestorePolicy {
     mode: row.mode as RestorePolicy["mode"],
     reason: row.reason == null ? undefined : String(row.reason),
     updatedAt: String(row.updated_at)
+  };
+}
+
+function captureRunFromRow(row: Row): CaptureRunRecord {
+  return {
+    id: String(row.id),
+    createdAt: String(row.created_at),
+    snapshotId: row.snapshot_id == null ? null : String(row.snapshot_id),
+    duplicateOf: row.duplicate_of == null ? null : String(row.duplicate_of),
+    resourceCount: Number(row.resource_count),
+    diagnosticCount: Number(row.diagnostic_count),
+    status: String(row.status) as CaptureRunRecord["status"]
   };
 }
 
