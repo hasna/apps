@@ -90,8 +90,22 @@ async function driveStdioInitialize(): Promise<RunResult & { gotInitializeRespon
   let stdout = "";
   let gotInitializeResponse = false;
   const readDeadline = Date.now() + 10_000;
-  while (Date.now() < readDeadline && !gotInitializeResponse) {
-    const next = reader ? await reader.read() : null;
+  // Each read is raced against the remaining deadline: a child that stays
+  // alive without producing stdout cannot block the probe past the bound —
+  // the read resolves to null on timeout and the loop breaks, so the
+  // transport gate fails boundedly instead of hanging.
+  while (!gotInitializeResponse) {
+    const remaining = readDeadline - Date.now();
+    if (remaining <= 0) break;
+    const readPromise = reader ? reader.read() : null;
+    const next = readPromise
+      ? await Promise.race([
+          readPromise,
+          new Promise<ReadableStreamReadResult<Uint8Array> | null>((resolve) =>
+            setTimeout(() => resolve(null), remaining),
+          ),
+        ])
+      : null;
     if (!next || next.done) break;
     stdout += new TextDecoder().decode(next.value);
     gotInitializeResponse =
