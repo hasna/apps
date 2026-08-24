@@ -935,6 +935,35 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await storage.getLoop(loop.id)).toBeUndefined();
   });
 
+  test("deleteLoop succeeds for a loop that has run receipts (O15-00624 regression)", async () => {
+    // O15-00624: DELETE /loops/<id> -> 500 on the hosted control plane. The
+    // run_receipts (tenant_id, loop_id) FK references loops with no ON DELETE
+    // action, so a loop that ever produced a terminal receipt cannot be
+    // deleted — the FK violation aborts the transaction and the API returns
+    // 500. The smoke loop 01a03339214a217030727d008d5a7399 reproduced this
+    // live. Deleting a loop must succeed and remove its receipts with it.
+    const loop = await storage.createLoop(loopInput("pg-delete-with-receipts"));
+    const receiptRunId = `receipt-${loop.id}`;
+    await storage.writeRunReceipt({
+      loop_id: loop.id,
+      run_id: receiptRunId,
+      repo: "hasna/apps",
+      task_ids: [],
+      knowledge_ids: [],
+      digest_id: "digest:sha256:o15-00624",
+      status: "succeeded",
+      exit_code: 0,
+      summary: "smoke",
+      evidence_paths: [],
+    });
+    expect(await storage.getRunReceipt(receiptRunId)).toBeTruthy();
+
+    await expect(storage.deleteLoop(loop.id)).resolves.toBe(true);
+    expect(await storage.getLoop(loop.id)).toBeUndefined();
+    // The receipt is a per-loop run artifact; it must not survive the loop.
+    expect(await storage.getRunReceipt(receiptRunId)).toBeUndefined();
+  });
+
   test("updateLoop rejects erased invalid statuses before any PostgreSQL mutation", async () => {
     const loop = await storage.createLoop(loopInput("pg-status-boundary", {
       labels: ["original"],
