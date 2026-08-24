@@ -56,6 +56,9 @@ describe('TwilioApiPlatformClient', () => {
     const captured = installFetch();
     const client = new TwilioApiPlatformClient({
       apiKey: 'key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example/v2/',
     });
     await client.get('/events');

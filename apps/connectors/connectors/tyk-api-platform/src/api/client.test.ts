@@ -19,6 +19,8 @@ describe('TykApiPlatformClient', () => {
   it('should allow base URL override', () => {
     const client = new TykApiPlatformClient({
       apiKey: 'test-key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2/',
     });
     expect(client.getBaseUrl()).toBe('https://custom.example.com/v2');
