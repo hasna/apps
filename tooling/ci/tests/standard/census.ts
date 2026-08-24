@@ -101,6 +101,11 @@
  * that registry is about manifest conformance, not surfaces, and prompts
  * still fails it. The 43 members that are recorded AND still genuinely
  * missing `./sdk` are untouched and keep the check non-vacuous.
+ * 2026-08-24 (datasets open-to-internal move): the datasets SERVE, SDK and
+ * KIT_VERSION exception entries DELETED — apps/datasets left the public tree
+ * for hasna-internal/internal-apps as @hasna-internal/datasets (destination
+ * PR hasna-internal/internal-apps#509), so the member no longer exists here
+ * and its recorded exceptions are stale under the two-sided contract.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -299,7 +304,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
   { member: "catalog", reason: "Local read model; the HTTP read API is a documented local dev convenience bound to loopback (README 'Security and deployment scope'), not a supported service surface — the manifest declares the api surface deferred with that reason." },
-  { member: "datasets", reason: "CLI-only member; no server surface." },
   { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
   { member: "docs", reason: "Docs renderer; no server surface." },
   { member: "draw", reason: "Library-shaped; no server surface." },
@@ -343,7 +347,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "controls", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "crawl", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "connectors", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #80 after the original census." },
-  { member: "datasets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "docs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -521,7 +524,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
  * describe, so the claim moves only with the manifest rewrite their
  * CONTRACTS_EXCEPTIONS remediation tasks own. */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
-  { member: "datasets", kitVersion: "0.11.1", pinned: "^0.10.6" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.13.4" },
   { member: "todos", kitVersion: "0.11.1", pinned: "0.13.4" },
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
