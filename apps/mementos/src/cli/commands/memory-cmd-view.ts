@@ -89,9 +89,13 @@ export function registerViewCommands(program: Command): void {
         });
 
         if (globalOpts.json) {
-          outputJson(updated);
+          // Read-path redaction (todos e12c7659): updateMemory returns the raw
+          // stored row, which can carry a credential-shaped key (and stored
+          // free-text) verbatim. Project the receipt through the same
+          // read-path redaction the other verbs use.
+          outputJson(redactMemoryForOutput(updated));
         } else {
-          console.log(chalk.green(`Pinned: ${updated.key} (${updated.id.slice(0, 8)})`));
+          console.log(chalk.green(`Pinned: ${redactTextFragment(updated.key)} (${updated.id.slice(0, 8)})`));
         }
       } catch (e) {
         handleError(e);
@@ -127,9 +131,11 @@ export function registerViewCommands(program: Command): void {
         });
 
         if (globalOpts.json) {
-          outputJson(updated);
+          // Read-path redaction (todos e12c7659): same as `pin` — the echoed
+          // stored row must not carry a credential-shaped key verbatim.
+          outputJson(redactMemoryForOutput(updated));
         } else {
-          console.log(chalk.green(`Unpinned: ${updated.key} (${updated.id.slice(0, 8)})`));
+          console.log(chalk.green(`Unpinned: ${redactTextFragment(updated.key)} (${updated.id.slice(0, 8)})`));
         }
       } catch (e) {
         handleError(e);
@@ -154,9 +160,11 @@ export function registerViewCommands(program: Command): void {
         }
         updateMemory(memory.id, { status: "archived", version: memory.version });
         if (globalOpts.json) {
-          outputJson({ archived: true, id: memory.id, key: memory.key });
+          // Read-path redaction (todos e12c7659): the stored key can be
+          // credential-shaped; redact the echoed receipt like the other verbs.
+          outputJson({ archived: true, id: memory.id, key: redactTextFragment(memory.key) });
         } else {
-          console.log(chalk.green(`✓ Archived: ${chalk.bold(memory.key)} (${memory.id.slice(0, 8)})`));
+          console.log(chalk.green(`✓ Archived: ${chalk.bold(redactTextFragment(memory.key))} (${memory.id.slice(0, 8)})`));
         }
       } catch (e) {
         console.error(chalk.red(`archive failed: ${e instanceof Error ? e.message : String(e)}`));

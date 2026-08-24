@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { isApiMode } from "../db/api-mode.js";
+import { redactTextFragment } from "../lib/redact.js";
 import { getMemory, getMemoryByKey } from "../db/memories.js";
 import { getAgent } from "../db/agents.js";
 import { getProject } from "../db/projects.js";
@@ -661,18 +662,23 @@ export function diffMemory(
     const changes: Record<string, { old: unknown; new: unknown }> = {};
     const n = newer as unknown as Record<string, unknown>;
 
-    if (older.value !== n.value) changes.value = { old: older.value, new: n.value };
+    // Read-path redaction (todos e12c7659): `diff` is a read verb, so the raw
+    // stored key and every free-text version field (`value`, `summary`, `tags`)
+    // must be projected through the same redaction the other read verbs use.
+    // The change DETECTION compares raw values; only the EMITTED projections are
+    // redacted, so a credential-bearing change still surfaces as a change.
+    if (older.value !== n.value) changes.value = { old: redactTextFragment(older.value), new: redactTextFragment(String(n.value)) };
     if (older.importance !== n.importance) changes.importance = { old: older.importance, new: n.importance };
     if (older.scope !== n.scope) changes.scope = { old: older.scope, new: n.scope };
     if (older.category !== n.category) changes.category = { old: older.category, new: n.category };
-    if (JSON.stringify(older.tags) !== JSON.stringify(newer.tags)) changes.tags = { old: older.tags, new: newer.tags };
-    if ((older.summary || null) !== (n.summary || null)) changes.summary = { old: older.summary, new: n.summary };
+    if (JSON.stringify(older.tags) !== JSON.stringify(newer.tags)) changes.tags = { old: older.tags.map(redactTextFragment), new: newer.tags.map(redactTextFragment) };
+    if ((older.summary || null) !== (n.summary || null)) changes.summary = { old: older.summary ? redactTextFragment(older.summary) : null, new: n.summary ? redactTextFragment(String(n.summary)) : null };
     if (older.pinned !== n.pinned) changes.pinned = { old: older.pinned, new: n.pinned };
     if (older.status !== n.status) changes.status = { old: older.status, new: n.status };
 
     outputJson({
       memory_id: memoryId,
-      key: current.key,
+      key: redactTextFragment(current.key),
       from_version: olderVersion,
       to_version: newerVersion,
       changes,
@@ -680,15 +686,19 @@ export function diffMemory(
     return;
   }
 
-  console.log(chalk.bold(`Diff for "${current.key}" (${memoryId.slice(0, 8)})`));
+  console.log(chalk.bold(`Diff for "${redactTextFragment(current.key)}" (${memoryId.slice(0, 8)})`));
   console.log(chalk.dim(`Version ${olderVersion} → ${newerVersion}`));
   console.log();
 
   let hasChanges = false;
   const n = newer as unknown as Record<string, unknown>;
 
-  const oldValue = older.value;
-  const newValue = n.value as string;
+  // Read-path redaction (todos e12c7659): the echoed key and every free-text
+  // version field (`value`, `summary`, `tags`) go through the same redaction
+  // the other read verbs use, so a credential-shaped key or stored free-text
+  // cannot reach the transcript verbatim.
+  const oldValue = redactTextFragment(older.value);
+  const newValue = redactTextFragment(n.value as string);
   if (oldValue !== newValue) {
     hasChanges = true;
     console.log(chalk.bold("  value:"));
@@ -699,7 +709,7 @@ export function diffMemory(
     { name: "importance", oldVal: older.importance, newVal: n.importance },
     { name: "scope", oldVal: older.scope, newVal: n.scope },
     { name: "category", oldVal: older.category, newVal: n.category },
-    { name: "summary", oldVal: older.summary || "(none)", newVal: n.summary || "(none)" },
+    { name: "summary", oldVal: older.summary ? redactTextFragment(older.summary) : "(none)", newVal: n.summary ? redactTextFragment(String(n.summary)) : "(none)" },
     { name: "pinned", oldVal: older.pinned, newVal: n.pinned },
     { name: "status", oldVal: older.status, newVal: n.status },
   ];
@@ -718,8 +728,8 @@ export function diffMemory(
     const removed = oldTags.filter((t: string) => !newTags.includes(t));
     const added = newTags.filter((t: string) => !oldTags.includes(t));
     console.log(`  ${chalk.bold("tags:")}`);
-    for (const t of removed) console.log(chalk.red(`    - ${t}`));
-    for (const t of added) console.log(chalk.green(`    + ${t}`));
+    for (const t of removed) console.log(chalk.red(`    - ${redactTextFragment(t)}`));
+    for (const t of added) console.log(chalk.green(`    + ${redactTextFragment(t)}`));
   }
 
   if (!hasChanges) {

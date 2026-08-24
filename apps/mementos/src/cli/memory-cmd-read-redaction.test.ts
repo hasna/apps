@@ -433,4 +433,131 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     expect(h.stdout).toContain("[REDACTED]");
     expect(h.stdout).toContain("old version value");
   });
+
+  // ==========================================================================
+  // diff (a read verb that was missed by the first fix — NO_GO finding)
+  // ==========================================================================
+
+  test("diff JSON: token-shaped key and version free-text are redacted, change metadata kept", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-diff-npm", key: NPM_REGISTRY_TOKEN, value: "registry token diff fixture" },
+    ]);
+    const db = new Database(dbPath);
+    try {
+      db.run(
+        `INSERT INTO memory_versions (id, memory_id, version, value, importance, scope, category, tags, summary, pinned, status, created_at)
+         VALUES ('mv-diff-0', 'm-diff-npm', 0, 'old ${NPM_REGISTRY_TOKEN} version value', 5, 'private', 'fact', '["tag-${NPM_REGISTRY_TOKEN}"]', 'summary ${NPM_REGISTRY_TOKEN}', 0, 'active', datetime('now'))`
+      );
+    } finally {
+      db.close();
+    }
+
+    const { stdout, exitCode } = await runCli(env, "--json", "diff", "m-diff-npm");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    const parsed = JSON.parse(stdout) as {
+      memory_id: string;
+      key: string;
+      from_version: number;
+      to_version: number;
+      changes: Record<string, { old: unknown; new: unknown }>;
+    };
+    expect(parsed.memory_id).toBe("m-diff-npm");
+    expect(parsed.from_version).toBe(0);
+    expect(parsed.to_version).toBe(1);
+    expect(parsed.key).not.toContain(NPM_REGISTRY_TOKEN);
+    // The free-text arms of the changes object must be redacted.
+    expect(String(parsed.changes.value!.old)).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(String(parsed.changes.value!.new)).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(String(parsed.changes.summary!.old)).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(JSON.stringify(parsed.changes.tags!.old)).not.toContain(NPM_REGISTRY_TOKEN);
+    // The change is still surfaced as a change (not swallowed by redaction).
+    expect(parsed.changes.value).toBeTruthy();
+  });
+
+  test("diff human: token-shaped key and version free-text are redacted", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-diffh-npm", key: NPM_REGISTRY_TOKEN, value: "registry token diff human fixture" },
+    ]);
+    const db = new Database(dbPath);
+    try {
+      db.run(
+        `INSERT INTO memory_versions (id, memory_id, version, value, importance, scope, category, tags, summary, pinned, status, created_at)
+         VALUES ('mv-diffh-0', 'm-diffh-npm', 0, 'old ${NPM_REGISTRY_TOKEN} version value', 5, 'private', 'fact', '[]', NULL, 0, 'active', datetime('now'))`
+      );
+    } finally {
+      db.close();
+    }
+
+    const { stdout, exitCode } = await runCli(env, "diff", "m-diffh-npm");
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(stdout).toContain("[REDACTED]");
+    expect(stdout).toContain("registry token diff human fixture");
+  });
+
+  // ==========================================================================
+  // pin / unpin / archive — mutation receipts echo the raw stored key (NO_GO
+  // finding): these commands read the stored row back and render `key` verbatim.
+  // ==========================================================================
+
+  test("pin --json / human: token-shaped key never reaches stdout verbatim", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-pin-npm", key: NPM_REGISTRY_TOKEN, value: "registry token pin fixture" },
+    ]);
+
+    const j = await runCli(env, "--json", "pin", "m-pin-npm");
+    expect(j.exitCode).toBe(0);
+    expect(j.stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    const parsed = JSON.parse(j.stdout) as Record<string, unknown>;
+    expect(parsed.id).toBe("m-pin-npm");
+    expect(parsed.pinned).toBe(true);
+    // Coordination metadata survives; the key is redacted.
+    expect(parsed.scope).toBe("private");
+    expect(parsed.category).toBe("fact");
+    expect(String(parsed.key)).not.toContain(NPM_REGISTRY_TOKEN);
+
+    const h = await runCli(env, "pin", "m-pin-npm");
+    expect(h.exitCode).toBe(0);
+    expect(h.stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(h.stdout).toContain("[REDACTED]");
+  });
+
+  test("unpin --json / human: token-shaped key never reaches stdout verbatim", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-unpin-npm", key: NPM_REGISTRY_TOKEN, value: "registry token unpin fixture" },
+    ]);
+
+    const j = await runCli(env, "--json", "unpin", "m-unpin-npm");
+    expect(j.exitCode).toBe(0);
+    expect(j.stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    const parsed = JSON.parse(j.stdout) as Record<string, unknown>;
+    expect(parsed.id).toBe("m-unpin-npm");
+    expect(parsed.pinned).toBe(false);
+    expect(String(parsed.key)).not.toContain(NPM_REGISTRY_TOKEN);
+
+    const h = await runCli(env, "unpin", "m-unpin-npm");
+    expect(h.exitCode).toBe(0);
+    expect(h.stdout).not.toContain(NPM_REGISTRY_TOKEN);
+    expect(h.stdout).toContain("[REDACTED]");
+  });
+
+  test("archive --json / human: token-shaped key never reaches stdout verbatim", async () => {
+    const { dbPath, env } = await seeded([
+      { id: "m-arch-npm", key: AWS_ACCESS_KEY, value: "aws key archive fixture" },
+    ]);
+
+    const j = await runCli(env, "--json", "archive", "m-arch-npm");
+    expect(j.exitCode).toBe(0);
+    expect(j.stdout).not.toContain(AWS_ACCESS_KEY);
+    const parsed = JSON.parse(j.stdout) as { archived: boolean; id: string; key: string };
+    expect(parsed.archived).toBe(true);
+    expect(parsed.id).toBe("m-arch-npm");
+    expect(parsed.key).not.toContain(AWS_ACCESS_KEY);
+
+    const h = await runCli(env, "archive", "m-arch-npm");
+    expect(h.exitCode).toBe(0);
+    expect(h.stdout).not.toContain(AWS_ACCESS_KEY);
+    expect(h.stdout).toContain("[REDACTED]");
+  });
 });
