@@ -22,6 +22,25 @@ export { uuid, now, slugify } from "./db/database.js";
 export { getConfigsStatus } from "./status.js";
 export type { ConfigsStatusContract } from "./status.js";
 
+// Per-endpoint provider-context injection (provider identity for non-native harness lanes)
+export {
+  PROVIDER_CONTEXT_DIR,
+  PROVIDER_CONTEXT_INVARIANT_ID,
+  PROVIDER_CONTEXT_MANIFEST,
+  PROVIDER_CONTEXT_SCHEMA,
+  PROVIDER_ENDPOINT_REGISTRY,
+  matchProviderEndpoint,
+  normalizeEndpointOrigin,
+  providerContextAuditLine,
+  renderProviderFragment,
+  resolveAndRenderProviderContext,
+} from "./lib/provider-context.js";
+export type {
+  ProviderContextRenderOptions,
+  ProviderContextResolution,
+  ProviderEndpointEntry,
+} from "./lib/provider-context.js";
+
 // Skill-home distribution (managed skill runtimes)
 export {
   INBOX_CONVERSATIONS_MINIMUM_VERSION,

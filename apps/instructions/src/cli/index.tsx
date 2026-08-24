@@ -51,6 +51,12 @@ import {
 } from "../lib/project-context.js";
 import { getConfigsStatus } from "../status.js";
 import { resolveConfigStore, isApiTransport, formatCliError, type ConfigStore } from "../data/config-store.js";
+import {
+  normalizeEndpointOrigin,
+  PROVIDER_CONTEXT_DIR,
+  providerContextAuditLine,
+  resolveAndRenderProviderContext,
+} from "../lib/provider-context.js";
 import { DEFAULT_LIST_LIMIT, paginate, parseLimit, truncateMiddle, truncateText } from "../lib/compact-output.js";
 import type { Config, ConfigAgent, ConfigCategory, ConfigFormat, ConfigKind, Profile, ProfileSelector, ProfileVariables } from "../types/index.js";
 
@@ -2746,6 +2752,59 @@ program
     console.log(chalk.green("✓") + " Feedback saved. Thank you!");
   });
 
+// ── provider-context ───────────────────────────────────────────────────────────
+const providerContextCmd = program
+  .command("provider-context")
+  .description("Resolve and render per-endpoint model-identity fragments for coding-agent harnesses");
+
+providerContextCmd
+  .command("resolve")
+  .description("Resolve the endpoint to a provider-context fragment, render it into the home, and emit an audit line")
+  .option("--endpoint <url>", "endpoint/base URL to resolve (default: $ANTHROPIC_BASE_URL)")
+  .option("--model <id>", "model id to record in the audit line (default: $ANTHROPIC_MODEL)")
+  .option("--home <dir>", `harness home directory (default: os.homedir()); fragments render to <home>/${PROVIDER_CONTEXT_DIR}`)
+  .option("--json", "print the full resolution as JSON")
+  .action((opts) => {
+    try {
+      const rawEndpoint = (opts.endpoint as string | undefined) ?? process.env["ANTHROPIC_BASE_URL"] ?? "";
+      const rawModel = (opts.model as string | undefined) ?? process.env["ANTHROPIC_MODEL"] ?? "";
+      const homeDir = (opts.home as string | undefined) ?? homedir();
+      const origin = normalizeEndpointOrigin(rawEndpoint);
+      const resolution = resolveAndRenderProviderContext({
+        origin,
+        rawEndpoint,
+        rawModel,
+        homeDir,
+      });
+      if (opts.json) {
+        printJson({
+          endpointKey: resolution.endpointKey,
+          provider: resolution.entry?.provider ?? null,
+          wireProtocol: resolution.entry?.wireProtocol ?? null,
+          fragmentPath: resolution.fragmentPath,
+          fragmentSha256: resolution.fragmentSha256,
+          reason: resolution.reason,
+          audit: providerContextAuditLine(resolution),
+        });
+      } else {
+        if (resolution.entry) {
+          console.log(chalk.green("✓") + ` provider: ${chalk.bold(resolution.entry.provider)} (${resolution.entry.wireProtocol})`);
+        } else {
+          console.log(chalk.yellow("!") + ` no registered provider for endpoint ${rawEndpoint || "(unset)"} — using invariant fragment`);
+        }
+        console.log(chalk.cyan("fragment:") + ` ${resolution.fragmentPath}`);
+        if (resolution.reason) console.log(chalk.dim(resolution.reason));
+        console.log(chalk.dim(providerContextAuditLine(resolution)));
+      }
+      // Unknown endpoint exits non-zero (verdict: lane proceeds on invariant + warning).
+      if (!resolution.entry) process.exitCode = 1;
+    } catch (e) {
+      console.error(chalk.red(formatCliError(e)));
+      process.exit(1);
+    }
+  });
+
+// ── version / bootstrap tail ───────────────────────────────────────────────────
 program.version(pkg.version).name("instructions");
 registerEventsCommands(program, { source: "configs" });
 
