@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { registerEventsCommands } from "@hasna/events/commander";
-import { Command } from "commander";
+import { Command, Help } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
@@ -23,6 +23,28 @@ import pkg from "../../package.json";
 import { printErrorLine, printJsonLine } from "../lib/stdout.js";
 
 const program = new Command();
+
+// Commander's default subcommandTerm() renders each row of the parent
+// `--help` command listing from the .argument() declaration order and
+// deliberately ignores a command's explicit .usage() override (help.js:
+// "Legacy. Ignores custom usage string"). That left `send` listed as
+// `send [options] <message> [channel]` in `conversations --help` while
+// `conversations send --help` — corrected by PR #1068 — says
+// `<channel> <message>`, so the contradiction the original bug named
+// persisted one surface up (todos afda2dcf). When a command declares an
+// explicit .usage(), render its parent row from that string so the two
+// surfaces agree; every other row keeps the legacy rendering unchanged.
+const legacySubcommandTerm = Help.prototype.subcommandTerm;
+
+program.configureHelp({
+  subcommandTerm(cmd: Command): string {
+    const explicitUsage = (cmd as { _usage?: string })._usage;
+    if (explicitUsage) {
+      return `${cmd.name()} ${explicitUsage}`;
+    }
+    return legacySubcommandTerm(cmd);
+  },
+});
 
 program
   .name("conversations")
