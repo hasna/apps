@@ -18,6 +18,9 @@ import {
 } from "./selective-changesets.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../../..");
+const RELEASES_CLI_PATH =
+  process.env["RELEASES_TEST_CLI"] ??
+  join(REPO_ROOT, "apps/releases/src/cli/index.ts");
 
 const CHANGESETS = {
   "conversations-monorepo-first-release": `---
@@ -127,13 +130,14 @@ function runGit(root: string, args: string[]): void {
   }
 }
 
-function createFixture(): Fixture {
+function createFixture(options: { linkNodeModules?: boolean } = {}): Fixture {
   const root = mkdtempSync(join(tmpdir(), "releases-selective-changesets-"));
   writeFixtureJson(root, "package.json", {
     name: "selective-changesets-fixture",
     private: true,
     workspaces: ["apps/*"],
   });
+  writeFixtureFile(root, "bun.lock", "# fixture lock\n");
   writeFixtureFile(root, ".gitignore", "node_modules\n");
   writeFixtureJson(root, ".changeset/config.json", {
     $schema: "https://unpkg.com/@changesets/config@3.0.3/schema.json",
@@ -211,7 +215,9 @@ This Changeset must remain byte-for-byte unchanged.
     );
   }
 
-  symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"), "dir");
+  if (options.linkNodeModules !== false) {
+    symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"), "dir");
+  }
   runGit(root, ["init", "-q", "-b", "main"]);
   runGit(root, ["add", "."]);
   runGit(root, ["commit", "-qm", "fixture"]);
@@ -294,7 +300,7 @@ function changesetsCandidateCliArgs(root: string, apply = false): string[] {
   return [
     "bun",
     "run",
-    join(REPO_ROOT, "apps/releases/src/cli/index.ts"),
+    RELEASES_CLI_PATH,
     "changesets-candidate",
     "--cwd",
     root,
@@ -597,6 +603,46 @@ describe("selective Changesets candidate", () => {
       expect(readManifest(fixture.root, "conversations").version).toBe("0.6.3");
       expect(readManifest(fixture.root, "todos").version).toBe("0.15.36");
       expect(readManifest(fixture.root, "projects").version).toBe("0.1.133");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("CLI --apply resolves the configured changelog when the target has no node_modules", () => {
+    const fixture = createFixture({ linkNodeModules: false });
+    try {
+      const before = readBytes(fixture.root, [
+        ".changeset/unselected-release.md",
+        "apps/events/CHANGELOG.md",
+        "apps/events/package.json",
+        "apps/loops/CHANGELOG.md",
+        "apps/loops/package.json",
+        "bun.lock",
+        "package.json",
+      ]);
+
+      const result = Bun.spawnSync(
+        changesetsCandidateCliArgs(fixture.root, true),
+        {
+          cwd: REPO_ROOT,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+
+      if (result.exitCode !== 0) {
+        throw new Error(result.stdout.toString());
+      }
+      expect(result.exitCode).toBe(0);
+      const report = JSON.parse(result.stdout.toString()) as {
+        mode: string;
+        plannedPaths: string[];
+        touchedPaths: string[];
+      };
+      expect(report.mode).toBe("apply");
+      expect(report.plannedPaths).toEqual(EXPECTED_PATHS);
+      expect(report.touchedPaths).toEqual(EXPECTED_PATHS);
+      expectBytesUnchanged(fixture.root, before);
     } finally {
       fixture.cleanup();
     }
