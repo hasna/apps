@@ -1673,7 +1673,7 @@
     },
     "apps/snapshots": {
       "name": "@hasna/snapshots",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "bin": {
         "snapshots": "dist/cli/index.js",
         "snapshots-agent": "dist/agent/index.js",
