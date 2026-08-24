@@ -37,16 +37,18 @@ describe("thread identity", () => {
     expect(newThreadId(A, B)).toBe(newThreadId(B, A));
   });
 
-  test("thread key is collision-free when agent names contain the separator (REGRESSION: P1 review finding)", () => {
-    // `a`/`b__c` and `a__b`/`c` must be two different threads. The old
-    // `sort().join("__")` encoding collapsed both to `a__b__c`, merging
-    // unrelated DM histories and delivery state.
-    const pair1 = newThreadId("a", "b__c");
-    const pair2 = newThreadId("a__b", "c");
-    expect(pair1).not.toBe(pair2);
-    // And each pair still keys to exactly one thread regardless of side.
-    expect(newThreadId("a", "b__c")).toBe(newThreadId("b__c", "a"));
-    expect(newThreadId("a__b", "c")).toBe(newThreadId("c", "a__b"));
+  test("thread key stays format-stable and collision-free via the name constraint (REGRESSION: review P1s)", async () => {
+    const { service } = testService();
+    // Format stability: the thread id is the legacy `t_<a>__<b>` (sorted), so
+    // threads already stored under that encoding keep resolving — a format
+    // change would split existing histories (cycle-1 re-review P1).
+    expect(newThreadId("augustus", "silvanus")).toBe("t_augustus__silvanus");
+    // Collision freedom: the `a`/`b__c` vs `a__b`/`c` collision class is
+    // eliminated by rejecting names containing the separator.
+    expect(() => service.registerAgent("a__b")).toThrow(/may not contain "__"/);
+    await expect(
+      service.send({ from_agent: "a", to_agent: "b__c", content: "hi" }),
+    ).rejects.toThrow(/may not contain "__"/);
   });
 });
 

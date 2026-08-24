@@ -74,14 +74,16 @@ export interface MessagesStore {
  * Canonical, order-independent, collision-free thread key for a pair of
  * agents. "augustus" <-> "silvanus" is the same thread from either side.
  *
- * The encoding is length-prefixed (`<len>:<name>_<len>:<name>`) so agent
- * names that themselves contain the separator cannot collide: without the
- * lengths, `a`/`b__c` and `a__b`/`c` would both key to `a__b__c` and merge
- * two unrelated DM histories.
+ * The format is the legacy `t_<a>__<b>` (sorted) — changing it would split
+ * threads already stored under the old encoding, so it is stable. Collision
+ * freedom comes from the name constraint instead: agent names may not contain
+ * the `__` separator (enforced in normalizeAgentName), so `a`/`b__c` and
+ * `a__b`/`c` cannot both be valid name pairs and the join is injective on
+ * the valid domain.
  */
 export function threadKeyFor(agentA: string, agentB: string): string {
   const [a, b] = [agentA, agentB].sort();
-  return `${a.length}:${a}_${b.length}:${b}`;
+  return `${a}__${b}`;
 }
 
 export function newThreadId(agentA: string, agentB: string): string {
@@ -89,7 +91,15 @@ export function newThreadId(agentA: string, agentB: string): string {
 }
 
 function normalizeAgentName(name: string): string {
-  return name.trim().toLowerCase();
+  const normalized = name.trim().toLowerCase();
+  // The thread key joins the sorted pair with "__"; a name containing the
+  // separator would make `a`/`b__c` and `a__b`/`c` collide on one thread and
+  // merge unrelated DM histories. Rejecting the separator keeps the legacy
+  // thread-id format stable (no migration) AND collision-free.
+  if (normalized.includes("__")) {
+    throw new Error(`agent name may not contain "__": ${name}`);
+  }
+  return normalized;
 }
 
 export class MessagesService {
