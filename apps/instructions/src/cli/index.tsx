@@ -2790,7 +2790,12 @@ providerContextCmd
         if (resolution.entry) {
           console.log(chalk.green("✓") + ` provider: ${chalk.bold(resolution.entry.provider)} (${resolution.entry.wireProtocol})`);
         } else {
-          console.log(chalk.yellow("!") + ` no registered provider for endpoint ${rawEndpoint || "(unset)"} — using invariant fragment`);
+          // Never echo the raw endpoint here: a rejected endpoint may carry embedded
+          // credentials (user:pass@...), and stdout persists into the transcript.
+          const banner = rawEndpoint && !resolution.reason
+            ? ` no registered provider for endpoint ${rawEndpoint} — using invariant fragment`
+            : (resolution.reason ?? " no registered provider — using invariant fragment");
+          console.log(chalk.yellow("!") + banner);
         }
         console.log(chalk.cyan("fragment:") + ` ${resolution.fragmentPath}`);
         if (resolution.reason) console.log(chalk.dim(resolution.reason));
