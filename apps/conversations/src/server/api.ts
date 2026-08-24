@@ -49,6 +49,14 @@ import {
   type ProjectMessageLinkageRow,
 } from "../lib/project-message-linkage.js";
 import { CHANNEL_MERGE_RECEIPTS_TABLE, stableChannelMergeHash } from "../lib/channel-merge.js";
+import {
+  buildConversationEventEnvelope,
+  CONTENT_PREVIEW_CHARS,
+  CONVERSATIONS_SOURCE,
+  MESSAGE_CREATED_TYPE,
+  TASK_CREATED_TYPE,
+  TASK_UPDATED_TYPE,
+} from "../lib/events-bridge.js";
 import type {
   ProjectMessageLinkageHash,
   ProjectMessageLinkageReceipt,
@@ -1239,6 +1247,23 @@ async function logTaskActivity(client: TypedQueryClient, taskId: number, agent: 
     `INSERT INTO task_activity (task_id, agent, action, detail) VALUES ($1,$2,$3,$4)`,
     [taskId, agent, action, detail ?? null],
   );
+}
+
+/** Task transition detail for the Conversations→Events outbox envelope. */
+function transitionDetailFor(
+  action: string,
+  current: { status: string; priority: string } | null | undefined,
+  body: Record<string, unknown>,
+  requestedPriority: string | undefined,
+): string | null {
+  switch (action) {
+    case "complete": return str(body.evidence) ?? null;
+    case "cancel": return str(body.reason) ?? null;
+    case "block": return str(body.reason) ?? null;
+    case "assign": return str(body.assignee) ?? null;
+    case "priority": return `${current?.priority ?? ""} -> ${requestedPriority ?? ""}`;
+    default: return null;
+  }
 }
 
 function parseTaskRow(row: Record<string, unknown>): Record<string, unknown> {
@@ -2658,6 +2683,37 @@ async function handleV1(
       } else {
         inserted.attachments = null;
       }
+
+      // Atomic event capture in the SAME PG transaction as the message insert
+      // (webhook-delivery contract). Hosted emission originates on the server.
+      const envelope = buildConversationEventEnvelope({
+        id: `conversations:message:${messageUuid}:created`,
+        type: MESSAGE_CREATED_TYPE,
+        time: String(inserted.created_at),
+        subject: channelName ?? toAgent ?? undefined,
+        data: {
+          id: inserted.id,
+          uuid: inserted.uuid,
+          from: inserted.from_agent,
+          to: inserted.to_agent,
+          channel: inserted.channel,
+          project_id: inserted.project_id,
+          session_id: inserted.session_id,
+          priority: inserted.priority,
+          blocking: inserted.blocking,
+          reply_to: inserted.reply_to,
+          reply_to_uuid: replyParent?.uuid ?? null,
+          created_at: inserted.created_at,
+          content_preview: String(content ?? "").slice(0, CONTENT_PREVIEW_CHARS),
+        },
+        appEvent: { kind: "message.created" },
+      });
+      await tx.query(
+        `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
+         VALUES ($1,$2,$3,$4,$5,'pending',0)
+         ON CONFLICT (id) DO NOTHING`,
+        [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
+      );
       return inserted;
     });
     if (!row) return json({ error: "Message insert returned no row" }, 500);
@@ -3963,7 +4019,7 @@ async function handleTasks(
   method: string,
   req: Request,
   url: URL,
-  client: TypedQueryClient,
+  client: PoolQueryClient,
   agent: string | null,
 ): Promise<Response | null> {
   if (sub !== "tasks" && !sub.startsWith("tasks/")) return null;
@@ -3983,30 +4039,76 @@ async function handleTasks(
       : (typeof body.parent_id === "string" && /^\d+$/.test(body.parent_id) ? Number(body.parent_id) : null);
     const tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : null;
     const metadata = body.metadata && typeof body.metadata === "object" ? JSON.stringify(body.metadata) : null;
-    const inserted = await client.get<{ id: number }>(
-      `INSERT INTO tasks (uuid, subject, description, reporter, assignee, priority, project_id, channel, parent_id, tags, metadata, due_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-      [uuid, subject, str(body.description) ?? null, reporter, str(body.assignee) ?? null, priority,
-       str(body.project_id) ?? null, channel, parentId, tags, metadata, str(body.due_at) ?? null],
-    );
-    const taskId = Number(inserted!.id);
     const dependsOn = Array.isArray(body.depends_on) ? (body.depends_on as unknown[]).map(Number).filter((n) => Number.isFinite(n)) : [];
     if (dependsOn.length) {
-      const resolved: number[] = [];
       for (const depId of dependsOn) {
         const exists = await client.get(`SELECT id FROM tasks WHERE id = $1`, [depId]);
         if (!exists) return json({ error: `Dependency task #${depId} not found` }, 400);
-        await client.query(`INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [taskId, depId]);
-        resolved.push(depId);
       }
-      await client.query(`UPDATE tasks SET depends_on = $1 WHERE id = $2`, [JSON.stringify(resolved), taskId]);
-      const incomplete = await client.get(
-        `SELECT 1 FROM task_dependencies td JOIN tasks t ON t.id = td.depends_on_id WHERE td.task_id = $1 AND t.status <> 'completed' LIMIT 1`,
-        [taskId],
-      );
-      if (incomplete) await client.query(`UPDATE tasks SET status = 'blocked' WHERE id = $1`, [taskId]);
     }
-    await logTaskActivity(client, taskId, reporter, "created");
+    const taskId = await client.transaction(async (tx) => {
+      const inserted = await tx.get<{ id: number }>(
+        `INSERT INTO tasks (uuid, subject, description, reporter, assignee, priority, project_id, channel, parent_id, tags, metadata, due_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        [uuid, subject, str(body.description) ?? null, reporter, str(body.assignee) ?? null, priority,
+         str(body.project_id) ?? null, channel, parentId, tags, metadata, str(body.due_at) ?? null],
+      );
+      const createdId = Number(inserted!.id);
+      if (dependsOn.length) {
+        const resolved: number[] = [];
+        for (const depId of dependsOn) {
+          await tx.query(`INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [createdId, depId]);
+          resolved.push(depId);
+        }
+        await tx.query(`UPDATE tasks SET depends_on = $1 WHERE id = $2`, [JSON.stringify(resolved), createdId]);
+        const incomplete = await tx.get(
+          `SELECT 1 FROM task_dependencies td JOIN tasks t ON t.id = td.depends_on_id WHERE td.task_id = $1 AND t.status <> 'completed' LIMIT 1`,
+          [createdId],
+        );
+        if (incomplete) await tx.query(`UPDATE tasks SET status = 'blocked' WHERE id = $1`, [createdId]);
+      }
+      await logTaskActivity(tx, createdId, reporter, "created");
+
+      // Atomic event capture in the SAME PG transaction as the task INSERT.
+      const created = await tx.get<{
+        id: number; uuid: string; subject: string; status: string; priority: string;
+        assignee: string | null; reporter: string; project_id: string | null; created_at: string;
+      }>(
+        `SELECT id, uuid, subject, status, priority, assignee, reporter, project_id, created_at
+         FROM tasks WHERE id = $1`,
+        [createdId],
+      );
+      if (created) {
+        const transitionUuid = randomUUID();
+        const envelope = buildConversationEventEnvelope({
+          id: `conversations:task:${created.uuid}:activity:${transitionUuid}`,
+          type: TASK_CREATED_TYPE,
+          time: String(created.created_at),
+          subject: created.subject,
+          data: {
+            task_id: created.id,
+            task_uuid: created.uuid,
+            subject: created.subject,
+            action: "created",
+            status: created.status,
+            priority: created.priority,
+            assignee: created.assignee,
+            reporter: created.reporter,
+            project_id: created.project_id,
+            created_at: created.created_at,
+            transition_uuid: transitionUuid,
+          },
+          appEvent: { kind: "task.created" },
+        });
+        await tx.query(
+          `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
+           VALUES ($1,$2,$3,$4,$5,'pending',0)
+           ON CONFLICT (id) DO NOTHING`,
+          [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
+        );
+      }
+      return createdId;
+    });
     return json({ task: await getEnrichedTask(client, taskId) }, 201);
   }
 
@@ -4279,59 +4381,101 @@ async function handleTasks(
     const who = str(body.agent) ?? agent ?? undefined;
     const current = await client.get<{ status: string; priority: string; reporter: string }>(`SELECT status, priority, reporter FROM tasks WHERE id = $1`, [id]);
     const actor = who ?? current?.reporter ?? "";
-    switch (action) {
-      case "start": {
-        const incomplete = await client.many<{ depends_on_id: number; subject: string; status: string }>(
-          `SELECT td.depends_on_id, t.subject, t.status FROM task_dependencies td JOIN tasks t ON t.id = td.depends_on_id WHERE td.task_id = $1 AND t.status <> 'completed'`,
-          [id],
-        );
-        if (incomplete.length > 0) {
-          return json({ error: `Cannot start: blocked by ${incomplete.length} incomplete task(s): ${incomplete.map((d) => `#${d.depends_on_id} "${d.subject}" (${d.status})`).join(", ")}` }, 400);
-        }
-        await client.query(`UPDATE tasks SET status = 'in_progress', started_at = $1 WHERE id = $2`, [now(), id]);
-        await logTaskActivity(client, id, actor, "started");
-        break;
-      }
-      case "complete":
-        await client.query(`UPDATE tasks SET status = 'completed', completed_at = $1 WHERE id = $2`, [now(), id]);
-        await logTaskActivity(client, id, actor, "completed", str(body.evidence));
-        await unblockDependents(client, id);
-        break;
-      case "cancel":
-        await client.query(`UPDATE tasks SET status = 'cancelled', cancelled_at = $1 WHERE id = $2`, [now(), id]);
-        await logTaskActivity(client, id, actor, "cancelled", str(body.reason));
-        break;
-      case "block":
-        await client.query(`UPDATE tasks SET status = 'blocked' WHERE id = $1`, [id]);
-        await logTaskActivity(client, id, actor, "blocked", str(body.reason));
-        break;
-      case "unblock": {
-        const incomplete = await client.get(
-          `SELECT 1 FROM task_dependencies td JOIN tasks t ON t.id = td.depends_on_id WHERE td.task_id = $1 AND t.status <> 'completed' LIMIT 1`,
-          [id],
-        );
-        await client.query(`UPDATE tasks SET status = $1 WHERE id = $2`, [incomplete ? "blocked" : "pending", id]);
-        await logTaskActivity(client, id, actor, "unblocked");
-        break;
-      }
-      case "reopen":
-        await client.query(`UPDATE tasks SET status = 'pending', completed_at = NULL, cancelled_at = NULL WHERE id = $1`, [id]);
-        await logTaskActivity(client, id, actor, "reopened");
-        break;
-      case "assign": {
-        const assignee = str(body.assignee);
-        await client.query(`UPDATE tasks SET assignee = $1 WHERE id = $2`, [assignee ?? null, id]);
-        await logTaskActivity(client, id, actor, "assigned", assignee ?? null);
-        break;
-      }
-      case "priority": {
-        const priority = str(body.priority);
-        if (!priority) return json({ error: "priority is required" }, 400);
-        await client.query(`UPDATE tasks SET priority = $1 WHERE id = $2`, [priority, id]);
-        await logTaskActivity(client, id, actor, "priority_changed", `${current?.priority} -> ${priority}`);
-        break;
+    const requestedPriority = str(body.priority);
+    if (action === "priority" && !requestedPriority) return json({ error: "priority is required" }, 400);
+    if (action === "start") {
+      const incomplete = await client.many<{ depends_on_id: number; subject: string; status: string }>(
+        `SELECT td.depends_on_id, t.subject, t.status FROM task_dependencies td JOIN tasks t ON t.id = td.depends_on_id WHERE td.task_id = $1 AND t.status <> 'completed'`,
+        [id],
+      );
+      if (incomplete.length > 0) {
+        return json({ error: `Cannot start: blocked by ${incomplete.length} incomplete task(s): ${incomplete.map((d) => `#${d.depends_on_id} "${d.subject}" (${d.status})`).join(", ")}` }, 400);
       }
     }
+    const transitionUuid = randomUUID();
+    await client.transaction(async (tx) => {
+      switch (action) {
+        case "start":
+          await tx.query(`UPDATE tasks SET status = 'in_progress', started_at = $1 WHERE id = $2`, [now(), id]);
+          await logTaskActivity(tx, id, actor, "started");
+          break;
+        case "complete":
+          await tx.query(`UPDATE tasks SET status = 'completed', completed_at = $1 WHERE id = $2`, [now(), id]);
+          await logTaskActivity(tx, id, actor, "completed", str(body.evidence));
+          await unblockDependents(tx, id);
+          break;
+        case "cancel":
+          await tx.query(`UPDATE tasks SET status = 'cancelled', cancelled_at = $1 WHERE id = $2`, [now(), id]);
+          await logTaskActivity(tx, id, actor, "cancelled", str(body.reason));
+          break;
+        case "block":
+          await tx.query(`UPDATE tasks SET status = 'blocked' WHERE id = $1`, [id]);
+          await logTaskActivity(tx, id, actor, "blocked", str(body.reason));
+          break;
+        case "unblock": {
+          const incomplete = await tx.get(
+            `SELECT 1 FROM task_dependencies td JOIN tasks t ON t.id = td.depends_on_id WHERE td.task_id = $1 AND t.status <> 'completed' LIMIT 1`,
+            [id],
+          );
+          await tx.query(`UPDATE tasks SET status = $1 WHERE id = $2`, [incomplete ? "blocked" : "pending", id]);
+          await logTaskActivity(tx, id, actor, "unblocked");
+          break;
+        }
+        case "reopen":
+          await tx.query(`UPDATE tasks SET status = 'pending', completed_at = NULL, cancelled_at = NULL WHERE id = $1`, [id]);
+          await logTaskActivity(tx, id, actor, "reopened");
+          break;
+        case "assign": {
+          const assignee = str(body.assignee);
+          await tx.query(`UPDATE tasks SET assignee = $1 WHERE id = $2`, [assignee ?? null, id]);
+          await logTaskActivity(tx, id, actor, "assigned", assignee ?? null);
+          break;
+        }
+        case "priority": {
+          await tx.query(`UPDATE tasks SET priority = $1 WHERE id = $2`, [requestedPriority, id]);
+          await logTaskActivity(tx, id, actor, "priority_changed", `${current?.priority} -> ${requestedPriority}`);
+          break;
+        }
+      }
+
+      // Atomic event capture in the SAME PG transaction as the transition.
+      const updated = await tx.get<{
+        id: number; uuid: string; subject: string; status: string; priority: string;
+        assignee: string | null; project_id: string | null;
+      }>(
+        `SELECT id, uuid, subject, status, priority, assignee, project_id FROM tasks WHERE id = $1`,
+        [id],
+      );
+      if (updated) {
+        const envelope = buildConversationEventEnvelope({
+          id: `conversations:task:${updated.uuid}:activity:${transitionUuid}`,
+          type: TASK_UPDATED_TYPE,
+          time: now(),
+          subject: updated.subject,
+          data: {
+            task_id: updated.id,
+            task_uuid: updated.uuid,
+            subject: updated.subject,
+            action,
+            old_status: current?.status ?? "",
+            new_status: updated.status,
+            agent: actor,
+            detail: transitionDetailFor(action, current, body, requestedPriority),
+            priority: updated.priority,
+            assignee: updated.assignee,
+            project_id: updated.project_id,
+            transition_uuid: transitionUuid,
+          },
+          appEvent: { kind: "task.updated", action },
+        });
+        await tx.query(
+          `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
+           VALUES ($1,$2,$3,$4,$5,'pending',0)
+           ON CONFLICT (id) DO NOTHING`,
+          [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
+        );
+      }
+    });
     return json({ task: await getEnrichedTask(client, id) });
   }
 

@@ -73,6 +73,19 @@ program
 // ---- brains ----
 registerBrainsCommand(program);
 
+// ---- events-drain: Conversations→Events source outbox worker (local path) ----
+program
+  .command("events-drain")
+  .description("Drain the Conversations→Events source outbox into the Events durable spool inbox")
+  .option("--limit <n>", "Maximum pending rows to transport per run", parseInt)
+  .action(async (opts) => {
+    const { getDb } = await import("../lib/db.js");
+    const { drainConversationEventOutbox } = await import("../lib/events-bridge.js");
+    const db = getDb();
+    const result = await drainConversationEventOutbox(db, { limit: Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined });
+    console.log(`events-drain: scanned ${result.scanned}, transported ${result.transported}, skipped ${result.skipped}, spooled ${result.spooled}`);
+  });
+
 // ---- default: TUI ----
 // The interactive TUI reads/writes the on-box SQLite domain helpers directly
 // (real-time polling). That is the local Store's own backing, so it is correct

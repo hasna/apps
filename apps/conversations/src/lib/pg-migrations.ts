@@ -1164,4 +1164,24 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (11) ON CONFLICT DO NOTHING;
   `,
+  // Migration 12: Conversations → Events source outbox (webhook-delivery
+  // contract). Written in the SAME transaction as the message/task mutation;
+  // drained by the outbox worker into the Events durable substrate. Hosted
+  // emission originates on the server, never ApiStore.sendMessage.
+  `
+  CREATE TABLE IF NOT EXISTS conversations_event_outbox (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    type TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'spooled', 'delivered', 'dead')),
+    attempts INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_conversations_event_outbox_pending
+    ON conversations_event_outbox(status, created_at);
+
+  INSERT INTO _migrations (id) VALUES (12) ON CONFLICT DO NOTHING;
+  `,
 ];
