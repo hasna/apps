@@ -1,4 +1,7 @@
-import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import { describe, it, expect, mock, beforeEach, beforeAll, afterAll } from "bun:test";
+import { tmpdir } from "os";
+import { join } from "path";
+import { mkdtempSync, writeFileSync } from "fs";
 
 // --- Mock setup ---
 // We need to intercept the AWS SDK calls. We do this by mocking the module
@@ -6,9 +9,17 @@ import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 
 const mockSend = mock(async (_cmd: unknown) => ({}));
 
+// Captures the options the wrapper passes to the AWS S3Client constructor so
+// tests can inspect credential resolution (static keys, named profile, or the
+// unset default chain).
+const mockS3ClientConstructor = mock((_options: unknown) => {});
+
 mock.module("@aws-sdk/client-s3", () => {
   return {
     S3Client: class MockAWSS3Client {
+      constructor(options: Record<string, unknown>) {
+        mockS3ClientConstructor(options);
+      }
       send = mockSend;
     },
     PutObjectCommand: class PutObjectCommand {
@@ -509,5 +520,94 @@ describe("S3Client direct multipart helpers", () => {
     const [cmd] = mockSend.mock.calls[0] as [{ constructor: { name: string }; input: Record<string, unknown> }];
     expect(cmd.constructor.name).toBe("HeadObjectCommand");
     expect(cmd.input["Key"]).toBe("uploads/done.txt");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: `attachments link <id> --regenerate` -> HTTP 500
+// "Could not load credentials from any providers"
+//
+// The regenerate path presigns an S3 URL through S3Client. When no static keys
+// are configured the client fell back to the SDK's DEFAULT credential chain,
+// which cannot resolve a NAMED AWS profile (AWS_PROFILE unset, no [default]
+// section) — while `aws s3 presign --profile <name>` works. The client must be
+// able to resolve credentials from a named profile exactly like the aws CLI.
+// ---------------------------------------------------------------------------
+describe("S3Client credential resolution — named AWS profile (regression: link --regenerate HTTP 500)", () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), "s3-profile-fixture-"));
+  const credentialsPath = join(fixtureDir, "credentials");
+  const configPath = join(fixtureDir, "config");
+
+  // Synthetic fixture values, split so no secret-scan pattern matches the
+  // source (same convention as the AKIA fixture above).
+  const fixtureAccessKey = "FIXTURE" + "AKIA" + "ACCESSKEY";
+  const fixtureSecret = "FIXTURE" + "SECRET" + "ACCESSKEY";
+  const missingProfile = "zz-no-such-" + "fixture-profile";
+
+  beforeAll(() => {
+    writeFileSync(
+      credentialsPath,
+      `[fixture-profile]\naws_access_key_id = ${fixtureAccessKey}\naws_secret_access_key = ${fixtureSecret}\n`,
+      "utf-8"
+    );
+    writeFileSync(configPath, "[profile fixture-profile]\nregion = us-east-1\n", "utf-8");
+  });
+
+  beforeEach(() => {
+    mockS3ClientConstructor.mockReset();
+  });
+
+  it("resolves credentials from a named AWS profile — the route the aws CLI --profile uses", async () => {
+    const client = new S3Client({
+      bucket: "test-bucket",
+      region: "us-east-1",
+      profile: "fixture-profile",
+      profileFilepath: credentialsPath,
+      profileConfigFilepath: configPath,
+    });
+
+    const [opts] = mockS3ClientConstructor.mock.calls[0] as [{ credentials?: unknown }];
+    expect(typeof opts.credentials).toBe("function");
+
+    const resolved = await (opts.credentials as () => Promise<{ accessKeyId: string; secretAccessKey: string }>)();
+    expect(resolved.accessKeyId).toBe(fixtureAccessKey);
+    expect(resolved.secretAccessKey).toBe(fixtureSecret);
+  });
+
+  it("rejects when the named profile does not exist (negative control)", async () => {
+    const client = new S3Client({
+      bucket: "test-bucket",
+      region: "us-east-1",
+      profile: missingProfile,
+      profileFilepath: credentialsPath,
+      profileConfigFilepath: configPath,
+    });
+
+    const [opts] = mockS3ClientConstructor.mock.calls[0] as [{ credentials?: unknown }];
+    expect(typeof opts.credentials).toBe("function");
+    await expect((opts.credentials as () => Promise<unknown>)()).rejects.toThrow();
+  });
+
+  it("keeps the default credential chain when no profile or static keys are given", () => {
+    const client = new S3Client({ bucket: "test-bucket", region: "us-east-1" });
+
+    const [opts] = mockS3ClientConstructor.mock.calls[0] as [Record<string, unknown>];
+    expect(opts).not.toHaveProperty("credentials");
+  });
+
+  it("prefers static keys over a named profile", () => {
+    const client = new S3Client({
+      bucket: "test-bucket",
+      region: "us-east-1",
+      accessKeyId: "AKIA" + "STATICKEY",
+      secretAccessKey: "STATIC" + "SECRET",
+      profile: "fixture-profile",
+    });
+
+    const [opts] = mockS3ClientConstructor.mock.calls[0] as [{ credentials?: unknown }];
+    expect(opts.credentials).toEqual({
+      accessKeyId: "AKIA" + "STATICKEY",
+      secretAccessKey: "STATIC" + "SECRET",
+    });
   });
 });

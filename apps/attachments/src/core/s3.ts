@@ -11,6 +11,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { fromIni } from "@aws-sdk/credential-provider-ini";
 import { createReadStream, createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
@@ -20,6 +21,18 @@ export interface S3Config {
   region: string;
   accessKeyId?: string;
   secretAccessKey?: string;
+  /**
+   * Named AWS profile (shared credentials / config files) to resolve
+   * credentials from, mirroring `aws --profile <name>`. Used when no static
+   * keys are configured. Without a profile the SDK's default credential chain
+   * runs (env vars, default profile, ECS/IMDS role, ...), which cannot select
+   * a non-default profile.
+   */
+  profile?: string;
+  /** Shared credentials file override (tests / non-standard layouts). */
+  profileFilepath?: string;
+  /** Shared config file override (tests / non-standard layouts). */
+  profileConfigFilepath?: string;
   endpoint?: string; // for custom S3-compatible storage / localstack
 }
 
@@ -71,7 +84,20 @@ export class S3Client {
               secretAccessKey: config.secretAccessKey,
             },
           }
-        : {}),
+        : config.profile
+          ? {
+              // Resolve from the named AWS profile exactly like
+              // `aws --profile <name>` — the SDK default chain cannot select a
+              // non-default profile, which left every S3-credential path (e.g.
+              // `link --regenerate` presigning) dead with "Could not load
+              // credentials from any providers" on profile-only hosts.
+              credentials: fromIni({
+                profile: config.profile,
+                ...(config.profileFilepath !== undefined ? { filepath: config.profileFilepath } : {}),
+                ...(config.profileConfigFilepath !== undefined ? { configFilepath: config.profileConfigFilepath } : {}),
+              }),
+            }
+          : {}),
       ...(config.endpoint !== undefined ? { endpoint: config.endpoint, forcePathStyle: true } : {}),
     });
   }

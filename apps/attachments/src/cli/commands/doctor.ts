@@ -4,6 +4,7 @@ import {
   S3Client as AWSS3Client,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
+import { fromIni } from "@aws-sdk/credential-provider-ini";
 import { getConfig, hasS3Config, CONFIG_PATH } from "../../core/config";
 import { resolveStore } from "../../core/store";
 
@@ -34,10 +35,14 @@ export function checkConfigFile(): CheckResult {
 
 export function checkS3Configured(): CheckResult {
   const config = getConfig();
-  const { bucket, region, accessKeyId, secretAccessKey } = config.s3;
+  const { bucket, region, accessKeyId, secretAccessKey, profile } = config.s3;
   const configured = hasS3Config(config);
   const credentialSource =
-    accessKeyId && secretAccessKey ? "static credentials" : "default credential chain";
+    accessKeyId && secretAccessKey
+      ? "static credentials"
+      : profile
+        ? `named AWS profile "${profile}"`
+        : "default credential chain";
   return {
     label: "S3",
     status: configured ? "ok" : "fail",
@@ -49,7 +54,7 @@ export function checkS3Configured(): CheckResult {
 
 export async function checkS3Connection(): Promise<CheckResult> {
   const config = getConfig();
-  const { bucket, region, accessKeyId, secretAccessKey, endpoint } = config.s3;
+  const { bucket, region, accessKeyId, secretAccessKey, profile, endpoint } = config.s3;
 
   if (!hasS3Config(config)) {
     return {
@@ -63,7 +68,9 @@ export async function checkS3Connection(): Promise<CheckResult> {
     const staticCredentials =
       accessKeyId && secretAccessKey
         ? { credentials: { accessKeyId, secretAccessKey } }
-        : {};
+        : profile
+          ? { credentials: fromIni({ profile }) }
+          : {};
     const s3 = new AWSS3Client({
       region,
       ...staticCredentials,

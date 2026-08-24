@@ -8,6 +8,12 @@ export interface AttachmentsConfig {
     region: string;
     accessKeyId: string;
     secretAccessKey: string;
+    /**
+     * Named AWS profile (shared credentials / config files) to resolve S3
+     * credentials from when no static keys are configured. Mirrors
+     * `aws --profile <name>`, which the SDK default chain cannot express.
+     */
+    profile?: string;
     endpoint?: string;
   };
   storage: {
@@ -178,7 +184,8 @@ export function validateS3Config(config?: AttachmentsConfig): void {
   if (missing.length > 0) {
     throw new Error(
       `S3 configuration incomplete. Missing: ${missing.join(", ")}. ` +
-        `Run 'attachments config set --bucket <bucket> --region <region>' and optionally static access keys.`
+        `Run 'attachments config set --bucket <bucket> --region <region>' and optionally static access keys ` +
+        `or an AWS profile ('attachments config set --profile <name>').`
     );
   }
 }
