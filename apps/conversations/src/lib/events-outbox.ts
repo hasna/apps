@@ -73,7 +73,7 @@ export function listPendingEventOutbox(db: EventOutboxDatabase, limit: number): 
     SELECT id, source, type, envelope_json, created_at, status, attempts
     FROM conversations_event_outbox
     WHERE status = 'pending'
-    ORDER BY created_at, id
+    ORDER BY created_at, rowid
     LIMIT ?
   `).all(limit) as Array<Record<string, unknown>>;
   return rows.map((row) => ({
