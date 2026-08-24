@@ -1,6 +1,6 @@
 # @hasna/connect-vercel-api-platform
 
-TypeScript connector and CLI for the [Vercel Api Platform](https://api.vercelapiplatform.com/v1) REST API.
+TypeScript connector and CLI for the [Vercel Api Platform](configured.example.com/v1) REST API.
 
 > **Note:** This is distinct from `@hasna/connect-vercel`, which targets `api.vercel.com` for Vercel deployments.
 
@@ -15,7 +15,7 @@ bun add @hasna/connect-vercel-api-platform
 ```bash
 export VERCEL_API_PLATFORM_API_KEY=your-api-key
 # optional
-export VERCEL_API_PLATFORM_BASE_URL=https://api.vercelapiplatform.com/v1
+export VERCEL_API_PLATFORM_BASE_URL=https://configured.example.com/v1
 ```
 
 Or use the CLI profile/config commands.

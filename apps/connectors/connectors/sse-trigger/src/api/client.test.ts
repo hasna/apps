@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { SseTriggerClient } from './client';
 import { SseTrigger } from './index';
-import { DEFAULT_BASE_URL } from './client';
 
 const realFetch = globalThis.fetch;
 
@@ -42,26 +42,26 @@ afterEach(() => {
 describe('SseTriggerClient', () => {
   test('listStreams sends Bearer auth to /streams', async () => {
     const recorded = installFetch(() => ({ streams: [] }));
-    const client = new SseTrigger({ apiKey: 'sse-trigger-key' });
+    const client = new SseTrigger({ apiKey: 'sse-trigger-key', baseUrl: 'https://configured.example.com/v1' });
     await client.listStreams();
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/streams`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/streams`);
     expect(recorded[0].method).toBe('GET');
     expect(new Headers(recorded[0].headers).get('Authorization')).toBe('Bearer sse-trigger-key');
   });
 
   test('getStream encodes stream id in URL path', async () => {
     const recorded = installFetch(() => ({ id: 'item-1' }));
-    const client = new SseTrigger({ apiKey: 'sse-trigger-key' });
+    const client = new SseTrigger({ apiKey: 'sse-trigger-key', baseUrl: 'https://configured.example.com/v1' });
     await client.getStream('item-1');
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/streams/item-1`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/streams/item-1`);
     expect(new Headers(recorded[0].headers).get('Authorization')).toBe('Bearer sse-trigger-key');
   });
 
   test('createStream POSTs JSON body to /streams', async () => {
     const recorded = installFetch(() => ({ id: 'new-stream' }));
-    const client = new SseTrigger({ apiKey: 'sse-trigger-key' });
+    const client = new SseTrigger({ apiKey: 'sse-trigger-key', baseUrl: 'https://configured.example.com/v1' });
     await client.createStream({ name: 'workflow' });
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/streams`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/streams`);
     expect(recorded[0].method).toBe('POST');
     expect(JSON.parse(recorded[0].body ?? '{}')).toEqual({ name: 'workflow' });
   });
@@ -74,6 +74,10 @@ describe('SseTriggerClient', () => {
   });
 
   test('requires API key', () => {
-    expect(() => new SseTrigger({ apiKey: '' })).toThrow('API key is required');
+    expect(() => new SseTrigger({ apiKey: '', baseUrl: 'https://configured.example.com/v1' })).toThrow('API key is required');
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new SseTriggerClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

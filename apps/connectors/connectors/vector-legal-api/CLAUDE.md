@@ -19,7 +19,7 @@ bun run dev -- --help # Show CLI help
 
 ## API Details
 
-- **Base URL**: `https://api.vector-legal.com/v1` (configurable via `VECTOR_LEGAL_API_BASE_URL`)
+- **Base URL**: no default (must be configured) (configurable via `VECTOR_LEGAL_API_BASE_URL`)
 - **Auth**: Bearer token: `Authorization: Bearer <API_KEY>` (api_key credential field)
 
 ## API Resources

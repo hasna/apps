@@ -1,6 +1,6 @@
 export { TogetherApiPlatform } from './api';
 export * from './types';
-export { TogetherApiPlatformClient, DEFAULT_BASE_URL } from './api';
+export { TogetherApiPlatformClient } from './api';
 
 export {
   getApiKey,

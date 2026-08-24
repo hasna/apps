@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Connector, ConnectorClient, DEFAULT_BASE_URL } from './index';
+import { Connector, ConnectorClient } from './index';
 
 const realFetch = globalThis.fetch;
 
@@ -48,20 +48,19 @@ describe('Velum Data Quality API client', () => {
     expect(() => new ConnectorClient({})).toThrow('API key');
   });
 
-  test('uses default base URL', () => {
-    const client = new ConnectorClient({ apiKey: 'test-key' });
-    expect(client.getBaseUrl()).toBe(DEFAULT_BASE_URL);
+    test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 
   test('listChecks sends Bearer auth to GET /checks', async () => {
     const recorded = installFetch((req) => {
       expect(req.method).toBe('GET');
-      expect(req.url).toBe(`${DEFAULT_BASE_URL}/checks`);
+      expect(req.url).toBe(`https://configured.example.com/v1/checks`);
       expect(req.headers.authorization).toBe('Bearer velum-test-key');
       return { checks: [{ id: 'chk_1' }] };
     });
 
-    const connector = new Connector({ apiKey: 'velum-test-key' });
+    const connector = new Connector({ apiKey: 'velum-test-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.checks.list();
     expect(result).toEqual({ checks: [{ id: 'chk_1' }] });
     expect(recorded).toHaveLength(1);
@@ -70,11 +69,11 @@ describe('Velum Data Quality API client', () => {
   test('getCheck encodes check ID in path', async () => {
     const recorded = installFetch((req) => {
       expect(req.method).toBe('GET');
-      expect(req.url).toBe(`${DEFAULT_BASE_URL}/checks/check%2F123`);
+      expect(req.url).toBe(`https://configured.example.com/v1/checks/check%2F123`);
       return { id: 'check/123', status: 'active' };
     });
 
-    const connector = new Connector({ apiKey: 'velum-test-key' });
+    const connector = new Connector({ apiKey: 'velum-test-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.checks.get('check/123');
     expect(result).toEqual({ id: 'check/123', status: 'active' });
     expect(recorded).toHaveLength(1);
@@ -83,12 +82,12 @@ describe('Velum Data Quality API client', () => {
   test('createCheck POSTs JSON body to /checks', async () => {
     const recorded = installFetch((req) => {
       expect(req.method).toBe('POST');
-      expect(req.url).toBe(`${DEFAULT_BASE_URL}/checks`);
+      expect(req.url).toBe(`https://configured.example.com/v1/checks`);
       expect(req.body).toBe(JSON.stringify({ name: 'freshness' }));
       return { id: 'chk_new', name: 'freshness' };
     });
 
-    const connector = new Connector({ apiKey: 'velum-test-key' });
+    const connector = new Connector({ apiKey: 'velum-test-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.checks.create({ name: 'freshness' });
     expect(result).toEqual({ id: 'chk_new', name: 'freshness' });
     expect(recorded).toHaveLength(1);
@@ -97,11 +96,11 @@ describe('Velum Data Quality API client', () => {
   test('listEvents hits GET /events', async () => {
     const recorded = installFetch((req) => {
       expect(req.method).toBe('GET');
-      expect(req.url).toBe(`${DEFAULT_BASE_URL}/events`);
+      expect(req.url).toBe(`https://configured.example.com/v1/events`);
       return { events: [{ id: 'evt_1' }] };
     });
 
-    const connector = new Connector({ apiKey: 'velum-test-key' });
+    const connector = new Connector({ apiKey: 'velum-test-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.events.list();
     expect(result).toEqual({ events: [{ id: 'evt_1' }] });
     expect(recorded).toHaveLength(1);
@@ -110,12 +109,12 @@ describe('Velum Data Quality API client', () => {
   test('search POSTs to /search', async () => {
     const recorded = installFetch((req) => {
       expect(req.method).toBe('POST');
-      expect(req.url).toBe(`${DEFAULT_BASE_URL}/search`);
+      expect(req.url).toBe(`https://configured.example.com/v1/search`);
       expect(req.body).toBe(JSON.stringify({ query: 'failed' }));
       return { results: [] };
     });
 
-    const connector = new Connector({ apiKey: 'velum-test-key' });
+    const connector = new Connector({ apiKey: 'velum-test-key', baseUrl: 'https://configured.example.com/v1' });
     const result = await connector.search.search({ query: 'failed' });
     expect(result).toEqual({ results: [] });
     expect(recorded).toHaveLength(1);
@@ -124,11 +123,11 @@ describe('Velum Data Quality API client', () => {
   test('rawRequest supports custom path and method', async () => {
     const recorded = installFetch((req) => {
       expect(req.method).toBe('PATCH');
-      expect(req.url).toBe(`${DEFAULT_BASE_URL}/checks/chk_1`);
+      expect(req.url).toBe(`https://configured.example.com/v1/checks/chk_1`);
       return { ok: true };
     });
 
-    const connector = new Connector({ apiKey: 'velum-test-key' });
+    const connector = new Connector({ apiKey: 'velum-test-key', baseUrl: 'https://configured.example.com/v1' });
     await connector.rawRequest({ method: 'PATCH', path: '/checks/chk_1', body: { status: 'paused' } });
     expect(recorded).toHaveLength(1);
   });
@@ -141,6 +140,8 @@ describe('Velum Data Quality API client', () => {
 
     const connector = new Connector({
       apiKey: 'velum-test-key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2',
     });
     await connector.checks.list();

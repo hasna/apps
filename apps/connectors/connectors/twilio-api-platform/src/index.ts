@@ -1,4 +1,4 @@
-export { TwilioApiPlatform, TwilioApiPlatformClient, DEFAULT_BASE_URL } from './api';
+export { TwilioApiPlatform, TwilioApiPlatformClient } from './api';
 export * from './types';
 
 export {

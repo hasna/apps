@@ -15,7 +15,7 @@ Set credentials via environment variables or CLI profile:
 ```bash
 export STOP_AND_ERROR_API_KEY=your-api-key
 # optional
-export STOP_AND_ERROR_BASE_URL=https://api.stop-and-error.com/v1
+export STOP_AND_ERROR_BASE_URL=https://configured.example.com/v1
 ```
 
 Or use the CLI:

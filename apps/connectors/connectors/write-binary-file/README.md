@@ -1,6 +1,6 @@
 # connect-write-binary-file
 
-TypeScript connector and CLI for the [Write Binary File](https://api.write-binary-file.com) REST API.
+TypeScript connector and CLI for the [Write Binary File](configured.example.com/v1) REST API.
 
 ## Features
 

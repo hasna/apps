@@ -58,5 +58,5 @@ export class TogetherApiPlatform {
   }
 }
 
-export { TogetherApiPlatformClient, DEFAULT_BASE_URL } from './client';
+export { TogetherApiPlatformClient } from './client';
 export type { RequestOptions } from './client';

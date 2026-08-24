@@ -160,7 +160,7 @@ profileCmd
 
     console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
     info(`API Key: ${config.apiKey ? `${config.apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${config.baseUrl || chalk.gray('default (https://api.vector-legal.com/v1)')}`);
+    info(`Base URL: ${config.baseUrl || chalk.gray('none configured')}`);
   });
 
 // ============================================
@@ -197,7 +197,7 @@ configCmd
     console.log(chalk.bold(`Active Profile: ${profileName}`));
     info(`Config directory: ${getConfigDir()}`);
     info(`API Key: ${apiKey ? `${apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${baseUrl || chalk.gray('default (https://api.vector-legal.com/v1)')}`);
+    info(`Base URL: ${baseUrl || chalk.gray('none configured')}`);
   });
 
 configCmd

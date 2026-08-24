@@ -21,7 +21,7 @@ bun install
 ```bash
 export TOGETHER_API_PLATFORM_API_KEY=your-api-key
 # optional
-export TOGETHER_API_PLATFORM_BASE_URL=https://api.togetherapiplatform.com/v1
+export TOGETHER_API_PLATFORM_BASE_URL=https://configured.example.com/v1
 ```
 
 Or use the CLI profile/config commands:

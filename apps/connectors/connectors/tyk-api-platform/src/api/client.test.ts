@@ -1,5 +1,5 @@
 import { describe, it, expect, mock } from 'bun:test';
-import { TykApiPlatformClient, DEFAULT_BASE_URL } from './client';
+import { TykApiPlatformClient } from './client';
 import { TykApiPlatform } from './index';
 import { TykApiPlatformApiError } from '../types';
 
@@ -9,17 +9,18 @@ function restoreFetch(original: typeof globalThis.fetch) {
 
 describe('TykApiPlatformClient', () => {
   it('should require an API key', () => {
-    expect(() => new TykApiPlatformClient({ apiKey: '' })).toThrow('API key is required');
+    expect(() => new TykApiPlatformClient({ apiKey: '', baseUrl: 'https://configured.example.com/v1' })).toThrow('API key is required');
   });
 
-  it('should use default base URL', () => {
-    const client = new TykApiPlatformClient({ apiKey: 'test-key' });
-    expect(client.getBaseUrl()).toBe(DEFAULT_BASE_URL);
+  it('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new TykApiPlatformClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 
   it('should allow base URL override', () => {
     const client = new TykApiPlatformClient({
       apiKey: 'test-key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2/',
     });
     expect(client.getBaseUrl()).toBe('https://custom.example.com/v2');
@@ -39,14 +40,14 @@ describe('TykApiPlatformClient', () => {
       );
     }) as any;
 
-    const client = new TykApiPlatformClient({ apiKey: 'my-api-key' });
+    const client = new TykApiPlatformClient({ apiKey: 'my-api-key', baseUrl: 'https://configured.example.com/v1' });
     await client.get('/items');
 
     expect(capturedHeaders.Authorization).toBe('Bearer my-api-key');
     restoreFetch(originalFetch);
   });
 
-  it('should request GET /items on default base URL', async () => {
+  it('should request GET /items on the configured base URL', async () => {
     const originalFetch = globalThis.fetch;
     let capturedUrl = '';
 
@@ -60,10 +61,10 @@ describe('TykApiPlatformClient', () => {
       );
     }) as any;
 
-    const client = new TykApiPlatformClient({ apiKey: 'key' });
+    const client = new TykApiPlatformClient({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
     await client.get('/items');
 
-    expect(capturedUrl).toBe(`${DEFAULT_BASE_URL}/items`);
+    expect(capturedUrl).toBe(`https://configured.example.com/v1/items`);
     restoreFetch(originalFetch);
   });
 
@@ -81,10 +82,10 @@ describe('TykApiPlatformClient', () => {
       );
     }) as any;
 
-    const api = new TykApiPlatform({ apiKey: 'key' });
+    const api = new TykApiPlatform({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
     await api.getItem('a/b');
 
-    expect(capturedUrl).toBe(`${DEFAULT_BASE_URL}/items/a%2Fb`);
+    expect(capturedUrl).toBe(`https://configured.example.com/v1/items/a%2Fb`);
     restoreFetch(originalFetch);
   });
 
@@ -100,7 +101,7 @@ describe('TykApiPlatformClient', () => {
       )
     ) as any;
 
-    const client = new TykApiPlatformClient({ apiKey: 'bad-key' });
+    const client = new TykApiPlatformClient({ apiKey: 'bad-key', baseUrl: 'https://configured.example.com/v1' });
 
     try {
       await client.get('/items');
@@ -132,10 +133,10 @@ describe('TykApiPlatformClient', () => {
       );
     }) as any;
 
-    const api = new TykApiPlatform({ apiKey: 'key' });
+    const api = new TykApiPlatform({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
     await api.search({ query: 'gateway' });
 
-    expect(capturedUrl).toBe(`${DEFAULT_BASE_URL}/search`);
+    expect(capturedUrl).toBe(`https://configured.example.com/v1/search`);
     expect(capturedMethod).toBe('POST');
     expect(JSON.parse(capturedBody)).toEqual({ query: 'gateway' });
 
@@ -145,7 +146,7 @@ describe('TykApiPlatformClient', () => {
 
 describe('TykApiPlatform', () => {
   it('should expose underlying client', () => {
-    const api = new TykApiPlatform({ apiKey: 'key' });
+    const api = new TykApiPlatform({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
     expect(api.getClient()).toBeInstanceOf(TykApiPlatformClient);
   });
 });

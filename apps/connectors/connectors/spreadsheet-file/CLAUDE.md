@@ -33,7 +33,7 @@ Environment variables:
 
 ## API Details
 
-- **Base URL**: `https://api.spreadsheet-file.com/v1`
+- **Base URL**: no default (must be configured)
 - **Auth**: `Authorization: Bearer <api_key>`
 - **Endpoints**:
   - `GET /files` - List files
@@ -75,7 +75,7 @@ Profile JSON structure:
 ```json
 {
   "apiKey": "your-api-key",
-  "baseUrl": "https://api.spreadsheet-file.com/v1"
+  "baseUrl": "configured.example.com/v1"
 }
 ```
 

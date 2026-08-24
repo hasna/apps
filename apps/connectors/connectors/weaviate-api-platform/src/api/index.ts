@@ -56,4 +56,4 @@ export class Connector {
   }
 }
 
-export { ConnectorClient, DEFAULT_BASE_URL } from './client';
+export { ConnectorClient } from './client';

@@ -4,11 +4,11 @@ Guidance for working with the Vercel Api Platform connector.
 
 ## Distinction from connect-vercel
 
-This connector targets **Vercel Api Platform** at `https://api.vercelapiplatform.com/v1` (items, events, search). It is **not** the same as `connect-vercel`, which wraps `api.vercel.com` for deployments and projects.
+This connector targets **Vercel Api Platform** at `configured.example.com/v1` (items, events, search). It is **not** the same as `connect-vercel`, which wraps `api.vercel.com` for deployments and projects.
 
 ## API Reference
 
-- **Base URL**: `https://api.vercelapiplatform.com/v1` (override via profile or `VERCEL_API_PLATFORM_BASE_URL`)
+- **Base URL**: no default (must be configured) (override via profile or `VERCEL_API_PLATFORM_BASE_URL`)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **Endpoints**:
   - `GET /items` — list items

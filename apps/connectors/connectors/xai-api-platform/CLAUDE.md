@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with the Xai API Platfor
 
 ## Project Overview
 
-`connect-xai-api-platform` is a TypeScript CLI and library for the Xai API Platform REST API at `https://api.xaiapiplatform.com/v1`. It is **distinct** from `connect-xai` (Grok at `api.x.ai`).
+`connect-xai-api-platform` is a TypeScript CLI and library for the Xai API Platform REST API at `configured.example.com/v1`. It is **distinct** from `connect-xai` (Grok at `api.x.ai`).
 
 ## Build & Run Commands
 

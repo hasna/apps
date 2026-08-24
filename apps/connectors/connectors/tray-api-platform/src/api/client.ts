@@ -1,8 +1,6 @@
 import type { ConnectorConfig, ListQueryParams } from '../types';
 import { ConnectorApiError, parseApiError } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.trayapiplatform.com/v1';
-
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   params?: ListQueryParams;
@@ -22,7 +20,10 @@ export class ConnectorClient {
       throw new Error('API key or token is required');
     }
     this.apiKey = key;
-    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    if (!config.baseUrl) {
+      throw new Error('baseUrl is required: no default endpoint is configured; set baseUrl (profile, config, or the connector BASE_URL environment variable)');
+    }
+    this.baseUrl = config.baseUrl.replace(/\/+$/, '');
   }
 
   getBaseUrl(): string {

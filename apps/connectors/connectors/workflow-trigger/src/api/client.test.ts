@@ -54,22 +54,22 @@ describe('WorkflowTrigger API client', () => {
 
   test('list triggers uses Bearer auth and GET /triggers', async () => {
     const recorded = installFetch(() => ({ data: [] }));
-    const client = new ConnectorClient({ apiKey: 'test-key' });
+    const client = new ConnectorClient({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.get('/triggers');
 
     expect(recorded).toHaveLength(1);
-    expect(recorded[0].url).toBe('https://api.workflow-trigger.com/v1/triggers');
+    expect(recorded[0].url).toBe('https://configured.example.com/v1/triggers');
     expect(recorded[0].method).toBe('GET');
     expect(recorded[0].headers.Authorization || recorded[0].headers.authorization).toBe('Bearer test-key');
   });
 
   test('get trigger encodes ID in path', async () => {
     const recorded = installFetch(() => ({ id: 'item-1' }));
-    const connector = new Connector({ apiKey: 'workflow-trigger-key' });
+    const connector = new Connector({ apiKey: 'workflow-trigger-key', baseUrl: 'https://configured.example.com/v1' });
     await connector.triggers.get('item-1');
 
     expect(recorded).toHaveLength(1);
-    expect(recorded[0].url).toBe('https://api.workflow-trigger.com/v1/triggers/item-1');
+    expect(recorded[0].url).toBe('https://configured.example.com/v1/triggers/item-1');
     expect(recorded[0].headers.Authorization || recorded[0].headers.authorization).toBe('Bearer workflow-trigger-key');
   });
 
@@ -77,6 +77,9 @@ describe('WorkflowTrigger API client', () => {
     const recorded = installFetch(() => ({}));
     const client = new ConnectorClient({
       apiKey: 'key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2',
     });
     await client.get('/events');
@@ -86,10 +89,14 @@ describe('WorkflowTrigger API client', () => {
 
   test('search posts to /search', async () => {
     const recorded = installFetch(() => ({ results: [] }));
-    const connector = new Connector({ apiKey: 'key' });
+    const connector = new Connector({ apiKey: 'key', baseUrl: 'https://configured.example.com/v1' });
     await connector.search.search({ query: 'test' });
 
-    expect(recorded[0].url).toBe('https://api.workflow-trigger.com/v1/search');
+    expect(recorded[0].url).toBe('https://configured.example.com/v1/search');
     expect(recorded[0].method).toBe('POST');
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

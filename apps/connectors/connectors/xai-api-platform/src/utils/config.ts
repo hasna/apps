@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { DEFAULT_BASE_URL } from '../api/client';
 
 const CONNECTOR_NAME = 'connect-' + 'xai' + '-api-platform';
 const DEFAULT_PROFILE = 'default';
@@ -125,8 +124,8 @@ export function getApiKey(): string | undefined {
   return process.env.XAI_API_PLATFORM_API_KEY || loadProfile().apiKey;
 }
 
-export function getBaseUrl(): string {
-  return process.env.XAI_API_PLATFORM_BASE_URL || loadProfile().baseUrl || DEFAULT_BASE_URL;
+export function getBaseUrl(): string | undefined {
+  return process.env.XAI_API_PLATFORM_BASE_URL || loadProfile().baseUrl;
 }
 
 export function setApiKey(apiKey: string): void {

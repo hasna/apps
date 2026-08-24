@@ -4,7 +4,7 @@ Tray API Platform connector — customer runtime REST API for items, events, and
 
 ## API Details
 
-- **Base URL**: `https://api.trayapiplatform.com/v1` (tenant-specific override supported)
+- **Base URL**: no default (must be configured) (tenant-specific override supported)
 - **Auth**: API key via Bearer token (`Authorization: Bearer <api_key>`)
 - **Not** the tray.io iPaaS or Tray Platform workspace management API
 

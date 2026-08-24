@@ -53,4 +53,4 @@ export class WriteBinaryFile {
   }
 }
 
-export { WriteBinaryFileClient, DEFAULT_BASE_URL, encodePathSegment } from './client';
+export { WriteBinaryFileClient, encodePathSegment } from './client';

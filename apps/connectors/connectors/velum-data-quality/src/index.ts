@@ -8,7 +8,6 @@ export {
   ChecksApi,
   EventsApi,
   SearchApi,
-  DEFAULT_BASE_URL,
 } from './api';
 
 export {

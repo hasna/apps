@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Connector, DEFAULT_BASE_URL } from './index';
+import { ConnectorClient } from './client';
+import { Connector } from './index';
 
 const realFetch = globalThis.fetch;
 
@@ -38,43 +39,43 @@ afterEach(() => {
 describe('Zapier API Platform client', () => {
   test('listItems uses default base URL and Bearer auth', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.items.list();
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items`);
     expect(recorded[0].method).toBe('GET');
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer test-key');
   });
 
   test('getItem encodes item ID in path', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.items.get('item-1');
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items/item-1`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items/item-1`);
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer test-key');
   });
 
   test('createItem POSTs JSON body to /items', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.items.create({ name: 'example' });
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/items`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/items`);
     expect(recorded[0].method).toBe('POST');
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer test-key');
   });
 
   test('listEvents hits /events', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.events.list();
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/events`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/events`);
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer test-key');
   });
 
   test('search POSTs to /search', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.search.search({ query: 'test' });
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/search`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/search`);
     expect(recorded[0].method).toBe('POST');
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer test-key');
   });
@@ -83,6 +84,8 @@ describe('Zapier API Platform client', () => {
     const recorded = installFetch();
     const client = new Connector({
       apiKey: 'test-key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2',
     });
     await client.items.list();
@@ -127,7 +130,7 @@ describe('Zapier API Platform client', () => {
       } as Response;
     }) as unknown as typeof fetch;
 
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await expect(client.items.list()).resolves.toEqual({ ok: true });
     expect(calls).toBe(2);
   });
@@ -137,7 +140,7 @@ describe('Zapier API Platform client', () => {
       throw new DOMException('The operation was aborted.', 'AbortError');
     }) as unknown as typeof fetch;
 
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await expect(client.getClient().request('/items', { retries: 0, timeout: 5 })).rejects.toThrow('Request timeout after 5ms');
   });
 
@@ -160,7 +163,11 @@ describe('Zapier API Platform client', () => {
       } as Response;
     }) as unknown as typeof fetch;
 
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await expect(client.getClient().request('/items', { retries: 0, timeout: 5 })).rejects.toThrow('Request timeout after 5ms');
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

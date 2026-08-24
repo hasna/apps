@@ -1,4 +1,4 @@
-export interface WuBookrateConfig { apiKey: string; }
+export interface WuBookrateConfig { apiKey: string; baseUrl?: string; }
 
 export interface WBBook { isbn: string; title: string; author: string; publisher: string; published_date: string; average_rating: number; ratings_count: number; image_url: string; }
 export interface WBReview { source: string; rating: number; review_count: number; url: string; }

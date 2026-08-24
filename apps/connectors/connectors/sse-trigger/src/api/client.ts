@@ -1,8 +1,6 @@
 import type { SseTriggerConfig } from '../types';
 import { SseTriggerApiError, parseApiError } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.sse-trigger.com/v1';
-
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   params?: Record<string, string | number | boolean | undefined>;
@@ -21,7 +19,10 @@ export class SseTriggerClient {
       throw new Error('API key is required');
     }
     this.apiKey = config.apiKey;
-    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
+    if (!config.baseUrl) {
+      throw new Error('baseUrl is required: no default endpoint is configured; set baseUrl (profile, config, or the connector BASE_URL environment variable)');
+    }
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
   }
 
   private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {

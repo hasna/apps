@@ -63,7 +63,7 @@ export class SseTrigger {
   }
 }
 
-export { SseTriggerClient, DEFAULT_BASE_URL } from './client';
+export { SseTriggerClient } from './client';
 export { StreamsApi } from './streams';
 export { EventsApi } from './events';
 export { SearchApi } from './search';

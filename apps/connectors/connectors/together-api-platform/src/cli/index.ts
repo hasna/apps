@@ -156,7 +156,7 @@ configCmd.command('show').description('Show config').action(() => {
   info(`Config dir: ${getConfigDir()}`);
   const apiKey = getApiKey();
   info(`API Key: ${apiKey ? apiKey.substring(0, 8) + '...' : chalk.gray('not set')}`);
-  info(`Base URL: ${getBaseUrl() || chalk.gray('default (https://api.togetherapiplatform.com/v1)')}`);
+  info(`Base URL: ${getBaseUrl() || chalk.gray('none configured')}`);
 });
 
 configCmd.command('clear').description('Clear config').action(() => {

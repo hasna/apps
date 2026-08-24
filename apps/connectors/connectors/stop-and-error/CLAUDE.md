@@ -31,7 +31,7 @@ Credentials can be set via:
 - Profile configuration: `stop-and-error config set-key <key>`
 
 Optional base URL override:
-- `STOP_AND_ERROR_BASE_URL` (default `https://api.stop-and-error.com/v1`)
+- `STOP_AND_ERROR_BASE_URL` (no default - must be configured)
 
 ## API Endpoints
 

@@ -3,7 +3,7 @@
 export { Connector } from './api';
 export * from './types';
 
-export { ConnectorClient, ItemsApi, EventsApi, SearchApi, RawApi, DEFAULT_BASE_URL } from './api';
+export { ConnectorClient, ItemsApi, EventsApi, SearchApi, RawApi } from './api';
 
 export {
   getApiKey,

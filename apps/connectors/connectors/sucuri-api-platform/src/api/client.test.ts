@@ -1,11 +1,11 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { ConnectorClient, DEFAULT_BASE_URL } from './client';
+import { ConnectorClient } from './client';
 import { ConnectorApiError } from '../types';
 
 describe('ConnectorClient', () => {
   const mockConfig = {
     apiKey: 'test-api-key-12345',
-    baseUrl: 'https://api.sucuriapiplatform.com/v1',
+    baseUrl: 'https://configured.example.com/v1',
   };
 
   describe('constructor', () => {
@@ -18,14 +18,16 @@ describe('ConnectorClient', () => {
       expect(client).toBeInstanceOf(ConnectorClient);
     });
 
-    test('uses default base URL when not provided', () => {
-      const client = new ConnectorClient({ apiKey: 'token' });
-      expect(client.getBaseUrl()).toBe(DEFAULT_BASE_URL);
-    });
+      test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
+  });
 
     test('strips trailing slash from base URL', () => {
       const client = new ConnectorClient({
         apiKey: 'token',
+        baseUrl: 'https://configured.example.com/v1',
+        baseUrl: 'https://configured.example.com/v1',
+        baseUrl: 'https://configured.example.com/v1',
         baseUrl: 'https://custom.example.com/v1/',
       });
       expect(client.getBaseUrl()).toBe('https://custom.example.com/v1');
@@ -72,7 +74,7 @@ describe('ConnectorClient', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = (global.fetch as ReturnType<typeof mock>).mock.calls[0];
-      expect(url).toBe('https://api.sucuriapiplatform.com/v1/items');
+      expect(url).toBe('https://configured.example.com/v1/items');
       expect(options.method).toBe('GET');
       expect(options.headers.Authorization).toBe('Bearer test-api-key-12345');
       expect(options.headers.Accept).toBe('application/json');

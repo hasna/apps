@@ -1,8 +1,6 @@
 import type { XaiApiPlatformConfig, RawRequestOptions } from '../types';
 import { XaiApiPlatformApiError } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.xaiapiplatform.com/v1';
-
 export interface RequestOptions extends RawRequestOptions {}
 
 export class XaiApiPlatformClient {
@@ -14,7 +12,10 @@ export class XaiApiPlatformClient {
       throw new Error('API key is required');
     }
     this.apiKey = config.apiKey;
-    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
+    if (!config.baseUrl) {
+      throw new Error('baseUrl is required: no default endpoint is configured; set baseUrl (profile, config, or the connector BASE_URL environment variable)');
+    }
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
   }
 
   encodePathSegment(segment: string): string {

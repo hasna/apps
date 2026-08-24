@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
-import { Connector, DEFAULT_BASE_URL } from './index';
+import { ConnectorClient } from './client';
+import { Connector } from './index';
 
 const realFetch = globalThis.fetch;
 
@@ -30,21 +31,21 @@ function installFetch(): Recorded[] {
 describe('Vector Legal API client', () => {
   test('uses default base URL and Bearer auth for list documents', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'vector-legal-api-key' });
+    const client = new Connector({ apiKey: 'vector-legal-api-key', baseUrl: 'https://configured.example.com/v1' });
     await client.documents.list();
 
     expect(recorded).toHaveLength(1);
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/documents`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/documents`);
     expect(recorded[0].method).toBe('GET');
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer vector-legal-api-key');
   });
 
   test('get document encodes id in path', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'vector-legal-api-key' });
+    const client = new Connector({ apiKey: 'vector-legal-api-key', baseUrl: 'https://configured.example.com/v1' });
     await client.documents.get('item-1');
 
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/documents/item-1`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/documents/item-1`);
     expect(recorded[0].headers.get('Authorization')).toBe('Bearer vector-legal-api-key');
   });
 
@@ -52,6 +53,8 @@ describe('Vector Legal API client', () => {
     const recorded = installFetch();
     const client = new Connector({
       apiKey: 'test-key',
+      baseUrl: 'https://configured.example.com/v1',
+      baseUrl: 'https://configured.example.com/v1',
       baseUrl: 'https://custom.example.com/v2',
     });
     await client.events.list();
@@ -61,10 +64,10 @@ describe('Vector Legal API client', () => {
 
   test('search posts to /search with body', async () => {
     const recorded = installFetch();
-    const client = new Connector({ apiKey: 'test-key' });
+    const client = new Connector({ apiKey: 'test-key', baseUrl: 'https://configured.example.com/v1' });
     await client.search.search({ query: 'nda' });
 
-    expect(recorded[0].url).toBe(`${DEFAULT_BASE_URL}/search`);
+    expect(recorded[0].url).toBe(`https://configured.example.com/v1/search`);
     expect(recorded[0].method).toBe('POST');
   });
 
@@ -77,5 +80,9 @@ describe('Vector Legal API client', () => {
 
   test('requires api key', () => {
     expect(() => new Connector({})).toThrow('API key');
+  });
+
+  test('refuses to send without a configured base URL (no default endpoint)', () => {
+    expect(() => new ConnectorClient({ apiKey: 'test-key' })).toThrow(/baseUrl/);
   });
 });

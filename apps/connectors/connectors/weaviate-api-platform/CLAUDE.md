@@ -23,7 +23,7 @@ Bearer token via `Authorization: Bearer <api_key>` header.
 ## Base URL
 
 ```
-https://api.weaviateapiplatform.com/v1
+configured.example.com/v1
 ```
 
 Override with profile `baseUrl` or `WEAVIATE_API_PLATFORM_BASE_URL`.

@@ -140,7 +140,7 @@ profileCmd.command('show [name]').description('Show profile configuration').acti
   const active = getCurrentProfile();
   console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
   info(`API Key: ${config.apiKey ? `${config.apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-  info(`Base URL: ${config.baseUrl || chalk.gray('default (https://api.vercelapiplatform.com/v1)')}`);
+  info(`Base URL: ${config.baseUrl || chalk.gray('none configured')}`);
 });
 
 const configCmd = program.command('config').description('Manage CLI configuration');
@@ -162,7 +162,7 @@ configCmd.command('show').description('Show current configuration').action(() =>
   console.log(chalk.bold(`Active Profile: ${profileName}`));
   info(`Config directory: ${getConfigDir()}`);
   info(`API Key: ${apiKey ? `${apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-  info(`Base URL: ${baseUrl || chalk.gray('default (https://api.vercelapiplatform.com/v1)')}`);
+  info(`Base URL: ${baseUrl || chalk.gray('none configured')}`);
 });
 
 configCmd.command('clear').description('Clear configuration for active profile').action(() => {

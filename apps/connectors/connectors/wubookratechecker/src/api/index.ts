@@ -9,7 +9,7 @@ export class WuBookrateChecker {
   static fromEnv(): WuBookrateChecker {
     const apiKey = process.env.WUBOOKRATE_API_KEY;
     if (!apiKey) throw new Error('WUBOOKRATE_API_KEY is required');
-    return new WuBookrateChecker({ apiKey });
+    return new WuBookrateChecker({ apiKey, baseUrl: process.env.WUBOOKRATE_BASE_URL });
   }
 
   async lookupByISBN(isbn: string): Promise<WBBook> { return this.client.request<WBBook>(`/books/${isbn}`); }

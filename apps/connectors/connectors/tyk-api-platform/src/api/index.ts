@@ -7,7 +7,7 @@ import type {
   RawRequestOptions,
 } from '../types';
 
-export { TykApiPlatformClient, DEFAULT_BASE_URL } from './client';
+export { TykApiPlatformClient } from './client';
 
 export class TykApiPlatform {
   private readonly client: TykApiPlatformClient;

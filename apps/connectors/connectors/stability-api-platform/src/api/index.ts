@@ -55,6 +55,5 @@ export class StabilityApiPlatform {
 export {
   ConnectorClient,
   StabilityApiPlatformClient,
-  DEFAULT_BASE_URL,
   encodePathSegment,
 } from './client';

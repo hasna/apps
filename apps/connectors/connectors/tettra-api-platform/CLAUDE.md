@@ -4,7 +4,7 @@ Tettra Api Platform connector — knowledge items, events, and search API.
 
 ## API Details
 
-- **Base URL**: `https://api.tettraapiplatform.com/v1` (override via `TETTRA_API_PLATFORM_BASE_URL`)
+- **Base URL**: no default (must be configured) (override via `TETTRA_API_PLATFORM_BASE_URL`)
 - **Auth**: Bearer token (`Authorization: Bearer <api_key>`)
 - **Endpoints**: `GET /items`, `POST /items`, `GET /items/:itemId`, `GET /events`, `POST /search`
 
