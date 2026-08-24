@@ -381,8 +381,9 @@ export interface StagedExposureScanOptions {
 /**
  * Text or bytes handed in directly, rather than discovered by walking a tree.
  *
- * Exactly one source is used, in this order: `buffer`, `text`, `path`, stdin.
- * `path` of "-" means stdin, matching the CLI convention.
+ * Exactly one source is used, in this order: `buffer`, `text`, `paths` (each
+ * element one input unit), single `path`, stdin. `path` of "-" means stdin,
+ * matching the CLI convention.
  */
 export interface InputExposureScanOptions {
   /** Raw bytes. Scanned binary-aware, exactly as a staged blob would be. */
@@ -391,6 +392,13 @@ export interface InputExposureScanOptions {
   text?: string;
   /** File to read, or "-" for stdin. Omit both this and text/buffer to read stdin. */
   path?: string;
+  /**
+   * Every named input to scan, each as its own unit — the multi-path form of
+   * `path`, used by `secrets scan input FILE...`. A "-" element reads stdin
+   * for that unit. When present it takes precedence over `path`, and every
+   * element is scanned; none is dropped.
+   */
+  paths?: string[];
   limit?: number;
   /**
    * Ceiling on the input. Exceeding it records a skip and drives exit 2 — the
@@ -779,54 +787,109 @@ export function scanInputExposures(options: InputExposureScanOptions = {}): Expo
   const deadline = Date.now() + timeoutMs;
 
   const inlined = options.buffer !== undefined || options.text !== undefined;
-  const usesFile = !inlined && options.path !== undefined && options.path !== "-";
-  const label = usesFile ? resolve(options.path as string) : STDIN_LABEL;
 
+  // Normalize every source shape to a list of input units. `paths` is the
+  // multi-file form handed in by `secrets scan input FILE...`; the single
+  // `path` option remains for the library surface. Inlined buffer/text win
+  // over both, exactly as before.
+  const units: InputScanUnit[] = [];
+  if (options.buffer !== undefined) {
+    units.push({ kind: "payload", payload: options.buffer });
+  } else if (options.text !== undefined) {
+    units.push({ kind: "payload", payload: Buffer.from(options.text, "utf8") });
+  } else if ((options.paths?.length ?? 0) > 0) {
+    for (const path of options.paths as string[]) {
+      units.push(path === "-" ? { kind: "stdin" } : { kind: "file", path });
+    }
+  } else if (options.path !== undefined && options.path !== "-") {
+    units.push({ kind: "file", path: options.path });
+  } else {
+    units.push({ kind: "stdin" });
+  }
+
+  const label = units[0].kind === "file" ? resolve(units[0].path) : STDIN_LABEL;
   const result = createResult("input", label, limit, { maxFileBytes: maxBytes, timeoutMs });
   result.stats.skipped = [];
 
+  // EVERY named unit is scanned. A unit that cannot be scanned — an
+  // unreadable or oversized file, an empty or oversized stdin — is recorded in
+  // `skipped` or `errors` and the loop continues; the result then carries the
+  // evidence and the gate exits 2. Nothing is dropped silently.
+  for (const unit of units) {
+    scanInputUnit(unit, result, maxBytes, deadline);
+  }
+
+  return finalizeResult(result);
+}
+
+/**
+ * One unit of input handed to scanInputExposures.
+ */
+type InputScanUnit =
+  | { kind: "payload"; payload: Buffer }
+  | { kind: "file"; path: string }
+  | { kind: "stdin" };
+
+/**
+ * Scan one input unit into the shared result. Failures are recorded on the
+ * result (error or skip) rather than thrown, so a multi-unit scan keeps going
+ * and the final verdict reflects everything that was not scanned.
+ */
+function scanInputUnit(
+  unit: InputScanUnit,
+  result: ExposureScanResult,
+  maxBytes: number,
+  deadline: number,
+): void {
+  if (Date.now() > deadline) {
+    markTruncated(result, "timeout");
+    return;
+  }
+
   let payload: Buffer;
-  if (options.buffer !== undefined) {
-    payload = options.buffer;
-  } else if (options.text !== undefined) {
-    payload = Buffer.from(options.text, "utf8");
-  } else if (usesFile) {
+  let label: string;
+  if (unit.kind === "payload") {
+    payload = unit.payload;
+    label = STDIN_LABEL;
+  } else if (unit.kind === "file") {
+    label = resolve(unit.path);
     let size: number;
     try {
       const stats = statSync(label);
       if (!stats.isFile()) {
         pushError(result, `Not a readable file: ${label}`);
-        return finalizeResult(result);
+        return;
       }
       size = stats.size;
     } catch (error) {
       pushError(result, `Unable to stat ${label}: ${(error as Error).message}`);
-      return finalizeResult(result);
+      return;
     }
     if (size > maxBytes) {
       recordSkip(result, label, "max_file_bytes", size);
-      return finalizeResult(result);
+      return;
     }
     try {
       payload = readFileSync(label);
     } catch (error) {
       pushError(result, `Unable to read ${label}: ${(error as Error).message}`);
-      return finalizeResult(result);
+      return;
     }
   } else {
+    label = STDIN_LABEL;
     const read = readBoundedStdin(maxBytes, deadline);
     if (read.timedOut) {
       markTruncated(result, "timeout");
       pushError(result, "Timed out while reading standard input.");
-      return finalizeResult(result);
+      return;
     }
     if (read.error) {
       pushError(result, `Unable to read standard input: ${read.error}`);
-      return finalizeResult(result);
+      return;
     }
     if (read.oversize) {
       recordSkip(result, STDIN_LABEL, "max_file_bytes", read.bytes);
-      return finalizeResult(result);
+      return;
     }
     // Zero bytes off stdin is "could not look", not "looked and it was clean".
     //
@@ -848,7 +911,7 @@ export function scanInputExposures(options: InputExposureScanOptions = {}): Expo
         result,
         "Read 0 bytes from standard input: nothing was scanned. Pipe the text in, or name a file.",
       );
-      return finalizeResult(result);
+      return;
     }
     payload = read.buffer;
   }
@@ -857,15 +920,15 @@ export function scanInputExposures(options: InputExposureScanOptions = {}): Expo
   // however the payload arrived.
   if (payload.length > maxBytes) {
     recordSkip(result, label, "max_file_bytes", payload.length);
-    return finalizeResult(result);
+    return;
   }
 
-  result.stats.filesScanned = 1;
-  result.stats.bytesScanned = payload.length;
+  result.stats.filesScanned++;
+  result.stats.bytesScanned += payload.length;
 
   if (!isLikelyBinary(payload)) {
     scanText(payload.toString("utf8"), { source: "input", path: label }, result, deadline);
-    return finalizeResult(result);
+    return;
   }
 
   // Same three-way handling the staged mode uses: a UTF-16 payload is "binary"
@@ -877,8 +940,6 @@ export function scanInputExposures(options: InputExposureScanOptions = {}): Expo
   } else {
     scanBinaryBuffer(payload, { source: "input", path: label, binary: true }, result, deadline);
   }
-
-  return finalizeResult(result);
 }
 
 /**
