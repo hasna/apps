@@ -33,6 +33,7 @@ import {
   listWorkspaceLocations,
   listWorkspacesByPath,
   listWorkspaces,
+  countWorkspaces,
   lookupGuardedWorkspaceMutationReceipt,
   matchRootForPath,
   migrateLegacyProjectsToWorkspaces,
@@ -1686,5 +1687,51 @@ describe("legacy project migration", () => {
 
     rmSync(dir, { recursive: true });
     db.close();
+  });
+});
+
+describe("registry fixture exclusion", () => {
+  test("listWorkspaces and countWorkspaces exclude registry-fixture rows when asked", () => {
+    const db = makeDb();
+    const root = tmpDir();
+    try {
+      const real = createWorkspace({
+        name: "Real Project",
+        slug: "real-project",
+        kind: "generic",
+        primary_path: join(root, "real-project"),
+      }, db);
+      const fixture = createWorkspace({
+        name: "Fixture Project",
+        slug: "http-compact-project-1",
+        kind: "generic",
+        tags: ["registry-fixture"],
+        primary_path: join(root, "http-compact-project-1"),
+      }, db);
+
+      expect(real.tags).toEqual([]);
+      expect(fixture.tags).toEqual(["registry-fixture"]);
+
+      // Default (no exclude flag) returns every row.
+      expect(listWorkspaces({ limit: 100 }, db).map((w) => w.slug).sort()).toEqual(["http-compact-project-1", "real-project"].sort());
+      expect(countWorkspaces({}, db)).toBe(2);
+
+      // With the exclusion, the fixture row disappears from both list and count.
+      const excluded = listWorkspaces({ exclude_registry_fixtures: true, limit: 100 }, db);
+      expect(excluded.map((w) => w.slug)).toEqual(["real-project"]);
+      expect(countWorkspaces({ exclude_registry_fixtures: true }, db)).toBe(1);
+
+      // The exclusion composes with a tag filter: explicitly requesting the
+      // fixture tag still honours the exclusion by default.
+      const tagged = listWorkspaces({ tags: ["registry-fixture"], exclude_registry_fixtures: true, limit: 100 }, db);
+      expect(tagged.map((w) => w.slug)).toEqual([]);
+
+      // And without the exclusion, the tag filter still finds the fixture.
+      const taggedAll = listWorkspaces({ tags: ["registry-fixture"], limit: 100 }, db);
+      expect(taggedAll.map((w) => w.slug)).toEqual(["http-compact-project-1"]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

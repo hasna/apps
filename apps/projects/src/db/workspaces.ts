@@ -919,6 +919,7 @@ export interface WorkspaceFilter {
   query?: string;
   tags?: string[];
   exclude_eval_artifacts?: boolean;
+  exclude_registry_fixtures?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -956,6 +957,15 @@ function workspaceFilterSql(filter: WorkspaceFilter): { where: string; params: S
       )
       OR COALESCE(json_extract(metadata, '$.eval_fixture'), 0) = 1
       OR COALESCE(json_extract(metadata, '$.agent_eval_fixture'), 0) = 1
+    )`);
+  }
+  if (filter.exclude_registry_fixtures) {
+    // The normalization program tagged generated registry rows with
+    // `registry-fixture`; default reads exclude them so tools stop seeing
+    // ~70% test data. The rows stay in place; only the read excludes them.
+    conditions.push(`NOT EXISTS (
+      SELECT 1 FROM json_each(workspaces.tags)
+      WHERE json_each.value = 'registry-fixture'
     )`);
   }
 
