@@ -257,6 +257,25 @@ Supported tools are `claude`, `codex`, `cursor`, `opencode`, `codewith`,
 `qwen`, `aicopilot`, and `antigravity`. Layer aliases are `provider` →
 `tool`, `project` → `repo`, and `identity` → `agent`.
 
+## Station profile
+
+```text
+instructions station-profile refresh [--dry-run] [--json]
+instructions station-profile preview [--json]
+instructions station-profile show [--json]
+instructions station-profile path
+```
+
+Generates the compact station-profile block (station id/name, hostname,
+platform/arch, user, home, workspace, best-effort live status, and installed
+`@hasna/*` + `@hasna-internal/*` package counts with top names) into
+`~/.hasna/instructions/station-profile.md`. `session plan|apply` inject the
+cached block into every render as a machine-layer source by default;
+`--no-station-profile` opts out for one render. `refresh` writes only when the
+block changed; `preview` builds without writing; `show` prints the cache;
+`path` prints the cache location. See [Session
+rendering](session-rendering.md) for the injector design.
+
 ## Managed project context
 
 ```text

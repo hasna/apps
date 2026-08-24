@@ -485,6 +485,10 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
   asset_surface?: string;
   allow_asset_installers?: boolean;
   graph_context?: Omit<InstructionGraphContext, "provider" | "provider_version">;
+  /** Extra sources appended after the compiled profile sources (for example
+   * the cached station-profile injector). Sorted into layer position by the
+   * renderer like any other source. */
+  extra_sources?: SessionInstructionSource[];
 }): ProfileSessionRenderPlan {
   const compiled = compileInstructionGraph({
     profile_id: input.profile_id,
@@ -514,6 +518,7 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
     asset_surface: _assetSurface,
     allow_asset_installers: _allowAssetInstallers,
     graph_context: _graphContext,
+    extra_sources: _extraSources,
     assetPlan: _callerAssetPlan,
     assetContents: _callerAssetContents,
     ...renderInput
@@ -527,7 +532,7 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
     ...planSessionRender({
       ...renderInput,
       ...(compiled.capability.session_surface ? { providerSurface: compiled.capability.session_surface } : {}),
-      sources: compiled.sources,
+      sources: [...compiled.sources, ...(input.extra_sources ?? [])],
       assetPlan,
       assetContents: Object.fromEntries((input.asset_configs ?? []).map((config) => [config.id, config.content])),
     }),

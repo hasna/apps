@@ -20,6 +20,16 @@ import { getRawStoreRoot } from "../lib/raw-store-root.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
+import {
+  buildStationProfileBlock,
+  getStationProfileCachePath,
+  readStationProfile,
+  refreshStationProfile,
+  resolveStationProfileMachine,
+  resolveStationProfilePackages,
+  STATION_PROFILE_MAX_BYTES,
+  stationProfileSource,
+} from "../lib/station-profile.js";
 import { ensurePlatformProfiles } from "../lib/platform-profiles.js";
 import { ensureProjectDashboardStandardConfig } from "../lib/project-dashboard-standard.js";
 import { ensureGlobalAgentRulesStandardConfig } from "../lib/global-agent-rules-standard.js";
@@ -305,14 +315,18 @@ async function buildSessionRenderPlan(
     assetSurface?: string;
     assetScope?: "global" | "project" | "session";
     allowAssetInstallers?: boolean;
+    /** Inject the cached station-profile source (default true; --no-station-profile disables). */
+    stationProfile?: boolean;
   },
   tool: SessionRenderTool,
   store: ConfigStore,
   assetPlanMode: "dry-run" | "apply" = "dry-run",
 ): Promise<SessionRenderPlan> {
+  const station = opts.stationProfile === false ? null : stationProfileSource();
   if (!opts.compileProfile) {
     if (opts.providerVariant) throw new Error("--provider-variant requires --compile-profile.");
     const sources = await collectSessionSources(opts, tool, store);
+    if (station) sources.push(station);
     return planSessionRender({
       tool,
       profile: opts.profile,
@@ -353,6 +367,7 @@ async function buildSessionRenderPlan(
     ...(opts.assetScope ? { asset_scope: opts.assetScope } : {}),
     ...(opts.assetSurface ? { asset_surface: opts.assetSurface } : {}),
     allow_asset_installers: opts.allowAssetInstallers,
+    extra_sources: station ? [station] : undefined,
     graph_context: {
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.path ? { path: opts.path } : {}),
@@ -1443,6 +1458,7 @@ sessionCmd.command("plan")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render plan")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
+  .option("--no-station-profile", "do not inject the cached station-profile source")
   .option("--json", "output dry-run JSON")
   .action(async (opts) => {
     try {
@@ -1515,6 +1531,7 @@ sessionCmd.command("apply")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
+  .option("--no-station-profile", "do not inject the cached station-profile source")
   .option("--dry-run", "preview writes and conflicts without writing")
   .option("--force", "overwrite existing unmanaged files")
   .option("--json", "output apply JSON")
@@ -1598,6 +1615,122 @@ sessionCmd.command("restore <snapshot>")
         console.error(chalk.red(`Conflicts: ${result.conflicts.length}. Restore stopped without writing.`));
         process.exitCode = 1;
       }
+    } catch (error) {
+      console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+      process.exit(1);
+    }
+  });
+
+// ── station-profile ──────────────────────────────────────────────────────────
+// Owner request 2026-08-24: a GLOBAL SYSTEM PROMPT INJECTOR — a compact block
+// naming the station, basic facts about it (platform, user, workspace/home,
+// live status where cheap), and the installed packages under the station's
+// hasna-scoped npm orgs. The block is generated into a per-station CACHE file
+// by `refresh` (a cadence/setup action, never a per-session query) and every
+// session render (`session plan`/`session apply`) injects it as a machine-layer
+// source when the cache exists. Renders without a cache are byte-identical to
+// before this feature; `--no-station-profile` opts out of injection for one
+// render.
+const stationProfileCmd = program.command("station-profile")
+  .description("Generate and inject the compact station profile block into every session render");
+
+stationProfileCmd.command("refresh")
+  .description("Regenerate the cached station profile block (idempotent; writes only when changed)")
+  .option("--dry-run", "build and print the block without writing the cache")
+  .option("--json", "output JSON")
+  .action((opts) => {
+    try {
+      const result = refreshStationProfile({ dryRun: opts.dryRun });
+      if (opts.json) {
+        printJson({
+          path: result.path,
+          bytes: result.bytes,
+          generatedAt: result.generatedAt,
+          dryRun: opts.dryRun === true,
+          budget: STATION_PROFILE_MAX_BYTES,
+          statusProbe: result.statusProbe,
+          machine: {
+            id: result.machine.id,
+            hostname: result.machine.hostname,
+            tailscaleName: result.machine.tailscaleName,
+            platform: result.machine.platform,
+            arch: result.machine.arch,
+            user: result.machine.user,
+            workspacePath: result.machine.workspacePath,
+            status: result.machine.status,
+          },
+          packages: result.packages,
+          content: result.content,
+        });
+        return;
+      }
+      const prefix = opts.dryRun ? chalk.yellow("[dry-run]") : chalk.green("OK");
+      console.log(`${prefix} station profile ${chalk.dim(`(${result.bytes} B, budget ${STATION_PROFILE_MAX_BYTES} B)`)}`);
+      console.log(`${chalk.cyan("path:")} ${result.path}`);
+      if (result.machine.status) {
+        console.log(`${chalk.cyan("status probe:")} ${result.statusProbe} (${result.machine.status.state})`);
+      } else {
+        console.log(`${chalk.cyan("status probe:")} ${result.statusProbe}`);
+      }
+      console.log(`${chalk.cyan("sources:")} machines manifest + bun global dir + local OS`);
+      console.log("");
+      printLine(result.content);
+    } catch (error) {
+      console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+      process.exit(1);
+    }
+  });
+
+stationProfileCmd.command("show")
+  .description("Print the cached station profile block")
+  .option("--json", "output JSON")
+  .action((opts) => {
+    const content = readStationProfile();
+    if (content === null) {
+      console.error(chalk.red("No cached station profile. Run `instructions station-profile refresh` first."));
+      process.exit(1);
+    }
+    if (opts.json) {
+      printJson({ path: getStationProfileCachePath(), bytes: Buffer.byteLength(content, "utf8"), content });
+      return;
+    }
+    printLine(content);
+  });
+
+stationProfileCmd.command("path")
+  .description("Print the station profile cache path")
+  .action(() => {
+    printLine(getStationProfileCachePath());
+  });
+
+stationProfileCmd.command("preview")
+  .description("Build and print the block without writing the cache (alias of refresh --dry-run)")
+  .option("--json", "output JSON")
+  .action((opts) => {
+    try {
+      const machine = resolveStationProfileMachine();
+      const packages = resolveStationProfilePackages();
+      const content = buildStationProfileBlock({ machine, packages });
+      if (opts.json) {
+        printJson({
+          bytes: Buffer.byteLength(content, "utf8"),
+          budget: STATION_PROFILE_MAX_BYTES,
+          machine: {
+            id: machine.id,
+            hostname: machine.hostname,
+            tailscaleName: machine.tailscaleName,
+            platform: machine.platform,
+            arch: machine.arch,
+            user: machine.user,
+            workspacePath: machine.workspacePath,
+            status: machine.status,
+          },
+          packages,
+          content,
+        });
+        return;
+      }
+      printLine(content);
     } catch (error) {
       console.error(chalk.red(error instanceof Error ? error.message : String(error)));
       process.exit(1);
@@ -2208,6 +2341,7 @@ _configs() {
     'scan:Scan for secrets'
     'profile:Manage profiles'
     'session:Plan and apply session instructions'
+    'station-profile:Generate and inject the compact station profile block'
     'snapshot:Version history'
     'template:Template operations'
     'mcp:Install MCP server'
@@ -2223,7 +2357,7 @@ compdef _configs configs`);
       console.log(`# bash completion for configs
 _configs_completions() {
   local cur="\${COMP_WORDS[COMP_CWORD]}"
-  local commands="list show add apply diff sync export import whoami status init scan profile session snapshot template mcp backup restore doctor completions"
+  local commands="list show add apply diff sync export import whoami status init scan profile session station-profile snapshot template mcp backup restore doctor completions"
   COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") )
 }
 complete -F _configs_completions configs`);
