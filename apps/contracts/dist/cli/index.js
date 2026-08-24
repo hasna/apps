@@ -23522,7 +23522,7 @@ function checkKit(options) {
       depVersionMismatch = { kitVersion, declared };
     }
   }
-  const ok = files.every((f) => f.status === "ok") && extras.length === 0 && depVersionMismatch === null;
+  const ok = files.every((f) => f.status === "ok") && extras.length === 0 && staleVersion === null && depVersionMismatch === null;
   return { ok, version: version2, targetDir, files, extras, staleVersion, depVersionMismatch };
 }
 
