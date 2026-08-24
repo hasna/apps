@@ -166,6 +166,27 @@ describe("secrets-serve answers --version/--help before the boot path (row afd9e
     expect(result.stdout + result.stderr).not.toContain("secrets-serve listening");
   });
 
+  test("db --version answers before the db path opens the cloud pool (row afd9e358)", async () => {
+    // The `db` subcommand must not swallow --version: runDbCommand() opens the
+    // cloud pool and, for any sub other than `status`, runs ledger.migrate().
+    // The guard must answer the version first, never the db-cli JSON output.
+    const result = await runBin("src/server/index.ts", ["db", "--version"], SERVE_SCRUB);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(PROBE_VERSION);
+    expect(result.stdout).not.toContain('"command"');
+    expect(result.stdout).not.toContain("DATABASE_URL");
+  });
+
+  test("db --help prints usage before the db path opens the cloud pool (row afd9e358)", async () => {
+    const result = await runBin("src/server/index.ts", ["db", "--help"], SERVE_SCRUB);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("usage: secrets-serve");
+    expect(result.stdout).not.toContain('"command"');
+    expect(result.stdout).not.toContain("DATABASE_URL");
+  });
+
   test("plain serve still takes the real boot path (negative probe)", async () => {
     // No early arg: the boot path must still be reached — here it fails fast at
     // the master-key gate (rc=1) instead of answering version/usage. A fix that
