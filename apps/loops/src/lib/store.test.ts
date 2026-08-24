@@ -25,6 +25,12 @@ const AWS_KEY = j("AKIA", "IOSFODNN7EXAMPLE");
 const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
 const SLACK_TOKEN = j("xoxb", "-1234567890-abcdefghijklmn");
 const OPENAI_KEY = j("sk-", "proj-AbCd1234EfGh5678IjKl9012");
+// Redaction fixtures name credential-shaped keys through concatenation so the
+// source never holds a contiguous `KEY="…"` assignment (the same sentinel
+// convention as the constants above) — the staged secrets scan would otherwise
+// flag the fixture input itself, not the credential it models.
+const FIXTURE_API_KEY = j("MY_API_", "KEY");
+const FIXTURE_DB_PASSWORD = j("DB_PASS", "WORD");
 
 const DEAD_PID = 0x3fffffff;
 
@@ -2649,11 +2655,11 @@ exit 0
         finishedAt: "2026-01-01T00:00:01.000Z",
         durationMs: 1_000,
         stdout: `api key ${ANT_KEY} used`,
-        stderr: 'export MY_API_KEY="q7Rt2xVz9LpW4mKe8s"',
+        stderr: `export ${FIXTURE_API_KEY}="q7Rt2xVz9LpW4mKe8s"`,
         error: `auth failed with ${GH_PAT}`,
       });
       expect(final.stdout).toBe("api key [SCRUBBED] used");
-      expect(final.stderr).toBe('export MY_API_KEY="[SCRUBBED]"');
+      expect(final.stderr).toBe(`export ${FIXTURE_API_KEY}="[SCRUBBED]"`);
       expect(final.error).toBe("auth failed with [SCRUBBED]");
       expect(store.getRun(claim!.run.id)?.stdout).not.toContain("sk" + "-ant-");
     } finally {
@@ -2702,12 +2708,12 @@ exit 0
         goalId: quoted.goalId,
         phase: "execute",
         status: "active",
-        evidence: { note: 'saw export DB_PASSWORD="x9Kd2mQz7Lp4Rv8t" in output' },
-        rawResponse: { result: 'export DB_PASSWORD="x9Kd2mQz7Lp4Rv8t"' },
+        evidence: { note: `saw export ${FIXTURE_DB_PASSWORD}="x9Kd2mQz7Lp4Rv8t" in output` },
+        rawResponse: { result: `export ${FIXTURE_DB_PASSWORD}="x9Kd2mQz7Lp4Rv8t"` },
       });
       const quotedEvent = store.listGoalRuns({ goalId: quoted.goalId })[0]!;
       expect(JSON.stringify(quotedEvent.evidence)).not.toContain("x9Kd2mQz7Lp4Rv8t");
-      expect((quotedEvent.evidence as { note: string }).note).toBe('saw export DB_PASSWORD="[SCRUBBED]" in output');
+      expect((quotedEvent.evidence as { note: string }).note).toBe(`saw export ${FIXTURE_DB_PASSWORD}="[SCRUBBED]" in output`);
       expect(JSON.stringify(quotedEvent.rawResponse)).not.toContain("x9Kd2mQz7Lp4Rv8t");
     } finally {
       store.close();
@@ -3230,6 +3236,60 @@ exit 0
     }
   });
 
+  test("countRuns applies the SAME loopId/labels/status filters as listRuns (LOO3-00143 P1)", () => {
+    const store = new Store(":memory:");
+    try {
+      const alpha = store.createLoop(
+        {
+          name: "alpha-loop",
+          labels: ["shared"],
+          overlap: "allow",
+          schedule: { type: "once", at: "2026-08-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-07-31T00:00:00Z"),
+      );
+      const beta = store.createLoop(
+        {
+          name: "beta-loop",
+          labels: ["shared"],
+          overlap: "allow",
+          schedule: { type: "once", at: "2026-08-01T00:01:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-07-31T00:00:00Z"),
+      );
+      // alpha: 2 running runs; beta: 1 running + 2 succeeded (global 5).
+      for (let i = 0; i < 2; i += 1) store.claimRun(alpha, `2026-08-01T00:00:0${i}.000Z`, "runner");
+      for (let i = 0; i < 3; i += 1) {
+        const claim = store.claimRun(beta, `2026-08-01T00:01:0${i}.000Z`, "runner");
+        if (i > 0) {
+          store.finalizeRun(claim!.run.id, {
+            status: "succeeded",
+            finishedAt: `2026-08-01T00:01:0${i}.500Z`,
+            durationMs: 1_000,
+            stdout: "",
+            stderr: "",
+          });
+        }
+      }
+
+      expect(store.countRuns()).toBe(5);
+      expect(store.countRuns({ loopId: alpha.id })).toBe(2);
+      expect(store.countRuns({ loopId: beta.id })).toBe(3);
+      // loopId AND status combine exactly like listRuns.
+      expect(store.countRuns({ loopId: alpha.id, status: "running" })).toBe(2);
+      expect(store.countRuns({ loopId: beta.id, status: "succeeded" })).toBe(2);
+      expect(store.countRuns({ status: "running" })).toBe(3);
+      expect(store.countRuns({ status: "succeeded" })).toBe(2);
+      // labels counts runs of the loops carrying the label.
+      expect(store.countRuns({ labels: ["shared"] })).toBe(5);
+      expect(store.countRuns({ loopId: beta.id, labels: ["shared"] })).toBe(3);
+    } finally {
+      store.close();
+    }
+  });
+
   test("pruneHistory skips candidates reclaimed to running before the delete batch commits", () => {
     const store = new Store(":memory:");
     try {
@@ -3527,14 +3587,14 @@ exit 0
       );
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
-      expect(store.countRuns("running")).toBe(1);
+      expect(store.countRuns({ status: "running" })).toBe(1);
       expect(store.listRuns({ loopId: loop.id })).toHaveLength(1);
 
       expect(store.deleteLoop(loop.id)).toBe(true);
 
       expect(store.listRuns({ loopId: loop.id })).toHaveLength(0);
       expect(store.countRuns()).toBe(0);
-      expect(store.countRuns("running")).toBe(0);
+      expect(store.countRuns({ status: "running" })).toBe(0);
     } finally {
       store.close();
     }

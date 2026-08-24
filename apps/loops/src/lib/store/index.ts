@@ -187,7 +187,7 @@ export interface LoopStore {
 
   // ── Runs & receipts ────────────────────────────────────────────────────────────
   listRuns(opts?: { loopId?: string; status?: RunStatus; labels?: string[]; limit?: number; offset?: number }): Promise<LoopRun[]>;
-  countRuns(status?: RunStatus): Promise<number>;
+  countRuns(opts?: { loopId?: string; status?: RunStatus; labels?: string[] }): Promise<number>;
   getRun(id: string): Promise<LoopRun | undefined>;
   writeRunReceipt(input: WriteRunReceiptInput): Promise<RunReceipt>;
   getRunReceipt(runId: string): Promise<RunReceipt | undefined>;
@@ -380,8 +380,8 @@ export class LocalStore implements LoopStore {
   async listRuns(opts: Parameters<Store["listRuns"]>[0] = {}): Promise<LoopRun[]> {
     return this.store.listRuns(opts);
   }
-  async countRuns(status?: RunStatus): Promise<number> {
-    return this.store.countRuns(status);
+  async countRuns(opts: Parameters<LoopStore["countRuns"]>[0] = {}): Promise<number> {
+    return this.store.countRuns(opts);
   }
   async getRun(id: string): Promise<LoopRun | undefined> {
     return this.store.getRun(id);
@@ -804,8 +804,9 @@ export class ApiStore implements LoopStore {
     const raw = await this.t.get("/runs", { query: clean({ ...query, labels: labels?.join(","), showOutput: true }) });
     return pickArray<LoopRun>(raw, "runs");
   }
-  async countRuns(status?: RunStatus): Promise<number> {
-    const raw = await this.t.get("/runs/count", { query: clean({ status }) });
+  async countRuns(opts: Parameters<LoopStore["countRuns"]>[0] = {}): Promise<number> {
+    const { labels, ...rest } = opts;
+    const raw = await this.t.get("/runs/count", { query: clean({ ...rest, labels: labels?.join(",") }) });
     return Number(pickObject<number>(raw, "count") ?? 0);
   }
   async getRun(id: string): Promise<LoopRun | undefined> {

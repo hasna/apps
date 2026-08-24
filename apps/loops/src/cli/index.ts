@@ -2088,12 +2088,16 @@ program
       // Envelope so a truncated page (e.g. the hosted control plane clamping
       // a page at its 1000-row cap) is observable: the old bare array made
       // every 'no runs remain' claim a silent floor.
-      const count = await store.countRuns();
+      // count must reflect the FILTERED population (same loopId/labels as the
+      // list), so has_more turns false once the filtered set is exhausted
+      // (LOO3-00143 P1). next_offset only advances while has_more is true.
+      const count = await store.countRuns({ loopId: loop?.id, labels: normalizeLoopLabels(opts.label) });
+      const hasMore = offset + runs.length < count;
       print({
         runs: runs.map((run) => publicRun(run, opts.showOutput)),
         count,
-        has_more: offset + runs.length < count,
-        next_offset: offset + runs.length,
+        has_more: hasMore,
+        next_offset: hasMore ? offset + runs.length : offset,
       });
     } else {
       for (const run of runs) {

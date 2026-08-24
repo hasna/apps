@@ -92,8 +92,8 @@ export function buildLoopUiSnapshot(store: Store, opts: BuildLoopUiSnapshotOptio
       activeLoops: store.countLoops("active"),
       pausedLoops: store.countLoops("paused"),
       stoppedLoops: store.countLoops("stopped"),
-      runningRuns: store.countRuns("running"),
-      failedRuns: store.countRuns("failed"),
+      runningRuns: store.countRuns({ status: "running" }),
+      failedRuns: store.countRuns({ status: "failed" }),
       updatedAt: now.toISOString(),
     },
   };

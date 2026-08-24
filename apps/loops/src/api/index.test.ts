@@ -2324,6 +2324,62 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("GET /v1/runs/count accepts the same loopId/labels/status filters as GET /v1/runs (LOO3-00143 P1)", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const alpha = await storage.createLoop({
+        name: "api-count-alpha",
+        labels: ["shared"],
+        overlap: "allow",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const beta = await storage.createLoop({
+        name: "api-count-beta",
+        labels: ["shared"],
+        overlap: "allow",
+        schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      // alpha: 2 running runs, beta: 1 running + 2 succeeded (global 5).
+      for (let i = 0; i < 2; i += 1) await storage.claimRun(alpha, `2026-01-01T00:00:0${i}.000Z`, "api-runner");
+      for (let i = 0; i < 3; i += 1) {
+        const claim = await storage.claimRun(beta, `2026-01-01T00:01:0${i}.000Z`, "api-runner");
+        if (i > 0) {
+          await storage.finalizeRun(claim!.run.id, {
+            status: "succeeded",
+            finishedAt: `2026-01-01T00:01:0${i}.500Z`,
+            durationMs: 1_000,
+            stdout: "",
+            stderr: "",
+          });
+        }
+      }
+
+      const countJson = async (query: string): Promise<{ ok: boolean; count?: number; error?: string }> => {
+        const res = await fetch(apiUrl(server, `/v1/runs/count${query}`));
+        expect(res.status).toBe(200);
+        return (await res.json()) as { ok: boolean; count?: number; error?: string };
+      };
+
+      expect((await countJson("")).count).toBe(5);
+      expect((await countJson(`?loopId=${encodeURIComponent(alpha.id)}`)).count).toBe(2);
+      expect((await countJson(`?loopId=${encodeURIComponent(beta.id)}`)).count).toBe(3);
+      expect((await countJson(`?loopId=${encodeURIComponent(alpha.id)}&status=running`)).count).toBe(2);
+      expect((await countJson(`?loopId=${encodeURIComponent(beta.id)}&status=succeeded`)).count).toBe(2);
+      expect((await countJson("?status=running")).count).toBe(3);
+      expect((await countJson("?status=succeeded")).count).toBe(2);
+      expect((await countJson("?labels=shared")).count).toBe(5);
+      expect((await countJson(`?loopId=${encodeURIComponent(beta.id)}&labels=shared`)).count).toBe(3);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("run receipt routes write, read, and filter bounded receipts", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

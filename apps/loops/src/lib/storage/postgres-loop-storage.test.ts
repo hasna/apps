@@ -1077,7 +1077,7 @@ suite("PostgresLoopStorage (live)", () => {
     expect(fin.status).toBe("succeeded");
     expect(fin.stdout).toBe("ok");
 
-    expect(await storage.countRuns("succeeded")).toBe(1);
+    expect(await storage.countRuns({ status: "succeeded" })).toBe(1);
     const runs = await storage.listRuns({ loopId: loop.id });
     expect(runs.length).toBe(1);
     expect((await storage.getRunBySlot(loop.id, slot))?.id).toBe(claim!.run.id);
@@ -1107,9 +1107,9 @@ suite("PostgresLoopStorage (live)", () => {
     );
 
     expect(finalized).toMatchObject({ status: "skipped", exitCode: 75 });
-    expect(await storage.countRuns("skipped")).toBe(1);
-    expect(await storage.countRuns("failed")).toBe(0);
-    expect(await storage.countRuns("succeeded")).toBe(0);
+    expect(await storage.countRuns({ status: "skipped" })).toBe(1);
+    expect(await storage.countRuns({ status: "failed" })).toBe(0);
+    expect(await storage.countRuns({ status: "succeeded" })).toBe(0);
   });
 
   test("same-runner reclaim fences stale and tokenless PostgreSQL work", async () => {
@@ -1202,7 +1202,7 @@ suite("PostgresLoopStorage (live)", () => {
 
     // The slot still belongs to the original runner's row: no new attempt minted.
     expect((await storage.getRunBySlot(loop.id, claimedAt.toISOString()))?.id).toBe(first!.run.id);
-    expect(await storage.countRuns("running")).toBe(1);
+    expect(await storage.countRuns({ status: "running" })).toBe(1);
   });
 
   test("expired-lease steal defers when the lease lapsed within the grace window even though the process started long ago", async () => {
@@ -1232,7 +1232,7 @@ suite("PostgresLoopStorage (live)", () => {
     expect(recovery.abandoned.map((r) => r.id)).not.toContain(first!.run.id);
     expect(recovery.deferred.map((r) => r.id)).toContain(first!.run.id);
     expect((await storage.getRunBySlot(loop.id, claimedAt.toISOString()))?.id).toBe(first!.run.id);
-    expect(await storage.countRuns("running")).toBe(1);
+    expect(await storage.countRuns({ status: "running" })).toBe(1);
   });
 
   test("expired-lease steal proceeds once the lease lapsed outside the grace window", async () => {

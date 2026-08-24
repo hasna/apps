@@ -1070,11 +1070,14 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
   const storage = requireStorage(ctx.storage);
   const showOutput = optionalBoolean(ctx.url.searchParams.get("showOutput")) ?? false;
   // GET /v1/runs/count — total-row verification (run history is far larger than
-  // the 1000-row list cap).
+  // the 1000-row list cap). Accepts the SAME loopId/labels/status filters as
+  // GET /v1/runs so the count reflects the filtered population (LOO3-00143 P1).
   if (segments.length === 1 && id === "count" && ctx.request.method === "GET") {
-    const count = await storage.countRuns(
-      optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
-    );
+    const count = await storage.countRuns({
+      loopId: ctx.url.searchParams.get("loopId") ?? undefined,
+      status: optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
+      labels: labelsFromSearchParams(ctx.url.searchParams),
+    });
     return ok({ count });
   }
   if (segments.length === 0 && ctx.request.method === "GET") {

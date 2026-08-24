@@ -5758,10 +5758,30 @@ export class Store {
     return row?.count ?? 0;
   }
 
-  countRuns(status?: RunStatus): number {
-    const row = status
-      ? this.db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loop_runs WHERE status = ?").get(status)
-      : this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loop_runs").get();
+  countRuns(opts: { loopId?: string; status?: RunStatus; labels?: string[] } = {}): number {
+    // Mirrors listRuns' filters exactly (LOO3-00143 P1): the CLI's pagination
+    // envelope must count the FILTERED population, never the global run table.
+    const labels = normalizeLoopLabels(opts.labels);
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (opts.loopId) {
+      where.push("loop_runs.loop_id = ?");
+      params.push(opts.loopId);
+    }
+    if (opts.status) {
+      where.push("loop_runs.status = ?");
+      params.push(opts.status);
+    }
+    for (const label of labels) {
+      where.push("EXISTS (SELECT 1 FROM json_each(label_loops.labels_json) WHERE value = ?)");
+      params.push(label);
+    }
+    const join = labels.length ? " JOIN loops AS label_loops ON label_loops.id = loop_runs.loop_id" : "";
+    const row = this.db
+      .query<{ count: number }, Array<string | number>>(
+        `SELECT COUNT(*) AS count FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`,
+      )
+      .get(...params);
     return row?.count ?? 0;
   }
 
