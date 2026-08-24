@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -103,16 +104,56 @@ describe("Conversations → Events source outbox", () => {
     const ids = new Set(updates.map((row) => row.id));
     expect(ids.size).toBe(8);
     const actions = updates.map((row) => (JSON.parse(row.envelope_json) as { data: { action: string } }).data.action);
-    expect(actions).toEqual([
-      "started",
-      "completed",
-      "cancelled",
-      "reopened",
-      "blocked",
-      "unblocked",
+    // Same-millisecond transitions share a created_at (ms-precision
+    // toISOString), and listPendingEventOutbox's ORDER BY created_at, id then
+    // falls through to the randomUUID id tiebreak — so drain order within a
+    // millisecond is arbitrary (BUG f5b705aa: CI flake where same-ms rows came
+    // back swapped). The drain contract is count + stable unique identity, both
+    // asserted above (length 8, 8 unique ids) — order within a millisecond is
+    // not part of it. Compare the action SET, not the sequence.
+    expect([...actions].sort()).toEqual([
       "assigned",
+      "blocked",
+      "cancelled",
+      "completed",
       "priority_changed",
+      "reopened",
+      "started",
+      "unblocked",
     ]);
+  });
+
+  test("same-millisecond outbox rows drain completely; order within a millisecond is arbitrary, count and identity are not", () => {
+    const db = getDb();
+    // Deterministic reproduction of the BUG f5b705aa collision shape: two
+    // transitions whose rows share one created_at (ms precision). The drain's
+    // ORDER BY created_at, id tiebreaks on the randomUUID id, so no insertion
+    // order is promised — what IS promised is that both rows drain with their
+    // distinct stable identities.
+    const sameMs = new Date().toISOString();
+    const actions = ["started", "completed"];
+    const ids = new Set<string>();
+    for (const action of actions) {
+      const transitionUuid = randomUUID();
+      ids.add(`conversations:task:same-ms:activity:${transitionUuid}`);
+      insertEventOutboxRow(db, {
+        id: `conversations:task:same-ms:activity:${transitionUuid}`,
+        source: "conversations",
+        type: TASK_UPDATED_TYPE,
+        envelope_json: JSON.stringify({ data: { action } }),
+        created_at: sameMs,
+        status: "pending",
+        attempts: 0,
+      });
+    }
+    const drained = listPendingEventOutbox(db, 100).filter((row) => row.type === TASK_UPDATED_TYPE);
+    expect(drained).toHaveLength(2);
+    expect(new Set(drained.map((row) => row.id))).toEqual(ids);
+    expect(
+      drained
+        .map((row) => (JSON.parse(row.envelope_json) as { data: { action: string } }).data.action)
+        .sort(),
+    ).toEqual([...actions].sort());
   });
 
   test("a repeated blocked -> unblocked -> blocked sequence produces two distinct events (never task_uuid + action alone)", () => {
