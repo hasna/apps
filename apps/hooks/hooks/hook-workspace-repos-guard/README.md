@@ -2,35 +2,35 @@
 
 Codewith-native hook installed as `hooks run workspace-repos-guard`.
 
-PreToolUse guard for the canonical workspace structure (knowledge
-`k_mssu9jdq_dgnnu2`): `$HOME/workspace` contains ONLY `repos/` + `scratch/` +
-`AGENTS.md`, and `repos/` contains ONLY GitHub-org folders. Checkouts at
-`$HOME/workspace/repos/<org>/<repo>/` are read/context only.
+PreToolUse guard for the canonical repo-checkout root (knowledge
+`k_mssu9jdq_dgnnu2`): `$HOME/.hasna/repos/clones` contains ONLY GitHub-org
+folders. Checkouts at `$HOME/.hasna/repos/clones/<org>/<repo>/` are
+read/context only.
 
 ## What it blocks
 
-- Any write to `$HOME/workspace/repos` itself (file tools and Bash).
-- Any write that would create a top-level entry directly under `repos/`
-  (depth 1 — a stray folder or file at the org level).
+- Any write to `$HOME/.hasna/repos/clones` itself (file tools and Bash).
+- Any write that would create a top-level entry directly under the clones
+  root (depth 1 — a stray folder or file at the org level).
 - Any write whose second path segment is not an allowed GitHub org.
 - Any delete (`rm`, `rmdir`, `git clean`, `git rm`, `unlink`, `shred`,
-  `trash`, ...) anywhere under `$HOME/workspace/repos`, at any depth,
+  `trash`, ...) anywhere under `$HOME/.hasna/repos/clones`, at any depth,
   including deep inside org checkouts.
 
 ## What it allows
 
 - Reads, always.
 - Writes deeper inside an allowed org folder
-  (`repos/<org>/<repo>/...`). Structure only: it deliberately does NOT
+  (`clones/<org>/<repo>/...`). Structure only: it deliberately does NOT
   duplicate the `worktree-guard` hook, which owns edits-in-shared-checkouts
   semantics.
 
 Home spellings (`~`, `$HOME`, `${HOME}`, quoted or not, including split-quote
-forms like `"$HOME"/workspace/repos`, which Bash treats identically to the
+forms like `"$HOME"/.hasna/repos/clones`, which Bash treats identically to the
 unquoted spelling) are expanded before classification; `apply_patch` tools
 are inspected through their `Add File` / `Update File` / `Delete File`
 markers; Bash relative operands are resolved against the command's cwd when
-it sits under `repos/`; parenthesized command groups
+it sits under the clones root; parenthesized command groups
 (`(cd ... && rm -rf ...)`) are unwrapped.
 
 ## Configuration

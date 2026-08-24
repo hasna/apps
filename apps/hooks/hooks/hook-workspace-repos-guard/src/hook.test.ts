@@ -4,7 +4,7 @@ import { join } from "path";
 import { evaluate, resolveAllowedOrgs } from "./hook";
 
 const HOME = homedir();
-const REPOS = join(HOME, "workspace", "repos");
+const REPOS = join(HOME, ".hasna", "repos", "clones");
 
 function preToolUse(tool_name: string, tool_input: Record<string, unknown>, cwd = join(REPOS, "hasna", "apps")) {
   return { hook_event_name: "PreToolUse", tool_name, tool_input, cwd };
@@ -75,11 +75,11 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
 
     test("tilde/$HOME spellings of deep allowed-org writes continue", () => {
       const commands = [
-        `touch ~/workspace/repos/hasna/apps/foo.md`,
-        `echo x > ~/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
-        `mkdir -p "${HOME}/workspace/repos/hasnaxyz/iapp-probe/notes"`,
-        `touch "$HOME"/workspace/repos/hasna/apps/x.txt`,
-        `echo x > "\${HOME}"/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
+        `touch ~/.hasna/repos/clones/hasna/apps/foo.md`,
+        `echo x > ~/.hasna/repos/clones/hasnaxyz/iapp-probe/notes.md`,
+        `mkdir -p "${HOME}/.hasna/repos/clones/hasnaxyz/iapp-probe/notes"`,
+        `touch "$HOME"/.hasna/repos/clones/hasna/apps/x.txt`,
+        `echo x > "\${HOME}"/.hasna/repos/clones/hasnaxyz/iapp-probe/notes.md`,
       ];
       for (const command of commands) {
         const result = evaluate(preToolUse("Bash", { command }));
@@ -89,10 +89,10 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
 
     test("file-tool tilde/$HOME paths deep inside an allowed org continue", () => {
       const results = [
-        evaluate(preToolUse("Write", { file_path: `~/workspace/repos/hasna/apps/src/x.ts` })),
-        evaluate(preToolUse("Edit", { file_path: `$HOME/workspace/repos/hasnaxyz/iapp-probe/n.ipynb` })),
-        evaluate(preToolUse("Write", { file_path: `"${HOME}/workspace/repos/hasna/apps/notes.md"` })),
-        evaluate(preToolUse("Write", { file_path: `"$HOME"/workspace/repos/hasna/apps/notes2.md` })),
+        evaluate(preToolUse("Write", { file_path: `~/.hasna/repos/clones/hasna/apps/src/x.ts` })),
+        evaluate(preToolUse("Edit", { file_path: `$HOME/.hasna/repos/clones/hasnaxyz/iapp-probe/n.ipynb` })),
+        evaluate(preToolUse("Write", { file_path: `"${HOME}/.hasna/repos/clones/hasna/apps/notes.md"` })),
+        evaluate(preToolUse("Write", { file_path: `"$HOME"/.hasna/repos/clones/hasna/apps/notes2.md` })),
       ];
       for (const result of results) {
         expect(result.output.continue).toBe(true);
@@ -129,7 +129,7 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
   });
 
   describe("negative controls — must block", () => {
-    test("Write to ~/workspace/repos itself is blocked", () => {
+    test("Write to ~/.hasna/repos/clones itself is blocked", () => {
       const result = evaluate(preToolUse("Write", { file_path: join(REPOS, "stray.txt") }));
       const reason = isBlocked(result);
       expect(reason).not.toBeNull();
@@ -207,21 +207,21 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
 
     test("tilde/$HOME spellings of the protected path are blocked", () => {
       const commands = [
-        `rm -rf ~/workspace/repos`,
-        `rm -rf ~/workspace/repos/hasna/apps`,
-        `rm -rf $HOME/workspace/repos/hasna`,
-        `rm -rf "${HOME}/workspace/repos"`,
-        `rm -rf "$HOME"/workspace/repos`,
-        `rm -rf "$HOME"/workspace/repos/hasna/apps`,
-        `rm -rf "\${HOME}"/workspace/repos/hasna`,
-        `rm -rf "${HOME}"/workspace/repos/hasna`,
-        `touch ~/workspace/repos/stray.txt`,
-        `mkdir -p ~/workspace/repos/notanorg`,
-        `echo x > ~/workspace/repos/notanorg/f.ts`,
-        `mv /tmp/x ~/workspace/repos`,
-        `truncate -s 0 ~/workspace/repos/stray.log`,
-        `rsync -a /tmp/x ~/workspace/repos/`,
-        `scp f.txt ~/workspace/repos/`,
+        `rm -rf ~/.hasna/repos/clones`,
+        `rm -rf ~/.hasna/repos/clones/hasna/apps`,
+        `rm -rf $HOME/.hasna/repos/clones/hasna`,
+        `rm -rf "${HOME}/.hasna/repos/clones"`,
+        `rm -rf "$HOME"/.hasna/repos/clones`,
+        `rm -rf "$HOME"/.hasna/repos/clones/hasna/apps`,
+        `rm -rf "\${HOME}"/.hasna/repos/clones/hasna`,
+        `rm -rf "${HOME}"/.hasna/repos/clones/hasna`,
+        `touch ~/.hasna/repos/clones/stray.txt`,
+        `mkdir -p ~/.hasna/repos/clones/notanorg`,
+        `echo x > ~/.hasna/repos/clones/notanorg/f.ts`,
+        `mv /tmp/x ~/.hasna/repos/clones`,
+        `truncate -s 0 ~/.hasna/repos/clones/stray.log`,
+        `rsync -a /tmp/x ~/.hasna/repos/clones/`,
+        `scp f.txt ~/.hasna/repos/clones/`,
       ];
       for (const command of commands) {
         const result = evaluate(preToolUse("Bash", { command }));
@@ -231,11 +231,11 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
 
     test("file-tool tilde/$HOME spellings are blocked", () => {
       const results = [
-        evaluate(preToolUse("Write", { file_path: `~/workspace/repos/stray.txt` })),
-        evaluate(preToolUse("Write", { file_path: `$HOME/workspace/repos/notanorg/f.ts` })),
-        evaluate(preToolUse("Edit", { file_path: `~/workspace/repos/hasna` })),
-        evaluate(preToolUse("Write", { file_path: `~/workspace/repos` })),
-        evaluate(preToolUse("Write", { file_path: `"$HOME"/workspace/repos/stray.txt` })),
+        evaluate(preToolUse("Write", { file_path: `~/.hasna/repos/clones/stray.txt` })),
+        evaluate(preToolUse("Write", { file_path: `$HOME/.hasna/repos/clones/notanorg/f.ts` })),
+        evaluate(preToolUse("Edit", { file_path: `~/.hasna/repos/clones/hasna` })),
+        evaluate(preToolUse("Write", { file_path: `~/.hasna/repos/clones` })),
+        evaluate(preToolUse("Write", { file_path: `"$HOME"/.hasna/repos/clones/stray.txt` })),
       ];
       for (const result of results) {
         expect(isBlocked(result)).not.toBeNull();
@@ -244,7 +244,7 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
 
     test("subshell-grouped cd + rm is blocked", () => {
       const commands = [
-        `(cd ~/workspace/repos && rm -rf hasna)`,
+        `(cd ~/.hasna/repos/clones && rm -rf hasna)`,
         `(cd ${REPOS} && rm -rf hasna)`,
         `( cd ${REPOS} && touch stray.txt )`,
       ];
@@ -265,11 +265,11 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
 
     test("mutating verbs writing under the protected root are blocked", () => {
       const commands = [
-        `sed -i 's/x/y/' ~/workspace/repos/stray.txt`,
+        `sed -i 's/x/y/' ~/.hasna/repos/clones/stray.txt`,
         `rsync -a ${join(REPOS, "hasna")} /tmp/out`,
         `scp -r ${join(REPOS, "hasna")} other:/tmp/`,
         `truncate -s 0 ${join(REPOS, "notanorg", "f.ts")}`,
-        `python3 -c "open('~/workspace/repos/stray.txt','w')"`,
+        `python3 -c "open('~/.hasna/repos/clones/stray.txt','w')"`,
         `node -e "require('fs').writeFileSync('${join(REPOS, "notanorg", "f.ts")}','x')"`,
       ];
       for (const command of commands) {

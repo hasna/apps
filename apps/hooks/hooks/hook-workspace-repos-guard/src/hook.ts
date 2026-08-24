@@ -3,20 +3,19 @@
 /**
  * PreToolUse hook: workspace-repos-guard
  *
- * Guards the canonical workspace structure (knowledge k_mssu9jdq_dgnnu2):
- * $HOME/workspace contains ONLY repos/ + scratch/ + AGENTS.md, and repos/
- * contains ONLY GitHub-org folders. Checkouts at
- * $HOME/workspace/repos/<org>/<repo>/ are read/context only.
+ * Guards the canonical repo-checkout root (knowledge k_mssu9jdq_dgnnu2):
+ * $HOME/.hasna/repos/clones contains ONLY GitHub-org folders, and checkouts at
+ * $HOME/.hasna/repos/clones/<org>/<repo>/ are read/context only.
  *
  * Structure-only guard — it deliberately does NOT duplicate the worktree-guard
  * hook, which owns edits-in-shared-checkouts semantics.
  *
  * BLOCKS:
- *   - any write to $HOME/workspace/repos itself (file tools and Bash),
- *   - any write that would create a top-level entry under repos/ (depth <= 1),
+ *   - any write to $HOME/.hasna/repos/clones itself (file tools and Bash),
+ *   - any write that would create a top-level entry under clones/ (depth <= 1),
  *   - any write whose second path segment is not an allowed GitHub org,
  *   - any delete (rm, rmdir, git clean, git rm, unlink, shred, trash, ...)
- *     anywhere under $HOME/workspace/repos, at any depth.
+ *     anywhere under $HOME/.hasna/repos/clones, at any depth.
  *
  * ALLOWS (structure only):
  *   - reads, always,
@@ -58,7 +57,7 @@ const DEFAULT_ORGS = ["hasna", "hasnaxyz", "hasna-products"];
 const RULE = "workspace-repos-guard";
 
 function reposRoot(home: string): string {
-  return join(home, "workspace", "repos");
+  return join(home, ".hasna", "repos", "clones");
 }
 
 export function resolveAllowedOrgs(env: NodeJS.ProcessEnv = process.env): Set<string> {
@@ -99,7 +98,7 @@ export function classifyPath(target: string, root: string, orgs: Set<string>, op
   const segments = rel.split(sep).filter(Boolean);
 
   if (op === "delete") {
-    return { blocked: true, reason: `[${RULE}] delete under ~/workspace/repos is forbidden at any depth: ${target}` };
+    return { blocked: true, reason: `[${RULE}] delete under ~/.hasna/repos/clones is forbidden at any depth: ${target}` };
   }
 
   if (segments.length <= 1) {
@@ -113,7 +112,7 @@ export function classifyPath(target: string, root: string, orgs: Set<string>, op
   if (!orgs.has(org)) {
     return {
       blocked: true,
-      reason: `[${RULE}] '${org}' is not an allowed GitHub org under ~/workspace/repos (allowed: ${[...orgs].join(", ")}): ${target}`,
+      reason: `[${RULE}] '${org}' is not an allowed GitHub org under ~/.hasna/repos/clones (allowed: ${[...orgs].join(", ")}): ${target}`,
     };
   }
 
@@ -193,7 +192,7 @@ export function expandHomeSpelling(token: string, home: string): string {
 
 /**
  * Strip one level of wrapping shell-group punctuation from a segment so a
- * subshell group like `(cd ~/workspace/repos && rm -rf hasna)` is analysed as
+ * subshell group like `(cd ~/.hasna/repos/clones && rm -rf hasna)` is analysed as
  * its parts after the `&&` split.
  */
 function unwrapSegment(segment: string): string {
@@ -208,7 +207,7 @@ function regexEscape(text: string): string {
 }
 
 /**
- * Extract workspace-repos targets from a Bash command. Recognises explicit
+ * Extract repos-clones targets from a Bash command. Recognises explicit
  * `~/...`, `$HOME/...`, `${HOME}/...` and literal-home references (expanded
  * before classification), plus a trailing relative operand (`.`, `..`, a bare
  * name) when the command `cd`s into the repos root or the command's cwd
@@ -234,7 +233,7 @@ export function bashTargets(command: string, home: string, cwd: string): PathTar
     }
 
     const homeLiteral = regexEscape(home);
-    const prefixRe = new RegExp(`(?:~|\\$HOME"*|\\$\\{HOME\\}"*|${homeLiteral}"*)/workspace/repos`);
+    const prefixRe = new RegExp(`(?:~|\\$HOME"*|\\$\\{HOME\\}"*|${homeLiteral}"*)/\\.hasna/repos/clones`);
     const re = new RegExp(`(${prefixRe.source})([^\\s"';&|<>()\x60]*|$)`, "g");
     let m: RegExpExecArray | null;
     let foundExplicit = false;

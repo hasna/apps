@@ -95,7 +95,7 @@ export const HOOKS: HookMeta[] = [
   {
     name: "workspace-repos-guard",
     displayName: "Workspace Repos Guard",
-    description: "Blocks writes and deletes that break the ~/workspace/repos structure: writes to the repos root, top-level entry creation, non-org folders, and any delete under repos",
+    description: "Blocks writes and deletes that break the ~/.hasna/repos/clones structure: writes to the clones root, top-level entry creation, non-org folders, and any delete under clones",
     version: "0.1.0",
     category: "Git Safety",
     event: "PreToolUse",
