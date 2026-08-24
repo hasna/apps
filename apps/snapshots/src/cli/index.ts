@@ -2,7 +2,9 @@
 import {
   applySavedRestorePlan,
   captureSnapshot,
+  freshness,
   getSnapshotEnvelope,
+  listCaptureRuns,
   listPolicies,
   listResources,
   listSnapshotResources,
@@ -52,6 +54,27 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       case "list":
       case "snapshots": {
         print({ snapshots: listSnapshots({ dbPath, limit: numberFlag(parsed, "limit") ?? 50 }) });
+        return;
+      }
+      case "runs": {
+        print({ runs: listCaptureRuns({ dbPath, limit: numberFlag(parsed, "limit") ?? 10 }) });
+        return;
+      }
+      case "freshness": {
+        // Exit contract: 0 = fresh, 1 = not fresh (stale / no runs — a VERDICT),
+        // 2 = could not determine (CLI/DB read error). A wrapper must not treat
+        // "could not read the status" as evidence the capture cron is dead.
+        try {
+          const status = freshness({ dbPath, threshold: numberFlag(parsed, "threshold") ?? 900 });
+          print(status);
+          if (!status.ok) process.exitCode = 1;
+        } catch (error) {
+          process.exitCode = 2;
+          print({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
         return;
       }
       case "show": {
@@ -150,7 +173,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         print({
           ok: true,
           db_path: dbPath,
-          commands: ["capture", "list", "show", "resources", "plan", "restore", "policy", "daemon", "service"]
+          commands: ["capture", "list", "runs", "freshness", "show", "resources", "plan", "restore", "policy", "daemon", "service"]
         });
         return;
       }
@@ -253,6 +276,8 @@ function printHelp(unknown?: string): void {
     usage: [
       "snapshots capture [--name name] [--include machine,tmux,projects,processes,sessions,browser,desktop,apps] [--tmux-tail-lines n]",
       "snapshots list [--limit n]",
+      "snapshots runs [--limit n]",
+      "snapshots freshness [--threshold seconds]",
       "snapshots show <snapshot-id>",
       "snapshots resources [--limit n]",
       "snapshots resources <snapshot-id> [--tree]",
