@@ -1428,6 +1428,21 @@ const root = join(import.meta.dir, "..");
  * selector with a warning while the client half remains live. A flat refusal
  * would break supported one-shell operator and test shapes before the client
  * families have been collapsed.
+ *
+ * emailsModeEnvReferences 202 -> 203, ONE occurrence, reconciled rather than
+ * hidden (todos 91c9ad74, 2026-08-24). The +1 is a scrubbing assertion in
+ * `scripts/prepublish-local-test.test.ts` (line 43) added by 91e38ef6f
+ * (O15-00516): the test proves the prepublish-local-test env scrub forces the
+ * local store and asserts the mode env var equals "local". It is a TEST
+ * assertion about the transitional variable, not a new mode branch or a second
+ * implementation of a repository, and it disappears along with the variable when
+ * the axis deletion lands. The metric deliberately counts every occurrence of the
+ * mode env var anywhere in the tree (docs, Terraform, compose, tests), so a real
+ * occurrence is counted, not exempted: the ceiling is moved to match the measured
+ * tree rather than the file being parked in RATCHET_CORPUS_EXCLUSIONS.
+ *
+ * (The variable name is spelled indirectly here on purpose: this file sits inside
+ * its own corpus and must contribute zero to every count.)
  */
 const CEILINGS: Record<string, number> = {
   twoArmFamilies: 14,
@@ -1440,7 +1455,7 @@ const CEILINGS: Record<string, number> = {
   getEmailsModeReferences: 55,
   resolveEmailsModeReferences: 64,
   normalizeEmailsModeReferences: 16,
-  emailsModeEnvReferences: 202,
+  emailsModeEnvReferences: 203,
 };
 
 // 649 files are tracked and 648 scanned today, totalling ~9.7M characters. (The figures in
