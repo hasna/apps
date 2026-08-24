@@ -1761,8 +1761,9 @@ export function releaseWorktree(request: ReleaseWorktreeRequest): ReleaseWorktre
 
   const timestamp = nowIso();
   const markReleased = () => {
-    db.query("UPDATE worktree_leases SET status = 'released', released_at = ?, updated_at = ? WHERE lease_id = ?")
-      .run(timestamp, timestamp, lease.lease_id);
+    db.query(
+      "UPDATE worktree_leases SET status = 'released', released_at = ?, updated_at = ?, last_error = NULL WHERE lease_id = ?",
+    ).run(timestamp, timestamp, lease.lease_id);
     return leaseById(db, lease.lease_id)!;
   };
 
@@ -1787,6 +1788,26 @@ export function releaseWorktree(request: ReleaseWorktreeRequest): ReleaseWorktre
     };
   } catch (error) {
     if (error instanceof WorktreeError) {
+      if (error.code === "NOT_A_WORKTREE") {
+        // The worktree is already gone — the directory was removed, or its
+        // `.git` pointer was pruned while the directory and lease row
+        // remained (O15-00583 / O15-00584). There is nothing left for the
+        // lease to protect and nothing for git to remove, so release
+        // completes instead of stranding the lease as permanently un-releasable
+        // (the previous behaviour: every retry hit the same NOT_A_WORKTREE
+        // refusal and the lease row stayed claimed forever). A directory that
+        // still exists is now untracked detritus and is deliberately kept —
+        // never deleted without a git-backed reason — and the result reports
+        // whether the worktree path is actually gone.
+        const released = markReleased();
+        return {
+          schema: WORKTREE_LEASE_SCHEMA,
+          removed: !existsSync(lease.worktree_path),
+          refusal: null,
+          evidence_path: null,
+          lease: released,
+        };
+      }
       // `delete-if-clean` means exactly that: a refusal leaves the lease
       // claimed and the directory intact, and reports why.
       db.query("UPDATE worktree_leases SET last_error = ?, updated_at = ? WHERE lease_id = ?")

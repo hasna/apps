@@ -973,4 +973,33 @@ describe("releaseWorktree", () => {
     expect(result.refusal).toBe("WORKTREE_DIRTY");
     expect(existsSync(created.path)).toBe(true);
   });
+
+  // O15-00583 / O15-00584 — a lease must never be stranded by a worktree that
+  // is already gone. When the worktree directory was removed (or its `.git`
+  // pointer pruned) while the directory and lease row remain, `removeWorktree`
+  // refuses with NOT_A_WORKTREE and the old code recorded the refusal and kept
+  // the lease claimed forever — no path ever marked it released. Release of a
+  // worktree that no longer exists has nothing to protect, so it completes.
+  test("release completes when the worktree directory is already gone (missing-directory strand)", () => {
+    const { repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "release-gone-dir" });
+    rmSync(created.path, { recursive: true, force: true });
+    const result = releaseWorktree({ leaseId: created.lease.lease_id });
+    expect(result.lease.status).toBe("released");
+    expect(result.refusal).toBeNull();
+    expect(result.removed).toBe(true);
+  });
+
+  test("release completes when the worktree .git pointer is gone (pruned-registration strand)", () => {
+    const { repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "release-gone-pointer" });
+    rmSync(join(created.path, ".git"));
+    const result = releaseWorktree({ leaseId: created.lease.lease_id });
+    expect(result.lease.status).toBe("released");
+    expect(result.refusal).toBeNull();
+    // The directory is untracked detritus now; release keeps it rather than
+    // deleting unknown content, and reports that it was not removed.
+    expect(result.removed).toBe(false);
+    expect(existsSync(created.path)).toBe(true);
+  });
 });
