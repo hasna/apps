@@ -9,9 +9,12 @@ import { ApiStore } from "../lib/store/api-store.js";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
-function makeFakeClient(initialProjects: Array<Record<string, any>> = [
-  { id: "proj-valid", name: "Chief of Harness" },
-]) {
+function makeFakeClient(
+  initialProjects: Array<Record<string, any>> = [
+    { id: "proj-valid", name: "Chief of Harness" },
+  ],
+  opts: { messageCreatedAtAsDate?: boolean } = {},
+) {
   const channels: Record<string, any> = {};
   const channelAliases: Record<string, string> = {};
   const channelMembers = new Set<string>();
@@ -705,7 +708,11 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
           reply_to: reply_to ?? null,
           thread_id: thread_id ?? null,
           thread_status: null,
-          created_at: new Date().toISOString(),
+          // The real server reads TIMESTAMPTZ through `pg`, which hands back a
+          // JS Date object (see src/lib/content-safety.ts). The default fake
+          // returns an ISO string; `messageCreatedAtAsDate` mimics pg so the
+          // timestamp-serialization path is exercised like production.
+          created_at: opts.messageCreatedAtAsDate ? new Date() : new Date().toISOString(),
         };
         messages.push(row);
         return row;
@@ -4784,5 +4791,65 @@ describe("H6 hosted /v1 outbox emission (Conversations→Events)", () => {
     const envelopes = outboxEnvelopes(mark);
     expect(envelopes).toHaveLength(1);
     expect(envelopes[0]!.data.uuid).toBeTruthy();
+  });
+
+  test("message creation binds an ISO-8601 timestamp into the outbox created_at even when pg returns a Date object", async () => {
+    // Regression for todo 445de05e: `conversations send` failed with
+    //   POST /messages -> 400: invalid input syntax for type timestamp with time zone:
+    //   "Mon Aug 24 2026 17:33:54 GMT+0000 (Coordinated Universal Time)"
+    // The hosted outbox INSERT binds `envelope.time` into a TIMESTAMPTZ column.
+    // `pg` hands back a real Date for the message row's `created_at`, and
+    // `String(date)` produced `Date.toString()` format instead of ISO 8601.
+    // Mimic pg by having the fake messages INSERT return a Date object.
+    const isoClient = makeFakeClient([], { messageCreatedAtAsDate: true });
+    isoClient.__debug.seedChannel(
+      {
+        id: "chn_iso_0000000000000000000000000001",
+        name: "h6-iso-channel",
+        description: "d",
+        topic: null,
+        project_id: null,
+        created_by: "test",
+        created_at: "2026-08-06T10:00:00.000Z",
+        archived_at: null,
+        metadata: null,
+        tags: null,
+      },
+      ["test"],
+      [],
+    );
+    const isoKeys = new ApiKeyStore(isoClient as any);
+    const isoVerifier = verifyApiKey({
+      app: "conversations",
+      signingSecret: SIGNING,
+      keyStatus: async (): Promise<ApiKeyStatus> => "active",
+    });
+    const isoServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: { client: isoClient as any, keys: isoKeys, verifier: isoVerifier },
+    });
+    const isoBase = `http://127.0.0.1:${isoServer.port}`;
+    try {
+      const mark = isoClient.__debug.queryCalls.length;
+      const sent = await fetch(`${isoBase}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ from: "a", to: "b", content: "iso timestamp probe", channel: "h6-iso-channel" }),
+      });
+      expect(sent.status).toBe(201);
+      const outbox = isoClient.__debug.queryCalls
+        .slice(mark)
+        .filter((c) => /INSERT INTO conversations_event_outbox/i.test(c.sql));
+      expect(outbox).toHaveLength(1);
+      // The outbox INSERT is
+      //   (id, source, type, envelope_json, created_at, status, attempts)
+      // so the 5th param ($5) is the timestamp bound to the TIMESTAMPTZ column.
+      const createdParam = String(outbox[0]!.params[4]);
+      expect(createdParam).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      expect(createdParam).not.toMatch(/(GMT|Coordinated Universal Time)/);
+    } finally {
+      isoServer.stop(true);
+    }
   });
 });

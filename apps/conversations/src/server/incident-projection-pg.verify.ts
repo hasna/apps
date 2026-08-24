@@ -122,6 +122,86 @@ async function runScenarios(baseUrl: string, apiKey: string): Promise<Check[]> {
   return checks;
 }
 
+/**
+ * Hosted-PG regression for task 041b4e3a (incident 731890): the message-create
+ * path binds the outbox envelope `time` into conversations_event_outbox
+ * created_at (TIMESTAMPTZ NOT NULL) inside the SAME PG transaction as the
+ * message insert. `pg` returns a real Date for TIMESTAMPTZ; `String(date)`
+ * yields "Mon Aug 24 2026 ... GMT+0000 (Coordinated Universal Time)", which
+ * Postgres rejects — every POST /v1/messages 400'd on the hosted env. With the
+ * bug present the POST fails and the transaction rolls back; with the fix the
+ * POST succeeds and the outbox row carries an ISO-8601 created_at.
+ */
+async function runOutboxMessageCreateCheck(
+  baseUrl: string,
+  apiKey: string,
+  client: ReturnType<typeof createQueryClient>,
+): Promise<Check[]> {
+  const checks: Check[] = [];
+  const channelName = `outbox-iso-${Date.now()}`;
+
+  const channel = await fetch(`${baseUrl}/v1/channels`, {
+    method: "POST",
+    headers: { "x-api-key": apiKey, "content-type": "application/json" },
+    body: JSON.stringify({ name: channelName, created_by: "incident-pg-verifier" }),
+  });
+  checks.push({
+    name: "outbox/channel-seed",
+    expected: "201",
+    observed: String(channel.status),
+  });
+  if (channel.status !== 201) return checks;
+
+  const sent = await fetch(`${baseUrl}/v1/messages`, {
+    method: "POST",
+    headers: { "x-api-key": apiKey, "content-type": "application/json" },
+    body: JSON.stringify({
+      from: "incident-pg-verifier",
+      to: channelName,
+      channel: channelName,
+      content: "outbox-iso regression",
+    }),
+  });
+  checks.push({
+    name: "outbox/message-create",
+    expected: "201",
+    observed: String(sent.status),
+  });
+
+  const row = await client.get<{ created_at: unknown; envelope_json: string }>(
+    `SELECT created_at, envelope_json FROM conversations_event_outbox
+     WHERE type = 'conversations.message.created' AND source = 'conversations'
+     ORDER BY created_at DESC LIMIT 1`,
+  );
+  if (!row) {
+    checks.push({ name: "outbox/row-present", expected: "row", observed: "absent" });
+    return checks;
+  }
+  checks.push({ name: "outbox/row-present", expected: "row", observed: "row" });
+
+  let envelope: { time?: unknown } | null = null;
+  try {
+    envelope = JSON.parse(row.envelope_json) as { time?: unknown };
+  } catch {
+    envelope = null;
+  }
+  const time = envelope === null ? "unparseable" : String(envelope.time ?? "");
+  checks.push({
+    name: "outbox/envelope-time-iso",
+    expected: "iso8601",
+    observed: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(time) ? "iso8601" : time,
+  });
+
+  const created = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at);
+  checks.push({
+    name: "outbox/column-created-at-iso",
+    expected: "iso8601",
+    observed: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(created) ? "iso8601" : created,
+  });
+
+  return checks;
+}
+
 export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<number> {
   const requireLive = argv.includes("--require-live");
   const gate = liveGateStatus();
@@ -191,6 +271,7 @@ export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<n
 
     const baseUrl = `http://127.0.0.1:${server.port}`;
     const checks = await runScenarios(baseUrl, apiKey);
+    checks.push(...await runOutboxMessageCreateCheck(baseUrl, apiKey, client));
     for (const check of checks) {
       const ok = check.expected === check.observed;
       if (!ok) failures++;

@@ -130,6 +130,37 @@ describe("Conversations → Events source outbox", () => {
     expect(blockedEvents[0]!.data.transition_uuid).not.toBe(blockedEvents[1]!.data.transition_uuid);
   });
 
+  test("pending outbox rows with identical created_at read back in insertion order (regression 156a9d7c)", () => {
+    // CI repro (32754617617, commit 1126270e): blockTask/unblockTask landed in
+    // the same millisecond, created_at tied, and ORDER BY created_at, id broke
+    // the tie on the random uuid id — blocked/unblocked swapped in the read.
+    // The uuid ids here are chosen so the id-lexicographic order is the REVERSE
+    // of insertion order: pre-fix the read returns ["second","first"].
+    const db = getDb();
+    const created = "2026-08-24T17:39:43.000Z";
+    insertEventOutboxRow(db, {
+      id: "conversations:task:z-first:activity:00000000-0000-4000-8000-000000000001",
+      source: "conversations",
+      type: TASK_UPDATED_TYPE,
+      envelope_json: JSON.stringify({ time: created, data: { action: "first" } }),
+      created_at: created,
+      status: "pending",
+      attempts: 0,
+    });
+    insertEventOutboxRow(db, {
+      id: "conversations:task:a-second:activity:00000000-0000-4000-8000-000000000002",
+      source: "conversations",
+      type: TASK_UPDATED_TYPE,
+      envelope_json: JSON.stringify({ time: created, data: { action: "second" } }),
+      created_at: created,
+      status: "pending",
+      attempts: 0,
+    });
+    const actions = listPendingEventOutbox(db, 10)
+      .map((row) => (JSON.parse(row.envelope_json) as { data: { action: string } }).data.action);
+    expect(actions).toEqual(["first", "second"]);
+  });
+
   test("drain transports pending outbox rows into the Events durable spool and marks them spooled", async () => {
     const db = getDb();
     sendMessage({ from: "alice", to: "bob", content: "drain me" });

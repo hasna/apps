@@ -74,7 +74,12 @@ export function truncateUtf8(value: string, maxBytes: number): { text: string; t
 }
 
 function boundedSafeString(value: unknown, maxBytes = 256): string {
-  return truncateUtf8(redactSensitiveText(String(value ?? "")), maxBytes).text;
+  // A pg-read TIMESTAMPTZ arrives as a real Date; `String(date)` yields
+  // `Date.toString()` format ("Mon Aug 24 2026 ... GMT+0000") instead of ISO
+  // 8601, which the CLI expects (it slices created_at as an ISO string). Coerce
+  // Dates to ISO and stringify everything else the same way as before.
+  const text = value instanceof Date ? value.toISOString() : String(value ?? "");
+  return truncateUtf8(redactSensitiveText(text), maxBytes).text;
 }
 
 function nullableSafeString(value: unknown, maxBytes = 256): string | null {
