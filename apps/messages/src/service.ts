@@ -74,18 +74,23 @@ export interface MessagesStore {
  * Canonical, order-independent, collision-free thread key for a pair of
  * agents. "augustus" <-> "silvanus" is the same thread from either side.
  *
- * The format is the legacy `t_<a>__<b>` (sorted) — changing it would split
- * threads already stored under the old encoding, so it is stable. Collision
- * freedom comes from the name constraint instead: agent names may not contain
- * the underscore at all (enforced in normalizeAgentName). Without that, the
- * join is ambiguous in two ways: `a`/`b__c` vs `a__b`/`c` (names containing
- * the separator), and `0_`/`a` vs `0`/`_a` (names with boundary underscores
- * both forming `0___a`). With underscores banned, the `__` separator can only
- * ever be the join, so the encoding is injective on the valid domain.
+ * Each name's underscores are escaped (`_` -> `_u`) before the sorted join.
+ * Names without underscores encode identically to the legacy format, so all
+ * existing thread rows for underscore-free agents keep resolving unchanged.
+ * For names that DO contain underscores, the escape makes the `__` join
+ * unambiguous — the separator can never occur inside an escaped name (every
+ * `_` is followed by `u`), so `0_`/`a` and `0`/`_a` can no longer collapse
+ * onto one key. Legacy rows for underscore-named agents remain reachable via
+ * the grandfather fallback in send().
  */
 export function threadKeyFor(agentA: string, agentB: string): string {
   const [a, b] = [agentA, agentB].sort();
-  return `${a}__${b}`;
+  return `${escapeKeyPart(a)}__${escapeKeyPart(b)}`;
+}
+
+/** Escape every `_` in a key part so the `__` join is unambiguous. */
+function escapeKeyPart(name: string): string {
+  return name.replace(/_/g, "_u");
 }
 
 export function newThreadId(agentA: string, agentB: string): string {
@@ -93,17 +98,9 @@ export function newThreadId(agentA: string, agentB: string): string {
 }
 
 function normalizeAgentName(name: string): string {
-  const normalized = name.trim().toLowerCase();
-  // The thread key joins the sorted pair with "__". An underscore anywhere in
-  // a name makes the join ambiguous — `a`/`b__c` vs `a__b`/`c` (separator in
-  // the name) and `0_`/`a` vs `0`/`_a` (boundary underscores both forming
-  // `0___a`) would merge unrelated DM histories. Rejecting the underscore
-  // entirely keeps the legacy thread-id format stable (no migration) AND
-  // collision-free: with no underscore in any name, `__` can only be the join.
-  if (normalized.includes("_")) {
-    throw new Error(`agent name may not contain "_" (underscore): ${name}`);
-  }
-  return normalized;
+  // No name constraint: the thread-key encoding is injective for any name
+  // (see threadKeyFor), so legacy identities with underscores keep working.
+  return name.trim().toLowerCase();
 }
 
 export class MessagesService {
@@ -174,8 +171,24 @@ export class MessagesService {
     const sender = await this.ensureAgent(from_agent, null, now);
     const recipient = await this.ensureAgent(to_agent, null, now);
 
-    const threadId = newThreadId(sender.name, recipient.name);
+    let threadId = newThreadId(sender.name, recipient.name);
     let thread = await this.store.findThread(threadId);
+    if (!thread) {
+      // Grandfather path for legacy rows: before the escape encoding, thread
+      // ids were the raw sorted join, so an underscore-named pair's stored
+      // thread carries the unescaped id. Adopt it (only when its participants
+      // are this pair — otherwise the legacy id belongs to a colliding pair
+      // and the escaped thread is the correct one).
+      const sortedPair = [sender.name, recipient.name].sort();
+      const legacyId = `t_${sortedPair.join("__")}`;
+      if (legacyId !== threadId) {
+        const legacy = await this.store.findThread(legacyId);
+        if (legacy && legacy.agent_a === sortedPair[0] && legacy.agent_b === sortedPair[1]) {
+          thread = legacy;
+          threadId = legacyId;
+        }
+      }
+    }
     if (!thread) {
       thread = {
         id: threadId,

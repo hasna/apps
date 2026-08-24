@@ -37,25 +37,44 @@ describe("thread identity", () => {
     expect(newThreadId(A, B)).toBe(newThreadId(B, A));
   });
 
-  test("thread key stays format-stable and collision-free via the name constraint (REGRESSION: review P1s)", async () => {
-    const { service } = testService();
-    // Format stability: the thread id is the legacy `t_<a>__<b>` (sorted), so
-    // threads already stored under that encoding keep resolving — a format
-    // change would split existing histories (cycle-1 re-review P1).
+  test("thread key stays format-stable for plain names and collision-free for underscore names (REGRESSION: review P1s)", async () => {
+    // Format stability: underscore-free names encode identically to the
+    // legacy `t_<a>__<b>` (sorted), so existing thread rows keep resolving —
+    // no migration (cycle-1 re-review P1).
     expect(newThreadId("augustus", "silvanus")).toBe("t_augustus__silvanus");
-    // Collision freedom: both collision classes are eliminated by rejecting
-    // names containing the underscore — `a`/`b__c` vs `a__b`/`c` (separator in
-    // the name) and `0_`/`a` vs `0`/`_a` (boundary underscores, both forming
-    // `t_0___a`), the final-review P1.
-    expect(() => service.registerAgent("a__b")).toThrow(/may not contain "_"/);
-    expect(() => service.registerAgent("0_")).toThrow(/may not contain "_"/);
-    expect(() => service.registerAgent("_a")).toThrow(/may not contain "_"/);
-    await expect(
-      service.send({ from_agent: "a", to_agent: "b__c", content: "hi" }),
-    ).rejects.toThrow(/may not contain "_"/);
-    await expect(
-      service.send({ from_agent: "0_", to_agent: "a", content: "hi" }),
-    ).rejects.toThrow(/may not contain "_"/);
+    // Collision freedom: `a`/`b__c` vs `a__b`/`c` and `0_`/`a` vs `0`/`_a`
+    // must produce distinct keys (original P1 + final-review P1).
+    expect(newThreadId("a", "b__c")).not.toBe(newThreadId("a__b", "c"));
+    expect(newThreadId("0_", "a")).not.toBe(newThreadId("0", "_a"));
+    // The escape is order-independent like the legacy format.
+    expect(newThreadId("0_", "a")).toBe(newThreadId("a", "0_"));
+    expect(newThreadId("0", "_a")).toBe(newThreadId("_a", "0"));
+  });
+
+  test("legacy underscore-named threads stay reachable via the grandfather fallback (REGRESSION: re-review P1)", async () => {
+    const { service, db } = testService();
+    // Seed a legacy thread row under the old unescaped id for an
+    // underscore-named pair, as a 0.1.0-era store would hold it.
+    const legacyId = "t_0___a";
+    db.query(
+      "INSERT INTO threads (id, agent_a, agent_b, last_message_at, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(legacyId, "0_", "a", new Date().toISOString(), new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "0_", new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "a", new Date().toISOString());
+
+    // A send from the underscore-named pair adopts the legacy row instead of
+    // splitting the history.
+    const result = await service.send({ from_agent: "0_", to_agent: "a", content: "hi" });
+    expect(result.message.thread_id).toBe(legacyId);
+    const messages = await service.threadMessages(legacyId);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.content).toBe("hi");
+
+    // The colliding OTHER pair (`0`/`_a`) must NOT adopt the legacy row whose
+    // participants are a different pair: it gets its own escaped thread.
+    const other = await service.send({ from_agent: "0", to_agent: "_a", content: "yo" });
+    expect(other.message.thread_id).not.toBe(legacyId);
+    expect(newThreadId("0", "_a")).toBe(other.message.thread_id);
   });
 });
 
