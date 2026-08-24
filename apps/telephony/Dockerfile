@@ -19,8 +19,7 @@ RUN bun run build
 FROM --platform=linux/arm64 oven/bun:1-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=8080 \
-    HASNA_TELEPHONY_STORAGE_MODE=postgres
+    PORT=8080
 
 # App code, deps, and the migration runner (owner-scoped migrations run as a
 # one-shot task; the service itself runs as the app role).

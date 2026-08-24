@@ -6,8 +6,7 @@
 #
 #   # 1. bring up postgres and apply the schema (owner == superuser locally)
 #   docker compose up -d postgres
-#   HASNA_TELEPHONY_STORAGE_MODE=postgres \
-#     HASNA_TELEPHONY_DATABASE_URL=postgres://telephony:telephony@localhost:5432/telephony?sslmode=disable \
+#   HASNA_TELEPHONY_DATABASE_URL=postgres://telephony:telephony@localhost:5432/telephony?sslmode=disable \
 #     bun scripts/apply-cloud-migrations.mjs
 #   # 2. build + start the service
 #   docker compose up --build serve
@@ -41,7 +40,6 @@ services:
         condition: service_healthy
     environment:
       PORT: "8080"
-      HASNA_TELEPHONY_STORAGE_MODE: postgres
       HASNA_TELEPHONY_DATABASE_URL: postgres://telephony:telephony@postgres:5432/telephony?sslmode=disable
       # Local-only throwaway signing secret. Use a real secret in production.
       HASNA_TELEPHONY_API_SIGNING_KEY: local-dev-signing-secret-change-me
