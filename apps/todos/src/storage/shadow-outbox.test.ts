@@ -269,6 +269,51 @@ describe("durable shadow outbox", () => {
     expect(metrics.pending).toBe(0);
     expect(metrics.lastError).toContain("already exists in this scope");
   });
+
+  test("mirror parks a snapshot whose destination preflight conflicts: typed, never retried", async () => {
+    // The destination preflight (an existing task-list slug on a different
+    // object_id) must throw a TYPED ResourceConflictError so the mirror parks
+    // the row immediately. A generic Error would enter retry handling and feed
+    // the duplicate-key retry storm (release-review P1-1).
+    const existing = {
+      service: "test",
+      object_type: "task_lists",
+      object_id: "tl-existing",
+      payload: JSON.stringify({ id: "tl-existing", slug: "accounting", project_id: null, name: "Existing" }),
+      updated_at: "2026-01-01T00:00:00.000Z",
+      deleted_at: null,
+      source_machine_id: null,
+      version: 1,
+    };
+    const cloud = createMemoryPostgresClient();
+    const origQuery = cloud.client.query.bind(cloud.client);
+    cloud.client.query = async <T>(sql: string, values: readonly unknown[] = []) => {
+      if (sql.includes("FROM todos_sync_records") && !sql.includes("INSERT INTO")) {
+        return { rows: [existing as unknown as T] };
+      }
+      return origQuery(sql, values);
+    };
+
+    const mirror = new TodosShadowMirror({
+      postgresClient: cloud.client,
+      maxRetries: 5,
+      retryBaseMs: 5,
+    });
+    mirror.enqueueUpsert("taskLists", {
+      id: "tl-accounting-b",
+      slug: "accounting",
+      project_id: null,
+      name: "Colliding",
+    });
+    await mirror.flush();
+
+    const metrics = mirror.getMetrics();
+    expect(metrics.failed).toBe(1);
+    expect(metrics.retries).toBe(0);
+    expect(metrics.mirrored).toBe(0);
+    expect(metrics.pending).toBe(0);
+    expect(metrics.lastError).toContain("conflicts with destination");
+  });
 });
 
 describe("durable shadow outbox: kill-and-restart", () => {

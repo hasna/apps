@@ -6,6 +6,12 @@
 
 - 9fd8163: Sync push classifies scoped-slug unique violations as typed conflicts (ba6e4a19). pushSnapshot's ON CONFLICT arbiter is the table PRIMARY KEY, but the deployed uniqueness invariants are the partial expression indexes todos_sync_records_task_list_scope_slug_uidx and todos_sync_records_project_task_list_slug_uidx, so a slug collision on a different object_id bypassed the upsert and raised a raw 23505 that the mirror (5x) and durable outbox (8x) retried as transient — the duplicate-key retry storm under load. pushSnapshot now maps 23505 to ResourceConflictError codes TASK_LIST_SLUG_CONFLICT / PROJECT_SLUG_CONFLICT (with a metadata-less fallback re-read, mirroring the adapter's renameProjectAtomic), runs the destination-conflict read plus inserts in the client's transaction when available, and the mirror/outbox retry machinery parks typed conflicts immediately instead of re-enqueueing them.
 
+- b8ba49f: `GET /v1/tasks` and legacy `GET /api/tasks` validate the pagination bounds (O15-00354). Malformed values — `limit` 0, negative, or non-numeric, and a negative/non-numeric `offset` — now return HTTP 400 instead of silently answering 200 with the entire table (`0` and `NaN` are falsy, so the store's `if (filter.limit)` dropped the LIMIT clause and SQLite `LIMIT -1` means "no limit"). Regression tests cover each malformed bound plus a valid-pagination control.
+
+- f8338ff: ensureCloudSchema retries are throttled with a min-interval cooldown (O15-00479 follow-up to PR #931). Sustained schema failure re-ran the idempotent DDL sequence on every /v1 request, saturating the connection pool under lock contention. Calls inside the min-interval window (default 10s, `HASNA_TODOS_SCHEMA_RETRY_MIN_MS`) rethrow the recorded failure without re-running the DDL; the memo stays cleared so the first call after the interval retries.
+
+- d9ce925: Sync push's destination preflight now throws a typed `ResourceConflictError` (`SNAPSHOT_DESTINATION_CONFLICT`) instead of a generic `Error`. The preflight (an existing task-list slug or project task_list_id on a different object_id) previously entered the mirror/outbox retry queues as a generic error, so a persistent destination collision kept retrying — feeding the same duplicate-key retry storm the 23505 classifier removes. The typed error is parked immediately by the retry machinery, matching the 23505 path.
+
 ## 0.15.47
 
 ### Patch Changes
