@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.113
+
+### Patch Changes
+
+- d02a934: Add `knowledge versions purge --id <id> [--rev <n>] --yes` to permanently scrub retained prior versions that carry credential-shaped values (OPE60-00006). The operation deletes by id/version without ever reading the retained body; the live row is never a purge target.
+- Updated dependencies [6176948]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.14.0
+
 ## 0.2.112
 
 ### Patch Changes

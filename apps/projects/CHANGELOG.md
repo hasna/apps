@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.2
+
+### Patch Changes
+
+- Updated dependencies [6176948]
+- Updated dependencies [1126270]
+- Updated dependencies [8554afc]
+- Updated dependencies [68167f7]
+- Updated dependencies [7575de8]
+  - @hasna/contracts@0.14.0
+  - @hasna/conversations@0.7.7
+  - @hasna/loops@0.6.3
+  - @hasna/todos@0.15.49
+
 ## 1.0.1
 
 ### Patch Changes
@@ -742,7 +756,7 @@ JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
   diverged from the deployed `@hasna/projects@0.1.89`: the published
   `ProjectStore` seam refactor (0.1.85–0.1.89 — unify the registry behind one
   `ProjectStore` and route all CLI + MCP registry / status / dashboard /
-   GitHub-import / coordination / hosted API writes and the prompt-agent through
+  GitHub-import / coordination / hosted API writes and the prompt-agent through
   the Store to kill split-brain, plus the production Docker prod-deps image fix)
   was live on npm but never landed on `main`, while a set of `main`-only
   CLI/UX fixes had never been published. This release merges the published tag

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.69
+
+### Patch Changes
+
+- 947fa83: Add the versioned admin API contract export for control-plane consumers.
+
 ## 0.1.68
 
 ### Patch Changes
