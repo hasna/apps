@@ -14,6 +14,7 @@ conform to the hasna/apps standards. Complements the repo's own gates
 | 3. four surfaces | `surfaces.test.ts` | `<name>` CLI bin (HARD), `<name>-mcp`, `<name>-serve`, `./sdk` (WARN, P5-census exceptions) | HARD + WARN |
 | 4. license | `license.test.ts` | `license === "Apache-2.0"` | HARD, recorded exceptions |
 | 5. dist hygiene | `dist-hygiene.test.ts` | no `files` entry pulls in `node_modules` (negated exclusions fine) | HARD |
+| 6. intra-wave unpublished pins | `published-pins.test.ts` | no publishable member exact-pins an intra-wave dep (`@hasna/*` member of this tree) to a version not on the npm registry (wave tooling must publish the bumped dep before/within the same wave, or hold pins at the last published version) | HARD, registry-backed |
 
 ## The census exception records are a REPORTING lane (f05fe292, 2026-08-15)
 
