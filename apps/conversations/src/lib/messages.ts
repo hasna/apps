@@ -680,8 +680,20 @@ export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): Mess
     params.push(opts.since);
   }
   if (opts.since_id !== undefined) {
-    conditions.push("id > ?");
-    params.push(opts.since_id);
+    if (opts.since !== undefined) {
+      // Both a time filter AND an id cursor: resume at the (created_at, id)
+      // tuple position of the cursor message, exactly like the digest walk, so a
+      // timestamp-watermark caller cannot step past a message whose id is higher
+      // but whose timestamp falls before the advanced watermark.
+      const resume = cursorTupleResume(db, opts.since_id);
+      if (resume) {
+        conditions.push(resume.sql);
+        params.push(...resume.params);
+      }
+    } else {
+      conditions.push("id > ?");
+      params.push(opts.since_id);
+    }
   }
   if (opts.unread_only) {
     conditions.push("read_at IS NULL");
@@ -704,8 +716,11 @@ export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): Mess
   // chronologically. Selecting ascending returned the OLDEST N (todos 2c25973b).
   const window = resolveReadWindow(opts);
   const idCursor = opts.since_id !== undefined;
+  // A since + since_id read is a TIME-window cursor walk: the authoritative
+  // sequence is the timestamp, so page by created_at ASC, id ASC.
+  const bothSinceAndCursor = idCursor && opts.since !== undefined;
   const order = idCursor ? "ASC" : (window.select === "desc" ? "DESC" : "ASC");
-  const orderBy = idCursor ? "id ASC" : `created_at ${order}, id ${order}`;
+  const orderBy = bothSinceAndCursor ? "created_at ASC, id ASC" : (idCursor ? "id ASC" : `created_at ${order}, id ${order}`);
 
   // SQLite LIMIT/OFFSET require literal integers — validated and bounded here
   const resolvedOffset = Number.isFinite(opts.offset) ? Math.floor(opts.offset as number) : 0;
@@ -791,8 +806,18 @@ export function countMessages(opts: CountMessagesOptions = {}): number {
     params.push(opts.since);
   }
   if (opts.since_id !== undefined) {
-    conditions.push("id > ?");
-    params.push(opts.since_id);
+    if (opts.since !== undefined) {
+      // Same time-window composite cursor as readMessagePreviews/digest: the
+      // count must match the query's resume condition or has_more is wrong.
+      const resume = cursorTupleResume(db, opts.since_id);
+      if (resume) {
+        conditions.push(resume.sql);
+        params.push(...resume.params);
+      }
+    } else {
+      conditions.push("id > ?");
+      params.push(opts.since_id);
+    }
   }
   if (opts.unread_only) {
     conditions.push("read_at IS NULL");
@@ -1180,6 +1205,32 @@ function finalizeDigestResult(result: DigestResult): DigestResult {
   return finalized;
 }
 
+/**
+ * Build the SQL fragment and params that resume a cursor walk at the
+ * (created_at, id) tuple position of the message named by `cursorId`.
+ *
+ * A plain `id > cursor` is the wrong resume condition when message ids are not
+ * chronological with timestamps — a message that is BACKFILLED/imported later
+ * receives a HIGHER id than its timestamp would suggest (measured on the
+ * incidents channel: id 730236 dated 2026-08-21T10:55Z while id 722262 dated
+ * 2026-08-21T19:20Z). An id-ordered walk then hands back a message with a newer
+ * timestamp first, a timestamp-watermark caller advances its `since` past the
+ * gap, and the walk reports has_more:false while newer-timestamp messages remain
+ * unreached. Ordering the walk by created_at and resuming at the tuple position
+ * keeps the walk in the authoritative time sequence.
+ *
+ * Returns null when the cursor message cannot be resolved (deleted), so the
+ * caller can fail safe by re-reading from `since` rather than stranding the walk.
+ */
+function cursorTupleResume(db: Database, cursorId: number): { sql: string; params: (string | number)[] } | null {
+  const row = db.prepare("SELECT created_at FROM messages WHERE id = ?").get(cursorId) as { created_at: string } | undefined;
+  if (!row) return null;
+  return {
+    sql: "(created_at > ? OR (created_at = ? AND id > ?))",
+    params: [row.created_at, row.created_at, cursorId],
+  };
+}
+
 function countDigestMessages(opts: {
   channel?: string;
   session_id?: string;
@@ -1197,7 +1248,22 @@ function countDigestMessages(opts: {
   if (opts.session_id) { baseConditions.push("session_id = ?"); baseParams.push(opts.session_id); }
   if (opts.to) { baseConditions.push("to_agent = ?"); baseParams.push(opts.to); }
   if (opts.since) { baseConditions.push("created_at > ?"); baseParams.push(opts.since); }
-  if (opts.cursor !== undefined) { baseConditions.push("id > ?"); baseParams.push(opts.cursor); }
+  if (opts.cursor !== undefined) {
+    if (opts.since !== undefined) {
+      // Non-chronological ids: resume at the (created_at, id) tuple position of
+      // the last delivered message, not at a bare id. When the cursor message is
+      // gone, drop the cursor condition and re-read from `since` — duplicates are
+      // detectable, loss is not.
+      const resume = cursorTupleResume(db, opts.cursor);
+      if (resume) {
+        baseConditions.push(resume.sql);
+        baseParams.push(...resume.params);
+      }
+    } else {
+      baseConditions.push("id > ?");
+      baseParams.push(opts.cursor);
+    }
+  }
   if (opts.project_id) { baseConditions.push("project_id = ?"); baseParams.push(opts.project_id); }
 
   const availableConditions = opts.unread_only ? [...baseConditions, "read_at IS NULL"] : baseConditions;
@@ -1226,14 +1292,33 @@ function queryDigestMessages(opts: {
   if (opts.session_id) { conditions.push("session_id = ?"); params.push(opts.session_id); }
   if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
   if (opts.since) { conditions.push("created_at > ?"); params.push(opts.since); }
-  if (opts.cursor !== undefined) { conditions.push("id > ?"); params.push(opts.cursor); }
+  if (opts.cursor !== undefined) {
+    if (opts.since !== undefined) {
+      // Same non-chronological-id resume as the count: page by the authoritative
+      // (created_at, id) tuple, never by a bare id, so a timestamp-watermark
+      // caller cannot step past a message whose timestamp falls before the walk's
+      // advanced watermark. When the cursor message is gone, drop the cursor
+      // condition and re-read from `since` (duplicates, never loss).
+      const resume = cursorTupleResume(db, opts.cursor);
+      if (resume) {
+        conditions.push(resume.sql);
+        params.push(...resume.params);
+      }
+    } else {
+      conditions.push("id > ?");
+      params.push(opts.cursor);
+    }
+  }
   if (opts.project_id) { conditions.push("project_id = ?"); params.push(opts.project_id); }
   if (opts.unread_only) conditions.push("read_at IS NULL");
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const safeLimit = Math.max(1, Math.min(Math.floor(opts.limit), MAX_DIGEST_LIMIT));
+  // A `since` filter makes this a TIME-window walk: order by the authoritative
+  // time sequence so the delivered ids advance monotonically with timestamps.
+  const orderBy = opts.since !== undefined ? "created_at ASC, id ASC" : "id ASC";
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY id ASC LIMIT ${safeLimit}`
+    `SELECT * FROM messages ${where} ORDER BY ${orderBy} LIMIT ${safeLimit}`
   ).all(...params) as Record<string, unknown>[];
   return rows.map(parseMessage);
 }
