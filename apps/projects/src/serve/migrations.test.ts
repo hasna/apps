@@ -212,6 +212,22 @@ describe("projects-serve migrations", () => {
     }
   });
 
+  test("applied 0001_baseline checksum matches the production ledger (no in-place edits)", () => {
+    const migration = loadMigrations().find(
+      (item) => item.id === "projects:0001_baseline",
+    );
+    expect(migration).toBeDefined();
+    // The production migration ledger recorded this sha256 when the baseline
+    // was applied. Editing the applied migration in place — even one comment
+    // line — drifts the checksum and makes migrate exit 1 with "Migration
+    // checksum mismatch" on every deployed database (BUG O15-00630). The
+    // file's own header says applied migrations must not be edited; this test
+    // enforces that invariant against the recorded ledger value.
+    expect(migration!.checksum).toBe(
+      "sha256:d436b4958046c2bebcf18a05951fa638072451ac251c881b16f923a7ca340cf9",
+    );
+  });
+
   test("accepts the exact legacy id and checksum as applied-only compatibility", async () => {
     const migration = defineMigration("projects:current", "SELECT current");
     const legacy: AppliedMigration = {
