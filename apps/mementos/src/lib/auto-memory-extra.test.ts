@@ -1,7 +1,5 @@
 // Set in-memory DB before any imports
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
-// Set a fake Anthropic key so the provider is "available"
-process.env["ANTHROPIC_API_KEY"] = "sk-test-fake-key-for-unit-tests";
 
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { resetDatabase, getDatabase } from "../db/database.js";
@@ -19,6 +17,51 @@ import {
 // 71-74, 132, 176-178, 201, 203-209
 // ============================================================================
 
+// ============================================================================
+// Hermetic fetch — the auto-memory pipeline reaches the LLM provider through
+// globalThis.fetch (auto-memory.ts registers the REAL processJob on the queue).
+// Without a mock, any enqueued job that drains with a provider API key present
+// in the environment makes a live network call. Install a hermetic mock that
+// returns empty memories so no job — including async drains and the
+// module-registered real handler — can reach a real provider endpoint.
+// ============================================================================
+
+let originalFetch: typeof globalThis.fetch;
+let fetchMock: ReturnType<typeof createFetchMock>;
+
+function createFetchMock(responseBody: unknown) {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const mock = async (input: string | URL | Request, init?: RequestInit) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    calls.push({ url, init: init ?? {} });
+    return new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  return {
+    fn: mock as unknown as typeof fetch,
+    calls,
+  };
+}
+
+/** Build an Anthropic-style response wrapping a JSON array of extracted memories */
+function anthropicMemoryResponse(memories: unknown[]) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(memories),
+      },
+    ],
+  };
+}
+
 beforeEach(async () => {
   await resetAutoMemoryForTests();
   resetDatabase();
@@ -29,10 +72,16 @@ beforeEach(async () => {
     provider: "anthropic",
     minImportance: 4,
   });
+
+  // Install a hermetic fetch mock that returns no memories by default.
+  originalFetch = globalThis.fetch;
+  fetchMock = createFetchMock(anthropicMemoryResponse([]));
+  globalThis.fetch = fetchMock.fn;
 });
 
 afterEach(async () => {
   await resetAutoMemoryForTests();
+  globalThis.fetch = originalFetch;
 });
 
 describe("processConversationTurn - edge cases", () => {
