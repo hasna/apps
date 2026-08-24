@@ -586,7 +586,7 @@ function printCommandHelp(command: string): void {
   if (command === 'restore' || command === 'unarchive') { console.log('Usage: knowledge restore|unarchive --id <id> [--json]'); return; }
   if (command === 'upsert') { console.log('Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, on both the create and update paths.'); return; }
   if (command === 'untag') { console.log('Usage: knowledge untag --id <id> -t <tag>... [--json]\n  -t/--tag is repeatable and accepts comma-separated values.\n  Each value is matched whole first, and only split on commas if no stored tag equals it,\n  so a legacy literal "a,b,c" tag can still be removed.\n  Removing nothing exits 1; unmatched names are reported in not_found.'); return; }
-  if (command === 'versions') { console.log('Usage: knowledge versions --id <id> [-l <limit>] [--json]\n  Lists the retained prior versions of an item, newest first, with the version the item is at now.\n  An item that exists but was never edited prints an EMPTY history, which is not the same answer as\n  "no such item" (that exits 1) or "this store keeps no history" (also exits 1, naming the store).\n  Entry history lives in the Postgres-backed store; the local JSON store has no version line.'); return; }
+  if (command === 'versions') { console.log('Usage: knowledge versions --id <id> [-l <limit>] [--json]\n  Lists the retained prior versions of an item, newest first, with the version the item is at now.\n  An item that exists but was never edited prints an EMPTY history, which is not the same answer as\n  "no such item" (that exits 1) or "this store keeps no history" (also exits 1, naming the store).\n  Entry history lives in the Postgres-backed store; the local JSON store has no version line.\n  Sub-action — purge retained versions (secret hygiene):\n    knowledge versions purge --id <id> [--rev <n>] --yes\n    Permanently deletes retained prior versions so a credential-shaped value in history stops being\n    reachable. Without --rev, deletes EVERY retained prior version; with --rev <n>, deletes only\n    retained version n. The live row is never a target, and the operation never reads or returns the\n    retained body. Purging the live/current version is refused.'); return; }
   if (command === 'diff') { console.log('Usage: knowledge diff --id <id> [--rev <n>] [--from <a> --to <b>] [--json]\n  Default: the latest retained version vs the item as it stands now.\n  --rev <n>: version n vs version n-1.  --from <a> --to <b>: two explicit versions, where\n  either side may be "current" to mean the live item.\n  --rev is spelled out because -v is the global --version flag.\n  Reports changed fields (title/url/tags/metadata/archived) as well as a line diff of the body,\n  so an edit that moved only the tags is not rendered as "no changes".'); return; }
   if (command === 'delete' || command === 'rm') { console.log('Usage: knowledge delete|rm --id <id> -y [--json]'); return; }
   if (command === 'export') { console.log('Usage: knowledge export [--verbose] [--json] [--format json|jsonl]'); return; }
@@ -2429,6 +2429,41 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (command === 'versions') {
+    // `versions purge` — the secret-hygiene capability: permanently delete
+    // retained prior versions so a credential-shaped value in history stops
+    // being reachable. Deletes by id/version and never reads the retained body.
+    if (positional[1] === 'purge') {
+      requireId(flags);
+      if (!flags.yes) {
+        throw new Error('Refusing to purge retained versions without --yes. Re-run with: knowledge versions purge --id <id> [--rev <n>] --yes');
+      }
+      let purgeVersion: number | undefined;
+      if (flags.rev !== undefined) {
+        if (!Number.isInteger(flags.rev) || (flags.rev as number) < 1) {
+          throw new Error('--rev must be a positive retained version number.');
+        }
+        purgeVersion = flags.rev as number;
+      }
+      const purged = await itemStore.purgeVersions(flags.id!, purgeVersion === undefined ? {} : { version: purgeVersion });
+      if (!purged) throw new Error(`Item not found: ${flags.id}`);
+      if (purgeVersion !== undefined && purged.purged === 0) {
+        throw new Error(`No retained version ${purgeVersion} of ${flags.id} (the item is at version ${purged.current_version})`);
+      }
+      const message = purgeVersion === undefined
+        ? `${flags.id} purged ${purged.purged} retained version(s); live content at version ${purged.current_version} untouched`
+        : `${flags.id} purged retained version ${purgeVersion}; live content at version ${purged.current_version} untouched`;
+      const purgeResult = {
+        ok: true,
+        id: flags.id,
+        purged: purged.purged,
+        current_version: purged.current_version,
+        message,
+      };
+      if (flags.json || flags.verbose) { output(purgeResult, flags.json, flags); return; }
+      console.log(message);
+      return;
+    }
+
     requireId(flags);
     const versionsPage = Number.isFinite(flags.page) && (flags.page as number) > 0 ? (flags.page as number) : 1;
     const versionsLimit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? (flags.limit as number) : undefined;

@@ -4886,6 +4886,16 @@ function wrap(client) {
           return null;
         throw error;
       }
+    },
+    async purgeVersions(idOrShort, options = {}) {
+      try {
+        const path = options.version === undefined ? `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions` : `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${options.version}`;
+        return await client.transport.request("DELETE", path);
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
     }
   };
 }
@@ -6046,6 +6056,9 @@ class LocalItemStore {
   async getVersion() {
     throw new VersionHistoryUnsupportedError(this.storePath);
   }
+  async purgeVersions() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
+  }
   get location() {
     return this.storePath;
   }
@@ -6158,6 +6171,9 @@ class ApiItemStore {
   }
   async getVersion(idOrShort, version) {
     return this.http.getVersion(idOrShort, version);
+  }
+  async purgeVersions(idOrShort, options = {}) {
+    return this.http.purgeVersions(idOrShort, options);
   }
   get location() {
     return this.http.baseUrl;

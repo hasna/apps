@@ -105,6 +105,19 @@ export interface ItemStore {
     }): Promise<KnowledgeItemVersionList | null>;
     /** One prior snapshot by version number. */
     getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
+    /**
+     * Permanently purge retained prior versions of an entry — the secret-hygiene
+     * capability that makes a credential-bearing retained version stop being
+     * reachable. `null` means NO SUCH ENTRY. Without `version`, every retained
+     * prior version is deleted; with `version`, only that one. The live row is
+     * never a target, and the operation never reads or returns the retained body.
+     */
+    purgeVersions(idOrShort: string, options?: {
+        version?: number;
+    }): Promise<{
+        purged: number;
+        current_version: number;
+    } | null>;
 }
 export interface ResolveItemStoreOptions {
     storePath: string;
