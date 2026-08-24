@@ -73,6 +73,7 @@ import {
 } from "../../lib/oss-project-matrix.js";
 import { parseWorkspaceAgentEvalCaseIds, runWorkspaceAgentEval } from "../../lib/workspace-agent-eval.js";
 import { cleanupProjectEvalArtifacts, filterProjectEvalArtifacts } from "../../lib/project-eval-artifacts.js";
+import { filterRegistryFixtures } from "../../lib/project-registry-fixtures.js";
 import { projectChannelSummary, resolveProjectChannelForProject } from "../../lib/project-channel.js";
 import { buildProjectContextBundle } from "../../lib/project-context-bundle.js";
 import {
@@ -2519,6 +2520,7 @@ function registerProjectCommands(program: Command): void {
     .option("--label <labels>", "Comma-separated label filter (labels are stored as tags)")
     .option("--labels <labels>", "Comma-separated label filter (alias for --label)")
     .option("--include-evals", "Include prompt-agent eval fixture projects")
+    .option("--include-fixtures", "Include registry-fixture projects (excluded from default reads)")
     .option(
       "--limit <n>",
       `Max rows (terminal output defaults to ${DEFAULT_LIST_LIMIT} and caps at ${MAX_HUMAN_LIMIT}; --json returns every matching project unless you pass this)`,
@@ -2540,11 +2542,12 @@ function registerProjectCommands(program: Command): void {
         };
         const store = resolveProjectStore();
         if (wantsRenderSpec(opts)) {
-          const projects = filterProjectEvalArtifacts(await store.listProjects({
+          const projects = filterRegistryFixtures(filterProjectEvalArtifacts(await store.listProjects({
             ...baseFilter,
             exclude_eval_artifacts: !opts.includeEvals,
+            exclude_registry_fixtures: !opts.includeFixtures,
             limit: parsePositiveInteger(opts.limit, "--limit"),
-          }), opts.includeEvals);
+          }), opts.includeEvals), opts.includeFixtures);
           printRenderSpec(buildProjectListRender(projects));
           return;
         }
@@ -2557,11 +2560,12 @@ function registerProjectCommands(program: Command): void {
           const page = await store.listProjectsPage({
             ...baseFilter,
             exclude_eval_artifacts: !opts.includeEvals,
+            exclude_registry_fixtures: !opts.includeFixtures,
             limit: parsePositiveInteger(opts.limit, "--limit"),
           });
-          const projects = filterProjectEvalArtifacts(page.projects, opts.includeEvals);
+          const projects = filterRegistryFixtures(filterProjectEvalArtifacts(page.projects, opts.includeEvals), opts.includeFixtures);
           const rows = projects.map(projectWithManagement);
-          // Eval fixtures are dropped client-side on the api path (the server
+          // Fixture rows are dropped client-side on the api path (the server
           // has no such filter), so a complete read knows its own true total;
           // a bounded one can only report the server's, minus what it dropped.
           const dropped = page.projects.length - projects.length;
@@ -2594,11 +2598,12 @@ function registerProjectCommands(program: Command): void {
           return;
         }
         const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
-        const projects = filterProjectEvalArtifacts(await store.listProjects({
+        const projects = filterRegistryFixtures(filterProjectEvalArtifacts(await store.listProjects({
           ...baseFilter,
           exclude_eval_artifacts: !opts.includeEvals,
+          exclude_registry_fixtures: !opts.includeFixtures,
           limit: limit + 1,
-        }), opts.includeEvals);
+        }), opts.includeEvals), opts.includeFixtures);
         const visible = projects.slice(0, limit);
         const hasMore = projects.length > limit;
         printRows(visible.map((project) => {
