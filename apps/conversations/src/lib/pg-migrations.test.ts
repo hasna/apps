@@ -157,6 +157,6 @@ describe("PG_MIGRATIONS", () => {
     expect(joined).toContain("update messages set thread_id = thread_chain.root_id");
     expect(joined).toContain("messages.reply_to is not null");
     expect(joined).toContain("messages.thread_id is null");
-    expect(joined).toContain("insert into _migrations (id) values (12)");
+    expect(joined).toContain("insert into _migrations (id) values (13)");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markMentionsReadByIds, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, getThreadUnreadCount, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markMentionsReadByIds, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
 import { createChannel, joinChannel } from "./channels";
 import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
 import { closeDb, getDb } from "./db";
@@ -1025,6 +1025,50 @@ describe("threaded replies", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "lonely" });
     const replies = getThreadReplies(msg.id);
     expect(replies).toHaveLength(0);
+  });
+
+  test("getThreadUnreadCount counts foreign replies without a read receipt on the local store", () => {
+    // Regression for the single-thread unread verb: the query reused
+    // THREAD_DESCENDANT_MATCH("r"), which expands to `(r.thread_id = m.id OR
+    // (r.thread_id IS NULL AND r.reply_to = m.id))` while this verb's FROM is
+    // `messages r` only — reproduced as `ERROR: no such column: m.id` on the
+    // real bun:sqlite store. The PG handler binds the root id directly; the
+    // local store must do the same.
+    const root = sendMessage({ from: "alice", to: "bob", content: "root" });
+    sendMessage({ from: "bob", to: "alice", content: "bob reply", reply_to: root.id, reply_to_uuid: root.uuid });
+    const aliceReply = sendMessage({ from: "alice", to: "bob", content: "alice reply", reply_to: root.id, reply_to_uuid: root.uuid });
+    sendMessage({ from: "bob", to: "alice", content: "bob nested", reply_to: aliceReply.id, reply_to_uuid: aliceReply.uuid });
+
+    // bob: only alice's reply is foreign; bob's own two replies never count.
+    expect(getThreadUnreadCount(root.id, "bob")).toBe(1);
+    // alice: bob's direct reply and bob's nested reply are both foreign.
+    expect(getThreadUnreadCount(root.id, "alice")).toBe(2);
+
+    // bob reads alice's reply → bob's unread count drops to zero.
+    recordReadReceipt(aliceReply.id, "bob");
+    expect(getThreadUnreadCount(root.id, "bob")).toBe(0);
+  });
+
+  test("getThreadUnreadCount also matches legacy rows with no thread_id via reply_to", () => {
+    const root = sendMessage({ from: "alice", to: "bob", content: "root" });
+    // Legacy row (pre-backfill): thread_id NULL, reply_to set directly. The
+    // descendant match must fall back to `reply_to = root` for these. The
+    // insert trigger requires the parent to share the same scope, so carry the
+    // root's session/channel/project forward.
+    const rootScope = getDb().prepare(
+      "SELECT session_id, channel, project_id FROM messages WHERE id = ?",
+    ).get(root.id) as { session_id: string; channel: string | null; project_id: string | null };
+    getDb().prepare(
+      "INSERT INTO messages (session_id, from_agent, to_agent, content, reply_to) VALUES (?, ?, ?, ?, ?)",
+    ).run(rootScope.session_id, "carol", "alice", "legacy reply", root.id);
+
+    // carol's legacy reply is foreign to bob and carries no receipt.
+    expect(getThreadUnreadCount(root.id, "bob")).toBe(1);
+    // A reference to the legacy reply itself resolves to its chain root.
+    const legacyId = (getDb().prepare(
+      "SELECT id FROM messages WHERE reply_to = ? AND from_agent = 'carol'",
+    ).get(root.id) as { id: number }).id;
+    expect(getThreadUnreadCount(legacyId, "bob")).toBe(1);
   });
 });
 

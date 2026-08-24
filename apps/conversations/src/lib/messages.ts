@@ -1931,10 +1931,14 @@ export function getThreadUnreadCount(messageRef: number, agent: string): number 
   const rootId = resolveThreadRootId(messageRef, db);
   if (rootId === null) throw new Error(`Message ${messageRef} not found.`);
   const normalized = agent.trim().toLowerCase();
-  const descendant = THREAD_DESCENDANT_MATCH("r");
+  // THREAD_DESCENDANT_MATCH references `m.id` (the collection query aliases the
+  // root table `messages m`); this single-thread verb's FROM is `messages r`
+  // only, so the root id is bound directly — mirroring the PG handler at
+  // /v1/threads/{id}/unread. The two backend queries must not diverge.
   const row = db.prepare(
     `SELECT COUNT(*) AS n FROM messages r
-     WHERE ${descendant} AND lower(r.from_agent) != ?
+     WHERE (r.thread_id = ? OR (r.thread_id IS NULL AND r.reply_to = ?))
+       AND lower(r.from_agent) != ?
        AND NOT EXISTS (SELECT 1 FROM message_read_receipts rc WHERE rc.message_id = r.id AND rc.agent = ?)`,
   ).get(rootId, rootId, normalized, normalized) as { n: number } | undefined;
   return Number(row?.n ?? 0);

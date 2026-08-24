@@ -42,7 +42,7 @@ export function registerThreadTools(server: McpServer): void {
   registerMcpTool(server, "expand_thread", {
     description: "Expand one thread: the root message plus every descendant reply ordered by creation, each annotated with its nesting depth (0 = direct reply to the root). Any thread member resolves to its root.",
     inputSchema: {
-      root: z.union([z.number(), z.string()]).describe("Thread root message ID or UUID (any thread member resolves to its root)"),
+      root: z.number().describe("Thread root numeric message id (any thread member resolves to its root)"),
     },
   }, async (args: Record<string, any>) => {
     try {
@@ -66,7 +66,7 @@ export function registerThreadTools(server: McpServer): void {
         ? "Close a reply thread by its root message id — no further replies are expected."
         : "Reopen a closed reply thread by its root message id.",
       inputSchema: {
-        root: z.union([z.number(), z.string()]).describe("Thread root message ID or UUID (any thread member resolves to its root)"),
+        root: z.number().describe("Thread root numeric message id (any thread member resolves to its root)"),
       },
     }, async (args: Record<string, any>) => {
       try {
@@ -90,7 +90,7 @@ export function registerThreadTools(server: McpServer): void {
   registerMcpTool(server, "get_thread_unread", {
     description: "Per-agent unread count for one thread: foreign replies with no read receipt for the given agent.",
     inputSchema: {
-      root: z.union([z.number(), z.string()]).describe("Thread root message ID or UUID"),
+      root: z.number().describe("Thread root numeric message id"),
       agent: z.string().optional().describe("Reader identity (defaults to the connected identity)"),
     },
   }, async (args: Record<string, any>) => {
