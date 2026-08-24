@@ -1,0 +1,61 @@
+{
+  "name": "@hasna/estate-sync",
+  "version": "0.1.0",
+  "description": "Shared cloud-sync engine for the apps estate store bucket: push a digest bundle plus a signed index pointer, pull by resolving the signed index, fetching by digest, verifying sha256, and hydrating atomically. Parameterized by (estate bucket, app prefix).",
+  "type": "module",
+  "bin": {
+    "estate-sync": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "clean": "rm -rf bin/ dist/",
+    "build": "bun run clean && bun build ./src/cli/index.ts --outdir ./bin --target bun && bun build ./src/index.ts ./src/sdk/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "test": "bun test --timeout 30000",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+  },
+  "keywords": [
+    "hasna",
+    "estate",
+    "sync",
+    "s3",
+    "digest",
+    "signed-index"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/apps.git"
+  }
+}

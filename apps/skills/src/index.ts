@@ -384,6 +384,15 @@ export {
   type SkillAlias,
 } from "./lib/skill-aliases.js";
 
+export {
+  SKILLS_ESTATE_PREFIX,
+  createSkillsEstateSync,
+  pullSkillBundleFromEstate,
+  pushSkillBundleToEstate,
+  resolveSkillsEstateSyncConfig,
+  type SkillsEstateSyncConfig,
+} from "./lib/estate-sync.js";
+
 export type {
   SkillResponse,
   SkillDetailResponse,

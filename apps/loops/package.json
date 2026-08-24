@@ -130,7 +130,8 @@
     "ai": "6.0.204",
     "commander": "^13.1.0",
     "pg": "^8.13.1",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@hasna/estate-sync": "0.1.0"
   },
   "optionalDependencies": {
     "@hasna/machines": "0.2.36"

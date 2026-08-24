@@ -270,3 +270,20 @@ export type {
   LoopsMigrationResource,
   ControlPlanePlanOptions,
 } from "./lib/migration.js";
+
+export {
+  LOOP_BUNDLE_SCHEMA_VERSION,
+  LOOPS_ESTATE_PREFIX,
+  createLoopsEstateSync,
+  loopDir,
+  loopPromptDir,
+  loopScriptsDir,
+  loopsEstateRoot,
+  packLoopDir,
+  pullLoopFromEstate,
+  pushLoopToEstate,
+  resolveLoopsEstateSyncConfig,
+  type LoopBundle,
+  type LoopBundleFile,
+  type LoopsEstateSyncConfig,
+} from "./lib/estate-sync.js";

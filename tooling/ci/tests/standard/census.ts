@@ -397,6 +397,7 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
+  { member: "estate-sync", reason: "No hasna.contract.json; shared sync library (O15-00627)." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "statusline", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "styles", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },

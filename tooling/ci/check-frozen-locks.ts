@@ -189,6 +189,13 @@ const UNRESOLVABLE_PINS = new Set<string>([
   "browser",
   "economy",
   "testers",
+  // skills — pins @hasna/estate-sync@0.1.0 (new, O15-00627), not yet on the
+  // registry; the owning release lane must publish estate-sync before skills'
+  // per-app lockfile can be regenerated in the standalone shape.
+  "skills",
+  // loops — same estate-sync@0.1.0 pin; the owning release lane must publish
+  // estate-sync before loops' per-app lockfile can be regenerated standalone.
+  "loops",
 ]);
 
 /**

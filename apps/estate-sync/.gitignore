@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+bin/
+
+# Environment
+.env
+.env.local
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+
+# npm pack output
+*.tgz
+
+# Editor swap files
+*.swp
+*.swo
+
+# Build caches
+.eslintcache
+.tsbuildinfo
