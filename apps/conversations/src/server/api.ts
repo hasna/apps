@@ -1922,13 +1922,19 @@ async function handleV1(
     const pinnedOnly = isTrue(url.searchParams.get("pinned_only"));
     const includeReplyCounts = isTrue(url.searchParams.get("include_reply_counts"));
     const idCursor = sinceId !== undefined;
-    // An id cursor is a prefix walk, so its bounded page must be selected by id
-    // ascending regardless of a caller-supplied presentation order. Otherwise
-    // imported timestamps can move a lower unseen id behind a committed cursor.
-    // Non-cursor reads retain the existing DESC default and explicit ASC path.
+    // A since filter makes this a TIME-window walk: the authoritative sequence is
+    // the timestamp, so a since + since_id read pages by created_at ASC, id ASC
+    // and resumes at the (created_at, id) tuple position of the cursor message —
+    // never at a bare id. When ids are not chronological with timestamps
+    // (backfill/import: a higher id can carry an earlier created_at), a bare
+    // `id > cursor` walk hands back a newer timestamp first, a timestamp-watermark
+    // caller advances its `since` past the gap, and the walk reports has_more:false
+    // while newer-timestamp messages remain unreached. Non-cursor and pure id-cursor
+    // reads retain their existing ordering.
     const order = idCursor
       ? "ASC"
       : (orderParam?.toLowerCase() === "asc" ? "ASC" : "DESC");
+    const bothSinceAndCursor = idCursor && since !== undefined && !q;
     const collection = collectionReadOptions(url);
     const clauses: string[] = [];
     const params: unknown[] = [];
@@ -1954,7 +1960,25 @@ async function handleV1(
       clauses.push(`created_at ${q ? ">=" : ">"} $${params.length}`);
     }
     if (until) { params.push(until); clauses.push(`created_at <= $${params.length}`); }
-    if (idCursor) { params.push(sinceId); clauses.push(`id > $${params.length}`); }
+    if (idCursor) {
+      if (bothSinceAndCursor) {
+        // Resume at the (created_at, id) tuple position of the cursor message.
+        // When the cursor message is gone, drop the id condition and re-read from
+        // `since` — duplicates are detectable, loss is not.
+        const cursorRow = await client.get<{ created_at: string }>(
+          `SELECT created_at FROM messages WHERE id = $1`,
+          [sinceId],
+        );
+        if (cursorRow) {
+          params.push(cursorRow.created_at);
+          clauses.push(`(created_at > $${params.length} OR (created_at = $${params.length} AND id > $${params.length + 1}))`);
+          params.push(sinceId);
+        }
+      } else {
+        params.push(sinceId);
+        clauses.push(`id > $${params.length}`);
+      }
+    }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
     if (mentionsOnly) {
       params.push(mentionsOnly.toLowerCase());
@@ -1984,7 +2008,7 @@ async function handleV1(
     const limitIdx = params.length;
     params.push(collection.offset);
     const offsetIdx = params.length;
-    const orderBy = idCursor ? "id ASC" : `created_at ${order}, id ${order}`;
+    const orderBy = bothSinceAndCursor ? "created_at ASC, id ASC" : (idCursor ? "id ASC" : `created_at ${order}, id ${order}`);
     const fetched = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
       `SELECT ${messagePreviewProjectionPg()}${replyCountSelect}
        FROM messages ${where} ORDER BY ${orderBy} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
