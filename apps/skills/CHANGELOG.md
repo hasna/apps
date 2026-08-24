@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.68
+
+### Patch Changes
+
+- 65c90db: Unknown top-level verbs, including skill names used as verbs, now exit 1 with stderr naming the valid commands instead of silently falling through to compact discovery output at rc=0. Bare `skills`, valid top-level verbs, and `skills run <unknown>` retain their existing behavior.
+
 ## 0.1.66
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.1.66",
+  "version": "0.1.68",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -22,6 +22,10 @@
     "./sdk": {
       "import": "./dist/sdk/index.js",
       "types": "./dist/sdk/index.d.ts"
+    },
+    "./admin-contract": {
+      "import": "./dist/admin-contract.js",
+      "types": "./dist/admin-contract.d.ts"
     }
   },
   "files": [
@@ -40,8 +44,8 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf bin/ dist/",
-    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/server.js --target bun && bun build ./src/server/worker.ts --outfile ./bin/worker.js --target bun && bun build ./src/server/migrate.ts --outfile ./bin/migrate.js --target bun && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
-    "build:js": "rm -rf dist && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/server.js --target bun && bun build ./src/server/worker.ts --outfile ./bin/worker.js --target bun && bun build ./src/server/migrate.ts --outfile ./bin/migrate.js --target bun && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts ./src/admin-contract.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build:js": "rm -rf dist && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts ./src/admin-contract.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "bun test --timeout 30000",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:watch": "bun --watch run ./src/cli/index.tsx",
