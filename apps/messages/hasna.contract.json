@@ -1,0 +1,95 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "messages",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.13.4",
+  "description": "Direct agent-to-agent messaging with threads: send, thread, read and mark-read between named agents. CLI + MCP + HTTP API (messages-serve) + SDK client. The server storage backend is SQLite by default (zero-config) or PostgreSQL selected by HASNA_MESSAGES_DATABASE_URL — the data backend is the only runtime switch. Built for the internal harness, open-sourced in hasna/apps.",
+  "bins": [
+    "messages",
+    "messages-mcp",
+    "messages-serve"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "messages-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "messages-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/v1/openapi.json"
+    },
+    {
+      "name": "messages-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/v1/openapi.json"
+    },
+    {
+      "name": "messages-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "messages",
+      "authMode": "local-only"
+    },
+    {
+      "name": "messages-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "messages-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_MESSAGES_",
+    "aliasEnvPrefix": "MESSAGES_",
+    "sqlitePath": "~/.hasna/messages/messages.db",
+    "pgTestGate": {
+      "envVar": "MESSAGES_TEST_DATABASE_URL",
+      "command": "bun scripts/pg-test-gate.mjs"
+    }
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "service": {
+      "port": 8081,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/v1/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key"
+    },
+    "client": {
+      "apiUrlEnv": "HASNA_MESSAGES_API_URL",
+      "apiKeyEnv": "HASNA_MESSAGES_API_KEY"
+    }
+  }
+}
