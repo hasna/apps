@@ -894,6 +894,11 @@ export type {
   TaskMergeResult,
 } from "./lib/task-dedupe.js";
 
+// Bounded dedup projection — the package-owned "canonical-machine" surface
+// workflows consume instead of credential-bearing whole-task composites (O15-00170).
+export { projectTasksForDedupe, DEDUPE_SOURCE_KEY_ALLOWLIST } from "./lib/dedupe-projection.js";
+export type { DedupeTaskProjection } from "./lib/dedupe-projection.js";
+
 // todos.md markdown
 export {
   TODOS_MARKDOWN_BRIDGE_MARKER,

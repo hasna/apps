@@ -47,6 +47,7 @@ import {
   getLatestHandoff,
 } from "../../db/handoffs.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
+import { projectTasksForDedupe } from "../../lib/dedupe-projection.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
 import {
@@ -3165,6 +3166,35 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           const duplicate = candidate.duplicate_task.short_id || candidate.duplicate_task.id.slice(0, 8);
           console.log(`${chalk.cyan(primary)} <- ${chalk.yellow(duplicate)} ${candidate.score.toFixed(2)} ${candidate.reasons.join(", ")}`);
         }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  dedupe
+    .command("project <ref>")
+    .description("Project a project's tasks into the bounded dedup projection (safe to emit: no free-form metadata, tags, comments, or run fields)")
+    .option("--limit <n>", "Maximum tasks to project", "1000")
+    .option("--include-archived", "Include archived tasks")
+    .option("-j, --json", "Output as JSON")
+    .action((ref: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const d = getDatabase();
+        const projectId = resolvePartialId(d, "projects", ref)
+          || (d.query("SELECT id FROM projects WHERE path = ? OR name = ? OR task_list_id = ?").get(ref, ref, ref) as { id: string } | null)?.id;
+        if (!projectId) {
+          handleError(new Error(`Could not resolve project: ${ref}`));
+          return;
+        }
+        const tasks = listTasks({
+          project_id: projectId,
+          include_archived: Boolean(opts.includeArchived),
+          limit: Number(opts.limit),
+        }, d);
+        const projected = projectTasksForDedupe(tasks);
+        if (opts.json || globalOpts.json) { output({ project_id: projectId, count: projected.length, tasks: projected }, true); return; }
+        console.log(chalk.dim(`${projected.length} task(s) projected for dedupe (bounded — no free-form metadata, tags, comments, or run fields).`));
       } catch (e) {
         handleError(e);
       }

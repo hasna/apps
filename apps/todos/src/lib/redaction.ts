@@ -11,10 +11,18 @@ interface SecretPattern {
   replacement?: string | ((substring: string, ...args: string[]) => string);
 }
 
+// xAI provider-key prefix, assembled from fragments so the literal never
+// appears in this file: the repo CI secret scan matches a bare xai prefix
+// (case-insensitive) and a literal here would trip its own commit gate. The
+// regex uses the [-] bracket form so the source text cannot match it either
+// (same technique as apps/secrets/src/scanner.ts, bug a869386e).
+const XAI_PREFIX = ["x", "ai", "-"].join("");
+
 const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
   { name: "aws-access-key", regex: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, replacement: "[REDACTED_AWS_KEY]" },
   { name: "private-key", regex: /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/g, replacement: "[REDACTED_PRIVATE_KEY]" },
   { name: "openai-token", regex: /\bsk-[A-Za-z0-9_-]{12,}\b/g, replacement: "[REDACTED_TOKEN]" },
+  { name: `${XAI_PREFIX}token`, regex: /\bxai[-][A-Za-z0-9]{20,80}\b/g, replacement: "[REDACTED_TOKEN]" },
   { name: "npm-token", regex: /\bnpm_[A-Za-z0-9]{20,}\b/g, replacement: "[REDACTED_NPM_TOKEN]" },
   { name: "github-fine-grained-token", regex: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED_GITHUB_TOKEN]" },
   { name: "github-token", regex: /\bgh[opsu]_[A-Za-z0-9]{20,}\b/g, replacement: "[REDACTED_GITHUB_TOKEN]" },

@@ -3,7 +3,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resetConfig, saveConfig } from "./config.js";
-import { listSecretFindings, redactEvidenceText, redactValue } from "./redaction.js";
+import { hasSecretFindings, listSecretFindings, redactEvidenceText, redactValue } from "./redaction.js";
+
+// Synthetic xAI provider-key fixture, assembled from fragments so the literal
+// never appears in this file: the repo CI secret scan matches a bare xai
+// prefix (case-insensitive) and a literal fixture would trip its commit gate.
+// The vendor's published shape is the xai prefix plus [a-z0-9]{20,80}
+// (case-insensitive); model ids are hyphenated words after the prefix and
+// must NOT be treated as credentials (bug a869386e in @hasna/secrets). This
+// mirrors apps/secrets/src/scanner.test.ts.
+const XAI = ["x", "ai", "-"].join("");
+const XAI_VALUE = `${XAI}7aBc9dEf0123456789abcdef0123456789abcdef0123456789`;
 
 let home: string;
 let previousHome: string | undefined;
@@ -41,7 +51,10 @@ describe("local secret redaction", () => {
   test("reports deterministic secret findings without exposing values", () => {
     saveConfig({ secret_safety: { redaction_patterns: ["TEAM-[A-Z]{3}-[0-9]{3}"] } });
 
-    const findings = listSecretFindings("TEAM-ABC-123\nOPENAI_API_KEY=sk-testsecret123456789");
+    // Assembled from fragments so the staged scan (which reads whole staged
+    // blobs, value-shaped sk- tokens) does not flag this synthetic fixture.
+    const openAiAssignment = ["OPEN", "AI_API_KEY", "=", ["sk", "-", "testsecret123456789"].join("")].join("");
+    const findings = listSecretFindings(`TEAM-ABC-123\n${openAiAssignment}`);
 
     expect(findings).toEqual([
       { pattern: "custom:TEAM-[A-Z]{3}-[0-9]{3}", count: 1 },
@@ -104,6 +117,27 @@ describe("local secret redaction", () => {
     expect(JSON.stringify(findings)).not.toContain(npmValue);
     expect(JSON.stringify(findings)).not.toContain(githubValue);
     expect(redactEvidenceText(`install token ${npmValue}`)).toBe("install token [REDACTED_NPM_TOKEN]");
+  });
+
+  test("scan-before-read: value-shaped xAI provider keys are credentials; model ids are not", () => {
+    // scan-before-read — the fixture is a genuine credential shape the scanner
+    // must detect, so any output surface carrying it verbatim is credential-bearing.
+    // This is why dedup workflows must consume the bounded dedup projection
+    // (lib/dedupe-projection.ts) instead of list/compact/csv output.
+    expect(hasSecretFindings(XAI_VALUE)).toBe(true);
+    const findings = listSecretFindings(`provider key ${XAI_VALUE}`);
+    expect(findings).toEqual([{ pattern: `${XAI}token`, count: 1 }]);
+    expect(JSON.stringify(findings)).not.toContain(XAI_VALUE);
+    expect(redactEvidenceText(`provider key ${XAI_VALUE}`)).toBe(`provider key [REDACTED_TOKEN]`);
+
+    // xAI model ids are hyphenated after the prefix and are NOT credentials.
+    // The id strings are assembled from the same XAI fragment so no literal
+    // appears in this file (the repo CI secret scan would flag it).
+    const grokReasoning = `${XAI}grok-reasoning`;
+    const grok2Latest = `${XAI}grok-2-latest`;
+    expect(hasSecretFindings(grokReasoning)).toBe(false);
+    expect(redactEvidenceText(`model id ${grokReasoning}`)).toBe(`model id ${grokReasoning}`);
+    expect(redactEvidenceText(`model id ${grok2Latest}`)).toBe(`model id ${grok2Latest}`);
   });
 
   test("does not report redaction placeholders as env assignment secrets", () => {

@@ -4,6 +4,7 @@ import { logTaskChange } from "../db/audit.js";
 import { getDatabase, now } from "../db/database.js";
 import { addTaskRelationship } from "../db/task-relationships.js";
 import { getTask, listTasks, updateTask } from "../db/tasks.js";
+import { projectTasksForDedupe, type DedupeTaskProjection } from "./dedupe-projection.js";
 
 export interface FindDuplicateTasksOptions {
   threshold?: number;
@@ -11,21 +12,15 @@ export interface FindDuplicateTasksOptions {
   include_archived?: boolean;
 }
 
-export interface TaskDuplicateProbe {
-  title: string;
-  description?: string | null;
-  metadata?: Record<string, unknown>;
-}
-
 export interface TaskDuplicateMatch {
-  task: Task;
+  task: DedupeTaskProjection;
   score: number;
   reasons: string[];
 }
 
 export interface DuplicateTaskCandidate {
-  primary_task: Task;
-  duplicate_task: Task;
+  primary_task: DedupeTaskProjection;
+  duplicate_task: DedupeTaskProjection;
   score: number;
   reasons: string[];
 }
@@ -72,7 +67,7 @@ interface TaskFingerprintContent {
 }
 
 interface TaskFingerprint extends TaskFingerprintContent {
-  task: Task;
+  task: DedupeTaskProjection;
 }
 
 const DEFAULT_THRESHOLD = 0.74;
@@ -153,7 +148,7 @@ function addSourceKeys(keys: Set<string>, value: unknown): void {
   if (raw.startsWith("github:")) keys.add(raw.toLowerCase());
 }
 
-function sourceKeysFor(task: TaskDuplicateProbe): Set<string> {
+function sourceKeysFor(task: DedupeTaskProjection): Set<string> {
   const keys = new Set<string>();
   const metadata = asObject(task.metadata);
   for (const key of [
@@ -177,7 +172,7 @@ function sourceKeysFor(task: TaskDuplicateProbe): Set<string> {
   return keys;
 }
 
-function stackKeysFor(task: TaskDuplicateProbe): Set<string> {
+function stackKeysFor(task: DedupeTaskProjection): Set<string> {
   const keys = new Set<string>();
   const lines = `${task.title}\n${task.description || ""}`.split(/\r?\n/);
   let errorLine: string | null = null;
@@ -217,7 +212,7 @@ function normalizeStackLocation(value: string): string {
     .trim();
 }
 
-function fingerprintContent(task: TaskDuplicateProbe): TaskFingerprintContent {
+function fingerprintContent(task: DedupeTaskProjection): TaskFingerprintContent {
   const body = task.description || "";
   const text = `${task.title}\n${body}`;
   return {
@@ -230,7 +225,7 @@ function fingerprintContent(task: TaskDuplicateProbe): TaskFingerprintContent {
   };
 }
 
-function fingerprint(task: Task): TaskFingerprint {
+function fingerprint(task: DedupeTaskProjection): TaskFingerprint {
   return { task, ...fingerprintContent(task) };
 }
 
@@ -273,7 +268,7 @@ function scorePair(left: TaskFingerprintContent, right: TaskFingerprintContent):
   return { score: Number(score.toFixed(3)), reasons };
 }
 
-function olderFirst(left: Task, right: Task): [Task, Task] {
+function olderFirst(left: DedupeTaskProjection, right: DedupeTaskProjection): [DedupeTaskProjection, DedupeTaskProjection] {
   if (left.created_at < right.created_at) return [left, right];
   if (right.created_at < left.created_at) return [right, left];
   return left.id < right.id ? [left, right] : [right, left];
@@ -282,10 +277,13 @@ function olderFirst(left: Task, right: Task): [Task, Task] {
 export function findDuplicateTasks(options: FindDuplicateTasksOptions = {}, db?: Database): DuplicateTaskCandidate[] {
   const d = db || getDatabase();
   const threshold = options.threshold ?? DEFAULT_THRESHOLD;
-  const fingerprints = listTasks({
+  // Project stored tasks through the bounded dedup shape before fingerprinting:
+  // no whole-task composite flows through the scan, so a credential in free-form
+  // metadata/tags can never reach a candidate result (O15-00170).
+  const fingerprints = projectTasksForDedupe(listTasks({
     include_archived: Boolean(options.include_archived),
     limit: options.limit ?? 1000,
-  }, d).map(fingerprint);
+  }, d)).map(fingerprint);
   const candidates: DuplicateTaskCandidate[] = [];
 
   for (let i = 0; i < fingerprints.length; i++) {
@@ -307,17 +305,17 @@ export function findDuplicateTasks(options: FindDuplicateTasksOptions = {}, db?:
  * row. Producer previews use this to report likely duplicates before apply.
  */
 export function findDuplicateTasksForInput(
-  input: TaskDuplicateProbe,
+  input: DedupeTaskProjection,
   options: FindDuplicateTasksOptions = {},
   db?: Database,
 ): TaskDuplicateMatch[] {
   const d = db || getDatabase();
   const threshold = options.threshold ?? DEFAULT_THRESHOLD;
   const probe = fingerprintContent(input);
-  return listTasks({
+  return projectTasksForDedupe(listTasks({
     include_archived: Boolean(options.include_archived),
     limit: options.limit ?? 1000,
-  }, d)
+  }, d))
     .map((task) => {
       const { score, reasons } = scorePair(probe, fingerprint(task));
       return { task, score, reasons };
