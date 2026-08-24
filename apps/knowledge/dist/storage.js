@@ -579,6 +579,16 @@ function wrap(client) {
           return null;
         throw error;
       }
+    },
+    async purgeVersions(idOrShort, options = {}) {
+      try {
+        const path = options.version === undefined ? `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions` : `/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${options.version}`;
+        return await client.transport.request("DELETE", path);
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
     }
   };
 }

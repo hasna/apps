@@ -38,6 +38,12 @@ services:
     environment:
       HASNA_MEMENTOS_DATABASE_URL: "postgres://mementos_owner:mementos_local@db:5432/mementos"
       API_KEY_SIGNING_SECRET: "${API_KEY_SIGNING_SECRET:-local-dev-signing-secret}"
+      # REQUIRED: the origin/host allowlist for state-changing requests. The
+      # default is http://localhost:19428, which would refuse 403 every request
+      # to this stack (clients here send Host: localhost:8080). The cloud
+      # deployment (hasna-app Terraform module env) must set
+      # MEMENTOS_CORS_ORIGIN to its own public origin for the same reason.
+      MEMENTOS_CORS_ORIGIN: "${MEMENTOS_CORS_ORIGIN:-http://localhost:8080}"
       PORT: "8080"
     ports:
       - "8080:8080"

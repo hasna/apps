@@ -225,7 +225,7 @@ backend and are not the fleet cutover mechanism.
 | --- | --- | --- |
 | `PORT` | REST server | Bind port; wins over `--port`; default 19428 |
 | `MEMENTOS_HOST` | REST server | Bind host; default `127.0.0.1` |
-| `MEMENTOS_CORS_ORIGIN` | REST server | Single allowed browser origin |
+| `MEMENTOS_CORS_ORIGIN` | REST server | Comma-separated allowlist of origins or `host[:port]` for state-changing requests (and write-implicit GETs such as `inject` and `memories/{id}`); default `http://localhost:19428`. MUST be set to the deployment's own origin/host (e.g. `http://localhost:8080` for the docker-compose stack) or every state-changing request is refused with 403 |
 | `API_KEY_SIGNING_SECRET` | REST auth | Preferred signing secret |
 | `HASNA_MEMENTOS_API_SIGNING_KEY` | REST auth | App-specific signing secret fallback |
 | `HASNA_API_SIGNING_KEY` | REST auth | Shared signing secret fallback |

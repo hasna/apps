@@ -39,7 +39,7 @@ describe("projects MCP HTTP transport", () => {
           return Response.json({ status: "ok", name: "projects" });
         }
         if (url.pathname === "/mcp") {
-          return handleMcpRequest(req, buildServer);
+          return handleMcpRequest(req, buildServer, { port: httpServer.port });
         }
         return new Response("Not Found", { status: 404 });
       },

@@ -14,6 +14,85 @@ export const CORS_HEADERS: Record<string, string> = {
 };
 
 // ============================================================================
+// Host/Origin allowlist for state-changing requests
+// ============================================================================
+
+const STATE_CHANGING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+/** True for methods that mutate state — the CSRF-relevant request surface. */
+export function isStateChangingMethod(method: string): boolean {
+  return STATE_CHANGING_METHODS.has(method);
+}
+
+/**
+ * The configured allowlist of origins permitted to mutate state.
+ *
+ * `MEMENTOS_CORS_ORIGIN` accepts a comma-separated list; each entry may be a
+ * full origin (`http://localhost:19428`) or a bare `host[:port]`. The default
+ * is the local dashboard origin. An empty value yields an empty allowlist,
+ * which fails closed (no origin or host is allowed to mutate state).
+ */
+export function getAllowedOrigins(): string[] {
+  const raw = process.env["MEMENTOS_CORS_ORIGIN"] ?? "http://localhost:19428";
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+/** The `host[:port]` portion of an allowlist entry (bare hosts pass through). */
+function hostOf(entry: string): string {
+  try {
+    return new URL(entry).host;
+  } catch {
+    return entry;
+  }
+}
+
+/**
+ * Reject state-changing requests whose Origin (when present) or Host (when no
+ * Origin is present) is not on the configured allowlist. Read-only methods
+ * pass through untouched. Returns an error `Response` to reject, or `null`.
+ *
+ * This is the non-OPTIONS sibling of the preflight gate: a hostile page can
+ * forge a POST/PATCH/DELETE with any Origin it likes, so those methods must
+ * be allowlisted on every request, not only at preflight time.
+ */
+export function checkOriginOrHost(req: Request, method: string): Response | null {
+  if (!isStateChangingMethod(method)) return null;
+  return checkWriteOriginOrHost(req);
+}
+
+/**
+ * The allowlist check itself: reject a request whose Origin (when present) or
+ * Host (when no Origin is present) is not on the configured allowlist.
+ *
+ * GET requests are CORS "simple requests" — a hostile cross-origin page can
+ * trigger one with no preflight — so a GET route whose handler writes state
+ * (a touch/recency update, a cache write, an LLM call) must be gated exactly
+ * like a state-changing method, even though its HTTP method is not one.
+ */
+export function checkWriteOriginOrHost(req: Request): Response | null {
+  const allowlist = getAllowedOrigins();
+  const allowedHosts = allowlist.map(hostOf);
+
+  const origin = req.headers.get("origin");
+  if (origin !== null) {
+    if (allowlist.includes(origin)) return null;
+    return json({ error: "Forbidden. Origin is not allowed." }, 403);
+  }
+
+  const host = req.headers.get("host");
+  if (host !== null) {
+    if (allowedHosts.includes(host)) return null;
+    return json({ error: "Forbidden. Host is not allowed." }, 403);
+  }
+
+  // Neither Origin nor Host (a malformed request) — fail closed.
+  return json({ error: "Forbidden. Missing Origin or Host header." }, 403);
+}
+
+// ============================================================================
 // MIME types
 // ============================================================================
 
@@ -93,10 +172,10 @@ export async function readJson(req: Request): Promise<unknown> {
 // ============================================================================
 
 export function getCorsHeaders(req?: Request): Record<string, string> {
-  const allowedOrigin = process.env["MEMENTOS_CORS_ORIGIN"] ?? "http://localhost:19428";
+  const allowlist = getAllowedOrigins();
   const origin = req?.headers.get("origin");
-  // If origin matches, echo it; otherwise use the configured default
-  const finalOrigin = origin === allowedOrigin ? origin : allowedOrigin;
+  // If origin is allowlisted, echo it; otherwise use the configured default
+  const finalOrigin = typeof origin === "string" && allowlist.includes(origin) ? origin : (allowlist[0] ?? "http://localhost:19428");
   return {
     "Access-Control-Allow-Origin": finalOrigin,
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",

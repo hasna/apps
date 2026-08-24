@@ -13,7 +13,10 @@
  *
  * When no signing secret is configured the contracts verifier is disabled and
  * the server falls back to the legacy static `MEMENTOS_API_KEY` bearer check
- * (local/dev). When neither is set, all requests are allowed (local default).
+ * (local/dev). When neither is set, state-changing requests are REFUSED
+ * (fail-closed default); an operator may explicitly restore unauthenticated
+ * writes with `MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES=1`. Read routes stay open
+ * (local default).
  */
 import pg from "pg";
 import {
@@ -23,7 +26,7 @@ import {
   type AuthQueryClient,
 } from "@hasna/contracts/auth";
 import { getStorageConnectionString, makePool } from "../storage.js";
-import { authenticateRequest, json } from "./helpers.js";
+import { authenticateRequest, isStateChangingMethod, json } from "./helpers.js";
 
 const APP = "mementos";
 
@@ -110,7 +113,16 @@ export async function checkApiKey(
 ): Promise<Response | null> {
   const verifier = getApiKeyVerifier();
   if (!verifier) {
-    // Contracts auth disabled — fall back to the legacy static bearer check.
+    // Contracts auth disabled. Fail closed on state-changing requests when no
+    // API key is configured: with neither a signing secret nor a static key,
+    // mutations are refused unless the operator explicitly opted in.
+    if (isStateChangingMethod(method) && !unauthenticatedWritesAllowed()) {
+      return json(
+        { error: "Unauthorized. No API key is configured; state-changing requests are refused." },
+        401
+      );
+    }
+    // Fall back to the legacy static bearer check (reads, or opted-in writes).
     return authenticateRequest(req);
   }
   if (_schemaReady) await _schemaReady;
@@ -122,4 +134,17 @@ export async function checkApiKey(
 /** True when contracts API-key auth is active (a signing secret is configured). */
 export function apiKeyAuthEnabled(): boolean {
   return getApiKeyVerifier() !== null;
+}
+
+/**
+ * Explicit operator opt-in for unauthenticated writes.
+ *
+ * The fail-closed default refuses state-changing requests when no API key is
+ * configured; a local/dashboard deployment that deliberately runs without a
+ * key sets `MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES=1` to restore the old
+ * allow-all behaviour for mutations. Absence is never treated as consent.
+ */
+function unauthenticatedWritesAllowed(): boolean {
+  const raw = process.env["MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES"]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }

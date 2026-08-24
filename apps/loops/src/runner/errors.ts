@@ -37,10 +37,16 @@ export class VersionProbeError extends Error {
  */
 export class LoopsApiError extends Error {
   readonly status: number;
+  /** The server's structured `error` token when one was present (e.g. `wrong_token_kind`). Foreign text; never surfaced — used only for exact set-membership classification. */
+  readonly reason?: string;
+  /** The control-plane route the non-2xx response came from (this package's own value, safe). */
+  readonly route?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, reason?: string, route?: string) {
     super(message);
     this.name = "LoopsApiError";
     this.status = status;
+    this.reason = reason;
+    this.route = route;
   }
 }

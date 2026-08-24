@@ -154,7 +154,14 @@ export interface RunnerLoopResult extends RunnerOnceResult {
   errors: number;
   idle: boolean;
   stopped: boolean;
+  /** True when the loop terminated because of a PERMANENT control-plane denial (wrong_token_kind, expired, ...). */
+  permanent: boolean;
+  /** Actionable message for the permanent denial, when one stopped the loop. */
+  permanentMessage?: string;
 }
+
+/** Exit code for a permanent credential/config denial, distinct from a generic transient failure (1). */
+export const RUNNER_PERMANENT_DENIAL_EXIT_CODE = 4;
 
 /**
  * `fleet` claims machine-unbound loops as well as loops pinned to this runner;
@@ -289,13 +296,78 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   // LoopsApiError carries the numeric status for failure classification; the
   // message stays what it always was and is never read by episode tracking.
+  // The server's structured `error` token (when present) travels as `reason`
+  // so the runner can tell a PERMANENT credential/config denial from a
+  // transient failure before deciding to retry — exact set-membership only,
+  // never surfaced as foreign text.
   if (!response.ok) {
+    const reason = typeof payload.error === "string" ? payload.error : undefined;
     throw new LoopsApiError(
-      typeof payload.error === "string" ? payload.error : `loops-api request failed: ${response.status}`,
+      reason ?? `loops-api request failed: ${response.status}`,
       response.status,
+      reason,
+      path,
     );
   }
   return payload;
+}
+
+/**
+ * Server denial reasons that are PERMANENT configuration/credential errors,
+ * never transient. Retrying them is pointless and is exactly what silently
+ * stalls the fleet: a runner whose token is the wrong kind (or is expired,
+ * revoked, unbound, or scope-insufficient) fails every claim, backs off and
+ * retries forever, no loop ever fires, and the "hosted scheduler" looks idle
+ * while every active loop's nextRunAt stays frozen. The runner must fail
+ * LOUDLY and terminally on these so the operator sees the actionable message
+ * instead of an endless silent retry loop.
+ */
+const PERMANENT_DENIAL_REASONS: ReadonlySet<string> = new Set([
+  "wrong_token_kind",
+  "insufficient_scope",
+  "insufficient_role",
+  "unbound_key",
+  "expired",
+  "revoked",
+  "disabled",
+  "key_record_mismatch",
+  "tenant_suspended",
+  "principal_suspended",
+  "membership_suspended",
+]);
+
+/** Typed error for a permanent control-plane denial. The message is a known-safe, generated string (never provider output). */
+export class RunnerPermanentDenialError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly route: string,
+  ) {
+    super(runnerDenialMessage(reason, route));
+    this.name = "RunnerPermanentDenialError";
+  }
+}
+
+function runnerDenialMessage(reason: string, route: string): string {
+  if (reason === "wrong_token_kind") {
+    return "loops-runner cannot authenticate to the control plane: the configured API token is NOT a `machine` or `service` token, and the runner routes require one. " +
+      `The control plane rejected route ${route} with wrong_token_kind. Mint a machine/service token with scope loops:runner ` +
+      "(scripts/issue-key.ts with KEY_TOKEN_KIND=machine|service and KEY_SCOPES=loops:runner), place it in HASNA_LOOPS_API_KEY " +
+      "(or LOOPS_RUNNER_* token env), and restart this runner. Until then the hosted scheduler dispatches nothing.";
+  }
+  return `loops-runner was denied by the control plane (${reason} on ${route}). This is a permanent credential/configuration error, not a transient failure: ` +
+    "fix the token/principal before restarting. Retrying will never clear it.";
+}
+
+/**
+ * Convert a thrown server error into a {@link RunnerPermanentDenialError} when
+ * it carries a known permanent denial reason; otherwise return undefined.
+ */
+export function runnerPermanentDenial(error: unknown): RunnerPermanentDenialError | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const reason = (error as Error & { reason?: unknown }).reason;
+  if (typeof reason !== "string" || !PERMANENT_DENIAL_REASONS.has(reason)) return undefined;
+  const route = (error as Error & { route?: unknown }).route;
+  return new RunnerPermanentDenialError(reason, typeof route === "string" ? route : "unknown");
 }
 
 class RunnerWorkflowApiStore implements WorkflowExecutionStore {
@@ -504,7 +576,14 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
     now: (opts.now ?? new Date()).toISOString(),
     maxClaims: 1,
   };
-  const claimed = await postJson(fetchImpl, config, "/v1/runners/claim", runnerBody);
+  let claimed: Record<string, unknown>;
+  try {
+    claimed = await postJson(fetchImpl, config, "/v1/runners/claim", runnerBody);
+  } catch (error) {
+    // A permanent credential/config denial surfaces as a typed, actionable
+    // error (wrong_token_kind etc.) instead of a bare retryable failure.
+    throw runnerPermanentDenial(error) ?? error;
+  }
   // The capability list can drift from what the server actually parses; the echo
   // is generated from the parse itself, so it is the stronger of the two checks.
   if (config.claimScope === "bound") {
@@ -561,6 +640,8 @@ export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<Ru
   let claimed = 0;
   let errors = 0;
   let idle = false;
+  let permanent = false;
+  let permanentMessage: string | undefined;
   let lastClaimedAt = nowMs();
 
   while (!opts.signal?.aborted && (maxIterations === undefined || iterations < maxIterations)) {
@@ -582,6 +663,16 @@ export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<Ru
       ok = false;
       opts.onError?.(error);
       opts.episodeRecorder?.recordFailure(error);
+      // A permanent credential/config denial (wrong_token_kind, expired,
+      // revoked, insufficient_scope, ...) will never clear by retrying. Stop
+      // the loop so the failure is loud and terminal instead of the silent
+      // infinite-backoff stall that froze the fleet's hosted scheduler.
+      const denial = runnerPermanentDenial(error);
+      if (denial) {
+        permanent = true;
+        permanentMessage = denial.message;
+        break;
+      }
     }
 
     if (idleExitAfterMs !== undefined && nowMs() - lastClaimedAt >= idleExitAfterMs) {
@@ -593,12 +684,14 @@ export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<Ru
   }
 
   return {
-    ok: ok && errors === 0,
+    ok: ok && errors === 0 && !permanent,
     claimed,
     completed,
     iterations,
     errors,
     idle,
+    permanent,
+    permanentMessage,
     stopped: Boolean(opts.signal?.aborted),
   };
 }
@@ -826,12 +919,24 @@ program
       console.log(
         `iterations=${result.iterations} claimed=${result.claimed} completed=${result.completed.length} errors=${result.errors}`,
       );
+      if (result.permanent && result.permanentMessage) console.error(result.permanentMessage);
     }
-    if (!result.ok) process.exitCode = 1;
+    if (result.permanent) {
+      process.exitCode = RUNNER_PERMANENT_DENIAL_EXIT_CODE;
+    } else if (!result.ok) process.exitCode = 1;
   });
 
 if (import.meta.main) {
   main().catch((error) => {
+    // A permanent credential/config denial is terminal and actionable: surface
+    // the message and exit with a distinct code (4) so a supervisor can tell
+    // "the runner is misconfigured" from a transient outage instead of backing
+    // off and retrying a permanent failure forever (the silent fleet stall).
+    const denial = runnerPermanentDenial(error);
+    if (denial) {
+      console.error(denial.message);
+      process.exit(RUNNER_PERMANENT_DENIAL_EXIT_CODE);
+    }
     logRunnerCommandFailure(error);
     process.exit(1);
   });

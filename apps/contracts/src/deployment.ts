@@ -74,7 +74,7 @@ const EXECUTABLE_VALUE_PATTERNS = [
   /(?:&&|\|\||\$\(|`[^`]+`|\$\{[^}]+\})/,
 ] as const;
 
-function addDeploymentSafetyIssues(
+export function addDeploymentSafetyIssues(
   value: unknown,
   ctx: z.RefinementCtx,
   path: Array<string | number> = [],
