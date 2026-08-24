@@ -87,6 +87,13 @@ export function registerMessagingCommands(program: Command): void {
   program
     .command("send")
     .description("Send a message to an agent")
+    // The positional order is CHANNEL first: when a second positional is
+    // present the handler swaps so `send <channel> "<message>"` is the
+    // documented form (see the swap branch below and
+    // send-positional-channel.e2e.test.ts). Commander derives the usage line
+    // from the .argument() declarations in declaration order, so without this
+    // override the help contradicted the parsing order (todos 5002ed12).
+    .usage("[options] <channel> <message>")
     .argument("<message>", "Message content")
     .argument("[channel]", "Channel name — positional form: `send <channel> \"<message>\"`")
     .option("--to <agent>", "Recipient agent ID (required unless --channel is used)")
