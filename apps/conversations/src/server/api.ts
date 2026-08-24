@@ -2796,7 +2796,10 @@ async function handleV1(
       const envelope = buildConversationEventEnvelope({
         id: `conversations:message:${messageUuid}:created`,
         type: MESSAGE_CREATED_TYPE,
-        time: String(inserted.created_at),
+        // PG returns timestamptz as a JS Date, and String(date) yields the JS
+        // toString format which PG cannot parse back into a timestamptz (BUG
+        // 041b4e3a). Normalize to ISO8601 UTC for both Date and string input.
+        time: new Date(inserted.created_at as Date | string).toISOString(),
         subject: channelName ?? toAgent ?? undefined,
         data: {
           id: inserted.id,
@@ -4368,7 +4371,10 @@ async function handleTasks(
         const envelope = buildConversationEventEnvelope({
           id: `conversations:task:${created.uuid}:activity:${transitionUuid}`,
           type: TASK_CREATED_TYPE,
-          time: String(created.created_at),
+          // Same normalization as the message-create emit: PG returns timestamptz
+          // as a JS Date, and String(date) produces the JS toString format PG
+          // cannot parse (BUG 041b4e3a).
+          time: new Date(created.created_at).toISOString(),
           subject: created.subject,
           data: {
             task_id: created.id,
