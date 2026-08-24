@@ -34,6 +34,27 @@ if (process.argv.includes("--version") || process.argv.includes("-V")) {
   process.exit(0);
 }
 
+// Binds-before-help class (todos row c8067fdd, O15-00628): --help/-h must
+// answer BEFORE any bind. They previously fell through to the Hono app export
+// and bound :3457, serving forever with no help output.
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+  console.log(`Usage: instructions-serve [options]
+
+HTTP API server for @hasna/instructions (backend: sqlite or postgresql).
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+  migrate        apply the schema migration to the configured database and exit
+
+Environment:
+  PORT / INSTRUCTIONS_PORT        HTTP port (default: 3457)
+  HOST / INSTRUCTIONS_HOST        bind host (default: localhost)
+  HASNA_INSTRUCTIONS_DATABASE_URL / INSTRUCTIONS_DATABASE_URL / DATABASE_URL
+                                  postgresql backend URL (enables the cloud backend)`);
+  process.exit(0);
+}
+
 const PORT = Number(
   process.env["PORT"] ?? process.env["INSTRUCTIONS_PORT"] ?? 3457,
 );
