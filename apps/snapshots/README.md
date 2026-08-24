@@ -8,6 +8,11 @@ Runtime snapshot and restore layer for the local Hasna open-source developer env
 
 - machine identity and runtime context
 - tmux sessions, windows, panes, and pane working directories
+- per-pane **resume identity**: the newest opencode2 session (`session_v2` in
+  `~/.local/share/opencode/opencode.db`) and the newest Claude Code JSONL
+  (`~/.claude/projects/<slug>/`) whose recorded working directory matches the
+  pane — so a tmux layout destroyed by an outage can be rebuilt by resuming
+  the agent sessions that were live in each pane
 - Hasna project registry output when `projects list --json` is available
 - local process summaries with secret-like arguments redacted
 - session, browser, and desktop state when companion Hasna CLIs or state folders exist
@@ -41,6 +46,14 @@ The package stores data in `$HOME/.hasna/snapshots/snapshots.sqlite` by default.
 ```sh
 HASNA_SNAPSHOTS_DIR=/path/to/data
 HASNA_SNAPSHOTS_DB_PATH=/path/to/snapshots.sqlite
+```
+
+Resume-identity sources and the restore freshness gate can also be configured:
+
+```sh
+HASNA_SNAPSHOTS_OPENCODE_DB=/path/to/opencode.db          # default ~/.local/share/opencode/opencode.db
+HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR=/path/to/projects    # default ~/.claude/projects
+HASNA_SNAPSHOTS_MAX_AGE=72h                              # default restore max-age (duration string)
 ```
 
 ## SDK
@@ -137,6 +150,7 @@ snapshots resources <snapshot-id> --tree
 snapshots plan <snapshot-id> --resource kind:tmux-session --with-dependencies
 snapshots restore <snapshot-id> --resource tmux-session:work --with-dependencies --apply --yes
 snapshots restore --plan <plan-id> --plan-hash <hash> --apply --yes
+snapshots restore <snapshot-id> --max-age 72h
 snapshots policy list
 snapshots policy set kind:process ignore --reason "processes are observe-only"
 snapshots daemon once --tmux-tail-lines 0
@@ -151,6 +165,13 @@ All commands emit JSON so agents can consume stable contracts.
 Snapshot summaries include per-source status, duration, resource count, diagnostic count, and a `degraded` flag when a source returns warnings or errors. Daemon captures can use `--tmux-tail-lines 0` to skip pane scrollback tails for faster topology snapshots.
 
 Restore plans include an `autopilot` assessment. By default, only low-risk project directory creation can be marked safe for autopilot. tmux mutations require approval, and shell command replay is forbidden for autopilot.
+
+Restore carries a freshness gate: `--max-age <duration>` (or
+`HASNA_SNAPSHOTS_MAX_AGE`) refuses snapshots older than the configured limit
+with a logged, audit-trailed error instead of planning or applying a stale
+restore. Durations accept `ms`, `s`, `m`, `h`, `d`, and compounds like
+`1h30m`; a bare number means seconds. The gate is recorded on the plan and
+re-checked when a saved plan is applied.
 
 ## MCP
 

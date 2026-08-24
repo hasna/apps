@@ -58,7 +58,8 @@ const tools = [
       required: ["id"],
       properties: {
         id: { type: "string" },
-        dbPath: { type: "string" }
+        dbPath: { type: "string" },
+        maxAgeMs: { type: "number", description: "Refuse snapshots older than this many milliseconds." }
       }
     }
   }
@@ -109,7 +110,8 @@ async function callTool(name: string, args: Record<string, unknown>) {
       exclude: Array.isArray(args.exclude) ? args.exclude.map(String) : undefined,
       dependencyMode: args.dependencyMode === "parents" || args.dependencyMode === "full" ? args.dependencyMode : "none",
       targetMode: args.targetMode === "merge-existing" ? "merge-existing" : "strict",
-      tmuxMode: args.tmuxMode === "resume-marked" ? "resume-marked" : "layout-only"
+      tmuxMode: args.tmuxMode === "resume-marked" ? "resume-marked" : "layout-only",
+      maxAgeMs: typeof args.maxAgeMs === "number" && Number.isFinite(args.maxAgeMs) ? args.maxAgeMs : undefined
     });
   }
   throw new Error(`Unknown tool: ${name}`);

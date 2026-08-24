@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createRestorePlan } from "../src/restore.js";
+import { RestoreMaxAgeError, assertSnapshotWithinMaxAge, createRestorePlan } from "../src/restore.js";
 import { commandExists, runCommand } from "../src/util.js";
 import type { SnapshotRecord, StoredSnapshotResource } from "../src/types.js";
 
@@ -559,5 +559,62 @@ describe("restore planning", () => {
 
     expect(plan.autopilot?.safeToApply).toBe(false);
     expect(plan.autopilot?.forbiddenOperationIds).toEqual([plan.operations[0].id]);
+  });
+});
+
+describe("restore max-age gate", () => {
+  const agedSnapshot: SnapshotRecord = {
+    id: "snap_aged",
+    hash: "aged",
+    createdAt: "2026-06-19T00:00:00.000Z",
+    resourceCount: 1,
+    summary: {}
+  };
+  const now = "2026-08-24T00:00:00.000Z"; // exactly 66 days after the snapshot
+  const DAY_MS = 86_400_000;
+
+  function projectResource(id: string): StoredSnapshotResource {
+    return {
+      id: `project:${id}`,
+      kind: "project",
+      name: id,
+      source: "projects",
+      attributes: { path: join(mkdtempSync(join(tmpdir(), "snapshots-maxage-")), "project") },
+      observedAt: "2026-06-19T00:00:00.000Z",
+      hash: "resource-hash"
+    };
+  }
+
+  test("refuses snapshots older than the configured max-age", () => {
+    expect(() => assertSnapshotWithinMaxAge(agedSnapshot, 65 * DAY_MS, now)).toThrow(RestoreMaxAgeError);
+    expect(() => assertSnapshotWithinMaxAge(agedSnapshot, 65 * DAY_MS, now)).toThrow("max-age");
+    expect(() => assertSnapshotWithinMaxAge(agedSnapshot, 65 * DAY_MS, now)).toThrow("Refusing restore");
+    expect(() => createRestorePlan(agedSnapshot, [projectResource("aged")], [], { maxAgeMs: 65 * DAY_MS })).toThrow(RestoreMaxAgeError);
+  });
+
+  test("allows snapshots within the limit and exactly at the limit", () => {
+    expect(() => assertSnapshotWithinMaxAge(agedSnapshot, 66 * DAY_MS, now)).not.toThrow();
+    expect(() => assertSnapshotWithinMaxAge(agedSnapshot, 7 * DAY_MS, "2026-06-20T00:00:00.000Z")).not.toThrow();
+  });
+
+  test("gate is inert without a configured limit", () => {
+    expect(() => assertSnapshotWithinMaxAge(agedSnapshot, undefined, now)).not.toThrow();
+    expect(() => createRestorePlan(agedSnapshot, [projectResource("ungated")])).not.toThrow();
+  });
+
+  test("refuses snapshots whose age cannot be determined", () => {
+    const malformed: SnapshotRecord = { ...agedSnapshot, createdAt: "not-a-date" };
+    expect(() => assertSnapshotWithinMaxAge(malformed, DAY_MS, now)).toThrow(RestoreMaxAgeError);
+    expect(() => assertSnapshotWithinMaxAge(malformed, DAY_MS, now)).toThrow("unparseable createdAt");
+  });
+
+  test("records maxAgeMs on the plan request and folds it into the plan hash", () => {
+    const resource = projectResource("hashed");
+    const plain = createRestorePlan(agedSnapshot, [resource]);
+    const gated = createRestorePlan(agedSnapshot, [resource], [], { maxAgeMs: 90 * DAY_MS });
+
+    expect(gated.request?.maxAgeMs).toBe(90 * DAY_MS);
+    expect(plain.request?.maxAgeMs).toBeUndefined();
+    expect(gated.planHash).not.toBe(plain.planHash);
   });
 });

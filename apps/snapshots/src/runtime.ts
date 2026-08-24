@@ -1,7 +1,8 @@
 import type { CaptureOptions, JsonObject, RestoreExecutionOptions, RestorePlan, SnapshotRecord } from "./types.js";
 import { captureAll } from "./capture/index.js";
 import { SnapshotStore } from "./storage.js";
-import { createRestorePlan, executeRestorePlan, prepareRestorePlanForExecution } from "./restore.js";
+import { RestoreMaxAgeError, assertSnapshotWithinMaxAge, createRestorePlan, executeRestorePlan, prepareRestorePlanForExecution } from "./restore.js";
+import { resolveMaxAgeMs } from "./util.js";
 
 export interface RuntimeOptions {
   dbPath?: string;
@@ -93,8 +94,15 @@ export function planSnapshotRestore(options: RuntimeOptions & RestoreExecutionOp
   try {
     const snapshot = store.getSnapshot(options.id);
     if (!snapshot) throw new Error(`Snapshot not found: ${options.id}`);
+    const maxAgeMs = resolveMaxAgeMs(options.maxAgeMs);
+    try {
+      assertSnapshotWithinMaxAge(snapshot, maxAgeMs);
+    } catch (error) {
+      if (error instanceof RestoreMaxAgeError) logRestoreRefusal(store, snapshot, error);
+      throw error;
+    }
     const resources = store.getSnapshotResources(options.id);
-    const plan = createRestorePlan(snapshot, resources, store.listPolicies(), options);
+    const plan = createRestorePlan(snapshot, resources, store.listPolicies(), { ...options, maxAgeMs });
     store.saveRestorePlan(plan as unknown as JsonObject & { id: string; snapshotId: string; createdAt: string });
     if (options.apply) store.saveRestoreRun(plan);
     return plan;
@@ -114,12 +122,37 @@ export function applySavedRestorePlan(options: RuntimeOptions & RestoreExecution
     if (plan.planHash !== options.planHash) {
       throw new Error(`Restore plan hash mismatch for ${options.planId}.`);
     }
+    // Re-check the freshness gate at apply time: a plan created within the
+    // limit may have aged past it while waiting for --apply --yes.
+    const snapshot = store.getSnapshot(plan.snapshotId);
+    const maxAgeMs = plan.request?.maxAgeMs ?? resolveMaxAgeMs(options.maxAgeMs);
+    if (snapshot) {
+      try {
+        assertSnapshotWithinMaxAge(snapshot, maxAgeMs);
+      } catch (error) {
+        if (error instanceof RestoreMaxAgeError) logRestoreRefusal(store, snapshot, error);
+        throw error;
+      }
+    }
     const result = executeRestorePlan(prepareRestorePlanForExecution(plan), { ...options, apply: Boolean(options.apply) });
     if (options.apply) store.saveRestoreRun(result);
     return result;
   } finally {
     store.close();
   }
+}
+
+/**
+ * A max-age refusal is a logged, alerting error: it goes to stderr and is
+ * appended to the durable audit trail so a refused restore is never silent.
+ */
+function logRestoreRefusal(store: SnapshotStore, snapshot: SnapshotRecord, error: RestoreMaxAgeError): void {
+  console.error(`[snapshots] ${error.message}`);
+  store.recordAuditEvent("restore.max-age-refused", snapshot.id, {
+    snapshot_id: snapshot.id,
+    snapshot_created_at: snapshot.createdAt,
+    error: error.message
+  });
 }
 
 export function upsertPolicy(options: RuntimeOptions & { selector: string; mode: "observe" | "restore" | "ignore"; reason?: string }) {

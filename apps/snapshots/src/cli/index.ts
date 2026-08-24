@@ -12,7 +12,7 @@ import {
 } from "../runtime.js";
 import { normalizePolicyMode } from "../policy.js";
 import { applyServicePlan, planService, serviceStatus } from "../service.js";
-import { defaultDbPath } from "../util.js";
+import { defaultDbPath, parseDuration } from "../util.js";
 import { getPackageVersion } from "../version.js";
 
 interface ParsedArgs {
@@ -80,7 +80,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
             planId,
             planHash: stringFlag(parsed, "plan-hash"),
             apply: Boolean(parsed.flags.apply),
-            yes: Boolean(parsed.flags.yes)
+            yes: Boolean(parsed.flags.yes),
+            maxAgeMs: durationFlag(parsed, "max-age")
           }));
           return;
         }
@@ -219,13 +220,20 @@ function listFlag(parsed: ParsedArgs, name: string): string[] | undefined {
   return value.split(",").map((part) => part.trim()).filter(Boolean);
 }
 
+function durationFlag(parsed: ParsedArgs, name: string): number | undefined {
+  const value = stringFlag(parsed, name);
+  if (!value) return undefined;
+  return parseDuration(value);
+}
+
 function restoreRequestFromFlags(parsed: ParsedArgs) {
   return {
     include: listFlag(parsed, "resource") ?? listFlag(parsed, "include"),
     exclude: listFlag(parsed, "exclude"),
     dependencyMode: Boolean(parsed.flags["with-dependencies"]) ? "full" as const : "none" as const,
     targetMode: Boolean(parsed.flags["merge-existing"]) ? "merge-existing" as const : "strict" as const,
-    tmuxMode: stringFlag(parsed, "tmux-mode") === "resume-marked" ? "resume-marked" as const : "layout-only" as const
+    tmuxMode: stringFlag(parsed, "tmux-mode") === "resume-marked" ? "resume-marked" as const : "layout-only" as const,
+    maxAgeMs: durationFlag(parsed, "max-age")
   };
 }
 
@@ -248,9 +256,9 @@ function printHelp(unknown?: string): void {
       "snapshots show <snapshot-id>",
       "snapshots resources [--limit n]",
       "snapshots resources <snapshot-id> [--tree]",
-      "snapshots plan <snapshot-id> [--resource selector[,selector]] [--exclude selector[,selector]] [--with-dependencies] [--merge-existing]",
-      "snapshots restore <snapshot-id> [--apply --yes] [--resource selector[,selector]] [--exclude selector[,selector]] [--with-dependencies] [--merge-existing]",
-      "snapshots restore --plan <plan-id> --plan-hash hash [--apply --yes]",
+      "snapshots plan <snapshot-id> [--resource selector[,selector]] [--exclude selector[,selector]] [--with-dependencies] [--merge-existing] [--max-age duration]",
+      "snapshots restore <snapshot-id> [--apply --yes] [--resource selector[,selector]] [--exclude selector[,selector]] [--with-dependencies] [--merge-existing] [--max-age duration]",
+      "snapshots restore --plan <plan-id> --plan-hash hash [--apply --yes] [--max-age duration]",
       "snapshots policy list",
       "snapshots policy set <selector> <observe|restore|ignore> [--reason text]",
       "snapshots daemon once|run [--interval seconds] [--max-runs n] [--tmux-tail-lines n]",

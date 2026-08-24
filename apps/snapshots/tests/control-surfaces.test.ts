@@ -94,3 +94,70 @@ describe("snapshots-serve answers --version/--help without binding", () => {
     expect(result.stdout).not.toContain("listening");
   });
 });
+
+describe("snapshots CLI max-age gate", () => {
+  test("restore --max-age refuses an old snapshot with a logged error", async () => {
+    const { SnapshotStore } = await import("../src/storage.js");
+    const { mkdtempSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+
+    const dbPath = join(mkdtempSync(join(tmpdir(), "snapshots-cli-maxage-")), "snapshots.sqlite");
+    const store = new SnapshotStore({ path: dbPath });
+    try {
+      store.saveSnapshot(
+        [{
+          id: "project:aged",
+          kind: "project",
+          name: "aged",
+          source: "projects",
+          attributes: { path: join(tmpdir(), "aged-project") },
+          observedAt: "2026-06-19T00:00:00.000Z"
+        }],
+        { id: "snap_old", createdAt: "2026-06-19T00:00:00.000Z" }
+      );
+    } finally {
+      store.close();
+    }
+
+    const result = await runEntry("src/cli/index.ts", ["restore", "snap_old", "--db", dbPath, "--max-age", "1h"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('"ok": false');
+    expect(result.stdout).toContain("max-age");
+    expect(result.stdout).toContain("Refusing restore");
+    expect(result.stderr).toContain("[snapshots]");
+  });
+
+  test("restore --max-age allows a fresh snapshot", async () => {
+    const { SnapshotStore } = await import("../src/storage.js");
+    const { mkdtempSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+
+    const dbPath = join(mkdtempSync(join(tmpdir(), "snapshots-cli-fresh-")), "snapshots.sqlite");
+    const store = new SnapshotStore({ path: dbPath });
+    try {
+      store.saveSnapshot(
+        [{
+          id: "project:fresh",
+          kind: "project",
+          name: "fresh",
+          source: "projects",
+          attributes: { path: join(tmpdir(), "fresh-project") },
+          observedAt: "2026-08-24T00:00:00.000Z"
+        }],
+        { id: "snap_fresh", createdAt: "2026-08-24T00:00:00.000Z" }
+      );
+    } finally {
+      store.close();
+    }
+
+    const result = await runEntry("src/cli/index.ts", ["restore", "snap_fresh", "--db", dbPath, "--max-age", "72h"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"snapshotId": "snap_fresh"');
+    expect(result.stdout).toContain('"maxAgeMs": 259200000');
+    expect(result.stdout).not.toContain("Refusing restore");
+  });
+});

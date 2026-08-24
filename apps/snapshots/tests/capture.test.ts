@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureAll } from "../src/capture/index.js";
+import { captureAll, isRestartableCommand } from "../src/capture/index.js";
+import { claudeProjectSlug } from "../src/capture/resume.js";
 import { commandExists, runCommand } from "../src/util.js";
 
 describe("captureAll", () => {
@@ -114,6 +116,128 @@ describe("captureAll", () => {
     } finally {
       runCommand("tmux", ["-L", socket, "kill-server"], 5_000);
       delete process.env.HASNA_SNAPSHOTS_TMUX_SOCKET;
+    }
+  });
+});
+
+describe("isRestartableCommand", () => {
+  test("detects opencode2 resume invocations", () => {
+    expect(isRestartableCommand("opencode2 --continue")).toBe(true);
+    expect(isRestartableCommand("opencode2 -c")).toBe(true);
+    expect(isRestartableCommand("opencode2 --session ses_fcd9fb83ffferR1QLpM2U6euUN")).toBe(true);
+    expect(isRestartableCommand("opencode2 -s ses_fcd9fb83ffferR1QLpM2U6euUN")).toBe(true);
+    expect(isRestartableCommand("opencode2 --continue --prompt \"fix the tests\"")).toBe(true);
+  });
+
+  test("does not mark plain opencode2 invocations restartable", () => {
+    expect(isRestartableCommand("opencode2 run \"fix the tests\"")).toBe(false);
+    expect(isRestartableCommand("opencode2 --help")).toBe(false);
+    expect(isRestartableCommand("opencode2 --version")).toBe(false);
+  });
+
+  test("keeps classic agent resume detection", () => {
+    expect(isRestartableCommand("claude --resume")).toBe(true);
+    expect(isRestartableCommand("codex --resume")).toBe(true);
+    expect(isRestartableCommand("codewith --resume")).toBe(true);
+    expect(isRestartableCommand("claude")).toBe(false);
+  });
+
+  test("keeps the explicit restartable marker", () => {
+    expect(isRestartableCommand("env HASNA_SNAPSHOTS_RESTARTABLE=1 sleep 60")).toBe(true);
+  });
+});
+
+describe("tmux pane resume identity", () => {
+  test("enriches pane records with opencode2 and claude session identity", async () => {
+    if (!commandExists("tmux")) return;
+    const socket = `snapshots-resume-${Date.now()}`;
+    const root = mkdtempSync(join(tmpdir(), "snapshots-resume-tmux-"));
+    const cwd = join(root, "pane-cwd");
+    mkdirSync(cwd, { recursive: true });
+
+    const opencodeDb = join(root, "opencode.db");
+    const db = new Database(opencodeDb, { create: true });
+    db.exec(`
+      CREATE TABLE session_v2 (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        directory TEXT NOT NULL,
+        version TEXT NOT NULL,
+        title TEXT,
+        agent TEXT,
+        model TEXT,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL
+      );
+    `);
+    db.query(
+      `INSERT INTO session_v2 (id, project_id, slug, directory, version, title, agent, model, time_created, time_updated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("ses_fixture", "p1", "s1", cwd, "v", "fixture session", "build", "{\"id\":\"deepseek-v4-flash\"}", 1_787_000_000_000, 1_787_556_333_337);
+    db.close();
+
+    const claudeDir = join(root, "claude-projects");
+    const slugDir = join(claudeDir, claudeProjectSlug(cwd));
+    mkdirSync(slugDir, { recursive: true });
+    writeFileSync(
+      join(slugDir, "session.jsonl"),
+      `${JSON.stringify({ type: "user", cwd, sessionId: "claude-fixture", timestamp: "2026-08-24T00:00:00.000Z" })}\n`
+    );
+
+    process.env.HASNA_SNAPSHOTS_TMUX_SOCKET = socket;
+    process.env.HASNA_SNAPSHOTS_OPENCODE_DB = opencodeDb;
+    process.env.HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR = claudeDir;
+    try {
+      const created = runCommand("tmux", ["-L", socket, "new-session", "-d", "-s", "resume-pane", "-c", cwd, "sleep 60"], 5_000);
+      if (!created.ok) return;
+      const result = await captureAll({ include: ["tmux"], now: "2026-06-19T00:00:00.000Z" });
+      const pane = result.resources.find((resource) => resource.kind === "tmux-pane" && resource.name.startsWith("resume-pane:"));
+
+      expect(pane?.attributes.resume_identity).toMatchObject({
+        opencode2: expect.objectContaining({
+          session_id: "ses_fixture",
+          directory: cwd,
+          title: "fixture session",
+          model_id: "deepseek-v4-flash",
+          time_updated_ms: 1_787_556_333_337
+        }),
+        claude: expect.objectContaining({
+          session_id: "claude-fixture",
+          cwd,
+          file: "session.jsonl"
+        })
+      });
+    } finally {
+      runCommand("tmux", ["-L", socket, "kill-server"], 5_000);
+      delete process.env.HASNA_SNAPSHOTS_TMUX_SOCKET;
+      delete process.env.HASNA_SNAPSHOTS_OPENCODE_DB;
+      delete process.env.HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR;
+    }
+  });
+
+  test("reports absent resume identity sources as info diagnostics without failing capture", async () => {
+    if (!commandExists("tmux")) return;
+    const socket = `snapshots-resume-missing-${Date.now()}`;
+    const root = mkdtempSync(join(tmpdir(), "snapshots-resume-missing-"));
+    process.env.HASNA_SNAPSHOTS_TMUX_SOCKET = socket;
+    process.env.HASNA_SNAPSHOTS_OPENCODE_DB = join(root, "absent.db");
+    process.env.HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR = join(root, "absent-claude");
+    try {
+      const created = runCommand("tmux", ["-L", socket, "new-session", "-d", "-s", "resume-missing", "sleep 60"], 5_000);
+      if (!created.ok) return;
+      const result = await captureAll({ include: ["tmux"], now: "2026-06-19T00:00:00.000Z" });
+      const pane = result.resources.find((resource) => resource.kind === "tmux-pane" && resource.name.startsWith("resume-missing:"));
+
+      expect(pane?.attributes.resume_identity).toEqual({ opencode2: null, claude: null });
+      expect(result.diagnostics.some((d) => d.source === "resume-identity" && d.level === "info" && d.message.includes("opencode2"))).toBe(true);
+      expect(result.diagnostics.some((d) => d.source === "resume-identity" && d.level === "info" && d.message.includes("Claude"))).toBe(true);
+      expect(result.diagnostics.filter((d) => d.source === "resume-identity")).toHaveLength(2);
+    } finally {
+      runCommand("tmux", ["-L", socket, "kill-server"], 5_000);
+      delete process.env.HASNA_SNAPSHOTS_TMUX_SOCKET;
+      delete process.env.HASNA_SNAPSHOTS_OPENCODE_DB;
+      delete process.env.HASNA_SNAPSHOTS_CLAUDE_PROJECTS_DIR;
     }
   });
 });

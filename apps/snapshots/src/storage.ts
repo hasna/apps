@@ -263,6 +263,15 @@ export class SnapshotStore {
       .run(`audit_${run.id}`, "restore.run", run.id, createdAt, JSON.stringify(run));
     return run as unknown as JsonObject;
   }
+
+  /** Append a durable audit event (e.g. a restore refused by the max-age gate). */
+  recordAuditEvent(eventType: string, subjectId: string | null, payload: JsonObject): void {
+    const createdAt = nowIso();
+    const id = `audit_${eventType}_${createdAt.replace(/[-:.TZ]/g, "").slice(0, 17)}_${sha256(stableJson({ createdAt, eventType, random: Math.random() })).slice(0, 8)}`;
+    this.db
+      .query("INSERT INTO audit_events (id, event_type, subject_id, created_at, payload) VALUES (?, ?, ?, ?, ?)")
+      .run(id, eventType, subjectId, createdAt, JSON.stringify(payload));
+  }
 }
 
 export function toStoredResource(resource: SnapshotResource): StoredSnapshotResource {

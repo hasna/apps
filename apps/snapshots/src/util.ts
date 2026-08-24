@@ -149,3 +149,64 @@ export function slugPart(value: string): string {
 export function fileExists(path: string | undefined): path is string {
   return Boolean(path && existsSync(path));
 }
+
+const DURATION_UNIT_MS: Record<string, number> = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000
+};
+
+/**
+ * Parse a human duration ("30s", "5m", "2h", "7d", "1500ms", or a bare
+ * integer meaning seconds) into milliseconds. Compound forms like "1h30m"
+ * are accepted. Throws on malformed input so a misconfigured gate fails
+ * loudly instead of silently disabling itself.
+ */
+export function parseDuration(text: string): number {
+  const input = String(text).trim();
+  if (!input) throw new Error(`Invalid duration: ${JSON.stringify(text)}`);
+  const token = /^(\d+)(ms|s|m|h|d)?/;
+  let remaining = input;
+  let totalMs = 0;
+  let matched = false;
+  while (remaining) {
+    const match = remaining.match(token);
+    if (!match || match[0].length === 0) throw new Error(`Invalid duration: ${JSON.stringify(text)}`);
+    totalMs += Number(match[1]) * DURATION_UNIT_MS[match[2] ?? "s"];
+    remaining = remaining.slice(match[0].length);
+    matched = true;
+  }
+  if (!matched) throw new Error(`Invalid duration: ${JSON.stringify(text)}`);
+  return totalMs;
+}
+
+/** Render a millisecond duration compactly ("72h", "90m", "30s", "250ms"). */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return `${ms}ms`;
+  const units: Array<[string, number]> = [
+    ["d", 86_400_000],
+    ["h", 3_600_000],
+    ["m", 60_000],
+    ["s", 1_000],
+    ["ms", 1]
+  ];
+  for (const [suffix, size] of units) {
+    if (ms >= size && ms % size === 0) return `${ms / size}${suffix}`;
+  }
+  return `${ms}ms`;
+}
+
+/**
+ * Resolve the restore max-age limit: an explicit value wins; otherwise the
+ * HASNA_SNAPSHOTS_MAX_AGE environment variable (a duration string) applies;
+ * otherwise the gate is disabled. A malformed env value throws so a
+ * misconfiguration fails loudly instead of silently disabling the gate.
+ */
+export function resolveMaxAgeMs(explicit?: number): number | undefined {
+  if (explicit !== undefined) return explicit;
+  const envValue = process.env.HASNA_SNAPSHOTS_MAX_AGE;
+  if (envValue === undefined || envValue === "") return undefined;
+  return parseDuration(envValue);
+}
