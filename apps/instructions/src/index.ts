@@ -68,6 +68,27 @@ export {
   sourceFromFilePath,
   sourcesFromIdentityExport,
 } from "./lib/session-render.js";
+// Lib — station-profile injector (owner request 2026-08-24)
+export {
+  STATION_PROFILE_CACHE_FILENAME,
+  STATION_PROFILE_LAYER,
+  STATION_PROFILE_MAX_BYTES,
+  STATION_PROFILE_SOURCE_ID,
+  buildStationProfileBlock,
+  getStationProfileCachePath,
+  readStationProfile,
+  refreshStationProfile,
+  resolveStationProfileMachine,
+  resolveStationProfilePackages,
+  stationProfileSource,
+} from "./lib/station-profile.js";
+export type {
+  StationProfileBuildInput,
+  StationProfileMachine,
+  StationProfilePackages,
+  StationProfileRefreshResult,
+  StationProfileStatus,
+} from "./lib/station-profile.js";
 export {
   INSTRUCTION_GRAPH_PLAN_SCHEMA,
   PROVIDER_CAPABILITIES,
