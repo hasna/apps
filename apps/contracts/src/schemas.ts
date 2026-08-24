@@ -3,6 +3,10 @@ import {
   createDeploymentSchemas,
   DEPLOYMENT_SCHEMA_IDS,
 } from "./deployment";
+import {
+  createDeploymentEnvelopeSchema,
+  DEPLOYMENT_ENVELOPE_SCHEMA_ID,
+} from "./deployment-envelope";
 import { z } from "zod";
 
 export const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
@@ -30,6 +34,7 @@ export const SCHEMA_IDS = {
   scaffoldManifest: "hasna.scaffold_manifest.v1",
   scaffoldInstallRecord: "hasna.scaffold_install_record.v1",
   appCloudManifest: "hasna.app_cloud_manifest.v1",
+  deploymentEnvelope: "hasna.deployment_envelope.v1",
   noCloudEvidencePack: "hasna.no_cloud_evidence_pack.v1",
   secureLocalStorePolicy: "hasna.secure_local_store_policy.v1",
   serviceContract: "hasna.service_contract.v1",
@@ -6680,6 +6685,31 @@ export const {
   DeploymentSchemaRegistry,
 } = DEPLOYMENT_SCHEMAS;
 
+const DEPLOYMENT_ENVELOPE_SCHEMAS = createDeploymentEnvelopeSchema({
+  timestamp: TimestampSchema,
+  metadata: MetadataSchema,
+  appId: AppIdSchema,
+  npmPackageName: NpmPackageNameSchema,
+  uri: UriSchema,
+  resourcePointer: ResourcePointerSchema,
+  evidencePointer: EvidencePointerSchema,
+  providerSideEffectClass: ProviderSideEffectClassSchema,
+  productProjectionRef: ProductProjectionRefSchema,
+  environmentBindingRef: EnvironmentBindingRefSchema,
+  buildArtifactRef: BuildArtifactRefSchema,
+  deploymentPlanRef: DeploymentPlanRefSchema,
+  deploymentReceiptRef: DeploymentReceiptRefSchema,
+});
+
+export const {
+  DeploymentEnvelopeSchema,
+  EnvelopeResourceSchema,
+  EnvelopeEnvironmentSchema,
+  EnvelopePhaseSchema,
+  EnvelopeActionSchema,
+} = DEPLOYMENT_ENVELOPE_SCHEMAS;
+export type DeploymentEnvelope = z.output<typeof DeploymentEnvelopeSchema>;
+
 export type ProductProjection = z.output<typeof ProductProjectionSchema>;
 export type IntentSnapshot = z.output<typeof IntentSnapshotSchema>;
 export type VerifiedSourceCandidate = z.output<typeof VerifiedSourceCandidateSchema>;
@@ -6733,6 +6763,7 @@ const CoreContractSchemaRegistry = {
   [SCHEMA_IDS.rolloutRecord]: RolloutRecordSchema,
   [SCHEMA_IDS.announcement]: AnnouncementSchema,
   [SCHEMA_IDS.audience]: AudienceSchema,
+  [SCHEMA_IDS.deploymentEnvelope]: DeploymentEnvelopeSchema,
 } as const;
 
 export const ContractSchemaRegistry:
@@ -6777,6 +6808,7 @@ export type ContractBySchemaId = {
   [SCHEMA_IDS.rolloutRecord]: RolloutRecord;
   [SCHEMA_IDS.announcement]: Announcement;
   [SCHEMA_IDS.audience]: Audience;
+  [SCHEMA_IDS.deploymentEnvelope]: DeploymentEnvelope;
   [DEPLOYMENT_SCHEMA_IDS.productProjection]: ProductProjection;
   [DEPLOYMENT_SCHEMA_IDS.intentSnapshot]: IntentSnapshot;
   [DEPLOYMENT_SCHEMA_IDS.verifiedSourceCandidate]: VerifiedSourceCandidate;
@@ -6825,6 +6857,7 @@ export type ReleaseInput = z.input<typeof ReleaseSchema>;
 export type RolloutRecordInput = z.input<typeof RolloutRecordSchema>;
 export type AnnouncementInput = z.input<typeof AnnouncementSchema>;
 export type AudienceInput = z.input<typeof AudienceSchema>;
+export type DeploymentEnvelopeInput = z.input<typeof DeploymentEnvelopeSchema>;
 export type ActorPointerInput = z.input<typeof ActorPointerSchema>;
 export type ResourcePointerInput = z.input<typeof ResourcePointerSchema>;
 export type EvidencePointerInput = z.input<typeof EvidencePointerSchema>;
@@ -6877,6 +6910,7 @@ export type ContractInputBySchemaId = {
   [SCHEMA_IDS.rolloutRecord]: RolloutRecordInput;
   [SCHEMA_IDS.announcement]: AnnouncementInput;
   [SCHEMA_IDS.audience]: AudienceInput;
+  [SCHEMA_IDS.deploymentEnvelope]: DeploymentEnvelopeInput;
   [DEPLOYMENT_SCHEMA_IDS.productProjection]: ProductProjectionInput;
   [DEPLOYMENT_SCHEMA_IDS.intentSnapshot]: IntentSnapshotInput;
   [DEPLOYMENT_SCHEMA_IDS.verifiedSourceCandidate]: VerifiedSourceCandidateInput;

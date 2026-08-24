@@ -1,0 +1,176 @@
+{
+  "schema": "hasna.deployment_envelope.v1",
+  "id": "envelope-example-app-ecs",
+  "createdAt": "2026-08-24T09:00:00.000Z",
+  "status": "draft",
+  "ratification": {
+    "gate": "one production deployment executed through this envelope with receipts and a passed live test",
+    "satisfied": false,
+    "evidenceRefs": []
+  },
+  "contractKitVersion": "1.0.0",
+  "identity": {
+    "appId": "example-app",
+    "packageName": "@hasna/example-app",
+    "projectsRef": {
+      "kind": "project",
+      "id": "project-example-app",
+      "uri": "project://example-app"
+    },
+    "repositoryRef": {
+      "kind": "repo",
+      "id": "repo-example-app",
+      "uri": "repo://github.com/hasna/example-app"
+    }
+  },
+  "audience": "internal",
+  "accountMapping": [
+    {
+      "audience": "internal",
+      "accountId": "789877399345",
+      "region": "eu-central-1",
+      "purpose": "control plane"
+    }
+  ],
+  "environments": [
+    {
+      "id": "production",
+      "classification": "production",
+      "legacyAlias": "prod",
+      "binding": {
+        "schema": "hasna.environment_binding.v1",
+        "id": "environment-production",
+        "revision": 2,
+        "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  ],
+  "resourceGraph": {
+    "resources": [
+      {
+        "id": "app-service",
+        "provider": "aws",
+        "kind": "compute",
+        "sourceVocabulary": "aws_plan",
+        "sourceKind": "ecs-service",
+        "ownerPackage": "@hasna/example-app",
+        "region": "eu-central-1",
+        "accountId": "789877399345",
+        "dependsOn": ["app-cluster", "app-network", "app-database", "app-files", "app-logs"]
+      },
+      {
+        "id": "app-cluster",
+        "provider": "aws",
+        "kind": "compute",
+        "sourceVocabulary": "aws_plan",
+        "sourceKind": "ecs-cluster",
+        "ownerPackage": "@hasna/example-app",
+        "region": "eu-central-1",
+        "accountId": "789877399345",
+        "dependsOn": ["app-network"]
+      },
+      {
+        "id": "app-network",
+        "provider": "aws",
+        "kind": "network",
+        "sourceVocabulary": "aws_plan",
+        "sourceKind": "vpc-networking",
+        "ownerPackage": "@hasna/example-app",
+        "region": "eu-central-1",
+        "accountId": "789877399345"
+      },
+      {
+        "id": "app-database",
+        "provider": "aws",
+        "kind": "database",
+        "sourceVocabulary": "aws_plan",
+        "sourceKind": "rds-postgres",
+        "ownerPackage": "@hasna/example-app",
+        "region": "eu-central-1",
+        "accountId": "789877399345",
+        "dependsOn": ["app-network"]
+      },
+      {
+        "id": "app-files",
+        "provider": "aws",
+        "kind": "object_storage",
+        "sourceVocabulary": "aws_plan",
+        "sourceKind": "s3-bucket",
+        "ownerPackage": "@hasna/example-app",
+        "region": "eu-central-1",
+        "accountId": "789877399345"
+      },
+      {
+        "id": "app-logs",
+        "provider": "aws",
+        "kind": "observability",
+        "sourceVocabulary": "aws_plan",
+        "sourceKind": "cloudwatch-log-group",
+        "ownerPackage": "@hasna/example-app",
+        "region": "eu-central-1",
+        "accountId": "789877399345"
+      },
+      {
+        "id": "app-exec-role",
+        "provider": "aws",
+        "kind": "identity",
+        "sourceVocabulary": "aws_plan",
+        "sourceKind": "iam-execution-role",
+        "ownerPackage": "@hasna/example-app",
+        "region": "eu-central-1",
+        "accountId": "789877399345"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "schema": "hasna.build_artifact.v1",
+      "id": "artifact-example-app",
+      "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  ],
+  "deployProcedure": {
+    "requestKind": "deployment",
+    "plan": {
+      "schema": "hasna.deployment_plan.v1",
+      "id": "deployment-plan-example-app",
+      "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "phases": [
+      {
+        "id": "apply",
+        "approvalScope": "phase",
+        "actions": [
+          {
+            "id": "apply-infra",
+            "operationId": "aws.ecs.apply",
+            "sideEffectClass": "compute_or_infra_mutation",
+            "compensationOperationId": "aws.ecs.rollback",
+            "approvalScope": "phase",
+            "evidenceRequirement": "provider-receipt"
+          }
+        ]
+      }
+    ]
+  },
+  "monitorWiring": {
+    "source": "uptime",
+    "importMode": "link_only",
+    "checks": [
+      {
+        "id": "availability",
+        "kind": "availability",
+        "expectedStatuses": [200],
+        "alarmClass": "fleet-default-alarms"
+      }
+    ]
+  },
+  "rollback": {
+    "profile": "fleet-default-rollback",
+    "targetReceipt": {
+      "schema": "hasna.deployment_receipt.v1",
+      "id": "deployment-receipt-example-app",
+      "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  }
+}
