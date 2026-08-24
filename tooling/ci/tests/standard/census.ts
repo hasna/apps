@@ -535,7 +535,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   // with the manifest rewrite its CONTRACTS_EXCEPTIONS remediation task owns.
   { member: "access", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "attachments", kitVersion: "0.8.2", pinned: "^0.14.0" },
-  { member: "calendar", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "consolidations", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "conversations", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
@@ -554,7 +553,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "recordings", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "secrets", kitVersion: "0.13.3", pinned: "^0.14.0" },
   { member: "servers", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "sessions", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "shield", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "testers", kitVersion: "0.13.4", pinned: "^0.14.0" },
 ];
