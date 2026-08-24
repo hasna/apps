@@ -533,7 +533,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
  * their manifest has no validator pin, so conformance runs at the
  * manifest's kitVersion (or latest). */
 export const NO_VALIDATOR_PIN: string[] = [
-  "banking",
   "bridge",
   "catalog",
   "changelog",
