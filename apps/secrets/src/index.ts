@@ -550,9 +550,12 @@ switch (command) {
     }
     let value = argvValue;
     if (useStdin) {
-      // Strip exactly ONE trailing newline (the echo/heredoc convention); every
-      // other byte is stored verbatim.
-      value = (await Bun.stdin.text()).replace(/\r?\n$/, "");
+      // Strip the trailing line-ending run (the echo/heredoc/pipe convention
+      // appends one or more `\n`/`\r\n`; a file or heredoc with a trailing
+      // blank line appends two). Every other byte is stored verbatim. A
+      // credential that genuinely ends in a line ending is pathological — a
+      // byte-exact consumer (a site gate is the measured case) 401s on it.
+      value = (await Bun.stdin.text()).replace(/[\r\n]+$/, "");
       if (!value) {
         console.error("No value on stdin. Usage: secrets set <key> --stdin < value-file");
         process.exit(1);
