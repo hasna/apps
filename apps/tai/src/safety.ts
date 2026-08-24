@@ -40,6 +40,14 @@ const CONFIRM_PATTERNS: Array<[RegExp, string]> = [
 
 const BLOCK_PATTERNS: Array<[RegExp, string]> = [
   [SENSITIVE_PATH_PATTERN, "possible credential disclosure"],
+  // Credential BASENAME reads (review P1): the narrowing in 0.1.7 dropped the
+  // broad basename coverage, so `cat id_rsa.pem`, `cat foo.env` and
+  // `cat credentials_backup.json` were allowed where 0.1.6 blocked them. This
+  // restores that coverage WITH extension support. Deliberately NOT matching
+  // bare `token`/`keychain` substrings here so `cat src/tokenizer.ts` and
+  // `sed -n 1,20p src/keychain-view.ts` stay allowed (the harmless-source-name
+  // tests).
+  [/\b(?:cat|grep|rg|sed|awk|head|tail)\b.*\b(?:\.env(?:\.[A-Za-z0-9_-]*)?|id_rsa(?:\.[A-Za-z0-9_-]*)?|id_ed25519(?:\.[A-Za-z0-9_-]*)?|credentials(?:[._-][A-Za-z0-9_-]+)*|secrets?(?:[._-][A-Za-z0-9_-]+)*)\b/i, "possible credential disclosure"],
   [/\b(?:cat|grep|rg|sed|awk|head|tail)\b.*\b(?:access|api|auth|refresh|id|session|client)[_-]?(?:token|secret|key)\b/i, "possible credential disclosure"],
   [/\b(?:curl|wget)\b.*\b(?:api[_-]?key|(?:access|auth|refresh|id)[_-]?token|client[_-]?secret|secret[_-]?key|token|secret|password)\s*=/i, "possible credential exfiltration"],
   [/\b(?:curl|wget)\b.*\$\{?[A-Za-z0-9_]*(?:token|secret|key|password|credential)[A-Za-z0-9_]*\}?/i, "possible credential exfiltration"],
