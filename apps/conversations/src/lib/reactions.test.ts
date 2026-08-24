@@ -10,7 +10,7 @@ import {
   normalizeEmoji,
 } from "./reactions";
 import { sendMessage, getMessageById, readMessagePreviews, readDigest } from "./messages";
-import { closeDb } from "./db";
+import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -254,5 +254,81 @@ describe("message envelope carries reactions", () => {
     expect(entry).toBeTruthy();
     expect(entry!.reactions).toBeTruthy();
     expect(entry!.reactions![0].emoji).toBe("👍");
+  });
+});
+
+describe("emoji content-safety (P1: credential-shaped emoji is rejected on write and redacted on read)", () => {
+  // Synthetic credential-shaped values. They must trip the APP content-safety
+  // detector (scanSensitiveContent) but NOT the CI commit-time secret scan
+  // patterns (which would block the fixture itself) — see tooling/ci/check-secrets.ts.
+  const CREDENTIAL_SHAPED = [
+    "xoxp-0123456789abcdefghijklmnopqrstuv", // Slack token shape (cloud_key)
+    "glpat-abcdefghijklmnopqrstuvwxyz0123", // GitLab PAT shape
+    "github_pat_abcdefghijklmnopqrstuvwxyz", // GitHub fine-grained PAT shape
+  ];
+
+  test("credential-shaped emoji is REJECTED on addReaction (assertNoSensitiveContent) and nothing is stored", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    for (const bad of CREDENTIAL_SHAPED) {
+      expect(() => addReaction(msg.id, "bob", bad)).toThrow(/sensitive content/i);
+    }
+    expect(getReactions(msg.id).length).toBe(0);
+  });
+
+  test("credential-shaped emoji is REJECTED on toggleReaction (store boundary)", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    expect(() => toggleReaction(msg.id, "bob", "glpat-abcdefghijklmnopqrstuvwxyz0123")).toThrow(/sensitive content/i);
+    expect(getReactions(msg.id).length).toBe(0);
+  });
+
+  test("real emoji (thumbs-up, skin tone, ZWJ, rocket) survive the write assert and read back unchanged", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    addReaction(msg.id, "bob", "👍");
+    addReaction(msg.id, "bob", "👏🏿");
+    addReaction(msg.id, "bob", "👩‍💻");
+    addReaction(msg.id, "bob", "🚀");
+    expect(getReactions(msg.id).map((r) => r.emoji)).toEqual(["👍", "👏🏿", "👩‍💻", "🚀"]);
+    expect(getReactionSummary(msg.id).map((s) => s.emoji)).toEqual(["👍", "👏🏿", "👩‍💻", "🚀"]);
+  });
+
+  test("a credential-shaped emoji seeded directly into the store is REDACTED on every read surface", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    const bad = "glpat-abcdefghijklmnopqrstuvwxyz0123";
+    // Bypass the write assert to simulate a malicious emoji that somehow
+    // survived: insert the raw row straight into the DB.
+    getDb().prepare("INSERT INTO reactions (message_id, agent, emoji) VALUES (?, ?, ?)").run(msg.id, "bob", bad);
+
+    const assertRedacted = (emoji: string | undefined) => {
+      expect(emoji).toBeTruthy();
+      expect(emoji!).toContain("[REDACTED");
+      expect(emoji!).not.toContain(bad);
+    };
+
+    // getReactions (raw)
+    const raw = getReactions(msg.id);
+    expect(raw).toHaveLength(1);
+    assertRedacted(raw[0].emoji);
+
+    // getReactionSummary (grouped)
+    const summary = getReactionSummary(msg.id);
+    expect(summary).toHaveLength(1);
+    assertRedacted(summary[0].emoji);
+
+    // getReactionSummariesForMessages (envelope helper)
+    const map = getReactionSummariesForMessages([msg.id]);
+    assertRedacted(map.get(msg.id)?.[0].emoji);
+
+    // message envelope (show)
+    const fetched = getMessageById(msg.id);
+    assertRedacted(fetched!.reactions?.[0].emoji);
+
+    // read preview envelope
+    const page = readMessagePreviews({ id: msg.id });
+    assertRedacted(page.messages[0].reactions?.[0].emoji);
+
+    // digest envelope
+    const digest = readDigest({ to: "bob" });
+    const entry = digest.messages.find((m) => m.id === msg.id);
+    assertRedacted(entry!.reactions?.[0].emoji);
   });
 });

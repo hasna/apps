@@ -5062,4 +5062,68 @@ describe("emoji reactions on /v1/messages/:id/reactions", () => {
     expect(message.reactions[0].emoji).toBe("👍");
     expect(message.reactions[0].count).toBe(1);
   });
+
+  test("POST rejects a credential-shaped emoji (400, nothing stored)", async () => {
+    const id = await seedReactionMessage();
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+    const res = await fetch(`${base}/v1/messages/${id}/reactions`, {
+      method: "POST", headers, body: JSON.stringify({ emoji: "glpat-abcdefghijklmnopqrstuvwxyz0123", agent: "bob" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(JSON.stringify(body)).toMatch(/sensitive content/i);
+    expect(JSON.stringify(body)).not.toContain("glpat-abcdefghijklmnopqrstuvwxyz0123");
+    const list = await (await fetch(`${base}/v1/messages/${id}/reactions`, { headers: { "x-api-key": roKey } })).json() as any;
+    expect(list.reactions).toEqual([]);
+  });
+
+  test("a credential-shaped emoji seeded into the store is REDACTED on GET /reactions (raw + summary) and the show envelope", async () => {
+    const id = await seedReactionMessage();
+    const bad = "glpat-abcdefghijklmnopqrstuvwxyz0123";
+    // Bypass the write assert to simulate a malicious emoji that somehow
+    // reached the store: seed the raw row straight into the fake PG client.
+    activeFakeClient!.__debug.reactions.push({
+      id: activeFakeClient!.__debug.reactions.length + 1,
+      message_id: id,
+      agent: "bob",
+      emoji: bad,
+      created_at: new Date().toISOString(),
+    });
+
+    const roHeaders = { "x-api-key": roKey };
+
+    // raw list
+    const raw = (await (await fetch(`${base}/v1/messages/${id}/reactions`, { headers: roHeaders })).json() as any).reactions;
+    expect(raw).toHaveLength(1);
+    expect(raw[0].emoji).toContain("[REDACTED");
+    expect(raw[0].emoji).not.toContain(bad);
+
+    // grouped summary
+    const summary = (await (await fetch(`${base}/v1/messages/${id}/reactions?summary=true`, { headers: roHeaders })).json() as any).summary;
+    expect(summary).toHaveLength(1);
+    expect(summary[0].emoji).toContain("[REDACTED");
+    expect(summary[0].emoji).not.toContain(bad);
+
+    // show envelope
+    const show = (await (await fetch(`${base}/v1/messages/${id}`, { headers: roHeaders })).json() as any).message;
+    expect(show.reactions).toBeTruthy();
+    expect(show.reactions[0].emoji).toContain("[REDACTED");
+    expect(show.reactions[0].emoji).not.toContain(bad);
+  });
+
+  test("real emoji survive redaction on GET /reactions and the show envelope", async () => {
+    const id = await seedReactionMessage();
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+    await fetch(`${base}/v1/messages/${id}/reactions`, { method: "POST", headers, body: JSON.stringify({ emoji: "👍", agent: "bob" }) });
+    await fetch(`${base}/v1/messages/${id}/reactions`, { method: "POST", headers, body: JSON.stringify({ emoji: "👩‍💻", agent: "alice" }) });
+
+    const roHeaders = { "x-api-key": roKey };
+    const expected = ["👩‍💻", "👍"].sort();
+    const raw = (await (await fetch(`${base}/v1/messages/${id}/reactions`, { headers: roHeaders })).json() as any).reactions;
+    expect(raw.map((r: any) => r.emoji).sort()).toEqual(expected);
+    const summary = (await (await fetch(`${base}/v1/messages/${id}/reactions?summary=true`, { headers: roHeaders })).json() as any).summary;
+    expect(summary.map((s: any) => s.emoji).sort()).toEqual(expected);
+    const show = (await (await fetch(`${base}/v1/messages/${id}`, { headers: roHeaders })).json() as any).message;
+    expect(show.reactions.map((s: any) => s.emoji).sort()).toEqual(expected);
+  });
 });

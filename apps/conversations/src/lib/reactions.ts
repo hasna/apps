@@ -1,4 +1,5 @@
 import { getDb } from "./db.js";
+import { assertNoSensitiveContent, redactSensitiveText } from "./content-safety.js";
 import type { Reaction, ReactionSummary, ReactionToggleResult } from "../types.js";
 
 export type { Reaction, ReactionSummary, ReactionToggleResult };
@@ -37,6 +38,11 @@ export function normalizeEmoji(emoji: string): string {
 export function toggleReaction(messageId: number, agent: string, emoji: string): ReactionToggleResult {
   const db = getDb();
   const norm = normalizeEmoji(emoji);
+  // Content-safety gate at the STORE boundary, mirroring the message-content
+  // assert on the send path: a credential-shaped/token-shaped string must never
+  // be stored in the emoji field, where the hosted read path would otherwise
+  // serve it verbatim (P1: hosted-redaction bypass, same class as fcd097bb).
+  assertNoSensitiveContent(norm, "Reaction emoji");
   const exists = db.prepare("SELECT 1 FROM messages WHERE id = ?").get(messageId);
   if (!exists) {
     throw new MessageNotFoundError(messageId);
@@ -80,7 +86,9 @@ export function getReactions(messageId: number): Reaction[] {
   const rows = db.prepare(
     "SELECT * FROM reactions WHERE message_id = ? ORDER BY created_at ASC, id ASC"
   ).all(messageId) as Reaction[];
-  return rows;
+  // Defense-in-depth on the read path: redact a stored emoji that somehow
+  // survived the write gate before it reaches any reader.
+  return rows.map((row) => ({ ...row, emoji: redactSensitiveText(row.emoji) }));
 }
 
 export function getReactionSummary(messageId: number): ReactionSummary[] {
@@ -94,7 +102,7 @@ export function getReactionSummary(messageId: number): ReactionSummary[] {
   `).all(messageId) as { emoji: string; agents: string; count: number }[];
 
   return rows.map((row) => ({
-    emoji: row.emoji,
+    emoji: redactSensitiveText(row.emoji),
     count: row.count,
     agents: row.agents.split(","),
   }));
@@ -120,7 +128,7 @@ export function getReactionSummariesForMessages(messageIds: number[]): Map<numbe
   for (const row of rows) {
     const key = Number(row.message_id);
     const list = map.get(key) ?? [];
-    list.push({ emoji: row.emoji, count: row.count, agents: String(row.agents).split(",") });
+    list.push({ emoji: redactSensitiveText(String(row.emoji)), count: row.count, agents: String(row.agents).split(",") });
     map.set(key, list);
   }
   return map;
