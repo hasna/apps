@@ -5,6 +5,13 @@
 ### Patch Changes
 
 - 8b70821: tai-mcp answers --version/-V/--help before the readline transport (todos row 7e5f8f3d). Previously `tai-mcp --version`/`--help` fell into the readline loop and printed nothing (silent-empty family).
+- safety: restore credential-basename file-read blocking that the initial
+  0.1.7 candidate dropped (caught by independent adversarial review, P1). The
+  narrowed credential-path patterns allowed `cat id_rsa.pem`, `cat foo.env`
+  and `cat credentials_backup.json` where 0.1.6 blocked them; the file-read
+  credential-basename pattern is restored WITH extension support while the
+  harmless-source-name improvements (`cat src/tokenizer.ts`,
+  `sed -n 1,20p src/keychain-view.ts` stay allowed) are retained.
 
 All notable changes to `@hasna/tai` are documented in this file.
 
