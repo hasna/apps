@@ -8,9 +8,21 @@ name: Release npm package
 # surfaces as an auth error that never mentions the rename. Change them only
 # together with `npm trust`.
 #
+# MONOREPO RE-HOME (todos A18-00026/27): this workflow moved here, to the
+# repo-root `.github/workflows/` directory that GitHub Actions actually
+# discovers, from the orphan `apps/secrets/.github/workflows/` shadow location
+# that was carried in with the hasna/secrets history-preserving import. It keeps
+# its FILENAME (release.yml), its `npm-release` environment, and its
+# `npm/secrets/v*` tag trigger, so the trusted-publisher binding can be
+# re-pointed at `hasna/apps` without renaming anything. The checkout root is
+# the monorepo, so the dependency install runs at the root per the repo's
+# install-order standard (root `bun install --frozen-lockfile --ignore-scripts`,
+# matching ci.yml), and every package-scoped step runs with
+# `working-directory: apps/secrets`.
+#
 # Provenance is generated automatically by npm under trusted publishing, with
 # one condition that is easy to miss: npm does NOT generate provenance for
-# PRIVATE repositories, even when the package itself is public. hasna/secrets is
+# PRIVATE repositories, even when the package itself is public. hasna/apps is
 # public (measured), so it holds here. If this repository is ever made private,
 # provenance stops being produced and this workflow will not tell you.
 
@@ -32,8 +44,11 @@ permissions:
 
 jobs:
   publish:
-    # Never publish from a fork that inherited this workflow.
-    if: github.repository == 'hasna/secrets'
+    # Never publish from a fork that inherited this workflow. The repository is
+    # the living monorepo hasna/apps; the standalone hasna/secrets repository
+    # was deleted by the migration (HTTP 404), so a guard naming it skipped
+    # every push even after the workflow became discoverable.
+    if: github.repository == 'hasna/apps'
     runs-on: ubuntu-latest
     environment: npm-release
     timeout-minutes: 30
@@ -79,11 +94,15 @@ jobs:
       # --frozen-lockfile exits 1 with "blocked by minimum-release-age". The
       # quarantine is real, but it belongs at lockfile-UPDATE time; naming it
       # here promised a protection this step cannot deliver.
+      # The root-level install (with --ignore-scripts) follows the monorepo's
+      # install-order standard — see ci.yml — so the workspace symlinks are
+      # consistent for every member, secrets included.
       - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Bind the tag to the package version
         id: version
+        working-directory: apps/secrets
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
@@ -109,7 +128,8 @@ jobs:
 
       # Tags are not protected by this repository's main-branch ruleset. Bind
       # the release to reviewed history in the workflow itself so a tag on an
-      # unmerged branch cannot publish different code.
+      # unmerged branch cannot publish different code. Runs against the checkout
+      # root (the monorepo), so the git ancestry check is repository-wide.
       - name: Require the release commit on protected main
         if: github.event_name == 'push'
         run: |
@@ -138,13 +158,25 @@ jobs:
       # `bun test` does not invoke tsc in this repository, so typecheck is its
       # own step rather than something the suite implies.
       - name: Typecheck
+        working-directory: apps/secrets
         run: bun run typecheck
 
-      - name: Test
-        run: bun test
-
+      # Build MUST run before Test on this fresh ubuntu-latest runner.
+      # apps/secrets/dist/ is gitignored and not committed, and the runner has no
+      # global `secrets` binary, so at Test time the host-protocol suite resolves
+      # the CLI it shells from dist/index.js (`resolveSecretsBin()` — "what CI's
+      # turbo build produces before the test phase"). Running Test before Build
+      # fails the suite on every tag push and blocks the publish this ceremony
+      # exists to reach. This is the same build-then-test order ci.yml uses for
+      # the affected build+test graph. Reordering is free: `bun run build` and
+      # `bun test` are independent steps in the same job.
       - name: Build
+        working-directory: apps/secrets
         run: bun run build
+
+      - name: Test
+        working-directory: apps/secrets
+        run: bun test
 
       # No NODE_AUTH_TOKEN, and no token of any kind. npm detects the Actions
       # OIDC environment and exchanges the id-token for a short-lived,
@@ -154,6 +186,7 @@ jobs:
       # no-op when it is already automatic.
       - name: Publish to npm via OIDC trusted publishing
         if: github.event_name == 'push'
+        working-directory: apps/secrets
         run: npm publish --provenance --access public
 
       - name: Verify the published version from the registry

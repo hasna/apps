@@ -62,7 +62,7 @@ Commands:
   scan workspace [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
   scan history [path] [--limit <n>] [--cursor <cursor>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
   scan staged [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--subtree] [--json]   commit gate; exit 0 clean / 1 finding / 2 could not scan
-  scan input [path|-] [--limit <n>] [--max-bytes <n>] [--timeout-ms <n>] [--json]   scan stdin or a file before the text is persisted; same exit codes (aliases: stdin, text)
+  scan input [path ...] [--limit <n>] [--max-bytes <n>] [--timeout-ms <n>] [--json]   scan stdin or one or more files before the text is persisted; every named path is scanned; same exit codes (aliases: stdin, text)
   security permissions [--roots <paths>] [--fix-permissions] [--report-dir <dir>] [--upsert-tasks] [--todos-project <path>] [--task-list <slug>] [--max-task-actions <n>] [--json|--pretty]
   security exposure [--mode workspace|history] [--roots <paths>] [--limit <n>] [--json|--pretty]
   security supply-chain [--roots <paths>] [--max-files <n>] [--max-findings <n>] [--json|--pretty]
@@ -963,14 +963,17 @@ switch (command) {
   }
 
   case "scan": {
-    const [rawTarget = "workspace", root] = positional;
+    const [rawTarget = "workspace", ...paths] = positional;
     // `stdin` and `text` are the two names an agent reaches for when it wants
     // to scan a stream. Both previously exited 1 on a usage error while the
     // capability was simply absent, so they resolve to the input mode rather
     // than teaching a second name for it.
     const target = rawTarget === "stdin" || rawTarget === "text" ? "input" : rawTarget;
+    // The first path locates the repo or tree for workspace/history/staged;
+    // input mode scans EVERY named path (see the `input` case below).
+    const root = paths[0];
     const scanUsage =
-      "Usage: secrets scan workspace|history|staged|input [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--subtree] [--pretty] [--json]";
+      "Usage: secrets scan workspace|history|staged|input [path ...] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--subtree] [--pretty] [--json]";
     const allowedFlags = {
       workspace: new Set(["cursor", "limit", "max-bytes", "max-files", "max-scan-bytes", "timeout-ms", "pretty", "json"]),
       history: new Set(["cursor", "limit", "max-commits", "timeout-ms", "pretty", "json"]),
@@ -1056,14 +1059,14 @@ switch (command) {
         // sessions, hooks, CI and cron, i.e. every context this mode targets.
         // The real guard is in scanInputExposures: zero bytes off stdin raises
         // an error and so exits 2.
-        const readsStdin = root === undefined || root === "-";
+        const readsStdin = paths.length === 0 || paths.includes("-");
         if (readsStdin && process.stdin.isTTY) {
           console.error("secrets scan input reads stdin: pipe the text in, or name a file.");
           console.error(scanUsage);
           process.exit(2);
         }
         const result = scanInputExposures({
-          path: root,
+          paths,
           limit: common.limit,
           maxBytes: positiveIntegerFlag(flags, "max-bytes"),
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),

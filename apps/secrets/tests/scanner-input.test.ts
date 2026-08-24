@@ -286,3 +286,77 @@ describe("secrets scan input — CLI gate", () => {
     expect(parsed.stats.filesScanned).toBe(1);
   });
 });
+
+// REGRESSION AGE10-00616 — "scan input takes N paths, scans ONLY THE FIRST,
+// reports rc=0: argument order decides the verdict and nothing says a file was
+// skipped". Measured on @hasna/secrets 0.3.7: `secrets scan input FILE1 FILE2`
+// captured only the first positional in the CLI (`const [rawTarget = "workspace",
+// root] = positional`) and handed it to a scanner that reads exactly one file, so
+// FILE2 never appeared in the output at all — not in findings, not in stats, not
+// in an error — and a clean-first ordering exited 0 with a credential-bearing
+// second file unscanned. The contract pinned here: EVERY named path is scanned,
+// findings carry the path they came from, and a path that could not be scanned
+// is VISIBLE in the result and forces a non-clean verdict. Nothing is silently
+// dropped.
+describe("secrets scan input — every named path is scanned (AGE10-00616)", () => {
+  it("finds a credential in the SECOND file when the first is clean", () => {
+    const secret = fakeStripeTestKey();
+    const cleanPath = join(testDir, "first-clean.txt");
+    const dirtyPath = join(testDir, "second-dirty.txt");
+    writeFileSync(cleanPath, "ordinary configuration text\n");
+    writeFileSync(dirtyPath, `key=${secret}\n`);
+
+    const result = runScan(["input", cleanPath, dirtyPath, "--json"]);
+    const parsed = JSON.parse(result.stdout);
+
+    // The bug's signature: clean-first ordered scans reported rc=0 with the
+    // credential-bearing second file never scanned. Scanning every named path
+    // must find it.
+    expect(result.exitCode).toBe(1);
+    expect(parsed.stats.filesScanned).toBe(2);
+    expect(parsed.findingCount).toBe(1);
+    expect(parsed.findings[0].detector).toBe("stripe_secret_key");
+    expect(parsed.findings[0].path).toBe(dirtyPath);
+  });
+
+  it("reports per-file results with findings attributed to their own path", () => {
+    const firstSecret = fakeStripeTestKey();
+    const secondSecret = fakePackageRegistryToken();
+    const firstPath = join(testDir, "first.txt");
+    const secondPath = join(testDir, "second.txt");
+    writeFileSync(firstPath, `stripe=${firstSecret}\n`);
+    writeFileSync(secondPath, `npm=${secondSecret}\n`);
+
+    const result = runScan(["input", firstPath, secondPath, "--json"]);
+    const parsed = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(1);
+    expect(parsed.stats.filesScanned).toBe(2);
+    const detectors = new Set(parsed.findings.map((f) => f.detector));
+    expect(detectors).toContain("stripe_secret_key");
+    expect(detectors).toContain("package_registry_token");
+    for (const finding of parsed.findings) {
+      expect([firstPath, secondPath]).toContain(finding.path);
+    }
+  });
+
+  it("never silently drops a path: an unscannable path is visible and blocks a clean verdict", () => {
+    const cleanPath = join(testDir, "clean.txt");
+    const missingPath = join(testDir, "does-not-exist.txt");
+    writeFileSync(cleanPath, "ordinary text\n");
+
+    const result = runScan(["input", cleanPath, missingPath, "--json"]);
+    const parsed = JSON.parse(result.stdout);
+
+    // The path that could not be scanned must be REPORTED (a skipped entry or
+    // an error naming it) — never absent from the output as if the command had
+    // not been given it. And a scan that did not look at everything must not
+    // answer "clean".
+    const mentionsMissing = [...(parsed.stats.skipped ?? []), ...(parsed.stats.errors ?? [])]
+      .some((entry) =>
+        typeof entry === "string" ? entry.includes(missingPath) : entry.path === missingPath
+      );
+    expect(mentionsMissing).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+  });
+});
