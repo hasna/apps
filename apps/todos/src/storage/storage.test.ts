@@ -662,7 +662,16 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records"))).toHaveLength(insertsBeforeImport);
 
     const syncStore = createPostgresTodosSyncStore(postgres.client);
-    await expect(syncStore.pushSnapshot(snapshot)).rejects.toThrow("conflicts with destination");
+    // The destination preflight must throw a TYPED ResourceConflictError (not a
+    // generic Error): the mirror/outbox retry machinery only parks
+    // ResourceConflictError and retries everything else as transient, so the
+    // generic path would feed the duplicate-key retry storm this release
+    // removes. Assert the typed class and code, not just the message.
+    await expect(syncStore.pushSnapshot(snapshot)).rejects.toMatchObject({
+      name: "ResourceConflictError",
+      code: "SNAPSHOT_DESTINATION_CONFLICT",
+      message: expect.stringContaining("conflicts with destination"),
+    });
     expect(postgres.calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records"))).toHaveLength(insertsBeforeImport);
   });
 

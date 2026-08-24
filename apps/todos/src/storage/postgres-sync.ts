@@ -457,7 +457,16 @@ export class PostgresTodosSyncStore {
         existingTaskLists,
       );
       if (destinationErrors.length > 0) {
-        throw new Error(`Snapshot routing conflicts with destination: ${destinationErrors.join("; ")}`);
+        // Typed, not a generic Error: the mirror/outbox retry machinery only
+        // parks ResourceConflictError and retries everything else as transient.
+        // A persistent destination slug/task_list_id collision cannot converge
+        // (the unique index is the final arbiter), so it must be parked
+        // immediately or it feeds the same duplicate-key retry storm the 23505
+        // classifier below exists to prevent.
+        throw new ResourceConflictError(
+          "SNAPSHOT_DESTINATION_CONFLICT",
+          `Snapshot routing conflicts with destination: ${destinationErrors.join("; ")}`,
+        );
       }
       const result: PostgresTodosSyncPushResult = { records: 0, objectTypes: {} };
       const sourceMachineId = context.requestId ?? this.sourceMachineId ?? null;
