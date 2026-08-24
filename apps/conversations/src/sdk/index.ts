@@ -4,9 +4,15 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: ConversationsClient 0.7.6
 
-export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
+export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string; "reactions"?: Array<ReactionSummary> }
 
-export interface MessagePreview { "id": number; "mention_id"?: number; "uuid"?: string; "session_id": string; "from_agent": string; "to_agent": string; "channel": string | null; "project_id": string | null; "priority": "low" | "normal" | "high" | "urgent"; "working_dir": string | null; "repository": string | null; "branch": string | null; "created_at": string; "edited_at": string | null; "pinned_at": string | null; "unread": boolean; "blocking": boolean; "reply_to": number | null; "reply_count"?: number; "attachment_count": number; "has_attachments": boolean; "has_metadata": boolean; "preview": string; "preview_bytes": number; "content_bytes": number; "truncated": boolean; "redacted": boolean; "relevance_score"?: number }
+export interface Reaction { "id": number; "message_id": number; "agent": string; "emoji": string; "created_at": string }
+
+export interface ReactionSummary { "emoji": string; "count": number; "agents": Array<string> }
+
+export interface ReactionToggleResult { "toggled": "added" | "removed"; "reaction"?: Reaction }
+
+export interface MessagePreview { "id": number; "mention_id"?: number; "uuid"?: string; "session_id": string; "from_agent": string; "to_agent": string; "channel": string | null; "project_id": string | null; "priority": "low" | "normal" | "high" | "urgent"; "working_dir": string | null; "repository": string | null; "branch": string | null; "created_at": string; "edited_at": string | null; "pinned_at": string | null; "unread": boolean; "blocking": boolean; "reply_to": number | null; "reply_count"?: number; "attachment_count": number; "has_attachments": boolean; "has_metadata": boolean; "preview": string; "preview_bytes": number; "content_bytes": number; "truncated": boolean; "redacted": boolean; "relevance_score"?: number; "reactions"?: Array<ReactionSummary> }
 
 export interface MessagePreviewPage { "messages": Array<MessagePreview>; "count": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "compact": true; "detail_path": "messages/{id}"; "query"?: string }
 
@@ -353,6 +359,33 @@ export class ConversationsClient {
         query,
         init,
         responseType: "arrayBuffer",
+      });
+    }
+
+    /** List emoji reactions on a message, or the grouped summary with ?summary=true */
+    async listReactions(id: number, query?: { "summary"?: boolean }, init?: RequestInit): Promise<{ "reactions"?: Array<Reaction>; "summary"?: Array<ReactionSummary> }> {
+      return this.request("GET", `/v1/messages/${encodeURIComponent(String(id))}/reactions`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Toggle an emoji reaction (same actor + emoji adds then removes) */
+    async react(id: number, body: { "agent"?: string; "emoji": string }, init?: RequestInit): Promise<ReactionToggleResult> {
+      return this.request("POST", `/v1/messages/${encodeURIComponent(String(id))}/reactions`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Explicitly remove an emoji reaction (404 when absent) */
+    async removeReaction(id: number, query?: { "agent"?: string; "emoji": string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("DELETE", `/v1/messages/${encodeURIComponent(String(id))}/reactions`, {
+        body: undefined,
+        query,
+        init,
       });
     }
 

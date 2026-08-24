@@ -749,8 +749,18 @@ export class ApiStore implements ConversationsStore {
 
   // ── reactions ────────────────────────────────────────────────────────────────
   addReaction: ConversationsStore["addReaction"] = async (messageId, agent, emoji) => {
-    const body = await this.post<{ reaction: unknown }>(`/messages/${encodeURIComponent(String(messageId))}/reactions`, { agent, emoji });
-    return body.reaction as never;
+    const body = await this.post<{ toggled?: string; reaction?: unknown }>(`/messages/${encodeURIComponent(String(messageId))}/reactions`, { agent, emoji });
+    return {
+      toggled: body.toggled === "removed" ? "removed" : "added",
+      reaction: body.reaction ?? null,
+    } as never;
+  };
+  toggleReaction: ConversationsStore["toggleReaction"] = async (messageId, agent, emoji) => {
+    const body = await this.post<{ toggled?: string; reaction?: unknown }>(`/messages/${encodeURIComponent(String(messageId))}/reactions`, { agent, emoji });
+    return {
+      toggled: body.toggled === "removed" ? "removed" : "added",
+      reaction: body.reaction ?? null,
+    } as never;
   };
   removeReaction: ConversationsStore["removeReaction"] = async (messageId, agent, emoji) => {
     try {

@@ -1,5 +1,7 @@
 import { getDb } from "./db.js";
-import type { Reaction } from "../types.js";
+import type { Reaction, ReactionSummary, ReactionToggleResult } from "../types.js";
+
+export type { Reaction, ReactionSummary, ReactionToggleResult };
 
 /**
  * Thrown when a reaction operation targets a message ID that does not exist.
@@ -15,8 +17,26 @@ export class MessageNotFoundError extends Error {
   }
 }
 
-export function addReaction(messageId: number, agent: string, emoji: string): Reaction {
+/**
+ * Canonical emoji form for storage: the exact Unicode sequence, NFKC-normalized
+ * so composed/decomposed spellings (and any other NFKC-equivalent variants)
+ * dedupe to a single row under the UNIQUE(message_id, agent, emoji) key.
+ */
+export function normalizeEmoji(emoji: string): string {
+  return emoji.normalize("NFKC");
+}
+
+/**
+ * Slack-style toggle: adding an emoji the SAME actor already added for this
+ * message removes it. Implemented as an atomic INSERT ... ON CONFLICT DO
+ * NOTHING RETURNING the row; when the unique key collides no row comes back and
+ * the existing row is deleted instead. A counter-only model cannot do this and
+ * the {emoji, count, agents[]} summary is derived by GROUP BY, so the actor-row
+ * table is the correct shape (no denormalized counter to drift).
+ */
+export function toggleReaction(messageId: number, agent: string, emoji: string): ReactionToggleResult {
   const db = getDb();
+  const norm = normalizeEmoji(emoji);
   const exists = db.prepare("SELECT 1 FROM messages WHERE id = ?").get(messageId);
   if (!exists) {
     throw new MessageNotFoundError(messageId);
@@ -24,17 +44,34 @@ export function addReaction(messageId: number, agent: string, emoji: string): Re
   const stmt = db.prepare(`
     INSERT INTO reactions (message_id, agent, emoji)
     VALUES (?, ?, ?)
-    ON CONFLICT (message_id, agent, emoji) DO UPDATE SET agent = agent
+    ON CONFLICT (message_id, agent, emoji) DO NOTHING
     RETURNING *
   `);
-  const row = stmt.get(messageId, agent, emoji) as Reaction;
-  return row;
+  const row = stmt.get(messageId, agent, norm) as Reaction | undefined;
+  if (row) {
+    return { toggled: "added", reaction: row };
+  }
+  db.prepare("DELETE FROM reactions WHERE message_id = ? AND agent = ? AND emoji = ?")
+    .run(messageId, agent, norm);
+  return { toggled: "removed", reaction: null };
 }
 
+/**
+ * Store-contract name for {@link toggleReaction}: kept so existing call sites
+ * (MCP tools, api-store, analytics CLI) read as "add a reaction" while the
+ * operation is a true toggle.
+ */
+export const addReaction = toggleReaction;
+
+/**
+ * Explicit, idempotent removal for agent-driven cleanup. Returns true only when
+ * a row was actually deleted (404-equivalent for the HTTP surface).
+ */
 export function removeReaction(messageId: number, agent: string, emoji: string): boolean {
   const db = getDb();
-  const stmt = db.prepare("DELETE FROM reactions WHERE message_id = ? AND agent = ? AND emoji = ?");
-  const result = stmt.run(messageId, agent, emoji);
+  const norm = normalizeEmoji(emoji);
+  const result = db.prepare("DELETE FROM reactions WHERE message_id = ? AND agent = ? AND emoji = ?")
+    .run(messageId, agent, norm);
   return result.changes > 0;
 }
 
@@ -44,12 +81,6 @@ export function getReactions(messageId: number): Reaction[] {
     "SELECT * FROM reactions WHERE message_id = ? ORDER BY created_at ASC, id ASC"
   ).all(messageId) as Reaction[];
   return rows;
-}
-
-export interface ReactionSummary {
-  emoji: string;
-  count: number;
-  agents: string[];
 }
 
 export function getReactionSummary(messageId: number): ReactionSummary[] {
@@ -67,4 +98,30 @@ export function getReactionSummary(messageId: number): ReactionSummary[] {
     count: row.count,
     agents: row.agents.split(","),
   }));
+}
+
+/**
+ * Grouped summaries for MANY message ids in ONE query — the envelope helper for
+ * read/digest/show, so a page of messages never pays a query per message.
+ */
+export function getReactionSummariesForMessages(messageIds: number[]): Map<number, ReactionSummary[]> {
+  const db = getDb();
+  const map = new Map<number, ReactionSummary[]>();
+  if (messageIds.length === 0) return map;
+  const placeholders = messageIds.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT message_id, emoji, GROUP_CONCAT(agent) as agents, COUNT(*) as count
+    FROM reactions
+    WHERE message_id IN (${placeholders})
+    GROUP BY message_id, emoji
+    ORDER BY message_id, count DESC, MIN(created_at) ASC
+  `).all(...messageIds) as { message_id: number; emoji: string; agents: string; count: number }[];
+
+  for (const row of rows) {
+    const key = Number(row.message_id);
+    const list = map.get(key) ?? [];
+    list.push({ emoji: row.emoji, count: row.count, agents: String(row.agents).split(",") });
+    map.set(key, list);
+  }
+  return map;
 }

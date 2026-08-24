@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { redactSensitiveValue, redactSensitiveValueWithFindings } from "./content-safety";
+import { redactSensitiveText, redactSensitiveValue, redactSensitiveValueWithFindings } from "./content-safety";
 
 /**
  * Regression for todos eb4184d7 — root cause #679793.
@@ -154,5 +154,23 @@ describe("redactSensitiveValue still walks everything that holds text", () => {
     });
     expect(out.created_at).toBeInstanceOf(Date);
     expect(out.nested.deeper.note).toContain("[REDACTED:CLOUD_KEY]");
+  });
+});
+
+describe("emoji reactions pass the content-safety redactor unchanged", () => {
+  test("a thumbs-up and a skin-tone variant survive redactSensitiveText", () => {
+    const body = "Great work on the release! 👍  👏🏿";
+    expect(redactSensitiveText(body)).toBe(body);
+  });
+
+  test("a ZWJ sequence survives redactSensitiveText unchanged", () => {
+    const body = "Shipped by 👩‍💻 today.";
+    expect(redactSensitiveText(body)).toBe(body);
+  });
+
+  test("an emoji in a message response value survives redactSensitiveValue", () => {
+    const out = redactSensitiveValue({ content: "looks good 👍", reactions: [{ emoji: "👍", count: 2, agents: ["bob"] }] });
+    expect(out.content).toBe("looks good 👍");
+    expect(out.reactions).toEqual([{ emoji: "👍", count: 2, agents: ["bob"] }]);
   });
 });

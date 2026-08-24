@@ -68,7 +68,7 @@ describe("advanced MCP tools", () => {
   });
 
   describe("react / add_reaction", () => {
-    test("add_reaction adds emoji", async () => {
+    test("add_reaction toggles an emoji on (first add)", async () => {
       // First send a message so message 1 exists
       const { sendMessage } = await import("../../lib/messages");
       const msg = sendMessage({ from: "react-sender", to: "advanced-test-agent", content: "react test" });
@@ -77,10 +77,11 @@ describe("advanced MCP tools", () => {
         name: "add_reaction",
         arguments: { message_id: msg.id, emoji: "thumbsup" },
       }) as any) as any;
-      expect(result.emoji).toBe("thumbsup");
+      expect(result.toggled).toBe("added");
+      expect(result.reaction.emoji).toBe("thumbsup");
     });
 
-    test("react alias works", async () => {
+    test("react alias works and toggles off on the same actor re-add", async () => {
       const msg = (await import("../../lib/messages")).sendMessage({
         from: "react-sender2", to: "advanced-test-agent", content: "react alias"
       });
@@ -88,7 +89,15 @@ describe("advanced MCP tools", () => {
         name: "react",
         arguments: { message_id: msg.id, emoji: "heart" },
       }) as any) as any;
-      expect(result.emoji).toBe("heart");
+      expect(result.toggled).toBe("added");
+      expect(result.reaction.emoji).toBe("heart");
+      // Same actor re-adding the same emoji removes it (Slack-style toggle).
+      const again = parseResult(await client.callTool({
+        name: "react",
+        arguments: { message_id: msg.id, emoji: "heart" },
+      }) as any) as any;
+      expect(again.toggled).toBe("removed");
+      expect(again.reaction).toBeNull();
     });
   });
 

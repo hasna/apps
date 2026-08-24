@@ -13,7 +13,7 @@ import { resolveSelfSenderId } from "../../lib/sender-identity.js";
 import { buildCompactSearchEnvelope, parseNonNegativeInteger, previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
 import { BLOCKERS_LIST_ORDER, PINNED_LIST_ORDER } from "../../lib/list-order.js";
-import { printMessageEntry } from "../message-output.js";
+import { printMessageEntry, printReactionRow } from "../message-output.js";
 import { resolveReadWindow } from "../../lib/message-window.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { emitCliError } from "../cli-error.js";
@@ -385,6 +385,7 @@ export function registerMessagingCommands(program: Command): void {
           printLine(chalk.dim(`Attachments: ${msg.attachments.map((att) => att.name).join(", ")}`));
         }
         printLine(renderContent(msg.content));
+        printReactionRow(msg.reactions);
       }
       closeDb();
     });
@@ -451,6 +452,7 @@ export function registerMessagingCommands(program: Command): void {
             const unread = msg.unread ? chalk.green(" unread") : "";
             printLine(`${time} ${from} → ${dest}${priority}${att}${unread} ${chalk.dim(`#${msg.id}`)}`);
             printLine(`  ${chalk.dim(msg.snippet)}`);
+            printReactionRow(msg.reactions);
           }
           if (result.has_more) printLine(chalk.dim(`Continue with: ${formatDigestContinuationCommand(result)}`));
           printLine(chalk.dim("Use conversations show <id> for one full message."));

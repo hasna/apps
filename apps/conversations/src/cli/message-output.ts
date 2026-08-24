@@ -22,4 +22,12 @@ export function printMessageEntry(msg: Message, opts: { verbose?: boolean; desti
   } else {
     printLine(`  ${previewText(msg.content)}`);
   }
+  printReactionRow(msg.reactions);
+}
+
+/** Muted emoji-reaction row rendered under content: `👍 2 (bob, charlie)`. */
+export function printReactionRow(reactions?: Array<{ emoji: string; count: number; agents: string[] }>): void {
+  if (!reactions?.length) return;
+  const parts = reactions.map((r) => `${r.emoji} ${r.count} (${r.agents.join(", ")})`).join("  ");
+  printLine(chalk.dim(`  ${parts}`));
 }

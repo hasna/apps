@@ -415,6 +415,7 @@ export interface ConversationsStore {
 
   // reactions
   addReaction: Async<typeof reactionsLib.addReaction>;
+  toggleReaction: Async<typeof reactionsLib.toggleReaction>;
   removeReaction: Async<typeof reactionsLib.removeReaction>;
   getReactions: Async<typeof reactionsLib.getReactions>;
   getReactionSummary: Async<typeof reactionsLib.getReactionSummary>;
@@ -630,6 +631,7 @@ export class LocalStore implements ConversationsStore {
 
   // reactions
   addReaction: ConversationsStore["addReaction"] = async (...a) => reactionsLib.addReaction(...a);
+  toggleReaction: ConversationsStore["toggleReaction"] = async (...a) => reactionsLib.toggleReaction(...a);
   removeReaction: ConversationsStore["removeReaction"] = async (...a) => reactionsLib.removeReaction(...a);
   getReactions: ConversationsStore["getReactions"] = async (...a) => reactionsLib.getReactions(...a);
   getReactionSummary: ConversationsStore["getReactionSummary"] = async (...a) => reactionsLib.getReactionSummary(...a);

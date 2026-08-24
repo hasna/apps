@@ -1,6 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { addReaction, removeReaction, getReactions, getReactionSummary, MessageNotFoundError } from "./reactions";
-import { sendMessage } from "./messages";
+import {
+  addReaction,
+  toggleReaction,
+  removeReaction,
+  getReactions,
+  getReactionSummary,
+  getReactionSummariesForMessages,
+  MessageNotFoundError,
+  normalizeEmoji,
+} from "./reactions";
+import { sendMessage, getMessageById, readMessagePreviews, readDigest } from "./messages";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -20,32 +29,50 @@ afterEach(() => {
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
 });
 
-describe("addReaction", () => {
-  test("adds a reaction to a message", () => {
+describe("addReaction is a Slack-style toggle", () => {
+  test("first add returns toggled=added with the row", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
-    const reaction = addReaction(msg.id, "bob", "👍");
-    expect(reaction.id).toBeGreaterThan(0);
-    expect(reaction.message_id).toBe(msg.id);
-    expect(reaction.agent).toBe("bob");
-    expect(reaction.emoji).toBe("👍");
-    expect(reaction.created_at).toBeTruthy();
+    const result = addReaction(msg.id, "bob", "👍");
+    expect(result.toggled).toBe("added");
+    expect(result.reaction).not.toBeNull();
+    expect(result.reaction!.id).toBeGreaterThan(0);
+    expect(result.reaction!.message_id).toBe(msg.id);
+    expect(result.reaction!.agent).toBe("bob");
+    expect(result.reaction!.emoji).toBe("👍");
+    expect(result.reaction!.created_at).toBeTruthy();
   });
 
-  test("duplicate reaction (same agent+emoji) is idempotent", () => {
+  test("same actor re-adding the same emoji REMOVES it (toggle)", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
     const r1 = addReaction(msg.id, "bob", "👍");
+    expect(r1.toggled).toBe("added");
     const r2 = addReaction(msg.id, "bob", "👍");
-    expect(r1.id).toBe(r2.id);
+    expect(r2.toggled).toBe("removed");
+    expect(r2.reaction).toBeNull();
     const all = getReactions(msg.id);
-    expect(all.length).toBe(1);
+    expect(all.length).toBe(0);
   });
 
-  test("different agents can react with same emoji", () => {
+  test("toggleReaction is the same operation as addReaction", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    const r1 = toggleReaction(msg.id, "bob", "👍");
+    expect(r1.toggled).toBe("added");
+    const r2 = toggleReaction(msg.id, "bob", "👍");
+    expect(r2.toggled).toBe("removed");
+  });
+
+  test("different agents can react with the same emoji without removing each other", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
     addReaction(msg.id, "bob", "👍");
     addReaction(msg.id, "charlie", "👍");
     const all = getReactions(msg.id);
     expect(all.length).toBe(2);
+    // Toggling bob's reaction only removes bob's row.
+    const toggled = addReaction(msg.id, "bob", "👍");
+    expect(toggled.toggled).toBe("removed");
+    const remaining = getReactions(msg.id);
+    expect(remaining.length).toBe(1);
+    expect(remaining[0].agent).toBe("charlie");
   });
 
   test("same agent can react with different emojis", () => {
@@ -66,7 +93,7 @@ describe("addReaction", () => {
   });
 });
 
-describe("removeReaction", () => {
+describe("removeReaction (agent-driven cleanup, idempotent)", () => {
   test("removes an existing reaction", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
     addReaction(msg.id, "bob", "👍");
@@ -76,10 +103,18 @@ describe("removeReaction", () => {
     expect(all.length).toBe(0);
   });
 
-  test("returns false when reaction does not exist", () => {
+  test("returns false when reaction does not exist (no error)", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
     const removed = removeReaction(msg.id, "bob", "👍");
     expect(removed).toBe(false);
+  });
+
+  test("does not remove another actor's reaction", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    addReaction(msg.id, "bob", "👍");
+    const removed = removeReaction(msg.id, "charlie", "👍");
+    expect(removed).toBe(false);
+    expect(getReactions(msg.id).length).toBe(1);
   });
 });
 
@@ -126,5 +161,98 @@ describe("getReactionSummary", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
     const summary = getReactionSummary(msg.id);
     expect(summary.length).toBe(0);
+  });
+});
+
+describe("NFKC normalization", () => {
+  test("normalizeEmoji applies NFKC", () => {
+    // U+00E9 (é precomposed) and U+0065 U+0301 (e + combining acute) are
+    // NFKC-equivalent. The store must store the normalized form so the two
+    // spellings dedupe to one row.
+    const composed = "é";
+    const decomposed = "é";
+    expect(normalizeEmoji(composed)).toBe(normalizeEmoji(decomposed));
+  });
+
+  test("NFKC-equivalent spellings dedupe to a single row and toggle", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    const composed = "é";   // é
+    const decomposed = "é"; // é (decomposed)
+    const r1 = addReaction(msg.id, "bob", composed);
+    expect(r1.toggled).toBe("added");
+    expect(r1.reaction!.emoji).toBe(composed.normalize("NFKC"));
+    // Same actor + same emoji after normalization -> toggle removes.
+    const r2 = addReaction(msg.id, "bob", decomposed);
+    expect(r2.toggled).toBe("removed");
+    expect(getReactions(msg.id).length).toBe(0);
+  });
+
+  test("skin-tone emoji sequences round-trip exactly and are distinct per tone", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    const light = "👍🏻"; // U+1F44D U+1F3FB
+    const dark = "👍🏿";  // U+1F44D U+1F3FF
+    addReaction(msg.id, "bob", light);
+    addReaction(msg.id, "bob", dark);
+    const reactions = getReactions(msg.id);
+    expect(reactions.length).toBe(2);
+    expect(reactions.some((r) => r.emoji === light)).toBe(true);
+    expect(reactions.some((r) => r.emoji === dark)).toBe(true);
+  });
+});
+
+describe("getReactionSummariesForMessages (envelope grouped helper)", () => {
+  test("returns a map keyed by message id from one grouped query", () => {
+    const msg1 = sendMessage({ from: "alice", to: "bob", content: "one" });
+    const msg2 = sendMessage({ from: "alice", to: "bob", content: "two" });
+    addReaction(msg1.id, "bob", "👍");
+    addReaction(msg1.id, "charlie", "👍");
+    addReaction(msg2.id, "alice", "❤️");
+
+    const map = getReactionSummariesForMessages([msg1.id, msg2.id]);
+    expect(map.size).toBe(2);
+    const s1 = map.get(msg1.id)!;
+    expect(s1.length).toBe(1);
+    expect(s1[0].emoji).toBe("👍");
+    expect(s1[0].count).toBe(2);
+    expect(map.get(msg2.id)![0].emoji).toBe("❤️");
+  });
+
+  test("returns empty map for no ids or no reactions", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "one" });
+    expect(getReactionSummariesForMessages([]).size).toBe(0);
+    expect(getReactionSummariesForMessages([msg.id]).size).toBe(0);
+  });
+});
+
+describe("message envelope carries reactions", () => {
+  test("getMessageById (show) carries the reactions array", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    addReaction(msg.id, "bob", "👍");
+    addReaction(msg.id, "charlie", "👍");
+    const fetched = getMessageById(msg.id);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.reactions).toBeTruthy();
+    expect(fetched!.reactions!.length).toBe(1);
+    expect(fetched!.reactions![0].emoji).toBe("👍");
+    expect(fetched!.reactions![0].count).toBe(2);
+  });
+
+  test("readMessagePreviews (read) carries the reactions array on each preview", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    addReaction(msg.id, "bob", "👍");
+    const page = readMessagePreviews({ id: msg.id });
+    expect(page.messages.length).toBe(1);
+    expect(page.messages[0].reactions).toBeTruthy();
+    expect(page.messages[0].reactions![0].emoji).toBe("👍");
+  });
+
+  test("readDigest (digest) carries the reactions array on each digest message", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    addReaction(msg.id, "bob", "👍");
+    const digest = readDigest({ to: "bob" });
+    const entry = digest.messages.find((m) => m.id === msg.id);
+    expect(entry).toBeTruthy();
+    expect(entry!.reactions).toBeTruthy();
+    expect(entry!.reactions![0].emoji).toBe("👍");
   });
 });
