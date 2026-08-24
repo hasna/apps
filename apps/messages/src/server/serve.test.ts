@@ -6,9 +6,9 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { MessagesService } from "../service";
+import { MessagesService, newThreadId } from "../service";
 import { SqliteMessagesStore } from "./sqlite-store";
-import { buildHandler } from "./serve-entry";
+import { assertSafeBind, buildHandler } from "./serve-entry";
 
 function makeHandler(key?: string) {
   const db = new Database(":memory:");
@@ -59,6 +59,17 @@ describe("messages-serve HTTP API", () => {
     } finally {
       close();
     }
+  });
+
+  test("bind gate: non-loopback without a key is refused; loopback and keyed non-loopback are allowed (REGRESSION: P1 review finding)", () => {
+    // Without a key, the server must only ever bind loopback — an absent key
+    // disables auth, so a non-loopback bind would expose every /v1/* DM route.
+    expect(() => assertSafeBind("0.0.0.0", false)).toThrow(/non-loopback bind/);
+    expect(() => assertSafeBind("::", false)).toThrow(/non-loopback bind/);
+    // Two-sided control: the gate must not refuse what is safe.
+    expect(() => assertSafeBind("127.0.0.1", false)).not.toThrow();
+    expect(() => assertSafeBind("localhost", false)).not.toThrow();
+    expect(() => assertSafeBind("0.0.0.0", true)).not.toThrow();
   });
 
   test("x-api-key gate: a configured key is required on /v1/*", async () => {
@@ -119,7 +130,7 @@ describe("messages-serve HTTP API", () => {
     const { handler, close } = makeHandler();
     try {
       await req(handler, "POST", "/v1/messages", { from: "augustus", to: "silvanus", content: "hi" });
-      const tid = "t_augustus__silvanus";
+      const tid = newThreadId("augustus", "silvanus");
       await req(handler, "POST", `/v1/threads/${tid}/close`, { agent: "silvanus" });
       const open = await j<{ threads: Array<{ id: string }> }>(await req(handler, "GET", "/v1/threads?agent=silvanus"));
       expect(open.threads.map((t) => t.id)).not.toContain(tid);

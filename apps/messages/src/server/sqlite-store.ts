@@ -217,13 +217,20 @@ export class SqliteMessagesStore implements MessagesStore {
 
   // --- messages + deliveries ---
 
-  async insertMessage(message: Message): Promise<void> {
+  async insertMessage(message: Omit<Message, "seq">): Promise<Message> {
+    // Atomic per-thread seq assignment: the insert and the MAX(seq)+1 read
+    // are one statement, so two concurrent sends to the same thread can never
+    // observe the same MAX and duplicate a seq.
     this.db
       .query(
         `INSERT INTO messages (id, thread_id, sender, content, reply_to, created_at, seq)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(seq), 0) + 1 FROM messages WHERE thread_id = ?`,
       )
-      .run(message.id, message.thread_id, message.from_agent, message.content, message.reply_to, message.created_at, message.seq);
+      .run(message.id, message.thread_id, message.from_agent, message.content, message.reply_to, message.created_at, message.thread_id);
+    const row = this.db
+      .query("SELECT id, thread_id, sender, content, reply_to, created_at, seq FROM messages WHERE id = ?")
+      .get(message.id) as MessageRow;
+    return toMessage(row);
   }
 
   async insertDelivery(messageId: string, delivery: MessageDelivery): Promise<void> {

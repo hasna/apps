@@ -8,6 +8,11 @@
  * localhost-only mode (the client sends the key when it has one; the server
  * is the authority on whether one is required).
  *
+ * The server binds 127.0.0.1 by default — the "no key" trust boundary is
+ * only valid on loopback. A non-loopback bind (HASNA_MESSAGES_HOST) without
+ * HASNA_MESSAGES_API_KEY is refused at startup: exposing /v1/* (DM read and
+ * write routes) unauthenticated to network peers is never the default.
+ *
  * Agent identity is first-class: agents are named in request bodies/query,
  * and POST /v1/auth/register creates/returns the agent row. messages owns
  * direct agent-to-agent DMs + DM-threads only — channels/announcements are
@@ -47,6 +52,9 @@ Options:
 }
 
 const PORT = Number(process.env.HASNA_MESSAGES_PORT ?? process.env.MESSAGES_PORT ?? 8081);
+// Loopback by default: the unauthenticated "no API key" mode is only a
+// trusted-localhost mode when the socket is actually on loopback.
+const HOST = process.env.HASNA_MESSAGES_HOST ?? "127.0.0.1";
 // Server-side gate: the configured key is compared against the x-api-key
 // header; unset means local-only mode. Read per request so the environment is
 // authoritative at call time (and tests can vary it). Never printed.
@@ -228,17 +236,34 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
   };
 }
 
+/** Fail-closed bind gate: a loopback bind may run without a key; any
+ * non-loopback bind requires a configured API key, otherwise /v1/* (DM read
+ * and write routes) would be exposed unauthenticated to network peers. */
+export function assertSafeBind(host: string, hasKey: boolean): void {
+  const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  if (!loopback && !hasKey) {
+    throw new Error(
+      `refusing to bind ${host} without HASNA_MESSAGES_API_KEY: a non-loopback bind would expose /v1/* unauthenticated`,
+    );
+  }
+}
+
 export async function serve(): Promise<void> {
+  // Fail fast before any store side effects: a non-loopback bind without a
+  // configured key would expose /v1/* unauthenticated.
+  assertSafeBind(HOST, Boolean(configuredKey()));
+
   const { store, backend, close } = await resolveStore();
   const service = new MessagesService(store);
   const handler = buildHandler({ service, backend });
 
   const server = Bun.serve({
+    hostname: HOST,
     port: PORT,
     fetch: (req) => handler(req),
   });
 
-  console.log(`messages-serve v${version} listening on http://0.0.0.0:${server.port} (backend: ${backend})`);
+  console.log(`messages-serve v${version} listening on http://${HOST}:${server.port} (backend: ${backend})`);
   // Keep the process alive; close is available for tests.
   await new Promise<void>(() => {
     // no-op: Bun.serve keeps the event loop alive

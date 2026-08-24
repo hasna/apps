@@ -36,6 +36,18 @@ describe("thread identity", () => {
     expect(threadKeyFor(A, B)).toBe(threadKeyFor(B, A));
     expect(newThreadId(A, B)).toBe(newThreadId(B, A));
   });
+
+  test("thread key is collision-free when agent names contain the separator (REGRESSION: P1 review finding)", () => {
+    // `a`/`b__c` and `a__b`/`c` must be two different threads. The old
+    // `sort().join("__")` encoding collapsed both to `a__b__c`, merging
+    // unrelated DM histories and delivery state.
+    const pair1 = newThreadId("a", "b__c");
+    const pair2 = newThreadId("a__b", "c");
+    expect(pair1).not.toBe(pair2);
+    // And each pair still keys to exactly one thread regardless of side.
+    expect(newThreadId("a", "b__c")).toBe(newThreadId("b__c", "a"));
+    expect(newThreadId("a__b", "c")).toBe(newThreadId("c", "a__b"));
+  });
 });
 
 describe("agent identity is first-class", () => {
@@ -122,6 +134,27 @@ describe("MessagesService", () => {
     await expect(
       service.send({ from_agent: A, to_agent: B, content: "  " }),
     ).rejects.toThrow("content is required");
+  });
+
+  test("concurrent sends get unique per-thread seqs and no agent-registration race (REGRESSION: P1 review finding)", async () => {
+    const { service } = testService();
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        service.send({ from_agent: A, to_agent: B, content: `msg ${i}` }),
+      ),
+    );
+    const seqs = results.map((r) => r.message.seq).sort((x, y) => x - y);
+    // 12 sends, seqs must be exactly 1..12 with no duplicate and no gap.
+    expect(seqs).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+    // A fresh agent created concurrently from two sides must not fail on the
+    // UNIQUE(name) insert: the loser re-reads the committed row.
+    const [x, y] = await Promise.all([
+      service.send({ from_agent: "newcomer", to_agent: B, content: "x" }),
+      service.send({ from_agent: "newcomer", to_agent: B, content: "y" }),
+    ]);
+    expect(x.message.from_agent).toBe("newcomer");
+    expect(y.message.from_agent).toBe("newcomer");
+    expect((await service.listAgents()).map((a) => a.name)).toContain("newcomer");
   });
 
   test("threads: reply chains stay in one thread and history is oldest-first", async () => {
