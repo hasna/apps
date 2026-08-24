@@ -111,6 +111,12 @@ export function normalizeEndpointOrigin(endpoint: string): { host: string; pathP
     return { host: url.toLowerCase(), pathPrefix: "" };
   }
   if (parsed.username || parsed.password) return null; // embedded credentials rejected
+  // A base URL with a query string or fragment is never a legitimate provider
+  // identity — credentials are commonly carried as ?api_key= / #access_token=.
+  // Reject them so the raw endpoint is never echoed into a reason string or
+  // persisted to the manifest (secret-bearing class, incident-606974).
+  if (parsed.search) return null;
+  if (parsed.hash) return null;
   const host = parsed.hostname.toLowerCase();
   let path = parsed.pathname.replace(/\/+$/, ""); // strip trailing slashes, keep prefix
   if (path === "/") path = "";
@@ -207,7 +213,7 @@ function sha256(content: string): string {
 export interface ProviderContextRenderOptions {
   /** Normalized endpoint origin (host + pathPrefix). */
   origin: { host: string; pathPrefix: string } | null;
-  /** Raw endpoint value passed in (for audit). */
+  /** Raw endpoint value passed in — used for rejection detection only, never echoed. */
   rawEndpoint: string;
   /** Raw model value passed in (for audit). */
   rawModel: string;
@@ -232,11 +238,15 @@ export function resolveAndRenderProviderContext(
   const entry = matchProviderEndpoint(opts.origin);
   const endpointKey = entry ? entry.key : PROVIDER_CONTEXT_INVARIANT_ID;
   const originAccepted = opts.origin !== null;
-  const recordedEndpoint = originAccepted ? opts.rawEndpoint : null;
+  // Record the endpoint ONLY in its normalized (host+path) form — never the raw
+  // string, which can carry userinfo, query-string or fragment credentials.
+  const recordedEndpoint = originAccepted
+    ? `${opts.origin!.host}${opts.origin!.pathPrefix || ""}`
+    : null;
   const reason =
     entry === null && opts.rawEndpoint
       ? originAccepted
-        ? `endpoint "${opts.rawEndpoint}" is not in the provider-context registry; using the invariant fragment`
+        ? `endpoint "${recordedEndpoint}" is not in the provider-context registry; using the invariant fragment`
         : "endpoint rejected (embedded credentials or unparseable); using the invariant fragment"
       : null;
 

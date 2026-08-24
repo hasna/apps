@@ -175,6 +175,65 @@ describe("resolveAndRenderProviderContext", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  test("query-string and fragment credentials are rejected and never echoed (unknown host)", () => {
+    const home = tempHome();
+    const homeDir = join(home, "home");
+    for (const credentialed of [
+      "https://llm.example.com/v1?api_key=sk-QUERYSECRET123",
+      "https://llm.example.com/v1#access_token=sk-FRAGMENT456",
+    ]) {
+      const res = resolveAndRenderProviderContext({
+        origin: normalizeEndpointOrigin(credentialed),
+        rawEndpoint: credentialed,
+        rawModel: "m",
+        homeDir,
+      });
+      expect(res.entry).toBeNull();
+      expect(res.endpointKey).toBe(PROVIDER_CONTEXT_INVARIANT_ID);
+      expect(res.reason).not.toContain("sk-QUERYSECRET123");
+      expect(res.reason).not.toContain("sk-FRAGMENT456");
+      expect(res.reason).toContain("embedded credentials");
+      const manifest = JSON.parse(readFileSync(join(homeDir, PROVIDER_CONTEXT_DIR, "manifest.json"), "utf8"));
+      expect(manifest.fragments["invariant"].rawEndpoint).toBeNull();
+    }
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("query-string credentials on a KNOWN host are rejected, manifest clean", () => {
+    const home = tempHome();
+    const homeDir = join(home, "home");
+    const credentialed = "https://openrouter.ai/api?api_key=sk-KNOWNSECRET456";
+    const res = resolveAndRenderProviderContext({
+      origin: normalizeEndpointOrigin(credentialed),
+      rawEndpoint: credentialed,
+      rawModel: "",
+      homeDir,
+    });
+    expect(res.entry).toBeNull(); // rejected before registry match
+    expect(res.reason).not.toContain("sk-KNOWNSECRET456");
+    const manifest = JSON.parse(readFileSync(join(homeDir, PROVIDER_CONTEXT_DIR, "manifest.json"), "utf8"));
+    expect(manifest.fragments["invariant"].rawEndpoint).toBeNull();
+    expect(readFileSync(join(homeDir, PROVIDER_CONTEXT_DIR, "invariant.md"), "utf8")).not.toContain("sk-KNOWNSECRET456");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("recorded endpoint in manifest is normalized host+path only (safe unmatched endpoint)", () => {
+    const home = tempHome();
+    const homeDir = join(home, "home");
+    const res = resolveAndRenderProviderContext({
+      origin: normalizeEndpointOrigin("https://llm.example-corp.internal/v1/messages"),
+      rawEndpoint: "https://llm.example-corp.internal/v1/messages",
+      rawModel: "",
+      homeDir,
+    });
+    expect(res.reason).toContain("llm.example-corp.internal/v1/messages");
+    const manifest = JSON.parse(readFileSync(join(homeDir, PROVIDER_CONTEXT_DIR, "manifest.json"), "utf8"));
+    expect(manifest.fragments["invariant"].rawEndpoint).toBe("llm.example-corp.internal/v1/messages");
+    expect(manifest.fragments["invariant"].rawEndpoint).not.toMatch(/^https:/);
+    expect(manifest.fragments["invariant"].rawEndpoint).not.toContain("://");
+    rmSync(home, { recursive: true, force: true });
+  });
+
   test("audit line carries key, fragment, sha256, model — no secrets", () => {
     const res: Parameters<typeof providerContextAuditLine>[0] = {
       entry: null,
