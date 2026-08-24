@@ -194,7 +194,11 @@ describe("ApiStore bounded message reads", () => {
     await expect(new ApiStore(client).readDigest({ channel: "chief-research" })).rejects.toThrow(aliasError.message);
   });
 
-  test("getUnreadBlockers without an explicit --from omits the agent query (principal-scoped read)", async () => {
+  test("getUnreadBlockers forwards the caller byline as the agent query even WITHOUT an explicit --from (regression: fleet-wide unscoped read)", async () => {
+    // Before task 1871c67f the default identity was deliberately omitted from
+    // the request (bug #160), so `blockers` without --from read fleet-wide at
+    // rc=0 while every seat reported "ZERO blockers". The byline must be
+    // forwarded unconditionally: the key authorizes, the byline scopes.
     const queries: Array<Record<string, unknown>> = [];
     const client = {
       name: "conversations",
@@ -204,7 +208,6 @@ describe("ApiStore bounded message reads", () => {
           expect(path).toBe("/messages/blockers");
           const query = options?.query ?? {};
           queries.push(query);
-          if ("agent" in query) throw new Error("agent query must be omitted for a default identity read");
           return {
             messages: [preview],
             count: 1,
@@ -223,13 +226,12 @@ describe("ApiStore bounded message reads", () => {
       },
     } as unknown as HasnaStorageClient;
 
-    // The resolved DEFAULT identity (drifted from the API principal, as in bug
-    // #160) must never reach the route as a query filter.
     const result = await new ApiStore(client).getUnreadBlockers("codewith-iapp-news");
 
     expect(result).toHaveLength(1);
     expect(result[0]?.content).toBe("bounded announcement");
     expect(queries).toEqual([{
+      agent: "codewith-iapp-news",
       limit: 20,
       cursor: 0,
       max_bytes: 65_536,
@@ -267,11 +269,10 @@ describe("ApiStore bounded message reads", () => {
       },
     } as unknown as HasnaStorageClient;
 
-    // Regression: the flag used to be silently dropped, so --from <any-agent>
-    // returned the authenticated principal's blockers at rc=0. An explicit
-    // request must reach the server, which answers 403 on mismatch — never a
-    // silent wrong-scope read.
-    const result = await new ApiStore(client).getUnreadBlockers("agent-chief-staff", { explicitFrom: true });
+    // Regression: the byline must reach the server as the scope for every
+    // blockers read. The explicitFrom gate is retired (task 1871c67f) — the
+    // byline is forwarded unconditionally, with no flag.
+    const result = await new ApiStore(client).getUnreadBlockers("agent-chief-staff");
 
     expect(result).toHaveLength(1);
     expect(queries).toEqual([{
@@ -283,6 +284,43 @@ describe("ApiStore bounded message reads", () => {
       timeout_ms: 3_000,
       detail: "preview",
     }]);
+  });
+
+  test("readChannelNotifications forwards the byline as the agent query unconditionally", async () => {
+    // The notification inbox requires the agent scope on the wire. The fleet
+    // server accepts the caller-declared byline (task 1871c67f); this pins the
+    // client half so the forwarding never regresses to an unscoped read.
+    const queries: Array<Record<string, unknown>> = [];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (_path: string, options?: { query?: Record<string, unknown> }) => {
+          const query = options?.query ?? {};
+          queries.push(query);
+          return {
+            notifications: [],
+            count: 0,
+            limit: 20,
+            cursor: 0,
+            next_cursor: null,
+            has_more: false,
+            skipped_count: 0,
+            byte_length: 0,
+            max_bytes: 65_536,
+            timeout_ms: 3_000,
+            marked_read: 0,
+            compact: true,
+            detail_path: "messages/{id}",
+          };
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    await new ApiStore(client).readChannelNotifications({ agent: "agent-chief-staff", unread_only: true });
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatchObject({ agent: "agent-chief-staff", unread_only: true });
   });
 });
 

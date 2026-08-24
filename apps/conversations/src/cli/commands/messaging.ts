@@ -984,16 +984,14 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
     .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      // `explicitFrom` marks an EXPLICIT --from flag. The hosted store forwards
-      // it so the server can enforce the identity match; the default identity
-      // is never forwarded (it drifted from the API principal and made the
-      // server reject valid requests — bug #160). An explicit --from for a
-      // different agent must fail loudly, never return another agent's
-      // blockers at rc=0.
+      // The resolved byline (--from, or the session default) is forwarded
+      // unconditionally: the API key authorizes, the byline scopes (task
+      // 1871c67f). Omitting the default identity was the fleet-wide unscoped
+      // read; the pre-fix equality 403 is gone, so `blockers` without --from
+      // is seat-scoped at rc=0.
       const agent = resolveIdentity(opts.from);
-      const explicitFrom = Boolean(opts.from?.trim());
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const blockers = await getStore().getUnreadBlockers(agent, { ...(opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset }), explicitFrom });
+      const blockers = await getStore().getUnreadBlockers(agent, opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset });
       const page = opts.json
         ? { items: blockers, count: blockers.length, total: blockers.length, hasMore: false, nextCursor: null }
         : pageFromQuery(blockers, window);

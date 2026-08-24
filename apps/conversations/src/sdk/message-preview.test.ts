@@ -144,6 +144,7 @@ describe("generated safe message-read client", () => {
     });
 
     const page: ChannelNotificationPage = await client.readChannelNotifications({
+      agent: "watcher",
       limit: 10,
       cursor: 0,
       max_bytes: 4096,

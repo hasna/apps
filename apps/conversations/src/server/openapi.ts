@@ -649,9 +649,9 @@ export const openapiSpec = {
       get: {
         operationId: "listUnreadBlockers",
         summary: "List bounded, redacted current-blocker previews visible to one agent",
-        description: "Reads are scoped to the authenticated API principal. The optional `agent` query MUST match the authenticated agent when provided (mismatch is a 403); omit it to read the principal's own blockers. A hosted client sends `agent` only for an explicit --from request, so a request for another agent's blockers fails loudly instead of returning the principal's blockers.",
+        description: "The API key is the fleet-level authorization principal; the declared byline is the identity the read is scoped to. The `agent` query scopes the blockers read to that agent (omitted: the key's own claim). The caller-declared byline is forwarded unconditionally — omitting it was the fleet-wide unscoped read (task 1871c67f).",
         parameters: [
-          { name: "agent", in: "query", required: false, schema: { type: "string" }, description: "Explicitly requested agent; MUST match the authenticated agent (403 otherwise). Omit for the authenticated agent's own blockers." },
+          { name: "agent", in: "query", required: false, schema: { type: "string" }, description: "Agent the blockers read is scoped to. Omitted: the API key's own claim." },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
           { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
           { name: "max_bytes", in: "query", schema: { type: "integer", minimum: 512, maximum: 65536 } },
@@ -766,9 +766,9 @@ export const openapiSpec = {
       get: {
         operationId: "readChannelNotifications",
         summary: "Read a bounded, cursored page of notifications for the authenticated principal",
-        description: "The optional agent filter must match the API-key principal. mark_read acknowledges only notification ids returned in this page.",
+        description: "The `agent` query is the identity the inbox is scoped to (required; the API key authorizes, the byline scopes — task 1871c67f). mark_read acknowledges only notification ids returned in this page.",
         parameters: [
-          { name: "agent", in: "query", schema: { type: "string" } },
+          { name: "agent", in: "query", required: true, schema: { type: "string" }, description: "Agent whose notification inbox is read. The API key authorizes; this byline scopes." },
           { name: "channel", in: "query", schema: { type: "string" } },
           { name: "since", in: "query", schema: { type: "string", format: "date-time" } },
           { name: "unread_only", in: "query", schema: { type: "boolean" } },
@@ -781,7 +781,7 @@ export const openapiSpec = {
         ],
         responses: {
           "200": { description: "notification page", content: { "application/json": { schema: { $ref: "#/components/schemas/ChannelNotificationPage" } } } },
-          "403": { description: "agent does not match authenticated principal", content: { "application/json": { schema: errorObject } } },
+          "400": { description: "agent is required", content: { "application/json": { schema: errorObject } } },
         },
       },
     },
