@@ -1,0 +1,9 @@
+{
+  "telephony_pg_000_extensions": "sha256:01a97d3690f0d340e76323ba9415088947dd802452b3fb0339052de24404ddd2",
+  "telephony_pg_001": "sha256:6eb6c4e0a9105a12ffd337f31891e6141a54a247223da83227def9271f5ada8e",
+  "telephony_pg_002": "sha256:f0e2d16c6f12f7eb85c45e408ad764a4d64f1ccbbfd40d95ac649fc2d6b1d588",
+  "telephony_pg_003": "sha256:dfb8e71542be943151f0d14402c889af9f86e1d537dccbc6e0250678cd812d82",
+  "hasna_auth_0001_api_keys": "sha256:95429079245944aa39727486cf92dea0ae8a1bfa889e1940f2d9911eb0b020a5",
+  "hasna_auth_0002_api_keys_indexes": "sha256:4e646262846e9ae664b5b0d67cb079f788c85d45fcc3a323131df5aa9ba7b777",
+  "telephony_api_keys_tenancy_001": "sha256:fce61651e503bd9c40ae1111e02c9651f1d9dc0a62c661e090df144ff9505b62"
+}

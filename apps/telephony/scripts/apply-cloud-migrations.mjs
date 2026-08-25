@@ -15,12 +15,10 @@
  *     --secret-id hasna/oss/telephony/database-url-owner --query SecretString --output text)"
  */
 import {
-  PG_MIGRATIONS,
   MigrationLedger,
-  defineMigration,
   createTelephonyCloudClient,
 } from "../src/storage.ts";
-import { apiKeyMigrations } from "@hasna/contracts/auth";
+import { buildTelephonyPostgresMigrations } from "../src/lib/migrate-list.ts";
 
 const dryRun = process.argv.includes("--dry-run");
 const asJson = process.argv.includes("--json");
@@ -49,19 +47,13 @@ const asJson = process.argv.includes("--json");
   // DATABASE_URL presence (any retired STORAGE_MODE variable throws).
 }
 
-// The extension migration must run before table DDL that relies on
-// gen_random_uuid()/pgcrypto. Kept first and stable.
-//
-// The api-keys ledger (from @hasna/contracts/auth) backs the serve API-key
-// auth middleware. Its ids are namespaced ("api_keys_*") so they never clash
-// with the telephony_pg_* schema migrations, and they run last (additive).
-const migrations = [
-  defineMigration("telephony_pg_000_extensions", "CREATE EXTENSION IF NOT EXISTS pgcrypto"),
-  ...PG_MIGRATIONS.map((sql, index) =>
-    defineMigration(`telephony_pg_${String(index + 1).padStart(3, "0")}`, sql),
-  ),
-  ...apiKeyMigrations().map((m) => defineMigration(m.id, m.sql)),
-];
+// ONE ordered migration program (extensions -> telephony_pg_* -> api keys ->
+// rc.1 tenancy), composed by buildTelephonyPostgresMigrations in
+// src/lib/migrate-list.ts. The id scheme matches the ledger the prod DB was
+// migrated under (O15-00691); the same builder is exercised by
+// tests/legacy-ledger-compat.test.ts so the composed list cannot drift from
+// what the tests pin.
+const migrations = buildTelephonyPostgresMigrations();
 
 const client = createTelephonyCloudClient();
 try {
