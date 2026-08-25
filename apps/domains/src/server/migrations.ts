@@ -33,24 +33,28 @@ const LEGACY_DSN_ENV = "DATABASE_URL";
  * never checksum-compared (their SQL is not reproducible from any source), and
  * are never re-applied or re-inserted.
  *
- * `domains_apikeys_tenancy_0001`, `domains_apikeys_tenancy_0002` and
- * `domains_tenancy_0001` were recorded against the prod ledger out-of-band
- * during the 2026-07 self-hosted cutover. Deploy evidence 2026-08-25: the
- * 02:00Z pass failed on `_0001` (O15-00671 filed); the 16:44Z pass, carrying
- * the kit with `_0001` acknowledged (hasna/apps#1176), advanced to `_0002`;
- * the next pass then failed on the third row `domains_tenancy_0001`
- * (O15-00758 filed). All three rows are present in the prod ledger. The
- * apikeys rows' substance — the api-keys tenancy (`tid`) column — is carried
- * today by `hasna_auth_0003_api_keys_tenant`; the substance of
- * `domains_tenancy_0001` is not reproducible from any source in this repo,
- * and no build generates the id, so it is acknowledged as history rather than
- * re-applied. Acknowledging all three unblocks `domains db migrate`
- * (the ECS migrate task) and therefore the domains deploy lane.
+ * `domains_apikeys_tenancy_0001`, `domains_apikeys_tenancy_0002`,
+ * `domains_tenancy_0001` and `domains_tenancy_0002` were recorded against the
+ * prod ledger out-of-band during the 2026-07 self-hosted cutover. Deploy
+ * evidence 2026-08-25: the 02:00Z pass failed on `_0001` (O15-00671 filed);
+ * the 16:44Z pass, carrying the kit with `_0001` acknowledged
+ * (hasna/apps#1176), advanced to `_0002`; the next pass then failed on the
+ * third row `domains_tenancy_0001` (O15-00758 filed), and the 2026-08-25
+ * PASS-18 pass then failed on the fourth row `domains_tenancy_0002` at
+ * `domains-prod-migrate:42` (O15-00762 filed). All four rows are present in
+ * the prod ledger. The apikeys rows' substance — the api-keys tenancy (`tid`)
+ * column — is carried today by `hasna_auth_0003_api_keys_tenant`; the
+ * substance of the `domains_tenancy_*` rows is not reproducible from any
+ * source in this repo, and no build generates the ids, so they are
+ * acknowledged as history rather than re-applied. Acknowledging all four
+ * unblocks `domains db migrate` (the ECS migrate task) and therefore the
+ * domains deploy lane.
  */
 export const ACKNOWLEDGED_LEGACY_MIGRATION_IDS: readonly string[] = [
   "domains_apikeys_tenancy_0001",
   "domains_apikeys_tenancy_0002",
   "domains_tenancy_0001",
+  "domains_tenancy_0002",
 ];
 
 /** The ordered migration set: app schema first, then the shared api-keys table. */
