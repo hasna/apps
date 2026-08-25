@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import {
   listTasks,
+  MAX_TASK_LIST_LIMIT,
   updateTask,
   getNextTask,
   claimNextTask,
@@ -3137,6 +3138,20 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       }
     });
 
+  /** Parse a dedupe --limit option: a positive safe integer within the store
+   *  cap. Returns null for 0, negative, nonnumeric, fractional, or over-cap
+   *  values — all of which previously flowed through as Number(opts.limit)
+   *  into listTasks, where 0/NaN are falsy (no LIMIT clause) and SQLite
+   *  `LIMIT -1` means "no limit": the caller believed the read was bounded
+   *  while the whole table was returned. */
+  function parseDedupeLimit(raw: unknown): number | null {
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TASK_LIST_LIMIT) {
+      return null;
+    }
+    return value;
+  }
+
   const dedupe = program
     .command("dedupe")
     .description("Find and merge likely duplicate local tasks");
@@ -3151,9 +3166,14 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action((opts) => {
       const globalOpts = program.opts();
       try {
+        const limit = parseDedupeLimit(opts.limit);
+        if (limit === null) {
+          handleError(new Error(`--limit must be a positive integer between 1 and ${MAX_TASK_LIST_LIMIT} (got: ${opts.limit})`));
+          return;
+        }
         const candidates = findDuplicateTasks({
           threshold: Number(opts.threshold),
-          limit: Number(opts.limit),
+          limit,
           include_archived: Boolean(opts.includeArchived),
         });
         if (opts.json || globalOpts.json) { output({ candidates, count: candidates.length }, true); return; }
@@ -3187,10 +3207,15 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           handleError(new Error(`Could not resolve project: ${ref}`));
           return;
         }
+        const limit = parseDedupeLimit(opts.limit);
+        if (limit === null) {
+          handleError(new Error(`--limit must be a positive integer between 1 and ${MAX_TASK_LIST_LIMIT} (got: ${opts.limit})`));
+          return;
+        }
         const tasks = listTasks({
           project_id: projectId,
           include_archived: Boolean(opts.includeArchived),
-          limit: Number(opts.limit),
+          limit,
         }, d);
         const projected = projectTasksForDedupe(tasks);
         if (opts.json || globalOpts.json) { output({ project_id: projectId, count: projected.length, tasks: projected }, true); return; }
