@@ -1,7 +1,7 @@
 {
   "name": "@hasna/workflows",
   "version": "0.1.0",
-  "description": "Universal graph workflow app — graph language, session WAL, daemon, and four lane adapters (claude, codex, cursor, grok)",
+  "description": "Universal graph workflow app \u2014 scaffold with version/health/readiness on all four surfaces; graph language, store, session WAL, daemon, and lane adapters are roadmap",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./types/index.d.ts",
