@@ -318,6 +318,26 @@ describe("workflows CLI — slice 4 verbs (live-verify closures)", () => {
     expect(secondSummary.reused).toBe(true);
   });
 
+  test("run --idempotency-key completes a while-node graph (regression: partial __wf crashed advanceRun)", async () => {
+    // Live-verify failure 2026-08-25: `run --idempotency-key` on any graph
+    // containing a while node crashed with "undefined is not an object
+    // (evaluating 'wf.loops[node.id]')" rc=1 and left the run orphaned in
+    // 'running'. withIdempotencyKey minted `__wf: { idempotencyKey }` without
+    // the loops/completedLoops members and advanceRun's default-shape
+    // fallback only applied when __wf was wholly absent.
+    const file = writeGraph("while-idem.json", whileGraph);
+    const first = await runCli(["run", file, "--idempotency-key", "idem-while-1", "--json"]);
+    expect(first.exitCode).toBe(0);
+    const firstSummary = JSON.parse(first.stdout) as { status: string; runId: string; result: { iterations: Record<string, number> } };
+    expect(firstSummary.status).toBe("completed");
+    expect(firstSummary.result.iterations.w).toBe(2);
+    const second = await runCli(["run", file, "--idempotency-key", "idem-while-1", "--json"]);
+    expect(second.exitCode).toBe(0);
+    const secondSummary = JSON.parse(second.stdout) as { runId: string; reused: boolean };
+    expect(secondSummary.runId).toBe(firstSummary.runId);
+    expect(secondSummary.reused).toBe(true);
+  });
+
   test("runs events <id> emits the run's WAL event stream", async () => {
     const file = writeGraph("linear-events.json", linearGraph);
     const run = await runCli(["run", file, "--json"]);

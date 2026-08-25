@@ -132,11 +132,21 @@ function mergeRunContext(contextRaw: string | undefined, inputs: string[]): Reco
   return { ...parseContext(contextRaw), ...parseInputs(inputs) };
 }
 
-/** Inject the idempotency key into the reserved __wf context namespace. */
+/** Inject the idempotency key into the reserved __wf context namespace.
+ * The full engine shape is minted (cursor/loops/completedLoops defaults) so
+ * a while-node graph never reads a partial __wf — live-verify failure
+ * 2026-08-25: a __wf holding only idempotencyKey crashed advanceRun on the
+ * first while node ("wf.loops[node.id] is not an object"). */
 function withIdempotencyKey(context: Record<string, unknown>, key: string): Record<string, unknown> {
   return {
     ...context,
-    __wf: { ...((context.__wf as Record<string, unknown> | undefined) ?? {}), idempotencyKey: key },
+    __wf: {
+      cursor: undefined,
+      loops: {},
+      completedLoops: {},
+      ...((context.__wf as Record<string, unknown> | undefined) ?? {}),
+      idempotencyKey: key,
+    },
   };
 }
 

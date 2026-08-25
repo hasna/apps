@@ -151,6 +151,25 @@ describe("reaper", () => {
     expect(after?.error).toBeNull();
   });
 
+  test("runGraphToCompletion does not dispatch or advance foreign runs in the shared store", async () => {
+    // Live-verify observation 2026-08-25: the foreground single-run driver
+    // reaped and advanced ALL pending/running runs in the shared store, not
+    // only its own — an orphaned run executed its step inside the foreground
+    // run's cycle and blocked it. Fencing prevented double-claim, but the
+    // driver was not isolated to its own run.
+    const graph = simpleGraph();
+    const foreign = new WorkflowsDaemon(store, wal, { worker: "foreign", time: () => clock.now, laneRunner: fakeLane });
+    const foreignRun = foreign.startRun(graph, {}); // pending in the shared store
+
+    const final = await runGraphToCompletion(store, wal, graph, {}, { time: () => clock.now, laneRunner: fakeLane });
+    expect(final.status).toBe("completed");
+
+    const after = store.getRun(foreignRun.id)!;
+    expect(after.status).toBe("pending"); // never claimed, never advanced
+    expect(store.listRunNodes(foreignRun.id)).toHaveLength(0); // no node rows were written
+    expect(calls.filter((c) => c.startsWith("lane:"))).toHaveLength(1); // only the foreground run's step ran
+  });
+
   test("reap advances one step per dispatched run (bounded)", async () => {
     const daemon = makeDaemon();
     const run = daemon.startRun(simpleGraph(), {});

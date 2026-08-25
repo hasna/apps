@@ -42,6 +42,12 @@ export interface DaemonOptions {
   time?: () => number;
   laneRunner?: LaneRunner;
   env?: Record<string, string>;
+  /** When set, reap() dispatches/advances ONLY this run (foreground
+   * single-run isolation). Live-verify observation 2026-08-25: the
+   * foreground driver reaped every pending/running run in the shared store —
+   * an orphaned run executed its step inside the foreground run's cycle and
+   * blocked it. */
+  isolatedRunId?: string;
 }
 
 export interface ReapReport {
@@ -112,6 +118,7 @@ export class WorkflowsDaemon {
   private readonly leases = new Map<string, Lease>();
   private readonly fencingCounter = new Map<string, number>();
   private graphCache = new Map<string, WorkflowGraph>();
+  private isolatedRunId: string | null = null;
 
   constructor(
     private readonly store: WorkflowsStore,
@@ -126,7 +133,13 @@ export class WorkflowsDaemon {
     this.time = options.time ?? Date.now;
     this.env = options.env ?? {};
     this.laneRunner = options.laneRunner ?? defaultLaneRunner;
+    this.isolatedRunId = options.isolatedRunId ?? null;
     this.replayRegisteredGraphs();
+  }
+
+  /** Foreground single-run mode: reap() touches only this run from now on. */
+  isolateRun(runId: string): void {
+    this.isolatedRunId = runId;
   }
 
   /**
@@ -214,14 +227,20 @@ export class WorkflowsDaemon {
       }
     }
 
-    const repair = repairTornRuns(this.store, this.wal, { maxAttempts: this.maxAttempts, now });
-    report.interrupted += repair.interrupted;
-    report.requeued += repair.requeued;
-    report.failed += repair.failed;
+    // When isolated (foreground single-run driver), the store-wide torn-run
+    // repair must not requeue or mutate OTHER runs' state — that is the
+    // daemon's job, not a foreground run's.
+    if (this.isolatedRunId === null) {
+      const repair = repairTornRuns(this.store, this.wal, { maxAttempts: this.maxAttempts, now });
+      report.interrupted += repair.interrupted;
+      report.requeued += repair.requeued;
+      report.failed += repair.failed;
+    }
 
-    // dispatch oldest pending runs first, bounded
+    // dispatch oldest pending runs first, bounded — only our own run when isolated
     const pending = this.store.listRuns({ status: "pending", limit: this.maxDispatchPerCycle });
     for (const run of pending) {
+      if (this.isolatedRunId !== null && run.id !== this.isolatedRunId) continue;
       const lease = this.claim(run.id);
       if (!lease) continue;
       this.store.setRunStatus(run.id, "running");
@@ -229,10 +248,11 @@ export class WorkflowsDaemon {
       report.dispatched++;
     }
 
-    // advance each running run one step, bounded in total
+    // advance each running run one step, bounded in total — only our own run when isolated
     const running = this.store.listRuns({ status: "running", limit: this.maxStepsPerCycle });
     let steps = 0;
     for (const run of running) {
+      if (this.isolatedRunId !== null && run.id !== this.isolatedRunId) continue;
       if (steps >= this.maxStepsPerCycle) break;
       const outcome = await this.advanceRun(run.id);
       steps++;
@@ -284,10 +304,21 @@ export class WorkflowsDaemon {
     }
 
     const context = JSON.parse(run.contextJson) as Record<string, unknown>;
-    const wf = (context.__wf ?? { cursor: undefined, loops: {}, completedLoops: {} }) as {
-      cursor?: string;
-      loops: Record<string, number>;
-      completedLoops: Record<string, number>;
+    // Normalize the reserved __wf shape at the READ site: any writer (CLI
+    // --idempotency-key, the authenticated trigger, an external context) may
+    // produce a __wf carrying only some members — a partial __wf must behave
+    // exactly like an absent one. Live-verify failure 2026-08-25: with __wf
+    // present but loops/completedLoops missing, executeWhile crashed with
+    // "undefined is not an object (evaluating 'wf.loops[node.id]')" and the
+    // run was left orphaned in 'running'.
+    const rawWf = (context.__wf ?? {}) as Record<string, unknown>;
+    const wf = {
+      // preserve every member (idempotencyKey rides inside __wf; dropping it
+      // here would silently break reuse detection on the next run)
+      ...rawWf,
+      cursor: typeof rawWf.cursor === "string" ? rawWf.cursor : undefined,
+      loops: (rawWf.loops as Record<string, number>) ?? {},
+      completedLoops: (rawWf.completedLoops as Record<string, number>) ?? {},
     };
 
     try {
@@ -550,6 +581,9 @@ export interface RunToCompletionOptions {
   time?: () => number;
   env?: Record<string, string>;
   maxCycles?: number;
+  /** Pre-set the daemon's isolation; the foreground driver always isolates
+   * to its own run anyway (see isolateRun in runGraphToCompletion). */
+  isolatedRunId?: string;
 }
 
 /** Drive a run to a terminal state with bounded cycles. Returns the final row. */
@@ -565,8 +599,14 @@ export async function runGraphToCompletion(
     laneRunner: options.laneRunner,
     time: options.time,
     env: options.env,
+    isolatedRunId: options.isolatedRunId,
   });
   const run = daemon.startRun(graph, context);
+  // The foreground driver reaps ONLY its own run — it must not dispatch,
+  // advance, or repair other runs sharing the store (live-verify observation
+  // 2026-08-25: an orphaned run executed its step inside the foreground
+  // run's cycle and blocked it for the full sleep).
+  daemon.isolateRun(run.id);
   const maxCycles = options.maxCycles ?? 500;
   for (let cycle = 0; cycle < maxCycles; cycle++) {
     const report = await daemon.reap();
