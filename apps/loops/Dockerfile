@@ -29,8 +29,11 @@ RUN bun run build
 
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS runner
 WORKDIR /app
+# I38-00535: pin the CVE-fixed Alpine versions (postgresql16 16.15-r0, libpq
+# 17.11-r0) so a vulnerable libpq/postgresql16-client never silently ships
+# again — the build fails loudly if Alpine has not published the fixes.
 RUN apk upgrade --no-cache libcrypto3 libssl3 openssl \
-    && apk add --no-cache postgresql16-client
+    && apk add --no-cache 'postgresql16-client>=16.15-r0' 'libpq>=17.11-r0'
 # Amazon RDS global CA bundle so the generated storage kit can verify TLS for
 # sslmode=require, verify-ca, and verify-full RDS connections.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
