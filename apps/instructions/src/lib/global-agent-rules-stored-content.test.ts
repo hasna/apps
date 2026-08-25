@@ -17,8 +17,8 @@ beforeEach(() => {
 
 const MARKER = "MARKER-STORED-RULES-MUST-REACH-DISK";
 const STORED_CONTENT = [
-  "# Hasna Agent Operating Rules — v1.1.12 (2026-07-27)",
-  "<!-- hasna:agent-operating-rules v=1.1.12 -->",
+  "# Hasna Agent Operating Rules — v1.1.27 (2026-08-20)",
+  "<!-- hasna:agent-operating-rules v=1.1.27 -->",
   MARKER,
   "24. Rule twenty-four exists only in the stored payload.",
 ].join("\n") + "\n";
@@ -38,8 +38,8 @@ describe("stored agent operating rules reach the rendered artifact", () => {
 
     const source = sourceFromConfig(stored);
     expect(source.content).toContain(MARKER);
-    expect(source.content).toContain("v1.1.12");
-    expect(source.content).not.toContain("v=1.1.6");
+    expect(source.content).toContain("v1.1.27");
+    expect(source.content).not.toContain("v=1.1.26");
   });
 
   test("planSessionRender writes stored content", () => {
@@ -61,6 +61,6 @@ describe("stored agent operating rules reach the rendered artifact", () => {
 
     const rendered = plan.files.map((f) => f.content).join("\n");
     expect(rendered).toContain(MARKER);
-    expect(rendered).toContain("v1.1.12");
+    expect(rendered).toContain("v1.1.27");
   });
 });
