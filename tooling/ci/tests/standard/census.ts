@@ -541,16 +541,23 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "conversations", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
   { member: "domains", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "economy", kitVersion: "0.13.4", pinned: "0.14.0" },
+  // economy LEFT this set on 2026-08-25 (O15-00629): its hasna.contract.json
+  // kitVersion was bumped to 0.14.0 in the same change that regenerated its
+  // member lockfile, so the recorded mismatch now agrees.
   { member: "emails", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "holdings", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "instructions", kitVersion: "0.13.1", pinned: "0.14.0" },
   { member: "knowledge", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "loops", kitVersion: "0.13.4", pinned: "0.14.0" },
+  // loops LEFT this set on 2026-08-25 (O15-00629): hasna/apps#1141
+  // (21e490a39) bumped its kitVersion to 0.14.0 without removing this entry,
+  // so it was already stale at main head; removed with the economy entry.
   { member: "machines", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "markdown", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "messages", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "projects", kitVersion: "0.13.4", pinned: "0.14.0" },
+  // projects LEFT this set on 2026-08-25 (O15-00629): main advanced past this
+  // PR's base and bumped apps/projects kitVersion to 0.14.0 (projects wave),
+  // so the recorded mismatch now agrees at the merge ref — the ci/test-suites
+  // merge-ref run caught this entry as stale before merge.
   { member: "prompts", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "recordings", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "secrets", kitVersion: "0.13.3", pinned: "^0.14.0" },
