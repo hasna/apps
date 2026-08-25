@@ -33,6 +33,34 @@ const EXEC_SCHEMA = {
   },
 }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> execute -> wait ~5 min
 // when idle -> re-census, forever. Stop = owner stops the run or the session ends.
 // Idle wait lives INSIDE the census agent (bash sleep 300 + re-check), so the run
@@ -44,7 +72,7 @@ const allExecs = []
 for (;;) {
   pass++
 phase('Census')
-const census = await agent(`Census the hotfix queue (todos project ${APPS}) — PASS ${pass} of the infinite loop. HOTFIX rows are the PRIORITY class: title starts with "HOTFIX:" (machine-greppable convention, owner 2026-08-25).
+const census = await safeAgent(censusPrompt(`Census the hotfix queue (todos project ${APPS}) — PASS ${pass} of the infinite loop. HOTFIX rows are the PRIORITY class: title starts with "HOTFIX:" (machine-greppable convention, owner 2026-08-25).
 
 1. \`todos list --project ${APPS} --status pending --json\` (redirect to a file, never pipe). Select rows whose title starts with "HOTFIX:".
 2. Filter to UNOWNED rows (no assigned_to). Exclude rows whose comments already record "FIXED AT HEAD"/"MERGED"/"DUPLICATE of".
@@ -53,7 +81,7 @@ const census = await agent(`Census the hotfix queue (todos project ${APPS}) — 
 5. Sort candidates by created_at ASC (oldest first — the priority queue).
 
 IF THE QUEUE IS EMPTY: \`sleep 300\` (bash), re-run the census steps once, and return the re-check result — the lane waits ~5 min between checks while idle. NEVER return a fabricated empty-hotfix state: if the re-check found hotfixes, return them.
-Return candidates (max ${MAX_ROWS + 1}), hotfixCount (pending unowned HOTFIX: rows), blocked (excluded with reasons).`, { label: 'hotfix-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+Return candidates (max ${MAX_ROWS + 1}), hotfixCount (pending unowned HOTFIX: rows), blocked (excluded with reasons).`, { label: 'hotfix-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' }))
 
 const candidates = (census && census.candidates) || []
 if (candidates.length === 0) {
@@ -66,7 +94,7 @@ const rowsToRun = candidates.slice(0, MAX_ROWS)
 const execs = []
 for (const row of rowsToRun) {
   log('hotfix-drain: executing ' + row.shortId + ' — ' + (row.title || '').slice(0, 80))
-const exec = await agent(`Execute ONE HOTFIX row via the fix-lane discipline — this is the PRIORITY class, move fast but correct. Row: ${JSON.stringify(row)}.
+const exec = await safeAgent(`Execute ONE HOTFIX row via the fix-lane discipline — this is the PRIORITY class, move fast but correct. Row: ${JSON.stringify(row)}.
 
 CLAIM FIRST: comment the row now — \`todos comment <row.id> "${CLAIM_TAG} — executing <shortId> $(date -u +%Y-%m-%dT%H:%MZ)"\`.
 

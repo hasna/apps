@@ -128,6 +128,34 @@ const VERIFY3_SCHEMA = { type: 'object', properties: { mergeTreeEqual: { type: '
 const REVIEW3_SCHEMA = { type: 'object', properties: { verdict: { type: 'string' }, findings: { type: 'array' } }, required: ['verdict'] }
 const HANDOFF_SCHEMA = { type: 'object', properties: { shippedPackages: { type: 'array' }, postDecision: { enum: ['full', 'one-liner', 'none'] }, postId: { type: ['string', 'null'] }, taskState: { type: 'string' }, residue: { type: 'array' } }, required: ['taskState', 'postDecision'] }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> wave (if owed) ->
 // 2-agent live gates (if a wave merged) -> handoff -> sleep ~30 min inside the
 // census when nothing pending -> re-census, forever. Stop = owner stops the run
@@ -136,7 +164,7 @@ const HANDOFF_SCHEMA = { type: 'object', properties: { shippedPackages: { type: 
 let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
-const census = await agent(CENSUS, { label: 'ship-latest-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
+const census = await safeAgent(censusPrompt(CENSUS), { label: 'ship-latest-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
 log(`pass ${pass} census: ${census && census.noop ? 'NO-OP (nothing pending)' : 'wave owed'}`)
 
 let wave = null
@@ -144,41 +172,41 @@ let review = null
 let merge = null
 if (census && !census.noop && !census.waveInFlight) {
   phase('Wave')
-  wave = await agent(WAVE, { label: 'ship-latest-wave', phase: 'Wave', schema: WAVE_SCHEMA })
+  wave = await safeAgent(WAVE, { label: 'ship-latest-wave', phase: 'Wave', schema: WAVE_SCHEMA })
 
   if (wave && wave.prNumber) {
     phase('Review')
-    review = await agent(REVIEW.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-review', phase: 'Review', schema: REVIEW_SCHEMA, model: 'fable' })
+    review = await safeAgent(REVIEW.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-review', phase: 'Review', schema: REVIEW_SCHEMA, model: 'fable' })
 
     if (review && review.verdict === 'GO') {
       phase('Merge')
-      merge = await agent(MERGE.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-merge', phase: 'Merge', schema: MERGE_SCHEMA })
+      merge = await safeAgent(MERGE.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-merge', phase: 'Merge', schema: MERGE_SCHEMA })
     } else if (review && review.verdict === 'NO_GO') {
       // CYCLE 1 — remediate the named blockers only, re-verify, same-lens re-review
       phase('Remediate-1')
-      const remediate1 = await agent(REMEDIATE1.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-remediate1', phase: 'Remediate-1', schema: REMEDIATE1_SCHEMA, model: 'opus' })
+      const remediate1 = await safeAgent(REMEDIATE1.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-remediate1', phase: 'Remediate-1', schema: REMEDIATE1_SCHEMA, model: 'opus' })
       phase('Verify-2')
-      const verify2 = remediate1 && remediate1.pushed ? await agent(VERIFY2.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-verify2', phase: 'Verify-2', schema: VERIFY2_SCHEMA, model: 'opus' }) : null
+      const verify2 = remediate1 && remediate1.pushed ? await safeAgent(VERIFY2.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-verify2', phase: 'Verify-2', schema: VERIFY2_SCHEMA, model: 'opus' }) : null
       phase('Review-2')
       const review2 = verify2
-        ? await agent(REVIEW2.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-review2', phase: 'Review-2', schema: REVIEW2_SCHEMA, model: 'fable' })
+        ? await safeAgent(REVIEW2.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-review2', phase: 'Review-2', schema: REVIEW2_SCHEMA, model: 'fable' })
         : { verdict: 'NO_GO', findings: [{ severity: 'P1', title: 'cycle-1 remediation did not complete', detail: JSON.stringify({ remediate1, verify2 }) }] }
       if (review2 && review2.verdict === 'GO') {
         phase('Merge')
-        merge = await agent(MERGE.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-merge', phase: 'Merge', schema: MERGE_SCHEMA })
+        merge = await safeAgent(MERGE.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-merge', phase: 'Merge', schema: MERGE_SCHEMA })
       } else if (review2 && review2.verdict === 'NO_GO') {
         // CYCLE 2 — final remediation cycle (bounded-review cap: at most two). Remaining named blocker: base-movement gate only.
         phase('Remediate-2')
-        const remediate2 = await agent(REMEDIATE2.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-remediate2', phase: 'Remediate-2', schema: REMEDIATE2_SCHEMA, model: 'opus' })
+        const remediate2 = await safeAgent(REMEDIATE2.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-remediate2', phase: 'Remediate-2', schema: REMEDIATE2_SCHEMA, model: 'opus' })
         phase('Verify-3')
-        const verify3 = remediate2 && remediate2.pushed ? await agent(VERIFY3.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-verify3', phase: 'Verify-3', schema: VERIFY3_SCHEMA, model: 'opus' }) : null
+        const verify3 = remediate2 && remediate2.pushed ? await safeAgent(VERIFY3.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-verify3', phase: 'Verify-3', schema: VERIFY3_SCHEMA, model: 'opus' }) : null
         phase('Review-3')
         const review3 = verify3
-          ? await agent(REVIEW3.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-review3', phase: 'Review-3', schema: REVIEW3_SCHEMA, model: 'fable' })
+          ? await safeAgent(REVIEW3.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-review3', phase: 'Review-3', schema: REVIEW3_SCHEMA, model: 'fable' })
           : { verdict: 'NO_GO', findings: [{ severity: 'P1', title: 'cycle-2 remediation did not complete', detail: JSON.stringify({ remediate2, verify3 }) }] }
         if (review3 && review3.verdict === 'GO') {
           phase('Merge')
-          merge = await agent(MERGE.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-merge', phase: 'Merge', schema: MERGE_SCHEMA })
+          merge = await safeAgent(MERGE.replace('{PR}', String(wave.prNumber)), { label: 'ship-latest-merge', phase: 'Merge', schema: MERGE_SCHEMA })
         }
         review = review3
       } else {
@@ -196,8 +224,8 @@ if (merge && merge.merged) {
   shipped = (merge && merge.mergedSha) ? merge.mergedSha : (wave ? wave.prNumber : null)
   phase('LiveGates')
   const gateResults = await parallel([
-    () => agent(GATE_PROMPT('ONE').replace('{SHIPPED}', JSON.stringify({ mergedSha: merge.mergedSha, prNumber: wave ? wave.prNumber : null })), { label: 'ship-latest-gate-1:' + pass, phase: 'LiveGates', schema: GATE_SCHEMA }),
-    () => agent(GATE_PROMPT('TWO').replace('{SHIPPED}', JSON.stringify({ mergedSha: merge.mergedSha, prNumber: wave ? wave.prNumber : null })), { label: 'ship-latest-gate-2:' + pass, phase: 'LiveGates', schema: GATE_SCHEMA }),
+    () => safeAgent(GATE_PROMPT('ONE').replace('{SHIPPED}', JSON.stringify({ mergedSha: merge.mergedSha, prNumber: wave ? wave.prNumber : null })), { label: 'ship-latest-gate-1:' + pass, phase: 'LiveGates', schema: GATE_SCHEMA }),
+    () => safeAgent(GATE_PROMPT('TWO').replace('{SHIPPED}', JSON.stringify({ mergedSha: merge.mergedSha, prNumber: wave ? wave.prNumber : null })), { label: 'ship-latest-gate-2:' + pass, phase: 'LiveGates', schema: GATE_SCHEMA }),
   ])
   const bothGo = gateResults.filter(Boolean).every(g => g && g.verdict === 'GO')
   gates = { bothGo, gate1: gateResults[0], gate2: gateResults[1] }
@@ -205,7 +233,7 @@ if (merge && merge.merged) {
 }
 
 phase('Handoff')
-const handoff = await agent(HANDOFF, { label: 'ship-latest-handoff-' + pass, phase: 'Handoff', schema: HANDOFF_SCHEMA })
+const handoff = await safeAgent(HANDOFF, { label: 'ship-latest-handoff-' + pass, phase: 'Handoff', schema: HANDOFF_SCHEMA })
 if (gates && !gates.bothGo) {
   // A NO_GO gate means the wave is NOT verified live: do not let [SHIP-READY] stand as shipped.
   log('pass ' + pass + ': live gate NO_GO — [SHIP-READY] not posted for the unverified wave; tasks filed by the gates')

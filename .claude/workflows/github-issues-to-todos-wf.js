@@ -55,6 +55,34 @@ const FILE_SCHEMA = {
   },
 }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> file -> sleep ~1h
 // when idle -> re-census, forever. The idle wait lives INSIDE the census agent
 // (bash sleep 3600 + re-check). Stop = owner stops the run or the session ends.
@@ -62,7 +90,7 @@ let pass = 0
 for (;;) {
   pass++
 phase('Census')
-const census = await agent(`${CONST}
+const census = await safeAgent(censusPrompt(`${CONST}
 ROLE: census (execute the deterministic procedure — no judgement). PASS ${pass} of the infinite loop.
 
 PRIORITY YIELD CHECK FIRST: todos list --project ${APPS_PROJECT} --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", sleep 3600 (bash), re-check once, return {yielded: true, hotfixCount: N, newIssues: []}.
@@ -78,7 +106,7 @@ STEP 3 — NEW: every open issue that is NOT already tracked by (a) or (b) is ne
 
 STEP 4 — IDLE WAIT: if newIssues is empty, sleep 3600 (bash — one hour), re-run steps 1-3 once, and return the RE-CHECK result. NEVER return an empty newIssues without the sleep+re-check having run.
 
-Return {newIssues: [{number, title, body, labels, url}], openCount, yielded, hotfixCount}.`, { label: 'issues-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'sonnet' })
+Return {newIssues: [{number, title, body, labels, url}], openCount, yielded, hotfixCount}.`, { label: 'issues-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'sonnet' }))
 
 const newIssues = (census && census.newIssues) || []
 if (census && census.yielded) {
@@ -91,7 +119,7 @@ if (newIssues.length === 0) {
 }
 
 phase('File')
-const filed = await agent(`${CONST}
+const filed = await safeAgent(`${CONST}
 ROLE: file (execute — create the rows). New issues to file: ${JSON.stringify(newIssues)}.
 For EACH issue (deterministic mapping, no judgement): todos add in project ${APPS_PROJECT}:
 - title: "GH#<number>: <issue title>" (the EXACT prefix form the census dedupes on);

@@ -58,6 +58,34 @@ const CENSUS_SCHEMA = { type: 'object', properties: { mergeReady: { type: 'array
 const PR_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
 const REPORT_SCHEMA = { type: 'object', properties: { prs: { type: 'array' }, residue: { type: 'array' } }, required: ['prs'] }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): re-census forever. When the
 // census is empty the census agent itself sleeps ~5 min and re-checks once, so
 // the run stays alive at ~1 agent per idle window. PRIORITY YIELD: when any
@@ -70,7 +98,7 @@ let census = null
 let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
-census = await agent(CENSUS, { label: `pr-drain-census-${pass}`, phase: 'Census', schema: CENSUS_SCHEMA })
+census = await safeAgent(censusPrompt(CENSUS), { label: `pr-drain-census-${pass}`, phase: 'Census', schema: CENSUS_SCHEMA })
 if (census && census.yielded) {
   log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
   continue
@@ -90,7 +118,7 @@ if (rebase.length) {
   const rebaseBatches = []
   for (let i = 0; i < rebase.length; i += 5) rebaseBatches.push(rebase.slice(i, i + 5))
   rebaseResults = await parallel(rebaseBatches.map((b, i) => () =>
-    agent(REBASE.replace('{PRS}', JSON.stringify(b)), { label: `pr-drain-rebase-${pass}-${i + 1}`, phase: 'Rebase', schema: PR_SCHEMA }),
+    safeAgent(REBASE.replace('{PRS}', JSON.stringify(b)), { label: `pr-drain-rebase-${pass}-${i + 1}`, phase: 'Rebase', schema: PR_SCHEMA }),
   ))
   const rebased = rebaseResults.filter(Boolean).flatMap(r => r.prs || []).filter(p => p.rebased)
   for (const p of rebased) ready.push({ number: p.number, head: p.newHead })
@@ -108,7 +136,7 @@ const REVIEW_WIDTH = 12
 for (let w = 0; w < review.length; w += REVIEW_WIDTH) {
   const wave = review.slice(w, w + REVIEW_WIDTH)
   const waveResults = await parallel(wave.map((p, wi) => () =>
-    agent(REVIEW.replace('{PRS}', JSON.stringify([p])).replace('{I}', String(w + wi + 1)).replace('{N}', String(review.length)), {
+    safeAgent(REVIEW.replace('{PRS}', JSON.stringify([p])).replace('{I}', String(w + wi + 1)).replace('{N}', String(review.length)), {
       label: `pr-drain-review-${p.number}`, phase: 'Review', schema: PR_SCHEMA, model: 'fable',
     }),
   ))
@@ -131,7 +159,7 @@ if (ready.length) {
   const mergeBatches = []
   for (let i = 0; i < ready.length; i += 6) mergeBatches.push(ready.slice(i, i + 6))
   mergeResults = await parallel(mergeBatches.map((b, i) => () =>
-    agent(MERGE.replace('{BATCH}', JSON.stringify(b)), { label: `pr-drain-merge-${pass}-${i + 1}`, phase: 'Merge', schema: PR_SCHEMA }),
+    safeAgent(MERGE.replace('{BATCH}', JSON.stringify(b)), { label: `pr-drain-merge-${pass}-${i + 1}`, phase: 'Merge', schema: PR_SCHEMA }),
   ))
 }
 allMerges.push(...mergeResults.filter(Boolean))
@@ -139,6 +167,6 @@ log(`pass ${pass} complete — next pass re-censuses`)
 }
 
 phase('Report')
-const report = await agent(REPORT, { label: 'pr-drain-report', phase: 'Report', schema: REPORT_SCHEMA })
+const report = await safeAgent(REPORT, { label: 'pr-drain-report', phase: 'Report', schema: REPORT_SCHEMA })
 
 return { passes: pass, census, rebase: allRebase, reviews: allReviews, merges: allMerges, report }
