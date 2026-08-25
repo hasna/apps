@@ -703,7 +703,7 @@ export async function applySelectiveChangesets(
         candidate.packages,
         candidate.config,
         undefined,
-        candidate.rootDir,
+        import.meta.dir,
       )
     )
       .map((path) => resolve(path))
