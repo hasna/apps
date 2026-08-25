@@ -221,12 +221,29 @@ export function handleServeRequest(req: Request, apiKey: string | undefined): Pr
   return Promise.resolve(json({ error: "Not Found" }, 404));
 }
 
+export function resolveServeOptions(options: {
+  port?: number;
+  host?: string;
+}): { port: number; host: string } {
+  // O15-00733: the container-standard PORT/HOST env vars must reach the bind.
+  // ECS task-defs declare PORT (the LB health-check surface, 8080 for the
+  // hooks deploy); before this, serve ignored the env and bound the local
+  // registry default 39428 on loopback, so the task came up unhealthy and the
+  // deploy was blocked. Precedence: explicit option > env > local default.
+  const envPort = process.env.PORT?.trim();
+  const envHost = process.env.HOST?.trim();
+  const port =
+    options.port ??
+    (envPort && /^[0-9]+$/.test(envPort) ? parseInt(envPort, 10) : DEFAULT_SERVE_PORT);
+  const host = options.host ?? (envHost && envHost.length > 0 ? envHost : SERVE_HOST);
+  return { port, host };
+}
+
 export function startServeServer(options: {
   port?: number;
   host?: string;
 }): ReturnType<typeof Bun.serve> {
-  const port = options.port ?? DEFAULT_SERVE_PORT;
-  const host = options.host ?? SERVE_HOST;
+  const { port, host } = resolveServeOptions(options);
   // P1-8: env-only resolution — never a CLI flag carrying the value.
   const apiKey = resolveApiKey();
 
