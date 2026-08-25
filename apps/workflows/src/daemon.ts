@@ -71,6 +71,12 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** The user-visible run input: context minus the engine's own state. */
+function stripRunState(context: Record<string, unknown>): Record<string, unknown> {
+  const { __wf: _wf, steps: _steps, ...user } = context;
+  return user;
+}
+
 /** Execute a shell command with a bounded timeout (the built-in step executor). */
 export function runCommand(job: LaneJob): LaneResult {
   if (!job.command) {
@@ -325,9 +331,12 @@ export class WorkflowsDaemon {
     const existing = this.store.listRunNodes(run.id).find((n) => n.nodeId === nodeId);
     const nodeRow = existing ?? this.store.createRunNode({ runId: run.id, nodeId, lane: node.lane ?? "claude" });
 
-    // memoization: same input -> reuse the cached output without executing
+    // memoization: same input -> reuse the cached output without executing.
+    // the run state (__wf cursor/loops, accumulated steps) is stripped from
+    // the memo input so identical user context + command hash identically
+    // across iterations and runs
     if (node.memo) {
-      const memoInput = { command: node.command, prompt: node.prompt, context };
+      const memoInput = { command: node.command, prompt: node.prompt, context: stripRunState(context) };
       const hit = tryMemoHit(this.store, run.graphName, nodeId, memoInput);
       if (hit) {
         const cached = JSON.parse(hit.outputJson) as Record<string, unknown>;
@@ -357,7 +366,7 @@ export class WorkflowsDaemon {
       result = { ok: false, exitCode: 1, output: "", durationMs: 0, error: String(err instanceof Error ? err.message : err) };
     }
 
-    const output = { exitCode: result.exitCode, output: result.output, durationMs: result.durationMs };
+    const output = { ok: result.ok, exitCode: result.exitCode, output: result.output, durationMs: result.durationMs };
     if (!result.ok) {
       const retriesLeft = (node.maxRetries ?? 0) + 1 - nodeRow.attempts;
       if (retriesLeft > 0) {
@@ -386,8 +395,8 @@ export class WorkflowsDaemon {
     this.store.setRunNodeStatus(nodeRow.id, "completed", { exitCode: result.exitCode, output });
     this.wal.append({ op: "node_finished", runId: run.id, nodeId, status: "completed", at: nowIso() });
     if (node.memo) {
-      recordMemo(this.store, run.graphName, nodeId, { command: node.command, prompt: node.prompt, context }, output);
-      this.wal.append({ op: "memo_set", key: `${run.graphName}:${nodeId}:${createHash("sha256").update(JSON.stringify({ command: node.command, prompt: node.prompt, context })).digest("hex")}`, at: nowIso() });
+      recordMemo(this.store, run.graphName, nodeId, { command: node.command, prompt: node.prompt, context: stripRunState(context) }, output);
+      this.wal.append({ op: "memo_set", key: `${run.graphName}:${nodeId}:${createHash("sha256").update(JSON.stringify({ command: node.command, prompt: node.prompt, context: stripRunState(context) })).digest("hex")}`, at: nowIso() });
     }
     this.recordStepResult(context, nodeId, output);
     return this.afterNode(run, context, wf, node.next);
@@ -413,6 +422,14 @@ export class WorkflowsDaemon {
       (n): n is Extract<GraphNode, { type: "while" }> => n.type === "while" && n.body.includes(cursor ?? ""),
     );
     if (whileNode) {
+      const index = whileNode.body.indexOf(cursor ?? "");
+      if (index >= 0 && index < whileNode.body.length - 1) {
+        // advance to the next body member; the iteration continues
+        wf.cursor = whileNode.body[index + 1];
+        this.persistContext(run, context, wf);
+        return { kind: "advanced", nodeId: wf.cursor };
+      }
+      // last body member: the iteration completes and the while re-enters
       wf.loops[whileNode.id] = (wf.loops[whileNode.id] ?? 0) + 1;
       wf.cursor = whileNode.id;
       this.persistContext(run, context, wf);

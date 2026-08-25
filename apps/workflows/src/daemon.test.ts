@@ -222,6 +222,51 @@ describe("run engine", () => {
     expect(result.iterations.w).toBe(3);
   });
 
+  test("a while body with multiple nodes sequences them in order per iteration", async () => {
+    const graph: WorkflowGraph = {
+      name: "seq",
+      version: "1.0.0",
+      nodes: [
+        { id: "start", type: "start", next: "w" },
+        { id: "w", type: "while", condition: "i < 2", body: ["a", "b"], maxIterations: 5, next: "done" },
+        { id: "a", type: "step", command: "printf step-a" },
+        { id: "b", type: "step", command: "printf step-b" },
+        { id: "done", type: "end" },
+      ],
+    };
+    const daemon = makeDaemon();
+    const final = await runGraphToCompletion(store, wal, graph, {}, { time: () => clock.now });
+    expect(final.status).toBe("completed");
+    const result = JSON.parse(final.resultJson!);
+    expect(result.steps.a.output).toContain("step-a");
+    expect(result.steps.b.output).toContain("step-b");
+    expect(result.iterations.w).toBe(2);
+    const rows = store.listRunNodes(final.id);
+    expect(rows.some((n) => n.nodeId === "a" && n.status === "completed")).toBe(true);
+    expect(rows.some((n) => n.nodeId === "b" && n.status === "completed")).toBe(true);
+  });
+
+  test("memoized steps inside a while loop hit the cache across iterations", async () => {
+    const graph: WorkflowGraph = {
+      name: "memo-loop",
+      version: "1.0.0",
+      nodes: [
+        { id: "start", type: "start", next: "w" },
+        { id: "w", type: "while", condition: "i < 2", body: ["expensive"], maxIterations: 5, next: "done" },
+        { id: "expensive", type: "step", command: "printf expensive", memo: true },
+        { id: "done", type: "end" },
+      ],
+    };
+    const daemon = makeDaemon();
+    const final = await runGraphToCompletion(store, wal, graph, {}, { time: () => clock.now });
+    expect(final.status).toBe("completed");
+    const result = JSON.parse(final.resultJson!);
+    // the second iteration reused the first iteration's cached output
+    expect(result.steps.expensive.memoHit).toBe(true);
+    // exactly ONE memo row: the run state did not pollute the input hash
+    expect(store.memoList().length).toBe(1);
+  });
+
   test("a while node fails the run when maxIterations is exhausted", async () => {
     const graph: WorkflowGraph = {
       name: "runaway",

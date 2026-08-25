@@ -62,8 +62,11 @@ describe("evaluateExpr", () => {
     expect(() => evaluateExpr("", ctx)).toThrow(ExprSyntaxError);
   });
 
-  test("throws on an unknown path", () => {
-    expect(() => evaluateExpr("steps.missing.ok", ctx)).toThrow(/unknown path/);
+  test("unknown paths evaluate to undefined (while-loop guard semantics)", () => {
+    // the canonical guard: a body step that has not run yet is not ok
+    expect(evaluateExpr("steps.missing.ok != true", ctx)).toBe(true);
+    expect(evaluateExpr("steps.missing.ok == true", ctx)).toBe(false);
+    expect(evaluateExpr("steps.missing.exitCode == 0", ctx)).toBe(false);
   });
 
   test("throws on a type mismatch in comparison", () => {

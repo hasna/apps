@@ -12,8 +12,10 @@
  *   path       := identifier ("." identifier)*   — resolves against the run context
  *
  * Values: numbers, strings, booleans. Comparisons require the same type on
- * both sides. A path that does not resolve throws ExprEvalError; the caller
- * turns that into a node failure with the path named.
+ * both sides. A path that does not resolve evaluates to undefined, so the
+ * canonical while-loop guard `steps.check.ok != true` is TRUE before the
+ * body has run — a missing step is simply not ok. Ordering comparisons
+ * against an unknown path are an error; equality is defined.
  */
 export class ExprSyntaxError extends Error {
   constructor(message: string) {
@@ -30,6 +32,7 @@ export class ExprEvalError extends Error {
 }
 
 export type ExprValue = number | string | boolean;
+type MaybeExprValue = ExprValue | undefined;
 
 export interface Token {
   kind: "number" | "string" | "ident" | "op" | "lparen" | "rparen";
@@ -213,25 +216,21 @@ export function parseExpr(input: string): AstNode {
   return new Parser(tokenize(input)).parse();
 }
 
-function resolvePath(segments: string[], context: Record<string, unknown>): ExprValue {
+function resolvePath(segments: string[], context: Record<string, unknown>): ExprValue | undefined {
   let current: unknown = context;
   for (const segment of segments) {
-    if (current === null || typeof current !== "object") {
-      throw new ExprEvalError(`unknown path ${segments.join(".")}`);
-    }
+    if (current === null || typeof current !== "object") return undefined;
     const record = current as Record<string, unknown>;
-    if (!(segment in record)) {
-      throw new ExprEvalError(`unknown path ${segments.join(".")}`);
-    }
+    if (!(segment in record)) return undefined;
     current = record[segment];
   }
   if (typeof current === "number" || typeof current === "string" || typeof current === "boolean") {
     return current;
   }
-  throw new ExprEvalError(`path ${segments.join(".")} is not a scalar value`);
+  return undefined;
 }
 
-function evalNode(node: AstNode, context: Record<string, unknown>): ExprValue {
+function evalNode(node: AstNode, context: Record<string, unknown>): MaybeExprValue {
   switch (node.kind) {
     case "literal":
       return node.value;
@@ -240,6 +239,13 @@ function evalNode(node: AstNode, context: Record<string, unknown>): ExprValue {
     case "comparison": {
       const left = evalNode(node.left, context);
       const right = evalNode(node.right, context);
+      // unknown paths resolve to undefined: `x != true` is true while x has
+      // not run yet — the canonical while-loop guard
+      if (left === undefined || right === undefined) {
+        if (node.op === "==") return left === undefined && right === undefined;
+        if (node.op === "!=") return left !== right;
+        throw new ExprEvalError("cannot order-compare an unknown path");
+      }
       if (typeof left !== typeof right) {
         throw new ExprEvalError(
           `cannot compare ${JSON.stringify(left)} (${typeof left}) with ${JSON.stringify(right)} (${typeof right})`,
