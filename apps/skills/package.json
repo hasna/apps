@@ -52,6 +52,7 @@
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
     "dev:server": "bun --watch run ./src/server/index.ts",
     "dev:worker": "bun --watch run ./src/server/worker.ts",
+    "docker:check": "bash scripts/docker-build-check.sh",
     "migrate": "bun run ./src/server/migrate.ts",
     "typecheck": "tsc --noEmit",
     "verify:release": "bun run scripts/release-guard.ts",

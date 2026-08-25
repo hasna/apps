@@ -1,7 +1,11 @@
 FROM oven/bun:1.3.14-slim AS deps
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
-RUN bun install --frozen-lockfile
+# O15-00677: skip lifecycle scripts here — `prepare` ("bun run build:js") must
+# not run before src/ is copied into this stage (it fails with FileNotFound on
+# "./src/"). The build runs explicitly in the build stage below, where src/
+# exists.
+RUN bun install --ignore-scripts --frozen-lockfile
 
 FROM deps AS build
 COPY . .
