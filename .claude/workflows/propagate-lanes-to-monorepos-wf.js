@@ -89,6 +89,34 @@ const LAND_SCHEMA = {
   },
 }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> propagate (4 parallel)
 // -> review (4 parallel) -> land (4 parallel) -> wait ~30 min when nothing drifted
 // -> re-census, forever. Idle wait lives INSIDE the census agent (bash sleep 1800
@@ -97,7 +125,7 @@ let pass = 0
 for (;;) {
   pass++
 phase('Census')
-const census = await agent(`${CONST}
+const census = await safeAgent(censusPrompt(`${CONST}
 ROLE: census (Opus). PASS ${pass} of the infinite loop.
 PRIORITY YIELD CHECK FIRST: todos list --project ${APPS_PROJECT} --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", sleep 1800 (bash), re-check once, return {targets: [], yielded: true, hotfixCount: N}.
 
@@ -105,7 +133,7 @@ STEP 1 — RESOLVE the 4 targets (${TARGETS.join(', ')}): for EACH, 'repos repo 
 STEP 2 — DRIFT-CHECK each target: list ${SOURCE}/*.js (the source store); list <target-path>/.claude/workflows/*.js (if the dir exists). A target needsPropagation when: its .claude/workflows/ is missing ANY source lane that applies to it, OR any present lane differs materially from the source shape (parameterized values are expected — the drift check is on the SHAPE: infinite-loop pattern, hotfix yield, 2-agent gates, idle-wait; a lane that is absent where it applies = drift). Resolve the target's conversations channel name (conversations channels list, bounded; or the target's project row via projects CLI) for the Land phase.
 IN-FLIGHT CHECK (measured 2026-08-25 — a target whose propagate PR is open must NOT be re-propagated, or every pass opens a duplicate PR): gh pr list --repo <org>/<target> --state open --json number,headRefName (redirect to a file, never pipe). If an OPEN PR carries a branch named 'propagate/lanes-<target>', FORCE needsPropagation: false with reason 'open propagate PR #N in flight — no duplicate' and record openPropagatePr: N.
 STEP 3 — IDLE WAIT: if NO target needsPropagation, sleep 1800 (bash — 30 min), re-run steps 1-2 once, and return the RE-CHECK result. NEVER return all-false needsPropagation without the sleep+re-check having run.
-Return {targets: [{name, path, remote, needsPropagation, reason, channel}], yielded, hotfixCount}.`, { label: 'propagate-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+Return {targets: [{name, path, remote, needsPropagation, reason, channel}], yielded, hotfixCount}.`, { label: 'propagate-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' }))
 if (census && census.yielded) {
   log('propagate pass ' + pass + ': YIELDED to hotfix-drain (' + (census.hotfixCount || 0) + ' HOTFIX: row(s)) — waited 30 min inside the census, re-checking next pass')
   continue
@@ -121,7 +149,7 @@ log('propagate pass ' + pass + ': ' + toPropagate.length + ' target(s) need prop
 // PROPAGATE — 4 agents in parallel, one per target (the step cap)
 phase('Propagate')
 const propagated = await parallel(toPropagate.map((t) => () =>
-  agent(`${CONST}
+  safeAgent(`${CONST}
 ROLE: propagate ${t.name} (path ${t.path}, remote ${t.remote}). You own THIS ONE target.
 0. NO-DUPLICATE GUARD: if an open PR with a branch named 'propagate/lanes-${t.name}' already exists on ${t.remote} (gh pr list --repo <org>/<target> --state open --json number,headRefName), DO NOT open another — return {target, prNumber: <the existing PR number>, status: 'nothing-to-do', reason: 'open PR #<n> in flight — no duplicate'}. Only proceed when no such PR exists.
 1. OWN WORKTREE via hasna/repos: create ~/.hasna/repos/worktrees/<repo-name>/propagate-lanes from origin/main with the repos CLI worktree verb (repos worktree add ... or git worktree add; run repos scan after). Branch propagate/lanes-<target>. NEVER the shared checkout, never another agent's worktree.
@@ -136,7 +164,7 @@ log('propagate pass ' + pass + ': ' + prs.length + ' PR(s) opened: ' + prs.map(p
 // REVIEW — 4 independent adversarial reviewers in parallel, one per PR
 phase('Review')
 const reviews = await parallel(prs.map((p) => () =>
-  agent(`${CONST}
+  safeAgent(`${CONST}
 ROLE: adversarial reviewer (Fable) for ${p.target} PR #${p.prNumber}. Review the PR at its CURRENT head (gh pr view ${p.prNumber} --json headRefOid,state): the diff is workflow files ONLY under .claude/workflows/ (any other tree touched is a P0 NO_GO); the lanes are PARAMETERIZED for ${p.target} (repo path, todos project, npm org, deploy surface — no hasna/apps hardcodes left); the infinite-loop shape, hotfix yield check, 2-agent live GO/NO-GO gates, and idle-wait-inside-census pattern are INTACT in every standing lane; naming is bare kebab-case with no scripts/ subdirectory; no secrets, no internal-infra strings; node --check clean on every lane; skipped lanes carry reasons. Post '[REVIEW] <GO|NO_GO> — ${p.target}#${p.prNumber} @ <sha> — lens: workflow propagation, reviewer propagate-review' on the PR. Block ONLY concrete P0/P1 defects; at most two remediation cycles (the propagate agent fixes the named findings, same reviewer re-reviews only those). Return {target, verdict, findings}.`, { label: 'review-' + p.target + ':' + pass, phase: 'Review', schema: REVIEW_SCHEMA, model: 'fable' }),
 ))
 const goPrs = prs.filter((p, i) => reviews[i] && reviews[i].verdict === 'GO')
@@ -146,7 +174,7 @@ log('review pass ' + pass + ': GO ' + goPrs.length + ', NO_GO ' + noGoPrs.length
 // LAND — 4 agents in parallel, one per GO'd PR
 phase('Land')
 const landed = await parallel(goPrs.map((p) => () =>
-  agent(`${CONST}
+  safeAgent(`${CONST}
 ROLE: land ${p.target} PR #${p.prNumber}. Per the CONST:
 1. Verify head unchanged since the verdict (gh pr view ${p.prNumber} --json headRefOid == the reviewed sha) and the base-movement gate: TREE=$(git -C <target-path> merge-tree --write-tree origin/main <head>); git diff --quiet <head> "$TREE" must be rc=0 (or the only deltas are main-side files disjoint from the PR's files, measured).
 2. MERGE: gh pr merge ${p.prNumber} --squash --body-file <file ending 'Agent: propagate-${p.target}-ship' as last line>. Verify the merge commit carries the trailer.

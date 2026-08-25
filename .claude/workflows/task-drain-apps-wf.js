@@ -61,6 +61,34 @@ const EXEC_SCHEMA = {
   },
 }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> execute -> wait ~5 min
 // when idle -> re-census, forever. Idle wait lives INSIDE the census agent (bash
 // sleep 300 + re-check). PRIORITY YIELD: any HOTFIX: row yields this lane to
@@ -69,7 +97,7 @@ const passes = []
 let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
-const census = await agent(`Census the hasna/apps task-drain queue (todos project 3bbc22e0). PASS ${pass} of the infinite loop — re-census each pass; rows executed earlier in this run carry claims and are excluded.
+const census = await safeAgent(censusPrompt(`Census the hasna/apps task-drain queue (todos project 3bbc22e0). PASS ${pass} of the infinite loop — re-census each pass; rows executed earlier in this run carry claims and are excluded.
 
 PRIORITY YIELD CHECK FIRST: if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-run the yield check once, and return {yielded: true, hotfixCount: N, candidates: [], queueSize: 0}. Do NOT enumerate BUG rows while yielding.
 
@@ -81,7 +109,7 @@ PRIORITY YIELD CHECK FIRST: if any UNOWNED row's title starts with "HOTFIX:", th
 6. Return the ordered candidates. Include rows already covered by a fix-lane in flight ONLY if their fix-lane is provably dead (transcript older than 60 min); otherwise exclude them (a live lane is a live fixer — never duplicate).
 
 IF THE QUEUE IS EMPTY (no unowned BUG rows): sleep 300 (bash), re-run the census steps once, and return the RE-CHECK result — the lane waits ~5 min between passes while idle. NEVER return an empty result without the sleep+re-check having run.
-Return candidates (max ${MAX_ROWS + 2}), queueSize (unowned BUG rows remaining), blocked (excluded rows with reasons), yielded (bool), hotfixCount (int).`, { label: 'census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
+Return candidates (max ${MAX_ROWS + 2}), queueSize (unowned BUG rows remaining), blocked (excluded rows with reasons), yielded (bool), hotfixCount (int).`, { label: 'census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA }))
 
 const candidates = (census && census.candidates) || []
 if (census && census.yielded) {
@@ -103,7 +131,7 @@ const execs = []
 for (let w = 0; w < rowsToRun.length; w += MAX_CONCURRENT) {
   const wave = rowsToRun.slice(w, w + MAX_CONCURRENT)
   const results = await parallel(wave.map((row) => () =>
-    agent(`Execute ONE hasna/apps BUG row via the fix-lane discipline. Row: ${JSON.stringify(row)}. You are ONE OF ${Math.min(MAX_CONCURRENT, wave.length)} CONCURRENT fix agents — each works its OWN row in its OWN worktree; never touch another agent's worktree, never the shared checkout.
+    safeAgent(`Execute ONE hasna/apps BUG row via the fix-lane discipline. Row: ${JSON.stringify(row)}. You are ONE OF ${Math.min(MAX_CONCURRENT, wave.length)} CONCURRENT fix agents — each works its OWN row in its OWN worktree; never touch another agent's worktree, never the shared checkout.
 
 CLAIM FIRST: comment the row now — \`todos comment <row.id> "${CLAIM_TAG} — executing <shortId> $(date -u +%Y-%m-%dT%H:%MZ)"\` (a concurrent task-drain instance's census excludes rows with a claim younger than 90 min; your claim prevents double-picking).
 
@@ -135,7 +163,7 @@ NEVER publish to npm (publish-all owns publishing).`, { label: 'exec-row:' + row
 const allExecs = passes.flatMap(p => p.execs)
 
 phase('Record')
-const record = await agent(`Record the task-drain-apps run (${passes.length} pass(es)). Post one line to #apps: "task-drain-apps: ${allExecs.map(e => e.row.shortId + ' ' + (e.exec ? e.exec.outcome : 'unknown') + (e.exec && e.exec.prNumber ? ' PR #' + e.exec.prNumber : '') + (e.exec && e.exec.mergeSha ? ' merged ' + e.exec.mergeSha : '')).join('; ')}". Save mementos: mementos save 'task-drain-apps-2026-08-23' '<two-sentence summary>'. Return {posted: true}.`, { label: 'record', phase: 'Record' })
+const record = await safeAgent(`Record the task-drain-apps run (${passes.length} pass(es)). Post one line to #apps: "task-drain-apps: ${allExecs.map(e => e.row.shortId + ' ' + (e.exec ? e.exec.outcome : 'unknown') + (e.exec && e.exec.prNumber ? ' PR #' + e.exec.prNumber : '') + (e.exec && e.exec.mergeSha ? ' merged ' + e.exec.mergeSha : '')).join('; ')}". Save mementos: mementos save 'task-drain-apps-2026-08-23' '<two-sentence summary>'. Return {posted: true}.`, { label: 'record', phase: 'Record' })
 
 return {
   status: allExecs.length === 0 ? 'task-drain-apps-empty' : (allExecs.length === 1 ? ('task-drain-apps-' + allExecs[0].exec.outcome) : 'task-drain-apps-multi'),

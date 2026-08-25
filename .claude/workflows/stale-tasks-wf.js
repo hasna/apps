@@ -62,6 +62,34 @@ const CLASSIFY_SCHEMA = { type: 'object', properties: { rows: { type: 'array', i
 const APPLY_SCHEMA = { type: 'object', properties: { actions: { type: 'array' }, errors: { type: 'array' } }, required: ['actions'] }
 const REPORT_SCHEMA = { type: 'object', properties: { counts: { type: 'object' }, boardLine: { type: 'string' } }, required: ['counts'] }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> classify -> apply ->
 // report -> wait ~30 min when nothing to correct -> re-census, forever. The idle
 // wait lives INSIDE the census agent (bash sleep 1800 + re-check) when the sweep
@@ -70,7 +98,7 @@ const REPORT_SCHEMA = { type: 'object', properties: { counts: { type: 'object' }
 let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
-const census = await agent(CENSUS, { label: 'stale-tasks-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+const census = await safeAgent(censusPrompt(CENSUS), { label: 'stale-tasks-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
 log(`pass ${pass} census: ${census && census.rows ? census.rows.length + ' rows' : 'FAILED'}`)
 if (census && census.yielded) {
   log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited 30 min inside the census, re-checking next pass`)
@@ -84,7 +112,7 @@ if (!census || !census.rows || census.rows.length === 0) {
 phase('Classify')
 let classify = null
 if (census && census.rows && census.rows.length) {
-  classify = await agent(CLASSIFY.replace('{ROWS}', JSON.stringify(census.rows)), { label: 'stale-tasks-classify', phase: 'Classify', schema: CLASSIFY_SCHEMA, model: 'opus' })
+  classify = await safeAgent(CLASSIFY.replace('{ROWS}', JSON.stringify(census.rows)), { label: 'stale-tasks-classify', phase: 'Classify', schema: CLASSIFY_SCHEMA, model: 'opus' })
 } else {
   classify = { rows: [] }
 }
@@ -92,7 +120,7 @@ if (census && census.rows && census.rows.length) {
 phase('Apply')
 let apply = null
 if (classify && classify.rows.length) {
-  apply = await agent(APPLY.replace('{VERDICTS}', JSON.stringify(classify.rows)), { label: 'stale-tasks-apply', phase: 'Apply', schema: APPLY_SCHEMA })
+  apply = await safeAgent(APPLY.replace('{VERDICTS}', JSON.stringify(classify.rows)), { label: 'stale-tasks-apply', phase: 'Apply', schema: APPLY_SCHEMA })
 } else {
   apply = { actions: [], errors: [] }
 }
@@ -120,6 +148,6 @@ for (const r of (classify && classify.rows) || []) {
 const boardLine = (derived.completed + derived.demoted) === 0
   ? 'stale-sweep: nothing to correct'
   : `stale-sweep: ${derived.completed} completed (evidence), ${derived.demoted} demoted, ${derived.live} live, ${derived.owner} owner, ${derived.unchanged} unchanged`
-const report = await agent(REPORT.replace('{COUNTS}', JSON.stringify(derived)).replace('{BOARDLINE}', boardLine), { label: 'stale-tasks-report-' + pass, phase: 'Report', schema: REPORT_SCHEMA })
+const report = await safeAgent(REPORT.replace('{COUNTS}', JSON.stringify(derived)).replace('{BOARDLINE}', boardLine), { label: 'stale-tasks-report-' + pass, phase: 'Report', schema: REPORT_SCHEMA })
 log('stale-tasks pass ' + pass + ': ' + boardLine + ' — next pass re-censuses')
 }

@@ -128,6 +128,34 @@ const HARVEST_SCHEMA = {
   required: ['categories'],
 }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole infinite run (measured
+// 2026-08-25: wf_b4894f28-d61 died after 37 agents / 2.7h). safeAgent catches,
+// logs, and returns null so the pass continues through the existing null-guards;
+// the failure flag makes the NEXT pass's census instruct a 300s bash sleep
+// before re-dispatching (the established idle-wait primitive) — a transient
+// agent failure pauses the lane instead of killing it or hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next pass census sleeps 300s first')
+    return null
+  }
+}
+const censusPrompt = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 // DRAIN-TO-ZERO LOOP (owner design 2026-08-25): re-census each pass; while the
 // publish queue is non-empty the pass restarts inside the same run. A pass that
 // publishes nothing new (all current/skipped) or an empty queue ends the loop.
@@ -136,7 +164,7 @@ let census = null
 let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
-census = await agent(CENSUS, { label: 'census-publish-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+census = await safeAgent(censusPrompt(CENSUS), { label: 'census-publish-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
 if (census && census.yielded) {
   log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
   continue
@@ -153,7 +181,7 @@ const lanes = []
 for (let i = 0; i < queue.length; i += 4) {
   const wave = queue.slice(i, i + 4)
   const results = await parallel(wave.map((app, j) => () =>
-    agent(
+    safeAgent(
       RELEASE
         .replaceAll('${APP}', app.name.replace('@hasna/', ''))
         .replaceAll('${REPO_VER}', app.repoVersion)
@@ -178,19 +206,19 @@ for (let i = 0; i < queue.length; i += 4) {
     const pkgName = '@hasna/' + (r.app || 'unknown')
     const gateV = r.publishedVersion
     const publishGates = await parallel([
-      () => agent(`LIVE GATE 1 OF 2 (publish): you verify the PUBLISHED package ${pkgName}@${gateV} by RUNNING its commands live — every bin, every non-destructive verb (--version, --help, validate, read, list, dry-run forms) — actual commands, actual outputs, per-command {command, verdict: GO|NO_GO, evidence}. NEVER write test scripts; run the real commands. NON-DESTRUCTIVE only. Return {verdict, perCommand, failures}.`, { label: 'publish-gate-1-' + (r.app || 'app'), phase: 'Release', schema: PUBLISH_GATE }),
-      () => agent(`LIVE GATE 2 OF 2 (publish): same task as gate 1, independently — run the published package's commands live, non-destructive, per-command GO/NO_GO with evidence. Return {verdict, perCommand, failures}.`, { label: 'publish-gate-2-' + (r.app || 'app'), phase: 'Release', schema: PUBLISH_GATE }),
+      () => safeAgent(`LIVE GATE 1 OF 2 (publish): you verify the PUBLISHED package ${pkgName}@${gateV} by RUNNING its commands live — every bin, every non-destructive verb (--version, --help, validate, read, list, dry-run forms) — actual commands, actual outputs, per-command {command, verdict: GO|NO_GO, evidence}. NEVER write test scripts; run the real commands. NON-DESTRUCTIVE only. Return {verdict, perCommand, failures}.`, { label: 'publish-gate-1-' + (r.app || 'app'), phase: 'Release', schema: PUBLISH_GATE }),
+      () => safeAgent(`LIVE GATE 2 OF 2 (publish): same task as gate 1, independently — run the published package's commands live, non-destructive, per-command GO/NO_GO with evidence. Return {verdict, perCommand, failures}.`, { label: 'publish-gate-2-' + (r.app || 'app'), phase: 'Release', schema: PUBLISH_GATE }),
     ])
     const publishAllGo = publishGates.filter(Boolean).every(g => g && g.verdict === 'GO')
     if (publishAllGo) {
       r.gate = 'GO'
-      const confirm = await agent(`GATE CONFIRM (publish gate protocol): both live gates returned GO for ${pkgName}@${gateV}. Reply IN-THREAD to the intent post in git-publishing (conversations send --channel git-publishing --reply-to ${r.intentId || 'MISSING'}): [PUBLISH-CONFIRM] ${pkgName}@${gateV} — <live-test evidence line: two-sided verify + live install/smoke + both gates GO>. If the intent id is missing or unresolvable, locate the [PUBLISH INTENT] post for this package in git-publishing and reply to its real message id — never invent an id. Return {confirmId, posted: true}.`, { label: 'confirm-publish-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['confirmId', 'posted'], properties: { confirmId: { type: 'string' }, posted: { type: 'boolean' } } } })
+      const confirm = await safeAgent(`GATE CONFIRM (publish gate protocol): both live gates returned GO for ${pkgName}@${gateV}. Reply IN-THREAD to the intent post in git-publishing (conversations send --channel git-publishing --reply-to ${r.intentId || 'MISSING'}): [PUBLISH-CONFIRM] ${pkgName}@${gateV} — <live-test evidence line: two-sided verify + live install/smoke + both gates GO>. If the intent id is missing or unresolvable, locate the [PUBLISH INTENT] post for this package in git-publishing and reply to its real message id — never invent an id. Return {confirmId, posted: true}.`, { label: 'confirm-publish-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['confirmId', 'posted'], properties: { confirmId: { type: 'string' }, posted: { type: 'boolean' } } } })
       r.confirmId = confirm ? confirm.confirmId : null
     } else {
       // NEVER confirm: file the UNVERIFIED todos row with the gate evidence (a REAL row
       // per the tracking rule — cite only a created/verified short id) and post the NO_GO
       // to #apps.
-      const unv = await agent(`RELEASE UNVERIFIED: ${pkgName}@${gateV} — the two independent live gates did NOT both return GO (verdicts: ${JSON.stringify(publishGates.filter(Boolean).map(g => ({ verdict: g.verdict, failures: g.failures })))}). NEVER post [PUBLISH-CONFIRM] for this package. Check whether a todos row for this exact defect class already exists (todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress, redirect to a file, never pipe); reuse it if it exists, otherwise todos add in project 3bbc22e0: title 'RELEASE UNVERIFIED: ${pkgName}@${gateV} — live gate NO_GO', description carrying the exact gate evidence (per-command outputs, verdicts, failures) + package + version; no credential values anywhere in the description — redact token-like output. Post the NO_GO to #apps with the evidence (conversations send --channel apps), no credential values in the post. Return {taskId, postedNoGo: true}.`, { label: 'publish-unverified-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['taskId', 'postedNoGo'], properties: { taskId: { type: 'string' }, postedNoGo: { type: 'boolean' } } } })
+      const unv = await safeAgent(`RELEASE UNVERIFIED: ${pkgName}@${gateV} — the two independent live gates did NOT both return GO (verdicts: ${JSON.stringify(publishGates.filter(Boolean).map(g => ({ verdict: g.verdict, failures: g.failures })))}). NEVER post [PUBLISH-CONFIRM] for this package. Check whether a todos row for this exact defect class already exists (todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress, redirect to a file, never pipe); reuse it if it exists, otherwise todos add in project 3bbc22e0: title 'RELEASE UNVERIFIED: ${pkgName}@${gateV} — live gate NO_GO', description carrying the exact gate evidence (per-command outputs, verdicts, failures) + package + version; no credential values anywhere in the description — redact token-like output. Post the NO_GO to #apps with the evidence (conversations send --channel apps), no credential values in the post. Return {taskId, postedNoGo: true}.`, { label: 'publish-unverified-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['taskId', 'postedNoGo'], properties: { taskId: { type: 'string' }, postedNoGo: { type: 'boolean' } } } })
       r.gate = 'NO_GO'
       r.unverifiedTaskId = unv ? unv.taskId : null
     }
@@ -206,7 +234,7 @@ log(`pass ${pass} complete — ${publishedThisPass} published, ${gateGoThisPass}
 }
 
 phase('Report')
-const report = await agent(
+const report = await safeAgent(
   REPORT
     .replace('{CENSUS}', JSON.stringify(census || {}))
     .replace('{LANES}', JSON.stringify(allLanes)),
@@ -214,7 +242,7 @@ const report = await agent(
 )
 
 phase('Harvest')
-const harvest = await agent(HARVEST.replace('{REPORT}', JSON.stringify(report || { report: null })), {
+const harvest = await safeAgent(HARVEST.replace('{REPORT}', JSON.stringify(report || { report: null })), {
   label: 'harvest-publish', phase: 'Harvest', schema: HARVEST_SCHEMA, model: 'opus',
 })
 
