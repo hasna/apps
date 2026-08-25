@@ -238,7 +238,7 @@ export interface KnowledgeHttpStore {
   purgeVersions(
     idOrShort: string,
     options?: { version?: number },
-  ): Promise<{ ok: boolean; purged: number; current_version: number }>;
+  ): Promise<{ ok: boolean; purged: number; current_version: number } | null>;
 }
 
 function toQuery(options: KnowledgeHttpListOptions): Record<

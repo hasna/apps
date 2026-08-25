@@ -1445,6 +1445,10 @@ async function run(argv: string[]): Promise<void> {
     const panel = await createKnowledgeProjectPanel(projectRef, {
       service,
       projectLinksAuthority: usesKnowledgeHttpTransport() ? projectLinksAuthority() : undefined,
+      // Over the hosted route a project-links NOT_FOUND must be a loud error:
+      // falling back to the cwd-derived inventory would answer about the wrong
+      // project (the authority resolves exact source project ids only).
+      allowLegacyFallback: !usesKnowledgeHttpTransport(),
       limit: flags.limit,
       storePath: usesKnowledgeHttpTransport() ? undefined : storePath,
       includeArchived: flags.includeArchived || flags.archived,

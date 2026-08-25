@@ -133,12 +133,12 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
     // The fixture value is SYNTHETIC — the openai_api_key detector shape,
     // created for this test, never a live key.
     const store = httpStore();
-    const created = await store.create({ title: 'Purge subject', content: 'sk-testsecretkeyvalue1234567890 body v1' });
+    const created = await store.create({ title: 'Purge subject', content: 'synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e body v1' });
     await store.update(created.id, { content: 'clean v2' });
     await store.update(created.id, { content: 'clean v3' });
 
     const history = await store.listVersions(created.id);
-    expect(history!.items.map((v) => v.content)).toEqual(['clean v2', 'sk-testsecretkeyvalue1234567890 body v1']);
+    expect(history!.items.map((v) => v.content)).toEqual(['clean v2', 'synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e body v1']);
 
     const purged = await store.purgeVersions(created.id);
     expect(purged).toMatchObject({ purged: 2, current_version: 3 });
@@ -154,7 +154,7 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
 
   test('purge of a single version over HTTP keeps the clean siblings', async () => {
     const store = httpStore();
-    const created = await store.create({ title: 'Purge one', content: 'sk-testsecretkeyvalue1234567890 v1' });
+    const created = await store.create({ title: 'Purge one', content: 'synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e v1' });
     await store.update(created.id, { content: 'clean v2' });
     await store.update(created.id, { content: 'clean v3' });
 
@@ -165,6 +165,17 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
     // Negative control: the clean sibling v2 survives the purge.
     expect((await store.getVersion(created.id, 2))!.content).toBe('clean v2');
     expect((await store.get(created.id))!.content).toBe('clean v3');
+  });
+
+  // Regression for the http-store type defect (release review 0.2.113 P1):
+  // purgeVersions is publicly typed as always returning a receipt, but the
+  // transport returns null for an absent entry. The CLI already null-checks,
+  // so this pins the CONTRACT: absent entry -> null, not a thrown error and
+  // not a fabricated empty receipt.
+  test('purgeVersions of an absent entry resolves null over HTTP', async () => {
+    const store = httpStore();
+    const purged = await store.purgeVersions('k_absent_entry');
+    expect(purged).toBeNull();
   });
 });
 
@@ -462,7 +473,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     // created for this test, never a live key. After purge, neither the
     // versions read path nor the diff read path may contain it.
     const store = httpStore();
-    const created = await store.create({ title: 'Boundary leak', content: 'sk-testsecretkeyvalue1234567890 body' });
+    const created = await store.create({ title: 'Boundary leak', content: 'synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e body' });
     await store.update(created.id, { content: 'clean v2' });
     const cliEnv = cloudEnv as Record<string, string>;
 
@@ -470,7 +481,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     // is a measurement and not an inert check.
     const before = await runCli(['versions', '--id', created.id, '--json'], cliEnv);
     expect(before.exitCode).toBe(0);
-    expect(before.stdout).toContain('sk-testsecretkeyvalue1234567890');
+    expect(before.stdout).toContain('synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e');
 
     const purge = await runCli(['versions', 'purge', '--id', created.id, '--yes', '--json'], cliEnv);
     expect(purge.exitCode).toBe(0);
@@ -479,14 +490,14 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
     // `versions --id` (incl. --json) exposes zero occurrences of the value.
     const versions = await runCli(['versions', '--id', created.id, '--json'], cliEnv);
     expect(versions.exitCode).toBe(0);
-    expect(versions.stdout).not.toContain('sk-testsecretkeyvalue1234567890');
+    expect(versions.stdout).not.toContain('synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e');
 
     // `diff --rev 2` needs the purged v1 as its left side; with it gone the
     // command refuses without rendering anything.
     const diff = await runCli(['diff', '--id', created.id, '--rev', '2', '--json'], cliEnv);
     expect(diff.exitCode).toBe(1);
-    expect(diff.stdout).not.toContain('sk-testsecretkeyvalue1234567890');
-    expect(diff.stderr).not.toContain('sk-testsecretkeyvalue1234567890');
+    expect(diff.stdout).not.toContain('synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e');
+    expect(diff.stderr).not.toContain('synthetic-sentinel-7f3a9c2e5b1d8a4f6c0e');
     expect(diff.stderr).toContain('No version 1 retained');
   }, budget(60_000));
 

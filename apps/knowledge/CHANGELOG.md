@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - d02a934: Add `knowledge versions purge --id <id> [--rev <n>] --yes` to permanently scrub retained prior versions that carry credential-shaped values (OPE60-00006). The operation deletes by id/version without ever reading the retained body; the live row is never a purge target.
+- 633ebf32a: fix: `knowledge project-panel --project <id|name|slug>` surfaces the project's registered knowledge collection and bound items via the project-links authority instead of the cwd-derived inventory; over the hosted route an unresolvable project ref is now a loud error rather than a silently mislabelled panel.
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
   - @hasna/contracts@0.14.0

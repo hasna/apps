@@ -23,6 +23,15 @@ export interface KnowledgeProjectPanelOptions {
   limit?: number;
   storePath?: string;
   includeArchived?: boolean;
+  /**
+   * When false and a projectLinksAuthority is present, a project the authority
+   * cannot resolve (NOT_FOUND) is a hard error instead of silently falling back
+   * to the cwd-derived legacy inventory. The hosted route must pass false: the
+   * legacy fallback would emit a panel about the current directory labelled
+   * with the requested project's slug. Local authority + local store share a
+   * corpus, so the fallback stays honest there and remains the default.
+   */
+  allowLegacyFallback?: boolean;
 }
 
 function clampLimit(limit: number | undefined): number {
@@ -343,6 +352,17 @@ export async function createKnowledgeProjectPanel(projectRef: string, options: K
     } catch (error) {
       if (!(error instanceof KnowledgeProjectLinksError) || error.code !== 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND') {
         throw error;
+      }
+      // The authority resolves exact source/stable project ids only. A
+      // name/slug miss must not silently emit the cwd-derived legacy inventory
+      // labelled with the requested project — that is plausible but wrong data.
+      // The hosted CLI route passes allowLegacyFallback: false so a miss is a
+      // loud error naming the exact ref and the resolution boundary.
+      if (options.allowLegacyFallback === false) {
+        throw new KnowledgeProjectLinksError(
+          'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND',
+          `Project ${projectRef} is not registered with a knowledge collection over the hosted route (the project-links authority resolves exact source project ids only). Refusing to fall back to the cwd-derived inventory, which would answer about the wrong project. Re-run with the exact source project id.`,
+        );
       }
     }
   }
