@@ -4,6 +4,8 @@
 
 ### Patch Changes
 
+- Add the aggregate workstation test profile (`machines.workstation_test_profile.v1`): a systemd-cgroup-v2 controller (cpu/memory/pids delegation required) with an aggregate `hasna-tests.slice` bounding memory, swap, and task counts for admitted local test scopes, plus the `workstationTestProfile` station-template flag.
+- Drop the storage-mode variable from deployment artifacts: docker-compose.yml no longer sets `HASNA_MACHINES_STORAGE_MODE` (the last residue sites of the retired deployment-modes doctrine), so the serve container no longer throws under the fail-loud legacy-storage-mode guard.
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
   - @hasna/contracts@0.14.0
