@@ -95,11 +95,16 @@
  * @hasna/todos@0.15.46 -> @hasna/contracts@0.13.4 and @hasna/mementos@0.14.86
  * -> @hasna/contracts@0.10.6.
  *
+ * RULE 4 — DOCKERFILE LOCKFILE PRESENCE (see the implementation comment): a
+ *   member whose Dockerfile COPYs an UNGLOBED `bun.lock` must ship its own
+ *   `apps/<name>/bun.lock` — the exact `COPY package.json bun.lock ./` class
+ *   that failed every hooks deploy with "/bun.lock: not found" (O15-00667,
+ *   measured 2026-08-25 on the deps stage). The globbed `bun.lock*` form is
+ *   the sanctioned non-frozen-install escape (telephony; testers under
+ *   I38-00566) and stays exempt — a globbed COPY with no lockfile resolves
+ *   from the manifest and is a deliberate sibling pattern, not a defect.
+ *
  * Not covered, stated so the boundary is visible:
- *   - apps with a Dockerfile but NO own lockfile (hooks — no
- *     `apps/hooks/bun.lock` is tracked, so its Docker `COPY package.json
- *     bun.lock ./` fails independently of lockfile freshness; telephony — its
- *     Dockerfile runs non-frozen `bun install`).
  *   - Resolution-level drift that leaves the recorded workspace entry intact
  *     (bun's own frozen check covers that class where it applies).
  *
@@ -425,10 +430,40 @@ function checkAppLockfiles(root: string): string[] {
   return problems;
 }
 
+/**
+ * RULE 4 — DOCKERFILE LOCKFILE PRESENCE.
+ *
+ * A member Dockerfile that COPYs an UNGLOBED `bun.lock` (`COPY package.json
+ * bun.lock ./` — the deploy-lane frozen-install shape) cannot build when the
+ * member ships no lockfile: measured 2026-08-25 on apps/hooks, `docker build
+ * --platform linux/arm64 --target deps` fails at the COPY with "/bun.lock":
+ * not found (O15-00667). The globbed `bun.lock*` form is the deliberate
+ * non-frozen-install escape (telephony; testers under I38-00566) and must
+ * stay silent — the negative lookahead on the `*` is what keeps those
+ * members exempt.
+ */
+function checkDockerfileLockfiles(root: string): string[] {
+  const problems: string[] = [];
+  for (const member of memberDirs(root)) {
+    const dockerfile = path.join(root, "apps", member, "Dockerfile");
+    if (!fs.existsSync(dockerfile)) continue;
+    const content = fs.readFileSync(dockerfile, "utf8");
+    const copiesUnglobbed = /^COPY\b[^\n]*\bbun\.lock\b(?!\*)/m.test(content);
+    if (!copiesUnglobbed) continue;
+    const lock = path.join(root, "apps", member, "bun.lock");
+    if (!fs.existsSync(lock)) {
+      problems.push(
+        `apps/${member}/Dockerfile COPYs an unglobbed bun.lock but apps/${member}/bun.lock does not exist — the Docker deploy lane fails at COPY with "/bun.lock: not found"`,
+      );
+    }
+  }
+  return problems;
+}
+
 export function runCheck(root: string, published: PublishedProbe = defaultPublishedProbe): RegistryCheckResult {
   const registry = checkRegistryEdges(root, published);
   return {
-    problems: [...checkRootLockfile(root), ...checkAppLockfiles(root), ...registry.problems],
+    problems: [...checkRootLockfile(root), ...checkAppLockfiles(root), ...checkDockerfileLockfiles(root), ...registry.problems],
     skipped: registry.skipped,
     failedProbes: registry.failedProbes,
   };
@@ -492,6 +527,27 @@ function selfTest(): void {
     if (clean.length !== 0) {
       throw new Error(`positive control failed — known-good fixture reported: ${clean.join("; ")}`);
     }
+
+    // RULE 4 controls — a Dockerfile COPYing an UNGLOBED bun.lock with no
+    // member lockfile must fire; the globbed form (telephony/testers escape)
+    // and a present lockfile must stay silent.
+    fs.writeFileSync(path.join(dir, "apps", "beta", "Dockerfile"), "COPY package.json bun.lock ./\n");
+    const r4Hits = runCheck(dir, offlineProbe).problems;
+    if (!r4Hits.some((p) => p.includes("apps/beta/Dockerfile") && p.includes("bun.lock"))) {
+      throw new Error(`negative control 6 failed — Dockerfile COPY without member lockfile not reported: ${r4Hits.join("; ")}`);
+    }
+    fs.writeFileSync(path.join(dir, "apps", "beta", "Dockerfile"), "COPY package.json bun.lock* ./\n");
+    const r4Glob = runCheck(dir, offlineProbe).problems;
+    if (r4Glob.some((p) => p.includes("apps/beta/Dockerfile"))) {
+      throw new Error(`glob escape control failed — globbed bun.lock* COPY reported: ${r4Glob.join("; ")}`);
+    }
+    fs.rmSync(path.join(dir, "apps", "beta", "Dockerfile"), { force: true });
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "Dockerfile"), "COPY package.json bun.lock ./\n");
+    const r4Present = runCheck(dir, offlineProbe).problems;
+    if (r4Present.some((p) => p.includes("apps/alpha/Dockerfile"))) {
+      throw new Error(`present-lockfile control failed — Dockerfile COPY with lockfile present reported: ${r4Present.join("; ")}`);
+    }
+    fs.rmSync(path.join(dir, "apps", "alpha", "Dockerfile"), { force: true });
 
     // Mutations must be caught: stale version, stale dep range, stale app lockfile.
     const staleLock = JSON.parse(JSON.stringify(goodLock));
@@ -646,7 +702,7 @@ function selfTest(): void {
     }
 
     console.log(
-      "self-test PASS — positive controls clean; negative controls 1-5 + skip + exact-pin (edge and hoisted) controls fired/silent as required; exception respected",
+      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present controls fired/silent as required; exception respected",
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

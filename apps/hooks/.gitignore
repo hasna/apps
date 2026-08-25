@@ -5,9 +5,6 @@ node_modules/
 dist/
 bin/
 
-# Bun
-bun.lock
-
 # OS
 .DS_Store
 
