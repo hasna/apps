@@ -11,11 +11,10 @@
  * duplicate is actually gone.
  */
 import { PGlite } from '@electric-sql/pglite';
-import { apiKeyMigrations } from '@hasna/contracts/auth';
-import { PG_MIGRATIONS } from '../../src/db/pg-migrations';
+import { buildKnowledgePostgresMigrations } from '../../src/db/migrate-list';
 import {
   MigrationLedger,
-  defineMigration,
+  type Migration,
   type PoolQueryClient,
 } from '../../src/generated/storage-kit/index.js';
 
@@ -46,6 +45,15 @@ export function pgliteClient(db: PGlite): PoolQueryClient {
       return row;
     },
     async execute(sql: string, params: readonly unknown[] = []) {
+      // With no parameters, use the simple query protocol (db.exec) exactly
+      // like node-postgres does: the extended protocol rejects multi-statement
+      // SQL, and the real migrate program contains multi-statement migrations
+      // (the api-keys index pair), so a harness that cannot run them is not
+      // the harness the ledger tests may stand on.
+      if (params.length === 0) {
+        await db.exec(sql);
+        return;
+      }
       await exec(sql, params);
     },
   };
@@ -76,43 +84,41 @@ export function pgliteClient(db: PGlite): PoolQueryClient {
 
 /**
  * Apply the real deploy schema, in the same order and with the same pieces as
- * `scripts/apply-postgres-migrations.mjs`: the pgcrypto extension, every
- * PG_MIGRATIONS statement, then the api-keys ledger the serve auth middleware
- * reads.
+ * `scripts/apply-postgres-migrations.mjs`: the single migration program
+ * composed by buildKnowledgePostgresMigrations (pgcrypto extension, every
+ * knowledge_pg_* statement, the project-links statements, the api-keys ledger
+ * the serve auth middleware reads, and the rc.6 tenancy program).
  *
- * Applying ALL of PG_MIGRATIONS (rather than the subset whose text mentions a
- * table of interest) is deliberate. MEASURED against the current array: a
- * `.includes('knowledge_items')` filter keeps 11 of 75 statements and DOES keep
- * the entry trigger and the versions table — but drops the append-only guard and
- * both secondary indexes, because `'knowledge_item_versions'` does not contain
- * `'knowledge_items'` as a substring. A filter that silently produces a schema
- * production never has is not a base any assertion below should stand on.
+ * Using the same builder as the migrate script (rather than a subset whose
+ * text mentions a table of interest) is deliberate. MEASURED against the
+ * current array: a `.includes('knowledge_items')` filter keeps 11 of 75
+ * statements and DOES keep the entry trigger and the versions table — but
+ * drops the append-only guard and both secondary indexes, because
+ * `'knowledge_item_versions'` does not contain `'knowledge_items'` as a
+ * substring. A filter that silently produces a schema production never has is
+ * not a base any assertion below should stand on.
  */
 export async function applyKnowledgePgMigrations(db: PGlite): Promise<void> {
   // Production creates this before the table DDL. PGlite has gen_random_uuid in
   // core, so a build without the contrib module must not fail the harness.
   await db.exec('CREATE EXTENSION IF NOT EXISTS pgcrypto').catch(() => {});
-  for (const sql of PG_MIGRATIONS) {
-    await db.exec(sql);
-  }
-  for (const migration of apiKeyMigrations()) {
+  for (const migration of buildKnowledgePostgresMigrations()) {
+    if (migration.id === 'knowledge_pg_000_extensions') continue;
     await db.exec(migration.sql);
   }
 }
 
-function knowledgeLedgerMigrations(pgMigrations: readonly string[] = PG_MIGRATIONS) {
-  return [
-    ...pgMigrations.map((sql, index) =>
-      defineMigration(`knowledge_pg_${String(index + 1).padStart(3, '0')}`, sql),
-    ),
-  ];
-}
-
 export async function applyKnowledgePgMigrationsThroughLedger(
   client: PoolQueryClient,
-  pgMigrations: readonly string[] = PG_MIGRATIONS,
+  migrations: readonly Migration[] = buildKnowledgePostgresMigrations(),
 ) {
-  const ledger = new MigrationLedger(client, knowledgeLedgerMigrations(pgMigrations));
+  // PGlite has gen_random_uuid in core; the pgcrypto extension is not available
+  // in the in-process build, so the extension migration is skipped exactly like
+  // the direct path does above.
+  const ledger = new MigrationLedger(
+    client,
+    migrations.filter((migration) => migration.id !== 'knowledge_pg_000_extensions'),
+  );
   return ledger.migrate();
 }
 
@@ -145,25 +151,18 @@ export async function createMigratedPglite(options: {
   }
   const client = pgliteClient(db);
   if (options.migrationMode === 'existing-ledger-upgrade') {
-    await applyKnowledgePgMigrationsThroughLedger(client, PG_MIGRATIONS.slice(0, -1));
-    await applyKnowledgePgMigrationsThroughLedger(client);
-    for (const migration of apiKeyMigrations()) {
-      await db.exec(migration.sql);
-    }
+    const full = buildKnowledgePostgresMigrations();
+    await applyKnowledgePgMigrationsThroughLedger(client, full.slice(0, -1));
+    await applyKnowledgePgMigrationsThroughLedger(client, full);
   } else if (options.migrationMode === 'pre-adoption-ledger-upgrade') {
-    const adoptionBoundary = PG_MIGRATIONS.findIndex((sql) =>
-      sql.includes('ADD COLUMN IF NOT EXISTS guarded_adoption_receipt_id'));
+    const full = buildKnowledgePostgresMigrations();
+    const adoptionBoundary = full.findIndex((migration) =>
+      migration.sql.includes('ADD COLUMN IF NOT EXISTS guarded_adoption_receipt_id'));
     if (adoptionBoundary < 1) {
       throw new Error('test fixture could not locate the guarded-adoption migration boundary.');
     }
-    await applyKnowledgePgMigrationsThroughLedger(
-      client,
-      PG_MIGRATIONS.slice(0, adoptionBoundary),
-    );
-    await applyKnowledgePgMigrationsThroughLedger(client);
-    for (const migration of apiKeyMigrations()) {
-      await db.exec(migration.sql);
-    }
+    await applyKnowledgePgMigrationsThroughLedger(client, full.slice(0, adoptionBoundary));
+    await applyKnowledgePgMigrationsThroughLedger(client, full);
   } else {
     await applyKnowledgePgMigrations(db);
   }

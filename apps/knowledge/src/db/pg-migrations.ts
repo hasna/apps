@@ -1,5 +1,3 @@
-import { postgresKnowledgeProjectLinksSchemaStatements } from '../project-links.js';
-
 export const PG_MIGRATIONS: string[] = [
   `CREATE TABLE IF NOT EXISTS sources (
     id TEXT PRIMARY KEY,
@@ -357,27 +355,6 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`,
-
-  // --- Full-text search parity (search overhaul, Stage 2) ---------------------
-  // The cloud notes list previously matched with `title/content ILIKE '%q%'`
-  // and ordered by `created_at DESC` — a substring/recency path that misses
-  // word-order/multi-term queries (returning near-empty results) and never
-  // ranks by relevance. Add a weighted tsvector generated column (title = A,
-  // content = B) plus a GIN index so the serve layer can use
-  // websearch_to_tsquery + ts_rank_cd, matching the local SQLite FTS behavior.
-  //
-  // APPEND-ONLY: PG migration ids are derived from array index
-  // (`knowledge_pg_${index+1}`), so these must stay at the end of the array —
-  // never inserted mid-array — or every following id/checksum shifts and the
-  // ledger drift-guard trips. Both statements are idempotent.
-  `ALTER TABLE knowledge_items
-     ADD COLUMN IF NOT EXISTS search_vector tsvector
-     GENERATED ALWAYS AS (
-       setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-       setweight(to_tsvector('english', coalesce(content, '')), 'B')
-     ) STORED`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
-     ON knowledge_items USING GIN (search_vector)`,
 
   // --- Entry versioning (R4) --------------------------------------------------
   // MEASURED 2026-07-28, before this shipped: an entry created over the hosted
@@ -979,6 +956,48 @@ export const PG_MIGRATIONS: string[] = [
      FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_authority()`,
   `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_00_guarded_authority`,
 
+  // --- Guarded-receipt referential integrity (restored at rc.6 position) -----
+  // The pre-monorepo rc.6 program applied these three statements as
+  // knowledge_pg_102..104 on the prod DB (knowledge-prod, 2026-08-11). The
+  // monorepo import dropped them, which shifted every id after this point and
+  // tripped the ledger drift-guard. They are restored HERE — at their exact
+  // historical position — so knowledge_pg_001..129 match the prod ledger
+  // byte-for-byte (see tests/legacy-ledger-compat.test.ts). All three are
+  // idempotent. Do not move or edit them; a migration belongs after them.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_receipt_key_id
+     ON knowledge_guarded_write_receipts(deterministic_key, receipt_id)`,
+
+  `DO $knowledge_guarded_receipt_claim_fk$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+        WHERE conname = 'knowledge_guarded_receipt_claim_fk'
+          AND conrelid = 'knowledge_guarded_write_receipts'::regclass
+     ) THEN
+       ALTER TABLE knowledge_guarded_write_receipts
+         ADD CONSTRAINT knowledge_guarded_receipt_claim_fk
+         FOREIGN KEY (deterministic_key)
+         REFERENCES knowledge_guarded_write_claims(deterministic_key);
+     END IF;
+   END
+   $knowledge_guarded_receipt_claim_fk$`,
+
+  `DO $knowledge_guarded_claim_receipt_fk$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+        WHERE conname = 'knowledge_guarded_claim_receipt_fk'
+          AND conrelid = 'knowledge_guarded_write_claims'::regclass
+     ) THEN
+       ALTER TABLE knowledge_guarded_write_claims
+         ADD CONSTRAINT knowledge_guarded_claim_receipt_fk
+         FOREIGN KEY (deterministic_key, receipt_id)
+         REFERENCES knowledge_guarded_write_receipts(deterministic_key, receipt_id)
+         DEFERRABLE INITIALLY DEFERRED;
+     END IF;
+   END
+   $knowledge_guarded_claim_receipt_fk$`,
+
   // Hosted knowledge tenancy migrations add knowledge_items.tenant_id as
   // UUID while FCAME-1 guarded claims retain TEXT tenant ids. Preserve the
   // historical trigger migration above for checksum-ledger compatibility and
@@ -1481,5 +1500,27 @@ export const PG_MIGRATIONS: string[] = [
      )
      WHERE metadata #>> '{hasna_knowledge_relations,schema}'
        = 'hasna.knowledge.relations.v1'`,
-  ...postgresKnowledgeProjectLinksSchemaStatements(),
+
+  // --- Full-text search parity (search overhaul, Stage 2) ---------------------
+  // The cloud notes list previously matched with `title/content ILIKE '%q%'`
+  // and ordered by `created_at DESC` — a substring/recency path that misses
+  // word-order/multi-term queries (returning near-empty results) and never
+  // ranks by relevance. Add a weighted tsvector generated column (title = A,
+  // content = B) plus a GIN index so the serve layer can use
+  // websearch_to_tsquery + ts_rank_cd, matching the local SQLite FTS behavior.
+  //
+  // THIS BLOCK MUST STAY AT THE END OF THE ARRAY (O15-00684): the prod ledger
+  // pins knowledge_pg_001..129 to the rc.6 schema program byte-for-byte, and
+  // these two statements are the only ones the current build adds on top — so
+  // they are knowledge_pg_130..131. Inserting anything before them — or before
+  // any earlier statement — shifts every following id and trips the ledger
+  // drift-guard at deploy time (see tests/legacy-ledger-compat.test.ts).
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS search_vector tsvector
+     GENERATED ALWAYS AS (
+       setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+       setweight(to_tsvector('english', coalesce(content, '')), 'B')
+     ) STORED`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
+     ON knowledge_items USING GIN (search_vector)`,
 ];

@@ -1,6 +1,7 @@
 import { ApiKeyStore, type ApiKeyVerifier } from '@hasna/contracts/auth';
 export { createKnowledgeDatabaseClient } from './db/remote-storage.js';
 export { PG_MIGRATIONS } from './db/pg-migrations.js';
+export { buildKnowledgePostgresMigrations } from './db/migrate-list.js';
 export { MigrationLedger, defineMigration } from './generated/storage-kit/migrations.js';
 import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store.js';
 import { type KnowledgeAuthorityBinding } from './guarded-write-contract.js';
