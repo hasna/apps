@@ -318,6 +318,26 @@ describe("workflows CLI — slice 4 verbs (live-verify closures)", () => {
     expect(secondSummary.reused).toBe(true);
   });
 
+  test("run --idempotency-key completes a while-node graph (regression: partial __wf crashed advanceRun)", async () => {
+    // Live-verify failure 2026-08-25: `run --idempotency-key` on any graph
+    // containing a while node crashed with "undefined is not an object
+    // (evaluating 'wf.loops[node.id]')" rc=1 and left the run orphaned in
+    // 'running'. withIdempotencyKey minted `__wf: { idempotencyKey }` without
+    // the loops/completedLoops members and advanceRun's default-shape
+    // fallback only applied when __wf was wholly absent.
+    const file = writeGraph("while-idem.json", whileGraph);
+    const first = await runCli(["run", file, "--idempotency-key", "idem-while-1", "--json"]);
+    expect(first.exitCode).toBe(0);
+    const firstSummary = JSON.parse(first.stdout) as { status: string; runId: string; result: { iterations: Record<string, number> } };
+    expect(firstSummary.status).toBe("completed");
+    expect(firstSummary.result.iterations.w).toBe(2);
+    const second = await runCli(["run", file, "--idempotency-key", "idem-while-1", "--json"]);
+    expect(second.exitCode).toBe(0);
+    const secondSummary = JSON.parse(second.stdout) as { runId: string; reused: boolean };
+    expect(secondSummary.runId).toBe(firstSummary.runId);
+    expect(secondSummary.reused).toBe(true);
+  });
+
   test("runs events <id> emits the run's WAL event stream", async () => {
     const file = writeGraph("linear-events.json", linearGraph);
     const run = await runCli(["run", file, "--json"]);
@@ -414,6 +434,35 @@ describe("workflows CLI — slice 4 verbs (live-verify closures)", () => {
       const r = await runCli(["resume", run.id, "--json"]);
       expect(r.exitCode).toBe(0);
       const restored = JSON.parse(r.stdout) as { runId: string; status: string; nodesRestored: number; memoizedNodes: number };
+      expect(restored.runId).toBe(run.id);
+      expect(restored.status).toBe("pending");
+      expect(restored.memoizedNodes).toBe(1);
+      const show = await runCli(["runs", "show", run.id, "--json"]);
+      expect((JSON.parse(show.stdout) as { status: string }).status).toBe("pending");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("repair then top-level resume restores a torn run (live-verify closure)", async () => {
+    // Live-verify 2026-08-25: `workflows repair` requeued a torn run to
+    // `pending`, so top-level `workflows resume <run-id>` hit
+    // restoreInterruptedRun's guard and always rejected. Repair now marks the
+    // run `interrupted`, so resume restores it with memoized node outputs.
+    const store = openStore(dataDir);
+    try {
+      const run = store.createRun({ graphName: "cli-torn-resume", graphVersion: "1.0.0", context: { n: 1 } });
+      const node = store.createRunNode({ runId: run.id, nodeId: "work" });
+      store.setRunNodeStatus(node.id, "completed", { output: { ok: true, exitCode: 0, output: "done-work", durationMs: 1 } });
+      store.setRunStatus(run.id, "running");
+
+      const repair = await runCli(["repair", "--json"]);
+      expect(repair.exitCode).toBe(0);
+      expect((JSON.parse(repair.stdout) as { interrupted: number; requeued: number }).requeued).toBe(1);
+
+      const r = await runCli(["resume", run.id, "--json"]);
+      expect(r.exitCode).toBe(0);
+      const restored = JSON.parse(r.stdout) as { runId: string; status: string; memoizedNodes: number };
       expect(restored.runId).toBe(run.id);
       expect(restored.status).toBe("pending");
       expect(restored.memoizedNodes).toBe(1);

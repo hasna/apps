@@ -184,6 +184,40 @@ describe("the authenticated /trigger", () => {
     expect(secondSummary.reused).toBe(true);
   });
 
+  test("an idempotency key completes a while-node graph through the trigger (regression: partial __wf)", async () => {
+    // Same live-verify failure as the CLI path: service.triggerRun minted
+    // `__wf: { idempotencyKey }` without loops/completedLoops, and the engine
+    // crashed on the first while node. Lock the API path too.
+    const base = startTriggerServer();
+    const whileTriggerGraph = {
+      name: "trigger-while",
+      version: "1.0.0",
+      nodes: [
+        { id: "start", type: "start", next: "w" },
+        { id: "w", type: "while", condition: "i < 2", body: ["tick"], maxIterations: 5, next: "done" },
+        { id: "tick", type: "step", command: "printf tick" },
+        { id: "done", type: "end" },
+      ],
+    };
+    const body = JSON.stringify({ graph: whileTriggerGraph, idempotencyKey: "trigger-idem-while-1" });
+    const first = await fetch(`${base}/trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-key-12345" },
+      body,
+    });
+    const firstSummary = (await first.json()) as { status: string; runId: string; result: { iterations: Record<string, number> } };
+    expect(firstSummary.status).toBe("completed");
+    expect(firstSummary.result.iterations.w).toBe(2);
+    const second = await fetch(`${base}/trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-key-12345" },
+      body,
+    });
+    const secondSummary = (await second.json()) as { runId: string; reused: boolean };
+    expect(secondSummary.runId).toBe(firstSummary.runId);
+    expect(secondSummary.reused).toBe(true);
+  });
+
   test("/openapi.json documents the authenticated trigger", async () => {
     const base = startTriggerServer();
     const res = await fetch(`${base}/openapi.json`);

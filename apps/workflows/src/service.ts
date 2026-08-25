@@ -111,7 +111,16 @@ export class WorkflowsService {
         }
       }
       const contextWithKey = opts.idempotencyKey
-        ? { ...(context as Record<string, unknown>), __wf: { ...(((context as Record<string, unknown>)?.__wf as Record<string, unknown>) ?? {}), idempotencyKey: opts.idempotencyKey } }
+        ? {
+            ...(context as Record<string, unknown>),
+            __wf: {
+              cursor: undefined,
+              loops: {},
+              completedLoops: {},
+              ...(((context as Record<string, unknown>)?.__wf as Record<string, unknown>) ?? {}),
+              idempotencyKey: opts.idempotencyKey,
+            },
+          }
         : context;
       const maxCycles = Math.min(Math.max(opts.maxCycles ?? 500, 1), 2000);
       const final = await runGraphToCompletion(store, wal, graph, contextWithKey, { maxCycles });

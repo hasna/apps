@@ -47,13 +47,16 @@ paths like `steps.build.exitCode`, and the loop counter `i`).
   (input-hash memoization across runs).
 - **Session WAL**: append-only JSONL journal with per-entry sha256 checksums;
   torn tails are truncated and reported on replay.
-- **Torn-run repair**: a run left `running` with no live claim is requeued
-  (attempts + 1, up to a bound) or failed; `repair` exposes it.
+- **Torn-run repair**: a run left `running` with no live claim is marked
+  `interrupted` (attempts + 1, up to a bound) or failed; `repair` exposes it.
+  An interrupted run continues from its durable cursor either via the daemon
+  (which dispatches interrupted runs) or via top-level `resume <run-id>`,
+  which restores it and reuses memoized node outputs.
 - **Daemon**: fencing-tokened, expiring, WAL-recorded claims; heartbeat and
   release are fencing-checked; the reaper expires stale leases, repairs torn
-  runs, dispatches pending runs, and advances each run ONE step per bounded
-  cycle (maxDispatchPerCycle / maxStepsPerCycle / maxCycles / maxIterations
-  — every invocation carries a finite budget).
+  runs, dispatches pending + interrupted runs, and advances each run ONE step
+  per bounded cycle (maxDispatchPerCycle / maxStepsPerCycle / maxCycles /
+  maxIterations — every invocation carries a finite budget).
 - **Secrets write-gate**: no node output, run result, or context containing a
   credential-shaped value is ever persisted; the write is refused with the
   path and detector named.

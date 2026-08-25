@@ -121,6 +121,35 @@ describe("reaper", () => {
     expect(store.getRun(pending.id)?.status).toBe("running");
   });
 
+  test("reap dispatches repaired interrupted runs so torn runs auto-continue", async () => {
+    // Live-verify closure 2026-08-25: repairTornRuns marks a torn run
+    // `interrupted`, and the daemon must dispatch interrupted runs in the
+    // same reap — otherwise the repair+daemon auto-continue path (the only
+    // path that previously drove torn runs to completion) would regress.
+    const daemon = makeDaemon({ leaseTtlMs: 1000 });
+    const graph = simpleGraph();
+    const torn = daemon.startRun(graph, {});
+    daemon.claim(torn.id);
+    store.setRunStatus(torn.id, "running");
+    clock.now += 5000;
+
+    const report = await daemon.reap();
+    expect(report.expired).toBe(1);
+    expect(report.requeued).toBe(1);
+    expect(report.dispatched).toBe(1); // the repaired interrupted run
+    expect(store.getRun(torn.id)?.attempts).toBe(1);
+    expect(store.getRun(torn.id)?.status).toBe("running");
+
+    // and it still completes through the daemon (bounded reaps)
+    let after = store.getRun(torn.id);
+    for (let i = 0; i < 10 && after?.status === "running"; i++) {
+      await daemon.reap();
+      after = store.getRun(torn.id);
+    }
+    expect(after?.status).toBe("completed");
+    expect(after?.error).toBeNull();
+  });
+
   test("a fresh daemon instance replays registered graphs from the WAL (crash recovery)", async () => {
     // Regression (measured live 2026-08-25): a run started by one process
     // could not be advanced by a replacement daemon — "graph demo not found
@@ -149,6 +178,25 @@ describe("reaper", () => {
     }
     expect(after?.status).toBe("completed"); // not "graph not found in daemon graph cache"
     expect(after?.error).toBeNull();
+  });
+
+  test("runGraphToCompletion does not dispatch or advance foreign runs in the shared store", async () => {
+    // Live-verify observation 2026-08-25: the foreground single-run driver
+    // reaped and advanced ALL pending/running runs in the shared store, not
+    // only its own — an orphaned run executed its step inside the foreground
+    // run's cycle and blocked it. Fencing prevented double-claim, but the
+    // driver was not isolated to its own run.
+    const graph = simpleGraph();
+    const foreign = new WorkflowsDaemon(store, wal, { worker: "foreign", time: () => clock.now, laneRunner: fakeLane });
+    const foreignRun = foreign.startRun(graph, {}); // pending in the shared store
+
+    const final = await runGraphToCompletion(store, wal, graph, {}, { time: () => clock.now, laneRunner: fakeLane });
+    expect(final.status).toBe("completed");
+
+    const after = store.getRun(foreignRun.id)!;
+    expect(after.status).toBe("pending"); // never claimed, never advanced
+    expect(store.listRunNodes(foreignRun.id)).toHaveLength(0); // no node rows were written
+    expect(calls.filter((c) => c.startsWith("lane:"))).toHaveLength(1); // only the foreground run's step ran
   });
 
   test("reap advances one step per dispatched run (bounded)", async () => {

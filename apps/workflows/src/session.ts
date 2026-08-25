@@ -3,9 +3,11 @@
  *
  * repairTornRuns runs at daemon start and via the CLI repair command: a run
  * whose status is running but whose WAL shows no live claim is a torn run
- * (its worker died mid-flight). It is requeued to pending (attempts + 1) up
- * to maxAttempts, then failed. Running nodes of a requeued run return to
- * pending so the run can resume from its last durable checkpoint.
+ * (its worker died mid-flight). It is marked interrupted (attempts + 1) up
+ * to maxAttempts, then failed. Running nodes of a repaired run return to
+ * pending so the run can resume from its last durable checkpoint — either
+ * via the daemon (which dispatches interrupted runs) or via top-level
+ * `resume`, whose restoreInterruptedRun guard requires status "interrupted".
  */
 import { createHash } from "node:crypto";
 import { SessionWAL } from "./wal.js";
@@ -14,7 +16,7 @@ import type { RunRow, WorkflowsStore } from "./store.js";
 export interface RepairResult {
   /** runs found running with no live claim */
   interrupted: number;
-  /** torn runs requeued to pending */
+  /** torn runs marked interrupted (restorable via resume or the daemon) */
   requeued: number;
   /** torn runs failed after exhausting attempts */
   failed: number;
@@ -39,7 +41,13 @@ export function repairTornRuns(
     const nodes = store.listRunNodes(run.id);
     if (run.attempts < maxAttempts) {
       store.bumpAttempts(run.id);
-      store.setRunStatus(run.id, "pending", {
+      // Mark the run `interrupted`, not `pending`: the status is the truth
+      // (a worker died mid-flight), and restoreInterruptedRun's guard requires
+      // it, so top-level `resume <run-id>` can restore the run from its
+      // durable cursor, reusing memoized node outputs. The daemon dispatches
+      // interrupted runs too, so the repair+daemon auto-continue path is
+      // unchanged.
+      store.setRunStatus(run.id, "interrupted", {
         error: `torn run interrupted after claim loss (attempt ${run.attempts + 1}/${maxAttempts})`,
       });
       for (const node of nodes) {
