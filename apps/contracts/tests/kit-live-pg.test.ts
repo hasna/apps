@@ -7,8 +7,8 @@ import { checkHealth, checkReady } from "../src/kit/templates/health";
 // Live Postgres integration for the kit. Runs only when a database URL is
 // available (KIT_TEST_DATABASE_URL); otherwise skipped so CI without a database
 // stays green. Spin one up locally, e.g.:
-//   docker run --rm -e POSTGRES_PASSWORD=<throwaway> -p 5432:5432 postgres:16
-//   KIT_TEST_DATABASE_URL=postgres://postgres:<throwaway>@localhost:5432/postgres bun test
+//   docker run --rm -p 5432:5432 postgres:16   (set the postgres superuser password to any throwaway local value)
+//   then run with KIT_TEST_DATABASE_URL set to a postgres DSN on localhost:5432 using that password
 const DATABASE_URL = process.env.KIT_TEST_DATABASE_URL;
 const LEDGER_TABLE = `kit_test_schema_migrations`;
 
@@ -84,5 +84,23 @@ describeLive("kit live Postgres", () => {
     await expect(
       new MigrationLedger(client, tampered, { ledgerTable: LEDGER_TABLE }).migrate(),
     ).rejects.toThrow(/checksum mismatch/);
+  });
+
+  test("acknowledged legacy row passes on a real ledger and is never re-run", async () => {
+    await client.execute(
+      `INSERT INTO ${LEDGER_TABLE} (id, checksum, applied_at) VALUES ($1, $2, now())`,
+      ["legacy_out_of_band_0001", "sha256:not-reproducible"],
+    );
+    const ledger = new MigrationLedger(client, migrations, {
+      ledgerTable: LEDGER_TABLE,
+      acknowledgedLegacyIds: ["legacy_out_of_band_0001"],
+    });
+    const result = await ledger.migrate();
+    expect(result.applied.map((m) => m.id)).toEqual(
+      expect.arrayContaining(["0001_kit_probe", "0002_kit_probe_ts", "legacy_out_of_band_0001"]),
+    );
+    // The legacy row is untouched (never re-inserted, never re-run).
+    const rows = await client.many<{ id: string }>(`SELECT id FROM ${LEDGER_TABLE} ORDER BY id`);
+    expect(rows.map((r) => r.id).filter((id) => id === "legacy_out_of_band_0001")).toHaveLength(1);
   });
 });

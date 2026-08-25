@@ -27,11 +27,32 @@ export declare function checksumSql(sql: string): string;
 export declare function defineMigration(id: string, sql: string): Migration;
 export interface MigrationRunnerOptions {
     ledgerTable?: string;
+    /**
+     * Applied-ledger rows whose ids the build ACKNOWLEDGES as non-reproducible
+     * history: a migration that was applied to the ledger by an out-of-band
+     * operation or by a build whose id scheme no longer exists, so no current
+     * source can reproduce its id or its SQL.
+     *
+     * An acknowledged id:
+     *   - passes the downgrade guard (it IS recognized — as history),
+     *   - is never checksum-compared (its SQL is gone, so no checksum can be
+     *     computed for it; storing an arbitrary placeholder in `checksum` is
+     *     what the prod ledger already holds for such rows),
+     *   - is never re-applied and never re-inserted (it is already in the
+     *     ledger; the plan covers declared migrations only).
+     *
+     * The list is EXPLICIT and OPT-IN: an acknowledged id may not also be a
+     * declared migration (enforced at construction), and any OTHER applied row
+     * unknown to the build still fails the downgrade guard. Every declared
+     * migration keeps its checksum bind unchanged.
+     */
+    acknowledgedLegacyIds?: readonly string[];
 }
 export declare class MigrationLedger {
     private readonly client;
     private readonly migrations;
     private readonly ledgerTable;
+    private readonly acknowledgedLegacyIds;
     constructor(client: TypedQueryClient, migrations: readonly Migration[], options?: MigrationRunnerOptions);
     ensureLedger(): Promise<void>;
     listApplied(): Promise<AppliedMigration[]>;
