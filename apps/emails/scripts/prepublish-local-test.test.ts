@@ -18,6 +18,7 @@ describe("prepublish-local-test environment scrub", () => {
     const env = buildPrepublishTestEnv({
       HOME: "/operator/home",
       EMAILS_DB_PATH: "/hosted/emails.db",
+      HASNA_EMAILS_DB_PATH: "/operator/db",
       EMAILS_SELF_HOSTED_URL: "https://emails.example.test/v1",
       EMAILS_CLIENT_ENV_SECRET: "emails/live/client-env",
       EMAILS_SELF_HOSTED_API_KEY: "op-key",
@@ -39,6 +40,10 @@ describe("prepublish-local-test environment scrub", () => {
     // Legacy keys keep being scrubbed.
     expect(env.MAILERY_MODE).toBeUndefined();
     expect(env.HASNA_MAILERY_API_URL).toBeUndefined();
+    // The canonical DB-path key is scrubbed: getDbPath() (src/db/database.ts)
+    // checks HASNA_EMAILS_DB_PATH BEFORE EMAILS_DB_PATH, so an inherited value
+    // would silently select an operator database despite the :memory: below.
+    expect(env.HASNA_EMAILS_DB_PATH).toBeUndefined();
     // The local store stays forced.
     expect(env.EMAILS_MODE).toBe("local");
     expect(env.EMAILS_DB_PATH).toBe(":memory:");

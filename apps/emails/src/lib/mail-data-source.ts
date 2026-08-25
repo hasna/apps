@@ -229,7 +229,12 @@ export interface MailDataSource {
 
   // reads
   listMailbox(mailbox: Mailbox, opts?: MailboxListOptions): Promise<TuiMessage[]>;
-  mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts>;
+  // countsComplete travels with the counts (O15-00350): when the self-hosted
+  // scan could not prove it reached the end of the table, every count is a
+  // lower bound and every consumer (TUI sidebar, CLI formatters) must render
+  // it as one. Dropping the marker here is how a truncated scan becomes a
+  // confident exact total.
+  mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts & { countsComplete: boolean }>;
   /**
    * Per-recipient unread inbox counts (`inbox unread-count --by-address`).
    * Same predicate on both backends: count each inbound message once per `to`
@@ -353,7 +358,7 @@ export class SqliteMailDataSource implements MailDataSource {
     return localListMailbox(mailbox, opts);
   }
 
-  async mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts> {
+  async mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts & { countsComplete: boolean }> {
     return localMailboxCounts(opts);
   }
 

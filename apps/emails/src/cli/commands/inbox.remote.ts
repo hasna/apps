@@ -1251,22 +1251,31 @@ function formatSourceList(
   return lines.join("\n");
 }
 
-function formatMailboxSources(sources: MailboxSourceSummary[]): string {
+/**
+ * Export the formatters so the renderer can be pinned directly: the O15-00350
+ * scan carries `countsComplete` in the payload, and a formatter that drops it
+ * makes a truncated scan read as an exact total — the same collapse the daemon
+ * renderer was pinned against (daemon.local.ts). Lower bounds render as `≥N`,
+ * matching `renderStatusCount` (src/lib/status-availability.ts).
+ */
+export function formatMailboxSources(sources: MailboxSourceSummary[]): string {
   const lines: string[] = [chalk.bold(`\nIngestion sources (${sources.length}):`)];
   for (const source of sources) {
     const badges = source.badges.length ? chalk.dim(` [${source.badges.join(", ")}]`) : "";
     const latest = source.latestReceivedAt ? chalk.dim(` latest ${source.latestReceivedAt}`) : chalk.dim(" latest never");
+    const count = (n: number) => (source.countsComplete ? String(n) : `≥${n}`);
     lines.push(`  ${chalk.cyan(source.id.padEnd(28))} ${source.label}${badges}`);
-    lines.push(`    ${source.total} total, ${source.unread} unread${latest}`);
+    lines.push(`    ${count(source.total)} total, ${count(source.unread)} unread${latest}`);
   }
   lines.push("");
   return lines.join("\n");
 }
 
-function formatMailboxStatus(status: MailboxStatusSummary): string {
+export function formatMailboxStatus(status: MailboxStatusSummary): string {
   const lines: string[] = [chalk.bold("\nMailbox folders:")];
+  const count = (n: number) => (status.countsComplete ? String(n) : `≥${n}`);
   for (const folder of status.folders) {
-    lines.push(`  ${folder.label.padEnd(10)} ${folder.count}`);
+    lines.push(`  ${folder.label.padEnd(10)} ${count(folder.count)}`);
   }
   lines.push("");
   return lines.join("\n");

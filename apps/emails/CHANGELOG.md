@@ -2,10 +2,12 @@
 
 ### Patch Changes
 
-- Updated dependencies [6176948]
-- Updated dependencies [7575de8]
-  - @hasna/contracts@0.14.0
-  - @hasna/domains@0.0.44
+- TUI self-hosted scan lists pages honestly and marks truncated counts (O15-00350, hasna/apps#999)
+- prepublish-local-test gate scrubs hosted API env before the local test run (O15-00516, hasna/apps#1012)
+- Reconcile the emailsModeEnvReferences ceiling 202 -> 203 (hasna/apps#1073)
+- Truncated scan counts render as lower bounds (`≥N`) in the TUI sidebar and the mailbox status/sources formatters instead of exact totals; the countsComplete marker now travels through the MailDataSource seam (release-review P1 remediation, publish-all lane 248f6ed8)
+- prepublish-local-test scrubs HASNA_EMAILS_DB_PATH so an inherited value cannot select an operator database over the forced :memory: store (release-review P1 remediation, publish-all lane 248f6ed8)
+- No dependency changes vs 1.4.8: @hasna/contracts stays 0.13.4 and @hasna/domains stays 0.0.44 (the version wave's 0.14.0 pin was reverted by the reviewed kit-lockstep repair, hasna/apps#1148)
 
 ## 1.4.8
 

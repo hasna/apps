@@ -3480,6 +3480,9 @@ describe("SelfHostedMailDataSource — scoped mailboxCounts scan budget", () => 
 
     expect(await ds.mailboxCounts({ source: source(SCOPED) })).toEqual({
       inbox: 2, unread: 1, priority: 0, starred: 1, sent: 1, archived: 1, spam: 0, trash: 0,
+      // O15-00350: the counts carry the completeness marker; this walk is exact
+      // (bounded walks throw rather than return partial), so it is true.
+      countsComplete: true,
     });
   });
 

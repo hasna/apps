@@ -56,7 +56,10 @@ export interface EmailsState {
   mailbox: Mailbox;
   route: RouteName;
   messages: TuiMessage[];
-	  counts: MailboxCounts;
+	  // countsComplete travels with the counts (O15-00350): when the self-hosted
+	  // scan could not prove it reached the end of the table, every count is a
+	  // lower bound and the sidebar must render it as one.
+	  counts: MailboxCounts & { countsComplete: boolean };
 	  addresses: InboxAddressChoice[];
 	  selectedAddressId: string;
 	  sources: InboxSource[];
@@ -98,8 +101,8 @@ const CLOCK_MS = 4000;
 const REFRESH_MS = 30000;
 const PULL_MS = 45000;
 
-function emptyCounts(): MailboxCounts {
-  return { inbox: 0, unread: 0, priority: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
+function emptyCounts(): MailboxCounts & { countsComplete: boolean } {
+  return { inbox: 0, unread: 0, priority: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0, countsComplete: true };
 }
 
 function sourceForSelection(address: InboxAddressChoice | undefined, sourceId: string | undefined): MailboxSource | undefined {

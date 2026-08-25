@@ -21,9 +21,12 @@ export function sidebarWidth(terminalWidth: number): number {
   return terminalWidth >= 92 ? SIDEBAR_WIDE : Math.min(34, Math.max(28, Math.floor(terminalWidth * 0.42)));
 }
 
-function CountText(props: { value: number; selected?: boolean }) {
+function CountText(props: { value: number; selected?: boolean; lowerBound?: boolean }) {
   const theme = useTheme();
-  return <text fg={props.selected ? selectedForeground(theme, theme.primary) : theme.textMuted}>{String(props.value)}</text>;
+  // O15-00350: a truncated self-hosted scan reports lower bounds (countsComplete
+  // false); rendering them as exact totals re-creates the collapse the scan was
+  // made honest to prevent. `≥` matches the CLI formatters (renderStatusCount).
+  return <text fg={props.selected ? selectedForeground(theme, theme.primary) : theme.textMuted}>{props.lowerBound ? `≥${props.value}` : String(props.value)}</text>;
 }
 
 export function Sidebar() {
@@ -83,7 +86,7 @@ export function Sidebar() {
                 <text fg={fg()} attributes={box === "unread" && mailboxCount(box) > 0 ? TextAttributes.BOLD : 0}>
                   {mailboxLabel(box)}
                 </text>
-                <CountText value={mailboxCount(box)} selected={active()} />
+                <CountText value={mailboxCount(box)} selected={active()} lowerBound={!emails.state.counts.countsComplete} />
               </box>
             </Row>
           );

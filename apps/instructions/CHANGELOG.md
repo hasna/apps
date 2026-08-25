@@ -1,3 +1,11 @@
+## 0.5.1
+
+### Patch Changes
+
+- 3298e2f: instructions-serve answers --help/-h before any bind (O15-00628, hasna/apps#1124)
+- d92f7c6: recognize a registered agents-md config as owned claude-home authority (hasna/apps#1129)
+- 593ca2e: refresh the embedded operating-rules fallback baseline to v1.1.26 (hasna/apps#1152)
+
 ## 0.5.0
 
 ### Minor Changes
