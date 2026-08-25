@@ -25,6 +25,29 @@ export const OWNER_DSN_ENV = "HASNA_DOMAINS_DATABASE_URL_OWNER";
 export const APP_DSN_ENV = "HASNA_DOMAINS_DATABASE_URL";
 const LEGACY_DSN_ENV = "DATABASE_URL";
 
+/**
+ * Applied-ledger rows recorded before the ledger's id scheme stabilized, which
+ * no build in this repo's history generates (verified across every published
+ * tarball 0.0.30-0.0.46 and all git history). They are acknowledged via the
+ * storage kit's `acknowledgedLegacyIds`: they pass the downgrade guard, are
+ * never checksum-compared (their SQL is not reproducible from any source), and
+ * are never re-applied or re-inserted.
+ *
+ * `domains_apikeys_tenancy_0001` and `domains_apikeys_tenancy_0002` were
+ * recorded against the prod ledger out-of-band during the 2026-07 self-hosted
+ * cutover. Deploy evidence 2026-08-25: the 02:00Z pass failed on `_0001`
+ * (O15-00671 filed); the 16:44Z pass, carrying the kit with `_0001`
+ * acknowledged (hasna/apps#1176), advanced to `_0002` — both rows are present
+ * in the prod ledger. Their substance — the api-keys tenancy (`tid`) column —
+ * is carried today by `hasna_auth_0003_api_keys_tenant`, so the rows are
+ * history, not pending work. Acknowledging them unblocks `domains db migrate`
+ * (the ECS migrate task) and therefore the domains deploy lane.
+ */
+export const ACKNOWLEDGED_LEGACY_MIGRATION_IDS: readonly string[] = [
+  "domains_apikeys_tenancy_0001",
+  "domains_apikeys_tenancy_0002",
+];
+
 /** The ordered migration set: app schema first, then the shared api-keys table. */
 export function buildMigrations(): Migration[] {
   const migrations: Migration[] = [];
@@ -57,12 +80,8 @@ export async function runMigrations(
   const pool = createPgPool({ connectionString: dsn, env, applicationName: "domains-migrate" });
   try {
     const client = wrapExecutor(pool);
-    // O15-00671: the prod ledger carries `domains_apikeys_tenancy_0001`, an
-    // out-of-band row from the 2026-07 self-hosted cutover that no published
-    // build ever generated. Acknowledge it so the downgrade guard passes and
-    // the row is never checksum-compared or re-applied.
     const ledger = new MigrationLedger(client, buildMigrations(), {
-      acknowledgedLegacyIds: ["domains_apikeys_tenancy_0001"],
+      acknowledgedLegacyIds: ACKNOWLEDGED_LEGACY_MIGRATION_IDS,
     });
     return await ledger.migrate(opts.dryRun ? { dryRun: true } : {});
   } finally {
