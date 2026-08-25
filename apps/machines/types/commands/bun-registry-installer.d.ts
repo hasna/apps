@@ -34,9 +34,26 @@ export interface TargetSourceRunResult {
     stderr: string;
 }
 export interface ExactBunTargetDependencies {
-    runSource?: (command: string, env: NodeJS.ProcessEnv) => TargetSourceRunResult;
+    runSource?: (command: string, env: NodeJS.ProcessEnv, cwd?: string) => TargetSourceRunResult;
     temporaryRoot?: string;
 }
+/**
+ * npmrc auth lines bun actually reads. The transaction delivers the publish
+ * tokens to the child environment as HASNA_NPM_PUBLISH_TOKEN and
+ * HASNAXYZ_NPM_PUBLISH_TOKEN (via `secrets exec --as`), but bun never reads
+ * those variables for registry authentication — its auth surfaces are .npmrc
+ * `_authToken` entries (with `${NAME}` environment expansion) and the
+ * BUN_CONFIG_TOKEN / NPM_CONFIG_TOKEN environment variables. Without a
+ * bun-readable surface, a fresh machine (no private-scope packages in the bun
+ * cache) cannot fetch @hasnaxyz/* tarballs and the install fails — on macOS
+ * bun's clonefile backend reports it as "failed opening cache/package/version
+ * dir for package @hasnaxyz/infinity" (O15-00346).
+ *
+ * The file holds placeholder text only; the values exist only in the child
+ * environment for the duration of the source run.
+ */
+export declare const EXACT_BUN_NPMRC_AUTH_LINES: readonly ["//registry.npmjs.org/:_authToken=${HASNA_NPM_PUBLISH_TOKEN}", "//registry.npmjs.org/@hasnaxyz/:_authToken=${HASNAXYZ_NPM_PUBLISH_TOKEN}"];
+export declare function writeExactBunNpmrc(root: string): void;
 export type ExactBunSourceChunkReader = (buffer: Buffer) => number;
 export declare function readBoundedExactBunSource(expectedBytes: number, reader?: ExactBunSourceChunkReader): Buffer;
 export declare function defaultExactBunSourceLoader(source: ExactBunRegistrySourceRef): Buffer;
