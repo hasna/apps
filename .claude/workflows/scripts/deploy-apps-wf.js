@@ -1,5 +1,5 @@
 export const meta = {
-  name: 'deploy-internal-apps',
+  name: 'deploy-apps',
   description: 'Deploy @hasna/* app services (hasna/apps monorepo members) to the oss-fleet-prod ECS surface. Surveys deployable services (serve surfaces + Dockerfile + published/ECS-deployed version), verifies the provider-role table per service (source/registry/ECS surface/database/route), executes the ECS deployment convention (build native arm64 -> ECR push sha-tagged -> migrate one-shot -> register task def -> update-service -> wait stable -> live HTTPS test), fails closed where provider roles are unverified. CORRECTED 2026-08-24: the internalapps-prod-host docker-compose convention is LEGACY — all services run as ECS Fargate in oss-fleet-prod (measured: 32 services, virgilius lane deploys via task defs). Owner directive 2026-08-20.',
   phases: [
     { title: 'Survey', detail: 'enumerate deployable services, verify versions + ECS surface + routes, classify ready / blocked' },

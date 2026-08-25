@@ -1,102 +1,121 @@
 export const meta = {
-  name: 'contracts-alignment',
-  description: 'Align fleet repos to the contracts standard (@hasna/contracts, apps/contracts): census hasna.contract.json conformance + daemon/queue semantics per the daemon-worker taxonomy, land per-repo PRs, review, merge',
+  name: 'contracts-alignment-r3',
+  description: 'Wave 3 of the contracts standard alignment: clear the 11-app residue from r2 (servers, shield, signatures, slides, tables, testers, instructions, knowledge, the missing-manifest cluster, attachments, workforce/markdown CI cases)',
   phases: [
-    { title: 'Census', detail: 'classify every app/repo: contract manifest presence/validity, daemon semantics, conformance gaps' },
-    { title: 'Fix', detail: 'per-repo alignment PRs (max 4 concurrent)' },
-    { title: 'Review', detail: 'Fable review per PR' },
-    { title: 'Merge', detail: 'merge GO\'d PRs' },
-    { title: 'Report', detail: 'final conformance state + follow-ups' },
+    { title: 'Fix', detail: 'residue apps per exact named gates (3 lanes)' },
+    { title: 'Review', detail: 'Fable review of the new PRs' },
+    { title: 'Merge2', detail: 'merge the GO\'d PRs with base-movement gate' },
+    { title: 'Report', detail: 'per-app state + residue' },
   ],
 }
 
+const TASK = '1bfb26b7-05eb-4cf5-9762-e554afd02de6'
 const MONOREPO = '/home/hasna/workspace/repos/hasna/apps'
-const TASK = '1bfb26b7'
 
 const CONST = `
-You are a lane of the contracts-alignment workflow (owner-authorized 2026-08-18). The contracts standard lives in apps/contracts (@hasna/contracts) — the canonical manifest/schema authority (NOT apps/apps/contracts; the monorepo layout is apps/contracts). The owner wants every repo/app properly aligned to "the new way we align to contracts": a valid hasna.contract.json manifest and, for apps with daemons/queues, the daemon-worker lifecycle semantics from the fleet taxonomy (control/execution/observation planes; admission/lease/fencing; terminal receipts; no control-plane write as execution evidence). This workflow: census conformance across apps/, land per-repo PRs closing the gaps, review, merge. Final text = machine-readable JSON.
+You are a lane of the contracts-alignment-r3 workflow (owner-authorized 2026-08-18, task ${TASK}). Wave 2 merged 30 manifest/taxonomy PRs; this wave clears the residue: the apps whose manifests still fail kit 0.11.1 conformance, with their exact named gates. Final text = machine-readable JSON.
 
 Non-negotiable rules (all agents):
-- ${MONOREPO} is READ/context only. Sync first (git -C ${MONOREPO} pull; never discard local work). Work in task worktrees ~/.hasna/repos/worktrees/apps/contracts-align-<n> from origin/main. Never push to main. Merges ONLY via gh pr merge <n> --squash --body-file <file whose LAST line is 'Agent: contracts-align'>.
-- IDEMPOTENCY CHECK FIRST: skip any app already conformant at origin/main; skip any PR already merged.
-- No secrets; no internal-infra strings. Staged secrets scan before every commit/push. Capture path: redirect to files, never pipe large reads. Paste literal output lines.
-- Record as you go: comments on the tracking task, posts to #board. English. Lineage identity 'conversations agents register' named contracts-align-<your-role>.
-`
-
-const CENSUS = CONST + `
-ROLE: census lane (Sonnet). From origin/main:
-1. Read apps/contracts source (the canonical schema: what hasna.contract.json must contain today — storage engines, envPrefix, serviceSurfaces, daemon/queue declarations if the schema has them; and the schema version in use).
-2. For EVERY app under apps/ (exclude node_modules/dist): classify (a) CONFORMANT — hasna.contract.json validates against the current schema and daemon-bearing apps carry the daemon semantics; (b) GAP-MANIFEST — manifest missing, stale, or schema-invalid; (c) GAP-DAEMON — manifest fine but daemon/queue behavior lacks the lifecycle semantics (control/execution/observation, lease/fencing/receipt); (d) N/A — app with no daemon and a valid manifest.
-3. TAXONOMY CHECK (mandatory — the owner's requirement: 'check and update and align everything perfectly'): classify each daemon/queue-bearing app against the daemon-worker taxonomy's exact vocabulary and semantics — the three planes (control: accepts commands/enqueue; execution: admitted item leased to a bounded worker; observation: reports queue state/lease health/receipts), the queue/attempt contract (stable identity, immutable payload, explicit admitted/leased/running/terminal states, bounded retries with distinguishable attempts preserving original identity, terminal receipts per attempt linked to entry+lease generation), leases (exclusive renewable, generation/fencing token, heartbeat, expiry, stale-worker rejection, renewal never erases generation history), acknowledgement (only after the durable effect exists and the receipt is committed — a control-plane write, process start, or rc=0 is never execution evidence), and the exact taxonomy VOCABULARY (admitted/leased/running/terminal, attempt, lease generation, fencing, receipt — not invented synonyms). List every vocabulary/semantic deviation with file:line evidence as class GAP-TAXONOMY.
-4. Per app, list the exact conformance gaps with file:line evidence.
-Return (JSON): { apps: [{app, class, gaps: [string], files: [string], taxonomyGaps: [string]}], totals: {conformant, gapManifest, gapDaemon, gapTaxonomy, na} }
+- ${MONOREPO} is READ/context only. Sync first (git -C ${MONOREPO} pull, fast-forward; never discard local work). Work in task worktrees ~/.hasna/repos/worktrees/apps/ca-r3-<n> from origin/main. Never push to main. PR-first; merges ONLY via gh pr merge <n> --squash --body-file <file whose LAST line is 'Agent: contracts-r3-<your-role>'>.
+- IDEMPOTENCY FIRST: if the app already validates clean at HEAD (its manifest passes the 0.11.1 validator) or its PR is merged, record and SKIP. If an open PR already exists for the app, fix THAT PR (rebase + fix on its branch), never open a second.
+- MANIFEST TRUTH: declare what the app actually does — storage.backend 'sqlite' | 'postgresql' from the real code, engines including postgresql where the server selects it, surfaces (api/sdk/mcp/cli) declared or truthfully deferred (sdk deferred only when no real ./sdk export and no served /openapi.json), hosting user-hosted, no mode/deploymentModes keys, kitVersion 0.11.1. Validate with the contracts CLI until zero errors.
+- NO COMPAT: remove mode vocabulary and legacy secret-ref metadata entirely; never leave a transitional alias. Tests may name the words only to prove rejection.
+- Verdicts: merge requires a [REVIEW] GO at the CURRENT head; base-movement gate (merge-tree == head or disjoint delta); bun.lock overlap -> regenerate with 'bun install --lockfile-only' in the worktree and re-verify.
+- No secrets: never print/capture/commit credential values; consume ONLY via 'secrets exec <key> --as VAR -- <cmd>'. Staged secrets scan (redirect + 'secrets scan input', rc 0 clean) before every commit/push. No internal-infra strings in artifacts. Capture path: redirect to files, never pipe large reads. Paste literal output lines.
+- Record as you go: comments on ${TASK}, posts to #board. English. Lineage identity 'conversations agents register' named contracts-r3-<your-role>.
 `
 
 const FIX = CONST + `
-ROLE: alignment lane (Sonnet). Your batch: {BATCH} (each: {app, class, gaps}). For EACH app:
-1. IDEMPOTENCY CHECK FIRST (see CONST).
-2. Worktree ~/.hasna/repos/worktrees/apps/contracts-align-<app> from origin/main, branch fix/contracts-align-<app>.
-3. Align per the class: (gap-manifest) create/repair hasna.contract.json against the CURRENT apps/contracts schema — read the schema first, validate with the contracts package's validator if one exists (check apps/contracts for a validate verb/API); (gap-daemon) add the daemon lifecycle semantics — control/execution/observation separation, lease/fencing/heartbeat on the queue, terminal receipts — following the EXACT shape the contracts app declares (the daemon-worker taxonomy: admission → lease → run → receipt; never a control-plane write as execution evidence).
-4. TAXONOMY ALIGNMENT (mandatory): for gap-taxonomy apps, update the daemon/queue implementation to the taxonomy's exact vocabulary and semantics — the three planes, the attempt/queue contract, lease generation/fencing, receipt-before-acknowledgement — renaming invented synonyms to the taxonomy terms, and fixing semantics where a control-plane write or process start is treated as execution evidence. Regression tests FIRST for each corrected semantic.5. Regression tests FIRST for the daemon semantics. Run the app's suite (bounded 8 min) + the contracts validator if available. Secrets scan (rc 0). Commit ('Agent: contracts-align-<app>' trailer LAST), push, open the PR.
-5. Verify merge-tree equality at CURRENT origin/main.
-Return (JSON): { prs: [{number, app, class, validated: bool, tests: {passed, failed}, secretsClean: bool, mergeTreeEqual: bool}] }
+ROLE: residue lane. Your apps: {APPS} (each with the r2 NO_GO gates). For EACH app:
+- servers (PR 538): kit 0.11.1 alignment unmerged, P1 findings at head — fix per the findings, validate rc=0, tests.
+- shield (PR 550): surface_matrix api + surface_bindings generatedFrom still fail — add/declare the surfaces truthfully (read the app's real serve/mcp surfaces), fix generatedFrom.
+- signatures (PR 551): storage.engines must declare both sqlite AND postgresql — read the server's backend selection and declare truthfully.
+- slides (PR 552): storage.backend Required + Unrecognized 'mode' key — migrate.
+- tables (PR 553): storage.backend Required + Unrecognized 'mode','localDataDir','format' — migrate to the 0.11.1 schema.
+- testers (PR 554): passes only at the pinned old validator — migrate the manifest to 0.11.1 and make it pass the CURRENT validator.
+- instructions (PR 548): census.ts merge-tree conflict (recorded exception c15cca18) — rebase onto main, resolve the census conflict keeping main's gateway row + the PR's intended instructions row, re-verify.
+- knowledge (PR 567): service-class manifest declares no service surface — the app has a real serve surface (api with /health /ready /version + /openapi.json per r2's knowledge lane); declare it truthfully.
+- workforce (PR 556): GO but CI publish-guard + test-suites fail and merge-tree differs on bun.lock — regenerate the lockfile, re-verify gates, re-run the base-movement check.
+- markdown (PR 534): missing-manifest GO but CI publish-guard + test-suites fail; merge result differs on own files — check whether the manifest caused the gate failures (artifactScan wiring for publish-guard) and fix.
+- statusline/styles/tai/terminal/tickets (PR 523, missing-manifest cluster): create the manifests declaring the real surfaces, validate rc=0, tests.
+- attachments (PR 508/561/565): manifest fails at pinned 0.8.2 — migrate the manifest to 0.11.1 (the purge PR 508's content + gates PR 561's fixes + modes-r3's unreviewed PR 565 all compose onto one 0.11.1 manifest); if the three PRs overlap, fix ONE coherent PR on the app's branch and reference the others.
+For EACH: validate until rc=0, run the app's suite (bounded 10 min, record counts), secrets scan, commit ('Agent: contracts-r3-<app>' trailer LAST), push, update the existing PR (force-with-lease on its own branch) or open a new one.
+Return (JSON): { apps: [{app, prNumber: number|null, valid: bool, gatesFixed: [string], remaining: [string], tests: {passed, failed}, evidence: string}] }
 `
 
 const REVIEW = CONST + `
-ROLE: adversarial reviewer (Fable). Review {PRS} (each: number). Verify per PR: (a) the manifest validates against the CURRENT apps/contracts schema (run the validator; quote its output); (b) daemon semantics AND vocabulary match the daemon-worker taxonomy EXACTLY (the three planes; the attempt/queue contract with admitted/leased/running/terminal states; lease generation/fencing/heartbeat; receipt-before-acknowledgement; the exact taxonomy terms — no invented synonyms); (c) tests green, secrets clean, scope confined. Post '[REVIEW] <GO|NO_GO> — hasna/apps#<n> @ <sha> — lens: contracts alignment, reviewer contracts-align-review'. Block ONLY concrete P0/P1 defects. P2/P3 non-blocking.
+ROLE: adversarial reviewer (Fable). Review {PRS} (each: number). Per PR: (a) the manifest is truthful (spot-check storage backend and surfaces against the code), (b) zero mode/deploymentModes vocabulary in shipped surfaces, (c) no internal-infra strings, (d) tests pass, secrets clean. Post '[REVIEW] <GO|NO_GO> — hasna/apps#<n> @ <sha> — lens: contracts alignment r3, reviewer contracts-r3-review ({I} of {N})'. Block ONLY concrete P0/P1 defects. P2/P3 non-blocking.
 Return (JSON): { prs: [{number, verdict: GO|NO_GO, findings: [{severity, title, detail}]}] }
 `
 
-const MERGE = CONST + `
-ROLE: merge lane (Sonnet). {BATCH} (each: number). For EACH GO'd PR: head == reviewed sha; merge-tree equality at CURRENT origin/main (re-measure; if main moved, verify the delta is disjoint and proceed); gh pr merge <n> --squash --body-file <file ending 'Agent: contracts-align'>; record merged sha. NO_GO: comment findings, leave open.
+const MERGE2 = CONST + `
+ROLE: merge lane. {BATCH} (each: number). For EACH GO'd PR: head == reviewed sha; base-movement gate at CURRENT origin/main (re-measure; bun.lock overlap -> regenerate then re-verify); gh pr merge <n> --squash --body-file <file ending 'Agent: contracts-r3-ship'>; record merged sha. NO_GO: comment findings, leave open.
 Return (JSON): { prs: [{number, merged: bool, mergedSha: string|null, reason: string|null}] }
 `
 
 const REPORT = CONST + `
-ROLE: report. Aggregate: per-app state (aligned/held), the final conformance count at origin/main, follow-ups (apps left unaligned with reasons). Comment on the tracking task, post to #board.
-Return (JSON): { prs: [{number, state, mergedSha}], finalConformant: number, remaining: [string] }
+ROLE: report. Aggregate per-app state (merged/reviewed/blocked with reason), residue. Comment ${TASK}, post to #board.
+Return (JSON): { apps: [{app, state, prNumber, mergedSha}], residue: [string] }
 `
 
-const CENSUS_SCHEMA = { type: 'object', properties: { apps: { type: 'array', items: { type: 'object' } }, totals: { type: 'object' } }, required: ['apps'] }
-const FIX_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
-const REVIEW_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
-const MERGE_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
-const REPORT_SCHEMA = { type: 'object', properties: { prs: { type: 'array' }, finalConformant: { type: 'integer' }, remaining: { type: 'array' } }, required: ['finalConformant'] }
-
-phase('Census')
-const census = await agent(CENSUS, { label: 'contracts-census', phase: 'Census', schema: CENSUS_SCHEMA, model: 'sonnet' })
-const worklist = (census && census.apps || []).filter(a => a.class !== 'conformant' && a.class !== 'na')
-log(`census: ${worklist.length} apps need alignment`)
+const APP_SCHEMA = { type: 'object', properties: { apps: { type: 'array', items: { type: 'object' } } }, required: ['apps'] }
+const PR_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
+const REPORT_SCHEMA = { type: 'object', properties: { apps: { type: 'array' }, residue: { type: 'array' } }, required: ['apps'] }
 
 phase('Fix')
-const fixResults = await parallel(worklist.slice(0, 24).map((item, i) => () =>
-  agent(FIX.replace('{BATCH}', JSON.stringify([{ app: item.app, class: item.class, gaps: item.gaps }])), { label: `ca-fix-${item.app}`, phase: 'Fix', schema: FIX_SCHEMA, model: 'sonnet' }),
+const RESIDUE = [
+  { app: 'servers', gate: 'PR 538 P1 findings at head' },
+  { app: 'shield', gate: 'surface_matrix api + surface_bindings generatedFrom' },
+  { app: 'signatures', gate: 'engines must declare sqlite AND postgresql' },
+  { app: 'slides', gate: 'storage.backend Required + mode key' },
+  { app: 'tables', gate: 'storage.backend Required + mode/localDataDir/format' },
+  { app: 'testers', gate: 'passes only at pinned old validator' },
+  { app: 'instructions', gate: 'census.ts merge-tree conflict (c15cca18)' },
+  { app: 'knowledge', gate: 'no service surface declared' },
+  { app: 'workforce', gate: 'CI publish-guard/test-suites + bun.lock delta' },
+  { app: 'markdown', gate: 'CI publish-guard/test-suites after missing-manifest GO' },
+  { app: 'statusline', gate: 'missing manifest (cluster)' },
+  { app: 'styles', gate: 'missing manifest (cluster)' },
+  { app: 'tai', gate: 'missing manifest (cluster)' },
+  { app: 'terminal', gate: 'missing manifest (cluster)' },
+  { app: 'tickets', gate: 'missing manifest (cluster)' },
+  { app: 'attachments', gate: 'manifest at pinned 0.8.2; 3 PRs compose' },
+]
+const batches = []
+for (let i = 0; i < RESIDUE.length; i += 6) batches.push(RESIDUE.slice(i, i + 6))
+const fixResults = await parallel(batches.map((b, i) => () =>
+  agent(FIX.replace('{APPS}', JSON.stringify(b)), { label: `contracts-r3-fix-${i + 1}`, phase: 'Fix', schema: APP_SCHEMA }),
 ))
-const fixed = fixResults.filter(Boolean).flatMap(r => r.prs || [])
-log(`fix: ${fixed.length} PRs`)
+const fixedApps = fixResults.filter(Boolean).flatMap(r => (r.apps || []).filter(a => a.prNumber))
+const newPrs = fixedApps.map(a => ({ number: a.prNumber }))
+log(`fix: ${fixedApps.length} apps, ${newPrs.length} PRs`)
 
 phase('Review')
+let reviewResults = []
 const reviewBatches = []
-for (let i = 0; i < fixed.length; i += 4) reviewBatches.push(fixed.slice(i, i + 4))
-const reviewResults = await parallel(reviewBatches.map((rb, i) => () =>
-  agent(REVIEW.replace('{PRS}', JSON.stringify(rb)), { label: `ca-review-${i + 1}`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'fable' }),
-))
-log(`reviews: ${reviewResults.filter(Boolean).length} lanes`)
+for (let i = 0; i < newPrs.length; i += 4) reviewBatches.push(newPrs.slice(i, i + 4))
+if (reviewBatches.length) {
+  reviewResults = await parallel(reviewBatches.map((rb, i) => () =>
+    agent(REVIEW.replace('{PRS}', JSON.stringify(rb)).replace('{I}', String(i + 1)).replace('{N}', String(reviewBatches.length)), {
+      label: `contracts-r3-review-${i + 1}`, phase: 'Review', schema: PR_SCHEMA, model: 'fable',
+    }),
+  ))
+}
 
-phase('Merge')
-let mergeResults = []
+phase('Merge2')
+let merge2Results = []
 if (reviewResults.length) {
   const verdictMap = {}
   for (const rv of reviewResults.filter(Boolean)) {
     for (const p of (rv.prs || [])) verdictMap[p.number] = p.verdict
   }
-  mergeResults = await parallel(reviewBatches.map((rb, i) => () => {
+  merge2Results = await parallel(reviewBatches.map((rb, i) => () => {
     const go = rb.map(p => p.number).filter(n => verdictMap[n] === 'GO')
-    return agent(MERGE.replace('{BATCH}', JSON.stringify(go)), { label: `ca-merge-${i + 1}`, phase: 'Merge', schema: MERGE_SCHEMA, model: 'sonnet' })
+    return agent(MERGE2.replace('{BATCH}', JSON.stringify(go)), { label: `contracts-r3-merge2-${i + 1}`, phase: 'Merge2', schema: PR_SCHEMA })
   }))
 }
 
 phase('Report')
-const report = await agent(REPORT, { label: 'contracts-report', phase: 'Report', schema: REPORT_SCHEMA, model: 'sonnet' })
+const report = await agent(REPORT, { label: 'contracts-r3-report', phase: 'Report', schema: REPORT_SCHEMA })
 
-return { census, fixes: fixResults.filter(Boolean), reviews: reviewResults.filter(Boolean), merges: mergeResults.filter(Boolean), report }
+return { fixes: fixResults.filter(Boolean), reviews: reviewResults.filter(Boolean), merges: merge2Results.filter(Boolean), report }
