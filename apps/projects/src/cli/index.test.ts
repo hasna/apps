@@ -251,7 +251,11 @@ function cloudDoctorFixture() {
     HASNA_PROJECTS_DB_PATH: dbPath,
     HASNA_PROJECTS_HOME: join(root, "home"),
     HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-    HASNA_PROJECTS_API_KEY: "test-key",
+    // Deliberate loopback credential via the shared contracts seam's override
+    // tier: a plain HASNA_PROJECTS_API_KEY in the spawned env is read as the
+    // legacy tier, which warns on stderr (DEPRECATED) whenever the disk tier
+    // holds no key — CI has none — breaking every stderr-clean assertion.
+    HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
   };
   const runDoctor = async (extraArgs: string[]) => {
     const proc = Bun.spawn({
@@ -974,7 +978,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
     };
     const forwardProof = [{
       created_by_operation: true,
@@ -2961,7 +2965,7 @@ describe("project-first CLI surface", () => {
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
     };
     try {
       const record = await runProjectsAsync([
@@ -3797,7 +3801,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
     };
     try {
       const proc = Bun.spawn({
@@ -3886,7 +3890,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: projectsHome,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
     };
     const runWhy = async (target: string) => {
       const proc = Bun.spawn({
@@ -4000,7 +4004,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: projectsHome,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
     };
     const runEnsure = async (target: string, extraArgs: string[] = []) => {
       const proc = Bun.spawn({
@@ -4196,7 +4200,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
       PROJECTS_CONVERSATIONS_BIN: conversationsBin,
     };
     const runEnsure = async () => {
@@ -4294,7 +4298,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
     };
     const targetPath = join(root, "cloud-flag-probe");
     const runCreate = async (args: string[]) => {
@@ -4473,7 +4477,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: home,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY: "test-key",
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
     };
     const runCreate = async (args: string[]) => {
       const proc = Bun.spawn({
