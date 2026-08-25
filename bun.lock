@@ -199,7 +199,7 @@
     },
     "apps/bridge": {
       "name": "@hasna/bridge",
-      "version": "0.7.4",
+      "version": "0.7.5",
       "bin": {
         "bridge": "dist/cli/index.js",
         "bridge-mcp": "dist/mcp/index.js",

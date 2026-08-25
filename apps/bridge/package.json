@@ -1,6 +1,6 @@
 {
   "name": "@hasna/bridge",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Agent messaging bridge for Telegram and other channels",
   "type": "module",
   "main": "dist/index.js",
