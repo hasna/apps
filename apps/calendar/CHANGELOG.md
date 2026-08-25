@@ -5,7 +5,7 @@
 ### Patch Changes
 
 - Updated dependencies [85a5e06]
-  - @hasna/contracts@0.14.1 (corrected: the changeset-versioned 0.14.1 pin was not on the npm registry — published 0.14.x ends at 0.14.0, so the release re-pins to the published 0.14.0; same class as the 0.3.6/0.3.7 corrections and release review P1, publish-all lane 248f6ed8)
+  - @hasna/contracts@0.14.0 (corrected: the changeset-versioned contracts pin was not on the npm registry — published 0.14.x ends at 0.14.0 — so the release ships the published 0.14.0 pin; same unpublished-intra-wave-dep class as the 0.3.6/0.3.7 corrections and release review P1, publish-all lane 248f6ed8)
 
 ## 0.3.8
 
