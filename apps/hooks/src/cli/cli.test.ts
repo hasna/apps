@@ -59,6 +59,33 @@ async function runJson(...args: string[]): Promise<any> {
   return JSON.parse(stdout.trim());
 }
 
+// Storage env stripped, so the migrate command is exercised in its
+// fail-closed state regardless of what the host shell has configured.
+const STORAGE_ENV_KEYS = [
+  "HASNA_HOOKS_DATABASE_URL",
+  "HOOKS_DATABASE_URL",
+  "HASNA_HOOKS_STORAGE_BACKEND",
+  "HOOKS_STORAGE_BACKEND",
+  "HASNA_HOOKS_STORAGE_MODE",
+  "HOOKS_STORAGE_MODE",
+];
+
+async function runWithoutStorageEnv(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const env = { ...cliEnv() };
+  for (const key of STORAGE_ENV_KEYS) delete env[key];
+  const proc = Bun.spawn(["bun", "run", CLI, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env,
+  });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
 describe("CLI", () => {
   describe("hooks --version", () => {
     test("prints version", async () => {
@@ -895,5 +922,54 @@ describe("CLI", () => {
         expect(typeof data.project).toBe("boolean");
       });
     }
+  });
+
+  describe("hooks migrate", () => {
+    test("--help lists the migrate command", async () => {
+      const { stdout, exitCode } = await run("--help");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("migrate");
+    });
+
+    test("fails closed with a clear message when no database URL is configured", async () => {
+      const { stdout, stderr, exitCode } = await runWithoutStorageEnv("migrate");
+      expect(exitCode).toBe(1);
+      expect(`${stdout}${stderr}`).toMatch(/HASNA_HOOKS_DATABASE_URL/);
+    });
+
+    test("--json reports the missing database URL as a JSON error", async () => {
+      const { stdout, exitCode } = await runWithoutStorageEnv("migrate", "--json");
+      expect(exitCode).toBe(1);
+      const parsed = JSON.parse(stdout.trim());
+      expect(parsed.error).toMatch(/HASNA_HOOKS_DATABASE_URL/);
+    });
+  });
+});
+
+// Live-PostgreSQL gate for the migrate command (storage.pgTestGate in
+// hasna.contract.json). Runs only when HASNA_HOOKS_TEST_DATABASE_URL points
+// at a throwaway Postgres; without the variable this block skips so the
+// ordinary local suite stays green. Proves the deploy-lane migrate shape
+// (`hooks migrate` against HASNA_HOOKS_DATABASE_URL) applies the package's
+// PG migrations on a live server.
+const TEST_DATABASE_URL = process.env.HASNA_HOOKS_TEST_DATABASE_URL;
+const maybeLiveMigrate = TEST_DATABASE_URL ? describe : describe.skip;
+
+maybeLiveMigrate("hooks migrate live PostgreSQL (HASNA_HOOKS_TEST_DATABASE_URL)", () => {
+  test("applies PG migrations against the live database and exits 0", async () => {
+    const env = { ...cliEnv(), HASNA_HOOKS_DATABASE_URL: TEST_DATABASE_URL! };
+    const proc = Bun.spawn(["bun", "run", CLI, "migrate", "--json"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env,
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const exitCode = await proc.exited;
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe(JSON.stringify({ ok: true }));
+    expect(stderr).toBe("");
   });
 });
