@@ -3002,7 +3002,7 @@ var require_pg_types = __commonJS((exports) => {
   });
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/defaults.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/defaults.js
 var require_defaults = __commonJS((exports, module) => {
   var user;
   try {
@@ -3043,7 +3043,7 @@ var require_defaults = __commonJS((exports, module) => {
   });
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/utils.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/utils.js
 var require_utils = __commonJS((exports, module) => {
   var defaults = require_defaults();
   var { isDate } = __require("util/types");
@@ -3192,7 +3192,7 @@ var require_utils = __commonJS((exports, module) => {
   };
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/crypto/utils.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/utils.js
 var require_utils2 = __commonJS((exports, module) => {
   var nodeCrypto = __require("crypto");
   module.exports = {
@@ -3241,7 +3241,7 @@ var require_utils2 = __commonJS((exports, module) => {
   }
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/crypto/cert-signatures.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/cert-signatures.js
 var require_cert_signatures = __commonJS((exports, module) => {
   function x509Error(msg, cert) {
     return new Error("SASL channel binding: " + msg + " when parsing public certificate " + cert.toString("base64"));
@@ -3353,7 +3353,7 @@ var require_cert_signatures = __commonJS((exports, module) => {
   module.exports = { signatureAlgorithmHashFromCertificate };
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/crypto/sasl.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/sasl.js
 var require_sasl = __commonJS((exports, module) => {
   var crypto = require_utils2();
   var { signatureAlgorithmHashFromCertificate } = require_cert_signatures();
@@ -3533,7 +3533,7 @@ var require_sasl = __commonJS((exports, module) => {
   };
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/type-overrides.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/type-overrides.js
 var require_type_overrides = __commonJS((exports, module) => {
   var types2 = require_pg_types();
   function TypeOverrides(userTypes) {
@@ -3746,7 +3746,7 @@ See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode de
   parse4.parseIntoClientConfig = parseIntoClientConfig;
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/connection-parameters.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/connection-parameters.js
 var require_connection_parameters = __commonJS((exports, module) => {
   var dns = __require("dns");
   var defaults = require_defaults();
@@ -3893,7 +3893,7 @@ var require_connection_parameters = __commonJS((exports, module) => {
   module.exports = ConnectionParameters;
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/result.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/result.js
 var require_result = __commonJS((exports, module) => {
   var types2 = require_pg_types();
   var matchRegexp = /^([A-Za-z]+)(?: (\d+))?(?: (\d+))?/;
@@ -3981,7 +3981,7 @@ var require_result = __commonJS((exports, module) => {
   module.exports = Result;
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/query.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/query.js
 var require_query = __commonJS((exports, module) => {
   var { EventEmitter } = __require("events");
   var Result = require_result();
@@ -4097,7 +4097,7 @@ var require_query = __commonJS((exports, module) => {
       if (typeof this.text !== "string" && typeof this.name !== "string") {
         return new Error("A query must have either text or a name. Supplying neither is unsupported.");
       }
-      const previous = connection.parsedStatements[this.name];
+      const previous = connection.parsedStatements[this.name] || connection.submittedNamedStatements[this.name];
       if (this.text && previous && this.text !== previous) {
         return new Error(`Prepared statements must be unique - '${this.name}' was used for a different statement`);
       }
@@ -4117,7 +4117,7 @@ var require_query = __commonJS((exports, module) => {
       return null;
     }
     hasBeenParsed(connection) {
-      return this.name && connection.parsedStatements[this.name];
+      return this.name && (connection.parsedStatements[this.name] || connection.submittedNamedStatements[this.name]);
     }
     handlePortalSuspended(connection) {
       this._getRows(connection, this.rows);
@@ -4140,6 +4140,9 @@ var require_query = __commonJS((exports, module) => {
           name: this.name,
           types: this.types
         });
+        if (this.name) {
+          connection.submittedNamedStatements[this.name] = this.text;
+        }
       }
       try {
         connection.bind({
@@ -4169,7 +4172,7 @@ var require_query = __commonJS((exports, module) => {
   module.exports = Query;
 });
 
-// ../../node_modules/.bun/pg-protocol@1.15.0/node_modules/pg-protocol/dist/messages.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/messages.js
 var require_messages = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.NoticeMessage = exports.DataRowMessage = exports.CommandCompleteMessage = exports.ReadyForQueryMessage = exports.NotificationResponseMessage = exports.BackendKeyDataMessage = exports.AuthenticationMD5Password = exports.ParameterStatusMessage = exports.ParameterDescriptionMessage = exports.RowDescriptionMessage = exports.Field = exports.CopyResponse = exports.CopyDataMessage = exports.DatabaseError = exports.copyDone = exports.emptyQuery = exports.replicationStart = exports.portalSuspended = exports.noData = exports.closeComplete = exports.bindComplete = exports.parseComplete = undefined;
@@ -4345,7 +4348,7 @@ var require_messages = __commonJS((exports) => {
   exports.NoticeMessage = NoticeMessage;
 });
 
-// ../../node_modules/.bun/pg-protocol@1.15.0/node_modules/pg-protocol/dist/buffer-writer.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/buffer-writer.js
 var require_buffer_writer = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Writer = undefined;
@@ -4441,7 +4444,7 @@ var require_buffer_writer = __commonJS((exports) => {
   exports.Writer = Writer;
 });
 
-// ../../node_modules/.bun/pg-protocol@1.15.0/node_modules/pg-protocol/dist/serializer.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/serializer.js
 var require_serializer = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.serialize = undefined;
@@ -4609,7 +4612,7 @@ var require_serializer = __commonJS((exports) => {
   exports.serialize = serialize;
 });
 
-// ../../node_modules/.bun/pg-protocol@1.15.0/node_modules/pg-protocol/dist/buffer-reader.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/buffer-reader.js
 var require_buffer_reader = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.BufferReader = undefined;
@@ -4665,7 +4668,7 @@ var require_buffer_reader = __commonJS((exports) => {
   exports.BufferReader = BufferReader;
 });
 
-// ../../node_modules/.bun/pg-protocol@1.15.0/node_modules/pg-protocol/dist/parser.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/parser.js
 var require_parser = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Parser = undefined;
@@ -4871,7 +4874,7 @@ var require_parser = __commonJS((exports) => {
     const parameterCount = reader.int16();
     const message = new messages_1.ParameterDescriptionMessage(LATEINIT_LENGTH, parameterCount);
     for (let i = 0;i < parameterCount; i++) {
-      message.dataTypeIDs[i] = reader.int32();
+      message.dataTypeIDs[i] = reader.uint32();
     }
     return message;
   };
@@ -4970,7 +4973,7 @@ var require_parser = __commonJS((exports) => {
   };
 });
 
-// ../../node_modules/.bun/pg-protocol@1.15.0/node_modules/pg-protocol/dist/index.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/index.js
 var require_dist = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DatabaseError = exports.serialize = undefined;
@@ -4997,7 +5000,7 @@ var require_empty = __commonJS((exports) => {
   exports.default = {};
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/stream.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/stream.js
 var require_stream = __commonJS((exports, module) => {
   var { getStream, getSecureStream } = getStreamFuncs();
   module.exports = {
@@ -5052,7 +5055,7 @@ var require_stream = __commonJS((exports, module) => {
   }
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/connection.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/connection.js
 var require_connection = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var { parse: parse4, serialize } = require_dist();
@@ -5073,6 +5076,7 @@ var require_connection = __commonJS((exports, module) => {
       this._keepAlive = config2.keepAlive;
       this._keepAliveInitialDelayMillis = config2.keepAliveInitialDelayMillis;
       this.parsedStatements = {};
+      this.submittedNamedStatements = {};
       this.ssl = config2.ssl || false;
       this.sslNegotiation = config2.sslNegotiation || "postgres";
       this._ending = false;
@@ -5525,7 +5529,7 @@ var require_lib = __commonJS((exports, module) => {
   module.exports.warnTo = helper.warnTo;
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/client.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/client.js
 var require_client = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var utils = require_utils();
@@ -5593,6 +5597,8 @@ var require_client = __commonJS((exports, module) => {
         encoding: this.connectionParameters.client_encoding || "utf8"
       });
       this._queryQueue = [];
+      this._sentQueryQueue = [];
+      this.pipeline = Boolean(c.pipeline);
       this.binary = c.binary || defaults.binary;
       this.processID = null;
       this.secretKey = null;
@@ -5627,6 +5633,8 @@ var require_client = __commonJS((exports, module) => {
         enqueueError(activeQuery);
         this._activeQuery = null;
       }
+      this._sentQueryQueue.forEach(enqueueError);
+      this._sentQueryQueue.length = 0;
       this._queryQueue.forEach(enqueueError);
       this._queryQueue.length = 0;
     }
@@ -5854,6 +5862,9 @@ var require_client = __commonJS((exports, module) => {
         return;
       }
       this._activeQuery = null;
+      if (activeQuery.name) {
+        delete this.connection.submittedNamedStatements[activeQuery.name];
+      }
       activeQuery.handleError(msg, this.connection);
     }
     _handleRowDescription(msg) {
@@ -5910,6 +5921,7 @@ var require_client = __commonJS((exports, module) => {
       }
       if (activeQuery.name) {
         this.connection.parsedStatements[activeQuery.name] = activeQuery.text;
+        delete this.connection.submittedNamedStatements[activeQuery.name];
       }
     }
     _handleCopyInResponse(msg) {
@@ -5976,6 +5988,8 @@ var require_client = __commonJS((exports, module) => {
         });
       } else if (client._queryQueue.indexOf(query) !== -1) {
         client._queryQueue.splice(client._queryQueue.indexOf(query), 1);
+      } else if (client._sentQueryQueue.indexOf(query) !== -1) {
+        query.callback = () => {};
       }
     }
     setTypeParser(oid, format, parseFn) {
@@ -5991,6 +6005,10 @@ var require_client = __commonJS((exports, module) => {
       return utils.escapeLiteral(str);
     }
     _pulseQueryQueue() {
+      if (this.pipeline) {
+        this._pulsePipelinedQueryQueue();
+        return;
+      }
       if (this.readyForQuery === true) {
         this._activeQuery = this._queryQueue.shift();
         const activeQuery = this._getActiveQuery();
@@ -6009,6 +6027,30 @@ var require_client = __commonJS((exports, module) => {
           this._activeQuery = null;
           this.emit("drain");
         }
+      }
+    }
+    _pulsePipelinedQueryQueue() {
+      if (!this._connected || !this._queryable) {
+        return;
+      }
+      while (this._queryQueue.length > 0) {
+        const query = this._queryQueue.shift();
+        this.hasExecuted = true;
+        const queryError = query.submit(this.connection);
+        if (queryError) {
+          process.nextTick(() => {
+            query.handleError(queryError, this.connection);
+          });
+          continue;
+        }
+        this._sentQueryQueue.push(query);
+      }
+      if (this.readyForQuery && !this._activeQuery && this._sentQueryQueue.length > 0) {
+        this._activeQuery = this._sentQueryQueue.shift();
+        this.readyForQuery = false;
+      }
+      if (!this._activeQuery && this._sentQueryQueue.length === 0 && this._queryQueue.length === 0 && this.hasExecuted) {
+        this.emit("drain");
       }
     }
     query(config2, values, callback) {
@@ -6052,6 +6094,9 @@ var require_client = __commonJS((exports, module) => {
           const index = this._queryQueue.indexOf(query);
           if (index > -1) {
             this._queryQueue.splice(index, 1);
+          } else if (this.pipeline) {
+            this.connection.stream.destroy();
+            return;
           }
           this._pulseQueryQueue();
         }, readTimeout);
@@ -6078,7 +6123,7 @@ var require_client = __commonJS((exports, module) => {
         });
         return result;
       }
-      if (this._queryQueue.length > 0) {
+      if (this._queryQueue.length > 0 && !this.pipeline) {
         queryQueueLengthDeprecationNotice();
       }
       this._queryQueue.push(query);
@@ -6104,7 +6149,11 @@ var require_client = __commonJS((exports, module) => {
           return this._Promise.resolve();
         }
       }
-      if (this._getActiveQuery() || !this._queryable) {
+      if (!this._queryable) {
+        this.connection.stream.destroy();
+      } else if (this.pipeline && (this._getActiveQuery() || this._sentQueryQueue.length > 0 || this._queryQueue.length > 0)) {
+        this.once("drain", () => this.connection.end());
+      } else if (this._getActiveQuery()) {
         this.connection.stream.destroy();
       } else {
         this.connection.end();
@@ -6126,7 +6175,7 @@ var require_client = __commonJS((exports, module) => {
   module.exports = Client;
 });
 
-// ../../node_modules/.bun/pg-pool@3.14.0+51226add061828f6/node_modules/pg-pool/index.js
+// ../../node_modules/.bun/pg-pool@3.14.0+00a0136bc273dfed/node_modules/pg-pool/index.js
 var require_pg_pool = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var NOOP = function() {};
@@ -6538,7 +6587,7 @@ var require_pg_pool = __commonJS((exports, module) => {
   module.exports = Pool;
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/native/query.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/native/query.js
 var require_query2 = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var util3 = __require("util");
@@ -6575,7 +6624,7 @@ var require_query2 = __commonJS((exports, module) => {
     sourceFunction: "routine"
   };
   NativeQuery.prototype.handleError = function(err) {
-    const fields = this.native.pq.resultErrorFields();
+    const fields = this.native && this.native.pq.resultErrorFields();
     if (fields) {
       for (const key in fields) {
         const normalizedFieldName = errorFieldMap[key] || key;
@@ -6674,7 +6723,7 @@ var require_query2 = __commonJS((exports, module) => {
   };
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/native/client.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/native/client.js
 var require_client2 = __commonJS((exports, module) => {
   var nodeUtils = __require("util");
   var Native;
@@ -6702,6 +6751,8 @@ var require_client2 = __commonJS((exports, module) => {
     this._connecting = false;
     this._connected = false;
     this._queryable = true;
+    this.pipeline = Boolean(config2.pipeline);
+    this._pipelineInFlight = false;
     const cp = this.connectionParameters = new ConnectionParameters(config2);
     if (config2.nativeConnectionString)
       cp.nativeConnectionString = config2.nativeConnectionString;
@@ -6846,7 +6897,7 @@ var require_client2 = __commonJS((exports, module) => {
       });
       return result;
     }
-    if (this._queryQueue.length > 0) {
+    if (this._queryQueue.length > 0 && !this.pipeline) {
       queryQueueLengthDeprecationNotice();
     }
     this._queryQueue.push(query);
@@ -6867,15 +6918,22 @@ var require_client2 = __commonJS((exports, module) => {
         cb = (err) => err ? reject(err) : resolve4();
       });
     }
-    this.native.end(function() {
-      self._connected = false;
-      self._errorAllQueries(new Error("Connection terminated"));
-      process.nextTick(() => {
-        self.emit("end");
-        if (cb)
-          cb();
+    const doEnd = function() {
+      self.native.end(function() {
+        self._connected = false;
+        self._errorAllQueries(new Error("Connection terminated"));
+        process.nextTick(() => {
+          self.emit("end");
+          if (cb)
+            cb();
+        });
       });
-    });
+    };
+    if (this.pipeline && (this._pipelineInFlight || this._queryQueue.length > 0)) {
+      this.once("drain", doEnd);
+    } else {
+      doEnd();
+    }
     return result;
   };
   Client.prototype._hasActiveQuery = function() {
@@ -6884,6 +6942,9 @@ var require_client2 = __commonJS((exports, module) => {
   Client.prototype._pulseQueryQueue = function(initialConnection) {
     if (!this._connected) {
       return;
+    }
+    if (this.pipeline && !initialConnection) {
+      return this._pulsePipelinedQueryQueue();
     }
     if (this._hasActiveQuery()) {
       return;
@@ -6900,6 +6961,69 @@ var require_client2 = __commonJS((exports, module) => {
     const self = this;
     query.once("_done", function() {
       self._pulseQueryQueue();
+    });
+  };
+  Client.prototype._pulsePipelinedQueryQueue = function() {
+    if (!this._connected || this._pipelineInFlight) {
+      return;
+    }
+    if (this._queryQueue.length === 0) {
+      if (this.hasExecuted) {
+        this.emit("drain");
+      }
+      return;
+    }
+    this._pipelineInFlight = true;
+    const self = this;
+    const queries = [];
+    const nativeQueries = [];
+    const utils = require_utils();
+    while (this._queryQueue.length > 0) {
+      const query = this._queryQueue.shift();
+      this.hasExecuted = true;
+      nativeQueries.push(query);
+      const values = query.values ? query.values.map(utils.prepareValue) : null;
+      const pipelineEntry = { text: query.text, name: query.name };
+      if (values) {
+        pipelineEntry.values = values;
+      }
+      if (query.name && this.namedQueries[query.name]) {
+        pipelineEntry._alreadyPrepared = true;
+      }
+      queries.push(pipelineEntry);
+    }
+    this.native.pipeline(queries, function(err, results) {
+      self._pipelineInFlight = false;
+      if (err) {
+        for (let i = 0;i < nativeQueries.length; i++) {
+          const q = nativeQueries[i];
+          q.native = self.native;
+          q.handleError(err);
+        }
+        self._pulsePipelinedQueryQueue();
+        return;
+      }
+      for (let i = 0;i < nativeQueries.length; i++) {
+        const q = nativeQueries[i];
+        const r = results[i];
+        q.native = self.native;
+        if (r.err) {
+          q.handleError(r.err);
+        } else {
+          if (q.name) {
+            self.namedQueries[q.name] = q.text;
+          }
+          q.state = "end";
+          q.emit("end", r.result);
+          if (q.callback) {
+            q.callback(null, r.result);
+          }
+        }
+        setImmediate(function() {
+          q.emit("_done");
+        });
+      }
+      self._pulsePipelinedQueryQueue();
     });
   };
   Client.prototype.cancel = function(query) {
@@ -6925,7 +7049,7 @@ var require_client2 = __commonJS((exports, module) => {
   };
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/lib/index.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/index.js
 var require_lib2 = __commonJS((exports, module) => {
   var Client = require_client();
   var defaults = require_defaults();
@@ -6987,7 +7111,7 @@ var require_lib2 = __commonJS((exports, module) => {
   });
 });
 
-// ../../node_modules/.bun/pg@8.22.0+51226add061828f6/node_modules/pg/esm/index.mjs
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/esm/index.mjs
 var exports_esm = {};
 __export(exports_esm, {
   types: () => types2,
