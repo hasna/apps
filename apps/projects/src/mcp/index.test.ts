@@ -13,17 +13,26 @@ function runMcpCli(args: string[]) {
     cmd: ["bun", "run", "src/mcp/index.ts", ...args],
     stdout: "pipe",
     stderr: "pipe",
+    // Same isolation as testSpawnEnv(): blank the hosted API selectors so the
+    // shared seam's disk tier cannot route the child to the real backend.
+    env: testSpawnEnv(),
   });
 }
 
 function runMcpSession(messages: unknown[], env: Record<string, string>) {
-  // Api-mode selectors are stripped from the passed env itself, not only from
+  // Api-mode selectors are blanked in the passed env itself, not only in
   // process.env: a call site passing raw process.env must not be able to
-  // reach an api transport through this helper. testSpawnEnv() keeps keys
-  // present in `overrides`, so it cannot express that here.
+  // reach an api transport through this helper, and the shared seam's disk
+  // tier must not route the child to the real backend either (an explicitly
+  // DEFINED-but-blank URL is the seam's "select the local store" escape
+  // hatch). testSpawnEnv() keeps keys present in `overrides`, so it cannot
+  // express that here.
   const isolated: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if ((HOSTED_API_ENV_KEYS as readonly string[]).includes(key)) continue;
+    if ((HOSTED_API_ENV_KEYS as readonly string[]).includes(key)) {
+      isolated[key] = "";
+      continue;
+    }
     isolated[key] = value;
   }
   return Bun.spawnSync({

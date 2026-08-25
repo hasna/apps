@@ -101,11 +101,14 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
   const previousEnv = new Map<string, string | undefined>();
   // Same reasoning as testSpawnEnv(): an operator shell that exports the hosted backend
   // selectors would otherwise silently turn these in-process local-store runs
-  // into hosted-backend runs against the real backend.
+  // into hosted-backend runs against the real backend. Blank, not delete: the
+  // shared @hasna/contracts seam reads fleet app-config files on disk when the
+  // environment is silent, and an explicitly DEFINED-but-blank URL is its
+  // "select the local store" escape hatch that beats any disk pointer.
   for (const key of HOSTED_API_ENV_KEYS) {
     if (key in env) continue;
     previousEnv.set(key, process.env[key]);
-    delete process.env[key];
+    process.env[key] = "";
   }
   for (const [key, value] of Object.entries(env)) {
     previousEnv.set(key, process.env[key]);

@@ -25,7 +25,11 @@ describe("projects MCP HTTP transport", () => {
     previousApiEnv = {};
     for (const key of HOSTED_API_ENV_KEYS) {
       previousApiEnv[key] = process.env[key];
-      delete process.env[key];
+      // Blank, not delete: the shared @hasna/contracts seam reads fleet
+      // app-config files on disk when the environment is silent, and an
+      // explicitly DEFINED-but-blank URL is its "select the local store"
+      // escape hatch that beats any disk pointer.
+      process.env[key] = "";
     }
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
     __resetProjectStore();
