@@ -1481,7 +1481,7 @@ sessionCmd.command("plan")
   .option("--allow-asset-installers", "opt in to planned provider installers; planning never invokes them")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render plan")
-  .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
+  .option("--check-global-coverage", "verify every registered, non-retired global-* source is in this render (expected read fresh from the registry, independent of this plan); on shortfall warn, exit non-zero, and for apply refuse to write (todos 102d6d0a, O15-00694)")
   .option("--no-station-profile", "do not inject the cached station-profile source")
   .option("--json", "output dry-run JSON")
   .action(async (opts) => {
@@ -1503,6 +1503,12 @@ sessionCmd.command("plan")
         // files: [] reads to automation as "nothing to render" while the render
         // is actually refused. Exit non-zero so the blockage is loud.
         if (plan.blocked) process.exitCode = 1;
+        // Coverage gate (O15-00694): an incomplete global-source render must not
+        // exit 0 — that is the silent-rc=0 class that left 16 registered global-*
+        // sources undelivered on station01 (incident 736344). The check stays
+        // opt-in via --check-global-coverage; passing it means "this render must
+        // carry every expected global source".
+        if (globalCoverage && !globalCoverage.complete) process.exitCode = 1;
         return;
       }
       console.log(chalk.bold(`${plan.tool} session render plan`) + chalk.dim(` (${plan.adapter.mode})`));
@@ -1526,6 +1532,7 @@ sessionCmd.command("plan")
         if (globalCoverage.complete) console.log(chalk.dim(`global source coverage: ${globalCoverage.expectedSlugs.length}/${globalCoverage.expectedSlugs.length} complete`));
       }
       if (plan.blocked) process.exitCode = 1;
+      if (globalCoverage && !globalCoverage.complete) process.exitCode = 1;
       console.log(chalk.dim("Dry run only. No files were written."));
     } catch (e) {
       console.error(chalk.red(formatCliError(e)));
@@ -1554,7 +1561,7 @@ sessionCmd.command("apply")
   .option("--asset-scope <scope>", "asset scope (global|project|session)")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render")
-  .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
+  .option("--check-global-coverage", "verify every registered, non-retired global-* source is in this render (expected read fresh from the registry, independent of this plan); on shortfall warn, exit non-zero, and for apply refuse to write (todos 102d6d0a, O15-00694)")
   .option("--no-station-profile", "do not inject the cached station-profile source")
   .option("--dry-run", "preview writes and conflicts without writing")
   .option("--force", "overwrite existing unmanaged files")
@@ -1569,6 +1576,33 @@ sessionCmd.command("apply")
       const store = resolveConfigStore();
       const plan = await buildSessionRenderPlan(opts, tool, store, "apply");
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
+      if (globalCoverage && !globalCoverage.complete) {
+        // Fail-closed coverage gate (O15-00694): refuse to write when registered,
+        // non-retired global-* sources are absent from this render. The fleet's
+        // hand-maintained spec (render-spec-station01-sh) silently left 16
+        // registered sources undelivered at rc=0 (incident 736344); an apply that
+        // perpetuates that gap must not look successful, and must not overwrite
+        // the last good home state with a partial render. The caller decides
+        // intent by passing --check-global-coverage; a partial render that is
+        // intentional simply does not pass the flag.
+        if (opts.json) {
+          printJson({
+            ...planJsonForOutput(plan),
+            globalSourceCoverage: globalCoverage,
+          });
+        } else {
+          for (const warning of formatGlobalSourceCoverageWarnings(globalCoverage)) {
+            console.error(chalk.red(`refused: ${warning}`));
+          }
+          console.error(
+            chalk.red(
+              `Refusing to apply: ${globalCoverage.missingSlugs.length} registered global-* source(s) absent from this render. Wire them into --config or tag them retired-global-source.`,
+            ),
+          );
+        }
+        process.exitCode = 1;
+        return;
+      }
       const ownedClaudeAuthorities = tool === "claude" ? await loadOwnedClaudeAuthorities(store) : undefined;
       const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force, ownedClaudeAuthorities });
       if (opts.json) {

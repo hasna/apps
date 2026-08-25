@@ -797,3 +797,117 @@ describe("configs session CLI", () => {
     }
   });
 });
+
+describe("configs session CLI -- global-source coverage gate (O15-00694)", () => {
+  // Regression for incident 736344 (todos O15-00694): 16 registered global-* sources
+  // reached no render on station01 because the hand-maintained RENDER-SPEC.sh
+  // GLOBAL_CONFIGS array never listed them, and `--check-global-coverage` was
+  // warn-only at rc=0 — the render path stayed silent, exactly the deletion-trap
+  // class global-source-coverage.ts documents ("a source that is simply never added
+  // to the array disappears from every render, silently, at rc=0, forever").
+  //
+  // The gate must FAIL the render (plan: non-zero exit; apply: refuse to write) when a
+  // registered, non-retired global-* source is absent from the --config list, so a gap
+  // is loud instead of silent. Constructed shortfall: seed one stored config with a
+  // global- slug, then render WITHOUT wiring it.
+
+  const sourceBody = "# Global fix-lane regression source\n\nBody for the coverage gate test.\n";
+
+  function seedGlobalConfig(home: string, env: Record<string, string | undefined>): void {
+    mkdirSync(join(home, "sources"), { recursive: true });
+    const sourcePath = join(home, "sources", "global-fix-lane-regression.md");
+    writeFileSync(sourcePath, sourceBody);
+    const seeded = runCli(["add", sourcePath, "--name", "global-fix-lane-regression", "--category", "agent", "--agent", "global"], env);
+    expect(seeded.status).toBe(0);
+  }
+
+  test("plan exits non-zero and reports the missing slug when a registered global-* source is absent (constructed shortfall)", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs") };
+      seedGlobalConfig(home, env);
+
+      const result = runCli([
+        "session", "plan",
+        "--tool", "codex",
+        "--profile", "account999",
+        "--target-home", join(home, "codex-home"),
+        "--allow-empty-sources",
+        "--check-global-coverage",
+        "--json",
+      ], env);
+
+      expect(result.status).toBe(1);
+      const plan = JSON.parse(result.stdout) as {
+        globalSourceCoverage: { complete: boolean; expectedSlugs: string[]; missingSlugs: string[] };
+      };
+      expect(plan.globalSourceCoverage.complete).toBe(false);
+      expect(plan.globalSourceCoverage.expectedSlugs).toContain("global-fix-lane-regression");
+      expect(plan.globalSourceCoverage.missingSlugs).toContain("global-fix-lane-regression");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("plan exits 0 when every registered global-* source is wired into the render", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs") };
+      seedGlobalConfig(home, env);
+
+      const result = runCli([
+        "session", "plan",
+        "--tool", "codex",
+        "--profile", "account999",
+        "--target-home", join(home, "codex-home"),
+        "--config", "global:global-fix-lane-regression",
+        "--check-global-coverage",
+        "--json",
+      ], env);
+
+      expect(result.status).toBe(0);
+      const plan = JSON.parse(result.stdout) as { globalSourceCoverage: { complete: boolean; missingSlugs: string[] } };
+      expect(plan.globalSourceCoverage.complete).toBe(true);
+      expect(plan.globalSourceCoverage.missingSlugs).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("apply refuses to write (status 1, no render) when coverage is incomplete; applies when complete", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs") };
+      seedGlobalConfig(home, env);
+      const codexHome = join(home, "codex-home");
+
+      const refused = runCli([
+        "session", "apply",
+        "--tool", "codex",
+        "--profile", "account999",
+        "--target-home", codexHome,
+        "--allow-empty-sources",
+        "--check-global-coverage",
+        "--json",
+      ], env);
+
+      expect(refused.status).toBe(1);
+      expect(existsSync(join(codexHome, ".hasna", "session-render-manifest.json"))).toBe(false);
+
+      const applied = runCli([
+        "session", "apply",
+        "--tool", "codex",
+        "--profile", "account999",
+        "--target-home", codexHome,
+        "--config", "global:global-fix-lane-regression",
+        "--check-global-coverage",
+        "--json",
+      ], env);
+
+      expect(applied.status).toBe(0);
+      expect(existsSync(join(codexHome, ".hasna", "session-render-manifest.json"))).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
