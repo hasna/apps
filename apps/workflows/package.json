@@ -1,6 +1,6 @@
 {
   "name": "@hasna/workflows",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Universal graph workflow app — graph language (start/step/decision/while/end), three-table store, session WAL, daemon with claims/leases, four lane adapters (claude/codex/cursor/grok), and a full CLI on four surfaces",
   "type": "module",
   "main": "./dist/index.js",
