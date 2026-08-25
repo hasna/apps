@@ -64,6 +64,17 @@
  *                 this entry previously cited (@hasna/conversations@0.7.5,
  *                 @hasna/mementos@0.14.86, @hasna/todos@0.15.46) are all
  *                 published as of this measurement.
+ *   domains     — @hasna/contracts@0.14.1 rc=1 until the contracts release lane
+ *                 publishes it (added 2026-08-25 by the publish-all-contracts
+ *                 lane, PR #1176). The domains manifest pin was bumped by
+ *                 Version Packages #1168 while the lockfile could not follow:
+ *                 measured standalone regen (`bun install --lockfile-only` in a
+ *                 dir with no workspace parent) rc=1 "No version matching
+ *                 '0.14.1' found for specifier '@hasna/contracts'". The lockfile
+ *                 regenerates in the change that follows the 0.14.1 publish —
+ *                 the economy O15-00629 pattern. The vendored storage-kit is
+ *                 already regenerated at 0.14.1 in the same PR; only the
+ *                 registry-resolved lockfile entry is pending.
  *   testers     — @hasna/browser@0.5.28 rc=1. Inert for RULE 2 as well: no
  *                 `apps/testers/bun.lock` is tracked (only its dashboard's).
  *   browser     — NOT justified by an unresolvable pin any more, and this entry
@@ -126,6 +137,7 @@ import { execSync } from "node:child_process";
 const UNRESOLVABLE_PINS = new Set<string>([
   "automations",
   "browser",
+  "domains",
   "economy",
   "testers",
 ]);

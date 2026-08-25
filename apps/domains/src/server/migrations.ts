@@ -57,7 +57,13 @@ export async function runMigrations(
   const pool = createPgPool({ connectionString: dsn, env, applicationName: "domains-migrate" });
   try {
     const client = wrapExecutor(pool);
-    const ledger = new MigrationLedger(client, buildMigrations());
+    // O15-00671: the prod ledger carries `domains_apikeys_tenancy_0001`, an
+    // out-of-band row from the 2026-07 self-hosted cutover that no published
+    // build ever generated. Acknowledge it so the downgrade guard passes and
+    // the row is never checksum-compared or re-applied.
+    const ledger = new MigrationLedger(client, buildMigrations(), {
+      acknowledgedLegacyIds: ["domains_apikeys_tenancy_0001"],
+    });
     return await ledger.migrate(opts.dryRun ? { dryRun: true } : {});
   } finally {
     await pool.end();
