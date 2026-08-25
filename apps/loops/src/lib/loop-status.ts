@@ -40,3 +40,18 @@ export function assertExpiresAfterRuns(value: unknown): asserts value is number 
     throw new ValidationError("loop expiresAfterRuns must be an integer >= 1");
   }
 }
+
+export function isLeaseMs(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+// leaseMs is the run lease in milliseconds before an unresponsive runner is
+// considered dead. 0 or a negative value would make every claim immediately
+// wedged, so require a positive integer. Shared by the sqlite and postgres
+// backends and the hosted PATCH validation (O15-00695: per-loop lease config
+// so long-running agentic sweeps can be widened in place).
+export function assertLeaseMs(value: unknown): asserts value is number {
+  if (!isLeaseMs(value)) {
+    throw new ValidationError("loop leaseMs must be an integer >= 1");
+  }
+}

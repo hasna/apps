@@ -112,7 +112,7 @@ import type {
 } from "../../types.js";
 import { normalizeRunReceipt } from "../run-receipts.js";
 import { normalizeLoopLabels } from "../labels.js";
-import { assertExpiresAfterRuns, assertLoopStatus, assertMaxAttempts } from "../loop-status.js";
+import { assertExpiresAfterRuns, assertLeaseMs, assertLoopStatus, assertMaxAttempts } from "../loop-status.js";
 import { normalizeRunCompletion } from "../run-completion.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
@@ -656,6 +656,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
     if ("maxAttempts" in patch && patch.maxAttempts !== undefined) assertMaxAttempts(patch.maxAttempts);
     if ("expiresAfterRuns" in patch && patch.expiresAfterRuns !== undefined) assertExpiresAfterRuns(patch.expiresAfterRuns);
+    if ("leaseMs" in patch && patch.leaseMs !== undefined) assertLeaseMs(patch.leaseMs);
     const updated = (opts.now ?? new Date()).toISOString();
     return this.client.transaction(async (c) => {
       const current = await this.loadLoop(c, id);
@@ -668,9 +669,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
         updatedAt: updated,
       };
       const res = await c.query(
-        `UPDATE loops SET status=$1, labels_json=$2::jsonb, next_run_at=$3, retry_scheduled_for=$4, expires_at=$5, expires_after_runs=$6, max_attempts=$7, updated_at=$8
-         WHERE tenant_id = open_loops_current_tenant_id() AND id=$9
-           AND ($10::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$10 AND expires_at > $11))`,
+        `UPDATE loops SET status=$1, labels_json=$2::jsonb, next_run_at=$3, retry_scheduled_for=$4, expires_at=$5, expires_after_runs=$6, max_attempts=$7, lease_ms=$8, updated_at=$9
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$10
+           AND ($11::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$11 AND expires_at > $12))`,
         [
           merged.status,
           JSON.stringify(merged.labels),
@@ -679,6 +680,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
           merged.expiresAt ?? null,
           merged.expiresAfterRuns ?? null,
           merged.maxAttempts,
+          merged.leaseMs,
           merged.updatedAt,
           id,
           opts.daemonLeaseId ?? null,

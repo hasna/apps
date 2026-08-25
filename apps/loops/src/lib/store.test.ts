@@ -168,6 +168,103 @@ describe("Store", () => {
     }
   });
 
+  test("updateLoop changes leaseMs in place, keeping the loop's id, schedule and run history", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "lease-widening",
+          leaseMs: 30 * 60_000,
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      // The default is 30 minutes; a long-running agentic sweep needs wider.
+      expect(loop.leaseMs).toBe(30 * 60_000);
+      store.claimRun(loop, "2027-01-01T00:00:00.000Z", "test");
+      const runsBefore = store.listRuns({ loopId: loop.id }).length;
+      expect(runsBefore).toBe(1);
+
+      const updated = store.updateLoop(loop.id, { leaseMs: 2 * 60 * 60_000 });
+
+      expect(updated.leaseMs).toBe(2 * 60 * 60_000);
+      expect(store.getLoop(loop.id)?.leaseMs).toBe(2 * 60 * 60_000);
+      // In place: nothing that a delete-and-recreate would have destroyed moved.
+      expect(updated.id).toBe(loop.id);
+      expect(updated.name).toBe(loop.name);
+      expect(updated.schedule).toEqual(loop.schedule);
+      expect(updated.nextRunAt).toBe(loop.nextRunAt);
+      expect(updated.createdAt).toBe(loop.createdAt);
+      expect(store.listRuns({ loopId: loop.id }).length).toBe(runsBefore);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop leaves leaseMs untouched when the patch omits it", () => {
+    // Regression (O15-00695): updateLoop writes lease_ms unconditionally from
+    // the merged row, so an omitted key must fall through to the current value
+    // rather than resetting the lease to the create default. This is the same
+    // class of bug that once wiped omitted schedule fields on the /v1 PATCH path.
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "lease-preserved",
+          leaseMs: 90 * 60_000,
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      expect(loop.leaseMs).toBe(90 * 60_000);
+
+      store.updateLoop(loop.id, { labels: ["unrelated"] });
+      expect(store.getLoop(loop.id)?.leaseMs).toBe(90 * 60_000);
+
+      store.updateLoop(loop.id, { status: "paused" });
+      expect(store.getLoop(loop.id)?.leaseMs).toBe(90 * 60_000);
+
+      store.updateLoop(loop.id, { maxAttempts: 2 });
+      expect(store.getLoop(loop.id)?.leaseMs).toBe(90 * 60_000);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop rejects a leaseMs that is not a positive integer, atomically", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "lease-invalid",
+          leaseMs: 30 * 60_000,
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const before = store.getLoop(loop.id);
+      // 0 and negatives would make every run claim immediately wedged, so a
+      // lease must be a positive integer of milliseconds.
+      for (const leaseMs of [0, -1, 1.5, "2", null, {}, Number.NaN]) {
+        expect(() =>
+          store.updateLoop(loop.id, {
+            leaseMs,
+            labels: ["mutated"],
+          } as unknown as Parameters<Store["updateLoop"]>[1])
+        ).toThrow(ValidationError);
+        expect(store.getLoop(loop.id)).toEqual(before);
+      }
+
+      expect(store.updateLoop(loop.id, { leaseMs: 1_000 }).leaseMs).toBe(1_000);
+      expect(store.updateLoop(loop.id, { leaseMs: 4 * 60 * 60_000 }).leaseMs).toBe(4 * 60 * 60_000);
+    } finally {
+      store.close();
+    }
+  });
+
   test("updateLoop rejects erased invalid statuses atomically and accepts every canonical status", () => {
     const store = new Store(":memory:");
     try {
