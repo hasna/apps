@@ -4,6 +4,8 @@
 
 ### Patch Changes
 
+- 11ba577f: Bounded dedup projection (O15-00170): dedup workflows now capture only the fields the dedupe fingerprint consumes instead of credential-bearing whole-task composites (incidents 713001/713022/713043-46/713119), surfaced through the new `todos dedupe project --json` command; the shared redactor also gains the xai-token pattern on every surface.
+- af5e91ef: Sync push's destination preflight now throws a typed `ResourceConflictError` (`SNAPSHOT_DESTINATION_CONFLICT`) so the mirror/outbox parks persistent destination collisions instead of retrying them as transient (duplicate-key retry storm).
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
   - @hasna/contracts@0.14.0

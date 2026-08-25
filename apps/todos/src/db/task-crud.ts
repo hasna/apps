@@ -18,6 +18,13 @@ import {
 } from "../types/index.js";
 import { getDatabase, lowerInClause, now, resolveAssignedToAliases, uuid } from "./database.js";
 export { resolveAssignedToAliases, assignedToAliasSet, lowerInClause } from "./database.js";
+
+/** Maximum accepted task-list limit. listTasks rejects any provided limit
+ *  outside [1, MAX_TASK_LIST_LIMIT] instead of silently dropping the LIMIT
+ *  clause (0 and NaN are falsy, and SQLite `LIMIT -1` means "no limit" — all
+ *  of which previously returned the WHOLE table to a caller that believed the
+ *  read was bounded). */
+export const MAX_TASK_LIST_LIMIT = 100_000;
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
@@ -294,6 +301,14 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   const d = db || getDatabase();
   const { clearExpiredLocks } = require("./database.js");
   clearExpiredLocks(d);
+  if (filter.limit !== undefined) {
+    const limit = filter.limit;
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > MAX_TASK_LIST_LIMIT) {
+      throw new TypeError(
+        `listTasks limit must be a positive integer between 1 and ${MAX_TASK_LIST_LIMIT}; got ${String(limit)}`,
+      );
+    }
+  }
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
 

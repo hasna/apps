@@ -1483,6 +1483,32 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should reject malformed dedupe --limit values (fail closed)", async () => {
+    const dbPath = "/tmp/test-cli-dedupe-limit.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const addResult = await runCli(["add", "Dedupe limit control task", "--json"], dbPath);
+      expect(addResult.exitCode).toBe(0);
+
+      // 0 is falsy (no LIMIT clause), -1 is SQLite "no limit", nonnumeric is
+      // NaN (also falsy), and the over-cap value exceeds the store bound —
+      // each used to silently return the WHOLE table.
+      for (const bad of ["0", "-1", "abc", "99999999999"]) {
+        const result = await runCli(["dedupe", "scan", "--limit", bad, "--json"], dbPath);
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout + result.stderr).toContain("--limit must be a positive integer");
+      }
+
+      // CONTROL: a valid limit still works.
+      const ok = await runCli(["dedupe", "scan", "--limit", "1", "--json"], dbPath);
+      expect(ok.exitCode).toBe(0);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should bootstrap a local project from CLI JSON output", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

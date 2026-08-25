@@ -7,6 +7,7 @@ export {
   getTask,
   getTaskWithRelations,
   listTasks,
+  MAX_TASK_LIST_LIMIT,
   countTasks,
   updateTask,
   upsertTaskByFingerprint,
