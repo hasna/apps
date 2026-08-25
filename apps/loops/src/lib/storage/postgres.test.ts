@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PostgresStorage } from "./postgres.js";
+import { LOOP_MUTATION_ADVISORY_LOCK_SQL } from "./postgres-loop-storage.js";
 import {
   POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
   POSTGRES_MIGRATION_LEDGER_TABLE,
@@ -249,5 +250,18 @@ describe("Postgres storage migrations", () => {
     const storage = new PostgresStorage(executor);
 
     await expect(storage.migrate()).rejects.toThrow("Postgres migration checksum mismatch");
+  });
+
+  test("loop mutation advisory lock SQL is valid PostgreSQL text (no NUL byte or NUL escape)", () => {
+    // O15-00692 regression: the lock query previously used E'\000' — an octal
+    // escape for NUL in a Postgres E-string. PostgreSQL rejects NUL bytes in
+    // text ("invalid byte sequence for encoding UTF8: 0x00"), so the first
+    // statement of every mutation transaction threw and
+    // POST /v1/loops/<id>/mutations returned 500 for every loop.
+    expect(LOOP_MUTATION_ADVISORY_LOCK_SQL.includes("\0")).toBe(false);
+    expect(LOOP_MUTATION_ADVISORY_LOCK_SQL).not.toMatch(/E'\\x?0{1,2}'/);
+    // The separator must be present so the three ids are joined deterministically.
+    expect(LOOP_MUTATION_ADVISORY_LOCK_SQL).toContain("E'\\x1f'");
+    expect(LOOP_MUTATION_ADVISORY_LOCK_SQL).toMatch(/open_loops_current_tenant_id\(\)/);
   });
 });
