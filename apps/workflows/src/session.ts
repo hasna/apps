@@ -25,11 +25,11 @@ export const DEFAULT_MAX_ATTEMPTS = 3;
 export function repairTornRuns(
   store: WorkflowsStore,
   wal: SessionWAL,
-  opts: { maxAttempts?: number } = {},
+  opts: { maxAttempts?: number; now?: number } = {},
 ): RepairResult {
   const maxAttempts = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const replay = wal.replay();
-  const liveClaims = replay.liveClaims();
+  const liveClaims = replay.liveClaims(opts.now);
   const report: RepairResult = { interrupted: 0, requeued: 0, failed: 0 };
 
   const running = store.listRuns({ status: "running", limit: 1000 });
@@ -44,7 +44,7 @@ export function repairTornRuns(
       });
       for (const node of nodes) {
         if (node.status === "running") {
-          store.setRunNodeStatus(node.id, "pending", { error: null });
+          store.setRunNodeStatus(node.id, "pending", { error: undefined });
         }
       }
       report.requeued++;
@@ -92,7 +92,7 @@ export function recordMemo(store: WorkflowsStore, graphName: string, nodeId: str
 export function resetRunNodes(store: WorkflowsStore, run: RunRow): void {
   for (const node of store.listRunNodes(run.id)) {
     if (node.status === "running") {
-      store.setRunNodeStatus(node.id, "pending", { error: null });
+      store.setRunNodeStatus(node.id, "pending", { error: undefined });
     }
   }
 }

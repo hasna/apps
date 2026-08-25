@@ -71,7 +71,7 @@ function nowIso(): string {
 export interface CreateRunInput {
   graphName: string;
   graphVersion: string;
-  context: unknown;
+  context?: unknown;
 }
 
 export interface CreateRunNodeInput {
@@ -87,6 +87,8 @@ export interface WorkflowsStore {
   getRun(id: string): RunRow | undefined;
   listRuns(opts?: { status?: RunStatus; limit?: number }): RunRow[];
   setRunStatus(id: string, status: RunStatus, patch?: { result?: unknown; error?: string; startedAt?: string; finishedAt?: string }): void;
+  /** Persist the run's durable execution state (the engine's cursor + steps). */
+  setRunContext(id: string, context: unknown): void;
   bumpAttempts(id: string): void;
   createRunNode(input: CreateRunNodeInput): RunNodeRow;
   getRunNode(id: string): RunNodeRow | undefined;
@@ -249,6 +251,10 @@ export function openStore(dataDir: string): WorkflowsStore {
 
     bumpAttempts(id: string): void {
       db.query(`UPDATE runs SET attempts = attempts + 1, updated_at = ? WHERE id = ?`).run(nowIso(), id);
+    },
+
+    setRunContext(id: string, context: unknown): void {
+      db.query(`UPDATE runs SET context_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(context), nowIso(), id);
     },
 
     createRunNode(input: CreateRunNodeInput): RunNodeRow {

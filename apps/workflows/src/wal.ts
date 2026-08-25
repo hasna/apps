@@ -58,7 +58,7 @@ export interface WalReplay {
   /** True when the torn tail was truncated away. */
   repaired: boolean;
   /** Reconstructed live claims from claim_acquired/claim_released pairs. */
-  liveClaims(): Map<string, LiveClaim>;
+  liveClaims(nowMs?: number): Map<string, LiveClaim>;
 }
 
 export const WAL_FILE_NAME = "session.wal";
@@ -157,7 +157,7 @@ export class SessionWAL {
       entries,
       torn,
       repaired,
-      liveClaims: () => reconstructLiveClaims(entries),
+      liveClaims: (nowMs?: number) => reconstructLiveClaims(entries, nowMs),
     };
   }
 
@@ -175,7 +175,7 @@ function cumulativeOffset(lines: string[], index: number): number {
   return offset;
 }
 
-function reconstructLiveClaims(entries: WalEntry[]): Map<string, LiveClaim> {
+function reconstructLiveClaims(entries: WalEntry[], nowMs = Date.now()): Map<string, LiveClaim> {
   const claims = new Map<string, LiveClaim>();
   for (const entry of entries) {
     const op = entry.op;
@@ -188,9 +188,8 @@ function reconstructLiveClaims(entries: WalEntry[]): Map<string, LiveClaim> {
       }
     }
   }
-  const now = Date.now();
   for (const [runId, claim] of claims) {
-    if (claim.expiresAtMs <= now) claims.delete(runId);
+    if (claim.expiresAtMs <= nowMs) claims.delete(runId);
   }
   return claims;
 }

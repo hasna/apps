@@ -76,6 +76,13 @@ describe("runs", () => {
   test("getRun returns undefined for a missing id", () => {
     expect(store.getRun("nope")).toBeUndefined();
   });
+
+  test("setRunContext persists durable execution state", () => {
+    const run = store.createRun({ graphName: "g", graphVersion: "1", context: { input: 1 } });
+    store.setRunContext(run.id, { input: 1, __wf: { cursor: "build", loops: {} } });
+    const read = store.getRun(run.id);
+    expect(JSON.parse(read!.contextJson).__wf.cursor).toBe("build");
+  });
 });
 
 describe("run_nodes", () => {
