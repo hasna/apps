@@ -1,6 +1,6 @@
 export const meta = {
   name: 'task-drain-apps',
-  description: 'Standing hasna/apps task drain: census unowned pending BUG rows in project 3bbc22e0, execute the next row via the fix-lane discipline (idempotency gate, worktree, PR-first, one Fable review, merge), record, relaunch on completion while rows remain',
+  description: 'Standing hasna/apps task drain, drain-to-zero: census unowned pending BUG rows in project 3bbc22e0, execute rows via the fix-lane discipline (idempotency gate, worktree, PR-first, one Fable review, merge), re-census each pass and loop while rows remain (hard bound MAX_PASSES), record at the end',
   phases: [
     { title: 'Census' },
     { title: 'Execute' },
@@ -9,9 +9,10 @@ export const meta = {
 }
 
 // Parallelism: this lane may run in up to 2 concurrent instances (owner-approved 2026-08-23).
-// Safe parallel execution requires (a) rows-per-run bounded (default 2, args.maxRows override)
+// Safe parallel execution requires (a) rows-per-pass bounded (default 2, args.maxRows override)
 // and (b) a claim comment on each row at execution start, which the census excludes.
 const MAX_ROWS = (args && args.maxRows) || 2
+const MAX_PASSES = (args && args.maxPasses) || 4 // drain-to-zero hard bound; the standing watchdog relaunches if the bound is hit
 const CLAIM_TAG = 'task-drain-apps claim'
 
 const CENSUS_SCHEMA = {
@@ -49,8 +50,14 @@ const EXEC_SCHEMA = {
   },
 }
 
+// DRAIN-TO-ZERO LOOP (owner design 2026-08-25): each pass re-censuses; while
+// unowned BUG rows remain the pass restarts. The loop exits when the census
+// returns no candidates (queue drained) or MAX_PASSES is hit (watchdog relaunches).
+const passes = []
+let pass = 0
+for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Census')
-const census = await agent(`Census the hasna/apps task-drain queue (todos project 3bbc22e0).
+const census = await agent(`Census the hasna/apps task-drain queue (todos project 3bbc22e0). PASS ${pass} of ${MAX_PASSES} — re-census each pass; rows executed earlier in this run carry claims and are excluded.
 
 1. \`todos list --project 3bbc22e0 --status pending --json\` (redirect to a file, never pipe). Select rows whose title starts with "BUG".
 2. Filter to UNOWNED rows (no assigned_to). For each, read the comments (rows carry comments in the list payload): a row whose comments already record "FIXED AT HEAD" or "MERGED" or "DUPLICATE of" is NOT a candidate — exclude it.
@@ -59,20 +66,21 @@ const census = await agent(`Census the hasna/apps task-drain queue (todos projec
 5. Sort candidates by created_at ASC (oldest first — queue order).
 6. Return the ordered candidates. Include rows already covered by a fix-lane in flight ONLY if their fix-lane is provably dead (transcript older than 60 min); otherwise exclude them (a live lane is a live fixer — never duplicate).
 
-Return candidates (max ${MAX_ROWS + 2}), queueSize (unowned BUG rows remaining), blocked (excluded rows with reasons).`, { label: 'census', phase: 'Census', schema: CENSUS_SCHEMA })
+Return candidates (max ${MAX_ROWS + 2}), queueSize (unowned BUG rows remaining), blocked (excluded rows with reasons).`, { label: 'census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
 
 const candidates = (census && census.candidates) || []
 if (candidates.length === 0) {
-  return { status: 'task-drain-apps-empty', queueSize: census ? census.queueSize : 0, blocked: census ? census.blocked : [] }
+  log('task-drain-apps: pass ' + pass + ' drained — no unowned BUG rows remain')
+  break
 }
 
 phase('Execute')
-// Up to MAX_ROWS rows per run, executed SEQUENTIALLY (one agent per row). Each row is
+// Up to MAX_ROWS rows per pass, executed SEQUENTIALLY (one agent per row). Each row is
 // claimed with a comment before execution so concurrent instances never double-pick it.
 const rowsToRun = candidates.slice(0, MAX_ROWS)
 const execs = []
 for (const row of rowsToRun) {
-  log('task-drain-apps: executing row ' + row.shortId + ' — ' + row.title.slice(0, 80))
+  log('task-drain-apps: pass ' + pass + ' executing row ' + row.shortId + ' — ' + row.title.slice(0, 80))
 const exec = await agent(`Execute ONE hasna/apps BUG row via the fix-lane discipline. Row: ${JSON.stringify(row)}.
 
 CLAIM FIRST: comment the row now — \`todos comment <row.id> "${CLAIM_TAG} — executing <shortId> $(date -u +%Y-%m-%dT%H:%MZ)"\` (a concurrent task-drain instance's census excludes rows with a claim younger than 90 min; your claim prevents double-picking).
@@ -95,15 +103,24 @@ NEVER publish to npm (publish-all owns publishing). Never touch the shared check
 
   execs.push({ row, exec })
 }
+  passes.push({ pass, census, execs })
+  log('task-drain-apps: pass ' + pass + ' done — ' + execs.length + ' rows executed, ' + (census ? census.queueSize : 0) + ' unowned BUG rows remain')
+  if (!census || census.queueSize === 0) {
+    log('task-drain-apps: queue drained at pass ' + pass)
+    break
+  }
+}
+
+const allExecs = passes.flatMap(p => p.execs)
 
 phase('Record')
-const record = await agent(`Record the task-drain-apps run. Post one line to #apps: "task-drain-apps: ${execs.map(e => e.row.shortId + ' ' + (e.exec ? e.exec.outcome : 'unknown') + (e.exec && e.exec.prNumber ? ' PR #' + e.exec.prNumber : '') + (e.exec && e.exec.mergeSha ? ' merged ' + e.exec.mergeSha : '')).join('; ')}". Save mementos: mementos save 'task-drain-apps-2026-08-23' '<two-sentence summary>'. Return {posted: true}.`, { label: 'record', phase: 'Record' })
+const record = await agent(`Record the task-drain-apps run (${passes.length} pass(es)). Post one line to #apps: "task-drain-apps: ${allExecs.map(e => e.row.shortId + ' ' + (e.exec ? e.exec.outcome : 'unknown') + (e.exec && e.exec.prNumber ? ' PR #' + e.exec.prNumber : '') + (e.exec && e.exec.mergeSha ? ' merged ' + e.exec.mergeSha : '')).join('; ')}". Save mementos: mementos save 'task-drain-apps-2026-08-23' '<two-sentence summary>'. Return {posted: true}.`, { label: 'record', phase: 'Record' })
 
 return {
-  status: execs.length === 1 ? ('task-drain-apps-' + execs[0].exec.outcome) : 'task-drain-apps-multi',
-  rows: execs.map(e => ({ id: e.row.id, shortId: e.row.shortId })),
-  execs: execs.map(e => e.exec),
-  queueSize: census ? census.queueSize : 0,
-  candidatesRemaining: Math.max(0, candidates.length - rowsToRun.length),
+  status: allExecs.length === 0 ? 'task-drain-apps-empty' : (allExecs.length === 1 ? ('task-drain-apps-' + allExecs[0].exec.outcome) : 'task-drain-apps-multi'),
+  rows: allExecs.map(e => ({ id: e.row.id, shortId: e.row.shortId })),
+  execs: allExecs.map(e => e.exec),
+  passes: passes.map(p => ({ pass: p.pass, queueSize: p.census ? p.census.queueSize : 0 })),
+  queueSize: passes.length ? (passes[passes.length - 1].census ? passes[passes.length - 1].census.queueSize : 0) : 0,
   record,
 }

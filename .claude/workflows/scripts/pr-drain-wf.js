@@ -1,6 +1,6 @@
 export const meta = {
   name: 'pr-drain',
-  description: 'Standing PR review-fix-merge drain (owner-authorized 2026-08-18; WIDENED 2026-08-19 by owner: per-PR review lanes in waves of 12, census cap 45, merge width 6): census open hasna/apps PRs, classify by state, rebase the conflicting, review the unreviewed at head, merge the GO\'d with base-movement gate, report residue',
+  description: 'Standing PR review-fix-merge drain, drain-to-zero (owner-authorized 2026-08-18; WIDENED 2026-08-19 by owner: per-PR review lanes in waves of 12, census cap 45, merge width 6; LOOPED 2026-08-25 by owner: re-census each pass and restart while actionable PRs remain, hard bound MAX_PASSES): census open hasna/apps PRs, classify by state, rebase the conflicting, review the unreviewed at head, merge the GO\'d with base-movement gate, report residue',
   phases: [
     { title: 'Census', detail: 'open PRs -> mergeReady / needsRebase / needsReview / blocked / held-by-active-lane' },
     { title: 'Rebase', detail: 'conflicting PRs onto origin/main (unambiguous only)' },
@@ -56,12 +56,28 @@ const CENSUS_SCHEMA = { type: 'object', properties: { mergeReady: { type: 'array
 const PR_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
 const REPORT_SCHEMA = { type: 'object', properties: { prs: { type: 'array' }, residue: { type: 'array' } }, required: ['prs'] }
 
+// DRAIN-TO-ZERO LOOP (owner design 2026-08-25): re-census each pass; while any
+// actionable PR class (mergeReady | needsRebase | needsReview) is non-empty the
+// pass restarts inside the same run. Rebase/review/merge are STEPS of this
+// workflow, not standalone lanes. Exit: census returns zero actionable, or the
+// MAX_PASSES hard bound (the standing watchdog relaunches past the bound).
+const MAX_PASSES = (args && args.maxPasses) || 8
+const allRebase = []
+const allReviews = []
+const allMerges = []
+let census = null
+let pass = 0
+for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Census')
-const census = await agent(CENSUS, { label: 'pr-drain-census', phase: 'Census', schema: CENSUS_SCHEMA })
+census = await agent(CENSUS, { label: `pr-drain-census-${pass}`, phase: 'Census', schema: CENSUS_SCHEMA })
 const ready = (census && census.mergeReady) || []
 const rebase = (census && census.needsRebase) || []
 const review = (census && census.needsReview) || []
-log(`census: mergeReady ${ready.length}, rebase ${rebase.length}, review ${review.length}`)
+log(`pass ${pass} census: mergeReady ${ready.length}, rebase ${rebase.length}, review ${review.length}`)
+if (!ready.length && !rebase.length && !review.length) {
+  log(`pass ${pass}: census empty — drain complete`)
+  break
+}
 
 phase('Rebase')
 let rebaseResults = []
@@ -69,11 +85,12 @@ if (rebase.length) {
   const rebaseBatches = []
   for (let i = 0; i < rebase.length; i += 5) rebaseBatches.push(rebase.slice(i, i + 5))
   rebaseResults = await parallel(rebaseBatches.map((b, i) => () =>
-    agent(REBASE.replace('{PRS}', JSON.stringify(b)), { label: `pr-drain-rebase-${i + 1}`, phase: 'Rebase', schema: PR_SCHEMA }),
+    agent(REBASE.replace('{PRS}', JSON.stringify(b)), { label: `pr-drain-rebase-${pass}-${i + 1}`, phase: 'Rebase', schema: PR_SCHEMA }),
   ))
   const rebased = rebaseResults.filter(Boolean).flatMap(r => r.prs || []).filter(p => p.rebased)
   for (const p of rebased) ready.push({ number: p.number, head: p.newHead })
 }
+allRebase.push(...rebaseResults.filter(Boolean))
 
 phase('Review')
 let reviewResults = []
@@ -101,6 +118,7 @@ if (reviewResults.length) {
     if (verdictMap[p.number] === 'GO') ready.push(p)
   }
 }
+allReviews.push(...reviewResults.filter(Boolean))
 
 phase('Merge')
 let mergeResults = []
@@ -108,11 +126,14 @@ if (ready.length) {
   const mergeBatches = []
   for (let i = 0; i < ready.length; i += 6) mergeBatches.push(ready.slice(i, i + 6))
   mergeResults = await parallel(mergeBatches.map((b, i) => () =>
-    agent(MERGE.replace('{BATCH}', JSON.stringify(b)), { label: `pr-drain-merge-${i + 1}`, phase: 'Merge', schema: PR_SCHEMA }),
+    agent(MERGE.replace('{BATCH}', JSON.stringify(b)), { label: `pr-drain-merge-${pass}-${i + 1}`, phase: 'Merge', schema: PR_SCHEMA }),
   ))
+}
+allMerges.push(...mergeResults.filter(Boolean))
+log(`pass ${pass} complete — next pass re-censuses`)
 }
 
 phase('Report')
 const report = await agent(REPORT, { label: 'pr-drain-report', phase: 'Report', schema: REPORT_SCHEMA })
 
-return { census, rebase: rebaseResults.filter(Boolean), reviews: reviewResults.filter(Boolean), merges: mergeResults.filter(Boolean), report }
+return { passes: pass, census, rebase: allRebase, reviews: allReviews, merges: allMerges, report }

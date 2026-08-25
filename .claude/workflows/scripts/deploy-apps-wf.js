@@ -1,6 +1,6 @@
 export const meta = {
   name: 'deploy-apps',
-  description: 'Deploy @hasna/* app services (hasna/apps monorepo members) to the oss-fleet-prod ECS surface. Surveys deployable services (serve surfaces + Dockerfile + published/ECS-deployed version), verifies the provider-role table per service (source/registry/ECS surface/database/route), executes the ECS deployment convention (build native arm64 -> ECR push sha-tagged -> migrate one-shot -> register task def -> update-service -> wait stable -> live HTTPS test), fails closed where provider roles are unverified. CORRECTED 2026-08-24: the internalapps-prod-host docker-compose convention is LEGACY — all services run as ECS Fargate in oss-fleet-prod (measured: 32 services, virgilius lane deploys via task defs). Owner directive 2026-08-20.',
+  description: 'Deploy @hasna/* app services (hasna/apps monorepo members) to the oss-fleet-prod ECS surface, drain-to-zero. Surveys deployable services (serve surfaces + Dockerfile + published/ECS-deployed version), verifies the provider-role table per service (source/registry/ECS surface/database/route), executes the ECS deployment convention (build native arm64 -> ECR push sha-tagged -> migrate one-shot -> register task def -> update-service -> wait stable -> live HTTPS test), re-surveys each pass and loops while services remain deployable (hard bound MAX_PASSES), fails closed where provider roles are unverified. CORRECTED 2026-08-24: the internalapps-prod-host docker-compose convention is LEGACY — all services run as ECS Fargate in oss-fleet-prod (measured: 32 services, virgilius lane deploys via task defs). Owner directive 2026-08-20.',
   phases: [
     { title: 'Survey', detail: 'enumerate deployable services, verify versions + ECS surface + routes, classify ready / blocked' },
     { title: 'Deploy', detail: 'one service at a time: build, ECR push, migrate, task def, update-service, live test' },
@@ -11,8 +11,17 @@ export const meta = {
 const SURVEY = { type: 'object', properties: { deployable: { type: 'array' }, blocked: { type: 'array' } }, required: ['deployable', 'blocked'] }
 const DEPLOY = { type: 'object', properties: { deployed: { type: 'array' }, failed: { type: 'array' } }, required: ['deployed', 'failed'] }
 
+// DRAIN-TO-ZERO LOOP (owner design 2026-08-25): re-survey each pass; while any
+// service is deployable the pass restarts inside the same run. A pass that
+// deploys nothing new or an empty deployable set ends the loop.
+const MAX_PASSES = (args && args.maxPasses) || 6
+const allDeployed = []
+const allFailed = []
+let survey = null
+let pass = 0
+for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Survey')
-const survey = await agent(`SURVEY the deployable @hasna/* app services (read-only, nothing modified). READ FROM origin/main, NEVER the stale local checkout (the shared checkout at /home/hasna/workspace/repos/hasna/apps is stale — git fetch origin main -q, then git show origin/main:<path> for every read).
+survey = await agent(`SURVEY the deployable @hasna/* app services (read-only, nothing modified). PASS ${pass} of ${MAX_PASSES} — re-survey each pass. READ FROM origin/main, NEVER the stale local checkout (the shared checkout at /home/hasna/workspace/repos/hasna/apps is stale — git fetch origin main -q, then git show origin/main:<path> for every read).
 
 THE DEPLOY SURFACE (measured 2026-08-24): services run as ECS Fargate in the oss-fleet-prod cluster (hasna-xyz-infra account 789877399345, us-east-1), service naming <name>-prod, behind the shared ALB; routes are <name>.hasna.xyz (or the app's own product domain). The internalapps-prod-host docker-compose channel is LEGACY and is NOT a deploy target — do not probe it.
 
@@ -25,11 +34,14 @@ THE DEPLOY SURFACE (measured 2026-08-24): services run as ECS Fargate in the oss
    - routing: https://<name>.hasna.xyz/health answers 200 (curl, one probe; a product app uses its own domain).
 3. Classify: DEPLOYABLE = ECS surface exists AND the ECS-deployed image version (from the current task def image tag or the route /version) is BEHIND origin/main's src version (or the src version differs from what the ECS service runs); BLOCKED = any role missing or unverifiable, with the exact missing role named. Do NOT deploy anything.
 Return {deployable: [{name, packageName, version, ecsService, taskDef, route}], blocked: [{name, missingRole, reason}]}.`, { label: 'survey-deploy', phase: 'Survey', schema: SURVEY })
-if (!survey || survey.deployable.length === 0) return { status: 'deploy-survey-only', deployable: [], blocked: survey ? survey.blocked : [], deployed: [], failed: [] }
-log(`deploy survey: ${survey.deployable.length} deployable, ${survey.blocked.length} blocked`)
+if (!survey || survey.deployable.length === 0) {
+  log(`pass ${pass}: no deployable services — drain complete`)
+  break
+}
+log(`pass ${pass} survey: ${survey.deployable.length} deployable, ${survey.blocked.length} blocked`)
 
 phase('Deploy')
-const d = await agent(`DEPLOY the surveyed services ONE AT A TIME (the owner's one-at-a-time rule) to the oss-fleet-prod ECS surface (hasna-xyz-infra 789877399345, us-east-1). Deployable set: ${JSON.stringify(survey.deployable)}.
+const d = await agent(`DEPLOY the surveyed services ONE AT A TIME (the owner's one-at-a-time rule) to the oss-fleet-prod ECS surface (hasna-xyz-infra 789877399345, us-east-1). PASS ${pass} of ${MAX_PASSES}. Deployable set: ${JSON.stringify(survey.deployable)}.
 
 For EACH service, in this exact order, from a task worktree cut at origin/main (git -C ~/.hasna/repos/worktrees/apps/skeleton fetch origin main; worktree add ~/.hasna/repos/worktrees/apps/deploy-<name> -b deploy/<name> origin/main):
 0. GATE POST (the deploy-intent-confirm protocol, knowledge k_mt1cuu2k_u91wsm): before the deploy, post to the git-deployments channel: [DEPLOY INTENT] <name>@<version> -> https://<name>.hasna.xyz — <one-line changelog>. Note the message id. Every deploy carries the gate; a deploy without the intent post is a protocol violation.
@@ -45,9 +57,13 @@ A per-service failure stops that service and is recorded in failed — the rest 
 
 TRACKING RULE (corrected 2026-08-25 — a run cited 4 fabricated task ids with zero todos invocations): EVERY failure reason MUST cite a REAL todos row. Before recording a failure: todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress (redirect to a file, never pipe) and check whether a row for this exact defect class exists (match by title/package/symptom, not by invented id). If none exists, create it with todos add in project 3bbc22e0: title 'BUG: @hasna/<name> — <symptom, blocks <name> deploys>', description carrying the exact error line + service + task-def revision + intent/thread ids from this run. Cite ONLY the short id of a row you just created or just verified. NEVER cite a task id that has not been created or verified in this run.
 
-Return {deployed: [{name, version, imageDigest, route, healthOk, versionOk}], failed: [{name, reason}]}.`, { label: 'deploy-services', phase: 'Deploy', schema: DEPLOY })
+Return {deployed: [{name, version, imageDigest, route, healthOk, versionOk}], failed: [{name, reason}]}.`, { label: 'deploy-services-' + pass, phase: 'Deploy', schema: DEPLOY })
+allDeployed.push(...(d ? d.deployed : []))
+allFailed.push(...(d ? d.failed : []))
+log(`pass ${pass} complete — ${d ? d.deployed.length : 0} deployed, ${d ? d.failed.length : 0} failed; next pass re-surveys`)
+}
 
 phase('Record')
-const record = await agent(`RECORD step. Post to the internal-apps conversations channel (#internal-apps): deploy run — deployed ${d ? d.deployed.length : 0} (${d ? d.deployed.map(x => x.name + '@' + x.version + ' ' + x.route).join('; ') : 'none'}), failed ${d ? d.failed.length : 0} (${d ? d.failed.map(f => f.name + ': ' + f.reason).join('; ') : 'none'}), blocked ${survey.blocked.length}. Save mementos: mementos save 'deploy-internal-apps-2026-08-24' '<two-sentence summary>'. Return {posted: true, channel: 'internal-apps', mementoKey: 'deploy-internal-apps-2026-08-24'}.`, { label: 'record-deploy', phase: 'Record', model: 'sonnet' })
+const record = await agent(`RECORD step. Post to the internal-apps conversations channel (#internal-apps): deploy run (${pass} pass(es)) — deployed ${allDeployed.length} (${allDeployed.map(x => x.name + '@' + x.version + ' ' + x.route).join('; ') || 'none'}), failed ${allFailed.length} (${allFailed.map(f => f.name + ': ' + f.reason).join('; ') || 'none'}), blocked ${survey ? survey.blocked.length : 0}. Save mementos: mementos save 'deploy-internal-apps-2026-08-24' '<two-sentence summary>'. Return {posted: true, channel: 'internal-apps', mementoKey: 'deploy-internal-apps-2026-08-24'}.`, { label: 'record-deploy', phase: 'Record', model: 'sonnet' })
 
-return { status: 'deploy-run-complete', deployable: survey.deployable, blocked: survey.blocked, deployed: d ? d.deployed : [], failed: d ? d.failed : [], record }
+return { status: allDeployed.length === 0 ? 'deploy-survey-only' : 'deploy-run-complete', passes: pass, deployable: survey ? survey.deployable : [], blocked: survey ? survey.blocked : [], deployed: allDeployed, failed: allFailed, record }

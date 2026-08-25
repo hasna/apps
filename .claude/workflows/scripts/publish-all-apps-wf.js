@@ -1,6 +1,6 @@
 export const meta = {
   name: 'publish-all-apps',
-  description: 'Ship every hasna/apps member that is ahead of the npm registry: 4 WIP release lanes (1 app each), codewith release review per candidate, npm publish, live install+smoke',
+  description: 'Ship every hasna/apps member that is ahead of the npm registry, drain-to-zero: 4 WIP release lanes (1 app each), codewith release review per candidate, npm publish, live install+smoke; re-census each pass and loop while the queue is non-empty (hard bound MAX_PASSES)',
   phases: [
     { title: 'Census', detail: 'repo version vs registry for every member -> the publish queue (ahead / not published), excluding in-flight-owned apps' },
     { title: 'Release', detail: 'waves of 4 lanes, one app per lane: codewith release review -> intent -> publish -> two-sided verify -> live install + CLI smoke' },
@@ -124,10 +124,22 @@ const HARVEST_SCHEMA = {
   required: ['categories'],
 }
 
+// DRAIN-TO-ZERO LOOP (owner design 2026-08-25): re-census each pass; while the
+// publish queue is non-empty the pass restarts inside the same run. A pass that
+// publishes nothing new (all current/skipped) or an empty queue ends the loop.
+const MAX_PASSES = (args && args.maxPasses) || 6
+const allLanes = []
+let census = null
+let pass = 0
+for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Census')
-const census = await agent(CENSUS, { label: 'census-publish', phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+census = await agent(CENSUS, { label: 'census-publish-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
 const queue = (census && census.queue) || []
-log(`census: ${census ? JSON.stringify(census.counts) : 'FAILED'} — queue ${queue.length}`)
+log(`pass ${pass} census: ${census ? JSON.stringify(census.counts) : 'FAILED'} — queue ${queue.length}`)
+if (!queue.length) {
+  log(`pass ${pass}: publish queue empty — drain complete`)
+  break
+}
 
 phase('Release')
 const lanes = []
@@ -142,19 +154,23 @@ for (let i = 0; i < queue.length; i += 4) {
         .replaceAll('${BINS}', JSON.stringify(app.bins || []))
         .replaceAll('${TSHORT}', app.name.replace('@hasna/', '').slice(0, 10))
         .replaceAll('${ACCT}', ACCOUNTS[(i + j) % ACCOUNTS.length]),
-      { label: `release-${app.name.replace('@hasna/', '')}`, phase: 'Release', schema: RELEASE_SCHEMA, model: 'sonnet' },
+      { label: `release-${app.name.replace('@hasna/', '')}-p${pass}`, phase: 'Release', schema: RELEASE_SCHEMA, model: 'sonnet' },
     ),
   ))
   lanes.push(...results)
   const published = lanes.filter(l => l && l.publishedVersion).length
-  log(`wave ${i / 4 + 1} done; published so far ${published}/${lanes.filter(Boolean).length}`)
+  log(`pass ${pass} wave ${i / 4 + 1} done; published so far ${published}/${lanes.filter(Boolean).length}`)
+}
+allLanes.push(...lanes.filter(Boolean))
+const publishedThisPass = lanes.filter(l => l && l.publishedVersion).length
+log(`pass ${pass} complete — ${publishedThisPass} published, queue had ${queue.length}; next pass re-censuses`)
 }
 
 phase('Report')
 const report = await agent(
   REPORT
     .replace('{CENSUS}', JSON.stringify(census || {}))
-    .replace('{LANES}', JSON.stringify(lanes.filter(Boolean))),
+    .replace('{LANES}', JSON.stringify(allLanes)),
   { label: 'report-publish', phase: 'Report', schema: REPORT_SCHEMA, model: 'sonnet' },
 )
 
@@ -163,4 +179,4 @@ const harvest = await agent(HARVEST.replace('{REPORT}', JSON.stringify(report ||
   label: 'harvest-publish', phase: 'Harvest', schema: HARVEST_SCHEMA, model: 'opus',
 })
 
-return { census, lanes: lanes.filter(Boolean), report, harvest }
+return { passes: pass, census, lanes: allLanes, report, harvest }
