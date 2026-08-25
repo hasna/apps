@@ -5,6 +5,7 @@
   "description": "Recipe for the Hasna two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, migrations, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile",
   "type": "module",
   "skills": {
-    "kind": "instruction"
+    "kind": "instruction",
+    "visibility": "public"
   }
 }

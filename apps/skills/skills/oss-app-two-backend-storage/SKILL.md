@@ -4,6 +4,7 @@ description: "Recipe for the Hasna two-backend storage contract: client transpor
 kind: instruction
 version: 0.1.0
 source: custom
+visibility: public
 category: Development Tools
 tags:
   - custom
