@@ -81,14 +81,16 @@ rl.on("line", (line: string) => {
     const params = msg.params ?? {};
     const name = typeof params.name === "string" ? params.name : "";
     const args = (params.arguments as Record<string, unknown> | undefined) ?? {};
-    try {
-      respond(msg.id ?? null, callWorkflowTool(service, name, args));
-    } catch (err) {
-      respond(msg.id ?? null, {
-        content: [{ type: "text", text: String(err instanceof Error ? err.message : err) }],
-        isError: true,
-      });
-    }
+    void (async () => {
+      try {
+        respond(msg.id ?? null, await callWorkflowTool(service, name, args));
+      } catch (err) {
+        respond(msg.id ?? null, {
+          content: [{ type: "text", text: String(err instanceof Error ? err.message : err) }],
+          isError: true,
+        });
+      }
+    })();
     return;
   }
   respondError(msg.id ?? null, -32601, `Method not found: ${method}`);

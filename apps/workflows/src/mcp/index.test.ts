@@ -102,7 +102,15 @@ describe("workflows-mcp (slice 1 scaffold)", () => {
       const resp = await send(proc, 2, "tools/list", {});
       const result = resp.result as { tools: { name: string }[] };
       const names = result.tools.map((t) => t.name);
-      expect(names).toEqual(["workflows_version", "workflows_health", "workflows_ready"]);
+      expect(names).toEqual([
+        "workflows_version",
+        "workflows_health",
+        "workflows_ready",
+        "workflows_validate",
+        "workflows_run",
+        "workflows_runs_list",
+        "workflows_lanes_list",
+      ]);
     } finally {
       proc.stdin.end();
       await proc.exited;
