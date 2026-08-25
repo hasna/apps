@@ -3,8 +3,8 @@
   "name": "workflows",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.0",
-  "description": "Scaffold of the universal graph workflow app: version/health/readiness on all four surfaces (CLI, MCP, serve, SDK). The graph language, three-table store, session WAL, claims/leases daemon, and lane adapters (claude, codex, cursor, grok) are roadmap slices not shipped in 0.1.0.",
+  "kitVersion": "0.14.1",
+  "description": "Universal graph workflow app: graph language (start/step/decision/while/end), three-table run store, session WAL, claims/leases daemon, four lane adapters (claude, codex, cursor, grok), and a full CLI on four surfaces (CLI, MCP, serve, SDK).",
   "bins": [
     "workflows",
     "workflows-mcp",
