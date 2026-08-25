@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createReleasesMcpServer } from "./server.js";
+import { VERSION } from "../version.js";
 
 export { registerReleasesMcpTools } from "./tools.js";
 export type { ReleasesMcpToolOptions } from "./tools.js";
@@ -25,12 +26,17 @@ Tools:
   releases_reconcile
 
 Options:
-  -h, --help  Display help`);
+  -h, --help     Display help
+  -V, --version  Display version`);
 }
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
+    return;
+  }
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(VERSION);
     return;
   }
   await startMcpServer();
