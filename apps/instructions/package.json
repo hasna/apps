@@ -1,6 +1,6 @@
 {
   "name": "@hasna/instructions",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "AI coding agent instruction & configuration manager — store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
@@ -76,7 +76,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "0.14.0",
+    "@hasna/contracts": "0.14.1",
     "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

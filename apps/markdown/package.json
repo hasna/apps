@@ -84,6 +84,6 @@
     "@types/bun": "^1.2.4",
     "@types/pg": "^8.15.6",
     "typescript": "^5.7.3",
-    "@hasna/contracts": "0.14.0"
+    "@hasna/contracts": "0.14.1"
   }
 }

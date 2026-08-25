@@ -1,5 +1,11 @@
 # @hasna/releases
 
+## 0.1.4
+
+### Patch Changes
+
+- 6356ce6: Resolve configured Changesets changelog modules from the Releases runtime when a target workspace has no installed dependencies.
+
 ## 0.1.3
 
 ### Patch Changes
