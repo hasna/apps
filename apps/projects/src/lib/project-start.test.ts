@@ -6,7 +6,18 @@ import { delimiter, join } from "node:path";
 import { addWorkspaceLocation, createTmuxProfile, createWorkspace, getWorkspaceByPath } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
 import { __resetProjectStore } from "../store/project-store.js";
+import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
 import { parseProjectStartAgent, parseProjectStartSessionPolicy, projectStartCommand, startProject } from "./project-start.js";
+
+// Isolate the shared @hasna/contracts seam's disk tier, mirroring testSpawnEnv():
+// when the environment is silent the seam reads fleet app-config files on disk
+// (e.g. ~/.hasna/cloud/projects.env) and selects the hosted transport, routing
+// these in-process local-store tests at the real hosted registry. An explicitly
+// DEFINED-but-blank URL is the seam's own "select the local store" escape hatch
+// and beats any disk pointer.
+for (const key of HOSTED_API_ENV_KEYS) {
+  process.env[key] = "";
+}
 
 function makeDb(): Database {
   const db = new Database(":memory:");
