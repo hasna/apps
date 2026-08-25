@@ -67,6 +67,19 @@ import type {
   ProjectResourceLinkReadResult,
   Workspace,
 } from "../types/workspace.js";
+import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
+
+// Isolate the shared @hasna/contracts seam's disk tier, mirroring testSpawnEnv()
+// and the cycle-1 lib test fix: registerFullProject() transitively runs the
+// production workspace-creation chain (planWorkspaceCreation/
+// executeWorkspaceCreation). When the environment is silent the seam reads
+// fleet app-config files on disk (e.g. ~/.hasna/cloud/projects.env) and selects
+// the hosted transport, routing these in-process local-store tests at the real
+// hosted registry. An explicitly DEFINED-but-blank URL is the seam's own
+// "select the local store" escape hatch and beats any disk pointer.
+for (const key of HOSTED_API_ENV_KEYS) {
+  process.env[key] = "";
+}
 
 const tempRoots: string[] = [];
 

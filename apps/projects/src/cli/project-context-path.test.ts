@@ -75,7 +75,10 @@ describe("projects context canonical path resolution", () => {
     const env = {
       HASNA_PROJECTS_HOME: root,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
-      HASNA_PROJECTS_API_KEY: "not-a-secret",
+      // Deliberate loopback credential via the seam's override tier: the
+      // shared contracts seam reads HASNA_PROJECTS_API_KEY_OVERRIDE before the
+      // disk file and never emits the legacy-env deprecation warning to stderr.
+      HASNA_PROJECTS_API_KEY_OVERRIDE: "not-a-secret",
     };
 
     try {

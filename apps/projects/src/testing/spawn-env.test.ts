@@ -21,13 +21,17 @@ describe("testSpawnEnv authority isolation", () => {
 
       const isolated = testSpawnEnv();
       expect(AUTHORITY_ENV_KEYS).toHaveLength(18);
-      expect(AUTHORITY_ENV_KEYS.every((key) => isolated[key] === undefined)).toBe(true);
+      // Blanked, not deleted: the shared @hasna/contracts seam reads fleet
+      // app-config files on disk when the environment is silent, and an
+      // explicitly DEFINED-but-blank URL is the seam's "select the local
+      // store" escape hatch that beats any disk pointer.
+      expect(AUTHORITY_ENV_KEYS.every((key) => isolated[key] === "")).toBe(true);
 
       const explicit = testSpawnEnv({
         HASNA_TODOS_DB_PATH: "/fixture/todos.db",
       });
       expect(explicit.HASNA_TODOS_DB_PATH).toBe("/fixture/todos.db");
-      expect(explicit.HASNA_TODOS_API_URL).toBeUndefined();
+      expect(explicit.HASNA_TODOS_API_URL).toBe("");
     } finally {
       for (const [key, value] of previous) {
         if (value === undefined) delete process.env[key];
@@ -51,7 +55,7 @@ describe("testSpawnEnv authority isolation", () => {
       });
       expect(isolated.HASNA_PROJECTS_DB_PATH).toBe("/fixture/projects.db");
       expect(PROJECTS_API_ENV_KEYS).toHaveLength(4);
-      expect(PROJECTS_API_ENV_KEYS.every((key) => isolated[key] === undefined)).toBe(true);
+      expect(PROJECTS_API_ENV_KEYS.every((key) => isolated[key] === "")).toBe(true);
     } finally {
       for (const [key, value] of previous) {
         if (value === undefined) delete process.env[key];

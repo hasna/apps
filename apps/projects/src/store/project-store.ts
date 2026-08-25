@@ -2,7 +2,8 @@
 //
 // ONE interface (`ProjectStore`) with two transports behind it:
 //   - LocalProjectStore  -> on-box sqlite (src/db/workspaces.ts)
-//   - ApiProjectStore    -> HTTP `<API_URL>/v1` + bearer key (src/http/client.ts)
+//   - ApiProjectStore    -> HTTP `<API_URL>/v1` + bearer key (via the shared
+//                          @hasna/contracts/client/storage seam, not a vendored copy)
 //
 // `resolveProjectStore()` picks the transport from the environment: the joint
 // presence of HASNA_PROJECTS_API_URL + HASNA_PROJECTS_API_KEY selects the HTTP
@@ -79,10 +80,9 @@ import {
 } from "../db/workspaces.js";
 import {
   resolveStorageClient,
-  type Env,
-  type StorageClient,
-  type QueryParams,
-} from "../http/client.js";
+  type HasnaStorageClient,
+} from "@hasna/contracts/client/storage";
+import type { HasnaHttpTransport, HasnaRequestOptions, QueryParams } from "@hasna/contracts/client";
 import { basename } from "node:path";
 import {
   isProjectDirectory,
@@ -212,6 +212,9 @@ import type {
 
 const APP = "projects";
 const RESOURCE = "projects";
+
+/** Process-environment shape accepted by the shared @hasna/contracts seam. */
+type Env = Record<string, string | undefined>;
 
 export type ProjectStoreTransport = "local" | "http";
 
@@ -1108,9 +1111,9 @@ function normalizeApiWorkspace(raw: unknown): Workspace | null {
 class ApiProjectStore implements ProjectStore {
   readonly transport = "http" as const;
   readonly baseUrl: string;
-  private readonly client: StorageClient;
+  private readonly client: HasnaStorageClient;
 
-  constructor(client: StorageClient) {
+  constructor(client: HasnaStorageClient) {
     this.client = client;
     this.baseUrl = client.baseUrl;
   }
@@ -1720,6 +1723,56 @@ class ApiProjectStore implements ProjectStore {
 
 let cached: ProjectStore | null = null;
 
+/**
+ * The shared @hasna/contracts seam keeps the server's reason on the error
+ * BODY and leaves it out of the message; the projects CLI/MCP surfaces
+ * `error.message`, so re-attach the bounded body detail to the message (the
+ * vendored transport used to do this). The error keeps its shape — name
+ * "HasnaHttpError", status, body — so the seam's own shape-based checks
+ * (404 -> null mapping, retry decisions) keep working. Matched by shape, never
+ * by instanceof: the seam builds `./client` and `./client/storage` as separate
+ * bundles, each carrying its own copy of the class.
+ */
+function enrichSeamTransport(transport: HasnaHttpTransport): HasnaHttpTransport {
+  const withDetail = (error: unknown): unknown => {
+    if (!(error instanceof Error) || error.name !== "HasnaHttpError") return error;
+    const body = (error as { body?: unknown }).body;
+    const detail = body !== null && typeof body === "object" && !Array.isArray(body)
+      ? (body as { error?: unknown }).error
+      : undefined;
+    if (typeof detail !== "string" || detail.length === 0 || error.message.includes(detail)) {
+      return error;
+    }
+    const bounded = detail.length <= 500 ? detail : `${detail.slice(0, 497)}...`;
+    return Object.assign(new Error(`${error.message}: ${bounded}`), {
+      name: error.name,
+      status: (error as { status?: number }).status,
+      method: (error as { method?: string }).method,
+      path: (error as { path?: string }).path,
+      body,
+    });
+  };
+  const guard = <T>(promise: Promise<T>): Promise<T> =>
+    promise.catch((error: unknown) => {
+      throw withDetail(error);
+    });
+  return {
+    ...transport,
+    request: <T = unknown>(method: string, path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T> =>
+      guard(transport.request<T>(method, path, body, opts)),
+    get: <T = unknown>(path: string, opts?: HasnaRequestOptions): Promise<T> =>
+      guard(transport.get<T>(path, opts)),
+    post: <T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T> =>
+      guard(transport.post<T>(path, body, opts)),
+    put: <T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T> =>
+      guard(transport.put<T>(path, body, opts)),
+    patch: <T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T> =>
+      guard(transport.patch<T>(path, body, opts)),
+    del: <T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T> =>
+      guard(transport.del<T>(path, body, opts)),
+  };
+}
+
 export interface ResolveProjectStoreOptions {
   producerAuthorityOptions?: ProductionProjectRegistrationAuthorityOptions;
   producerVerifierNow?: () => string;
@@ -1740,10 +1793,13 @@ export function resolveProjectStore(
     && options.producerAuthorityOptions === undefined
     && options.producerVerifierNow === undefined;
   if (cacheable && cached) return cached;
-  const resolved = resolveStorageClient(APP, env, fetchImpl);
+  const resolved = resolveStorageClient(APP, env, { fetchImpl });
   const store: ProjectStore =
     resolved.transport === "http"
-      ? new ApiProjectStore(resolved.client)
+      ? new ApiProjectStore({
+        ...resolved.client,
+        transport: enrichSeamTransport(resolved.client.transport),
+      })
       : new LocalProjectStore(
         createProductionProjectResourceLinkProducerEvidenceVerifier({
           authorities: productionProjectRegistrationAuthorities({
