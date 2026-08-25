@@ -1,6 +1,6 @@
 /**
  * frontmatter-strict-yaml.test.ts — the oss-app-two-backend-storage legacy bug
- * (todos 326538ce) as a standing regression.
+ * as a standing regression.
  *
  * The installed mirror of the two-backend-storage recipe carried a `description`
  * whose plain-scalar value contained an unquoted colon+space ("storage contract:
@@ -38,7 +38,7 @@ const SKILLS_DIR = findSkillsDir();
 /** The exact legacy frontmatter that Codewith 0.1.95 rejected on 2026-08-19. */
 const LEGACY_INVALID_FRONTMATTER = `---
 name: oss-app-two-backend-storage
-description: Recipe for the fleet two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, pg-migrations + apply script, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile. Use when building or extending an app whose client connects to an on-box store or a server HTTP API and whose server runs SQLite or PostgreSQL behind HASNA_<APP>_DATABASE_URL.
+description: Recipe for the Hasna two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, pg-migrations + apply script, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile. Use when building or extending an app whose client connects to an on-box store or a server HTTP API and whose server runs SQLite or PostgreSQL behind HASNA_<APP>_DATABASE_URL.
 kind: instruction
 version: 0.1.0
 source: custom
@@ -65,7 +65,7 @@ function corpusSkillNames(): string[] {
   });
 }
 
-describe("strict frontmatter YAML regression (todos 326538ce)", () => {
+describe("strict frontmatter YAML regression", () => {
   test("instrument can fail: the legacy unquoted-colon form is rejected", () => {
     expect(() => parse(LEGACY_INVALID_FRONTMATTER)).toThrow(YAMLParseError);
   });

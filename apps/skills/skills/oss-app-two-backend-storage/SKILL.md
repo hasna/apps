@@ -1,9 +1,10 @@
 ---
 name: oss-app-two-backend-storage
-description: "Recipe for the fleet two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, pg-migrations + apply script, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile. Use when building or extending an app whose client connects to an on-box store or a server HTTP API and whose server runs SQLite or PostgreSQL behind HASNA_<APP>_DATABASE_URL."
+description: "Recipe for the Hasna two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, pg-migrations + apply script, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile. Use when building or extending an app whose client connects to an on-box store or a server HTTP API and whose server runs SQLite or PostgreSQL behind HASNA_<APP>_DATABASE_URL."
 kind: instruction
 version: 0.1.0
 source: custom
+visibility: public
 category: Development Tools
 tags:
   - custom
@@ -15,13 +16,12 @@ tags:
   - two-backend
 ---
 
-# oss-app-two-backend-storage — the fleet two-backend storage contract
+# oss-app-two-backend-storage — the Hasna two-backend storage contract
 
 A Hasna app whose server has a SQLite-or-PostgreSQL backend ships the SAME
 shape every time. Two full implementations exist and are the reference: the
-knowledge app (canonical first instance) and the notes app (second instance,
-PR #287 / task 5b2d66b4). This skill is the recipe the second implementation
-taught the fleet. Build the next one by copying the pattern, never by
+knowledge app and the notes app. This skill is the recipe the second
+implementation produced. Build the next one by copying the pattern, never by
 re-inventing a storage layer.
 
 ## The contract in one paragraph
@@ -32,7 +32,7 @@ without it the client stays on-box. An API URL **without** its
 `HASNA_<APP>_API_KEY` FAILS CLOSED — it throws, it never drifts to the local
 store. The server reads `HASNA_<APP>_DATABASE_URL` and runs SQLite by default
 or PostgreSQL; the client never opens PostgreSQL directly. There are NO mode
-enums (deployment modes are retired fleet-wide — doctrine k_ms5wv466_u0jidq);
+enums (deployment modes are retired);
 the only switch is the server's data backend, selected by the DATABASE_URL.
 
 ## Reference files (read before writing anything)
@@ -58,7 +58,7 @@ One resolver serves the CLI, the MCP server, and the app. Its shape:
   (`<APP>_STORAGE_MODE`, `<APP>_MODE`, and legacy unprefixed variants), and an
   `assertNoRetired<App>StorageSelector(env)` that THROWS
   `Retired<App>StorageSelectorError` when any is present — even blank. This
-  is a fail-loud ratchet so a stale station fragment cannot silently bind.
+  is a fail-loud ratchet so a stale environment fragment cannot silently bind.
   The error message states the current selection rule in full.
 - `resolve<App>ClientTransport(env)`: URL present + key absent -> throw (fail
   closed, message names both variables and the local alternative); URL present
@@ -163,7 +163,7 @@ object — CA bundle included. Facts to rely on:
 - Explicit off resolves to `false`; a DSN with no ssl parameter resolves to
   `undefined` (pg's `PGSSLMODE` fallback applies); a PRESENT-but-empty
   `?sslmode=` throws — empty is a value, not an absence.
-- Amazon RDS's root is NOT in Node's trust store, so a fleet RDS with
+- Amazon RDS's root is NOT in Node's trust store, so a managed RDS with
   `sslmode=require` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` unless the
   Amazon RDS global bundle is reachable: download it at image build time
   (`https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` into
@@ -215,7 +215,7 @@ matching the vendored kit, and:
 - Data pumping / bulk sync between backends: `sqlite-to-rds-parity-migrate`
   owns that.
 - Mode enums or deployment modes in any form: do NOT resurrect them
-  (doctrine k_ms5wv466_u0jidq). If a stale config or prompt still carries a
+  (deployment modes are retired). If a stale config or prompt still carries a
   mode selector, retire it via the fail-loud ratchet in Step 1.
 
 ## Verification checklist
