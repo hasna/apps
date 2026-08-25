@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs'
+import packageJson from '../../package.json'
 
 type PackageMetadata = {
   name: string
@@ -10,12 +10,9 @@ let cachedMetadata: PackageMetadata | null = null
 export function getPackageMetadata(): PackageMetadata {
   if (cachedMetadata) return cachedMetadata
 
-  const raw = readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
-  const parsed = JSON.parse(raw) as Partial<PackageMetadata>
-
   cachedMetadata = {
-    name: parsed.name ?? '@hasna/economy',
-    version: parsed.version ?? '0.0.0',
+    name: packageJson.name ?? '@hasna/economy',
+    version: packageJson.version ?? '0.0.0',
   }
 
   return cachedMetadata
