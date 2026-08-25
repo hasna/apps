@@ -35,10 +35,16 @@ COPY hooks ./hooks
 # CLI shim so `hooks …` works (e.g. the one-shot migration task: hooks migrate).
 RUN printf '#!/bin/sh\nexec bun /app/bin/index.js "$@"\n' > /usr/local/bin/hooks \
   && chmod +x /usr/local/bin/hooks
+# O15-00733: the image previously baked HOST=127.0.0.1 PORT=39428 (the local
+# registry defaults), so the container bound loopback-only on 39428 and the
+# ECS LB health check on 8080 never passed — the hooks deploy came up
+# unhealthy. The image's declared surface is the deploy surface: 0.0.0.0:8080,
+# which serve honors via the container-standard PORT/HOST env (task-def env
+# overrides these for any future revision).
 ENV NODE_ENV=production \
-    HOST=127.0.0.1 \
-    PORT=39428 \
+    HOST=0.0.0.0 \
+    PORT=8080 \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
-EXPOSE 39428
+EXPOSE 8080
 CMD ["bun", "bin/serve.js"]

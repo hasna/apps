@@ -2,7 +2,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { handleServeRequest, DEFAULT_SERVE_PORT } from "./serve.js";
+import { handleServeRequest, startServeServer, resolveServeOptions, DEFAULT_SERVE_PORT, SERVE_HOST } from "./serve.js";
 import { writeCustomHook, customHookDir } from "./lib/manifest.js";
 import { readLock, sha256Of } from "./lib/store.js";
 import { getHook } from "./lib/registry.js";
@@ -97,6 +97,56 @@ describe("serve catalog and artifacts", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("serve bind resolution (O15-00733)", () => {
+  // Regression: the ECS task-def declares PORT=8080 and the LB health check
+  // hits 8080, but startServeServer ignored the env and bound the local
+  // registry default 39428 — the container came up unhealthy and the hooks
+  // deploy was blocked. The serve surface MUST honor the container-standard
+  // PORT/HOST env vars (argv flags still win).
+  function withEnv(name: string, value: string | undefined, fn: () => void) {
+    const prev = process.env[name];
+    try {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+      fn();
+    } finally {
+      if (prev === undefined) delete process.env[name];
+      else process.env[name] = prev;
+    }
+  }
+
+  test("PORT env overrides the local registry default", () => {
+    withEnv("PORT", "8080", () => {
+      expect(resolveServeOptions({})).toEqual({ port: 8080, host: SERVE_HOST });
+    });
+  });
+
+  test("HOST env overrides the loopback default", () => {
+    withEnv("HOST", "0.0.0.0", () => {
+      expect(resolveServeOptions({})).toEqual({ port: DEFAULT_SERVE_PORT, host: "0.0.0.0" });
+    });
+  });
+
+  test("explicit port/host options still win over env", () => {
+    withEnv("PORT", "8080", () => {
+      withEnv("HOST", "0.0.0.0", () => {
+        expect(resolveServeOptions({ port: 9123, host: "127.0.0.1" })).toEqual({ port: 9123, host: "127.0.0.1" });
+      });
+    });
+  });
+
+  test("startServeServer binds the PORT env port", () => {
+    withEnv("PORT", "48080", () => {
+      const server = startServeServer({});
+      try {
+        expect(server.port).toBe(48080);
+      } finally {
+        server.stop(true);
+      }
+    });
   });
 });
 
