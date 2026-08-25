@@ -1885,6 +1885,29 @@ if (LIVE_URL) describe("pg-store live CRUD", () => {
     expect(await store.getWorkspace(created.id)).toBeNull();
   });
 
+  test("listWorkspaces/countWorkspaces exclude registry-fixture rows when requested", async () => {
+    const stamp = Date.now();
+    const normal = await store.createWorkspace({ name: `Normal ${stamp}`, tags: ["test", "serve"] });
+    const fixture = await store.createWorkspace({
+      name: `Fixture ${stamp}`,
+      tags: ["test", "serve", "registry-fixture"],
+    });
+    try {
+      const excluded = await store.listWorkspaces({ exclude_registry_fixtures: true });
+      const included = await store.listWorkspaces({});
+      expect(excluded.some((w) => w.id === fixture.id)).toBe(false);
+      expect(excluded.some((w) => w.id === normal.id)).toBe(true);
+      expect(included.some((w) => w.id === fixture.id)).toBe(true);
+
+      const excludedCount = await store.countWorkspaces({ exclude_registry_fixtures: true });
+      const includedCount = await store.countWorkspaces({});
+      expect(excludedCount).toBeLessThanOrEqual(includedCount);
+    } finally {
+      await store.deleteWorkspace(normal.id, { hard: true });
+      await store.deleteWorkspace(fixture.id, { hard: true });
+    }
+  });
+
   test("typed resource-link lifecycle is transactional and rollback-safe", async () => {
     const stamp = Date.now();
     const created = await store.createWorkspace({

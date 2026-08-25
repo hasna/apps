@@ -867,6 +867,7 @@ server.tool(
     query: z.string().optional(),
     tags: z.array(z.string()).optional(),
     include_evals: z.boolean().optional(),
+    include_fixtures: z.boolean().optional(),
     limit: z.number().int().positive().max(500).optional(),
     compact: z.boolean().optional(),
     verbose: z.boolean().optional(),
@@ -880,6 +881,7 @@ server.tool(
       query: input.query,
       tags: input.tags,
       exclude_eval_artifacts: !input.include_evals,
+      exclude_registry_fixtures: !input.include_fixtures,
       limit: input.compact && !input.verbose ? limit + 1 : input.limit,
     }), input.include_evals);
     if (!input.compact || input.verbose) return jsonText(projects.map(projectWithManagement));
@@ -955,6 +957,7 @@ server.tool(
     query: z.string().optional(),
     tags: z.array(z.string()).optional(),
     include_evals: z.boolean().optional(),
+    include_fixtures: z.boolean().optional(),
     limit: z.number().int().positive().max(500).optional(),
   },
   async (input) => jsonText(buildProjectListRender(filterProjectEvalArtifacts(await resolveProjectStore().listProjects({
@@ -963,6 +966,7 @@ server.tool(
     query: input.query,
     tags: input.tags,
     exclude_eval_artifacts: !input.include_evals,
+    exclude_registry_fixtures: !input.include_fixtures,
     limit: input.limit,
   }), input.include_evals))),
 );

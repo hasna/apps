@@ -1039,6 +1039,9 @@ function listQuery(filter?: WorkspaceFilter): QueryParams {
     query: filter.query,
     root_id: filter.root_id,
     tag: filter.tags && filter.tags.length > 0 ? filter.tags[0] : undefined,
+    // The hosted API excludes registry-fixture rows by default; only send the
+    // opt-in when the caller explicitly asked for them.
+    ...(filter.exclude_registry_fixtures === false ? { include_fixtures: "true" } : {}),
     limit: filter.limit,
     offset: filter.offset,
   };

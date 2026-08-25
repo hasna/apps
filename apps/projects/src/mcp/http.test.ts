@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 import { closeDatabase } from "../db/database.js";
+import { createWorkspace } from "../db/workspaces.js";
 import { __resetProjectStore } from "../store/project-store.js";
 import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
 
@@ -113,6 +114,43 @@ describe("projects MCP HTTP transport", () => {
     expect(compactPayload.projects?.[0]?.metadata).toBeUndefined();
     expect(compactPayload.count).toBe(1);
     expect(compactPayload.next_steps).toContain("full records");
+    await client.close();
+  });
+
+  test("projects_list excludes registry-fixture rows by default; include_fixtures=true includes them", async () => {
+    createWorkspace({
+      name: "Fixture Smoke",
+      slug: "fixture-smoke",
+      kind: "generic",
+      tags: ["registry-fixture"],
+    });
+
+    const client = new Client({ name: "projects-http-test", version: "0.0.0" });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp`),
+    );
+    await client.connect(transport);
+
+    const def = await client.callTool({
+      name: "projects_list",
+      arguments: { query: "fixture-smoke", limit: 10 },
+    });
+    expect(def.isError).not.toBe(true);
+    const defPayload = JSON.parse(
+      (def.content as Array<{ type: string; text?: string }>)?.[0]?.text ?? "[]",
+    ) as Array<{ slug: string }>;
+    expect(defPayload.find((item) => item.slug === "fixture-smoke")).toBeUndefined();
+
+    const inc = await client.callTool({
+      name: "projects_list",
+      arguments: { query: "fixture-smoke", include_fixtures: true, limit: 10 },
+    });
+    expect(inc.isError).not.toBe(true);
+    const incPayload = JSON.parse(
+      (inc.content as Array<{ type: string; text?: string }>)?.[0]?.text ?? "[]",
+    ) as Array<{ slug: string }>;
+    expect(incPayload.find((item) => item.slug === "fixture-smoke")).toBeDefined();
+
     await client.close();
   });
 });
