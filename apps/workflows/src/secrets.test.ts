@@ -62,7 +62,7 @@ describe("assertNoSecrets", () => {
 
 describe("redactDeep", () => {
   test("replaces credential values with a marker, preserving structure", () => {
-    const redacted = redactDeep({ a: `${["sk","ant"].join("-")}-abcdef1234567890`, b: [`${["npm","_"].join("")}abcdefghijklmnopqrstuvwxyz0123`], c: "keep" });
+    const redacted = redactDeep({ a: `${["sk","ant"].join("-")}-abcdef1234567890`, b: [`${["npm","_"].join("")}abcdefghijklmnopqrstuvwxyz0123`], c: "keep" }) as Record<string, unknown>;
     expect(JSON.stringify(redacted)).toContain("REDACTED");
     expect(redacted.c).toBe("keep");
     expect(JSON.stringify(redacted)).not.toContain("abcdef1234567890");

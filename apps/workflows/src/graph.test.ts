@@ -97,7 +97,7 @@ describe("validateGraph", () => {
   test("rejects a decision without a condition", () => {
     const g = baseGraph({ nodes: [
       { id: "start", type: "start", next: "d" },
-      { id: "d", type: "decision" as const, then: "e", else: "e" },
+      { id: "d", type: "decision" as const, then: "e", else: "e", condition: undefined as unknown as string },
       { id: "e", type: "end" },
     ] });
     const result = validateGraph(g);
@@ -118,7 +118,7 @@ describe("validateGraph", () => {
   test("rejects a while node without a condition", () => {
     const g = baseGraph({ nodes: [
       { id: "start", type: "start", next: "w" },
-      { id: "w", type: "while" as const, body: ["s"], maxIterations: 3, next: "e" },
+      { id: "w", type: "while" as const, body: ["s"], maxIterations: 3, next: "e", condition: undefined as unknown as string },
       { id: "s", type: "step", prompt: "work" },
       { id: "e", type: "end" },
     ] });
@@ -130,7 +130,7 @@ describe("validateGraph", () => {
   test("rejects a while node without maxIterations (SOL finite-budget rule)", () => {
     const g = baseGraph({ nodes: [
       { id: "start", type: "start", next: "w" },
-      { id: "w", type: "while" as const, condition: "i < 3", body: ["s"], next: "e" },
+      { id: "w", type: "while" as const, condition: "i < 3", body: ["s"], next: "e", maxIterations: undefined as unknown as number },
       { id: "s", type: "step", prompt: "work" },
       { id: "e", type: "end" },
     ] });
