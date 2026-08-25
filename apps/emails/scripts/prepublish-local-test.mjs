@@ -31,6 +31,11 @@ const legacyKeys = [
   ["EMAILS", "SELF", "HOSTED", "API", "KEY"],
   ["EMAILS", "SESSION", "TOKEN"],
   ["EMAILS", "IDP", "TOKEN"],
+  // The canonical DB-path key (src/db/database.ts getDbPath() checks
+  // HASNA_EMAILS_DB_PATH BEFORE the EMAILS_DB_PATH=:memory: forced below), so an
+  // inherited value would silently select an operator database and the suite
+  // would run against it (release-review P1, publish-all lane 248f6ed8).
+  ["HASNA", "EMAILS", "DB", "PATH"],
 ];
 
 const scrubbedKeys = legacyKeys.map((parts) => parts.join("_"));

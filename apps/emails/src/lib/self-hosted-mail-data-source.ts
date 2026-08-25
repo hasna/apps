@@ -1732,11 +1732,11 @@ export class SelfHostedMailDataSource implements MailDataSource {
    * a tally and, for the to/from union, the ids already seen; materialising every
    * message of a six-figure mailbox into an array was most of this path's cost.
    */
-  private async scopedCounts(scope: SelfHostedScope): Promise<MailboxCounts> {
+  private async scopedCounts(scope: SelfHostedScope): Promise<MailboxCounts & { countsComplete: boolean }> {
     const key = scopedCountsKey(scope);
     const generation = this.scopedCountsGeneration;
     const cached = this.scopedCountsCache.get(key);
-    if (cached && this.now() - cached.at < cached.ttl) return { ...cached.counts };
+    if (cached && this.now() - cached.at < cached.ttl) return { ...cached.counts, countsComplete: true };
     // A remembered failure is re-thrown as the ORIGINAL error, not a fresh one
     // wrapped in "(cached)": its text already names both causes and both
     // remedies, and that advice is exactly as true the second time. Rewording it
@@ -1749,7 +1749,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     // another — the accumulation behind the climbing idle CPU. A walk from an
     // OLDER generation is not joinable, because its pages predate a write.
     const inFlight = this.scopedCountsInFlight.get(key);
-    if (inFlight && inFlight.generation === generation) return { ...(await inFlight.promise) };
+    if (inFlight && inFlight.generation === generation) return { ...(await inFlight.promise), countsComplete: true };
 
     const walk = (async () => {
       // The rules read is part of the walk: it must sit INSIDE the coalesced
@@ -1818,18 +1818,20 @@ export class SelfHostedMailDataSource implements MailDataSource {
     try {
       // Copied on the way out so a caller holding the result cannot mutate the
       // cached entry that later callers will be served.
-      return { ...(await walk) };
+      return { ...(await walk), countsComplete: true };
     } finally {
       // Never clear a NEWER walk that replaced this one after an invalidate.
       if (this.scopedCountsInFlight.get(key) === pending) this.scopedCountsInFlight.delete(key);
     }
   }
 
-  async mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts> {
+  async mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts & { countsComplete: boolean }> {
     const scope = selfHostedScopeOf(opts?.source);
     // The whole store has an exact server-side aggregate; only a scope has to be
     // counted client-side, because /v1/messages/counts takes no recipient filter.
-    if (!scope) return (await this.serverStats()).counts;
+    // Both arms are exact (server aggregate, or a walk that throws on its bound
+    // rather than returning partial), so countsComplete is always true here.
+    if (!scope) return { ...(await this.serverStats()).counts, countsComplete: true };
     return this.scopedCounts(scope);
   }
 
