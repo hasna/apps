@@ -2842,6 +2842,42 @@ program
     );
   })));
 
+program
+  .command("set-lease <idOrName> <duration>")
+  .description("change a loop's run lease in place, without losing its id, schedule, runs, or history")
+  .action(runAction((idOrName, duration) => withStore(async (store) => {
+    // requireUniqueLoop so an ambiguous name errors instead of mutating the
+    // newest same-named loop -- the same guard rename and pause/resume use.
+    const loop = await store.requireUniqueLoop(idOrName);
+    const previous = loop.leaseMs;
+    const next = positiveDuration(duration, "<duration>");
+    if (next === undefined) throw new ValidationError("duration must be greater than zero");
+
+    if (next === previous) {
+      print(
+        { changed: false, id: loop.id, leaseMs: previous, loop: publicLoop(loop) },
+        `${loop.id} unchanged (leaseMs=${previous})`,
+      );
+      return;
+    }
+
+    // Backups protect the on-box sqlite file; there is nothing local to snapshot
+    // when the update is routed to the hosted API.
+    const backupPath = store.transport === "file" ? backupLoopsDatabase("set-lease") : undefined;
+    const updated = await store.updateLoop(loop.id, { leaseMs: next });
+    print(
+      {
+        changed: true,
+        id: updated.id,
+        previousLeaseMs: previous,
+        leaseMs: updated.leaseMs,
+        backupPath,
+        loop: publicLoop(updated),
+      },
+      `${updated.id} leaseMs ${previous} -> ${updated.leaseMs}\nbackup=${backupPath ?? "skipped (recent backup exists)"}`,
+    );
+  })));
+
 function updateStatus(
   idOrName: string,
   status: "paused" | "active" | "stopped",

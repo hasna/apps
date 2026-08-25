@@ -1851,6 +1851,60 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("PATCH updates leaseMs in place and rejects a non-integer lease with a stable 422", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const loop = await storage.createLoop({
+        name: "api-lease-widening",
+        schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      }, new Date("2026-01-01T00:00:00Z"));
+      // Regression (O15-00695): a long-running agentic sweep (e.g. the
+      // ecosystem-intel-harness Luna loop, 4m..1h+ per run) outlives the 50m
+      // default lease and wedges the run; the hosted PATCH must be able to
+      // widen the lease in place instead of forcing delete-and-recreate.
+      expect(loop.leaseMs).toBe(30 * 60_000);
+
+      const ok = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ leaseMs: 2 * 60 * 60_000 }),
+      });
+      expect(ok.status).toBe(200);
+      expect((await ok.json()).loop.leaseMs).toBe(2 * 60 * 60_000);
+      expect((await storage.getLoop(loop.id))?.leaseMs).toBe(2 * 60 * 60_000);
+      // The schedule must survive a lease-only PATCH.
+      expect((await storage.getLoop(loop.id))?.nextRunAt).toBe(loop.nextRunAt);
+
+      const before = await storage.getLoop(loop.id);
+      for (const leaseMs of [0, -1, 1.5, "2", null, {}]) {
+        const response = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({ leaseMs, labels: ["mutated"] }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_lease_ms" });
+        expect(await storage.getLoop(loop.id)).toEqual(before);
+      }
+
+      // A PATCH that omits leaseMs must not reset the lease.
+      const other = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ status: "paused" }),
+      });
+      expect(other.status).toBe(200);
+      expect((await storage.getLoop(loop.id))?.leaseMs).toBe(2 * 60 * 60_000);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("PATCH sets and clears expiresAfterRuns in place and rejects invalid ceilings with a stable 422", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

@@ -144,7 +144,7 @@ export interface LoopStore {
     name?: string;
   }): Promise<Loop[]>;
   countLoops(status?: LoopStatus, opts?: { archived?: boolean; includeArchived?: boolean }): Promise<number>;
-  updateLoop(id: string, patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>): Promise<Loop>;
+  updateLoop(id: string, patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts" | "leaseMs">>): Promise<Loop>;
   mutateLoop(envelope: LoopMutationEnvelope): Promise<PublicLoopMutationResult>;
   getLoopMutationResult(operationId: string, stepId: string, caps: LoopMutationLookupCaps): Promise<PublicLoopMutationResult | undefined>;
   renameLoop(id: string, name: string): Promise<Loop>;
@@ -260,7 +260,7 @@ export class LocalStore implements LoopStore {
   }
   async updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts" | "leaseMs">>,
   ): Promise<Loop> {
     return this.store.updateLoop(id, patch);
   }
@@ -566,7 +566,7 @@ export class ApiStore implements LoopStore {
   }
   async updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts" | "leaseMs">>,
   ): Promise<Loop> {
     // The `/v1` PATCH contract distinguishes a present-null nullable field (an
     // explicit clear) from an absent one (leave unchanged). Callers signal a

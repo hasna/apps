@@ -68,7 +68,7 @@ import {
 } from "./run-artifacts.js";
 import { normalizeRunReceipt } from "./run-receipts.js";
 import { normalizeLoopLabels } from "./labels.js";
-import { assertExpiresAfterRuns, assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
+import { assertExpiresAfterRuns, assertLeaseMs, assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
 import { normalizeRunCompletion } from "./run-completion.js";
 import { runLocalCommand, todosCliArgs, todosMutationSummary } from "./route/todos-cli.js";
 import {
@@ -1961,13 +1961,14 @@ export class Store {
 
   updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "expiresAfterRuns" | "labels" | "maxAttempts">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "expiresAfterRuns" | "labels" | "maxAttempts" | "leaseMs">>,
     opts: DaemonLeaseFence = {},
   ): Loop {
     const updated = (opts.now ?? new Date()).toISOString();
     if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
     if ("maxAttempts" in patch && patch.maxAttempts !== undefined) assertMaxAttempts(patch.maxAttempts);
     if ("expiresAfterRuns" in patch && patch.expiresAfterRuns !== undefined) assertExpiresAfterRuns(patch.expiresAfterRuns);
+    if ("leaseMs" in patch && patch.leaseMs !== undefined) assertLeaseMs(patch.leaseMs);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const current = this.getLoop(id);
@@ -1984,7 +1985,7 @@ export class Store {
       const res = this.db
         .query(
           `UPDATE loops SET status=$status, labels_json=$labels, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
-           expires_at=$expiresAt, expires_after_runs=$expiresAfterRuns, max_attempts=$maxAttempts, updated_at=$updated
+           expires_at=$expiresAt, expires_after_runs=$expiresAfterRuns, max_attempts=$maxAttempts, lease_ms=$leaseMs, updated_at=$updated
            WHERE id=$id
              AND ($daemonLeaseId IS NULL OR EXISTS (
                SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -1999,6 +2000,7 @@ export class Store {
           $expiresAt: merged.expiresAt ?? null,
           $expiresAfterRuns: merged.expiresAfterRuns ?? null,
           $maxAttempts: merged.maxAttempts,
+          $leaseMs: merged.leaseMs,
           $updated: merged.updatedAt,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
           $now: updated,

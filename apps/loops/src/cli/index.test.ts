@@ -1731,6 +1731,61 @@ describe("loops CLI", () => {
     }
   });
 
+  test("set-lease changes only the lease and writes a backup", () => {
+    const dataDir = freshDataDir("loops-cli-set-lease-");
+    const create = runCli(dataDir, ["--json", "create", "command", "lease-loop", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+    const created = JSON.parse(create.stdout);
+    expect(created.leaseMs).toBe(30 * 60_000);
+
+    const set = runCli(dataDir, ["--json", "set-lease", created.id, "2h"]);
+
+    expect(set.status).toBe(0);
+    const value = JSON.parse(set.stdout);
+    expect(value).toMatchObject({
+      changed: true,
+      id: created.id,
+      previousLeaseMs: 30 * 60_000,
+      leaseMs: 2 * 60 * 60_000,
+    });
+    expect(value.backupPath).toContain(join(dataDir, "backups"));
+    expect(existsSync(value.backupPath)).toBe(true);
+
+    // Read it back through a separate process: the loop keeps its id, name,
+    // and schedule, which delete-and-recreate would not have.
+    const after = runCli(dataDir, ["--json", "show", created.id]);
+    expect(after.status).toBe(0);
+    const loop = JSON.parse(after.stdout);
+    expect(loop.id).toBe(created.id);
+    expect(loop.name).toBe("lease-loop");
+    expect(loop.leaseMs).toBe(2 * 60 * 60_000);
+    expect(loop.schedule).toEqual(created.schedule);
+  });
+
+  test("set-lease reports a no-op and rejects a duration below 1", () => {
+    const dataDir = freshDataDir("loops-cli-set-lease-invalid-");
+    const create = runCli(dataDir, ["--json", "create", "command", "lease-guard", "--at", futureAt(), "--cmd", "true", "--lease", "90m"]);
+    expect(create.status).toBe(0);
+    const created = JSON.parse(create.stdout);
+    expect(created.leaseMs).toBe(90 * 60_000);
+
+    const noop = runCli(dataDir, ["--json", "set-lease", "lease-guard", "90m"]);
+    expect(noop.status).toBe(0);
+    const noopValue = JSON.parse(noop.stdout);
+    expect(noopValue.changed).toBe(false);
+    expect(noopValue.backupPath).toBeUndefined();
+
+    // The duration grammar (shared with create --lease) accepts fractional
+    // milliseconds ("1.5" -> 2ms), so the rejection set is non-positive and
+    // unparseable values only.
+    for (const bad of ["0", "-1", "abc", "0s"]) {
+      const rejected = runCli(dataDir, ["--json", "set-lease", "lease-guard", bad]);
+      expect(rejected.status).not.toBe(0);
+      const still = JSON.parse(runCli(dataDir, ["--json", "show", "lease-guard"]).stdout);
+      expect(still.leaseMs).toBe(90 * 60_000);
+    }
+  });
+
   test("rename reports no-op without writing a backup", () => {
     const dataDir = freshDataDir("loops-cli-rename-noop-");
     const create = runCli(dataDir, ["create", "command", "stable-name", "--at", futureAt(), "--cmd", "true"]);

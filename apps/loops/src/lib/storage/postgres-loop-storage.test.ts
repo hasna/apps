@@ -1020,6 +1020,35 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await storage.getRunReceipt(receiptRunId)).toBeUndefined();
   });
 
+  test("updateLoop changes leaseMs in place and rejects non-integer leases (O15-00695)", async () => {
+    const loop = await storage.createLoop(loopInput("pg-lease-widening", {
+      leaseMs: 30 * 60_000,
+      schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+    }));
+    expect(loop.leaseMs).toBe(30 * 60_000);
+
+    const updated = await storage.updateLoop(loop.id, { leaseMs: 2 * 60 * 60_000 });
+    expect(updated.leaseMs).toBe(2 * 60 * 60_000);
+    expect((await storage.getLoop(loop.id))?.leaseMs).toBe(2 * 60 * 60_000);
+    // In place: id, name and schedule survive the lease change.
+    expect(updated.id).toBe(loop.id);
+    expect(updated.name).toBe(loop.name);
+    expect(updated.schedule).toEqual(loop.schedule);
+
+    const before = await storage.getLoop(loop.id);
+    for (const leaseMs of [0, -1, 1.5, "2", null, {}]) {
+      await expect(storage.updateLoop(loop.id, {
+        leaseMs,
+        labels: ["mutated"],
+      } as unknown as Parameters<typeof storage.updateLoop>[1])).rejects.toBeInstanceOf(ValidationError);
+      expect(await storage.getLoop(loop.id)).toEqual(before);
+    }
+
+    // A patch that omits leaseMs must not reset the lease.
+    await storage.updateLoop(loop.id, { status: "paused" });
+    expect((await storage.getLoop(loop.id))?.leaseMs).toBe(2 * 60 * 60_000);
+  });
+
   test("updateLoop rejects erased invalid statuses before any PostgreSQL mutation", async () => {
     const loop = await storage.createLoop(loopInput("pg-status-boundary", {
       labels: ["original"],

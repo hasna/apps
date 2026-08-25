@@ -39,7 +39,7 @@ export interface Loop { "id": string; "name": string; "description"?: string | n
 
 export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown>; "expiresAfterRuns"?: number | null; "machine"?: LoopMachineRef }
 
-export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "expiresAfterRuns"?: number | null; "maxAttempts"?: number; "labels"?: Array<string> }
+export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "expiresAfterRuns"?: number | null; "maxAttempts"?: number; "leaseMs"?: number; "labels"?: Array<string> }
 
 export interface LoopMutationEnvelope { "schema": string; "operationId": string; "stepId": string; "targetId": string; "action": "pause" | "resume" | "stop"; "expectedRevision": string; "approvedPlanDigest": string; "manifestDigest": string; "descriptorRef": string; "descriptorDigest": string; "dryRun"?: boolean }
 
@@ -506,8 +506,8 @@ export class LoopsClient {
       });
     }
 
-    /** Count runs (total-row verification; accepts the same filters as listRuns) */
-    async countRuns(query?: { "loopId"?: string; "status"?: string; "labels"?: Array<string> }, init?: RequestInit): Promise<CountResponse> {
+    /** Count runs (total-row verification) */
+    async countRuns(query?: { "status"?: string; "loopId"?: string; "labels"?: string }, init?: RequestInit): Promise<CountResponse> {
       return this.request("GET", `/v1/runs/count`, {
         body: undefined,
         query,

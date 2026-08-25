@@ -800,6 +800,22 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "loopId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4279,6 +4295,11 @@
             "type": "integer",
             "minimum": 1,
             "description": "Retry budget for this loop: the scheduler admits a retry while attempt < maxAttempts, so 1 means a single transient failure retires the loop with no retry. Omit to leave the current budget unchanged."
+          },
+          "leaseMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Run lease in milliseconds before an unresponsive runner is considered dead. Widen in place for long-running agentic sweeps whose runs legitimately outlive the create-time default (e.g. 4m..1h+ per run). Omit to leave the current lease unchanged."
           },
           "labels": {
             "type": "array",
