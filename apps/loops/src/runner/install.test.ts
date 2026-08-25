@@ -63,6 +63,18 @@ describe("installRunnerStartup (linux)", () => {
     }
   });
 
+  test("the systemd unit carries RestartPreventExitStatus=4 so a permanently-denied runner (exit 4) is not churned into a restart loop (O15-00665 regression)", () => {
+    const env = withInstallEnv();
+    try {
+      const result = installRunnerStartup({ cliEntry: "loops-runner", execPath: "/usr/bin/bun", platform: "linux" });
+      const service = readFileSync(result.path, "utf8");
+      expect(service).toContain("Restart=always");
+      expect(service).toContain("RestartPreventExitStatus=4");
+    } finally {
+      env.restore();
+    }
+  });
+
   test("bakes --claim-scope and --machine-id into the unit run args and the env file", () => {
     const env = withInstallEnv();
     try {
