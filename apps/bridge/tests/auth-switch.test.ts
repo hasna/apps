@@ -75,6 +75,25 @@ test("isStaleSessionSignal detects a gone/expired resumed session from json erro
   expect(isStaleSessionSignal({ exitCode: 0, stdout: '{"type":"error","message":"session not found"}', stderr: "", timedOut: false })).toBe(false);
 });
 
+test("isStaleSessionSignal classifies context-window exhaustion as a stale session (rotate, not dead-letter)", () => {
+  // Known-positive: the exact error measured on the 2026-08-25 telegram
+  // dead-letter recovery — the subject word is present ("thread"), there is no
+  // not-found/expired qualifier, so the context-window shapes are what make the
+  // resumed session stale and trigger the fresh-thread self-heal.
+  expect(isStaleSessionSignal({
+    exitCode: 1,
+    stdout: '{"type":"error","error":{"message":"Codewith ran out of room in the model\'s context window. Start a new thread or clear earlier history before retrying."}}',
+    stderr: "",
+    timedOut: false,
+  })).toBe(true);
+  // Close variants of the exhaustion shape.
+  expect(isStaleSessionSignal({ exitCode: 1, stdout: '{"type":"error","message":"session ran out of room in the model\'s context window"}', stderr: "", timedOut: false })).toBe(true);
+  expect(isStaleSessionSignal({ exitCode: 1, stdout: '{"type":"error","error":{"code":"context_window_exhausted","message":"thread context window is full"}}', stderr: "", timedOut: false })).toBe(true);
+  // Known-negative: an ordinary error that merely names the subject is not stale.
+  expect(isStaleSessionSignal({ exitCode: 1, stdout: '{"type":"error","error":{"message":"session is busy"}}', stderr: "", timedOut: false })).toBe(false);
+  expect(isStaleSessionSignal({ exitCode: 1, stdout: '{"type":"error","error":{"message":"thread failed"}}', stderr: "", timedOut: false })).toBe(false);
+});
+
 test("rotationProfiles builds an ordered validated pool", () => {
   const pool = rotationProfiles(config, config.agents.cw);
   expect(pool.map((p) => p.id)).toEqual(["A", "B"]);

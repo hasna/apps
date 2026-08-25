@@ -81,6 +81,37 @@ test("runAgent self-heals a stale resumed session by retrying with a fresh sessi
   expect(seen[1]).toContain("account088");
 });
 
+test("runAgent self-heals a resumed session that hit context-window exhaustion (rotates, not dead-letter)", async () => {
+  // Regression for HC-01156: the exact error measured on 2026-08-25 — a durable
+  // codewith thread that ran out of context room is as unusable as a deleted
+  // thread, so the turn must forceFresh-retry on a new thread instead of
+  // failing through to the dead-letter path.
+  const seen: string[][] = [];
+  const spawn: AgentSpawn = async (command) => {
+    seen.push(command);
+    const resuming = command.includes("resume");
+    if (resuming) {
+      return { exitCode: 1, stdout: '{"type":"error","error":{"message":"Codewith ran out of room in the model\'s context window. Start a new thread or clear earlier history before retrying."}}', stderr: "", timedOut: false };
+    }
+    // Fresh session succeeds and yields a new id.
+    return { exitCode: 0, stdout: '{"type":"thread.started","thread_id":"' + NEW_SID + '"}', stderr: "", timedOut: false };
+  };
+  const result = await runAgent(config, "cw", { message, route, session: durableSession(OLD_SID) }, {
+    spawn, readOutput: async () => "fresh reply",
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.staleSessionHealed).toBe(true);
+  expect(result.contextReset).toBe(true);
+  expect(result.replyText).toBe("fresh reply");
+  expect(result.providerSessionId).toBe(NEW_SID);
+  // Two spawns: the stale context-window resume, then the fresh-thread retry.
+  expect(seen.length).toBe(2);
+  expect(seen[0]).toContain("resume");
+  expect(seen[0]).toContain(OLD_SID);
+  expect(seen[1]).not.toContain("resume");
+});
+
 test("runAgent does not retry-fresh when the resumed session simply errors for another reason", async () => {
   let calls = 0;
   const spawn: AgentSpawn = async () => {
