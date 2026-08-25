@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type WorkflowsStore } from "./store.js";
 import { SessionWAL } from "./wal.js";
-import { inputHash, memoKey, recordMemo, repairTornRuns, tryMemoHit } from "./session.js";
+import { inputHash, memoKey, recordMemo, repairTornRuns, restoreInterruptedRun, tryMemoHit } from "./session.js";
 
 let dir: string;
 let store: WorkflowsStore;
@@ -42,10 +42,36 @@ describe("torn-run repair", () => {
     expect(report.failed).toBe(0);
 
     const read = store.getRun(run.id);
-    expect(read?.status).toBe("pending");
+    expect(read?.status).toBe("interrupted");
     expect(read?.attempts).toBe(1);
     expect(read?.error).toContain("torn");
     expect(store.getRunNode(node.id)?.status).toBe("pending");
+  });
+
+  test("a repaired torn run is restorable by top-level resume (live-verify closure)", () => {
+    // Live-verify 2026-08-25: kill-a-run-mid-node then `workflows repair`
+    // requeued the torn run to `pending`, and restoreInterruptedRun's guard
+    // rejected it — top-level resume was unreachable ("use 'runs resume' for
+    // cancelled/failed runs"). Repair must mark the run `interrupted` so
+    // resume restores it with its memoized (completed) node outputs reused.
+    const run = store.createRun({ graphName: "g", graphVersion: "1", context: { n: 1 } });
+    store.setRunStatus(run.id, "running");
+    const done = store.createRunNode({ runId: run.id, nodeId: "built" });
+    store.setRunNodeStatus(done.id, "completed", { output: { ok: true } });
+    const inFlight = store.createRunNode({ runId: run.id, nodeId: "deploy" });
+    store.setRunNodeStatus(inFlight.id, "running");
+
+    const report = repairTornRuns(store, wal, { maxAttempts: 3 });
+    expect(report.interrupted).toBe(1);
+    expect(report.requeued).toBe(1);
+    expect(store.getRun(run.id)?.status).toBe("interrupted");
+
+    const restored = restoreInterruptedRun(store, run.id);
+    expect(restored.status).toBe("pending");
+    expect(restored.memoizedNodes).toBe(1);
+    expect(restored.nodesRestored).toBe(1);
+    expect(store.getRun(run.id)?.status).toBe("pending");
+    expect(store.getRunNode(inFlight.id)?.status).toBe("pending");
   });
 
   test("fails a torn run that exhausted its attempts", () => {

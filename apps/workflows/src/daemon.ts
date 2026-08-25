@@ -237,8 +237,18 @@ export class WorkflowsDaemon {
       report.failed += repair.failed;
     }
 
-    // dispatch oldest pending runs first, bounded — only our own run when isolated
-    const pending = this.store.listRuns({ status: "pending", limit: this.maxDispatchPerCycle });
+    // dispatch pending + interrupted (torn, repaired) runs, bounded — only our
+    // own run when isolated. repairTornRuns marks a torn run `interrupted`,
+    // and an interrupted run is ready to continue from its durable cursor
+    // exactly like a pending one: the daemon re-claims and advances it, and
+    // completed node outputs are reused without re-execution.
+    const pending = this.store
+      .listRuns({ status: "pending", limit: this.maxDispatchPerCycle })
+      .concat(this.store.listRuns({ status: "interrupted", limit: this.maxDispatchPerCycle }))
+      .sort((a, b) =>
+        a.createdAt === b.createdAt ? (a.id < b.id ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1,
+      )
+      .slice(0, this.maxDispatchPerCycle);
     for (const run of pending) {
       if (this.isolatedRunId !== null && run.id !== this.isolatedRunId) continue;
       const lease = this.claim(run.id);
