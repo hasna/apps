@@ -62,7 +62,7 @@
     "prepublishOnly": "bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/domains 2>/dev/null || true",
     "prepack": "bun run build && bun run artifact-scan",
-    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/domains-artifact-scan.tgz\" && bunx @hasna/contracts@0.13.4 artifact-scan domains-artifact-scan.tgz; rc=$?; rm -f \"$PWD/domains-artifact-scan.tgz\"; exit $rc"
+    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/domains-artifact-scan.tgz\" && bunx @hasna/contracts@0.14.1 artifact-scan domains-artifact-scan.tgz; rc=$?; rm -f \"$PWD/domains-artifact-scan.tgz\"; exit $rc"
   },
   "keywords": [
     "domains",
