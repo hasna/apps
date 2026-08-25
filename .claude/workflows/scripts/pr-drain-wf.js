@@ -1,0 +1,118 @@
+export const meta = {
+  name: 'pr-drain',
+  description: 'Standing PR review-fix-merge drain (owner-authorized 2026-08-18; WIDENED 2026-08-19 by owner: per-PR review lanes in waves of 12, census cap 45, merge width 6): census open hasna/apps PRs, classify by state, rebase the conflicting, review the unreviewed at head, merge the GO\'d with base-movement gate, report residue',
+  phases: [
+    { title: 'Census', detail: 'open PRs -> mergeReady / needsRebase / needsReview / blocked / held-by-active-lane' },
+    { title: 'Rebase', detail: 'conflicting PRs onto origin/main (unambiguous only)' },
+    { title: 'Review', detail: 'Fable review of unreviewed-at-head PRs (batches of 4)' },
+    { title: 'Merge', detail: 'GO at head + base-movement gate, squash with attribution' },
+    { title: 'Report', detail: 'per-PR state + residue' },
+  ],
+}
+
+const APPS = '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
+const MONOREPO = '/home/hasna/workspace/repos/hasna/apps'
+
+const CONST = `
+You are a lane of the pr-drain workflow (owner-authorized 2026-08-18, standing PR review-fix-merge drain). The drain keeps the hasna/apps PR queue moving: every pass takes the open PRs, classifies them, and advances each one — rebase the conflicting, review the unreviewed at head, merge the GO'd, record the blocked. Final text = machine-readable JSON.
+
+Non-negotiable rules (all agents):
+- ${MONOREPO} is READ/context only. Sync first: git -C ${MONOREPO} pull (fast-forward; never discard local work). Work in task worktrees ~/.hasna/repos/worktrees/apps/pr-drain-<n> from origin/main. Never push to main. Force-push (--force-with-lease) ONLY on the PR's own branch for a rebase. Merges ONLY via gh pr merge <n> --squash --body-file <file whose LAST line is 'Agent: pr-drain-<your-role>'>.
+- IDEMPOTENCY FIRST: check state before acting (gh pr view <n> --json state,headRefOid,mergeable — projected fields). Merged/closed -> record and skip. A PR already carrying a [REVIEW] GO at its CURRENT head -> go to merge, never re-review.
+- VERDICT DISCIPLINE: a merge requires a [REVIEW] GO at the CURRENT head sha (search 'conversations search "hasna/apps#<n>" --channel git-prs -j' AND the PR's comments; verdict sha must equal the current head). NO verdict at head -> REVIEW lane, not merge. NO_GO with open P0/P1 -> comment if not already, leave open, record as blocked.
+- BASE-MOVEMENT GATE before every merge: TREE=$(git -C ${MONOREPO} merge-tree --write-tree origin/main <head>); git -C ${MONOREPO} diff --quiet <head> "$TREE" (equal OR the delta is disjoint from the PR's own files, verified with git diff --name-only). If main moved over the PR's own files -> needsRebase, never merge.
+- ACTIVE-LANE RESPECT: a PR with a recent comment marker from an active workstream ([merge-open], 'modes-r3', 'contracts-r2', 'monitor-v2', 'backlog-', 'consolidate-r3', 'ship-latest') is HELD — do not touch it, record held. Never fight another lane over a PR. The version-wave PRs (label 'ship-latest' OR title 'Version Packages' OR head branch release/version-wave or version-wave-*) are EXCLUDED from this drain's review+merge set entirely — sole owner is the ship-latest workflow (Fable verdict A, 2026-08-19; measured 2026-08-19: the label does not exist on hasna/apps, so key on title+head branch too); record them as held, never review or merge them.
+- No secrets: never print/capture/commit credential values; consume ONLY via 'secrets exec <key> --as VAR -- <cmd>'. Staged secrets scan (redirect + 'secrets scan input', rc 0 clean) before every commit/push. No internal-infra strings in artifacts. Capture path: redirect to files, never pipe large reads. Paste literal output lines. NEVER run bash -x / set -x (trace mode) in this environment — the shell profile sources ~/.hasna/cloud/*.env (credential files) and trace echoed the sourced KEY=value lines into a transcript (measured: pr-drain-census, #incidents 736502, 2026-08-25).
+- Authenticated API calls use 'gh api' ONLY. NEVER curl with an inline Bearer/token header — interpolating a token into a command argument records it in the transcript (measured: pr-drain-ship, #incidents 713084, 2026-08-19). gh api authenticates internally; there is no legitimate curl-with-token call in this lane.
+- Record as you go: comments on each touched PR (rebase result, verdict, merge), posts to #board. English. Lineage identity 'conversations agents register' named pr-drain-<your-role>. Distinguish measured vs inferred; state what you did not check.
+`
+
+const CENSUS = CONST + `
+ROLE: census lane (execute). Enumerate the open PRs on hasna/apps (gh pr list --repo hasna/apps --state open --limit 200 --json number,title,headRefName,headRefOid,mergeable,updatedAt — redirect to a file, never pipe). For EACH PR classify: (a) mergeReady — has a [REVIEW] GO at the current head AND mergeable AND base-fresh (verify the merge-tree gate); (b) needsRebase — conflicting, or base moved over its own files, or head stale; (c) needsReview — no [REVIEW] line at the current head; (d) blocked — NO_GO with open P0/P1 at head (record the finding titles); (e) held — a recent comment marker names an active workstream (see CONST); (f) ownerHeld — the decisions row (dd06739c) or a 'owner decision' comment names it. Cap the pass: process the 45 most recently updated PRs across classes (a)-(c) (owner-widened 2026-08-19); list (d)/(e)/(f) as counts. Return the per-class lists with exact numbers and heads.
+Return (JSON): { mergeReady: [{number, head}], needsRebase: [{number, head}], needsReview: [{number, head}], blocked: [{number, findings: [string]}], held: [number], ownerHeld: [number], totals: {open, processed} }
+`
+
+const REBASE = CONST + `
+ROLE: rebase lane (execute). PRs: {PRS} (each: number). For EACH: fetch the head (git -C ${MONOREPO} fetch origin pull/<n>/head:pr-drain-<n>; worktree ~/.hasna/repos/worktrees/apps/pr-drain-<n>; checkout -B <THE ACTUAL headRefName> pr-drain-<n> — never guess a branch name). git rebase origin/main. Resolve ONLY unambiguous conflicts (single-sided deletions, non-overlapping hunks); ambiguous -> ABORT, leave the PR open with a comment naming the conflict, record. After a clean rebase: run the touched app's tests (bounded 8 min, record counts), secrets scan the diff, push --force-with-lease, re-fetch the head, verify the base-movement gate (merge-tree == head). Comment the rebase on the PR (new head, tests, secrets).
+Return (JSON): { prs: [{number, newHead, rebased: bool, conflict: string|null, tests: {passed, failed}, secretsClean: bool}] }
+`
+
+const REVIEW = CONST + `
+ROLE: adversarial reviewer (Fable). PRs: {PRS} (each: number). For EACH: state-check first (gh pr view <n> --json state,headRefOid — projected); merged/closed -> record and skip. Review the diff vs origin/main at the current head: substance matches the PR's title/description, tests green (verify or record), secrets clean, scope confined, no mode vocabulary regression. Post '[REVIEW] <GO|NO_GO> — hasna/apps#<n> @ <sha> — lens: PR drain, reviewer pr-drain-review ({I} of {N})'. Block ONLY concrete P0/P1 defects; P2/P3 non-blocking (list as follow-ups). Mechanical chores (version bumps, docs-only, display-name) may GO on a bounded review (diff scope + secrets + tests), with the review noted as mechanical.
+Return (JSON): { prs: [{number, verdict: GO|NO_GO, findings: [{severity, title, detail}]}] }
+`
+
+const MERGE = CONST + `
+ROLE: merge lane (execute). PRs: {BATCH} (each: number). For EACH: verify head unchanged since the verdict (gh pr view <n> --json headRefOid == the reviewed sha), base-movement gate at CURRENT origin/main (re-measure; if the delta is not disjoint, send back to rebase, do not merge), then gh pr merge <n> --squash --body-file <file ending 'Agent: pr-drain-ship'>. Record the merged sha. NO_GO or unverified: comment and leave open.
+Return (JSON): { prs: [{number, merged: bool, mergedSha: string|null, reason: string|null}] }
+`
+
+const REPORT = CONST + `
+ROLE: report (execute). Aggregate per-PR state (merged/rebased/reviewed/blocked/held/ownerHeld), residue (blocked with findings, rebase conflicts, PRs that moved between classes). Post the pass summary to #board. Return the residue as follow-up strings.
+Return (JSON): { prs: [{number, state, mergedSha}], residue: [string] }
+`
+
+const CENSUS_SCHEMA = { type: 'object', properties: { mergeReady: { type: 'array', items: { type: 'object' } }, needsRebase: { type: 'array', items: { type: 'object' } }, needsReview: { type: 'array', items: { type: 'object' } }, blocked: { type: 'array', items: { type: 'object' } }, held: { type: 'array', items: { type: 'integer' } }, ownerHeld: { type: 'array', items: { type: 'integer' } }, totals: { type: 'object' } }, required: ['mergeReady', 'needsRebase', 'needsReview'] }
+const PR_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
+const REPORT_SCHEMA = { type: 'object', properties: { prs: { type: 'array' }, residue: { type: 'array' } }, required: ['prs'] }
+
+phase('Census')
+const census = await agent(CENSUS, { label: 'pr-drain-census', phase: 'Census', schema: CENSUS_SCHEMA })
+const ready = (census && census.mergeReady) || []
+const rebase = (census && census.needsRebase) || []
+const review = (census && census.needsReview) || []
+log(`census: mergeReady ${ready.length}, rebase ${rebase.length}, review ${review.length}`)
+
+phase('Rebase')
+let rebaseResults = []
+if (rebase.length) {
+  const rebaseBatches = []
+  for (let i = 0; i < rebase.length; i += 5) rebaseBatches.push(rebase.slice(i, i + 5))
+  rebaseResults = await parallel(rebaseBatches.map((b, i) => () =>
+    agent(REBASE.replace('{PRS}', JSON.stringify(b)), { label: `pr-drain-rebase-${i + 1}`, phase: 'Rebase', schema: PR_SCHEMA }),
+  ))
+  const rebased = rebaseResults.filter(Boolean).flatMap(r => r.prs || []).filter(p => p.rebased)
+  for (const p of rebased) ready.push({ number: p.number, head: p.newHead })
+}
+
+phase('Review')
+let reviewResults = []
+// OWNER WIDENING 2026-08-19: one independent Fable reviewer PER PR, waves of 12
+// concurrent (was one reviewer per batch of 4). Same bounded standard per PR,
+// same verdict-at-head discipline. Peak concurrency stays within the 16-agent
+// workflow cap; review phases are sequential with rebase/merge so the box never
+// runs both at once.
+const REVIEW_WIDTH = 12
+for (let w = 0; w < review.length; w += REVIEW_WIDTH) {
+  const wave = review.slice(w, w + REVIEW_WIDTH)
+  const waveResults = await parallel(wave.map((p, wi) => () =>
+    agent(REVIEW.replace('{PRS}', JSON.stringify([p])).replace('{I}', String(w + wi + 1)).replace('{N}', String(review.length)), {
+      label: `pr-drain-review-${p.number}`, phase: 'Review', schema: PR_SCHEMA, model: 'fable',
+    }),
+  ))
+  reviewResults.push(...waveResults)
+}
+if (reviewResults.length) {
+  const verdictMap = {}
+  for (const rv of reviewResults.filter(Boolean)) {
+    for (const p of (rv.prs || [])) verdictMap[p.number] = p.verdict
+  }
+  for (const p of review) {
+    if (verdictMap[p.number] === 'GO') ready.push(p)
+  }
+}
+
+phase('Merge')
+let mergeResults = []
+if (ready.length) {
+  const mergeBatches = []
+  for (let i = 0; i < ready.length; i += 6) mergeBatches.push(ready.slice(i, i + 6))
+  mergeResults = await parallel(mergeBatches.map((b, i) => () =>
+    agent(MERGE.replace('{BATCH}', JSON.stringify(b)), { label: `pr-drain-merge-${i + 1}`, phase: 'Merge', schema: PR_SCHEMA }),
+  ))
+}
+
+phase('Report')
+const report = await agent(REPORT, { label: 'pr-drain-report', phase: 'Report', schema: REPORT_SCHEMA })
+
+return { census, rebase: rebaseResults.filter(Boolean), reviews: reviewResults.filter(Boolean), merges: mergeResults.filter(Boolean), report }
