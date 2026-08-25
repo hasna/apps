@@ -1003,11 +1003,24 @@ export function isExhaustionSignal(result: SpawnLike): boolean {
 }
 
 /**
+ * Context-window exhaustion is a thread-level failure: the resumed thread can no
+ * longer take tokens, so it is as unusable as a thread that was deleted. The
+ * codewith error names the thread subject but carries no not-found/expired
+ * qualifier, so it needs its own shapes or the turn dead-letters instead of
+ * rotating to a fresh thread. Measured 2026-08-25 on the telegram dead-letter
+ * recovery (session ses_8846c3f1): "Codewith ran out of room in the model's
+ * context window. Start a new thread or clear earlier history before retrying."
+ */
+const CONTEXT_WINDOW_PATTERN =
+  /(ran out of room|out of room|context[ _-]?window|context[ _-]?(?:length|limit|cap)(?: exceeded| reached| exhausted)?|context[ _-]?exhausted)/i;
+
+/**
  * Whether a (failed) run indicates the resumed codewith session id no longer
- * exists (rollout deleted / session expired / unknown thread), so the turn should
- * be retried on a fresh session rather than failing forever. Reads structured
- * `--json` error events, matching an error that names a session/thread/rollout
- * subject together with a not-found/expired/invalid qualifier.
+ * exists (rollout deleted / session expired / unknown thread / context window
+ * exhausted), so the turn should be retried on a fresh session rather than
+ * failing forever. Reads structured `--json` error events, matching an error
+ * that names a session/thread/rollout subject together with a
+ * not-found/expired/invalid qualifier or a context-window exhaustion shape.
  */
 export function isStaleSessionSignal(result: SpawnLike): boolean {
   if (result.timedOut) return false;
@@ -1017,7 +1030,8 @@ export function isStaleSessionSignal(result: SpawnLike): boolean {
     if (!text) continue;
     const hasSubject = /(session|thread|conversation|rollout)/.test(text);
     const hasMissing = /(not[ _-]?found|no such|does ?n['o]?t exist|doesn't exist|unknown|no longer|missing|invalid|expired|gone|cannot be found|could not be found)/.test(text);
-    if (hasSubject && hasMissing) return true;
+    const hasContextWindow = CONTEXT_WINDOW_PATTERN.test(text);
+    if (hasSubject && (hasMissing || hasContextWindow)) return true;
   }
   return false;
 }
