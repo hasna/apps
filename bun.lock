@@ -266,7 +266,7 @@
         "calendar-serve": "dist/server/bin.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.0",
         "@hasna/events": "^0.1.7",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
