@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.35
+
+### Patch Changes
+
+- Updated dependencies [23916b3]
+  - @hasna/connectors@1.4.4
+  - @hasna/conversations@0.7.8
+  - @hasna/sessions@0.12.21
+  - @hasna/todos@0.15.50
+
 ## 0.5.34
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.4
+
+### Patch Changes
+
+- 23916b3: Remove 23 registrable domains that were unregistered yet hardcoded as default endpoints in shipped connector code, each contacted with the user's API key as an Authorization: Bearer token (todos 6109cc1b, PR #1106). A connector now sends API keys only to endpoints the user registered.
+
 ## 1.4.3
 
 ### Patch Changes
@@ -38,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Two limits on that claim, stated because "hostnames removed" would overstate it:
 
-  - `@hasna/events` is externalized out of `bin/index.js` (see *Changed*) but is
+  - `@hasna/events` is externalized out of `bin/index.js` (see _Changed_) but is
     still a runtime dependency, and its own published package continues to carry
     the literal. `npm install` therefore still places an owned domain on disk.
     Removing it belongs to that package, and is tracked there.

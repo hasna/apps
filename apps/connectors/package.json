@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connectors",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Open source connector library - Install API connectors with a single command",
   "type": "module",
   "bin": {
