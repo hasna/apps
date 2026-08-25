@@ -18,8 +18,16 @@ RUN bun run build
 # ---- runtime -----------------------------------------------------------------
 FROM --platform=linux/arm64 oven/bun:1-alpine AS runtime
 WORKDIR /app
+# Amazon RDS global CA bundle so TLS verification to the shared cloud Postgres
+# succeeds (the vendored storage kit resolves sslmode=require with
+# server-certificate verification enabled; without the RDS root in the trust
+# store, the migrate/serve handshake fails with 'self signed certificate in
+# certificate chain' — see O15-00669).
+COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
-    PORT=8080
+    PORT=8080 \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
+    PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
 
 # App code, deps, and the migration runner (owner-scoped migrations run as a
 # one-shot task; the service itself runs as the app role).
