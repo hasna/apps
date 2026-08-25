@@ -16,7 +16,7 @@ create one.**
 | script | kind (taxonomy axis 1) | role |
 |---|---|---|
 | `pr-drain-wf.js` | coordinate-steer / review-verify | standing PR review-fix-merge drain, drain-to-zero loop (rebase/review/merge are internal steps; verdict-at-head + base-movement gates) |
-| `task-drain-apps-wf.js` | coordinate-steer / fix-and-ship | standing BUG-row drain in todos 3bbc22e0, drain-to-zero loop, CONCURRENT fix agents (each row in its own worktree via hasna/repos, claim comment, max 3 rows / 3 agents per pass) |
+| `task-drain-apps-wf.js` | coordinate-steer / fix-and-ship | standing drain in todos 3bbc22e0 for BUG rows (fix-lane discipline) AND live-gate UNVERIFIED rows (RELEASE/SHIP/DEPLOY UNVERIFIED — gate-remediation: two independent live gates re-verify, BOTH GO -> post the missing confirm + complete, ANY NO_GO -> record the verdict + route to ONE deduped BUG row), drain-to-zero loop, CONCURRENT fix agents (each row in its own worktree via hasna/repos, claim comment, max 3 rows / 3 agents per pass) |
 | `hotfix-drain-wf.js` | coordinate-steer / fix-and-ship | PRIORITY lane: drains unowned `HOTFIX:` rows in todos 3bbc22e0 (all other lanes yield to it via their census HOTFIX check) |
 | `github-issues-to-todos-wf.js` | coordinate-steer / intake | DETERMINISTIC hourly lane: open GitHub issues on hasna/apps → todos rows (`GH#<n>:` prefix dedupe, exact-match only) |
 | `publish-all-apps-wf.js` | build-and-deploy | standing release lane for versioned `@hasna/*` members, drain-to-zero loop (publish law; 2-agent live GO/NO-GO gates after publish, both GO before [PUBLISH-CONFIRM]) |
