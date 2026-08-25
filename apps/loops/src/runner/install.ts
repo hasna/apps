@@ -11,7 +11,11 @@ import {
   runnerSystemdServicePath,
 } from "../lib/paths.js";
 import { normalizeExecutionPath } from "../lib/env.js";
-import { RUNNER_CLAIM_SCOPES, type RunnerClaimScope } from "./index.js";
+import {
+  RUNNER_CLAIM_SCOPES,
+  RUNNER_PERMANENT_DENIAL_EXIT_CODE,
+  type RunnerClaimScope,
+} from "./index.js";
 
 const SERVICE_NAME = "loops-runner";
 const LAUNCHD_LABEL = "com.hasna.loops.runner";
@@ -174,6 +178,7 @@ Type=simple
 ExecStart=${execStart}
 WorkingDirectory=${systemdPathValue(dataDirPath)}
 Restart=always
+RestartPreventExitStatus=${RUNNER_PERMANENT_DENIAL_EXIT_CODE}
 RestartSec=5
 EnvironmentFile=-${systemdPathValue(runnerEnvPath())}
 ${systemdEnvironmentLine("PATH", pathEnv)}
