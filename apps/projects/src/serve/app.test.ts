@@ -629,6 +629,30 @@ describe("projects-serve auth", () => {
     expect(postRes.status).toBe(403);
   });
 
+  test("GET /v1/projects excludes registry fixtures by default; include_fixtures=true opts out", async () => {
+    const filters: Array<Record<string, unknown>> = [];
+    const store = {
+      ...fakeStore(),
+      listWorkspaces: async (filter?: Record<string, unknown>) => {
+        filters.push(filter ?? {});
+        return [];
+      },
+      countWorkspaces: async () => 0,
+    } as unknown as ProjectsPgStore;
+    const h = handler(store);
+    const token = keyWith(["projects:read"]);
+
+    const def = await h(new Request("http://x/v1/projects", { headers: { "x-api-key": token } }));
+    expect(def.status).toBe(200);
+    const inc = await h(
+      new Request("http://x/v1/projects?include_fixtures=true", { headers: { "x-api-key": token } }),
+    );
+    expect(inc.status).toBe(200);
+
+    expect(filters[0]).toMatchObject({ exclude_registry_fixtures: true });
+    expect(filters[1]).not.toHaveProperty("exclude_registry_fixtures");
+  });
+
   test("wildcard key can create and read back a project", async () => {
     const h = handler();
     const token = keyWith(["projects:*"]);

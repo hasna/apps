@@ -86,6 +86,22 @@ describe("project agent system prompt", () => {
     expect(inventory.projects.map((project) => project.slug)).toEqual(["normal-project"]);
   });
 
+  test("default project inventory hides registry-fixture rows (regression: O15-00667 fixture exclusion across surfaces)", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-agent-inventory-"));
+    process.env["HASNA_PROJECTS_DB_PATH"] = join(root, "projects.db");
+
+    createWorkspace({ name: "Normal Project", slug: "normal-project", kind: "generic" });
+    createWorkspace({
+      name: "Fixture Project",
+      slug: "fixture-project",
+      kind: "generic",
+      tags: ["registry-fixture"],
+    });
+
+    const inventory = buildWorkspaceInventoryContext() as { projects: Array<{ slug: string }> };
+    expect(inventory.projects.map((project) => project.slug)).toEqual(["normal-project"]);
+  });
+
   test("default project inventory omits bulky metadata and integration values", () => {
     const root = mkdtempSync(join(tmpdir(), "project-agent-compact-inventory-"));
     process.env["HASNA_PROJECTS_DB_PATH"] = join(root, "projects.db");

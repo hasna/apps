@@ -407,7 +407,9 @@ function workspaceContextLimit(): number {
 }
 
 export function buildWorkspaceInventoryContext(limit = workspaceContextLimit()): JsonObject {
-  const projects = filterProjectEvalArtifacts(listWorkspaces({ limit, exclude_eval_artifacts: true })).map(compactProject);
+  const projects = filterProjectEvalArtifacts(
+    listWorkspaces({ limit, exclude_eval_artifacts: true, exclude_registry_fixtures: true }),
+  ).map(compactProject);
   return {
     count: projects.length,
     limit,
@@ -1382,6 +1384,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         query: z.string().optional(),
         tags: z.array(z.string()).optional(),
         include_evals: z.boolean().optional(),
+        include_fixtures: z.boolean().optional(),
         limit: z.number().int().positive().max(500).optional(),
         verbose: z.boolean().optional(),
       }),
@@ -1393,6 +1396,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
           query: input.query,
           tags: input.tags,
           exclude_eval_artifacts: !input.include_evals,
+          exclude_registry_fixtures: !input.include_fixtures,
           limit: limit + 1,
         }), input.include_evals);
         const visible = projects.slice(0, limit);

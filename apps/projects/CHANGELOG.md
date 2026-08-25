@@ -4,15 +4,9 @@
 
 ### Patch Changes
 
-- Updated dependencies [6176948]
-- Updated dependencies [1126270]
-- Updated dependencies [8554afc]
-- Updated dependencies [68167f7]
-- Updated dependencies [7575de8]
+- Updated dependencies [c4622d9]
   - @hasna/contracts@0.14.0
   - @hasna/conversations@0.7.7
-  - @hasna/loops@>=0.6.0
-  - @hasna/todos@0.15.41
 
 ## 1.0.1
 

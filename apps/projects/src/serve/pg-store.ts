@@ -356,6 +356,8 @@ export interface WorkspaceFilter {
   root_id?: string;
   query?: string;
   tags?: string[];
+  /** Exclude rows tagged `registry-fixture` (the normalization program's generated test rows). Default reads exclude them. */
+  exclude_registry_fixtures?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -594,6 +596,12 @@ export class ProjectsPgStore {
         params.push(tag);
         conditions.push(`(tags::jsonb ? $${params.length})`);
       }
+    }
+    if (filter.exclude_registry_fixtures) {
+      // The normalization program tagged generated registry rows with
+      // `registry-fixture`; default reads exclude them so tools stop seeing
+      // ~70% test data. The rows stay in place; only the read excludes them.
+      conditions.push(`NOT (tags::jsonb ? 'registry-fixture')`);
     }
     return { where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "", params };
   }

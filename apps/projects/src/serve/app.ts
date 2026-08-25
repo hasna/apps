@@ -183,12 +183,17 @@ async function route(
       if (method === "GET") {
         const q = url.searchParams;
         const tag = q.get("tag");
+        // Registry-fixture rows are excluded from default reads (same contract
+        // as the CLI's `--include-fixtures` opt-in); `include_fixtures=true`
+        // opts back into seeing them.
+        const includeFixtures = q.get("include_fixtures") === "true";
         const filter = {
           ...(q.get("status") ? { status: q.get("status") as never } : {}),
           ...(q.get("kind") ? { kind: q.get("kind") as never } : {}),
           ...(q.get("root_id") ? { root_id: q.get("root_id")! } : {}),
           ...(q.get("query") ? { query: q.get("query")! } : {}),
           ...(tag ? { tags: [tag] } : {}),
+          ...(includeFixtures ? {} : { exclude_registry_fixtures: true }),
           ...(q.get("limit") ? { limit: Number(q.get("limit")) } : {}),
           ...(q.get("offset") ? { offset: Number(q.get("offset")) } : {}),
         };

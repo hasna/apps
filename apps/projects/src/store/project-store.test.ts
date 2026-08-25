@@ -410,6 +410,25 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/roots", auth: "Bearer secret-key" });
   });
 
+  test("listProjects omits include_fixtures by default and sends it only when fixtures are requested", async () => {
+    const { store, calls } = stubStore(() => ({
+      workspaces: [],
+      count: 0,
+      total: 0,
+      offset: 0,
+      limit: 100,
+      has_more: false,
+    }));
+    await store.listProjects({});
+    await store.listProjects({ exclude_registry_fixtures: false });
+    expect(calls[0]).toMatchObject({ method: "GET" });
+    expect(calls[0]!.path.startsWith("/v1/projects")).toBe(true);
+    expect(calls[0]!.path).not.toContain("include_fixtures");
+    expect(calls[1]).toMatchObject({ method: "GET" });
+    expect(calls[1]!.path.startsWith("/v1/projects")).toBe(true);
+    expect(calls[1]!.path).toContain("include_fixtures=true");
+  });
+
   test("createRoot POSTs to /v1/roots", async () => {
     const { store, calls } = stubStore((_m, _p, body) => ({ id: "r2", slug: "new", ...(body as object) }));
     const created = await store.createRoot({ name: "New", base_path: "/tmp/new" });
