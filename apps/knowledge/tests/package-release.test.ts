@@ -312,9 +312,12 @@ describe('public package release safety', () => {
       transpiler.scan(readFileSync(join(repoRoot, script), 'utf8')).imports.map((i) => i.path);
 
     // Each exempted import must still exist; a stale exemption invites the next one to be
-    // added without evidence.
+    // added without evidence. The migrate script composes the migration program through
+    // the shared builder in dist/serve.js; @hasna/contracts/auth is imported at runtime by
+    // the BUILT bundle (the build keeps @hasna/contracts external), so the dependency
+    // assertion below checks the bundle rather than the script.
     expect(importsOf('scripts/apply-postgres-migrations.mjs')).toContain('../dist/serve.js');
-    expect(importsOf('scripts/apply-postgres-migrations.mjs')).toContain('@hasna/contracts/auth');
+    expect(readFileSync(join(repoRoot, 'dist/serve.js'), 'utf8')).toContain('@hasna/contracts/auth');
     expect(importsOf('scripts/smoke-files-installed-boundary.mjs')).toContain('bun:sqlite');
 
     // ...and each is genuinely unresolvable, not merely unfamiliar.

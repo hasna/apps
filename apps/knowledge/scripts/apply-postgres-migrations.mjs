@@ -13,12 +13,10 @@
  * runtime's credential consumer before starting this script.
  */
 import {
-  PG_MIGRATIONS,
+  buildKnowledgePostgresMigrations,
   MigrationLedger,
-  defineMigration,
   createKnowledgeDatabaseClient,
 } from '../dist/serve.js';
-import { apiKeyMigrations } from '@hasna/contracts/auth';
 
 const dryRun = process.argv.includes('--dry-run');
 const asJson = process.argv.includes('--json');
@@ -44,19 +42,13 @@ const asJson = process.argv.includes('--json');
   }
 }
 
-// The extension migration must run before the table DDL that relies on
-// gen_random_uuid()/pgcrypto. Kept first and stable.
-//
-// The api-keys ledger (from @hasna/contracts/auth) backs the serve API-key
-// auth middleware. Its ids are namespaced ("api_keys_*") so they never clash
-// with the knowledge_pg_* schema migrations, and they run last (additive).
-const migrations = [
-  defineMigration('knowledge_pg_000_extensions', 'CREATE EXTENSION IF NOT EXISTS pgcrypto'),
-  ...PG_MIGRATIONS.map((sql, index) =>
-    defineMigration(`knowledge_pg_${String(index + 1).padStart(3, '0')}`, sql),
-  ),
-  ...apiKeyMigrations().map((m) => defineMigration(m.id, m.sql)),
-];
+// ONE ordered migration program (extensions -> knowledge_pg_* -> project links
+// -> api keys -> rc.6 tenancy), composed by buildKnowledgePostgresMigrations in
+// src/db/migrate-list.ts. The id scheme matches the ledger the prod DB was
+// migrated under (O15-00684); the same builder is exercised by
+// tests/legacy-ledger-compat.test.ts so the composed list cannot drift from
+// what the tests pin.
+const migrations = buildKnowledgePostgresMigrations();
 
 const client = createKnowledgeDatabaseClient();
 try {
