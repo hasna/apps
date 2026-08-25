@@ -303,6 +303,74 @@ describe("kit migration ledger", () => {
       /Duplicate migration id/,
     );
   });
+
+  // --- acknowledged legacy migrations (O15-00671) -------------------------
+  //
+  // The prod domains ledger carries an out-of-band row
+  // (`domains_apikeys_tenancy_0001`) that no published build ever generated.
+  // The downgrade guard refuses it, so `domains db migrate` fails and the
+  // deploy lane is blocked. The remedy is an EXPLICIT opt-in list of applied
+  // ids that the build acknowledges as non-reproducible history: they pass
+  // the downgrade guard, are never checksum-compared (their SQL is gone), and
+  // are never re-applied. Every other guarantee is unchanged: an
+  // unacknowledged unknown row still throws, and declared migrations still
+  // checksum-bind.
+
+  async function seedLegacyRow(
+    client: ReturnType<typeof inMemoryLedgerClient>,
+    id: string,
+    checksum = "sha256:not-reproducible",
+  ): Promise<void> {
+    await client.execute(
+      `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
+      [id, checksum],
+    );
+  }
+
+  test("acknowledged legacy applied rows pass the downgrade guard and are never re-applied", async () => {
+    const client = inMemoryLedgerClient();
+    await new MigrationLedger(client, migrations).migrate();
+    await seedLegacyRow(client, "domains_apikeys_tenancy_0001");
+
+    const ledger = new MigrationLedger(client, migrations, {
+      acknowledgedLegacyIds: ["domains_apikeys_tenancy_0001"],
+    });
+    const result = await ledger.migrate();
+    expect(result.applied.map((m) => m.id)).toEqual(
+      expect.arrayContaining(["0001_init", "0002_more", "domains_apikeys_tenancy_0001"]),
+    );
+    expect(client.appliedDdl).toHaveLength(2); // declared migrations only, never re-run
+  });
+
+  test("acknowledged legacy rows are not checksum-compared (their SQL is not reproducible)", async () => {
+    const client = inMemoryLedgerClient();
+    await new MigrationLedger(client, migrations).migrate();
+    await seedLegacyRow(client, "legacy_arbitrary_checksum", "not-a-real-checksum");
+
+    const ledger = new MigrationLedger(client, migrations, {
+      acknowledgedLegacyIds: ["legacy_arbitrary_checksum"],
+    });
+    await expect(ledger.migrate()).resolves.toBeDefined();
+  });
+
+  test("acknowledging one id does not mask OTHER unknown applied rows", async () => {
+    const client = inMemoryLedgerClient();
+    await new MigrationLedger(client, migrations).migrate();
+    await seedLegacyRow(client, "legacy_a");
+    await seedLegacyRow(client, "rogue_b");
+
+    const ledger = new MigrationLedger(client, migrations, { acknowledgedLegacyIds: ["legacy_a"] });
+    await expect(ledger.migrate()).rejects.toThrow(/rogue_b.*not recognized/);
+  });
+
+  test("an acknowledged id that is also declared is rejected at construction", () => {
+    expect(
+      () =>
+        new MigrationLedger(inMemoryLedgerClient(), migrations, {
+          acknowledgedLegacyIds: ["0001_init"],
+        }),
+    ).toThrow(/also declared/);
+  });
 });
 
 // --- health.ts -----------------------------------------------------------
