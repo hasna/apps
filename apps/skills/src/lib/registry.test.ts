@@ -35,9 +35,9 @@ function bundledSkillPackageNames(): string[] {
 describe("registry", () => {
   describe("SKILLS", () => {
     test("has a populated registry", () => {
-      // OSS catalog: 20 instruction skills + 66 restored credential-free
-      // executable skills = 86.
-      expect(SKILLS.length).toBe(86);
+      // OSS catalog: 21 instruction skills + 66 restored credential-free
+      // executable skills = 87.
+      expect(SKILLS.length).toBe(87);
     });
 
     test("all skills have required fields", () => {

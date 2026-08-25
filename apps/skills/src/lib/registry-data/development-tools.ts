@@ -205,6 +205,14 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["config", "validation", "schema", "linting"],
   },
   {
+    name: "oss-app-two-backend-storage",
+    displayName: "OSS App Two-Backend Storage",
+    description: "Recipe for the fleet two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, pg-migrations + apply script, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile",
+    category: "Development Tools",
+    tags: ["storage", "backend", "postgresql", "sqlite", "two-backend", "oss-app"],
+    kind: "instruction",
+  },
+  {
     name: "session-inject-monitor",
     displayName: "Session Inject Monitor",
     description: "Set up a declarative monitor that injects a prompt into a live coding-agent session when a watched source (conversations, email, todos, knowledge, command output) has new content",
