@@ -28,9 +28,8 @@ describe("cloud client lifecycle", () => {
   it("detects mode and lazily caches and closes the configured pool", async () => {
     expect(APP_NAME).toBe("sessions");
     expect(isCloudMode({})).toBe(false);
-    expect(isCloudMode({ HASNA_SESSIONS_STORAGE_MODE: "self_hosted" })).toBe(true);
+    expect(isCloudMode({ HASNA_SESSIONS_DATABASE_URL: "postgres://localhost/sessions" })).toBe(true);
 
-    process.env.HASNA_SESSIONS_STORAGE_MODE = "cloud";
     process.env["HASNA_SESSIONS_DATABASE_URL"] = "postgres://localhost/sessions";
     const first = getCloudClient();
     expect(getCloudClient()).toBe(first);
@@ -44,7 +43,7 @@ describe("cloud client lifecycle", () => {
   it("fails closed when cloud client configuration is absent", () => {
     delete process.env.HASNA_SESSIONS_STORAGE_MODE;
     delete process.env.HASNA_SESSIONS_DATABASE_URL;
-    expect(() => getCloudClient()).toThrow("requires sessions storage mode 'cloud'");
+    expect(() => getCloudClient()).toThrow("needs a database URL");
   });
 });
 

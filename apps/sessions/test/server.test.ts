@@ -42,14 +42,14 @@ describe("createSessionsServer", () => {
     ).toThrow(SERVER_IDLE_TIMEOUT_ENV);
   });
 
-  it("preserves Bun's default body limit in local mode unless configured", () => {
-    expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_STORAGE_MODE: "local" })).toBeUndefined();
+  it("preserves Bun's default body limit in the sqlite backend unless configured", () => {
+    expect(resolveMaxRequestBodySize({})).toBeUndefined();
   });
 
-  it("uses a self-hosted/cloud default request body limit for large imports", () => {
-    expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_STORAGE_MODE: "cloud" })).toBe(
-      SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE,
-    );
+  it("uses a postgresql-backend default request body limit for large imports", () => {
+    expect(
+      resolveMaxRequestBodySize({ HASNA_SESSIONS_DATABASE_URL: "postgres://localhost/sessions" }),
+    ).toBe(SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE);
   });
 
   it("accepts byte and unit overrides for the request body limit", () => {

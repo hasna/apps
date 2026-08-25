@@ -6,7 +6,7 @@ import type { SessionParser } from "./ingest/types.js";
 import { listParsers } from "./ingest/index.js";
 import { getSessionsDir } from "./paths.js";
 import type { SessionStore } from "../db/session-store.js";
-import { resolveStorageMode } from "../generated/storage-kit/mode.js";
+import { resolveServerDataBackend } from "../generated/storage-kit/backend.js";
 import type {
   MessageInsert,
   ParsedSession,
@@ -751,9 +751,9 @@ function isApplyStoreModeAllowed(opts: BackfillRunOptions, env: Record<string, s
   if (!opts.apply) return true;
   if (opts.store) return opts.store.mode === "cloud";
   const clientMode = firstEnv(env, ["HASNA_SESSIONS_MODE", "SESSIONS_MODE"]);
-  const storageMode = resolveStorageMode("sessions", env).mode;
-  const normalizedMode = (clientMode ?? storageMode).toLowerCase().replace(/-/g, "_");
-  const cloudLikeMode = normalizedMode === "cloud" || normalizedMode === "self_hosted" || normalizedMode === "remote" || normalizedMode === "hybrid";
+  const backend = resolveServerDataBackend("sessions", env).backend;
+  const normalizedMode = (clientMode ?? backend).toLowerCase().replace(/-/g, "_");
+  const cloudLikeMode = normalizedMode === "postgresql" || normalizedMode === "cloud" || normalizedMode === "self_hosted" || normalizedMode === "remote" || normalizedMode === "hybrid";
   const apiUrlPresent = Boolean(firstEnv(env, API_URL_ENV_KEYS));
   const apiKeyPresent = Boolean(firstEnv(env, ["HASNA_SESSIONS_API_KEY", "SESSIONS_API_KEY"]));
   return cloudLikeMode && apiUrlPresent && apiKeyPresent;
