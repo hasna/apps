@@ -1,0 +1,6 @@
+node_modules
+dist
+types
+.bun
+*.log
+.DS_Store

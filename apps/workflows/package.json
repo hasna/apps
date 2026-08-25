@@ -1,0 +1,83 @@
+{
+  "name": "@hasna/workflows",
+  "version": "0.1.0",
+  "description": "Universal graph workflow app — graph language, session WAL, daemon, and four lane adapters (claude, codex, cursor, grok)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./types/index.d.ts",
+  "bin": {
+    "workflows": "dist/cli/index.js",
+    "workflows-mcp": "dist/mcp/index.js",
+    "workflows-serve": "dist/serve/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./types/cli/index.d.ts",
+      "import": "./dist/cli/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "types",
+    "README.md",
+    "LICENSE",
+    "hasna.contract.json"
+  ],
+  "scripts": {
+    "build": "bun run build:runtime && bun run build:types",
+    "build:runtime": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/serve/index.ts --outdir dist/serve --target bun --packages external && bun build src/index.ts src/service.ts src/handlers.ts src/agent-tools.ts src/types.ts --root src --outdir dist --target bun --packages external",
+    "build:types": "rm -rf types && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir types",
+    "artifact-scan": "bun scripts/contracts-cli.mjs artifact-scan dist",
+    "contract:check": "bun scripts/contracts-cli.mjs repo-conformance .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:pg": "WORKFLOWS_TEST_DATABASE_URL=\"${WORKFLOWS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" WORKFLOWS_REQUIRE_POSTGRES=1 bun test src/db/pg-live.test.ts",
+    "prepack": "bun run build && bun run artifact-scan",
+    "prepublishOnly": "bun run test && bun run build"
+  },
+  "keywords": [
+    "workflows",
+    "graph",
+    "automation",
+    "cli",
+    "typescript",
+    "bun",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/apps.git"
+  },
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/workflows",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0",
+    "node": ">=20.0.0"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "0.14.0",
+    "@types/bun": "latest",
+    "@types/pg": "^8.15.6",
+    "pg": "^8.16.3",
+    "typescript": "^5.7.3"
+  }
+}

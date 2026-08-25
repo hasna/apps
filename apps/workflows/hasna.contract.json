@@ -1,0 +1,96 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "workflows",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.14.0",
+  "description": "Universal graph workflow app — graph language with while nodes, a three-table store, session WAL with torn-run repair, a claims/leases daemon, and four lane adapters (claude, codex, cursor, grok). Serve binds localhost by default. The live-PG connectivity gate (test:pg) proves the postgresql backend is reachable; the store slice adds the store-level pg tests.",
+  "bins": [
+    "workflows",
+    "workflows-mcp",
+    "workflows-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "workflows-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "clientClassName": "WorkflowsClient",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "workflows-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "workflows",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_WORKFLOWS_",
+    "aliasEnvPrefix": "WORKFLOWS_",
+    "sqlitePath": "~/.hasna/workflows/workflows.db",
+    "pgTestGate": {
+      "envVar": "WORKFLOWS_TEST_DATABASE_URL",
+      "command": "bun run test:pg"
+    }
+  },
+  "metadata": {
+    "serve": {
+      "healthEndpoints": [
+        "/health",
+        "/ready",
+        "/version"
+      ],
+      "versionedApiPrefix": "/v1",
+      "openapi": "/openapi.json",
+      "auth": "api-key"
+    },
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    }
+  }
+}

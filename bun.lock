@@ -1979,6 +1979,25 @@
         "typescript": "5.6.3",
       },
     },
+    "apps/workflows": {
+      "name": "@hasna/workflows",
+      "version": "0.1.0",
+      "bin": {
+        "workflows": "dist/cli/index.js",
+        "workflows-mcp": "dist/mcp/index.js",
+        "workflows-serve": "dist/serve/index.js",
+      },
+      "dependencies": {
+        "commander": "^13.1.0",
+      },
+      "devDependencies": {
+        "@hasna/contracts": "0.14.0",
+        "@types/bun": "latest",
+        "@types/pg": "^8.15.6",
+        "pg": "^8.16.3",
+        "typescript": "^5.7.3",
+      },
+    },
   },
   "trustedDependencies": [
     "@hasna/projects",
@@ -2489,6 +2508,8 @@
     "@hasna/treasury": ["@hasna/treasury@workspace:apps/treasury"],
 
     "@hasna/ui": ["@hasna/ui@workspace:apps/ui"],
+
+    "@hasna/workflows": ["@hasna/workflows@workspace:apps/workflows"],
 
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
@@ -4803,6 +4824,8 @@
     "@hasna/treasury/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/ui/@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
+
+    "@hasna/workflows/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@img/sharp-wasm32/@emnapi/runtime": ["@emnapi/runtime@1.11.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA=="],
 
