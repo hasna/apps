@@ -2125,7 +2125,12 @@ describe("project-first CLI surface", () => {
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_CONTACTS_API_URL: `http://127.0.0.1:${server.port}`,
-      HASNA_CONTACTS_API_KEY: "test-contact-key",
+      // The contacts key resolves through the shared @hasna/contracts seam,
+      // whose deliberate-override tier outranks the fleet app-config file on
+      // disk. The plain HASNA_CONTACTS_API_KEY legacy tier would lose to that
+      // disk credential on machines that have one, sending the real key to
+      // this test server instead of the test key.
+      HASNA_CONTACTS_API_KEY_OVERRIDE: "test-contact-key",
       HASNA_CONTACTS_SERVICE_INSTANCE: "urn:hasna:contacts:test",
     };
 

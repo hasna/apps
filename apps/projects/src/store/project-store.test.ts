@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HasnaHttpError } from "@hasna/contracts/client";
 import { closeDatabase } from "../db/database.js";
 import {
   PROJECTS_HOME_ENV,
@@ -37,12 +38,19 @@ describe("projects store resolution (client-flip)", () => {
 
   test("url without key -> throws instead of silently using local", () => {
     __resetProjectStore();
-    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" })).toThrow(/both/i);
+    // The shared @hasna/contracts seam owns this fail-closed contract now: a
+    // URL that selects the HTTP server with no resolvable key throws.
+    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" })).toThrow(/no API key could be resolved/i);
   });
 
-  test("key without url -> throws instead of silently using local", () => {
+  test("key without url -> local store (a key alone selects no server)", () => {
     __resetProjectStore();
-    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" })).toThrow(/both/i);
+    // The shared seam's contract: with no API URL in either tier the client
+    // stays on the local store and never consults credential files. A stray
+    // key routes nothing.
+    const store = resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" });
+    expect((store as unknown as { transport?: string }).transport).toBe("local");
+    expect(store.baseUrl).toBeNull();
   });
 
   test("legacy selector variables do not change transport", () => {
@@ -926,9 +934,17 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     __resetProjectStore();
     const store = resolveProjectStore(CLOUD_ENV, fetchImpl);
 
-    await expect(store.updateProject("wks_typedintegration01", {
+    const err = await store.updateProject("wks_typedintegration01", {
       integrations: { conversations_channel: "moved-outside-resource-links" },
-    })).rejects.toThrow(/must be changed through resource-links/);
+    }).catch((error: unknown) => error);
+    // The shared @hasna/contracts seam surfaces the server's reason on the
+    // error body (structured), not in the message string; the message keeps
+    // the seam's standard shape. The seam's bundles are separate entries, so
+    // errors are matched by shape (name + status), never by instanceof.
+    expect(err).toMatchObject({ name: "HasnaHttpError", status: 400 });
+    expect((err as HasnaHttpError).body).toEqual({
+      error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+    });
 
     expect(calls).toEqual([{
       method: "PATCH",
@@ -951,7 +967,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     __resetProjectStore();
     const store = resolveProjectStore(CLOUD_ENV, fetchImpl);
 
-    await expect(store.guardedUpdateProject({
+    const err = await store.guardedUpdateProject({
       project_id: "wks_typedintegration01",
       operation_id: "typed-integration-update",
       step_id: "guarded",
@@ -962,7 +978,11 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       dry_run: true,
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,
-    })).rejects.toThrow(/must be changed through resource-links/);
+    }).catch((error: unknown) => error);
+    expect(err).toMatchObject({ name: "HasnaHttpError", status: 400 });
+    expect((err as HasnaHttpError).body).toEqual({
+      error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+    });
 
     expect(calls).toEqual([{
       method: "POST",

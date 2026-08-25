@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiKeyStore } from "@hasna/contracts/auth";
+import { resolveClientTransport } from "@hasna/contracts/client";
 import { createPgPool, createQueryClient } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { ProjectsPgStore } from "./pg-store.js";
@@ -105,9 +106,16 @@ export function resolvePort(argv: string[], env: NodeJS.ProcessEnv = process.env
 export function resolveContactsAuthority(
   env: NodeJS.ProcessEnv = process.env,
 ): ContactsHttpProjectMembershipAuthority | undefined {
-  const hasUrl = Boolean(env.HASNA_CONTACTS_API_URL?.trim() || env.CONTACTS_API_URL?.trim());
-  const hasKey = Boolean(env.HASNA_CONTACTS_API_KEY?.trim() || env.CONTACTS_API_KEY?.trim());
-  if (!hasUrl && !hasKey) return undefined;
+  const resolution = resolveClientTransport("contacts", env);
+  // Any Contacts configuration at all (a URL selecting http, a key, or a
+  // fully paired transport) warrants the authority; a completely silent
+  // environment gets none. Half-paired configuration still fails closed with
+  // a throw inside createContactsProjectMembershipAuthorityFromEnv.
+  const anyContactsConfig =
+    resolution.transport === "http" ||
+    resolution.apiUrlSource !== null ||
+    resolution.apiKeyPresent;
+  if (!anyContactsConfig) return undefined;
   return createContactsProjectMembershipAuthorityFromEnv(env);
 }
 

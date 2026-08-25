@@ -1,3 +1,4 @@
+import { resolveClientTransport, resolveCredential } from "@hasna/contracts/client";
 import type {
   ContactProjectMembershipAuthority,
   ContactProjectMembershipListResult,
@@ -6,6 +7,9 @@ import type {
   ContactProjectMembershipSnapshot,
 } from "./project-contact-links.js";
 import { canonicalProjectResourceLinkUri } from "./project-resource-links.js";
+
+/** Process-environment shape accepted by the shared @hasna/contracts seam. */
+type Env = Record<string, string | undefined>;
 
 export interface ContactsHttpProjectMembershipAuthorityOptions {
   baseUrl: string;
@@ -180,12 +184,19 @@ export function createContactsProjectMembershipAuthorityFromEnv(
   env: ContactsAuthorityEnvironment | NodeJS.ProcessEnv = process.env,
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>,
 ): ContactsHttpProjectMembershipAuthority {
-  const baseUrl = env.HASNA_CONTACTS_API_URL ?? env.CONTACTS_API_URL;
-  const apiKey = env.HASNA_CONTACTS_API_KEY ?? env.CONTACTS_API_KEY;
+  // The Contacts pairing resolves through the shared client seam, never by
+  // hand: the seam covers both HASNA_CONTACTS_* and CONTACTS_* prefixes, plus
+  // the fleet app-config file on disk, and fails closed when an API URL
+  // selects HTTP without a resolvable key.
+  const resolution = resolveClientTransport("contacts", env as Env);
+  if (resolution.misconfigured) {
+    throw new Error(resolution.warning ?? `Client for 'contacts' is misconfigured for the hosted API.`);
+  }
+  const credential = resolution.apiKeyPresent ? resolveCredential("contacts", env as Env) : null;
   const serviceInstance = env.HASNA_CONTACTS_SERVICE_INSTANCE ?? env.CONTACTS_SERVICE_INSTANCE;
   return new ContactsHttpProjectMembershipAuthority({
-    baseUrl: required(baseUrl, "HASNA_CONTACTS_API_URL (or CONTACTS_API_URL)"),
-    apiKey: required(apiKey, "HASNA_CONTACTS_API_KEY (or CONTACTS_API_KEY)"),
+    baseUrl: required(resolution.baseUrl ?? undefined, "HASNA_CONTACTS_API_URL (or CONTACTS_API_URL)"),
+    apiKey: required(credential?.apiKey, "HASNA_CONTACTS_API_KEY (or CONTACTS_API_KEY)"),
     ...(serviceInstance ? { serviceInstance } : {}),
     ...(fetchImpl ? { fetchImpl } : {}),
   });

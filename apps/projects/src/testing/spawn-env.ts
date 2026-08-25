@@ -8,8 +8,14 @@
  * backends, which both masks local-store regressions and creates real rows as a
  * side effect of `bun test`.
  *
- * So: strip the hosted API selectors from the inherited environment unless the
+ * So: blank the hosted API selectors from the inherited environment unless the
  * test explicitly opts into the hosted backend by passing them in `overrides`.
+ * Blanking (rather than deleting) is load-bearing: the shared
+ * @hasna/contracts seam reads the fleet app-config files on disk (e.g.
+ * `~/.hasna/cloud/projects.env`) when the environment is silent, so deleting
+ * the keys would let the disk tier select the real hosted backend anyway. An
+ * explicitly DEFINED-but-blank URL is the seam's own "select the local store"
+ * escape hatch and beats any disk pointer.
  */
 export const HOSTED_API_ENV_KEYS = [
   "HASNA_PROJECTS_API_URL",
@@ -43,7 +49,7 @@ export function testSpawnEnv(overrides: Record<string, string> = {}): Record<str
     env[key] = value;
   }
   for (const key of HOSTED_API_ENV_KEYS) {
-    if (!(key in overrides)) delete env[key];
+    if (!(key in overrides)) env[key] = "";
   }
   return { ...env, ...overrides };
 }
