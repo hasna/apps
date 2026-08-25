@@ -1913,6 +1913,35 @@ program
     console.log();
   });
 
+// Migrate command — apply PostgreSQL migrations to the storage database.
+// The deploy lane runs this as the one-shot migration step (`hooks migrate`)
+// against the shared RDS, the same shape as `logs db migrate` for @hasna/logs.
+program
+  .command("migrate")
+  .description("Apply PostgreSQL migrations to the storage database (HASNA_HOOKS_DATABASE_URL)")
+  .option("-j, --json", "Output as JSON", false)
+  .action(async (options: { json: boolean }) => {
+    try {
+      const { getStoragePg, runStorageMigrations } = await import("../storage.js");
+      const remote = await getStoragePg();
+      try {
+        await runStorageMigrations(remote);
+      } finally {
+        await remote.close();
+      }
+      if (options.json) {
+        console.log(JSON.stringify({ ok: true }));
+        return;
+      }
+      console.log(chalk.green("✓ PostgreSQL migrations applied"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.json) console.log(JSON.stringify({ error: message }));
+      else console.error(chalk.red(`✗ ${message}`));
+      process.exitCode = 1;
+    }
+  });
+
 // MCP server command
 program
   .command("mcp")

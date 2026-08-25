@@ -26,6 +26,9 @@ RUN bun install --production --frozen-lockfile --ignore-scripts
 COPY --from=build /app/bin ./bin
 COPY --from=build /app/dist ./dist
 COPY hooks ./hooks
+# CLI shim so `hooks …` works (e.g. the one-shot migration task: hooks migrate).
+RUN printf '#!/bin/sh\nexec bun /app/bin/index.js "$@"\n' > /usr/local/bin/hooks \
+  && chmod +x /usr/local/bin/hooks
 ENV NODE_ENV=production \
     HOST=127.0.0.1 \
     PORT=39428
