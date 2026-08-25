@@ -28,8 +28,10 @@ Non-negotiable rules (all agents):
 `
 
 const CENSUS = CONST + `
-ROLE: census lane (execute). Enumerate the open PRs on hasna/apps (gh pr list --repo hasna/apps --state open --limit 200 --json number,title,headRefName,headRefOid,mergeable,updatedAt — redirect to a file, never pipe). For EACH PR classify: (a) mergeReady — has a [REVIEW] GO at the current head AND mergeable AND base-fresh (verify the merge-tree gate); (b) needsRebase — conflicting, or base moved over its own files, or head stale; (c) needsReview — no [REVIEW] line at the current head; (d) blocked — NO_GO with open P0/P1 at head (record the finding titles); (e) held — a recent comment marker names an active workstream (see CONST); (f) ownerHeld — the decisions row (dd06739c) or a 'owner decision' comment names it. Cap the pass: process the 45 most recently updated PRs across classes (a)-(c) (owner-widened 2026-08-19); list (d)/(e)/(f) as counts. Return the per-class lists with exact numbers and heads.
-Return (JSON): { mergeReady: [{number, head}], needsRebase: [{number, head}], needsReview: [{number, head}], blocked: [{number, findings: [string]}], held: [number], ownerHeld: [number], totals: {open, processed} }
+ROLE: census lane (execute). PRIORITY YIELD CHECK FIRST: todos list --project 3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8 --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-run the yield check once, and return {yielded: true, hotfixCount: N} with the per-class lists empty. Do NOT enumerate PRs while yielding.
+
+Otherwise enumerate the open PRs on hasna/apps (gh pr list --repo hasna/apps --state open --limit 200 --json number,title,headRefName,headRefOid,mergeable,updatedAt — redirect to a file, never pipe). For EACH PR classify: (a) mergeReady — has a [REVIEW] GO at the current head AND mergeable AND base-fresh (verify the merge-tree gate); (b) needsRebase — conflicting, or base moved over its own files, or head stale; (c) needsReview — no [REVIEW] line at the current head; (d) blocked — NO_GO with open P0/P1 at head (record the finding titles); (e) held — a recent comment marker names an active workstream (see CONST); (f) ownerHeld — the decisions row (dd06739c) or a 'owner decision' comment names it. Cap the pass: process the 45 most recently updated PRs across classes (a)-(c) (owner-widened 2026-08-19); list (d)/(e)/(f) as counts. IF THE QUEUE IS EMPTY (no mergeReady/needsRebase/needsReview): sleep 300 (bash), re-run the census once, and return the RE-CHECK result — the lane waits ~5 min between passes while idle. NEVER return an empty result without the sleep+re-check having run.
+Return (JSON): { mergeReady: [{number, head}], needsRebase: [{number, head}], needsReview: [{number, head}], blocked: [{number, findings: [string]}], held: [number], ownerHeld: [number], totals: {open, processed}, yielded: bool, hotfixCount: int }
 `
 
 const REBASE = CONST + `
@@ -52,31 +54,34 @@ ROLE: report (execute). Aggregate per-PR state (merged/rebased/reviewed/blocked/
 Return (JSON): { prs: [{number, state, mergedSha}], residue: [string] }
 `
 
-const CENSUS_SCHEMA = { type: 'object', properties: { mergeReady: { type: 'array', items: { type: 'object' } }, needsRebase: { type: 'array', items: { type: 'object' } }, needsReview: { type: 'array', items: { type: 'object' } }, blocked: { type: 'array', items: { type: 'object' } }, held: { type: 'array', items: { type: 'integer' } }, ownerHeld: { type: 'array', items: { type: 'integer' } }, totals: { type: 'object' } }, required: ['mergeReady', 'needsRebase', 'needsReview'] }
+const CENSUS_SCHEMA = { type: 'object', properties: { mergeReady: { type: 'array', items: { type: 'object' } }, needsRebase: { type: 'array', items: { type: 'object' } }, needsReview: { type: 'array', items: { type: 'object' } }, blocked: { type: 'array', items: { type: 'object' } }, held: { type: 'array', items: { type: 'integer' } }, ownerHeld: { type: 'array', items: { type: 'integer' } }, totals: { type: 'object' }, yielded: { type: 'boolean' }, hotfixCount: { type: 'integer' } }, required: ['mergeReady', 'needsRebase', 'needsReview'] }
 const PR_SCHEMA = { type: 'object', properties: { prs: { type: 'array', items: { type: 'object' } } }, required: ['prs'] }
 const REPORT_SCHEMA = { type: 'object', properties: { prs: { type: 'array' }, residue: { type: 'array' } }, required: ['prs'] }
 
-// DRAIN-TO-ZERO LOOP (owner design 2026-08-25): re-census each pass; while any
-// actionable PR class (mergeReady | needsRebase | needsReview) is non-empty the
-// pass restarts inside the same run. Rebase/review/merge are STEPS of this
-// workflow, not standalone lanes. Exit: census returns zero actionable, or the
-// MAX_PASSES hard bound (the standing watchdog relaunches past the bound).
-const MAX_PASSES = (args && args.maxPasses) || 8
+// INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): re-census forever. When the
+// census is empty the census agent itself sleeps ~5 min and re-checks once, so
+// the run stays alive at ~1 agent per idle window. PRIORITY YIELD: when any
+// HOTFIX: row exists in todos, this lane yields (waits) — the hotfix-drain lane
+// owns the priority class. Stop = owner stops the run or the session ends.
 const allRebase = []
 const allReviews = []
 const allMerges = []
 let census = null
 let pass = 0
-for (pass = 1; pass <= MAX_PASSES; pass++) {
+for (pass = 1; ; pass++) {
 phase('Census')
 census = await agent(CENSUS, { label: `pr-drain-census-${pass}`, phase: 'Census', schema: CENSUS_SCHEMA })
+if (census && census.yielded) {
+  log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
+  continue
+}
 const ready = (census && census.mergeReady) || []
 const rebase = (census && census.needsRebase) || []
 const review = (census && census.needsReview) || []
 log(`pass ${pass} census: mergeReady ${ready.length}, rebase ${rebase.length}, review ${review.length}`)
 if (!ready.length && !rebase.length && !review.length) {
-  log(`pass ${pass}: census empty — drain complete`)
-  break
+  log(`pass ${pass}: census empty — the census waited ~5 min and re-checked; re-checking next pass`)
+  continue
 }
 
 phase('Rebase')

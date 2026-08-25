@@ -26,9 +26,12 @@ Non-negotiable rules (all agents):
 `
 
 const CENSUS = CONST + `
-ROLE: census lane (Opus). Enumerate: todos list --project ${APPS} --status pending --limit 300 --json AND --status in_progress --limit 300 --json (redirect to files, never pipe; parse both). For EACH row capture: id, title (trimmed to 80 chars), status, assigned_to, updated_at, created_at, lastActivity (the most recent comment date), and any PR/merge references in comments (gh pr list --repo hasna/apps --search '<package> in:title' bounded ONLY for rows whose comments lack a PR reference). Also note open PRs per package (bounded) as live-workstream markers. Cap: process the 150 most recently updated rows; record the bound.
+ROLE: census lane (Opus). PRIORITY YIELD CHECK FIRST: if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class — sleep 1800 (bash), re-check once, return {rows: [], bound: 0, yielded: true, hotfixCount: N}. Do NOT enumerate while yielding.
+
+Otherwise enumerate: todos list --project ${APPS} --status pending --limit 300 --json AND --status in_progress --limit 300 --json (redirect to files, never pipe; parse both). For EACH row capture: id, title (trimmed to 80 chars), status, assigned_to, updated_at, created_at, lastActivity (the most recent comment date), and any PR/merge references in comments (gh pr list --repo hasna/apps --search '<package> in:title' bounded ONLY for rows whose comments lack a PR reference). Also note open PRs per package (bounded) as live-workstream markers. Cap: process the 150 most recently updated rows; record the bound.
 COMPACT PAYLOAD (measured cap, 2026-08-20): the census return MUST stay under ~30KB — a ~88KB rows array with comment bodies truncates mid-JSON and fails the schema gate (5 retries, workflow failed). Do NOT include comment bodies in the census. The classify lane fetches each row's own comments itself when a decision needs them.
-Return (JSON): { rows: [{id, title, status, assignedTo, updatedAt, lastActivity, prRefs: [string]}], bound: number, residue: [string] }
+IF NOTHING NEEDS THE SWEEP (no rows older than 24h with no live marker — i.e. the classify pass would be a no-op): sleep 1800 (bash — 30 min), re-run the census once, and return the RE-CHECK result — the lane waits ~30 min between passes while idle. NEVER return an empty rows without the sleep+re-check having run.
+Return (JSON): { rows: [{id, title, status, assignedTo, updatedAt, lastActivity, prRefs: [string]}], bound: number, yielded: bool, hotfixCount: int, residue: [string] }
 `
 
 const CLASSIFY = CONST + `
@@ -54,14 +57,29 @@ ROLE: report. The authoritative counts ({COUNTS}) were DERIVED DETERMINISTICALLY
 Return (JSON): { posted: bool, boardLine: string, errors: [string] }
 `
 
-const CENSUS_SCHEMA = { type: 'object', properties: { rows: { type: 'array', items: { type: 'object' } }, bound: { type: 'number' }, residue: { type: 'array' } }, required: ['rows'] }
+const CENSUS_SCHEMA = { type: 'object', properties: { rows: { type: 'array', items: { type: 'object' } }, bound: { type: 'number' }, residue: { type: 'array' }, yielded: { type: 'boolean' }, hotfixCount: { type: 'integer' } }, required: ['rows'] }
 const CLASSIFY_SCHEMA = { type: 'object', properties: { rows: { type: 'array', items: { type: 'object' } } }, required: ['rows'] }
 const APPLY_SCHEMA = { type: 'object', properties: { actions: { type: 'array' }, errors: { type: 'array' } }, required: ['actions'] }
 const REPORT_SCHEMA = { type: 'object', properties: { counts: { type: 'object' }, boardLine: { type: 'string' } }, required: ['counts'] }
 
+// INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> classify -> apply ->
+// report -> wait ~30 min when nothing to correct -> re-census, forever. The idle
+// wait lives INSIDE the census agent (bash sleep 1800 + re-check) when the sweep
+// finds nothing to correct. PRIORITY YIELD: any HOTFIX: row yields to hotfix-drain.
+// Stop = owner stops the run or the session ends.
+let pass = 0
+for (pass = 1; ; pass++) {
 phase('Census')
-const census = await agent(CENSUS, { label: 'stale-tasks-census', phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
-log(`census: ${census && census.rows ? census.rows.length + ' rows' : 'FAILED'}`)
+const census = await agent(CENSUS, { label: 'stale-tasks-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+log(`pass ${pass} census: ${census && census.rows ? census.rows.length + ' rows' : 'FAILED'}`)
+if (census && census.yielded) {
+  log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited 30 min inside the census, re-checking next pass`)
+  continue
+}
+if (!census || !census.rows || census.rows.length === 0) {
+  log(`pass ${pass}: nothing to correct — the census waited ~30 min and re-checked; re-checking next pass`)
+  continue
+}
 
 phase('Classify')
 let classify = null
@@ -102,6 +120,6 @@ for (const r of (classify && classify.rows) || []) {
 const boardLine = (derived.completed + derived.demoted) === 0
   ? 'stale-sweep: nothing to correct'
   : `stale-sweep: ${derived.completed} completed (evidence), ${derived.demoted} demoted, ${derived.live} live, ${derived.owner} owner, ${derived.unchanged} unchanged`
-const report = await agent(REPORT.replace('{COUNTS}', JSON.stringify(derived)).replace('{BOARDLINE}', boardLine), { label: 'stale-tasks-report', phase: 'Report', schema: REPORT_SCHEMA })
-
-return { census, classify, apply, report, derivedCounts: derived, boardLine }
+const report = await agent(REPORT.replace('{COUNTS}', JSON.stringify(derived)).replace('{BOARDLINE}', boardLine), { label: 'stale-tasks-report-' + pass, phase: 'Report', schema: REPORT_SCHEMA })
+log('stale-tasks pass ' + pass + ': ' + boardLine + ' — next pass re-censuses')
+}
