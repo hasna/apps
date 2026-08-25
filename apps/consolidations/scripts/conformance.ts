@@ -1,7 +1,7 @@
 // Repo conformance gate for the Hasna Service Contract v1.
 //
-// Two gates, both driven by @hasna/contracts PINNED to EXACTLY 0.13.4 (registry
-// devDependency "0.13.4", no caret) so a concurrent publish of 0.13.5 cannot
+// Two gates, both driven by @hasna/contracts PINNED to EXACTLY 0.14.0 (registry
+// devDependency "0.14.0", no caret) so a concurrent publish of 0.14.1 cannot
 // re-break this app:
 //   1. vendor-kit --check : the vendored src/generated/storage-kit/* still
 //      matches the canonical generator output (sha256 per file) — no drift.
@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // --- Gate 0: the installed contracts kit is EXACTLY the pinned version.
-const PINNED_CONTRACTS_VERSION = "0.13.4";
+const PINNED_CONTRACTS_VERSION = "0.14.0";
 const contractsPkgPath = join(process.cwd(), "node_modules", "@hasna", "contracts", "package.json");
 const installedContractsVersion = JSON.parse(readFileSync(contractsPkgPath, "utf8")).version as string;
 if (installedContractsVersion !== PINNED_CONTRACTS_VERSION) {
