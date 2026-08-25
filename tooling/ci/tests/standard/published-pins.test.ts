@@ -15,6 +15,13 @@
  *   - @hasna/contracts 0.14.0 unpinned: todos 90fe5c89 (O15-00663; 32
  *     members pinned by wave c4622d9094 / PR #1123 while the registry
  *     latest was 0.13.4; remediated by PR #1127)
+ *   - @hasna/contracts 0.14.1 unpinned: todos 1f6adcf7 (O15-00725; 22
+ *     members pinned by wave 2be005361 / PR #1168 while the registry
+ *     latest was 0.14.0; remediated by the change that encodes the
+ *     wave-1168 state in the self-test below — the wave merged even
+ *     though this HARD check fires on it, so the gate alone was not the
+ *     barrier; the check now also covers the same wave's connectors
+ *     1.4.4, sessions 0.12.21, todos 0.15.50 and machines 0.2.37 pins)
  *
  * The wave tooling must not merge a wave that pins an intra-wave dep to a
  * version that is not on the registry: either publish the bumped package
@@ -184,6 +191,49 @@ describe("standard-adherence: intra-wave unpublished pins", () => {
     const result3 = findUnpublishedPins(pins, publishedByDep3);
     expect(result3.violations).toEqual([]);
     expect(result3.unverifiable).toEqual([pins[0], pins[1]]);
+  });
+
+  test("self-test: wave-1168 state fires — 0.14.1 pinned while the registry stops at 0.14.0 (O15-00725)", () => {
+    // The exact state measured at wave 2be005361 / PR #1168's merge:
+    // @hasna/contracts 0.14.1 pinned by consumers while the registry latest
+    // was 0.14.0 — plus the same wave's unpublished pins on connectors
+    // (1.4.4 vs 1.4.3), sessions (0.12.21 vs 0.12.20), todos (0.15.50 vs
+    // 0.15.49) and machines (0.2.37 vs 0.2.36). Each must be a violation,
+    // and the registry-caught-up state must go silent.
+    const wave1168Pins: IntraWavePin[] = [
+      { member: "todos", dependency: "@hasna/contracts", pin: "0.14.1" },
+      { member: "browser", dependency: "@hasna/connectors", pin: "1.4.4" },
+      { member: "browser", dependency: "@hasna/sessions", pin: "0.12.21" },
+      { member: "browser", dependency: "@hasna/todos", pin: "0.15.50" },
+      { member: "loops", dependency: "@hasna/machines", pin: "0.2.37" },
+    ];
+    const publishedAtMerge = new Map<string, string[] | null>([
+      ["@hasna/contracts", ["0.13.4", "0.14.0"]],
+      ["@hasna/connectors", ["1.4.3"]],
+      ["@hasna/sessions", ["0.12.20"]],
+      ["@hasna/todos", ["0.15.49"]],
+      ["@hasna/machines", ["0.2.36"]],
+    ]);
+    const { violations, unverifiable } = findUnpublishedPins(wave1168Pins, publishedAtMerge);
+    expect(violations.map((v) => `${v.member}@${v.dependency}@${v.pin}`)).toEqual([
+      "todos@@hasna/contracts@0.14.1",
+      "browser@@hasna/connectors@1.4.4",
+      "browser@@hasna/sessions@0.12.21",
+      "browser@@hasna/todos@0.15.50",
+      "loops@@hasna/machines@0.2.37",
+    ]);
+    expect(unverifiable).toEqual([]);
+
+    // Registry catches up after the wave publishes: every pin is now on the
+    // registry — silent, because the check must not fire on valid pins.
+    const publishedAfterPublish = new Map<string, string[] | null>([
+      ["@hasna/contracts", ["0.13.4", "0.14.0", "0.14.1"]],
+      ["@hasna/connectors", ["1.4.3", "1.4.4"]],
+      ["@hasna/sessions", ["0.12.20", "0.12.21"]],
+      ["@hasna/todos", ["0.15.49", "0.15.50"]],
+      ["@hasna/machines", ["0.2.36", "0.2.37"]],
+    ]);
+    expect(findUnpublishedPins(wave1168Pins, publishedAfterPublish).violations).toEqual([]);
   });
 
   test("no publishable member exact-pins an intra-wave dep to a version not on the npm registry (HARD)", async () => {
