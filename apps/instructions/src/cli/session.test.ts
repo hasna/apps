@@ -635,7 +635,7 @@ describe("configs session CLI", () => {
           content: GLOBAL_AGENT_RULES_STANDARD_CONTENT,
           targetProviders: ["codewith"],
           nonOverridable: true,
-          metadata: { role: "agent-operating-rules", rulesVersion: "1.1.6" },
+          metadata: { role: "agent-operating-rules", rulesVersion: "1.1.26" },
         }],
         validation: { valid: true },
       }));
@@ -683,7 +683,7 @@ describe("configs session CLI", () => {
       };
       const rendered = readFileSync(join(home, "codewith-home", "CODEWITH.md"), "utf8");
       expect(manifest.sources).toHaveLength(1);
-      expect((rendered.match(/hasna:agent-operating-rules v=1\.1\.6/g) ?? [])).toHaveLength(1);
+      expect((rendered.match(/hasna:agent-operating-rules v=1\.1\.26/g) ?? [])).toHaveLength(1);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

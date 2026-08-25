@@ -275,7 +275,7 @@ describe("rule-borne agent-operating-rules payloads are floored (todos 9af165a8)
   // CASE 6 — THE BOUND ON CASE 4b, stated as a test so it cannot be read as a stronger
   // guarantee than it is. When NEITHER candidate matches the pinned digest the integrity
   // axis ties and version ordering decides exactly as before. This is the measured fleet
-  // shape (v1.1.16 beside v1.1.24 against a v1.1.6 baseline), and it must keep resolving
+  // shape (v1.1.16 beside v1.1.24 against a v1.1.26 baseline), and it must keep resolving
   // to the newer document — an integrity rule that also downgraded this case would freeze
   // homes on a stale snapshot.
   test("BOUND: with neither payload digest-verified, the NEWER one still wins", () => {

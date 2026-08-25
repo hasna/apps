@@ -19,10 +19,9 @@ import {
 } from "./session-render";
 import { tempRootPath } from "./test-temp-root";
 
-const ACCEPTED_RULES_VERSION = "1.1.6";
-const ACCEPTED_SOURCE_SET_VERSION = "2026-07-23";
-const ACCEPTED_SENTINEL = "<!-- hasna:agent-operating-rules v=1.1.6 -->";
-const ACCEPTED_POLICY_REFERENCE = "hasna-agent-operating-rules/scoped-operational-control/v1";
+const ACCEPTED_RULES_VERSION = "1.1.26";
+const ACCEPTED_SOURCE_SET_VERSION = "2026-08-11";
+const ACCEPTED_SENTINEL = "<!-- hasna:agent-operating-rules v=1.1.26 -->";
 const ACCEPTED_UPSTREAM_REPOSITORY = "hasnaxyz/iapp-identities";
 const ACCEPTED_UPSTREAM_COMMIT = "48168c549cc2945053a4498a9a2b11888419bc94";
 const ACCEPTED_UPSTREAM_PATH = "src/global-agent-rules.ts";
@@ -190,14 +189,13 @@ describe("agent operating rules managed render integration", () => {
         expect(plan.manifest.sources.map((source) => source.id)).toEqual([standard.slug]);
         expect(plan.manifest.skippedSources).toEqual(selection.skippedSources);
         expect(content).toContain(ACCEPTED_SENTINEL);
-        expect(content).toContain("Only a verified, authorized, scope-matching control");
-        expect(content).toContain("Different identifier types never match each other");
-        expect(content).toContain("smallest potentially affected set");
-        expect(content).toContain("Always continue unrelated safe authorized work");
-        expect(content).toContain(ACCEPTED_POLICY_REFERENCE);
-        expect(content).toContain("secrets, provider-policy, legal, billing, destructive-action, and public-action boundaries");
+        expect(content).toContain("Sole exception: severity-tagged posts");
+        expect(content).toContain("permitted responses are acknowledge, re-read this protocol, or upgrade");
+        expect(content).toContain("The only actionable stop signal is a real, code-confirmed blocker");
+        expect(content).toContain("note it and continue with unrelated safe work rather than halting the session");
+        expect(content).toContain("freezes are not a stop signal");
         expect(content).not.toContain("freeze notices never stop work");
-        expect(content).not.toContain("freezes are not a stop signal");
+        expect(content).not.toContain("hasna-agent-operating-rules/scoped-operational-control/v1");
         expect(plan.manifest.sources[0]?.provenance).toMatchObject({
           source: "hasna/instructions:global-agent-rules-standard",
           upstreamRepository: ACCEPTED_UPSTREAM_REPOSITORY,
@@ -206,10 +204,9 @@ describe("agent operating rules managed render integration", () => {
           upstreamFileSha256: "b8e89cdb49e207e5b497ac51384d67022b94fe5645cc9273db60384eb2c2fb32",
           upstreamExportId: "hasna-global-agent-rules-standard",
           upstreamSourceId: "hasna-agent-operating-rules",
-          selectedPayloadSha256: "8b236086b82e94490516e0b00dffa03fb5f6841b68d95f80fc3e3c8fb7087420",
+          selectedPayloadSha256: "486844a3d869e3dabc2f33fd66479d4e2fb0a0d1864a3d8a3dd05669eb3f1b77",
           rulesVersion: ACCEPTED_RULES_VERSION,
           sourceSetVersion: ACCEPTED_SOURCE_SET_VERSION,
-          policyReference: ACCEPTED_POLICY_REFERENCE,
         });
         expect(plan.manifest.sources[0]?.metadata).toMatchObject({
           sourceSet: "hasna-global-agent-rules-standard",
@@ -217,8 +214,7 @@ describe("agent operating rules managed render integration", () => {
           rulesVersion: ACCEPTED_RULES_VERSION,
           sourceSetVersion: ACCEPTED_SOURCE_SET_VERSION,
           plan: "global-agent-rules-standard",
-          contentSha256: "8b236086b82e94490516e0b00dffa03fb5f6841b68d95f80fc3e3c8fb7087420",
-          policyReferences: { incidentRecovery: ACCEPTED_POLICY_REFERENCE },
+          contentSha256: "486844a3d869e3dabc2f33fd66479d4e2fb0a0d1864a3d8a3dd05669eb3f1b77",
         });
         expect(plan.manifest.sources[0]?.nonOverridable).toBe(true);
         expect(plan.manifest.targetOwner).toMatchObject({
@@ -240,8 +236,8 @@ describe("agent operating rules managed render integration", () => {
       const store = new LocalConfigStore(db);
       const marker = "MARKER-NEWER-STORED-RULES-REACHES-DISK";
       const newerContent = [
-        "# Hasna Agent Operating Rules — v1.1.12 (2026-07-27)",
-        "<!-- hasna:agent-operating-rules v=1.1.12 -->",
+        "# Hasna Agent Operating Rules — v1.1.27 (2026-08-20)",
+        "<!-- hasna:agent-operating-rules v=1.1.27 -->",
         marker,
         "24. Rule twenty-four exists only in the newer stored payload.",
       ].join("\n") + "\n";
@@ -267,10 +263,10 @@ describe("agent operating rules managed render integration", () => {
         .map((file) => readFileSync(join(targetHome, file.relativePath), "utf8"))
         .join("\n");
       expect(written).toContain(marker);
-      expect(written).toContain("v1.1.12");
+      expect(written).toContain("v1.1.27");
       expect(written).not.toContain(ACCEPTED_SENTINEL);
       expect(plan.manifest.sources[0]?.metadata).toMatchObject({
-        rulesVersion: "1.1.12",
+        rulesVersion: "1.1.27",
         payloadOrigin: "stored-config",
       });
     });
@@ -416,7 +412,7 @@ describe("agent operating rules managed render integration", () => {
   // arrives through sourcesFromIdentityExport, carries its own nonOverridable flag, and
   // never passed through the config-store guard — so a below-baseline export rendered
   // verbatim into a file agents load as their highest-precedence instruction. Measured on
-  // a live machine: a codewith home rendered v1.1.5 while this build embeds v1.1.6.
+  // a live machine: a codewith home rendered v1.1.5 while this build embeds v1.1.26.
   test("floors a below-baseline identity export instead of rendering it", () => {
     const staleExport = {
       version: 1,
