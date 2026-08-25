@@ -1,6 +1,7 @@
 /**
  * Lane adapter types (slice E) — shared by the daemon and the four adapters.
  */
+import { statSync } from "node:fs";
 
 export const LANE_KINDS = ["claude", "codex", "cursor", "grok"] as const;
 export type LaneKind = (typeof LANE_KINDS)[number];
@@ -27,9 +28,27 @@ export interface LaneResult {
   error?: string;
 }
 
+/**
+ * A lane maturity probe: is the substrate actually wired on THIS machine
+ * right now, and if not, why. `wired` means a usable substrate exists —
+ * the SDK package importable or the CLI binary on PATH — NOT that a live
+ * authenticated call would succeed (that is the live-verify gate's job).
+ */
+export interface LaneProbe {
+  kind: LaneKind;
+  sdk: string;
+  wired: boolean;
+  /** How the lane would execute when wired (e.g. "sdk" or "cli"). */
+  via?: string;
+  /** Why the lane is not ready, when not wired. */
+  reason?: string;
+}
+
 export interface LaneAdapter {
   kind: LaneKind;
   run(job: LaneJob): Promise<LaneResult>;
+  /** Re-run the maturity check for this lane. */
+  probe(): Promise<LaneProbe>;
 }
 
 /** The substrate (SDK package or CLI binary) is not installed/available. */
@@ -49,6 +68,20 @@ export class LaneAdapterShapeError extends Error {
 }
 
 export const DEFAULT_LANE_TIMEOUT_MS = 120_000;
+
+/** Is a binary present on PATH (read-only existence check; never runs it)? */
+export function binaryOnPath(binary: string): boolean {
+  const pathEntries = (process.env.PATH ?? "").split(":").filter(Boolean);
+  for (const entry of pathEntries) {
+    try {
+      const stat = statSync(`${entry}/${binary}`);
+      if (stat.isFile()) return true;
+    } catch {
+      // not at this PATH entry; keep looking
+    }
+  }
+  return false;
+}
 
 /** Run a promise with a bounded wall-clock budget. */
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, what: string): Promise<T> {

@@ -12,9 +12,11 @@
 import {
   type LaneAdapter,
   type LaneJob,
+  type LaneProbe,
   type LaneResult,
   LaneDependencyMissingError,
   spawnCli,
+  binaryOnPath,
   DEFAULT_LANE_TIMEOUT_MS,
 } from "./types.js";
 
@@ -25,6 +27,18 @@ export interface GrokAdapterDeps {
 export function createGrokAdapter(deps: GrokAdapterDeps = {}): LaneAdapter {
   return {
     kind: "grok",
+    async probe(): Promise<LaneProbe> {
+      const cliPath = deps.cliPath ?? "grok";
+      if (binaryOnPath(cliPath)) {
+        return { kind: "grok", sdk: "no npm SDK (measured 2026-08-25)", wired: true, via: "cli" };
+      }
+      return {
+        kind: "grok",
+        sdk: "no npm SDK (measured 2026-08-25)",
+        wired: false,
+        reason: `no xAI Grok SDK exists on npm (measured 2026-08-25) and the grok CLI is not on PATH`,
+      };
+    },
     async run(job: LaneJob): Promise<LaneResult> {
       if (!job.prompt) {
         return { ok: false, exitCode: 2, output: "", durationMs: 0, error: "grok lane requires a prompt" };

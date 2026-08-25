@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { openStore } from "../store.js";
 
 const pkgDir = join(import.meta.dir, "..", "..");
 const pkgVersion = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version as string;
@@ -264,5 +265,204 @@ describe("workflows CLI — the fourteen commands", () => {
     expect(r.exitCode).toBe(0);
     const report = JSON.parse(r.stdout) as { interrupted: number; requeued: number; failed: number };
     expect(typeof report.interrupted).toBe("number");
+  });
+});
+
+describe("workflows CLI — slice 4 verbs (live-verify closures)", () => {
+  test("init creates the store layout (workflows/, sessions/, workflows.db) and the default sample inside workflows/", async () => {
+    const r = await runCli(["init"]);
+    expect(r.exitCode).toBe(0);
+    expect(existsSync(join(dataDir, "workflows"))).toBe(true);
+    expect(existsSync(join(dataDir, "sessions"))).toBe(true);
+    expect(existsSync(join(dataDir, "workflows.db"))).toBe(true);
+    const samplePath = join(dataDir, "workflows", "demo.json");
+    expect(existsSync(samplePath)).toBe(true);
+    const valid = await runCli(["validate", samplePath, "--json"]);
+    expect(valid.exitCode).toBe(0);
+    expect((JSON.parse(valid.stdout) as { ok: boolean }).ok).toBe(true);
+  });
+
+  test("run --input k=v feeds the decision scope", async () => {
+    const inputGraph = {
+      name: "cli-input",
+      version: "1.0.0",
+      nodes: [
+        { id: "start", type: "start", next: "decide" },
+        { id: "decide", type: "decision", condition: "go == 'yes'", then: "yes", else: "no" },
+        { id: "yes", type: "step", command: "printf yes-branch", next: "done" },
+        { id: "no", type: "step", command: "printf no-branch", next: "done" },
+        { id: "done", type: "end" },
+      ],
+    };
+    const file = writeGraph("input.json", inputGraph);
+    const yes = await runCli(["run", file, "--input", "go=yes", "--json"]);
+    expect(yes.exitCode).toBe(0);
+    const yesSummary = JSON.parse(yes.stdout) as { result: { steps: Record<string, { output: string }> } };
+    expect(yesSummary.result.steps.yes.output).toContain("yes-branch");
+    const no = await runCli(["run", file, "--input", "go=no", "--json"]);
+    expect(no.exitCode).toBe(0);
+    const noSummary = JSON.parse(no.stdout) as { result: { steps: Record<string, { output: string }> } };
+    expect(noSummary.result.steps.no.output).toContain("no-branch");
+  });
+
+  test("run --idempotency-key reuses the same run on a repeat", async () => {
+    const file = writeGraph("linear-idem.json", linearGraph);
+    const first = await runCli(["run", file, "--idempotency-key", "idem-1", "--json"]);
+    expect(first.exitCode).toBe(0);
+    const firstSummary = JSON.parse(first.stdout) as { runId: string; status: string };
+    expect(firstSummary.status).toBe("completed");
+    const second = await runCli(["run", file, "--idempotency-key", "idem-1", "--json"]);
+    expect(second.exitCode).toBe(0);
+    const secondSummary = JSON.parse(second.stdout) as { runId: string; reused: boolean };
+    expect(secondSummary.runId).toBe(firstSummary.runId);
+    expect(secondSummary.reused).toBe(true);
+  });
+
+  test("runs events <id> emits the run's WAL event stream", async () => {
+    const file = writeGraph("linear-events.json", linearGraph);
+    const run = await runCli(["run", file, "--json"]);
+    const { runId } = JSON.parse(run.stdout) as { runId: string };
+    const events = await runCli(["runs", "events", runId, "--json"]);
+    expect(events.exitCode).toBe(0);
+    const rows = JSON.parse(events.stdout) as { op: { op: string } }[];
+    const ops = rows.map((r) => r.op.op);
+    expect(ops).toContain("run_started");
+    expect(ops).toContain("run_finished");
+    expect(ops).toContain("node_finished");
+  });
+
+  test("nodes show <run> <node> prints the single node row", async () => {
+    const file = writeGraph("linear-nodeshow.json", linearGraph);
+    const run = await runCli(["run", file, "--json"]);
+    const { runId } = JSON.parse(run.stdout) as { runId: string };
+    const show = await runCli(["nodes", "show", runId, "work", "--json"]);
+    expect(show.exitCode).toBe(0);
+    const row = JSON.parse(show.stdout) as { nodeId: string; status: string };
+    expect(row.nodeId).toBe("work");
+    expect(row.status).toBe("completed");
+    // the bare form still lists
+    const bare = await runCli(["nodes", runId, "--json"]);
+    expect(bare.exitCode).toBe(0);
+    expect((JSON.parse(bare.stdout) as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  test("sessions list and pull work after a run", async () => {
+    const file = writeGraph("linear-sessions.json", linearGraph);
+    const run = await runCli(["run", file, "--json"]);
+    expect(run.exitCode).toBe(0);
+    const list = await runCli(["sessions", "list", "--json"]);
+    expect(list.exitCode).toBe(0);
+    expect((JSON.parse(list.stdout) as unknown[]).length).toBeGreaterThan(0);
+    const pull = await runCli(["sessions", "pull", "--json"]);
+    expect(pull.exitCode).toBe(0);
+    const report = JSON.parse(pull.stdout) as { entries: number; torn: boolean; liveClaims: unknown[] };
+    expect(report.entries).toBeGreaterThan(0);
+    expect(typeof report.torn).toBe("boolean");
+    expect(Array.isArray(report.liveClaims)).toBe(true);
+  });
+
+  test("machines list and status work", async () => {
+    const list = await runCli(["machines", "list", "--json"]);
+    expect(list.exitCode).toBe(0);
+    const rows = JSON.parse(list.stdout) as { local: boolean; name: string }[];
+    expect(rows.some((r) => r.local)).toBe(true);
+    const status = await runCli(["machines", "status", "--json"]);
+    expect(status.exitCode).toBe(0);
+    const report = JSON.parse(status.stdout) as { hostname: string; dataDir: string; layout: { workflows: boolean; sessions: boolean; db: boolean } };
+    expect(typeof report.hostname).toBe("string");
+    expect(report.dataDir).toBe(dataDir);
+    expect(report.layout.workflows).toBe(true);
+    expect(report.layout.sessions).toBe(true);
+    expect(report.layout.db).toBe(true);
+  });
+
+  test("graph <file> renders text, dot, and json", async () => {
+    const file = writeGraph("render.json", whileGraph);
+    const text = await runCli(["graph", file]);
+    expect(text.exitCode).toBe(0);
+    expect(text.stdout).toContain("while i < 2");
+    const dot = await runCli(["graph", file, "--format", "dot"]);
+    expect(dot.exitCode).toBe(0);
+    expect(dot.stdout).toContain("digraph");
+    const json = await runCli(["graph", file, "--format", "json"]);
+    expect(json.exitCode).toBe(0);
+    const rendered = JSON.parse(json.stdout) as { name: string; edges: unknown[] };
+    expect(rendered.name).toBe("cli-while");
+    expect(rendered.edges.length).toBeGreaterThan(0);
+  });
+
+  test("lanes probe <lane> reports the wired-vs-not-ready shape", async () => {
+    const probe = await runCli(["lanes", "probe", "claude", "--json"]);
+    expect(probe.exitCode).toBe(0);
+    const report = JSON.parse(probe.stdout) as { kind: string; wired: boolean };
+    expect(report.kind).toBe("claude");
+    expect(typeof report.wired).toBe("boolean");
+    const list = await runCli(["lanes", "list", "--json"]);
+    expect(list.exitCode).toBe(0);
+    const lanes = JSON.parse(list.stdout) as { kind: string; wired: boolean }[];
+    expect(lanes.map((l) => l.kind).sort()).toEqual(["claude", "codex", "cursor", "grok"]);
+    for (const lane of lanes) expect(typeof lane.wired).toBe("boolean");
+  });
+
+  test("top-level resume restores an interrupted run, reusing memoized node outputs", async () => {
+    const store = openStore(dataDir);
+    try {
+      const run = store.createRun({ graphName: "cli-interrupted", graphVersion: "1.0.0", context: { n: 1 } });
+      const node = store.createRunNode({ runId: run.id, nodeId: "work" });
+      store.setRunNodeStatus(node.id, "completed", { output: { ok: true, exitCode: 0, output: "done-work", durationMs: 1 } });
+      store.setRunStatus(run.id, "interrupted", { error: "worker died mid-flight" });
+      const r = await runCli(["resume", run.id, "--json"]);
+      expect(r.exitCode).toBe(0);
+      const restored = JSON.parse(r.stdout) as { runId: string; status: string; nodesRestored: number; memoizedNodes: number };
+      expect(restored.runId).toBe(run.id);
+      expect(restored.status).toBe("pending");
+      expect(restored.memoizedNodes).toBe(1);
+      const show = await runCli(["runs", "show", run.id, "--json"]);
+      expect((JSON.parse(show.stdout) as { status: string }).status).toBe("pending");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("resume on a non-interrupted run names the distinction", async () => {
+    const store = openStore(dataDir);
+    try {
+      const run = store.createRun({ graphName: "cli-not-interrupted", graphVersion: "1.0.0" });
+      store.setRunStatus(run.id, "failed", { error: "boom" });
+      const r = await runCli(["resume", run.id]);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain("runs resume");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("serve subcommand binds and answers /health", async () => {
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    const proc = Bun.spawn(["bun", "src/cli/index.ts", "serve", "--port", String(port)], {
+      cwd: pkgDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, HASNA_WORKFLOWS_DATA_DIR: dataDir },
+    });
+    try {
+      let healthy = false;
+      for (let i = 0; i < 40; i++) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/health`);
+          if (res.status === 200) {
+            healthy = true;
+            break;
+          }
+        } catch {
+          // not up yet
+        }
+        await Bun.sleep(200);
+      }
+      expect(healthy).toBe(true);
+    } finally {
+      proc.kill("SIGTERM");
+      await proc.exited;
+    }
   });
 });

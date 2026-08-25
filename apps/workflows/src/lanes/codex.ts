@@ -7,11 +7,13 @@
 import {
   type LaneAdapter,
   type LaneJob,
+  type LaneProbe,
   type LaneResult,
   LaneAdapterShapeError,
   LaneDependencyMissingError,
   withTimeout,
   spawnCli,
+  binaryOnPath,
   DEFAULT_LANE_TIMEOUT_MS,
 } from "./types.js";
 
@@ -27,6 +29,23 @@ interface CodexLike {
 export function createCodexAdapter(deps: CodexAdapterDeps = {}): LaneAdapter {
   return {
     kind: "codex",
+    async probe(): Promise<LaneProbe> {
+      const loader = deps.sdkLoader ?? (async () => (await import("@openai/codex-sdk")) as unknown);
+      try {
+        await loader();
+        return { kind: "codex", sdk: "@openai/codex-sdk", wired: true, via: "sdk" };
+      } catch {
+        if (binaryOnPath(deps.cliPath ?? "codex")) {
+          return { kind: "codex", sdk: "@openai/codex-sdk", wired: true, via: "cli" };
+        }
+        return {
+          kind: "codex",
+          sdk: "@openai/codex-sdk",
+          wired: false,
+          reason: "neither @openai/codex-sdk nor the codex CLI is available on this machine",
+        };
+      }
+    },
     async run(job: LaneJob): Promise<LaneResult> {
       if (!job.prompt) {
         return { ok: false, exitCode: 2, output: "", durationMs: 0, error: "codex lane requires a prompt" };

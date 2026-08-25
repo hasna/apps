@@ -10,7 +10,7 @@
  * torn-run repair with the reconstructed claim state.
  */
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowGraph } from "./graph.js";
 
@@ -72,6 +72,9 @@ export interface WalReplay {
 }
 
 export const WAL_FILE_NAME = "session.wal";
+/** The data-dir layout is workflows/ + sessions/ + workflows.db (owner spec):
+ * session WALs live under sessions/, workflow graph files under workflows/. */
+export const SESSIONS_DIR_NAME = "sessions";
 const MAX_WAL_BYTES = 256 * 1024 * 1024;
 
 function checksumOf(op: WalOp): string {
@@ -87,11 +90,25 @@ export class SessionWAL {
   }
 
   static open(dataDir: string): SessionWAL {
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(join(dataDir, SESSIONS_DIR_NAME), { recursive: true });
+    const canonical = join(dataDir, SESSIONS_DIR_NAME, WAL_FILE_NAME);
+    const legacy = join(dataDir, WAL_FILE_NAME);
+    // The data-dir layout is workflows/ + sessions/ + workflows.db (owner
+    // spec 2026-08-25). A WAL written by an earlier build sat at the data-dir
+    // root; migrate it once into sessions/ so no claim history is lost (a
+    // lost claim record would re-dispatch runs another worker still owns).
+    if (existsSync(legacy) && !existsSync(canonical)) {
+      try {
+        renameSync(legacy, canonical);
+      } catch {
+        // migration failed (permissions etc.): keep serving the legacy path
+        return new SessionWAL(legacy);
+      }
+    }
     // open does NOT replay: the first replay() (or append(), which replays to
     // compute the next seq) detects and truncates any torn tail, and reports
     // it — an open that silently repaired would hide the torn signal.
-    return new SessionWAL(join(dataDir, WAL_FILE_NAME));
+    return new SessionWAL(canonical);
   }
 
   static openAt(filePath: string): SessionWAL {

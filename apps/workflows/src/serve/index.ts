@@ -17,11 +17,13 @@ Endpoints:
   /health         service health
   /ready          service readiness
   /version        service version
+  /trigger        authenticated run trigger (POST, Bearer token)
   /openapi.json   API document
 
 Configuration (env):
   HASNA_WORKFLOWS_PORT  port (default 8790)
-  HASNA_WORKFLOWS_HOST  bind host (default 127.0.0.1)`;
+  HASNA_WORKFLOWS_HOST  bind host (default 127.0.0.1)
+  WORKFLOWS_API_KEY     token required by the authenticated /trigger`;
 
 const argv = process.argv.slice(2);
 if (argv.includes("--version") || argv.includes("-v")) {

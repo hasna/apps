@@ -228,8 +228,36 @@ describe("registry", () => {
     expect(resolveLane("codex").kind).toBe("codex");
     expect(resolveLane("cursor").kind).toBe("cursor");
     expect(resolveLane("grok").kind).toBe("grok");
-    const inventory = laneInventory();
+    const inventory = await laneInventory();
     expect(inventory.map((i) => i.kind).sort()).toEqual(["claude", "codex", "cursor", "grok"]);
+  });
+
+  test("the inventory carries the wired-vs-not-ready-with-reason shape", async () => {
+    const inventory = await laneInventory();
+    for (const lane of inventory) {
+      expect(typeof lane.wired).toBe("boolean");
+      expect(typeof lane.sdk).toBe("string");
+      if (lane.wired) {
+        expect(typeof lane.via).toBe("string");
+      } else {
+        expect(typeof lane.reason).toBe("string");
+        expect(lane.reason!.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("probe reports wired via sdk when the SDK loader resolves", async () => {
+    const probe = await createClaudeAdapter({ sdkLoader: async () => ({ query: async () => claudeMessages("x") }) }).probe();
+    expect(probe.kind).toBe("claude");
+    expect(probe.wired).toBe(true);
+    expect(probe.via).toBe("sdk");
+  });
+
+  test("probe reports not-ready with a named reason when no substrate exists", async () => {
+    const probe = await createGrokAdapter({ cliPath: "definitely-no-such-grok-binary" }).probe();
+    expect(probe.kind).toBe("grok");
+    expect(probe.wired).toBe(false);
+    expect(probe.reason).toMatch(/grok/);
   });
 
   test("unknown lane throws", () => {

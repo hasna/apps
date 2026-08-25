@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWorkflowsService } from "../service.js";
 import { createWorkflowsServer } from "./server.js";
+
+let triggerDir: string | undefined;
 
 const pkgDir = join(import.meta.dir, "..", "..");
 const pkgVersion = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version as string;
@@ -79,5 +82,113 @@ describe("workflows-serve (slice 1 scaffold)", () => {
     const exitCode = await proc.exited;
     expect(exitCode).toBe(0);
     expect(stdout).toContain("workflows-serve");
+  });
+});
+
+describe("the authenticated /trigger", () => {
+  const triggerGraph = {
+    name: "trigger-demo",
+    version: "1.0.0",
+    nodes: [
+      { id: "start", type: "start", next: "work" },
+      { id: "work", type: "step", command: "printf trigger-ok", next: "done" },
+      { id: "done", type: "end" },
+    ],
+  };
+
+  afterEach(() => {
+    if (triggerDir) {
+      rmSync(triggerDir, { recursive: true, force: true });
+      triggerDir = undefined;
+    }
+  });
+
+  function startTriggerServer(): string {
+    triggerDir = mkdtempSync(join(tmpdir(), "workflows-trigger-"));
+    const server = createWorkflowsServer(
+      createWorkflowsService({ port: 0, host: "127.0.0.1", apiKey: "test-key-12345", dataDir: triggerDir }),
+    );
+    servers.push(server);
+    return `http://127.0.0.1:${server.port}`;
+  }
+
+  test("runs a graph to completion with a valid Bearer token", async () => {
+    const base = startTriggerServer();
+    const res = await fetch(`${base}/trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-key-12345" },
+      body: JSON.stringify({ graph: triggerGraph }),
+    });
+    expect(res.status).toBe(200);
+    const summary = (await res.json()) as { runId: string; status: string; reused: boolean };
+    expect(summary.status).toBe("completed");
+    expect(summary.reused).toBe(false);
+    expect(summary.runId.length).toBeGreaterThan(0);
+  });
+
+  test("rejects an unauthenticated trigger with 401", async () => {
+    const base = startTriggerServer();
+    const res = await fetch(`${base}/trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ graph: triggerGraph }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("rejects a wrong Bearer token with 401", async () => {
+    const base = startTriggerServer();
+    const res = await fetch(`${base}/trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer wrong-key" },
+      body: JSON.stringify({ graph: triggerGraph }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("refuses with 503 when no API key is configured", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "workflows-trigger-nokey-"));
+    try {
+      const server = createWorkflowsServer(createWorkflowsService({ port: 0, host: "127.0.0.1", dataDir: dir }));
+      servers.push(server);
+      const res = await fetch(`http://127.0.0.1:${server.port}/trigger`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ graph: triggerGraph }),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("trigger_not_configured");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an idempotency key makes a repeated trigger reuse the same run", async () => {
+    const base = startTriggerServer();
+    const body = JSON.stringify({ graph: triggerGraph, idempotencyKey: "trigger-idem-1" });
+    const first = await fetch(`${base}/trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-key-12345" },
+      body,
+    });
+    const firstSummary = (await first.json()) as { runId: string; status: string; reused: boolean };
+    expect(firstSummary.status).toBe("completed");
+    const second = await fetch(`${base}/trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-key-12345" },
+      body,
+    });
+    const secondSummary = (await second.json()) as { runId: string; reused: boolean };
+    expect(secondSummary.runId).toBe(firstSummary.runId);
+    expect(secondSummary.reused).toBe(true);
+  });
+
+  test("/openapi.json documents the authenticated trigger", async () => {
+    const base = startTriggerServer();
+    const res = await fetch(`${base}/openapi.json`);
+    const doc = (await res.json()) as { paths: Record<string, unknown>; components: { securitySchemes: Record<string, unknown> } };
+    expect(doc.paths["/trigger"]).toBeDefined();
+    expect(doc.components.securitySchemes.bearerAuth).toBeDefined();
   });
 });

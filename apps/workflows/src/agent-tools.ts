@@ -77,7 +77,7 @@ export function workflowsTools(_service: WorkflowsService): McpTool[] {
     },
     {
       name: "workflows_lanes_list",
-      description: "List the four lane adapters and their substrates.",
+      description: "List the four lane adapters with their wired-vs-not-ready-with-reason registry shape.",
       inputSchema: { type: "object", properties: {} },
     },
   ];
@@ -123,7 +123,7 @@ export async function callWorkflowTool(service: WorkflowsService, name: string, 
       }
     }
     case "workflows_lanes_list":
-      return textResult(laneInventory());
+      return textResult(await laneInventory());
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

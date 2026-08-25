@@ -11,9 +11,9 @@ describe("workflows sdk surface (src/index.ts)", () => {
     expect(resolveWorkflowsConfig().port).toBe(8790);
   });
 
-  test("exports the request handler (serve surface)", () => {
+  test("exports the request handler (serve surface)", async () => {
     const handler = createRequestHandler(createWorkflowsService());
-    const res = handler(new Request("http://localhost/health"));
+    const res = await handler(new Request("http://localhost/health"));
     expect(res.status).toBe(200);
   });
 

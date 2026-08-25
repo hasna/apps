@@ -389,4 +389,33 @@ describe("run engine", () => {
     expect(threw).toBeTruthy();
     expect(String(threw)).toContain("start");
   });
+
+  test("the WAL graph_registered record is gated: a credential-shaped graph definition never lands in the WAL", async () => {
+    // the credential-shaped value is built from fragments so the test source
+    // itself is not a credential literal
+    const cred = ["Bearer", " ", "abcdefghij", "klmnopqrst", "uvwxyz123456"].join("");
+    const graph: WorkflowGraph = {
+      name: "leaky-graph",
+      version: "1.0.0",
+      nodes: [
+        { id: "start", type: "start", next: "call" },
+        { id: "call", type: "step", command: `curl -s -H 'Authorization: ${cred}' https://example.invalid/api`, next: "done" },
+        { id: "done", type: "end" },
+      ],
+    };
+    const daemon = makeDaemon();
+    let threw: unknown = null;
+    try {
+      daemon.startRun(graph, {});
+    } catch (err) {
+      threw = err;
+    }
+    expect(threw).toBeTruthy();
+    expect(String(threw)).toContain("write-gate");
+    // no graph_registered record carrying the definition may exist in the WAL
+    const replay = wal.replay();
+    expect(replay.entries.some((e) => e.op.op === "graph_registered")).toBe(false);
+    // and no run was created for the refused graph
+    expect(store.listRuns({ limit: 100 }).some((r) => r.graphName === "leaky-graph")).toBe(false);
+  });
 });

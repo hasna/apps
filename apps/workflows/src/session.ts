@@ -96,3 +96,64 @@ export function resetRunNodes(store: WorkflowsStore, run: RunRow): void {
     }
   }
 }
+
+export interface RestoreResult {
+  runId: string;
+  status: string;
+  /** running/pending node rows returned to pending so the run can continue. */
+  nodesRestored: number;
+  /** completed node rows whose persisted output the restore reuses (memoized). */
+  memoizedNodes: number;
+  attempts: number;
+}
+
+/**
+ * Top-level `resume` — restore an INTERRUPTED run from its durable cursor.
+ *
+ * Distinct from `runs resume` (which requeues cancelled/failed runs): an
+ * interrupted run is one whose worker died mid-flight; its durable context
+ * (__wf cursor + steps) and completed node outputs are already persisted, so
+ * restore reuses them (memoization) and only running/pending nodes return to
+ * pending. The daemon then continues from the last durable checkpoint.
+ */
+export function restoreInterruptedRun(store: WorkflowsStore, runId: string): RestoreResult {
+  const run = store.getRun(runId);
+  if (!run) throw new Error(`no such run ${runId}`);
+  if (run.status !== "interrupted") {
+    throw new Error(
+      `run ${runId} is ${run.status}; top-level resume restores interrupted runs — use 'runs resume' for cancelled/failed runs`,
+    );
+  }
+  const nodes = store.listRunNodes(runId);
+  let nodesRestored = 0;
+  let memoizedNodes = 0;
+  for (const node of nodes) {
+    if (node.status === "completed" && node.outputJson !== null) {
+      memoizedNodes++;
+    } else if (node.status === "running" || node.status === "pending") {
+      store.setRunNodeStatus(node.id, "pending", { error: undefined });
+      nodesRestored++;
+    }
+  }
+  store.setRunStatus(runId, "pending", { error: null });
+  return { runId, status: "pending", nodesRestored, memoizedNodes, attempts: run.attempts };
+}
+
+/**
+ * Idempotent run lookup: the run whose context carries the given idempotency
+ * key, if any. The three-table law forbids an extra column, so the key lives
+ * in the reserved __wf namespace of context_json; the scan is bounded by the
+ * store's own listRuns cap (1000 rows).
+ */
+export function findRunByIdempotencyKey(store: WorkflowsStore, key: string): RunRow | undefined {
+  const runs = store.listRuns({ limit: 1000 });
+  for (const run of runs) {
+    try {
+      const context = JSON.parse(run.contextJson) as { __wf?: { idempotencyKey?: unknown } };
+      if (context?.__wf?.idempotencyKey === key) return run;
+    } catch {
+      // an unparseable context row cannot carry the key; skip it
+    }
+  }
+  return undefined;
+}
