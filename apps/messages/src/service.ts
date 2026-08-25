@@ -47,7 +47,10 @@ export interface MessagesStore {
   listThreads(agent: string, openOnly: boolean): Promise<Thread[]>;
 
   // --- messages + deliveries ---
-  insertMessage(message: Message): Promise<void>;
+  /** Insert a message; the store assigns the per-thread `seq` atomically and
+   * returns the stored message. `seq` must never be computed client-side from
+   * a count (concurrent sends to one thread would duplicate it). */
+  insertMessage(message: Omit<Message, "seq">): Promise<Message>;
   insertDelivery(messageId: string, delivery: MessageDelivery): Promise<void>;
   /** Most recent `limit` messages of the thread, oldest-first within the window. */
   listMessages(threadId: string, limit?: number): Promise<Message[]>;
@@ -68,18 +71,41 @@ export interface MessagesStore {
 }
 
 /**
- * Canonical, order-independent thread key for a pair of agents.
- * "augustus" <-> "silvanus" is the same thread from either side.
+ * Canonical, order-independent, collision-free thread key for a pair of
+ * agents. "augustus" <-> "silvanus" is the same thread from either side.
+ *
+ * Each name's underscores are escaped (`_` -> `_u`) before the sorted join,
+ * making the `__` separator unambiguous inside the new id space: the escape
+ * can never contain `__` (every `_` is followed by `u`), so `0_`/`a` and
+ * `0`/`_a` no longer collapse onto one key. newThreadId prefixes the result
+ * with `t1_`, keeping the new id space disjoint from the legacy `t_` space
+ * (legacy names like `0_u` cannot collide with the escaped id of `0_`).
+ * Legacy rows are adopted by the grandfather fallback in send(), which uses
+ * the raw legacy id and verifies the stored participants.
  */
 export function threadKeyFor(agentA: string, agentB: string): string {
-  return [agentA, agentB].sort().join("__");
+  const [a, b] = [agentA, agentB].sort();
+  return `${escapeKeyPart(a)}__${escapeKeyPart(b)}`;
+}
+
+/** Escape every `_` in a key part so the `__` join is unambiguous. */
+function escapeKeyPart(name: string): string {
+  return name.replace(/_/g, "_u");
 }
 
 export function newThreadId(agentA: string, agentB: string): string {
-  return `t_${threadKeyFor(agentA, agentB)}`;
+  // The `t1_` prefix keeps the NEW id space disjoint from the legacy `t_`
+  // space: every legacy id is `t_<a>__<b>`, which never starts with `t1_`, so
+  // a primary escaped-id lookup can never match a legacy row of a different
+  // pair (a legacy name like `0_u` would otherwise collide with the escaped
+  // id of `0_`). Legacy rows are adopted via the grandfather fallback in
+  // send(), which uses the raw legacy id and verifies the participants.
+  return `t1_${threadKeyFor(agentA, agentB)}`;
 }
 
 function normalizeAgentName(name: string): string {
+  // No name constraint: the thread-key encoding is injective for any name
+  // (see threadKeyFor), so legacy identities with underscores keep working.
   return name.trim().toLowerCase();
 }
 
@@ -100,7 +126,10 @@ export class MessagesService {
     return this.store.listAgents();
   }
 
-  /** Resolve an agent by name, registering it on first use. */
+  /** Resolve an agent by name, registering it on first use. Registration is
+   * conflict-tolerant: two concurrent sends of the same new agent race the
+   * UNIQUE(name) insert, and the loser re-reads the committed row instead of
+   * surfacing a unique-constraint failure. */
   private async ensureAgent(name: string, displayName: string | null, at: string): Promise<Agent> {
     const normalized = normalizeAgentName(name);
     if (!normalized) throw new Error("agent name is required");
@@ -116,8 +145,18 @@ export class MessagesService {
       created_at: at,
       last_seen_at: at,
     };
-    await this.store.insertAgent(agent);
-    return agent;
+    try {
+      await this.store.insertAgent(agent);
+      return agent;
+    } catch (err) {
+      // A concurrent registration won the race; return the committed row.
+      const raced = await this.store.findAgentByName(normalized);
+      if (raced) {
+        await this.store.touchAgent(normalized, at);
+        return raced;
+      }
+      throw err;
+    }
   }
 
   // --- messaging ----------------------------------------------------------
@@ -138,8 +177,24 @@ export class MessagesService {
     const sender = await this.ensureAgent(from_agent, null, now);
     const recipient = await this.ensureAgent(to_agent, null, now);
 
-    const threadId = newThreadId(sender.name, recipient.name);
+    let threadId = newThreadId(sender.name, recipient.name);
     let thread = await this.store.findThread(threadId);
+    if (!thread) {
+      // Grandfather path for legacy rows: before the escape encoding, thread
+      // ids were the raw sorted join, so an underscore-named pair's stored
+      // thread carries the unescaped id. Adopt it (only when its participants
+      // are this pair — otherwise the legacy id belongs to a colliding pair
+      // and the escaped thread is the correct one).
+      const sortedPair = [sender.name, recipient.name].sort();
+      const legacyId = `t_${sortedPair.join("__")}`;
+      if (legacyId !== threadId) {
+        const legacy = await this.store.findThread(legacyId);
+        if (legacy && legacy.agent_a === sortedPair[0] && legacy.agent_b === sortedPair[1]) {
+          thread = legacy;
+          threadId = legacyId;
+        }
+      }
+    }
     if (!thread) {
       thread = {
         id: threadId,
@@ -155,17 +210,16 @@ export class MessagesService {
     await this.store.ensureParticipant(threadId, sender.name, now);
     await this.store.ensureParticipant(threadId, recipient.name, now);
 
-    const seq = (await this.store.countMessages(threadId)) + 1;
-    const message: Message = {
+    // seq is assigned atomically by the store (never count+1 client-side —
+    // concurrent sends to one thread would duplicate it).
+    const message = await this.store.insertMessage({
       id: crypto.randomUUID(),
       thread_id: threadId,
       from_agent: sender.name,
       content,
       reply_to: input.reply_to ?? null,
       created_at: now,
-      seq,
-    };
-    await this.store.insertMessage(message);
+    });
 
     // Per-recipient delivery: the recipient's record starts `stored`. The
     // sender has no delivery row (own message). A stored-but-undelivered

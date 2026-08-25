@@ -36,6 +36,74 @@ describe("thread identity", () => {
     expect(threadKeyFor(A, B)).toBe(threadKeyFor(B, A));
     expect(newThreadId(A, B)).toBe(newThreadId(B, A));
   });
+
+  test("thread keys are injective and disjoint from the legacy id space (REGRESSION: review P1s)", async () => {
+    // Collision freedom: `a`/`b__c` vs `a__b`/`c` and `0_`/`a` vs `0`/`_a`
+    // must produce distinct keys (original P1 + final-review P1).
+    expect(newThreadId("a", "b__c")).not.toBe(newThreadId("a__b", "c"));
+    expect(newThreadId("0_", "a")).not.toBe(newThreadId("0", "_a"));
+    // The escape is order-independent like the legacy format.
+    expect(newThreadId("0_", "a")).toBe(newThreadId("a", "0_"));
+    expect(newThreadId("0", "_a")).toBe(newThreadId("_a", "0"));
+    // The new id space (t1_) is disjoint from the legacy space (t_): a legacy
+    // name containing the escape sequence cannot collide with the escaped id
+    // of a different pair — the re-review P1 (`0_u` legacy vs `0_` escaped).
+    expect(newThreadId("0_", "a")).toBe("t1_0_u__a");
+    expect(newThreadId("0_u", "a")).toBe("t1_0_uu__a");
+    expect(newThreadId("0_u", "a")).not.toBe(newThreadId("0_", "a"));
+  });
+
+  test("legacy underscore-named threads stay reachable via the grandfather fallback (REGRESSION: re-review P1)", async () => {
+    const { service, db } = testService();
+    // Seed a legacy thread row under the old unescaped id for an
+    // underscore-named pair, as a 0.1.0-era store would hold it.
+    const legacyId = "t_0___a";
+    db.query(
+      "INSERT INTO threads (id, agent_a, agent_b, last_message_at, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(legacyId, "0_", "a", new Date().toISOString(), new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "0_", new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "a", new Date().toISOString());
+
+    // A send from the underscore-named pair adopts the legacy row instead of
+    // splitting the history.
+    const result = await service.send({ from_agent: "0_", to_agent: "a", content: "hi" });
+    expect(result.message.thread_id).toBe(legacyId);
+    const messages = await service.threadMessages(legacyId);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.content).toBe("hi");
+
+    // The colliding OTHER pair (`0`/`_a`) must NOT adopt the legacy row whose
+    // participants are a different pair: it gets its own escaped thread.
+    const other = await service.send({ from_agent: "0", to_agent: "_a", content: "yo" });
+    expect(other.message.thread_id).not.toBe(legacyId);
+    expect(newThreadId("0", "_a")).toBe(other.message.thread_id);
+  });
+
+  test("escaped-id lookups cannot land in an unrelated legacy thread (REGRESSION: re-review 2 P1)", async () => {
+    const { service, db } = testService();
+    // Legacy row for pair ("0_u", "a") under the raw id t_0_u__a — which is
+    // byte-identical to the escaped id that "0_"/"a" would produce WITHOUT the
+    // t1_ prefix. The t1_ prefix must keep the pair ("0_", "a") out of it.
+    const legacyId = "t_0_u__a";
+    db.query(
+      "INSERT INTO threads (id, agent_a, agent_b, last_message_at, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(legacyId, "0_u", "a", new Date().toISOString(), new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "0_u", new Date().toISOString());
+    db.query("INSERT INTO thread_participants (thread_id, agent, joined_at) VALUES (?, ?, ?)").run(legacyId, "a", new Date().toISOString());
+
+    // Sending as "0_" to "a" must create its OWN t1_ thread, never insert
+    // into the unrelated legacy row.
+    const first = await service.send({ from_agent: "0_", to_agent: "a", content: "one" });
+    expect(first.message.thread_id).toBe("t1_0_u__a");
+    expect((await service.threadMessages(legacyId)).length).toBe(0);
+
+    // The legacy pair ("0_u", "a") still reaches its own history.
+    const second = await service.send({ from_agent: "0_u", to_agent: "a", content: "two" });
+    expect(second.message.thread_id).toBe(legacyId);
+    const legacyMessages = await service.threadMessages(legacyId);
+    expect(legacyMessages).toHaveLength(1);
+    expect(legacyMessages[0]!.content).toBe("two");
+  });
 });
 
 describe("agent identity is first-class", () => {
@@ -122,6 +190,27 @@ describe("MessagesService", () => {
     await expect(
       service.send({ from_agent: A, to_agent: B, content: "  " }),
     ).rejects.toThrow("content is required");
+  });
+
+  test("concurrent sends get unique per-thread seqs and no agent-registration race (REGRESSION: P1 review finding)", async () => {
+    const { service } = testService();
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        service.send({ from_agent: A, to_agent: B, content: `msg ${i}` }),
+      ),
+    );
+    const seqs = results.map((r) => r.message.seq).sort((x, y) => x - y);
+    // 12 sends, seqs must be exactly 1..12 with no duplicate and no gap.
+    expect(seqs).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+    // A fresh agent created concurrently from two sides must not fail on the
+    // UNIQUE(name) insert: the loser re-reads the committed row.
+    const [x, y] = await Promise.all([
+      service.send({ from_agent: "newcomer", to_agent: B, content: "x" }),
+      service.send({ from_agent: "newcomer", to_agent: B, content: "y" }),
+    ]);
+    expect(x.message.from_agent).toBe("newcomer");
+    expect(y.message.from_agent).toBe("newcomer");
+    expect((await service.listAgents()).map((a) => a.name)).toContain("newcomer");
   });
 
   test("threads: reply chains stay in one thread and history is oldest-first", async () => {

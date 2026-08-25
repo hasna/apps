@@ -200,12 +200,29 @@ export class PostgresMessagesStore implements MessagesStore {
 
   // --- messages + deliveries ---
 
-  async insertMessage(message: Message): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO messages (id, thread_id, sender, content, reply_to, created_at, seq)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [message.id, message.thread_id, message.from_agent, message.content, message.reply_to, message.created_at, message.seq],
-    );
+  async insertMessage(message: Omit<Message, "seq">): Promise<Message> {
+    // Atomic per-thread seq assignment: the thread row is locked FOR UPDATE so
+    // concurrent sends to the same thread serialize, then MAX(seq)+1 is
+    // computed inside the transaction. Without the lock, two READ COMMITTED
+    // statements could read the same MAX and duplicate a seq.
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [message.thread_id]);
+      const { rows } = await client.query<MessageRow>(
+        `INSERT INTO messages (id, thread_id, sender, content, reply_to, created_at, seq)
+         SELECT $1, $2, $3, $4, $5, $6, COALESCE(MAX(seq), 0) + 1 FROM messages WHERE thread_id = $2
+         RETURNING id, thread_id, sender, content, reply_to, created_at, seq`,
+        [message.id, message.thread_id, message.from_agent, message.content, message.reply_to, message.created_at],
+      );
+      await client.query("COMMIT");
+      return toMessage(rows[0]!);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async insertDelivery(messageId: string, delivery: MessageDelivery): Promise<void> {
