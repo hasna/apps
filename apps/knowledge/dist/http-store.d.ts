@@ -174,7 +174,7 @@ export interface KnowledgeHttpStore {
         ok: boolean;
         purged: number;
         current_version: number;
-    }>;
+    } | null>;
 }
 /**
  * Resolve the HTTP knowledge store from the environment. The canonical API URL

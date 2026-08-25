@@ -29965,6 +29965,9 @@ async function createKnowledgeProjectPanel(projectRef, options = {}) {
       if (!(error instanceof KnowledgeProjectLinksError) || error.code !== "KNOWLEDGE_PROJECT_LINKS_NOT_FOUND") {
         throw error;
       }
+      if (options.allowLegacyFallback === false) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", `Project ${projectRef} is not registered with a knowledge collection over the hosted route (the project-links authority resolves exact source project ids only). Refusing to fall back to the cwd-derived inventory, which would answer about the wrong project. Re-run with the exact source project id.`);
+      }
     }
   }
   const service = options.service ?? createKnowledgeService({ scope: options.scope ?? "project", cwd: options.cwd });

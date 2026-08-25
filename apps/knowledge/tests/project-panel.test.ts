@@ -334,6 +334,31 @@ describe('knowledge project panel provider', () => {
     expect(panel.provider.externalId).toBe(`knowledge:collection:${collectionId}`);
   });
 
+  // Regression for the silent-mislabelled-panel defect (release review 0.2.113
+  // P1): over the hosted route the authority resolves exact source project ids
+  // only, so a name/slug miss must be a LOUD error, never the cwd-derived
+  // inventory labelled with the requested project. The CLI passes
+  // allowLegacyFallback: false on the hosted route.
+  test('refuses the legacy fallback when allowLegacyFallback is false', async () => {
+    const harness = panelLocalAuthority();
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-project-panel-nofallback-'));
+    panelTempRoots.push(dir);
+    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    service.paths();
+    saveStore(service.jsonStorePath(), {
+      items: [panelItem('k_local_item', 'Local Item Must Not Surface', ['local'])],
+    });
+
+    await expect(
+      createKnowledgeProjectPanel('some-project-slug', {
+        service,
+        projectLinksAuthority: harness.authority,
+        allowLegacyFallback: false,
+        limit: 10,
+      }),
+    ).rejects.toThrow(/not registered with a knowledge collection over the hosted route/);
+  });
+
   // Negative control: an unregistered project with no authority still keeps the
   // legacy cwd-derived inventory path (the local store item is surfaced).
   test('falls back to the legacy inventory path when the project is not registered', async () => {
