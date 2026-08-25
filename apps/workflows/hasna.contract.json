@@ -41,7 +41,7 @@
       "name": "typescript-sdk",
       "kind": "sdk",
       "status": "supported",
-      "authMode": "api-key",
+      "authMode": "local-only",
       "exportSubpath": "./sdk",
       "clientClassName": "WorkflowsService",
       "generatedFrom": "/openapi.json"

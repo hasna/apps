@@ -21,6 +21,11 @@ database yet.
 
 All three bins answer `--version` / `--help` before binding or serving.
 
+The SDK is hand-authored to the OpenAPI document served at
+`/openapi.json` — there is no code-generated client and no API-key auth in
+0.1.0. (`hasna.contract.json` carries the fleet-mandated `generatedFrom`
+pointer naming that API document for service-class SDK surfaces.)
+
 ## Usage
 
 ```bash
