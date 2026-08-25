@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import packageJson from "../package.json";
+import { useDefaultTestTimeout } from "./test-preload.js";
+
+useDefaultTestTimeout();
 
 const root = join(import.meta.dir, "..");
 
