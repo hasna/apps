@@ -22,6 +22,7 @@ COPY --from=build /app/package.json ./package.json
 # (oven/bun has no wget; bun's fetch does the download.)
 RUN bun -e "const r = await fetch('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem'); if (!r.ok) throw new Error('bundle fetch ' + r.status); await Bun.write('/etc/ssl/certs/rds-global-bundle.pem', await r.arrayBuffer());" \
   && chmod 644 /etc/ssl/certs/rds-global-bundle.pem
-ENV HASNA_MESSAGES_PORT=8081
+ENV HASNA_MESSAGES_PORT=8081 \
+    HASNA_MESSAGES_HOST=0.0.0.0
 EXPOSE 8081
 CMD ["bun", "bin/serve.js"]
