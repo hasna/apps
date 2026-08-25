@@ -4,8 +4,9 @@
 
 ### Patch Changes
 
+- e9cf2db: Slack-style emoji reactions — `conversations react <message> <emoji>` (toggle add/remove), `conversations reactions list <message>` (grouped summary) and `conversations reactions remove <message> <emoji>`; MCP tools `add_reaction`/`remove_reaction`/`get_reactions`/`get_reaction_summary`; server routes `POST|GET|DELETE /v1/messages/{id}/reactions` with the SDK regenerated (`ConversationsClient.react/listReactions/removeReaction`); NFKC-normalized canonical emoji storage under `UNIQUE(message_id, agent, emoji)`; content-safety hardened (write-side assertion + read-side redaction). (todos 0aa4cb2d, PR #1091)
 - Updated dependencies [85a5e06]
-  - @hasna/contracts@0.14.1
+  - @hasna/contracts@0.14.0
 
 ## 0.7.7
 
