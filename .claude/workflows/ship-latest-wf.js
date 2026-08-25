@@ -80,6 +80,42 @@ ROLE: handoff lane. Per the CONST: derive the WAVE END STATE from origin/main me
 Return (JSON): { shippedPackages: [string], postDecision: 'full'|'one-liner'|'none', postId: string|null, taskState: string, residue: [string] }
 `
 
+
+// LIVE GATES (owner 2026-08-25): TWO independent agent gates that run the app
+// ITSELF live after the wave merges, before [SHIP-READY]. Each gate installs the
+// wave's packages (bun install -g @hasna/<pkg>@<v>) and runs the app's real
+// commands live — never test scripts, never --help-only, NON-DESTRUCTIVE —
+// per-command GO/NO_GO with evidence. BOTH must return GO or the wave is not
+// announced as shipped (a NO_GO files a task and the lane re-checks next pass).
+const GATE_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['verdict', 'perCommand', 'failures'],
+  properties: {
+    verdict: { enum: ['GO', 'NO_GO'] },
+    perCommand: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['command', 'verdict', 'evidence'],
+        properties: {
+          command: { type: 'string' },
+          verdict: { enum: ['GO', 'NO_GO'] },
+          evidence: { type: 'string' },
+        },
+      },
+    },
+    taskId: { type: ['string', 'null'] },
+    failures: { type: 'array', items: { type: 'string' } },
+  },
+}
+const GATE_PROMPT = (which) => `${CONST}
+ROLE: LIVE GATE ${'${which}'} OF 2 (ship-latest, owner 2026-08-25). Wave end state: ${'${SHIPPED}'} (packages + versions + merged sha). You verify the SHIPPED APP ITSELF by running its real commands live — this is a LIVE RUN, not a script check:
+1. For EACH package in the set: bun install -g @hasna/<pkg>@<v> (add the exact name to ~/.bunfig.toml minimumReleaseAgeExcludes first — the sanctioned quarantine escape; never bypass the quarantine itself). Verify the installed version: <bin> --version prints the published version.
+2. RUN THE APP ITSELF, every bin and every non-destructive command: --version, --help (answers BEFORE any bind — a bind-before-version is NO_GO), and every read/validate/list/dry-run verb the app exposes — actual commands, actual outputs, per-command {command, verdict: GO|NO_GO, evidence}. For -serve bins: --version/--help WITHOUT binding, then start it live and hit /health /ready /version.
+3. NON-DESTRUCTIVE ONLY: never mutate anything that isn't a throwaway scratch dir. NEVER write test scripts — run the real commands.
+4. NO_GO: file a todos task in project 3bbc22e0 ('SHIP UNVERIFIED: <pkg>@<v> — live gate ${'${which}'} NO_GO', evidence in the description) and return its taskId.
+Return {verdict, perCommand, failures}.`
+
 const CENSUS_SCHEMA = { type: 'object', properties: { noop: { type: 'boolean' }, pendingChangesets: { type: 'array' }, aheadPackages: { type: 'array' }, waveInFlight: { type: 'boolean' }, wavePr: { type: ['number', 'null'] }, evidence: { type: 'string' } }, required: ['noop'] }
 const WAVE_SCHEMA = { type: 'object', properties: { prNumber: { type: ['number', 'null'] }, bumps: { type: 'array' }, commandError: { type: ['string', 'null'] }, evidence: { type: 'string' } }, required: ['prNumber', 'bumps'] }
 const REVIEW_SCHEMA = { type: 'object', properties: { verdict: { type: 'string' }, findings: { type: 'array' } }, required: ['verdict'] }
@@ -92,9 +128,16 @@ const VERIFY3_SCHEMA = { type: 'object', properties: { mergeTreeEqual: { type: '
 const REVIEW3_SCHEMA = { type: 'object', properties: { verdict: { type: 'string' }, findings: { type: 'array' } }, required: ['verdict'] }
 const HANDOFF_SCHEMA = { type: 'object', properties: { shippedPackages: { type: 'array' }, postDecision: { enum: ['full', 'one-liner', 'none'] }, postId: { type: ['string', 'null'] }, taskState: { type: 'string' }, residue: { type: 'array' } }, required: ['taskState', 'postDecision'] }
 
+// INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> wave (if owed) ->
+// 2-agent live gates (if a wave merged) -> handoff -> sleep ~30 min inside the
+// census when nothing pending -> re-census, forever. Stop = owner stops the run
+// or the session ends. The census agent sleeps 1800 (bash) and re-checks once
+// when it is a NO-OP, so the run stays alive at ~1 agent per idle window.
+let pass = 0
+for (pass = 1; ; pass++) {
 phase('Census')
-const census = await agent(CENSUS, { label: 'ship-latest-census', phase: 'Census', schema: CENSUS_SCHEMA })
-log(`census: ${census && census.noop ? 'NO-OP (nothing pending)' : 'wave owed'}`)
+const census = await agent(CENSUS, { label: 'ship-latest-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
+log(`pass ${pass} census: ${census && census.noop ? 'NO-OP (nothing pending)' : 'wave owed'}`)
 
 let wave = null
 let review = null
@@ -145,7 +188,30 @@ if (census && !census.noop && !census.waveInFlight) {
   }
 }
 
-phase('Handoff')
-const handoff = await agent(HANDOFF, { label: 'ship-latest-handoff', phase: 'Handoff', schema: HANDOFF_SCHEMA })
+// 2-AGENT LIVE GATES (owner 2026-08-25): when a wave MERGED this pass, the app
+// itself must pass TWO independent live GO/NO_GO gates before [SHIP-READY].
+let gates = null
+let shipped = null
+if (merge && merge.merged) {
+  shipped = (merge && merge.mergedSha) ? merge.mergedSha : (wave ? wave.prNumber : null)
+  phase('LiveGates')
+  const gateResults = await parallel([
+    () => agent(GATE_PROMPT('ONE').replace('{SHIPPED}', JSON.stringify({ mergedSha: merge.mergedSha, prNumber: wave ? wave.prNumber : null })), { label: 'ship-latest-gate-1:' + pass, phase: 'LiveGates', schema: GATE_SCHEMA }),
+    () => agent(GATE_PROMPT('TWO').replace('{SHIPPED}', JSON.stringify({ mergedSha: merge.mergedSha, prNumber: wave ? wave.prNumber : null })), { label: 'ship-latest-gate-2:' + pass, phase: 'LiveGates', schema: GATE_SCHEMA }),
+  ])
+  const bothGo = gateResults.filter(Boolean).every(g => g && g.verdict === 'GO')
+  gates = { bothGo, gate1: gateResults[0], gate2: gateResults[1] }
+  log(`pass ${pass} live gates: ${bothGo ? 'BOTH GO' : 'NO_GO — wave NOT announced as shipped'}`)
+}
 
-return { census, wave, review, merge, handoff }
+phase('Handoff')
+const handoff = await agent(HANDOFF, { label: 'ship-latest-handoff-' + pass, phase: 'Handoff', schema: HANDOFF_SCHEMA })
+if (gates && !gates.bothGo) {
+  // A NO_GO gate means the wave is NOT verified live: do not let [SHIP-READY] stand as shipped.
+  log('pass ' + pass + ': live gate NO_GO — [SHIP-READY] not posted for the unverified wave; tasks filed by the gates')
+}
+
+if (census && census.noop && !(merge && merge.merged)) {
+  log(`pass ${pass}: nothing pending and nothing merged — the census waited ~30 min and re-checked; re-checking next pass`)
+}
+}

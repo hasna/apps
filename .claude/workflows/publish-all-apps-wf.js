@@ -1,9 +1,9 @@
 export const meta = {
   name: 'publish-all-apps',
-  description: 'Ship every hasna/apps member that is ahead of the npm registry, drain-to-zero: 4 WIP release lanes (1 app each), codewith release review per candidate, npm publish, live install+smoke; re-census each pass and loop while the queue is non-empty (hard bound MAX_PASSES)',
+  description: 'Ship every hasna/apps member that is ahead of the npm registry, drain-to-zero: 4 WIP release lanes (1 app each), codewith release review per candidate, npm publish, live install+smoke; re-census each pass and loop while the queue is non-empty (hard bound MAX_PASSES). HARDENED 2026-08-25 (owner-directed harden-lanes-review-gates, temporary): after each app\'s publish + two-sided verify and BEFORE any [PUBLISH-CONFIRM], TWO independent agents (publish-gate-1/publish-gate-2) live-verify the PUBLISHED package non-destructively — every bin, every non-destructive verb (--version, --help, validate, read, list, dry-run forms), actual commands with per-command GO/NO_GO evidence; [PUBLISH-CONFIRM] is posted only when BOTH return GO, otherwise the app is recorded RELEASE UNVERIFIED with a filed todos task and is never confirmed.',
   phases: [
     { title: 'Census', detail: 'repo version vs registry for every member -> the publish queue (ahead / not published), excluding in-flight-owned apps' },
-    { title: 'Release', detail: 'waves of 4 lanes, one app per lane: codewith release review -> intent -> publish -> two-sided verify -> live install + CLI smoke' },
+    { title: 'Release', detail: 'waves of 4 lanes, one app per lane: codewith release review -> intent -> publish -> two-sided verify; then a 2-agent live gate (publish-gate-1/publish-gate-2, both must return GO) before the gated [PUBLISH-CONFIRM] -> live install + CLI smoke' },
     { title: 'Report', detail: 'per-app release evidence + live-test results' },
     { title: 'Harvest', detail: 'independent Opus harvest' },
   ],
@@ -22,7 +22,7 @@ Non-negotiable rules (all agents):
 - No secrets: never print/capture/commit credential values in any encoding; consume ONLY via 'secrets exec <key> --as VAR -- <cmd>'. No internal-infra strings in artifacts.
 - Capture path: redirect to files, read both + $?; never pipe large reads. Paste literal output lines when reporting.
 - Record as you go: comments on ${TASK}, mementos for non-obvious findings, posts to #${CHANNEL}. English. Register a lineage identity ('conversations agents register') named publish-all-<your-role>.
-- Publish form (per the repo law): NPMRC="$(mktemp)"; chmod 600 "$NPMRC"; printf '//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}\n' > "$NPMRC"; secrets exec hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- npm publish --userconfig "$NPMRC" --access public; rm -f "$NPMRC" — run from the app dir. Announce intent on git-publishing BEFORE, confirm in-thread AFTER. Two-sided verify: 'npm view <pkg> version' shows the NEW version AND did NOT show it BEFORE (negative control at lane start).
+- Publish form (per the repo law): NPMRC="$(mktemp)"; chmod 600 "$NPMRC"; printf '//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}\n' > "$NPMRC"; secrets exec hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- npm publish --userconfig "$NPMRC" --access public; rm -f "$NPMRC" — run from the app dir. Announce intent on git-publishing BEFORE, confirm in-thread AFTER TWO independent live gate agents (publish-gate-1/publish-gate-2) both return GO (the gates live-verify the PUBLISHED package — every bin, every non-destructive verb — before any [PUBLISH-CONFIRM]; a NO_GO means RELEASE UNVERIFIED and no confirm ever). Two-sided verify: 'npm view <pkg> version' shows the NEW version AND did NOT show it BEFORE (negative control at lane start).
 - The 7-day quarantine: the LIVE TEST installs via bun — add the EXACT package name to ~/.bunfig.toml minimumReleaseAgeExcludes first (the sanctioned mechanism; never bypass the quarantine itself).
 - The codewith release review is the ADVERSARIAL GATE (the npm-release rule: an independent agent verdict bound to repo+sha+package+version+registry): never publish without a GO. A failed/timed-out review run retried once, then SKIP the app (never publish unreviewed).
 - FLEET INSTALL DISCIPLINE (owner ruling 2026-08-19): 'shipped' = published AND installed live on ALL AVAILABLE stations. Availability measured per pass via the tailnet (tailscale status/ping — never assumed): for every REACHABLE station, 'bun install -g @hasna/<pkg>@<v>' then verify the installed CLI --version against 'npm view @hasna/<pkg> version' (both must agree; MERGED != PUBLISHED != INSTALLED). Unreachable stations are NAMED in the pass report with their resume condition (e.g. 'station04: tailnet unreachable; @hasna/<pkg>@<v> install pending; resumes when reachable') — never silently skipped, never a blocker for the reachable set; each later pass retries the pending set.
@@ -32,7 +32,8 @@ Non-negotiable rules (all agents):
 const CENSUS = CONST + `
 FRESHNESS MARKER 2026-08-20T08:2xZ: this census must RE-READ the registry and origin/main LIVE — the prior pass (02:45Z marker) completed with loops 0.5.3 SHIPPED (05:02:40Z, fleet 15/16) and contracts 0.11.2 SKIPPED on a pre-reset review-gate failure (account006 usage-limit, retried once, pids 1756743/1799842). account006 reset passed 03:53Z — the contracts release review IS retryable now; contracts is the SOLE remaining ahead app (registry 0.11.1). Do not reuse any prior census numbers. — the prior census (02:20Z) is stale: hasna/apps#672 (contracts 0.11.2) MERGED 45399cf1b, so contracts is AHEAD on main (registry 0.11.1) and is the next publish candidate; test-guard 0.0.1 already published. Do not reuse any prior census numbers.: this census must RE-READ the registry and origin/main LIVE — the prior cached census (17:5xZ) is stale: hasna/apps#600 (machines 0.2.28) MERGED 18:27:57Z, so machines is AHEAD on main (registry 0.2.27) and must be in the publish queue. Do not reuse any prior census numbers.
 
-ROLE: census (Opus). Build the publish queue. Do:
+ROLE: census (Opus). Build the publish queue. PRIORITY YIELD CHECK FIRST: todos list --project 3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8 --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-check once, return {queue: [], current: [], pendingPR: [], counts: {ahead: 0, current: 0, pendingPR: 0}, yielded: true, hotfixCount: N}. Do NOT enumerate the registry while yielding.
+IF THE QUEUE IS EMPTY: sleep 300 (bash), re-run the census once, and return the RE-CHECK result — the lane waits ~5 min between passes while idle. NEVER return an empty queue without the sleep+re-check having run. Do:
 IDEMPOTENCY CHECK FIRST: the registry at THIS moment is the only authority — npm view <pkg>@<version> (rc=0 = ALREADY PUBLISHED, do not republish; E404 is the ONLY publishable state); never re-run a release lane whose PR is merged or whose package is current; never reuse prior census numbers (they are stale by construction).
 SCOPE GUARD: this phase reads ONLY the npm registry (npm view) and the repo (git/gh api). Do NOT enumerate conversations channels or page conversations — the channel id for posting is supplied; never drift into channel discovery (a prior census agent hung on paginating the channel list).
 1. For every member of ${MONOREPO}/apps (a directory with a package.json): the repo version (python3 json read) and the registry latest ('npm view @hasna/<name> version' — 404 = never published).
@@ -50,10 +51,10 @@ ROLE: release lane for ${'${APP}'} (repo ${'${REPO_VER}'} vs registry ${'${REG_V
 2. Re-verify at lane start: the repo version is still ahead of the registry (negative control: npm view @hasna/${'${TSHORT}'} version must NOT already show the repo version — if it does, someone else published: STOP, record, and return skipped with 'already-published'). If a changeset is pending for the app ('bunx changeset status' or the .changeset files), run 'bunx changeset version' in a worktree, commit the version+changelog changes ('Agent: publish-all-${'${TSHORT}'}'), push via a PR (title 'release(${'${APP}'}): version <v>'), and let it merge BEFORE publishing (the PR needs a review — post the codewith release review on that PR instead; the review covers the release candidate).
 3. RELEASE REVIEW via codewith exec: write release-brief-${'${TSHORT}'}.md: 'Adversarially review the release candidate for @hasna/${'${TSHORT}'}@<version>: repo hasna/apps, head <sha>, the diff since the last published version (git log + git diff), repo laws (AGENTS.md + .claude/rules), the npm release rule (independent agent verdict). Check: secrets/internal-infra strings in the packed content, the changelog accuracy, the version bump correctness, regression risk. FIRST LINE exactly: [REVIEW] GO|NO_GO — @hasna/${'${TSHORT}'}@<version> @ <sha> — registry npmjs. Then ONLY concrete P0/P1 blocking findings.' Run: codewith exec --auth-profile ${'${ACCT}'} -m gpt-5.6-sol -c model_reasoning_effort="xhigh" --sandbox read-only --skip-git-repo-check -C <worktree> -o <worktree>/release-review-${'${TSHORT}'}.md "$(cat release-brief-${'${TSHORT}'}.md)" < /dev/null > release-run-${'${TSHORT}'}.log 2>&1 &
    Wait: until [ -s release-review-${'${TSHORT}'}.md ] || ! kill -0 $! 2>/dev/null; do sleep 20; done — bounded 45 iterations; on timeout kill + RETRY ONCE; second failure = SKIP (never publish unreviewed). If the model 400s, re-run with gpt-5.6-terra and record the deviation. NO_GO: remediate ONLY the named P0/P1 findings (via a PR), re-review — bounded 2 cycles; third NO_GO: SKIP with the findings recorded.
-4. GO: announce intent on git-publishing ('PUBLISH INTENT: @hasna/${'${TSHORT}'}@<version> — <one-line changelog>'). Publish with the npmrc pairing from the app dir. Verify two-sided (npm view version = the new version; timestamp fresh). Confirm in-thread.
+4. GO: announce intent on git-publishing ('PUBLISH INTENT: @hasna/${'${TSHORT}'}@<version> — <one-line changelog>'). Note the intent post's message id (the send receipt, or conversations show <id> --json) as intentId — the gated confirm step needs it to reply IN-THREAD. Publish with the npmrc pairing from the app dir. Verify two-sided (npm view version = the new version; timestamp fresh). DO NOT post [PUBLISH-CONFIRM] here — the [PUBLISH-CONFIRM] reply is posted by a SEPARATE workflow step AFTER two independent live gate agents (publish-gate-1/publish-gate-2) verify the PUBLISHED package (every bin, every non-destructive verb, run live); the lane NEVER posts [PUBLISH-CONFIRM] unless BOTH gates return GO.
 5. LIVE TEST (declared stop condition): add the exact name @hasna/${'${TSHORT}'} to ~/.bunfig.toml minimumReleaseAgeExcludes (sanctioned), then 'bun install -g @hasna/${'${TSHORT}'}@<version>' (rc=0). Smoke the installed binary: for the primary bin: '<bin> --version' prints the published version; '<bin> --help' exits 0; one read-only verb where sensible (bounded 5 min; for server/mcp bins: '<bin>-mcp --version' / '<bin>-serve --help' must answer WITHOUT binding (the recordings pattern) — if a bin binds-before-version, record it as a P1 finding (do NOT fail the release for it unless it blocks the smoke; file it). PASS = version match + help rc=0 + the read-only verb works. FAIL = any of those with evidence; fix (root cause) and re-test — at most 3 fix-retest cycles; on exhaustion STOP and report the live failure verbatim.
 6. Record: comment ${TASK} (version, review sha, live-test evidence); mementos.
-Return (JSON): { app, publishedVersion, reviewVerdict: string, reviewSha: string, mergedChangesetPr: string|null, liveTest: {state: pass|fail|pending, version, helpRc, smoke: string}, skipped: bool, reason: string|null }
+Return (JSON): { app, publishedVersion, reviewVerdict: string, reviewSha: string, mergedChangesetPr: string|null, intentId: string|null, liveTest: {state: pass|fail|pending, version, helpRc, smoke: string}, skipped: bool, reason: string|null }
 `
 
 const REPORT = CONST + `
@@ -83,6 +84,8 @@ const CENSUS_SCHEMA = {
     current: { type: 'array', items: { type: 'string' } },
     pendingPR: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, prNumber: { type: 'integer' } } } },
     counts: { type: 'object' },
+    yielded: { type: 'boolean' },
+    hotfixCount: { type: 'integer' },
   },
   required: ['queue', 'current', 'counts'],
 }
@@ -91,12 +94,13 @@ const RELEASE_SCHEMA = {
   properties: {
     app: { type: 'string' }, publishedVersion: { type: ['string', 'null'] },
     reviewVerdict: { type: 'string' }, reviewSha: { type: 'string' },
-    mergedChangesetPr: { type: ['string', 'null'] },
+    mergedChangesetPr: { type: ['string', 'null'] }, intentId: { type: ['string', 'null'] },
     liveTest: { type: 'object', properties: { state: { type: 'string' }, version: { type: 'string' }, helpRc: { type: ['integer', 'null'] }, smoke: { type: 'string' } } },
     skipped: { type: 'boolean' }, reason: { type: ['string', 'null'] },
   },
   required: ['app', 'skipped'],
 }
+const PUBLISH_GATE = { type: 'object', additionalProperties: false, required: ['verdict', 'perCommand'], properties: { verdict: { enum: ['GO', 'NO_GO'] }, perCommand: { type: 'array', items: { type: 'object' } }, failures: { type: 'array', items: { type: 'string' } } } }
 const REPORT_SCHEMA = {
   type: 'object',
   properties: {
@@ -127,18 +131,21 @@ const HARVEST_SCHEMA = {
 // DRAIN-TO-ZERO LOOP (owner design 2026-08-25): re-census each pass; while the
 // publish queue is non-empty the pass restarts inside the same run. A pass that
 // publishes nothing new (all current/skipped) or an empty queue ends the loop.
-const MAX_PASSES = (args && args.maxPasses) || 6
 const allLanes = []
 let census = null
 let pass = 0
-for (pass = 1; pass <= MAX_PASSES; pass++) {
+for (pass = 1; ; pass++) {
 phase('Census')
 census = await agent(CENSUS, { label: 'census-publish-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+if (census && census.yielded) {
+  log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
+  continue
+}
 const queue = (census && census.queue) || []
 log(`pass ${pass} census: ${census ? JSON.stringify(census.counts) : 'FAILED'} — queue ${queue.length}`)
 if (!queue.length) {
-  log(`pass ${pass}: publish queue empty — drain complete`)
-  break
+  log(`pass ${pass}: publish queue empty — the census waited ~5 min and re-checked; re-checking next pass`)
+  continue
 }
 
 phase('Release')
@@ -157,13 +164,45 @@ for (let i = 0; i < queue.length; i += 4) {
       { label: `release-${app.name.replace('@hasna/', '')}-p${pass}`, phase: 'Release', schema: RELEASE_SCHEMA, model: 'sonnet' },
     ),
   ))
+  // PUBLISH GATE (owner-directed 2026-08-25, harden-lanes-review-gates): after each
+  // app's publish + two-sided verify and BEFORE any [PUBLISH-CONFIRM] may be posted,
+  // TWO independent agents (publish-gate-1/publish-gate-2) live-verify the PUBLISHED
+  // package — every bin, every non-destructive verb (--version, --help, validate, read,
+  // list, dry-run forms) — actual commands, actual outputs, per-command
+  // {command, verdict: GO|NO_GO, evidence}. NEVER write test scripts; run the real
+  // commands. NON-DESTRUCTIVE only. The lane posts [PUBLISH-CONFIRM] only when BOTH
+  // return GO; any NO_GO files 'RELEASE UNVERIFIED: <pkg>@<v>' in todos with the gate
+  // evidence, posts the NO_GO to #apps, and NEVER confirms.
+  for (const r of results) {
+    if (!r || !r.publishedVersion) continue
+    const pkgName = '@hasna/' + (r.app || 'unknown')
+    const gateV = r.publishedVersion
+    const publishGates = await parallel([
+      () => agent(`LIVE GATE 1 OF 2 (publish): you verify the PUBLISHED package ${pkgName}@${gateV} by RUNNING its commands live — every bin, every non-destructive verb (--version, --help, validate, read, list, dry-run forms) — actual commands, actual outputs, per-command {command, verdict: GO|NO_GO, evidence}. NEVER write test scripts; run the real commands. NON-DESTRUCTIVE only. Return {verdict, perCommand, failures}.`, { label: 'publish-gate-1-' + (r.app || 'app'), phase: 'Release', schema: PUBLISH_GATE }),
+      () => agent(`LIVE GATE 2 OF 2 (publish): same task as gate 1, independently — run the published package's commands live, non-destructive, per-command GO/NO_GO with evidence. Return {verdict, perCommand, failures}.`, { label: 'publish-gate-2-' + (r.app || 'app'), phase: 'Release', schema: PUBLISH_GATE }),
+    ])
+    const publishAllGo = publishGates.filter(Boolean).every(g => g && g.verdict === 'GO')
+    if (publishAllGo) {
+      r.gate = 'GO'
+      const confirm = await agent(`GATE CONFIRM (publish gate protocol): both live gates returned GO for ${pkgName}@${gateV}. Reply IN-THREAD to the intent post in git-publishing (conversations send --channel git-publishing --reply-to ${r.intentId || 'MISSING'}): [PUBLISH-CONFIRM] ${pkgName}@${gateV} — <live-test evidence line: two-sided verify + live install/smoke + both gates GO>. If the intent id is missing or unresolvable, locate the [PUBLISH INTENT] post for this package in git-publishing and reply to its real message id — never invent an id. Return {confirmId, posted: true}.`, { label: 'confirm-publish-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['confirmId', 'posted'], properties: { confirmId: { type: 'string' }, posted: { type: 'boolean' } } } })
+      r.confirmId = confirm ? confirm.confirmId : null
+    } else {
+      // NEVER confirm: file the UNVERIFIED todos row with the gate evidence (a REAL row
+      // per the tracking rule — cite only a created/verified short id) and post the NO_GO
+      // to #apps.
+      const unv = await agent(`RELEASE UNVERIFIED: ${pkgName}@${gateV} — the two independent live gates did NOT both return GO (verdicts: ${JSON.stringify(publishGates.filter(Boolean).map(g => ({ verdict: g.verdict, failures: g.failures })))}). NEVER post [PUBLISH-CONFIRM] for this package. Check whether a todos row for this exact defect class already exists (todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress, redirect to a file, never pipe); reuse it if it exists, otherwise todos add in project 3bbc22e0: title 'RELEASE UNVERIFIED: ${pkgName}@${gateV} — live gate NO_GO', description carrying the exact gate evidence (per-command outputs, verdicts, failures) + package + version; no credential values anywhere in the description — redact token-like output. Post the NO_GO to #apps with the evidence (conversations send --channel apps), no credential values in the post. Return {taskId, postedNoGo: true}.`, { label: 'publish-unverified-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['taskId', 'postedNoGo'], properties: { taskId: { type: 'string' }, postedNoGo: { type: 'boolean' } } } })
+      r.gate = 'NO_GO'
+      r.unverifiedTaskId = unv ? unv.taskId : null
+    }
+  }
   lanes.push(...results)
   const published = lanes.filter(l => l && l.publishedVersion).length
   log(`pass ${pass} wave ${i / 4 + 1} done; published so far ${published}/${lanes.filter(Boolean).length}`)
 }
 allLanes.push(...lanes.filter(Boolean))
 const publishedThisPass = lanes.filter(l => l && l.publishedVersion).length
-log(`pass ${pass} complete — ${publishedThisPass} published, queue had ${queue.length}; next pass re-censuses`)
+const gateGoThisPass = lanes.filter(l => l && l.gate === 'GO').length
+log(`pass ${pass} complete — ${publishedThisPass} published, ${gateGoThisPass} gate-verified (both gates GO), queue had ${queue.length}; next pass re-censuses`)
 }
 
 phase('Report')
