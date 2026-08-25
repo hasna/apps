@@ -121,6 +121,36 @@ describe("reaper", () => {
     expect(store.getRun(pending.id)?.status).toBe("running");
   });
 
+  test("a fresh daemon instance replays registered graphs from the WAL (crash recovery)", async () => {
+    // Regression (measured live 2026-08-25): a run started by one process
+    // could not be advanced by a replacement daemon — "graph demo not found
+    // in daemon graph cache" — because the graph cache was in-memory only and
+    // the WAL never carried the graph. `runs resume` and torn-run repair were
+    // dead paths across processes. startRun must persist the graph into the
+    // WAL and a fresh instance must replay it.
+    const first = makeDaemon({ leaseTtlMs: 1000 });
+    const run = first.startRun(simpleGraph(), {});
+    first.claim(run.id);
+    store.setRunStatus(run.id, "running");
+    await first.reap(); // advances the start node under the first instance
+
+    clock.now += 5000; // the first instance's claim expires; it is now dead
+
+    const second = makeDaemon({ worker: "replacement-worker", leaseTtlMs: 1000 });
+    const report = await second.reap();
+    expect(report.requeued).toBe(1); // torn run repaired
+    expect(report.advanced).toBeGreaterThan(0); // and advanced by the replacement
+
+    // the replacement drives the run to a terminal state (bounded reaps)
+    let after = store.getRun(run.id);
+    for (let i = 0; i < 10 && after?.status === "running"; i++) {
+      await second.reap();
+      after = store.getRun(run.id);
+    }
+    expect(after?.status).toBe("completed"); // not "graph not found in daemon graph cache"
+    expect(after?.error).toBeNull();
+  });
+
   test("reap advances one step per dispatched run (bounded)", async () => {
     const daemon = makeDaemon();
     const run = daemon.startRun(simpleGraph(), {});

@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { WorkflowGraph } from "./graph.js";
 
 export interface ClaimOp {
   op: "claim_acquired";
@@ -29,12 +30,21 @@ export interface ReleaseOp {
   at: string;
 }
 
+export interface GraphRegisteredOp {
+  op: "graph_registered";
+  name: string;
+  version: string;
+  graph: WorkflowGraph;
+  at: string;
+}
+
 export type WalOp =
   | { op: "run_started"; runId: string; at: string }
   | { op: "run_finished"; runId: string; status: string; at: string }
   | { op: "node_started"; runId: string; nodeId: string; at: string }
   | { op: "node_finished"; runId: string; nodeId: string; status: string; at: string }
   | { op: "memo_set"; key: string; at: string }
+  | GraphRegisteredOp
   | ClaimOp
   | ReleaseOp;
 

@@ -126,6 +126,25 @@ export class WorkflowsDaemon {
     this.time = options.time ?? Date.now;
     this.env = options.env ?? {};
     this.laneRunner = options.laneRunner ?? defaultLaneRunner;
+    this.replayRegisteredGraphs();
+  }
+
+  /**
+   * Recover graph definitions from the WAL. A replacement daemon (crash
+   * recovery) must be able to advance runs whose graphs were registered by
+   * the previous instance — the in-memory cache alone made `runs resume` and
+   * torn-run repair dead paths across processes (measured live 2026-08-25:
+   * "graph ... not found in daemon graph cache"). The latest registration of
+   * a name wins.
+   */
+  private replayRegisteredGraphs(): void {
+    const entries = this.wal.replay().entries;
+    for (const entry of entries) {
+      const op = entry.op;
+      if (op.op === "graph_registered") {
+        this.graphCache.set(op.name, op.graph);
+      }
+    }
   }
 
   liveLeases(): ReadonlyMap<string, Lease> {
@@ -231,7 +250,17 @@ export class WorkflowsDaemon {
       throw new Error(`graph validation failed: ${validation.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`);
     }
     assertNoSecrets(context, "run context");
-    this.graphCache.set(graph.name, graph);
+    const existing = this.graphCache.get(graph.name);
+    const serialized = JSON.stringify(graph);
+    if (!existing || JSON.stringify(existing) !== serialized) {
+      // Persist the graph definition into the WAL so a replacement daemon
+      // (crash recovery, `runs resume`, torn-run repair) can re-execute it.
+      // Identical re-registrations are deduped to bound WAL growth.
+      this.graphCache.set(graph.name, graph);
+      this.wal.append({ op: "graph_registered", name: graph.name, version: graph.version, graph, at: nowIso() });
+    } else {
+      this.graphCache.set(graph.name, existing);
+    }
     return this.store.createRun({ graphName: graph.name, graphVersion: graph.version, context: context ?? {} });
   }
 
@@ -485,7 +514,9 @@ export class WorkflowsDaemon {
       this.failRun(run, message);
       return;
     }
-    this.store.setRunStatus(run.id, "completed", { result, finishedAt: nowIso() });
+    // error: null clears the transient torn-run repair note — a completed run
+    // must not carry "torn run interrupted after claim loss" as its error.
+    this.store.setRunStatus(run.id, "completed", { result, finishedAt: nowIso(), error: null });
     this.wal.append({ op: "run_finished", runId: run.id, status: "completed", at: nowIso() });
     const lease = this.leases.get(run.id);
     if (lease) this.release(run.id, lease.fencing);

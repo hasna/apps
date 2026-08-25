@@ -86,14 +86,14 @@ export interface WorkflowsStore {
   createRun(input: CreateRunInput): RunRow;
   getRun(id: string): RunRow | undefined;
   listRuns(opts?: { status?: RunStatus; limit?: number }): RunRow[];
-  setRunStatus(id: string, status: RunStatus, patch?: { result?: unknown; error?: string; startedAt?: string; finishedAt?: string }): void;
+  setRunStatus(id: string, status: RunStatus, patch?: { result?: unknown; error?: string | null; startedAt?: string; finishedAt?: string }): void;
   /** Persist the run's durable execution state (the engine's cursor + steps). */
   setRunContext(id: string, context: unknown): void;
   bumpAttempts(id: string): void;
   createRunNode(input: CreateRunNodeInput): RunNodeRow;
   getRunNode(id: string): RunNodeRow | undefined;
   listRunNodes(runId: string): RunNodeRow[];
-  setRunNodeStatus(id: string, status: NodeStatus, patch?: { exitCode?: number | null; output?: unknown; error?: string; startedAt?: string; finishedAt?: string }): void;
+  setRunNodeStatus(id: string, status: NodeStatus, patch?: { exitCode?: number | null; output?: unknown; error?: string | null; startedAt?: string; finishedAt?: string }): void;
   bumpAttemptsNode(id: string): void;
   memoPut(key: string, graphName: string, nodeId: string, inputHash: string, outputJson: string): void;
   memoGet(key: string): MemoRow | undefined;
@@ -225,7 +225,7 @@ export function openStore(dataDir: string): WorkflowsStore {
       return rows.map((r) => rowToRun(r as Record<string, unknown>));
     },
 
-    setRunStatus(id: string, status: RunStatus, patch: { result?: unknown; error?: string; startedAt?: string; finishedAt?: string } = {}): void {
+    setRunStatus(id: string, status: RunStatus, patch: { result?: unknown; error?: string | null; startedAt?: string; finishedAt?: string } = {}): void {
       const now = nowIso();
       const existing = this.getRun(id);
       const resultJson = patch.result !== undefined ? JSON.stringify(patch.result) : (existing?.resultJson ?? null);
@@ -276,7 +276,7 @@ export function openStore(dataDir: string): WorkflowsStore {
       return rows.map((r) => rowToNode(r as Record<string, unknown>));
     },
 
-    setRunNodeStatus(id: string, status: NodeStatus, patch: { exitCode?: number | null; output?: unknown; error?: string; startedAt?: string; finishedAt?: string } = {}): void {
+    setRunNodeStatus(id: string, status: NodeStatus, patch: { exitCode?: number | null; output?: unknown; error?: string | null; startedAt?: string; finishedAt?: string } = {}): void {
       const now = nowIso();
       const existing = this.getRunNode(id);
       if (!existing) return;
