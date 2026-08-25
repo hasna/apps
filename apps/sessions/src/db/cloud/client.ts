@@ -5,8 +5,8 @@
 // engine, cache, or local mirror in the service path.
 
 import {
-  createCloudPoolFromEnv,
-  resolveStorageMode,
+  createServerPoolFromEnv,
+  resolveServerDataBackend,
   type PoolQueryClient,
 } from "../../generated/storage-kit/index.js";
 
@@ -14,9 +14,9 @@ export const APP_NAME = "sessions";
 
 let _client: PoolQueryClient | null = null;
 
-/** True when the environment selects cloud storage mode for sessions. */
+/** True when the environment selects the PostgreSQL (remote) backend for sessions. */
 export function isCloudMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveStorageMode(APP_NAME, env).mode === "cloud";
+  return resolveServerDataBackend(APP_NAME, env).backend === "postgresql";
 }
 
 /**
@@ -26,7 +26,7 @@ export function isCloudMode(env: NodeJS.ProcessEnv = process.env): boolean {
  */
 export function getCloudClient(): PoolQueryClient {
   if (_client) return _client;
-  const { client } = createCloudPoolFromEnv(APP_NAME, {
+  const { client } = createServerPoolFromEnv(APP_NAME, {
     applicationName: "sessions-serve",
     max: 5,
   });

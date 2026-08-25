@@ -22,8 +22,7 @@ Options:
 Environment:
   PORT                          port to listen on (default: 3456)
   HOST                          hostname to bind (default: 127.0.0.1)
-  HASNA_SESSIONS_STORAGE_MODE   local | cloud (default: local)
-  HASNA_SESSIONS_DATABASE_URL   cloud Postgres DSN (cloud mode)
+  HASNA_SESSIONS_DATABASE_URL   PostgreSQL DSN; presence selects the postgresql backend (default: SQLite)
   HASNA_SESSIONS_API_SIGNING_KEY  HMAC signing key for /v1 API-key auth
   HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE  max request body bytes/units (cloud default: 512MiB)
   HASNA_SESSIONS_IDLE_TIMEOUT_SECONDS  in-flight HTTP idle timeout (default: 60, max: 255)
