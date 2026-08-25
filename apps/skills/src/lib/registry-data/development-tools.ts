@@ -207,7 +207,7 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
   {
     name: "oss-app-two-backend-storage",
     displayName: "OSS App Two-Backend Storage",
-    description: "Recipe for the fleet two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, pg-migrations + apply script, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile",
+    description: "Recipe for the Hasna two-backend storage contract: client transport + HTTP store, server PG/SQLite backend, pg-migrations + apply script, fail-closed URL-without-key, bun bins, contract manifest, Dockerfile",
     category: "Development Tools",
     tags: ["storage", "backend", "postgresql", "sqlite", "two-backend", "oss-app"],
     kind: "instruction",
