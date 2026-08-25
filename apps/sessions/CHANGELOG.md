@@ -4,8 +4,7 @@
 
 ### Patch Changes
 
-- Updated dependencies [85a5e06]
-  - @hasna/contracts@0.14.1
+- No code changes since 0.12.20. Mechanical version bump from the 2026-08-24 wave (#1168); the wave's `@hasna/contracts@0.14.1` dependency update was reverted by the repin (O15-00725, #1181) — dependencies are unchanged from 0.12.20.
 
 ## 0.12.20
 
