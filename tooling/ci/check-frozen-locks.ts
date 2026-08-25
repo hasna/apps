@@ -137,7 +137,6 @@ import { execSync } from "node:child_process";
 const UNRESOLVABLE_PINS = new Set<string>([
   "automations",
   "browser",
-  "domains",
   "economy",
   "testers",
 ]);
