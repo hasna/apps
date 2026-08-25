@@ -250,6 +250,12 @@ export class WorkflowsDaemon {
       throw new Error(`graph validation failed: ${validation.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`);
     }
     assertNoSecrets(context, "run context");
+    // The WAL graph_registered record persists the FULL graph definition
+    // verbatim (commands included) so a replacement daemon can re-execute it.
+    // The secrets write-gate must therefore scan the graph itself before the
+    // record is appended — a credential-shaped value embedded in a graph
+    // definition must never land in the WAL (measured live 2026-08-25).
+    assertNoSecrets(graph, "graph definition");
     const existing = this.graphCache.get(graph.name);
     const serialized = JSON.stringify(graph);
     if (!existing || JSON.stringify(existing) !== serialized) {

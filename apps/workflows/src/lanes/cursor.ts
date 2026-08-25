@@ -8,11 +8,13 @@
 import {
   type LaneAdapter,
   type LaneJob,
+  type LaneProbe,
   type LaneResult,
   LaneAdapterShapeError,
   LaneDependencyMissingError,
   withTimeout,
   spawnCli,
+  binaryOnPath,
   DEFAULT_LANE_TIMEOUT_MS,
 } from "./types.js";
 
@@ -29,6 +31,23 @@ interface RunLike {
 export function createCursorAdapter(deps: CursorAdapterDeps = {}): LaneAdapter {
   return {
     kind: "cursor",
+    async probe(): Promise<LaneProbe> {
+      const loader = deps.sdkLoader ?? (async () => (await import("@cursor/sdk")) as unknown);
+      try {
+        await loader();
+        return { kind: "cursor", sdk: "@cursor/sdk", wired: true, via: "sdk (local mode)" };
+      } catch {
+        if (binaryOnPath(deps.cliPath ?? "cursor-agent")) {
+          return { kind: "cursor", sdk: "@cursor/sdk", wired: true, via: "cli" };
+        }
+        return {
+          kind: "cursor",
+          sdk: "@cursor/sdk",
+          wired: false,
+          reason: "neither @cursor/sdk nor the cursor-agent CLI is available on this machine",
+        };
+      }
+    },
     async run(job: LaneJob): Promise<LaneResult> {
       if (!job.prompt) {
         return { ok: false, exitCode: 2, output: "", durationMs: 0, error: "cursor lane requires a prompt" };

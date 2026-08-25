@@ -9,11 +9,13 @@
 import {
   type LaneAdapter,
   type LaneJob,
+  type LaneProbe,
   type LaneResult,
   LaneAdapterShapeError,
   LaneDependencyMissingError,
   withTimeout,
   spawnCli,
+  binaryOnPath,
   DEFAULT_LANE_TIMEOUT_MS,
 } from "./types.js";
 
@@ -27,6 +29,24 @@ export interface ClaudeAdapterDeps {
 export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): LaneAdapter {
   return {
     kind: "claude",
+    async probe(): Promise<LaneProbe> {
+      const loader = deps.sdkLoader ?? (async () => (await import("@anthropic-ai/claude-agent-sdk")) as unknown);
+      try {
+        await loader();
+        return { kind: "claude", sdk: "@anthropic-ai/claude-agent-sdk", wired: true, via: "sdk" };
+      } catch {
+        // SDK unavailable -> is the claude CLI on PATH?
+        if (binaryOnPath(deps.cliPath ?? "claude")) {
+          return { kind: "claude", sdk: "@anthropic-ai/claude-agent-sdk", wired: true, via: "cli" };
+        }
+        return {
+          kind: "claude",
+          sdk: "@anthropic-ai/claude-agent-sdk",
+          wired: false,
+          reason: "neither @anthropic-ai/claude-agent-sdk nor the claude CLI is available on this machine",
+        };
+      }
+    },
     async run(job: LaneJob): Promise<LaneResult> {
       if (!job.prompt) {
         return { ok: false, exitCode: 2, output: "", durationMs: 0, error: "claude lane requires a prompt" };

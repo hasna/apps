@@ -9,6 +9,11 @@
  */
 import { join } from "node:path";
 import packageJson from "../package.json";
+import { runGraphToCompletion } from "./daemon.js";
+import { openStore } from "./store.js";
+import { SessionWAL } from "./wal.js";
+import { findRunByIdempotencyKey } from "./session.js";
+import type { WorkflowGraph } from "./graph.js";
 import type { HealthReport, ReadinessReport, WorkflowsConfig } from "./types.js";
 
 const DEFAULT_PORT = 8790;
@@ -76,6 +81,50 @@ export class WorkflowsService {
       version: this.version,
       checks: { version: "ok" },
     };
+  }
+
+  /**
+   * The authenticated trigger: run a graph to a terminal state (bounded
+   * cycles) and return its summary. The HTTP layer authenticates; this
+   * method holds the business logic. When an idempotency key is supplied and
+   * a run carrying it already exists, that run's summary is returned instead
+   * of starting a new one.
+   */
+  async triggerRun(
+    graph: WorkflowGraph,
+    context: unknown = {},
+    opts: { maxCycles?: number; idempotencyKey?: string } = {},
+  ): Promise<{ runId: string; status: string; error: string | null; result: unknown; reused: boolean }> {
+    const store = openStore(this.config.dataDir);
+    const wal = SessionWAL.open(this.config.dataDir);
+    try {
+      if (opts.idempotencyKey) {
+        const existing = findRunByIdempotencyKey(store, opts.idempotencyKey);
+        if (existing) {
+          return {
+            runId: existing.id,
+            status: existing.status,
+            error: existing.error ?? null,
+            result: existing.resultJson ? JSON.parse(existing.resultJson) : null,
+            reused: true,
+          };
+        }
+      }
+      const contextWithKey = opts.idempotencyKey
+        ? { ...(context as Record<string, unknown>), __wf: { ...(((context as Record<string, unknown>)?.__wf as Record<string, unknown>) ?? {}), idempotencyKey: opts.idempotencyKey } }
+        : context;
+      const maxCycles = Math.min(Math.max(opts.maxCycles ?? 500, 1), 2000);
+      const final = await runGraphToCompletion(store, wal, graph, contextWithKey, { maxCycles });
+      return {
+        runId: final.id,
+        status: final.status,
+        error: final.error ?? null,
+        result: final.resultJson ? JSON.parse(final.resultJson) : null,
+        reused: false,
+      };
+    } finally {
+      store.close();
+    }
   }
 }
 

@@ -9,10 +9,10 @@ cursor, grok) — one domain implementation, four interface surfaces.
 
 | surface | bin / export | what it is |
 |---|---|---|
-| CLI | `workflows` | 14 commands: init, validate, run, runs list/show/cancel/resume, nodes, daemon start/status/stop, memos list/clear, lanes list (+ repair, version, health, info) |
+| CLI | `workflows` | init, validate, graph (render), run (--context/--input/--idempotency-key), runs list/show/cancel/resume/events, nodes list/show, sessions list/pull, machines list/status, lanes list/probe, daemon start/status/stop, memos list/clear, resume (interrupted-run restore), serve, repair (+ version, health, info) |
 | MCP | `workflows-mcp` | stdio MCP server for coding agents (7 tools incl. workflows_validate, workflows_run, workflows_runs_list, workflows_lanes_list) |
-| Serve | `workflows-serve` | HTTP server (`/health`, `/ready`, `/version`, `/openapi.json`); binds `127.0.0.1` by default |
-| SDK | `./sdk` (`@hasna/workflows/sdk`) | importable module surface (exports `WorkflowsService`, `createWorkflowsService`, `createRequestHandler`, `workflowsTools`, `callWorkflowTool`); hand-authored to `/openapi.json` — no code-generated client, no API-key auth in 0.1.0 |
+| Serve | `workflows-serve` (or `workflows serve`) | HTTP server (`/health`, `/ready`, `/version`, authenticated `/trigger`, `/openapi.json`); binds `127.0.0.1` by default; `/trigger` requires `WORKFLOWS_API_KEY` + Bearer token |
+| SDK | `./sdk` (`@hasna/workflows/sdk`) | importable module surface (exports `WorkflowsService`, `createWorkflowsService`, `createRequestHandler`, `workflowsTools`, `callWorkflowTool`) |
 
 All three bins answer `--version` / `--help` before binding or serving.
 
@@ -67,14 +67,21 @@ paths like `steps.build.exitCode`, and the loop counter `i`).
 
 ```bash
 workflows --version
-workflows init                 # scaffold a sample graph
+workflows init                 # creates workflows/ + sessions/ + workflows.db and scaffolds a sample graph
 workflows validate graph.json
-workflows run graph.json --context '{"repo":"x"}'
+workflows graph graph.json     # render (text | --format dot | --format json)
+workflows run graph.json --context '{"repo":"x"}' --input go=yes --idempotency-key k1
 workflows runs list
 workflows runs show <run-id>
+workflows runs events <run-id> # the run's WAL event stream
+workflows nodes show <run-id> <node-id>
+workflows sessions pull        # session WAL state (entries, torn, live claims)
+workflows machines status      # this machine's store/WAL/daemon status
+workflows lanes probe claude   # wired-vs-not-ready-with-reason maturity check
+workflows resume <run-id>      # restore an INTERRUPTED run from its durable cursor
 workflows daemon start --once  # or a continuous reap loop
 workflows memos clear --yes
-workflows lanes list
+workflows serve                # HTTP server (same as workflows-serve)
 workflows-mcp                  # stdio MCP server
 workflows-serve                # HTTP server, port from HASNA_WORKFLOWS_PORT (default 8790)
 ```
