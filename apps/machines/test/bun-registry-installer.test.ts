@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -539,6 +539,44 @@ describe("exact Bun target transaction", () => {
     expect(selectors).toEqual(["@hasnaxyz/infinity@1.0.12", "@hasnaxyz/factory@0.6.9"]);
     expect(commands.every((command) => command.includes("secrets exec") && command.includes("hasna/npm/live/publish-token") && command.includes("hasnaxyz/npm/live/publish-token"))).toBe(true);
     expect(commands.every((command) => !command.includes(sourceBytes.toString("base64")))).toBe(true);
+  });
+
+  test("runs the source from a cwd holding a placeholder npmrc bun can authenticate with", () => {
+    // O15-00346: the tokens are delivered to HASNA_NPM_PUBLISH_TOKEN /
+    // HASNAXYZ_NPM_PUBLISH_TOKEN env vars, which bun never reads for registry
+    // auth (bun reads .npmrc _authToken entries with ${NAME} expansion and
+    // BUN_CONFIG_TOKEN / NPM_CONFIG_TOKEN). Without a bun-readable surface,
+    // fresh-machine global installs of private-scope packages
+    // (@hasnaxyz/infinity, @hasnaxyz/factory) cannot fetch the tarball, and on
+    // macOS the clonefile install step fails with "failed opening
+    // cache/package/version dir for package @hasnaxyz/infinity".
+    const machine = machineFixture();
+    const plan = buildExactBunAppsPlan(machine);
+    const payload = exactBunTargetPayload(machine, plan);
+    const runCwd: string[] = [];
+    const result = executeExactBunTargetTransaction(payload, sourceBytes, {
+      temporaryRoot: roots[roots.length - 1],
+      runSource(_command, _env, cwd) {
+        // The npmrc must exist at RUN time — the transaction deletes its temp
+        // root on exit, so assert inside the run.
+        const npmrcPath = join(cwd ?? "", ".npmrc");
+        expect(existsSync(npmrcPath)).toBe(true);
+        const content = readFileSync(npmrcPath, "utf8");
+        expect(content).toContain("//registry.npmjs.org/:_authToken=${HASNA_NPM_PUBLISH_TOKEN}");
+        expect(content).toContain("//registry.npmjs.org/@hasnaxyz/:_authToken=${HASNAXYZ_NPM_PUBLISH_TOKEN}");
+        // placeholder text only — a captured token value must never reach the file
+        expect(content).not.toMatch(/npm_[A-Za-z0-9]{20,}/);
+        expect(statSync(npmrcPath).mode & 0o777).toBe(0o600);
+        runCwd.push(cwd ?? "");
+        const step = plan.steps[runCwd.length - 1]!;
+        writePackage(globalRoot(machine), step.package.name, step.package.version);
+        writeRegistryLock(globalRoot(machine), plan.steps.slice(0, runCwd.length));
+        return { status: 0, stdout: JSON.stringify(probe(step)), stderr: "" };
+      },
+    });
+    expect(result.state).toBe("COMMITTED");
+    expect(runCwd).toHaveLength(2);
+    expect(runCwd[1]).toBe(runCwd[0]);
   });
 
   test("rejects a wrong Bun path before execution", () => {

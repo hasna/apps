@@ -93,8 +93,32 @@ export interface TargetSourceRunResult {
 }
 
 export interface ExactBunTargetDependencies {
-  runSource?: (command: string, env: NodeJS.ProcessEnv) => TargetSourceRunResult;
+  runSource?: (command: string, env: NodeJS.ProcessEnv, cwd?: string) => TargetSourceRunResult;
   temporaryRoot?: string;
+}
+
+/**
+ * npmrc auth lines bun actually reads. The transaction delivers the publish
+ * tokens to the child environment as HASNA_NPM_PUBLISH_TOKEN and
+ * HASNAXYZ_NPM_PUBLISH_TOKEN (via `secrets exec --as`), but bun never reads
+ * those variables for registry authentication — its auth surfaces are .npmrc
+ * `_authToken` entries (with `${NAME}` environment expansion) and the
+ * BUN_CONFIG_TOKEN / NPM_CONFIG_TOKEN environment variables. Without a
+ * bun-readable surface, a fresh machine (no private-scope packages in the bun
+ * cache) cannot fetch @hasnaxyz/* tarballs and the install fails — on macOS
+ * bun's clonefile backend reports it as "failed opening cache/package/version
+ * dir for package @hasnaxyz/infinity" (O15-00346).
+ *
+ * The file holds placeholder text only; the values exist only in the child
+ * environment for the duration of the source run.
+ */
+export const EXACT_BUN_NPMRC_AUTH_LINES = [
+  "//registry.npmjs.org/:_authToken=${HASNA_NPM_PUBLISH_TOKEN}",
+  "//registry.npmjs.org/@hasnaxyz/:_authToken=${HASNAXYZ_NPM_PUBLISH_TOKEN}",
+] as const;
+
+export function writeExactBunNpmrc(root: string): void {
+  writeFileSync(join(root, ".npmrc"), `${EXACT_BUN_NPMRC_AUTH_LINES.join("\n")}\n`, { mode: 0o600 });
 }
 
 export type ExactBunSourceChunkReader = (buffer: Buffer) => number;
@@ -676,10 +700,11 @@ function safeSourceEnvironment(base: NodeJS.ProcessEnv, step: ExactBunRegistryPl
   };
 }
 
-function defaultSourceRun(command: string, env: NodeJS.ProcessEnv): TargetSourceRunResult {
+function defaultSourceRun(command: string, env: NodeJS.ProcessEnv, cwd?: string): TargetSourceRunResult {
   const result = spawnSync("sh", ["-c", command], {
     encoding: "utf8",
     env,
+    cwd,
     timeout: EXACT_BUN_TARGET_TIMEOUT_MS,
     maxBuffer: 1_048_576,
   });
@@ -839,6 +864,10 @@ export function executeExactBunTargetTransaction(
   const sourcePath = join(transactionRoot, "installer.ts");
   writeFileSync(sourcePath, sourceBytes, { mode: 0o600 });
   verifyExactSourceBytes(payload.steps[0]!.source, readFileSync(sourcePath));
+  // The source runs from this root, so a bun-readable .npmrc here makes the
+  // secrets-exec-delivered tokens actually reach bun's registry auth (bun
+  // reads ./.npmrc from the process cwd and expands ${NAME} from the env).
+  writeExactBunNpmrc(transactionRoot);
   const snapshotRoot = join(transactionRoot, "preimage");
   mkdirSync(snapshotRoot, { mode: 0o700 });
   const snapshot = createSnapshot([globalRoot, binRoot, bunfigPath], snapshotRoot);
@@ -855,6 +884,7 @@ export function executeExactBunTargetTransaction(
       const run = (dependencies.runSource ?? defaultSourceRun)(
         command,
         safeSourceEnvironment(process.env, step, sourcePath, globalRoot),
+        transactionRoot,
       );
       if (run.status !== 0) throw new Error(`source_execution_failed:${step.order}`);
       if (run.stderr.trim().length > 0) throw new Error(`source_stderr_not_empty:${step.order}`);
