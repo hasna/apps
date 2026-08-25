@@ -93,7 +93,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@hasna/contracts": "0.14.0",
+    "@hasna/contracts": "0.14.1",
     "@hasna/events": "^0.1.7",
     "@hasna/mcp-harness": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
