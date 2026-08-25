@@ -535,7 +535,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   // 0.14.0 without rewriting their hasna.contract.json kitVersion; each
   // member's conformance passes at its declared kit, so the claim moves only
   // with the manifest rewrite its CONTRACTS_EXCEPTIONS remediation task owns.
-  { member: "access", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "consolidations", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "conversations", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
