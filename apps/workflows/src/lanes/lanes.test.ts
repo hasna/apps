@@ -86,6 +86,29 @@ describe("claude adapter", () => {
     expect(result.error).toContain("50ms");
   });
 
+  test("enforces the timeout budget on a stalled stream (regression: for-await was unbounded)", async () => {
+    // The SDK query resolves immediately to an async generator whose stream
+    // never yields (a stalled API connection after the first chunk). The
+    // budget must bound the ITERATION, not only the generator's creation —
+    // measured live 2026-08-25: `workflows run` on the sample graph exceeded
+    // the declared 120s lane budget for 6+ minutes on a real SDK call.
+    async function* stalledStream(): AsyncGenerator<Record<string, unknown>> {
+      yield { type: "assistant", message: { content: [{ type: "text", text: "partial" }] } };
+      await new Promise<never>(() => {}); // never yields again
+    }
+    const adapter = createClaudeAdapter({
+      sdkLoader: async () => ({
+        query: async () => stalledStream(),
+      }),
+    });
+    const started = Date.now();
+    const result = await adapter.run({ ...job, timeoutMs: 100 });
+    const elapsed = Date.now() - started;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("100ms");
+    expect(elapsed).toBeLessThan(10_000); // bounded, not a hang
+  });
+
   test("rejects an SDK that does not export query()", async () => {
     const adapter = createClaudeAdapter({ sdkLoader: async () => ({}) });
     let threw: unknown = null;

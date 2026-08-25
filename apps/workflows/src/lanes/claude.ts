@@ -45,32 +45,42 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): LaneAdapter {
       if (typeof query !== "function") {
         throw new LaneAdapterShapeError("@anthropic-ai/claude-agent-sdk exports no query() function");
       }
+      const prompt = job.prompt; // narrowed by the guard above; stable inside the closure
       try {
-        const generator = await withTimeout(
-          Promise.resolve(
-            (query as (params: { prompt: string; options?: Record<string, unknown> }) => AsyncIterable<Record<string, unknown>>)({
-              prompt: job.prompt,
+        // The whole query — generator creation AND stream iteration — runs
+        // under one budget. Wrapping only the creation left the for-await
+        // unbounded: a stream that stalls after the first chunk hung the run
+        // past the declared timeout (measured live 2026-08-25 on a real SDK
+        // call). The iteration promise rejects at the budget and the caller
+        // sees the timeout error instead of an indefinite hang.
+        const { output, isError } = await withTimeout(
+          (async () => {
+            const generator = await (
+              query as (params: { prompt: string; options?: Record<string, unknown> }) => AsyncIterable<Record<string, unknown>>
+            )({
+              prompt,
               options: { model: job.model, maxTurns: 32, abortSignal: undefined },
-            }),
-          ),
+            });
+            let output = "";
+            let isError = false;
+            for await (const message of generator) {
+              if (message.type === "assistant") {
+                const content = (message as { message?: { content?: unknown[] } }).message?.content;
+                if (Array.isArray(content)) {
+                  for (const block of content) {
+                    if (block && typeof block === "object" && "text" in block && typeof (block as { text: unknown }).text === "string") {
+                      output += (block as { text: string }).text;
+                    }
+                  }
+                }
+              }
+              if (message.type === "error") isError = true;
+            }
+            return { output, isError };
+          })(),
           timeoutMs,
           `claude lane (${job.prompt.slice(0, 60)})`,
         );
-        let output = "";
-        let isError = false;
-        for await (const message of generator) {
-          if (message.type === "assistant") {
-            const content = (message as { message?: { content?: unknown[] } }).message?.content;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (block && typeof block === "object" && "text" in block && typeof (block as { text: unknown }).text === "string") {
-                  output += (block as { text: string }).text;
-                }
-              }
-            }
-          }
-          if (message.type === "error") isError = true;
-        }
         const durationMs = Date.now() - started;
         return { ok: !isError, exitCode: isError ? 1 : 0, output: output.trim(), durationMs };
       } catch (err) {
