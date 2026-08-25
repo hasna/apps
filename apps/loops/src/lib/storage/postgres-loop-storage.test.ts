@@ -18,6 +18,7 @@ import {
   AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
+  LoopMutationConflictError,
   RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
@@ -887,6 +888,61 @@ suite("PostgresLoopStorage (live)", () => {
     const required = await storage.requireLoop("alpha");
     expect(required.id).toBe(loop.id);
     await expect(storage.requireLoop("nope")).rejects.toThrow();
+  });
+
+  test("mutateLoop happy path: dry-run, replay, stop, revision conflict (O15-00692)", async () => {
+    // O15-00692 regression: the loop-mutation advisory-lock query used
+    // E'\000' (octal NUL) as the id separator. PostgreSQL rejects NUL bytes in
+    // text, so the FIRST statement of every mutation transaction threw an
+    // unhandled Postgres error and POST /v1/loops/<id>/mutations returned 500
+    // for every loop. This test exercises the full mutateLoop flow against a
+    // live Postgres; before the fix it fails at the advisory lock on every
+    // call (dry-run, real stop, and conflict alike).
+    const loop = await storage.createLoop(loopInput("mutate-stop"));
+    const authority = { authorityId: "loops-control-plane", tenantId: "tenant-test" };
+    const envelope = (action: "pause" | "resume" | "stop", operationId: string, over: Record<string, unknown> = {}) => ({
+      schema: "openloops.loop_mutation.v1",
+      operationId,
+      stepId: "stop-step",
+      targetId: loop.id,
+      action,
+      expectedRevision: loop.updatedAt,
+      approvedPlanDigest: "0".repeat(64),
+      manifestDigest: "0".repeat(64),
+      descriptorRef: "owner-operation-target:o15-00692-regression",
+      descriptorDigest: "0".repeat(64),
+      ...over,
+    });
+
+    // 1. Dry-run stop: mutates nothing, but must not throw at the advisory lock.
+    const dryRun = await storage.mutateLoop(
+      envelope("stop", "op-dry-run", { dryRun: true }) as never,
+      authority,
+    );
+    expect(dryRun.replayed).toBe(false);
+    expect(dryRun.loop.status).toBe("active");
+
+    // 2. Replay of the same (operation, step) returns the stored receipt.
+    const replay = await storage.mutateLoop(
+      envelope("stop", "op-dry-run", { dryRun: true }) as never,
+      authority,
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.loop.status).toBe("active");
+
+    // 3. Real stop with a fresh operation: the loop transitions to stopped.
+    const stopped = await storage.mutateLoop(envelope("stop", "op-stop") as never, authority);
+    expect(stopped.replayed).toBe(false);
+    expect(stopped.loop.status).toBe("stopped");
+    const afterStop = await storage.getLoop(loop.id);
+    expect(afterStop?.status).toBe("stopped");
+    expect(afterStop?.nextRunAt).toBeUndefined();
+
+    // 4. A stale revision maps to the revision_mismatch conflict (409 class),
+    //    proving the pre-fix NUL error is gone from the whole path.
+    await expect(
+      storage.mutateLoop(envelope("resume", "op-stale", { expectedRevision: loop.updatedAt }) as never, authority),
+    ).rejects.toBeInstanceOf(LoopMutationConflictError);
   });
 
   test("listLoops / dueLoops / countLoops", async () => {

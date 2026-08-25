@@ -164,6 +164,24 @@ function isUniqueViolation(error: unknown): boolean {
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 
+/**
+ * Serializes concurrent mutations of the same (tenant, operation, step) triple.
+ * `hashtextextended` receives the tenant id, operation id and step id joined
+ * with the unit separator (E'\x1f', 0x1F) — a single-byte, UTF-8-valid control
+ * character that PostgreSQL accepts inside text values.
+ *
+ * O15-00692: the previous separator was `E'\000'` (an octal escape for NUL in a
+ * Postgres E-string). PostgreSQL rejects NUL bytes in text ("invalid byte
+ * sequence for encoding UTF8: 0x00"), so the very first statement of every
+ * mutation transaction threw an unhandled Postgres error and
+ * POST /v1/loops/<id>/mutations returned 500 for every loop. The separator must
+ * stay NUL-free.
+ */
+export const LOOP_MUTATION_ADVISORY_LOCK_SQL = `SELECT pg_advisory_xact_lock(
+  hashtextextended(open_loops_current_tenant_id() || E'\\x1f' || $1 || E'\\x1f' || $2, 0)
+)`;
+
+
 type M<K extends LoopStorageMethodName> = Store[K] extends (...a: infer A) => infer R
   ? { args: A; result: R }
   : never;
@@ -694,12 +712,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const createdAt = now.toISOString();
     const leaseExpiresAt = new Date(now.getTime() + (opts.leaseMs ?? 30_000)).toISOString();
     return this.client.transaction(async (c) => {
-      await c.query(
-        `SELECT pg_advisory_xact_lock(
-           hashtextextended(open_loops_current_tenant_id() || E'\\000' || $1 || E'\\000' || $2, 0)
-         )`,
-        [binding.operationId, binding.stepId],
-      );
+      await c.query(LOOP_MUTATION_ADVISORY_LOCK_SQL, [binding.operationId, binding.stepId]);
       const existing = await c.get<{
         binding_digest: string;
         binding_json: string;
