@@ -23,7 +23,7 @@ THE FIX (smallest owned):
 4. Do not weaken: the gate must fail CLOSED on scan errors (a scanner that cannot run is a rejection with the reason, never a pass-through) — per the task's 'fails open on BOTH arms' finding.
 
 VERIFY (two-sided, per the fleet verify's own fixture style):
-(a) POSITIVE: a throwaway repo with a staged credential-shaped value (synthetic, e.g. sk-ant-... never a real value) — 'git commit' must FAIL (rc!=0) with the scanner naming the finding; the value must not leave the fixture.
+(a) POSITIVE: a throwaway repo with a staged credential-shaped value (synthetic, e.g. sk[-]ant-... never a real value) — 'git commit' must FAIL (rc!=0) with the scanner naming the finding; the value must not leave the fixture.
 (b) NEGATIVE: a benign commit in the same fixture must PASS (rc=0) within 60s.
 (c) Push arm: the same positive on a push must be rejected (or the pre-push scan runs — verify which arm the push scan is wired to and prove it fires).
 (d) The hooks still complete in bounded time (no hang): time the runs.

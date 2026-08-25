@@ -46,7 +46,7 @@ const LANES = [
   lane('conversations-send-positional', '4a2a4ac1-c45f-4252-b4f0-5b209f09803f', 'conversations',
     `'conversations send <channel> --from X' positional form exits rc=1 'Recipient is required: use --to <agent> or --channel <name>' — the CLI only accepts --channel/--to, while the charter, .claude/rules and several dispatch briefs teach the positional form, so every driver following our own docs fails its record step. Fix direction: make the positional first argument resolve as the channel (compat with the documented form) OR fix the docs if the CLI form is intentional — smallest owned fix, Fix Once, decide with evidence.`,
     'Measured again 2026-08-20 while posting a fleet heartbeat: positional channel form rc=1 with that exact message; --channel form works.'),
-  lane('secrets-xai-detector', 'a869386e-3ef4-4bb1-ad13-397aa0c2a956', 'secrets',
+  lane('secrets-xai-key-detector', 'a869386e-3ef4-4bb1-ad13-397aa0c2a956', 'secrets',
     `The xai_api_key detector matches on the bare 'xai-' prefix, so ordinary model IDs like "id": "xai-grok-reasoning" trip the staged scan at rc=1 and block commits on files that contain no credential. Fix: the detector must require a value-shaped match (high-entropy suffix), not a bare prefix. Regression test both ways: a model id must pass, a real xai key must still trip.`,
     'This is the root cause of the false positive that produced scrub row 0a464091 (xai_api_key value mis-scanned in a task body).'),
   lane('repos-exact-lookup', 'd8ed2fc2-4e40-4457-8290-55fbeca920a1', 'repos',
