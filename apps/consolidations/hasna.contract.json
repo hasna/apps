@@ -3,7 +3,7 @@
   "name": "consolidations",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.13.4",
+  "kitVersion": "0.14.0",
   "description": "Group financial consolidation CLI + MCP + serve. SQLite at ~/.hasna/consolidations/consolidations.db is the default server data backend; a HASNA_CONSOLIDATIONS_DATABASE_URL selects PostgreSQL via the vendored storage kit. Legacy storage-mode variables are rejected.",
   "bins": [
     "consolidations",
