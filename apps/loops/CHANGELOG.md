@@ -4,6 +4,9 @@
 
 ### Patch Changes
 
+- afab227e2: fix mutation advisory-lock SQL used a NUL byte separator — every POST /loops/<id>/mutations returned 500
+- 858cbfd4a: runner systemd unit prevents restart on permanent-denial exit 4
+- 0cfc11b48: per-loop lease config — set-lease verb + PATCH leaseMs (O15-00695)
 - Updated dependencies [85a5e06]
   - @hasna/contracts@0.14.1
 
