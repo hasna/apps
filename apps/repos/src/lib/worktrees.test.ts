@@ -724,6 +724,56 @@ describe("removeWorktree", () => {
     expect(existsSync(join(clonePath, "README.md"))).toBe(true);
   });
 
+  test("removes through the checkout that owns the worktree's gitdir, never a stale lease repo_path", () => {
+    // I38-00638: the lease's stored repo_path pointed at a pre-rename mirror
+    // checkout that still existed on disk, so `git worktree remove` ran from
+    // the wrong repository — a clean worktree's tracked files were deleted
+    // partway before git failed with an opaque GIT_FAILED and no archive. The
+    // worktree's own `.git` pointer is ground truth for which gitdir owns it;
+    // the lease's repo_path is a stored value that goes stale.
+    const { originPath, repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "stale-parent" });
+
+    // A second checkout of the same origin, existing on disk: the "mirror" the
+    // stale lease points at. `git worktree remove` from it cannot see the
+    // worktree (it is registered under the original clone's gitdir).
+    const mirror = join(tempDir, "mirror");
+    git(tempDir, ["clone", originPath, mirror]);
+    getDb().prepare("UPDATE worktree_leases SET repo_path = ? WHERE lease_id = ?")
+      .run(mirror, created.lease.lease_id);
+
+    const result = removeWorktree({ ref: created.lease.lease_id });
+    expect(result.removed).toBe(true);
+    expect(existsSync(created.path)).toBe(false);
+    // The mirror checkout itself is untouched — the removal ran from the true
+    // owner, and no file outside the worktree was mutated.
+    expect(readFileSync(join(mirror, "README.md"), "utf8")).toBe("seed\n");
+  });
+
+  test("a git failure in the remove step surfaces the real git stderr", () => {
+    // I38-00638: the failure read as a bare "GIT_FAILED: git worktree failed"
+    // with no diagnosis and no archive. The redacted git stderr must travel
+    // with the error.
+    const { clonePath, repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "locked-remove" });
+    git(clonePath, ["worktree", "lock", created.path]);
+
+    let caught: unknown;
+    try {
+      removeWorktree({ ref: created.lease.lease_id });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(WorktreeError);
+    const error = caught as WorktreeError;
+    expect(error.code).toBe("GIT_FAILED");
+    expect(error.details.git_stderr).toContain("locked");
+    expect(error.message).toContain("locked");
+    // The failed remove left the worktree and its files intact.
+    expect(existsSync(created.path)).toBe(true);
+    expect(readFileSync(join(created.path, "README.md"), "utf8")).toBe("seed\n");
+  });
+
   test("refuses a worktree whose gitdir is dead, unless removal explicitly archives the working tree", () => {
     // The 2026-08-14 monorepo move: the parent checkout moved, and the
     // `.git/worktrees/<name>` metadata it carried went with it — the worktree

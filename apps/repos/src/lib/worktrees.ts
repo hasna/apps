@@ -233,7 +233,11 @@ function runGit(cwd: string, args: string[], options: GitOptions = {}): GitResul
       String(failure.stderr ?? "").trim() || String(failure.message ?? "git failed"),
     );
     if (!options.allowFailure) {
-      fail("GIT_FAILED", `git ${args[0]} failed`, { path: cwd, git_stderr: stderr });
+      // I38-00638: the failure read as a bare "GIT_FAILED: git worktree
+      // failed" with no diagnosis and no archive. The real (redacted) git
+      // stderr belongs in the message so every surface — human and --json —
+      // carries the cause.
+      fail("GIT_FAILED", `git ${args[0]} failed: ${stderr}`, { path: cwd, git_stderr: stderr });
     }
     return { ok: false, stdout: String(failure.stdout ?? "").trim(), stderr };
   }
@@ -776,6 +780,25 @@ function isLinkedWorktree(path: string): boolean {
 function linkedGitdirIsLive(path: string): boolean {
   const target = linkedGitdirTarget(path);
   return target !== null && isDirectory(target);
+}
+
+/**
+ * The checkout that OWNS a linked worktree's gitdir, read from the worktree's
+ * own `.git` pointer rather than from the lease's stored repo_path.
+ *
+ * The pointer names `<common>/worktrees/<name>`; the checkout that owns the
+ * worktree is the one whose gitdir is `<common>`. A lease's `repo_path` is a
+ * stored value that can go stale — I38-00638 measured a pre-rename mirror
+ * path that still existed on disk, so `git worktree remove` ran from the
+ * wrong repository, deleted tracked files partway, and failed with an opaque
+ * GIT_FAILED and no archive. The worktree's own pointer is ground truth: it
+ * is what git itself reads when it resolves the worktree.
+ */
+function owningParentCheckout(worktreePath: string): string | null {
+  const gitdirTarget = linkedGitdirTarget(worktreePath); // <common>/worktrees/<name>
+  if (!gitdirTarget) return null;
+  const commonDir = dirname(dirname(gitdirTarget)); // <common>
+  return dirname(commonDir); // the checkout whose .git IS <common>
 }
 
 export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
@@ -1675,7 +1698,19 @@ export function removeWorktree(request: RemoveWorktreeRequest): RemoveWorktreeRe
       )
     : null;
 
-  const parentForGit = target.parentPath && existsSync(target.parentPath) ? target.parentPath : resolved;
+  // The parent checkout git runs in must be the checkout that OWNS the
+  // worktree's gitdir — read from the worktree's own `.git` pointer, never
+  // from the lease's stored repo_path.
+  //
+  // I38-00638: the lease's repo_path pointed at a stale pre-rename mirror
+  // checkout that still existed on disk, so `git worktree remove` ran from the
+  // wrong repository — a clean worktree's tracked files were deleted partway
+  // before git failed with an opaque GIT_FAILED and no archive. The worktree's
+  // own `.git` pointer is ground truth for which gitdir owns it.
+  const pointerParent = owningParentCheckout(resolved);
+  const parentForGit = pointerParent && existsSync(pointerParent)
+    ? pointerParent
+    : (target.parentPath && existsSync(target.parentPath) ? target.parentPath : resolved);
   // The branch to delete is the one this worktree actually has checked out, read
   // now, not the one the lease claims.
   //
