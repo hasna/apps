@@ -1,10 +1,10 @@
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { homedir } from "os";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { SqliteAdapter } from "./sqlite-adapter.js";
 import * as schema from "./schema.js";
+import { effectiveHome, getBrainsHome } from "../lib/app-home.js";
 
 export * from "./schema.js";
 
@@ -22,8 +22,7 @@ function ensurePrivateDir(path: string): void {
 }
 
 function currentBrainsDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  return join(home, ".hasna", "brains");
+  return getBrainsHome();
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -43,9 +42,8 @@ function secureSqliteArtifacts(filePath: string): void {
 }
 
 function resolveDefaultDbPath(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const newDir = join(home, ".hasna", "brains");
-  const oldDir = join(home, ".brains");
+  const newDir = getBrainsHome();
+  const oldDir = join(effectiveHome(), ".brains");
 
   if (existsSync(oldDir) && !existsSync(newDir)) {
     ensurePrivateDir(newDir);

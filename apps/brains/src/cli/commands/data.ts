@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import { randomUUID } from "crypto";
 import { readFileSync, existsSync } from "fs";
 import { dirname, join } from "path";
-import { homedir } from "os";
 import { getDb, trainingDatasets } from "../../db/index.js";
+import { getBrainsDatasetsDir } from "../../lib/app-home.js";
 import { ensurePrivateDirectory, writePrivateTextFile } from "../../lib/private-files.js";
 import { printJson, printError, printSuccess, printInfo, printTable, printHint } from "../ui.js";
 import {
@@ -17,7 +17,7 @@ import {
   truncateText,
 } from "../../lib/compact-output.js";
 
-const DEFAULT_DATASETS_DIR = join(homedir(), ".hasna", "brains", "datasets");
+const DEFAULT_DATASETS_DIR = getBrainsDatasetsDir();
 
 export function registerDataCommands(program: Command): void {
   const dataCmd = program.command("data").description("Manage training datasets");

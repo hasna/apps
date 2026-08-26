@@ -20,8 +20,11 @@ Global options must appear before the command.
 | `--help`, `-h`, `help` | Prints help. |
 | `--version`, `-v`, `version` | Prints the package version. With `--json`, prints `{ "version": "..." }`. |
 
-The default data root is `~/.hasna/automations`. The environment variables
-`HASNA_AUTOMATIONS_DIR` and `AUTOMATIONS_DATA_DIR` override it, in that order.
+The default data root is `~/.hasna/automations`, resolved through the
+`@hasna/paths` resolver. The environment variables `HASNA_AUTOMATIONS_DIR` and
+`AUTOMATIONS_DATA_DIR` override it, in that order; the XDG data home
+(`~/.local/share/hasna/automations`, or `$HASNA_DATA_HOME/automations`) is
+adopted once the store has been migrated there or `HASNA_DATA_HOME` is set.
 
 ## Store Commands
 

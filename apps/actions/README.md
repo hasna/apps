@@ -77,9 +77,11 @@ const action = createTypeScriptAction({
 
 ## SDK
 
-`ActionsClient` defaults to the SQLite store at `~/.hasna/actions/actions.db`,
-which is backed by `bun:sqlite` and therefore requires the Bun runtime. See
-[Storage](#storage) for the Node fallback.
+`ActionsClient` defaults to the SQLite store at the effective actions data home —
+the legacy `~/.hasna/actions/actions.db` default, resolved through `@hasna/paths`,
+until the XDG data home is adopted (the store is migrated there or `HASNA_DATA_HOME`
+is set) — which is backed by `bun:sqlite` and therefore requires the Bun runtime.
+See [Storage](#storage) for the Node fallback.
 
 ```ts
 import { ActionsClient } from "@hasna/actions";
@@ -281,10 +283,16 @@ Default local data directory:
 ~/.hasna/actions
 ```
 
-Override with `HASNA_ACTIONS_DIR` or the fallback `HASNA_ACTIONS_HOME`. The CLI
-`--dir` option takes precedence over both environment variables.
+The directory is resolved through `@hasna/paths`. The legacy `~/.hasna/actions`
+default stays the effective data home until the store is actually migrated to the
+XDG data home (`~/.local/share/hasna/actions` on Linux;
+`~/Library/Application Support/Hasna/actions` on macOS) or the operator sets the
+data-kind override `HASNA_DATA_HOME`, so an existing local store never becomes
+invisible on upgrade. Exact-app overrides win over that default:
+`HASNA_ACTIONS_DIR`, then the fallback `HASNA_ACTIONS_HOME`. The CLI `--dir`
+option takes precedence over both environment variables.
 
-The default store is SQLite at `~/.hasna/actions/actions.db`. On first use it
+The default store is SQLite at the effective data home's `actions.db`. On first use it
 imports any existing `manifests.json`, `runs.json`, and `audit-events.json`
 records once without overwriting newer database records. `JsonActionsStore`
 remains available for explicitly configured compatibility use.

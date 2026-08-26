@@ -6,6 +6,7 @@
       "name": "@hasna/automations",
       "dependencies": {
         "@hasna/contracts": "^0.8.1",
+        "@hasna/paths": "0.1.0",
         "postgres": "^3.4.7",
       },
       "devDependencies": {
@@ -22,6 +23,8 @@
     "@hasna/actions": ["@hasna/actions@0.1.6", "", { "dependencies": { "@hasna/contracts": "^0.2.2", "@modelcontextprotocol/sdk": "^1.26.0", "commander": "^13.1.0", "zod": "^3.24.2" }, "bin": { "actions": "dist/cli/index.js", "actions-mcp": "dist/mcp/index.js" } }, "sha512-NPp42p7gqhbcBqVRKKEqdeOOhgONz/UXL/WoeZ0U74fuLwpLiAOYpb1GFJXgDbJ4mezfm0X2fJMHmz9c+YmduA=="],
 
     "@hasna/contracts": ["@hasna/contracts@0.8.7", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-wLSmzL8vjx+tREowbQ0LJqj9i0wuQRKvzLT3cCD+897HikIu+6UFg7oBrYBmkSOvCTWM0Xs/+9hsl78hWZizUw=="],
+
+    "@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hono/node-server": ["@hono/node-server@2.1.0", "", { "peerDependencies": { "hono": "^4" } }, "sha512-XovyyCCnBzW+zKu+z/zq8hwNs4KOR5rEMAOxo2f40Q5xoOI37IMm6MIg2COOUtUApo0i6850MTBKH2u4QLGIqg=="],
 

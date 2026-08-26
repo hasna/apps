@@ -40,9 +40,11 @@ permissions:
 env:
   # >>> THE ONLY LINE EACH REPO CHANGES <<<
   APP: attachments
-  # Locked platform defaults.
+  # Locked platform defaults (region stays repo-pinned).
   AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: "789877399345"
+  # The deploy role ARN comes from a GitHub Actions variable
+  # (AWS_ROLE_ARN, repo- or environment-scoped) — never committed.
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
 
 jobs:
   deploy:
@@ -58,7 +60,7 @@ jobs:
       - name: Configure AWS credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.APP }}-prod-gha-deploy
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-deploy-${{ env.APP }}-${{ github.run_id }}
 

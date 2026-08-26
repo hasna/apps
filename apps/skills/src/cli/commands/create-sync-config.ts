@@ -21,6 +21,10 @@ import {
   pruneStrayHomes,
 } from "../../lib/home-adoption.js";
 import { censusHomeDrift, type DriftCensus } from "../../lib/home-census.js";
+import {
+  StationSnapshotError,
+  writeStationSnapshot,
+} from "../../lib/station-snapshot.js";
 
 export function registerCreateSync(parent: Command) {
   // Config
@@ -158,7 +162,14 @@ export function registerCreateSync(parent: Command) {
     )
     .option("--apply", "Write adoption markers / conflicts ledger, or perform prune removals", false)
     .option("--json", "Output as JSON", false)
-    .description("Write corpus skills into each coding agent's global skills folder, per-tool adapted")
+    .option(
+      "--station <id>",
+      "Per-station snapshot mode: snapshot the installed skill homes into resources/<station>/skills with a v3 sync-manifest (dry-run by default; --populate writes)",
+    )
+    .option("--populate", "Write the per-station snapshot (station mode; the default is dry-run)", false)
+    .option("--repo-root <path>", "Station snapshot destination repo root (default: cwd)")
+    .option("--homes-root <dir>", "Build the station snapshot from a staged mirror of the skill homes instead of this machine's $HOME")
+    .description("Write corpus skills into each coding agent's global skills folder, per-tool adapted; with --station, snapshot the homes into a reviewed snapshot repo instead")
     .action((names: string[], options) => handleSync(names, options));
 }
 
@@ -201,8 +212,12 @@ function handleCreate(name: string, options: { category: string; description?: s
 
 function handleSync(
   names: string[],
-  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; check: boolean; adopt: boolean; prune: boolean; apply: boolean; json: boolean },
+  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; check: boolean; adopt: boolean; prune: boolean; apply: boolean; json: boolean; station?: string; populate: boolean; repoRoot?: string; homesRoot?: string },
 ) {
+  if (options.station) {
+    handleStationSnapshot(names, options);
+    return;
+  }
   const modes = [options.check, options.adopt, options.prune].filter(Boolean).length;
   if (modes > 1) {
     const message = "--check, --adopt, and --prune are mutually exclusive";
@@ -260,6 +275,79 @@ function handleSync(
   // folder is hand-authored is a deliberate, successful no-op and must not fail the run.
   if (actions.some((action) => action.action === "skip" && action.reason?.includes("not found"))) {
     process.exitCode = 1;
+  }
+}
+
+/**
+ * Per-station snapshot mode (`skills sync --station <id>`): snapshot the
+ * installed skill homes into resources/<station>/skills with a v3
+ * sync-manifest. Dry-run is the default; --populate writes. Fail-closed
+ * classes (invalid station, symlinks, conflicts, destination escape) exit 2,
+ * exactly like the retired fleet-resources script this generalizes.
+ */
+function handleStationSnapshot(
+  names: string[],
+  options: { station?: string; populate: boolean; dryRun: boolean; repoRoot?: string; homesRoot?: string; json: boolean; check: boolean; adopt: boolean; prune: boolean; force: boolean; all: boolean; source?: string },
+): void {
+  const station = options.station;
+  if (!station) return;
+  if (options.populate && options.dryRun) {
+    const message = "--populate and --dry-run are mutually exclusive";
+    if (options.json) console.log(JSON.stringify({ error: message }));
+    else console.error(chalk.red(message));
+    process.exitCode = 1;
+    return;
+  }
+  const incompatible = names.length > 0 || options.check || options.adopt || options.prune
+    || options.force || options.all || options.source !== undefined;
+  if (incompatible) {
+    const message = "--station (per-station snapshot mode) cannot be combined with corpus->home sync names, --check, --adopt, --prune, --force, --all, or --source";
+    if (options.json) console.log(JSON.stringify({ error: message }));
+    else console.error(chalk.red(message));
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    const result = writeStationSnapshot({
+      stationId: station,
+      repoRoot: options.repoRoot,
+      homesRoot: options.homesRoot,
+      dryRun: !options.populate,
+    });
+    if (result.mode === "dry-run") {
+      if (options.json) {
+        console.log(JSON.stringify({
+          stationId: result.stationId,
+          mode: "dry-run",
+          stats: { files: result.stats.files, bytes: result.stats.bytes },
+          homes: Object.fromEntries(result.homes.map((home) => [
+            home.name,
+            { homePath: home.homePath, files: home.files, skipped: home.skipped },
+          ])),
+        }, null, 2));
+        return;
+      }
+      console.log(
+        `DRY-RUN station=${result.stationId} files=${result.stats.files} bytes=${result.stats.bytes}`
+      );
+      for (const home of result.homes) {
+        console.log(`  ${home.name}: ${home.files} files, ${home.skipped} skipped`);
+      }
+      return;
+    }
+    console.log(
+      `POPULATE station=${result.stationId} written=${result.stats.written} unchanged=${result.stats.unchanged} total=${result.stats.files} bytes=${result.stats.bytes}`
+    );
+  } catch (error) {
+    if (error instanceof StationSnapshotError) {
+      for (const line of error.detail) console.error(`CONFLICT ${line}`);
+      console.error(`FAIL ${error.message}`);
+      process.exitCode = 2;
+    } else {
+      console.error(`FAIL ${(error as Error).stack ?? (error as Error).message}`);
+      process.exitCode = 1;
+    }
   }
 }
 

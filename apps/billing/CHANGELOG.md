@@ -1,5 +1,11 @@
 # @hasna/billing
 
+## 0.1.4
+
+### Patch Changes
+
+- Switch @hasna/billing local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/billing` default (with the `HASNA_BILLING_HOME` / `BILLING_HOME` exact-app overrides) stays the effective home until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+
 ## 0.1.3
 
 ### Patch Changes

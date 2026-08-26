@@ -1,12 +1,12 @@
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import { gatherFromTodos } from "./todos.js";
 import { gatherFromMementos } from "./mementos.js";
 import { gatherFromConversations } from "./conversations.js";
 import { gatherFromSessions } from "./sessions.js";
 import type { GatherResult, GathererOptions, TrainingExample } from "./types.js";
 import { getGatherer, getRegisteredSources } from "./registry.js";
+import { getBrainsDatasetsDir } from "../app-home.js";
 
 export * from "./types.js";
 export * from "./protocol.js";
@@ -37,7 +37,7 @@ export async function mergeAndWriteJSONL(
   results: GatherResult[],
   outputPath?: string
 ): Promise<{ path: string; totalExamples: number; duplicatesRemoved: number }> {
-  const defaultDir = join(homedir(), ".hasna", "brains", "datasets");
+  const defaultDir = getBrainsDatasetsDir();
   await mkdir(defaultDir, { recursive: true });
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");

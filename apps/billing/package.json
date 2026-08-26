@@ -1,6 +1,6 @@
 {
   "name": "@hasna/billing",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Thin agent-facing billing/dunning orchestration over Stripe Billing: subscription lifecycle, decline-code retries, pre-dunning, graduated downgrades, multi-entity invoicing. CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
@@ -39,7 +39,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8891",
     "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "node -e \"const fs=require('node:fs'),path=require('node:path'),os=require('node:os');const home=process.env.HOME||process.env.USERPROFILE||os.homedir();const root=path.join(home,'.hasna','billing');try{fs.mkdirSync(root,{recursive:true,mode:0o700});for(const dir of ['config','data','exports','backups','logs','tmp'])fs.mkdirSync(path.join(root,dir),{recursive:true,mode:0o700});}catch{}\""
+    "postinstall": "node -e \"const fs=require('node:fs'),path=require('node:path'),os=require('node:os');const home=process.env.HOME||process.env.USERPROFILE||os.homedir();const exact=process.env.HASNA_BILLING_HOME||process.env.BILLING_HOME;const dataHome=process.env.HASNA_DATA_HOME;const root=exact&&exact.trim()?path.resolve(exact.trim()):(dataHome&&dataHome.trim()?path.join(dataHome.trim(),'billing'):path.join(home,'.hasna','billing'));try{fs.mkdirSync(root,{recursive:true,mode:0o700});for(const dir of ['config','data','exports','backups','logs','tmp'])fs.mkdirSync(path.join(root,dir),{recursive:true,mode:0o700});}catch{}\""
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -59,6 +59,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "hono": "^4.6.0",
     "commander": "^13.1.0",

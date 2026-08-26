@@ -44,22 +44,22 @@ permissions:
   contents: read
   id-token: write # required to mint the GitHub OIDC token
 
-env:
-  AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: "789877399345"
-  CLUSTER: oss-fleet-prod
-  SERVICE: mementos-prod
-  WEB_FAMILY: mementos-prod
-  WEB_CONTAINER: mementos
-  ECR_REPOSITORY: mementos
-  ECR_URL: 789877399345.dkr.ecr.us-east-1.amazonaws.com/mementos
-
 jobs:
   deploy:
     name: build + migrate + verify + deploy
     runs-on: ubuntu-24.04-arm # native arm64 runner — image built without QEMU
-    environment: production # NOTE (monorepo port): OIDC subject is now repo:hasna/apps:environment:production; verify the mementos-prod-gha-deploy role trust policy and account (789877399345) are current before enabling this workflow
+    environment: production # NOTE (monorepo port): OIDC subject is now repo:hasna/apps:environment:production; verify the mementos-prod-gha-deploy role trust policy and account are current before enabling this workflow
     timeout-minutes: 45
+
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "${{ secrets.MEMENTOS_PROD_AWS_ACCOUNT_ID }}"
+      CLUSTER: oss-fleet-prod
+      SERVICE: mementos-prod
+      WEB_FAMILY: mementos-prod
+      WEB_CONTAINER: mementos
+      ECR_REPOSITORY: mementos
+      ECR_URL: "${{ secrets.MEMENTOS_PROD_AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/mementos"
 
     steps:
       - name: Checkout
@@ -68,7 +68,7 @@ jobs:
       - name: Configure AWS credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mementos-prod-gha-deploy
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ secrets.MEMENTOS_PROD_GHA_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-deploy-mementos-${{ github.run_id }}
 
@@ -102,7 +102,7 @@ jobs:
 
       - name: Verify health and migration readiness endpoints
         env:
-          APP_BASE_URL: https://mementos.hasna.xyz
+          APP_BASE_URL: ${{ vars.MEMENTOS_PROD_APP_BASE_URL }}
           PREVIOUS_TASK_DEFINITION: ${{ steps.deploy.outputs.previous_task_definition }}
           DEPLOYED_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
         run: bash scripts/production-deploy.sh verify

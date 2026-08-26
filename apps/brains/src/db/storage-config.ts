@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { getBrainsStorageConfigPath } from "../lib/app-home.js";
 
 export interface StorageConfig {
   postgres: {
@@ -27,7 +26,6 @@ export const LEGACY_STORAGE_MODE_ENV = [
   "BRAINS_MODE",
 ] as const;
 
-const STORAGE_CONFIG_PATH = join(homedir(), ".hasna", "brains", "storage", "config.json");
 type RawStorageConfig = Partial<StorageConfig> & { rds?: StorageConfig["postgres"] };
 
 function firstEnv(names: readonly string[]): string | undefined {
@@ -88,9 +86,10 @@ export function getStorageConfig(): StorageConfig {
     },
   };
 
-  if (existsSync(STORAGE_CONFIG_PATH)) {
+  const storageConfigPath = getBrainsStorageConfigPath();
+  if (existsSync(storageConfigPath)) {
     try {
-      const raw = JSON.parse(readFileSync(STORAGE_CONFIG_PATH, "utf-8")) as RawStorageConfig;
+      const raw = JSON.parse(readFileSync(storageConfigPath, "utf-8")) as RawStorageConfig;
       config.postgres = { ...config.postgres, ...(raw.postgres ?? raw.rds ?? {}) };
     } catch {
       // Ignore malformed storage config.
@@ -108,7 +107,7 @@ export function getStorageConnectionString(dbName = "brains"): string {
   const config = getStorageConfig();
   const { host, port, username, password_env, ssl } = config.postgres;
   if (!host || !username) {
-    throw new Error("Remote storage database is not configured. Set HASNA_BRAINS_DATABASE_URL or configure ~/.hasna/brains/storage/config.json.");
+    throw new Error(`Remote storage database is not configured. Set HASNA_BRAINS_DATABASE_URL or configure ${getBrainsStorageConfigPath()}.`);
   }
 
   const password = process.env[password_env];

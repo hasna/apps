@@ -1,5 +1,11 @@
 # @hasna/prompts
 
+## 0.3.37
+
+### Patch Changes
+
+- 5273f12: Fix package.json `repository`/`homepage`/`bugs` metadata: the published fields named `github.com/hasna/prompts`, a repository that never existed. Repointed to the real source, the `hasna/apps` monorepo — `repository` now carries `url: git+https://github.com/hasna/apps.git` with `directory: apps/prompts`, and `homepage`/`bugs` resolve to the `hasna/apps` repo pages for that member path.
+
 ## 0.3.36
 
 ### Patch Changes

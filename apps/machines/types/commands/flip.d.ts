@@ -169,7 +169,45 @@ export interface StorageStatusVerification {
     observedMode: string | null;
     apiEnabled: boolean | null;
     reason?: string;
+    /** Result of the provenance gates (P1-C): ok only when the new fleet-env file supplied the connection. */
+    provenanceOk?: boolean;
+    /** The source the app reported for its API key (absolute path or env key), or null. Never a value. */
+    apiKeySource?: string | null;
+    /** The source the app reported for its API URL, or null. Never a value. */
+    apiUrlSource?: string | null;
+    /** The credential tier the app reported (e.g. fleet-env / legacy-cloud / legacy-env), or null. */
+    apiKeyTier?: string | null;
+    /** The source that proved the new file supplied the connection. */
+    sourceOfValue?: string | null;
+    /** sha256 of the env file the flip wrote (from the FLIP_SHA256 marker), or null. */
+    envSha256?: string | null;
 }
+/** Extract the sha256 the flip script reported for the env file it wrote. */
+export declare function extractFlipSha256(rawOutput: string): string | null;
+/**
+ * Provenance gates for a flip (P1-C, review P0-3 / Sol 5).
+ *
+ * The flip must PROVE the freshly written fleet-env file supplied the
+ * connection, not merely that required vars exist and the app reports api
+ * mode. When the app's status JSON reports the credential resolution fields
+ * (`apiKeyTier` / `apiUrlSource` / `apiKeySource`, the `@hasna/contracts`
+ * client-transport fields), this verifies them and rejects:
+ *
+ *   1. `apiKeyTier === "legacy-env"` — the key came from a process env var,
+ *      not the fleet file;
+ *   2. a `transportSource`/`apiUrlSource`/`apiKeySource` that names a file
+ *      under `~/.hasna/cloud` — the app is still resolving from the legacy
+ *      cloud dir;
+ *   3. api mode whose exact source cannot be reported — api-backed mode with
+ *      no reportable source fields (or a tier that is not a fleet/disk tier).
+ *
+ * Positive case: the reported key/URL source is the fleet-env file the flip
+ * just wrote (matched on its `/fleet-env/<app>.env` suffix so any HOME
+ * resolves), which proves the new file supplied the connection.
+ */
+export declare function verifyFlipProvenance(rawOutput: string, spec: FlipAppSpec, expected: FlipMode, options?: {
+    expectedEnvFile?: string;
+}): Pick<StorageStatusVerification, "provenanceOk" | "apiKeySource" | "apiUrlSource" | "apiKeyTier" | "sourceOfValue" | "envSha256" | "reason">;
 /**
  * Parse `<app> storage status --json` output (possibly wrapped in the
  * FLIP_STATUS_BEGIN/END markers) and check it matches the expected mode.
@@ -214,6 +252,26 @@ export interface FlipMachineResult {
     exitCode: number;
     error?: string;
 }
+/** One row of the per-run flip ledger (P1-C). No credential values, ever. */
+export interface FlipLedgerEntry {
+    ts: string;
+    machine: string;
+    app: string;
+    wave: string;
+    mode: FlipMode;
+    /** dry-run | ok | FAIL */
+    result: string;
+    /** The source that supplied the connection (fleet-env file path) or null. */
+    sourceOfValue: string | null;
+    /** sha256 of the fleet env file the flip wrote, or null (dry-run / revert). */
+    envSha256: string | null;
+    /** Provenance gate verdict. */
+    provenanceOk: boolean;
+}
+/** Ledger sink, injectable for tests and CLI `--ledger` overrides. */
+export type FlipLedgerWriter = (entries: FlipLedgerEntry[]) => void;
+/** Default no-op ledger sink — the CLI wires the file writer. */
+export declare const NOOP_LEDGER_WRITER: FlipLedgerWriter;
 export interface RunFlipOptions {
     spec: FlipAppSpec;
     mode: FlipMode;
@@ -227,6 +285,8 @@ export interface RunFlipOptions {
     timeoutMs?: number;
     /** Abort remaining waves if any machine in a wave fails (default true). */
     stopOnWaveFailure?: boolean;
+    /** Ledger sink; defaults to NOOP (the CLI wires the file writer). */
+    ledger?: FlipLedgerWriter;
 }
 export interface RunFlipReport {
     app: string;
@@ -235,6 +295,8 @@ export interface RunFlipReport {
     results: FlipMachineResult[];
     aborted: boolean;
     abortReason?: string;
+    /** Per-run ledger rows (P1-C): machine, app, ts, result, source-of-value, sha256. */
+    ledger: FlipLedgerEntry[];
 }
 /**
  * Execute (or dry-run) the flip wave-by-wave. Verifies each machine's storage
