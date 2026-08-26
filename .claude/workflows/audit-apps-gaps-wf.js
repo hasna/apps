@@ -72,6 +72,7 @@ Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasn
 NEVER print a credential value.`;
 
 const AT = ['Bash', 'Read', 'Grep'];
+const CENSUS_SCHEMA = { type: 'object', required: ['apps'], properties: { apps: { type: 'array', items: { type: 'string', maxLength: 80 } } } };
 
 // The runtime's phase(name) is a progress-group global only (no callback contract).
 const runPhase = async (name, fn) => { phase(name); return await fn(); }
@@ -330,13 +331,15 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
     const censusOut = await safeAgent({
       prompt: withRecord(censusPrompt()),
       tools: AT,
+      schema: CENSUS_SCHEMA,
     });
     if (censusOut == null) {
       throw new Error(
         `fail-closed: census agent failed; app population unknown (pass ${pass})`
       );
     }
-    const list = parseArr(censusOut, `census-${pass}`);
+    const listRaw = (censusOut && Array.isArray(censusOut.apps)) ? censusOut.apps : parseArr(censusOut, `census-${pass}`);
+    const list = Array.isArray(listRaw) ? listRaw : null;
     if (list == null) {
       throw new Error(
         `fail-closed: census output unparseable; app population unknown (pass ${pass})`
