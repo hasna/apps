@@ -111,7 +111,7 @@ Run a shared Streamable HTTP MCP server (stateless, `127.0.0.1` only):
 ```bash
 monitor-mcp --http
 # or: MCP_HTTP=1 monitor-mcp
-# default port: 8826 (override with --port or MCP_HTTP_PORT)
+# default port: 8869 (override with --port or MCP_HTTP_PORT)
 ```
 
 Endpoints: `GET /health`, `POST /mcp` (Streamable HTTP).

@@ -19,9 +19,10 @@ tracked by the manifest lane (todos `41208cbe`) and the SDK lane
 
 Naming: directory `apps/<name>` ↔ package `@hasna/<name>`, kebab-case, enforced
 by the CI name-conformance gate. Every member publishes with
-`"access": "public"` in its `publishConfig`; no member declares
-`private: false`, and extending `../../tsconfig.base.json` is the exception,
-not the rule — only `apps/agency` and `apps/workflows` do (73 of 75 do not).
+`"access": "public"` in its `publishConfig`; the one explicit
+`"private": false` declaration is `apps/notes` (a publishing member), and
+extending `../../tsconfig.base.json` is the exception, not the rule — only
+`apps/agency` and `apps/workflows` do (73 of 75 do not).
 
 ## Dependencies
 

@@ -36,12 +36,16 @@ create one.**
 ## Standing-loop semantics (updated 2026-08-26)
 
 Standing continuity is now **bounded passes + coordinator relaunch**, per the
-runtime ground truth (1,000-agent cap per run): every standing lane bounds its
-passes with `MAX_PASSES` (args `maxPasses` override; 30/40 defaults), sleeps
-inside the census agent (args `idleMinutes`, floor 300 s, cap 1800 s) and
-re-checks once before returning empty, and the 10-minute coordination loop
-relaunches the run — so the fleet never stops while the session lives, and a
-single run can never run away. Stop = the owner stops the coordinator/data run.
+runtime ground truth (1,000-agent cap per run): standing lanes bound their
+passes with `MAX_PASSES` (args `maxPasses` override; defaults per lane — 30/40
+on the census/drain lanes, 1–3 on the audit lanes), sleeps inside the census
+agent (args `idleMinutes`, floor 300 s, cap 1800 s) and re-checks once before
+returning empty, and the 10-minute coordination loop relaunches the run — so
+the fleet never stops while the session lives, and a single run can never run
+away. Owner-designed session-scoped loops (`ship-latest`, `publish-all-apps`,
+`hotfix-drain`, `github-issues-to-todos`, `propagate-lanes-to-monorepos`) run
+unbounded per run and rely on the coordinator relaunch + re-census each pass.
+Stop = the owner stops the coordinator/data run.
 
 - **PRIORITY YIELD**: every lane's census checks todos 3bbc22e0 for UNOWNED
   rows titled `HOTFIX:` first — if any exist, the lane yields (sleeps and

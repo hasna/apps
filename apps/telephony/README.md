@@ -40,7 +40,7 @@ telephony-mcp --http
 # or: MCP_HTTP=1 telephony-mcp
 ```
 
-Default port **8839** (`--port` / `MCP_HTTP_PORT`). Endpoints: `GET /health`, `POST /mcp`.
+Default port **8884** (`--port` / `MCP_HTTP_PORT`). Endpoints: `GET /health`, `POST /mcp`.
 
 ## REST API
 
