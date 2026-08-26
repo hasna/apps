@@ -38,6 +38,41 @@ const censusPrompt = (body) => {
 }
 // --- /safeAgent ---
 
+// Idle window (owner 2026-08-25, args-driven): args.idleMinutes in MINUTES,
+// default 30. The census sleeps IDLE_SLEEP seconds then re-checks once —
+// min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
+// (the standing idle wait, also the safeAgent failure-banner sleep).
+const IDLE_MINUTES = Math.min(((args && args.idleMinutes) || 30), 300)
+const IDLE_SLEEP = Math.max(300, IDLE_MINUTES * 60)
+
+// RECORDING V2 (owner requirement): every workflow agent records while working.
+// Interpolated into every agent prompt below.
+const RECORDING = `
+RECORD WHILE WORKING (required, every workflow agent):
+(1) conversations: claim/post to #hasna-apps at start (create via 'conversations channel create hasna-apps' if missing), milestone after each phase, done at the end; deploy lane additionally posts [DEPLOY INTENT] to git-deployments BEFORE and [DEPLOY-CONFIRM] in-thread AFTER with the 2-live-gate GO.
+(2) todos: one task per work item (todos add --project hasna-apps), todos comment with evidence as you go, status start/complete only with proof (merged PR / verified live).
+(3) mementos: mementos save key apps-<topic> on every non-obvious root cause/decision.
+(4) knowledge: on durable doctrine, file a follow-up task 'KNOWLEDGE: <item>' for the knowledge lane (never silent add).
+(5) skills: on a repeated procedure, file 'SKILL: <name>' follow-up.
+(6) instructions: only when the workflow itself changes rules (then file 'INSTRUCTIONS: <config>').
+Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done.
+NEVER print a credential value.
+`
+
+// hasna/apps todos project id (args-driven, 2026-08-26): args.project overrides;
+// the standing hasna/apps project id is the default. Every use below
+// interpolates ${APPS} — no hardcoded id.
+const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
+
+// Pass bound (fleet ground truth 2026-08-26): the standing 'infinite' lane runs a
+// BOUNDED pass loop — MAX_PASSES hard cap per run (~5 agents per pass, so 40
+// passes is well inside the runtime's 1,000-agent run cap, which stays the outer
+// guard). The standing continuity between runs comes from the COORDINATOR
+// re-launching this workflow, never an unbounded in-script loop; sweeps RESTART
+// from repo 1 on the next fired run (cursors keep later sweeps delta-only).
+// args.maxPasses overrides.
+const MAX_PASSES = (args && args.maxPasses) || 40
+
 const STATE_FILE = '~/workspace/scratch/fabia/leak-scan/state.json'
 const CLONE_ROOT = '~/workspace/scratch/fabia/leak-scan/clones'
 // Known public OSS population, measured 2026-08-26 (positive control for the census read).
@@ -157,14 +192,15 @@ let pass = 0
 let sweep = 1
 let sweepSpec = null
 
-for (pass = 1; ; pass++) {
+for (pass = 1; pass <= MAX_PASSES; pass++) {
   phase('Census')
-  const census = await safeAgent(censusPrompt(`Census for the leak-scan lane. PASS ${pass}, script sweep counter ${sweep}. PRIORITY YIELD CHECK FIRST: todos list --project 3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8 --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-check once, return {yielded: true, specPresent: false, spec: null, sweep: ${sweep}, sweepStarted: false, population: [], populationComplete: false, reposTotal: 0, remainingThisSweep: 0, idle: false, queue: []} and do NOT probe GitHub while yielding.
+  const census = await safeAgent(censusPrompt(`${RECORDING}
+Census for the leak-scan lane. PASS ${pass} of the bounded loop (max ${MAX_PASSES}), script sweep counter ${sweep}. PRIORITY YIELD CHECK FIRST: todos list --project ${APPS} --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-check once, return {yielded: true, specPresent: false, spec: null, sweep: ${sweep}, sweepStarted: false, population: [], populationComplete: false, reposTotal: 0, remainingThisSweep: 0, idle: false, queue: []} and do NOT probe GitHub while yielding.
 
 1. READ THE STATE FILE (resume contract): if [ -f ${STATE_FILE} ] then cat it (it holds {spec, cursors, lastSweep}); else state is missing — this is a fresh start: full-scan mode for every repo. specPresent = (state.spec is a complete object). Return the state's spec object as the census field "spec" (null when there is no state or no spec).
 2. ENUMERATE THE POPULATION fresh: for each org in [${ORGS.join(', ')}]: gh api "orgs/<org>/repos?per_page=100&type=public" --paginate --jq '.[].full_name' (redirect to a file, never pipe; 404/Not Found org → skip and record it absent). Population = union of all names. POSITIVE CONTROL: every name in the known set [${KNOWN_POPULATION.join(', ')}] MUST appear in the read — if any is missing, the read is INCOMPLETE: set populationComplete: false, queue: [] and do NOT scan (a capped read must never be presented as the population). New public repos not in the known set join the population with mode full (no cursor yet).
 3. SWEEP BOOKKEEPING: the state's lastSweep {number, scannedRepos, complete} governs. If state.lastSweep.number == ${sweep} and NOT complete: continue the current sweep — queue = the first 4 repos of the population NOT in state.lastSweep.scannedRepos, remainingThisSweep = population size - scannedRepos size. Otherwise (no state, number mismatch, or complete): START A NEW SWEEP — sweepStarted: true, sweep = ${sweep} + 1 (or 1 when no state), queue = the first 4 repos of the population, remainingThisSweep = population size. Never claim a full-census result from a capped read.
-4. MODES AND CURSORS: per queued repo, mode = state.cursors has the repo ? 'delta' : 'full'; cursor = state.cursors[repo] or null. IDLE CHECK: for each queued delta repo, compare its cursor to the remote HEAD — git ls-remote https://github.com/<repo>.git HEAD (redirect to a file; note the special case hasna-internal/dsh-TUI uses the same URL shape). If EVERY delta repo's remote HEAD equals its cursor (nothing new) AND lastSweep.complete: the fleet is clean — sleep 300 (bash), re-check once, then return the final queue with idle: true.
+4. MODES AND CURSORS: per queued repo, mode = state.cursors has the repo ? 'delta' : 'full'; cursor = state.cursors[repo] or null. IDLE CHECK: for each queued delta repo, compare its cursor to the remote HEAD — git ls-remote https://github.com/<repo>.git HEAD (redirect to a file; note the special case hasna-internal/dsh-TUI uses the same URL shape). If EVERY delta repo's remote HEAD equals its cursor (nothing new) AND lastSweep.complete: the fleet is clean — sleep ${IDLE_SLEEP} (bash — the args-driven idle window, ${IDLE_MINUTES} min default), re-check once, then return the final queue with idle: true.
 5. QUEUE ORDER: population order (org list order, then repo name). Exactly 2 scan agents will each take 2 repos: the first 2 queue entries go to agent A, the next 2 to agent B — the queue length is capped at 4.
 
 Return the census: yielded, specPresent, spec (the state's spec object, or null), sweep (the sweep you are working), sweepStarted, population (all names read), populationComplete, reposTotal, remainingThisSweep, idle, queue (each with repo, mode, cursor). Read-only: never open, close, comment, file, or clone anything in this phase.`), { label: 'leak-census:' + pass, phase: 'Census', schema: CENSUS, model: 'sonnet' })
@@ -191,7 +227,8 @@ Return the census: yielded, specPresent, spec (the state's spec object, or null)
 
   if (!census.specPresent) {
     phase('Investigate')
-    const spec = await safeAgent(`You are the INVESTIGATE phase of the leak-scan lane (pass ${pass}; the operating spec is missing from ${STATE_FILE}). Determine how this lane scans "hasna internal information leaked into PUBLIC repos" — by MEASURING, never by asserting.
+    const spec = await safeAgent(`${RECORDING}
+You are the INVESTIGATE phase of the leak-scan lane (pass ${pass}; the operating spec is missing from ${STATE_FILE}). Determine how this lane scans "hasna internal information leaked into PUBLIC repos" — by MEASURING, never by asserting.
 
 CONTEXT (binding rules):
 - global-no-fleet-internal-skills-in-oss-repo (incident 2026-08-24: a fleet-internal skill session-inject-monitor was committed to the public OSS corpus at apps/skills/skills/). Its marker lists: exact private markers = @hasna-internal/* references, private hosts (*.hasna.xyz), ARNs, 12-digit AWS account ids, /home/hasna/... paths, concrete station names (station01..), session-injection commands, live session/worktree ids; compound pairs = internal channel names + secrets-CLI usage, ~/.hasna paths, fixed machine/session identity.
@@ -221,7 +258,8 @@ MEASURE FIRST: run the probe verbs on one repo (e.g. a small scratch clone of ma
   phase('Scan')
   const queueA = census.queue.slice(0, 2)
   const queueB = census.queue.slice(2, 4)
-  const scanPrompt = (repos, passLabel) => `SCAN phase of the leak-scan lane, pass ${passLabel}. You are ONE of TWO parallel scan agents; you were assigned EXACTLY ${repos.length} repo(s): ${repos.map(r => r.repo + ' (' + r.mode + (r.cursor ? ', cursor ' + r.cursor.slice(0, 10) : ', no cursor') + ')').join('; ') || 'none'}. The other agent covers the rest of the queue. The lane's operating spec (from the Investigate phase):
+  const scanPrompt = (repos, passLabel) => `${RECORDING}
+SCAN phase of the leak-scan lane, pass ${passLabel}. You are ONE of TWO parallel scan agents; you were assigned EXACTLY ${repos.length} repo(s): ${repos.map(r => r.repo + ' (' + r.mode + (r.cursor ? ', cursor ' + r.cursor.slice(0, 10) : ', no cursor') + ')').join('; ') || 'none'}. The other agent covers the rest of the queue. The lane's operating spec (from the Investigate phase):
 
 ${JSON.stringify(sweepSpec)}
 
@@ -246,11 +284,12 @@ Return {results: [...]} — one entry per assigned repo (empty array when none a
   if (failedRepos.length > 0) log(`pass ${pass}: scan failed for ${failedRepos.join(', ')} — re-queued next pass`)
 
   phase('Record')
-  const record = await safeAgent(`RECORD phase of the leak-scan lane, pass ${pass}, sweep ${sweep}. Census summary: population ${census.population.join(', ')} (${census.reposTotal} total, complete=${census.populationComplete}), queue this pass ${census.queue.map(q => q.repo + ':' + q.mode).join(', ')}, remainingThisSweep ${census.remainingThisSweep}, idle ${census.idle}. Scan results (successful repos only):
+  const record = await safeAgent(`${RECORDING}
+RECORD phase of the leak-scan lane, pass ${pass}, sweep ${sweep}. Census summary: population ${census.population.join(', ')} (${census.reposTotal} total, complete=${census.populationComplete}), queue this pass ${census.queue.map(q => q.repo + ':' + q.mode).join(', ')}, remainingThisSweep ${census.remainingThisSweep}, idle ${census.idle}. Scan results (successful repos only):
 
 ${JSON.stringify(allResults.filter((r) => !r.failed).map((r) => ({ repo: r.repo, mode: r.mode, scannedCommits: r.scannedCommits, scannedFiles: r.scannedFiles, cursor: r.cursor, truncated: r.truncated, findings: r.findings, controls: r.controls })))}
 
-1. FINDINGS → ROWS + COMMENTS (dedupe first): for EACH finding, skip if an existing [LEAK-FOUND] comment already stands on that commit (gh api repos/<org>/<name>/commits/<sha>/comments) or an existing todos row whose title starts with "LEAK-FOUND: <repo>@<short-sha>" exists (PREFIX match — the separator after the sha can arrive in different forms across transport; never match byte-exact titles). Otherwise file EXACTLY ONE todos row in project 3bbc22e0 titled "LEAK-FOUND: <repo>@<short-sha> | <detector>" (tags leak-scan,security; the separator is a pipe — never an em-dash, which transports inconsistently) whose body carries repo, commit sha, file:line, detector/marker, and the evidence rule — NEVER the matched value, NEVER a credential; the detector name + location IS the evidence. Then post ONE [LEAK-FOUND] commit comment via gh api repos/<org>/<name>/commits/<sha>/comments -f body="[LEAK-FOUND] <detector> @ <file>:<line> | <repo>@<short-sha>; row filed in hasna/todos (apps project)". Never post the matched value. NEVER delete, cancel, or update any todos row or comment — this lane files and comments ONLY. A duplicate is skipped and counted in skippedDedup, never removed. If you believe rows from an earlier pass are duplicates, leave them and note it in the channel line.
+1. FINDINGS → ROWS + COMMENTS (dedupe first): for EACH finding, skip if an existing [LEAK-FOUND] comment already stands on that commit (gh api repos/<org>/<name>/commits/<sha>/comments) or an existing todos row whose title starts with "LEAK-FOUND: <repo>@<short-sha>" exists (PREFIX match — the separator after the sha can arrive in different forms across transport; never match byte-exact titles). Otherwise file EXACTLY ONE todos row in project ${APPS} titled "LEAK-FOUND: <repo>@<short-sha> | <detector>" (tags leak-scan,security; the separator is a pipe — never an em-dash, which transports inconsistently) whose body carries repo, commit sha, file:line, detector/marker, and the evidence rule — NEVER the matched value, NEVER a credential; the detector name + location IS the evidence. Then post ONE [LEAK-FOUND] commit comment via gh api repos/<org>/<name>/commits/<sha>/comments -f body="[LEAK-FOUND] <detector> @ <file>:<line> | <repo>@<short-sha>; row filed in hasna/todos (apps project)". Never post the matched value. NEVER delete, cancel, or update any todos row or comment — this lane files and comments ONLY. A duplicate is skipped and counted in skippedDedup, never removed. If you believe rows from an earlier pass are duplicates, leave them and note it in the channel line.
 2. STATE FILE (resume contract): write ${STATE_FILE} atomically (mkdir -p, write to state.json.tmp, mv over) with {spec: ${JSON.stringify(sweepSpec)}, cursors: {<repo>: <new cursor for every successfully scanned repo>}, lastSweep: {number: ${sweep}, scannedRepos: <previous scannedRepos ∪ successful repos this pass>, complete: <(${census.remainingThisSweep} - successful repos this pass) == 0>}}. If a repo scan failed, its cursor stays at the old value and it is NOT added to scannedRepos. The spec object above is the actual operating spec (measured by Investigate or read from state) — write it verbatim.
 3. ONE line to #apps: "leak-scan pass ${pass}: <repo>@<short-sha> <detector> @ <file>:<line> (n findings, m rows, k comments); sweep ${sweep} remaining <n>" — no ids without their meaning; one line even when clean ("leak-scan pass ${pass}: clean — 0 findings across <repos>; sweep ${sweep} remaining <n>").
 4. Save ONE memento under leak-scan-pass-${pass}: the per-pass finding count and any new leak class discovered (one or two sentences; no values).
@@ -264,3 +303,4 @@ Return {rowsFiled, commentsPosted, skippedDedup, stateWritten, channelLine}.`, {
     log(`pass ${pass}: ${findingsTotal} findings (rows ${record ? record.rowsFiled : '?'}, comments ${record ? record.commentsPosted : '?'}, dedup ${record ? record.skippedDedup : '?'}, state ${record ? record.stateWritten : '?'})`)
   }
 }
+if (pass > MAX_PASSES) log(`MAX_PASSES reached (${MAX_PASSES}) — bounded run ends; the coordinator re-launches this workflow for standing continuity (cursors persist in ${STATE_FILE}, so the next run resumes delta-only)`)

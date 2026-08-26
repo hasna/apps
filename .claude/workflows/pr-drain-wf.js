@@ -4,14 +4,50 @@ export const meta = {
   phases: [
     { title: 'Census', detail: 'open PRs -> mergeReady / needsRebase / needsReview / blocked / held-by-active-lane' },
     { title: 'Rebase', detail: 'conflicting PRs onto origin/main (unambiguous only)' },
-    { title: 'Review', detail: 'Fable review of unreviewed-at-head PRs (batches of 4)' },
+    { title: 'Review', detail: 'adversarial review of unreviewed-at-head PRs — one independent reviewer agent per PR, run on the default model' },
     { title: 'Merge', detail: 'GO at head + base-movement gate, squash with attribution' },
     { title: 'Report', detail: 'per-PR state + residue' },
   ],
 }
 
-const APPS = '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
-const MONOREPO = '/home/hasna/workspace/repos/hasna/apps'
+// hasna/apps todos project id (args-driven, 2026-08-26): args.project overrides;
+// the standing hasna/apps project id is the default. Every use below
+// interpolates ${APPS} — no hardcoded id.
+const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
+// Repo root (args-driven, 2026-08-26): args.repo overrides; default is the current
+// clones layout (~/.hasna/repos/clones/hasna/apps). The legacy
+// /home/hasna/.hasna/repos/clones/hasna/apps path is retired.
+const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
+
+// Pass bound (fleet ground truth 2026-08-26): the standing 'infinite' lane runs a
+// BOUNDED pass loop — MAX_PASSES hard cap per run. Worst case ~20 agents per pass
+// (1 census + up to 9 rebase batches + up to 4 review waves + up to 8 merge
+// batches at the 45-PR cap), so 30 passes is ~600 agents — inside the runtime's
+// 1,000-agent run cap, which stays the outer guard. Standing continuity comes
+// from the COORDINATOR re-launching this workflow, never an unbounded in-script
+// loop. args.maxPasses overrides.
+const MAX_PASSES = (args && args.maxPasses) || 30
+
+// Idle window (owner 2026-08-25, args-driven): args.idleMinutes in MINUTES,
+// default 30. The census sleeps IDLE_SLEEP seconds then re-checks once —
+// min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
+// (the standing idle wait, also the safeAgent failure-banner sleep).
+const IDLE_MINUTES = Math.min(((args && args.idleMinutes) || 30), 300)
+const IDLE_SLEEP = Math.max(300, IDLE_MINUTES * 60)
+
+// RECORDING V2 (owner requirement): every workflow agent records while working.
+// Interpolated into every agent prompt below.
+const RECORDING = `
+RECORD WHILE WORKING (required, every workflow agent):
+(1) conversations: claim/post to #hasna-apps at start (create via 'conversations channel create hasna-apps' if missing), milestone after each phase, done at the end; deploy lane additionally posts [DEPLOY INTENT] to git-deployments BEFORE and [DEPLOY-CONFIRM] in-thread AFTER with the 2-live-gate GO.
+(2) todos: one task per work item (todos add --project hasna-apps), todos comment with evidence as you go, status start/complete only with proof (merged PR / verified live).
+(3) mementos: mementos save key apps-<topic> on every non-obvious root cause/decision.
+(4) knowledge: on durable doctrine, file a follow-up task 'KNOWLEDGE: <item>' for the knowledge lane (never silent add).
+(5) skills: on a repeated procedure, file 'SKILL: <name>' follow-up.
+(6) instructions: only when the workflow itself changes rules (then file 'INSTRUCTIONS: <config>').
+Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done.
+NEVER print a credential value.
+`
 
 const CONST = `
 You are a lane of the pr-drain workflow (owner-authorized 2026-08-18, standing PR review-fix-merge drain). The drain keeps the hasna/apps PR queue moving: every pass takes the open PRs, classifies them, and advances each one — rebase the conflicting, review the unreviewed at head, merge the GO'd, record the blocked. Final text = machine-readable JSON.
@@ -24,13 +60,14 @@ Non-negotiable rules (all agents):
 - ACTIVE-LANE RESPECT: a PR with a recent comment marker from an active workstream ([merge-open], 'modes-r3', 'contracts-r2', 'monitor-v2', 'backlog-', 'consolidate-r3', 'ship-latest') is HELD — do not touch it, record held. Never fight another lane over a PR. The version-wave PRs (label 'ship-latest' OR title 'Version Packages' OR head branch release/version-wave or version-wave-*) are EXCLUDED from this drain's review+merge set entirely — sole owner is the ship-latest workflow (Fable verdict A, 2026-08-19; measured 2026-08-19: the label does not exist on hasna/apps, so key on title+head branch too); record them as held, never review or merge them.
 - No secrets: never print/capture/commit credential values; consume ONLY via 'secrets exec <key> --as VAR -- <cmd>'. Staged secrets scan (redirect + 'secrets scan input', rc 0 clean) before every commit/push. No internal-infra strings in artifacts. Capture path: redirect to files, never pipe large reads. Paste literal output lines. NEVER run bash -x / set -x (trace mode) in this environment — the shell profile sources ~/.hasna/cloud/*.env (credential files) and trace echoed the sourced KEY=value lines into a transcript (measured: pr-drain-census, #incidents 736502, 2026-08-25).
 - Authenticated API calls use 'gh api' ONLY. NEVER curl with an inline Bearer/token header — interpolating a token into a command argument records it in the transcript (measured: pr-drain-ship, #incidents 713084, 2026-08-19). gh api authenticates internally; there is no legitimate curl-with-token call in this lane.
-- Record as you go: comments on each touched PR (rebase result, verdict, merge), posts to #board. English. Lineage identity 'conversations agents register' named pr-drain-<your-role>. Distinguish measured vs inferred; state what you did not check.
+${RECORDING}
+- English. Lineage identity 'conversations agents register' named pr-drain-<your-role>. Distinguish measured vs inferred; state what you did not check.
 `
 
 const CENSUS = CONST + `
-ROLE: census lane (execute). PRIORITY YIELD CHECK FIRST: todos list --project 3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8 --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-run the yield check once, and return {yielded: true, hotfixCount: N} with the per-class lists empty. Do NOT enumerate PRs while yielding.
+ROLE: census lane (execute). PRIORITY YIELD CHECK FIRST: todos list --project ${APPS} --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-run the yield check once, and return {yielded: true, hotfixCount: N} with the per-class lists empty. Do NOT enumerate PRs while yielding.
 
-Otherwise enumerate the open PRs on hasna/apps (gh pr list --repo hasna/apps --state open --limit 200 --json number,title,headRefName,headRefOid,mergeable,updatedAt — redirect to a file, never pipe). For EACH PR classify: (a) mergeReady — has a [REVIEW] GO at the current head AND mergeable AND base-fresh (verify the merge-tree gate); (b) needsRebase — conflicting, or base moved over its own files, or head stale; (c) needsReview — no [REVIEW] line at the current head; (d) blocked — NO_GO with open P0/P1 at head (record the finding titles); (e) held — a recent comment marker names an active workstream (see CONST); (f) ownerHeld — the decisions row (dd06739c) or a 'owner decision' comment names it. Cap the pass: process the 45 most recently updated PRs across classes (a)-(c) (owner-widened 2026-08-19); list (d)/(e)/(f) as counts. IF THE QUEUE IS EMPTY (no mergeReady/needsRebase/needsReview): sleep 300 (bash), re-run the census once, and return the RE-CHECK result — the lane waits ~5 min between passes while idle. NEVER return an empty result without the sleep+re-check having run.
+Otherwise enumerate the open PRs on hasna/apps (gh pr list --repo hasna/apps --state open --limit 200 --json number,title,headRefName,headRefOid,mergeable,updatedAt — redirect to a file, never pipe). For EACH PR classify: (a) mergeReady — has a [REVIEW] GO at the current head AND mergeable AND base-fresh (verify the merge-tree gate); (b) needsRebase — conflicting, or base moved over its own files, or head stale; (c) needsReview — no [REVIEW] line at the current head; (d) blocked — NO_GO with open P0/P1 at head (record the finding titles); (e) held — a recent comment marker names an active workstream (see CONST); (f) ownerHeld — the decisions row (dd06739c) or a 'owner decision' comment names it. Cap the pass: process the 45 most recently updated PRs across classes (a)-(c) (owner-widened 2026-08-19); list (d)/(e)/(f) as counts. IF THE QUEUE IS EMPTY (no mergeReady/needsRebase/needsReview): sleep ${IDLE_SLEEP} (bash — the args-driven idle window, ${IDLE_MINUTES} min default), re-run the census once, and return the RE-CHECK result — the lane waits the idle window between passes while idle. NEVER return an empty result without the sleep+re-check having run.
 Return (JSON): { mergeReady: [{number, head}], needsRebase: [{number, head}], needsReview: [{number, head}], blocked: [{number, findings: [string]}], held: [number], ownerHeld: [number], totals: {open, processed}, yielded: bool, hotfixCount: int }
 `
 
@@ -40,7 +77,7 @@ Return (JSON): { prs: [{number, newHead, rebased: bool, conflict: string|null, t
 `
 
 const REVIEW = CONST + `
-ROLE: adversarial reviewer (Fable). PRs: {PRS} (each: number). For EACH: state-check first (gh pr view <n> --json state,headRefOid — projected); merged/closed -> record and skip. Review the diff vs origin/main at the current head: substance matches the PR's title/description, tests green (verify or record), secrets clean, scope confined, no mode vocabulary regression. Post '[REVIEW] <GO|NO_GO> — hasna/apps#<n> @ <sha> — lens: PR drain, reviewer pr-drain-review ({I} of {N})'. Block ONLY concrete P0/P1 defects; P2/P3 non-blocking (list as follow-ups). Mechanical chores (version bumps, docs-only, display-name) may GO on a bounded review (diff scope + secrets + tests), with the review noted as mechanical.
+ROLE: adversarial reviewer (an independent reviewer agent run on the default model). PRs: {PRS} (each: number). For EACH: state-check first (gh pr view <n> --json state,headRefOid — projected); merged/closed -> record and skip. Review the diff vs origin/main at the current head: substance matches the PR's title/description, tests green (verify or record), secrets clean, scope confined, no mode vocabulary regression. Post '[REVIEW] <GO|NO_GO> — hasna/apps#<n> @ <sha> — lens: PR drain, reviewer pr-drain-review ({I} of {N})'. Block ONLY concrete P0/P1 defects; P2/P3 non-blocking (list as follow-ups). Mechanical chores (version bumps, docs-only, display-name) may GO on a bounded review (diff scope + secrets + tests), with the review noted as mechanical.
 Return (JSON): { prs: [{number, verdict: GO|NO_GO, findings: [{severity, title, detail}]}] }
 `
 
@@ -99,17 +136,19 @@ const censusPrompt = (body) => {
 }
 // --- /safeAgent ---
 
-// INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): re-census forever. When the
-// census is empty the census agent itself sleeps ~5 min and re-checks once, so
-// the run stays alive at ~1 agent per idle window. PRIORITY YIELD: when any
-// HOTFIX: row exists in todos, this lane yields (waits) — the hotfix-drain lane
-// owns the priority class. Stop = owner stops the run or the session ends.
+// BOUNDED SESSION-SCOPED LOOP (owner 2026-08-25; bounded per fleet ground truth
+// 2026-08-26): re-census each pass up to MAX_PASSES per run. When the census is
+// empty the census agent itself sleeps the idle window and re-checks once, so a
+// pass costs ~1 agent while idle. PRIORITY YIELD: when any HOTFIX: row exists in
+// todos, this lane yields (waits) — the hotfix-drain lane owns the priority
+// class. Standing continuity between runs comes from the coordinator
+// re-launching this workflow; the run never loops past its hard bound.
 const allRebase = []
 const allReviews = []
 const allMerges = []
 let census = null
 let pass = 0
-for (pass = 1; ; pass++) {
+for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Census')
 census = await safeAgent(censusPrompt(CENSUS), { label: `pr-drain-census-${pass}`, phase: 'Census', schema: CENSUS_SCHEMA })
 if (census && census.yielded) {
@@ -121,7 +160,7 @@ const rebase = (census && census.needsRebase) || []
 const review = (census && census.needsReview) || []
 log(`pass ${pass} census: mergeReady ${ready.length}, rebase ${rebase.length}, review ${review.length}`)
 if (!ready.length && !rebase.length && !review.length) {
-  log(`pass ${pass}: census empty — the census waited ~5 min and re-checked; re-checking next pass`)
+  log(`pass ${pass}: census empty — the census waited ${IDLE_SLEEP}s and re-checked; re-checking next pass`)
   continue
 }
 
@@ -140,17 +179,17 @@ allRebase.push(...rebaseResults.filter(Boolean))
 
 phase('Review')
 let reviewResults = []
-// OWNER WIDENING 2026-08-19: one independent Fable reviewer PER PR, waves of 12
-// concurrent (was one reviewer per batch of 4). Same bounded standard per PR,
-// same verdict-at-head discipline. Peak concurrency stays within the 16-agent
-// workflow cap; review phases are sequential with rebase/merge so the box never
-// runs both at once.
+// OWNER WIDENING 2026-08-19: one independent reviewer agent PER PR (run on the
+// default model — no model field), waves of 12 concurrent (was one reviewer per
+// batch of 4). Same bounded standard per PR, same verdict-at-head discipline.
+// Peak concurrency stays within the 16-agent workflow cap; review phases are
+// sequential with rebase/merge so the box never runs both at once.
 const REVIEW_WIDTH = 12
 for (let w = 0; w < review.length; w += REVIEW_WIDTH) {
   const wave = review.slice(w, w + REVIEW_WIDTH)
   const waveResults = await parallel(wave.map((p, wi) => () =>
     safeAgent(REVIEW.replace('{PRS}', JSON.stringify([p])).replace('{I}', String(w + wi + 1)).replace('{N}', String(review.length)), {
-      label: `pr-drain-review-${p.number}`, phase: 'Review', schema: PR_SCHEMA, model: 'fable',
+      label: `pr-drain-review-${p.number}`, phase: 'Review', schema: PR_SCHEMA,
     }),
   ))
   reviewResults.push(...waveResults)
@@ -178,6 +217,7 @@ if (ready.length) {
 allMerges.push(...mergeResults.filter(Boolean))
 log(`pass ${pass} complete — next pass re-censuses`)
 }
+if (pass > MAX_PASSES) log(`MAX_PASSES reached (${MAX_PASSES}) — bounded run ends; the coordinator re-launches this workflow for standing continuity`)
 
 phase('Report')
 const report = await safeAgent(REPORT, { label: 'pr-drain-report', phase: 'Report', schema: REPORT_SCHEMA })
