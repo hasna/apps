@@ -5,7 +5,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.14.1",
-  "description": "Non-human-identity governance CLI + MCP + serve: inventory of every agent/service identity, its credentials and MCP tool scopes, owner mapping, JIT elevation, access reviews and one-click revocation, plus the cohort MCP bearer-token issuer. SQLite at ~/.local/share/hasna/access/access.db by default (resolved via @hasna/paths); operator-owned PostgreSQL when HASNA_ACCESS_DATABASE_URL is set.",
+  "description": "Non-human-identity governance CLI + MCP + serve: inventory of every agent/service identity, its credentials and MCP tool scopes, owner mapping, JIT elevation, access reviews and one-click revocation, plus the cohort MCP bearer-token issuer. SQLite at ~/.hasna/access/access.db by default (resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set); operator-owned PostgreSQL when HASNA_ACCESS_DATABASE_URL is set.",
   "bins": [
     "access",
     "access-mcp",
@@ -70,7 +70,7 @@
     ],
     "envPrefix": "HASNA_ACCESS_",
     "aliasEnvPrefix": "ACCESS_",
-    "sqlitePath": "~/.local/share/hasna/access/access.db",
+    "sqlitePath": "~/.hasna/access/access.db",
     "pgTestGate": {
       "envVar": "ACCESS_TEST_DATABASE_URL",
       "command": "bun scripts/pg-test-gate.mjs"

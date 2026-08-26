@@ -1,20 +1,38 @@
-// Best-effort install-time creation of the access home directories, resolved
-// through @hasna/paths (XDG / macOS home layout). Failures are non-fatal: the
+// Best-effort install-time creation of the access home directories, resolving
+// the SAME effective home the runtime uses: an exact-app override
+// (HASNA_ACCESS_HOME / ACCESS_HOME) wins; otherwise the @hasna/paths XDG data
+// home once adopted (HASNA_DATA_HOME set, or the store already migrated there);
+// otherwise the legacy ~/.hasna/access default. Failures are non-fatal: the
 // runtime ensureAppHome() creates the same directories on first use.
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+
+const EXACT_OVERRIDE = (process.env["HASNA_ACCESS_HOME"] || process.env["ACCESS_HOME"] || "").trim();
+const DATA_HOME_OVERRIDE = (process.env["HASNA_DATA_HOME"] || "").trim();
+const LEGACY_SUBDIRS = ["config", "data", "exports", "backups", "logs", "tmp"];
 
 try {
   const { cacheDir, configDir, dataDir, stateDir } = await import("@hasna/paths");
   const OPTIONS = { app: "access" };
-  const DIRS = [
-    configDir(OPTIONS),
-    dataDir(OPTIONS),
-    join(dataDir(OPTIONS), "exports"),
-    join(dataDir(OPTIONS), "backups"),
-    join(stateDir(OPTIONS), "logs"),
-    join(cacheDir(OPTIONS), "tmp"),
-  ];
+  let DIRS;
+  if (EXACT_OVERRIDE) {
+    // Exact-app override keeps the legacy subdir layout under the override root.
+    DIRS = LEGACY_SUBDIRS.map((n) => join(EXACT_OVERRIDE, n));
+  } else if (DATA_HOME_OVERRIDE || existsSync(join(dataDir(OPTIONS), "access.db"))) {
+    DIRS = [
+      configDir(OPTIONS),
+      dataDir(OPTIONS),
+      join(dataDir(OPTIONS), "exports"),
+      join(dataDir(OPTIONS), "backups"),
+      join(stateDir(OPTIONS), "logs"),
+      join(cacheDir(OPTIONS), "tmp"),
+    ];
+  } else {
+    // Legacy default until the XDG home is adopted.
+    const root = join(homedir(), ".hasna", "access");
+    DIRS = LEGACY_SUBDIRS.map((n) => join(root, n));
+  }
   for (const dir of DIRS) {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {

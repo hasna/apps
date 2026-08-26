@@ -1,19 +1,10 @@
 #!/usr/bin/env bun
-// Dev-time creation of the access home dirs, resolved via @hasna/paths
-// (XDG / macOS layout): config, data, exports, backups, logs, tmp, mode 0700.
+// Dev-time creation of the access home dirs, mode 0700, resolving the SAME
+// effective home the runtime uses (app-home.ts): exact-app override
+// (HASNA_ACCESS_HOME / ACCESS_HOME), else the @hasna/paths XDG home once
+// adopted, else the legacy ~/.hasna/access default.
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { cacheDir, configDir, dataDir, stateDir } from "@hasna/paths";
-
-const OPTIONS = { app: "access" };
-const SUBDIRS = [
-  configDir(OPTIONS),
-  dataDir(OPTIONS),
-  join(dataDir(OPTIONS), "exports"),
-  join(dataDir(OPTIONS), "backups"),
-  join(stateDir(OPTIONS), "logs"),
-  join(cacheDir(OPTIONS), "tmp"),
-];
+import { APP_SUBDIRS, getAppDir, getAppHome } from "../src/core/app-home.js";
 
 function ensure(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -24,5 +15,7 @@ function ensure(dir: string): void {
   }
 }
 
-for (const dir of SUBDIRS) ensure(dir);
-console.log(`access: ensured ${SUBDIRS.join(", ")} (0700)`);
+const root = getAppHome();
+ensure(root);
+for (const name of APP_SUBDIRS) ensure(getAppDir(name));
+console.log(`access: ensured ${root} (0700) with subdirs ${APP_SUBDIRS.join(", ")}`);

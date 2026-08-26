@@ -2,4 +2,4 @@
 "@hasna/access": patch
 ---
 
-Switch @hasna/access local path reads/writes to the @hasna/paths resolver (XDG/macOS home layout): the SQLite store, backups, config, exports, logs, and tmp dirs now resolve through @hasna/paths instead of the hardcoded `~/.hasna/access` root, honoring `HASNA_*_HOME` overrides. Nothing is moved on disk in this phase — the package can now resolve the new paths (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+Switch @hasna/access local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/access` default (with the `HASNA_ACCESS_HOME` / `ACCESS_HOME` exact-app overrides) stays the effective home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
