@@ -472,7 +472,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "prompts",
-    cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required). (The earlier self_host_artifact and storage_capabilities causes no longer fire at main.)",
+    cause: "surface_matrix (api/sdk missing or unwaived), service_api_topology (a supported API surface is required), self_host_artifact (no Dockerfile/compose), storage_capabilities (engines + pgTestGate undeclared; SQLite-only store). All four verified firing at kits 0.13.4, 0.14.0 (pinned) and 0.14.1 (latest), 2026-08-26; the serve-bin-derived requirements make them one root, documented in apps/prompts/docs/contracts-conformance.md (todos 1c1c18f0-072e-4331-a1e8-e8f897427485) with closure in progress via hasna/apps#265 (feat/prompts-storage-core — /v1 API).",
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
