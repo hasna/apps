@@ -1,17 +1,19 @@
-// hasna/apps todos project id (args-driven, 2026-08-26): args.project overrides;
-// the standing hasna/apps project id is the default. Every use below
-// interpolates ${APPS} — no hardcoded id.
-const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
-
 export const meta = {
   name: 'task-drain-apps',
-  description: `Standing hasna/apps task drain, drain-to-zero: census unowned pending rows in project ${APPS} — the BUG class executed via the fix-lane discipline (idempotency gate, worktree, PR-first, one independent reviewer-agent review on the default model, merge) and the live-gate UNVERIFIED class (RELEASE/SHIP/DEPLOY UNVERIFIED rows filed by the publish/deploy/ship lanes on gate NO_GO) driven through gate-remediation (two independent live gates re-verify the artifact; BOTH GO -> post the missing confirm + complete; ANY NO_GO -> record the verdict + route the defect to ONE deduped BUG row) — re-census each pass and loop while rows remain (hard bound MAX_PASSES), record at the end`,
+  description: `Standing hasna/apps task drain, drain-to-zero: census unowned pending rows in project the hasna/apps todos project (args.project, default 3bbc22e0) — the BUG class executed via the fix-lane discipline (idempotency gate, worktree, PR-first, one independent reviewer-agent review on the default model, merge) and the live-gate UNVERIFIED class (RELEASE/SHIP/DEPLOY UNVERIFIED rows filed by the publish/deploy/ship lanes on gate NO_GO) driven through gate-remediation (two independent live gates re-verify the artifact; BOTH GO -> post the missing confirm + complete; ANY NO_GO -> record the verdict + route the defect to ONE deduped BUG row) — re-census each pass and loop while rows remain (hard bound MAX_PASSES), record at the end`,
   phases: [
     { title: 'Census' },
     { title: 'Execute' },
     { title: 'Record' },
   ],
 }
+
+
+// hasna/apps todos project id (args-driven, 2026-08-26): args.project overrides;
+// the standing hasna/apps project id is the default. Every use below
+// interpolates ${APPS} — no hardcoded id.
+const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
+
 
 // Parallelism (owner 2026-08-25): MULTIPLE fix agents per pass, each working a
 // DIFFERENT row in its OWN task worktree via hasna/repos (repos CLI worktree

@@ -1,3 +1,19 @@
+export const meta = {
+  name: 'build-and-ship-workflows-app',
+  description: 'One-off build lane (owner-directed 2026-08-25, not durable): validate the hasna/workflows plan, file it in todos, build the @hasna/workflows app in the hasna/apps monorepo with a fix loop until green, verify it live locally, publish to npm, ship to oss-fleet-prod, then loop the full acceptance sweep until every command works. ALSO builds the 5 standing fleet workflow definitions (fix-deepsec, audit-apps-gaps, verify-apps-qa, generate-apps-docs-marketing, deploy-app-hasna-com) with authoring-skill validation (basename==meta.name, verb-first regex, no import(), no banned tokens) plus ONE adversarial review agent before each PR. While-loops used per owner amendment. Plan file: /tmp/workflows-plan-final.md',
+  phases: [
+    { title: 'PlanValidate', detail: 'read the plan, verify the build contract against repo laws + SDK pins' },
+    { title: 'TodosFile', detail: 'create the todos plan + Build/Publish/Ship tasks in the hasna/apps todos project (args.project)' },
+    { title: 'Build', detail: 'worktree scaffold + slice implementation, fix-loop until suite + check green' },
+    { title: 'LocalVerify', detail: 'CLI live test, control surfaces, -serve live run, sdk import, interrupted-run resume' },
+    { title: 'Publish', detail: 'release review, intent, npm publish, two-sided verify, install + smoke' },
+    { title: 'Ship', detail: 'deploy intent, ECR, task def, update-service, live HTTPS test, confirm' },
+    { title: 'FullValidate', detail: 'end-to-end acceptance sweep; loop back to the failing phase until all commands work' },
+    { title: 'Harvest', detail: 'record + independent harvest' },
+  ],
+}
+
+
 // Repo root (args-driven, 2026-08-26): args.repo overrides; default is the current
 // clones layout (~/.hasna/repos/clones/hasna/apps). The legacy
 // /home/hasna/.hasna/repos/clones/hasna/apps path is retired.
@@ -8,20 +24,6 @@ const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
 // interpolates ${APPS_PROJECT} — no hardcoded id.
 const APPS_PROJECT = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
 
-export const meta = {
-  name: 'build-and-ship-workflows-app',
-  description: 'One-off build lane (owner-directed 2026-08-25, not durable): validate the hasna/workflows plan, file it in todos, build the @hasna/workflows app in the hasna/apps monorepo with a fix loop until green, verify it live locally, publish to npm, ship to oss-fleet-prod, then loop the full acceptance sweep until every command works. ALSO builds the 5 standing fleet workflow definitions (fix-deepsec, audit-apps-gaps, verify-apps-qa, generate-apps-docs-marketing, deploy-app-hasna-com) with authoring-skill validation (basename==meta.name, verb-first regex, no import(), no banned tokens) plus ONE adversarial review agent before each PR. While-loops used per owner amendment. Plan file: /tmp/workflows-plan-final.md',
-  phases: [
-    { title: 'PlanValidate', detail: 'read the plan, verify the build contract against repo laws + SDK pins' },
-    { title: 'TodosFile', detail: `create the todos plan + Build/Publish/Ship tasks in project ${APPS_PROJECT}` },
-    { title: 'Build', detail: 'worktree scaffold + slice implementation, fix-loop until suite + check green' },
-    { title: 'LocalVerify', detail: 'CLI live test, control surfaces, -serve live run, sdk import, interrupted-run resume' },
-    { title: 'Publish', detail: 'release review, intent, npm publish, two-sided verify, install + smoke' },
-    { title: 'Ship', detail: 'deploy intent, ECR, task def, update-service, live HTTPS test, confirm' },
-    { title: 'FullValidate', detail: 'end-to-end acceptance sweep; loop back to the failing phase until all commands work' },
-    { title: 'Harvest', detail: 'record + independent harvest' },
-  ],
-}
 
 const PLAN = MONOREPO + '/.claude/workflows/workflows-plan-final.md'
 const CHANNEL = 'board'
@@ -259,7 +261,7 @@ ROLE: plan validation (Opus). READ the plan file ${PLAN} in full (it exists on d
 4. The exit gates: interrupted-run test, sessions pull mid-run, secrets write-gate fires on a synthetic fixture, while-node validate + execution.
 5. A gap in the plan (missing command, broken pin, law violation, or the while-loop/14-verb/live-verification/four-lane contract absent from the build scope) is a GAP — return it, do not proceed. The amendments section satisfies the while-loop + 14-verb + live-verification + four-lane contract — verify the build scope in the plan actually includes them; do NOT report them as gaps if the amendments section covers them.
 6. ENVIRONMENT OBSERVATIONS ARE NOT GAPS (measured 2026-08-25: a machine-hygiene observation in the gaps array stopped the whole build): anything about the local clone, residue dirs, stale files, or environment — NOT about the plan itself — goes in the 'observations' array, NEVER in 'gaps'. Only a defect IN THE PLAN blocks.
-Return {contract, gaps, observations}.`, { label: 'plan-validate', phase: 'PlanValidate', schema: PLAN_SCHEMA, model: 'opus' })
+Return {contract, gaps, observations}.`, { label: 'plan-validate', phase: 'PlanValidate', schema: PLAN_SCHEMA, model: 'opus' }))
 if (!plan || (plan.gaps || []).length > 0) {
   log('PLAN GAPS: ' + JSON.stringify(plan ? plan.gaps : ['plan agent failed']))
   return { status: 'plan-gaps', gaps: plan ? plan.gaps : ['plan agent failed'], observations: plan ? plan.observations : [] }
