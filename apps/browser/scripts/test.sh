@@ -8,7 +8,7 @@ chunks=(
   "src/db/storage-sync.test.ts src/cli/storage.test.ts src/server/security.test.ts"
   "src/db/agents.test.ts src/db/gallery.test.ts src/db/projects.test.ts src/db/recordings.test.ts src/db/schema.test.ts src/db/sessions.test.ts src/db/video-recordings.test.ts"
   "src/lib/actions.test.ts src/lib/actions-ref.test.ts src/lib/extractor.test.ts src/lib/snapshot.test.ts src/lib/screenshot.test.ts src/lib/screenshot-v4.test.ts src/lib/annotate.test.ts"
-  "src/lib/qol.test.ts src/lib/recorder.test.ts src/lib/session-v3.test.ts src/lib/network.test.ts src/lib/semantic-actions.test.ts src/lib/security.test.ts src/lib/video-presets.test.ts src/lib/video-recording.test.ts src/lib/workflow-manifests.test.ts"
+  "src/lib/app-home.test.ts src/lib/qol.test.ts src/lib/recorder.test.ts src/lib/session-v3.test.ts src/lib/network.test.ts src/lib/semantic-actions.test.ts src/lib/security.test.ts src/lib/video-presets.test.ts src/lib/video-recording.test.ts src/lib/workflow-manifests.test.ts"
   "src/lib/agents.test.ts src/lib/downloads.test.ts src/lib/integrations.test.ts src/lib/snapshot-diff.test.ts src/lib/stealth.test.ts src/lib/policy.test.ts src/lib/session-policy.test.ts src/lib/extension-bridge.test.ts extension/src/executor.test.ts src/lib/coordination.test.ts"
   "test/publish-guard.test.ts test/registry-versions.test.ts"
 )

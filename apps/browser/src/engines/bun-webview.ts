@@ -70,7 +70,7 @@ interface NativeBunWebView {
 export interface BunWebViewOptions {
   width?: number;
   height?: number;
-  profile?: string;          // if set: persistent dataStore at ~/.hasna/browser/profiles/{profile}/
+  profile?: string;          // if set: persistent dataStore at <resolver-resolved browser data home>/profiles/{profile}/
   headless?: boolean;        // always headless in current implementation
   userAgent?: string;
   onConsole?: (type: string, ...args: unknown[]) => void;

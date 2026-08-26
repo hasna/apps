@@ -1,5 +1,7 @@
 import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { chromium, type Browser, type Page } from "playwright";
+import { join } from "node:path";
+import { getBrowserHome } from "../lib/app-home.js";
 import { BrowserError, EngineNotAvailableError } from "../types/index.js";
 
 const DEFAULT_LIGHTPANDA_PORT = 9222;
@@ -14,7 +16,7 @@ export function isLightpandaAvailable(): boolean {
     const paths = [
       "/usr/local/bin/lightpanda",
       "/usr/bin/lightpanda",
-      `${process.env["HOME"]}/.hasna/browser/bin/lightpanda`,
+      join(getBrowserHome(), "bin", "lightpanda"),
     ];
     return paths.some((p) => {
       try {
@@ -33,7 +35,7 @@ export function getLightpandaBinaryPath(): string {
     "lightpanda",
     "/usr/local/bin/lightpanda",
     "/usr/bin/lightpanda",
-    `${process.env["HOME"]}/.hasna/browser/bin/lightpanda`,
+    join(getBrowserHome(), "bin", "lightpanda"),
   ];
   for (const p of paths) {
     try {

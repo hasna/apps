@@ -88,10 +88,12 @@ CAPTCHA, MFA, payment, or account-safety challenges.
 ## Workflow Ownership
 
 Reusable browser workflows are Browser-owned runtime assets. Local workflow
-manifests belong under the Browser data directory:
+manifests belong under the Browser data directory (resolved through
+`@hasna/paths` — the legacy `~/.hasna/browser` default until the XDG data home
+is adopted):
 
 ```text
-~/.hasna/browser/workflows/
+<resolver-resolved browser data home>/workflows/
 ```
 
 Project folders may contain source notes, tests, and run evidence, but they
@@ -331,7 +333,14 @@ extension bridge helpers are available from `@hasna/browser/extension`.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/browser/`.
+The browser data home is resolved through `@hasna/paths` (XDG/macOS home
+layout). The legacy `~/.hasna/browser` default stays the effective data home
+until the store is actually migrated to the XDG data home
+(`~/.local/share/hasna/browser` on Linux; `~/Library/Application
+Support/Hasna/browser` on macOS) or the operator sets the data-kind override
+`HASNA_DATA_HOME`, so an existing local store never becomes invisible on
+upgrade. The exact-app override `BROWSER_DATA_DIR` wins over that default;
+`BROWSER_DB_PATH` pins the SQLite database path directly.
 
 ## License
 

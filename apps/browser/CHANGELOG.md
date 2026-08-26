@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.36
+
+### Patch Changes
+
+- Switch @hasna/browser local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/browser` default (with the `BROWSER_DATA_DIR` exact-app override) stays the effective data home until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+
 ## 0.5.35
 
 ### Patch Changes

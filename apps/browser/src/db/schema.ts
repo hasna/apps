@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import type { TypedDb } from "../types/db-adapter.js";
 import { join } from "node:path";
 import { existsSync, readdirSync, copyFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { effectiveHome, getBrowserHome } from "../lib/app-home.js";
 import { ensureOwnerOnlyDir, ensureOwnerOnlyFile, ensureSqliteArtifactsOwnerOnly, sanitizeBrowserDbRow } from "../lib/security.js";
 
 export interface FeedbackInput {
@@ -25,14 +25,8 @@ export interface FeedbackEntry {
 }
 
 export function getDataDir(): string {
-  if (process.env["BROWSER_DATA_DIR"]) {
-    ensureOwnerOnlyDir(process.env["BROWSER_DATA_DIR"]);
-    return process.env["BROWSER_DATA_DIR"];
-  }
-
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const newDir = join(home, ".hasna", "browser");
-  const oldDir = join(home, ".browser");
+  const newDir = getBrowserHome();
+  const oldDir = join(effectiveHome(), ".browser");
 
   // Auto-migrate: if old dir exists and new doesn't, copy files over
   if (existsSync(oldDir) && !existsSync(newDir)) {

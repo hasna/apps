@@ -103,7 +103,7 @@ Plus `src/cli/index.test.ts`: `browser extension --help` and `--engine extension
 7. CLI `src/cli/commands/extension.ts` (`pair`/`status`/`path`/`unpair`) + register; thread `--engine extension`.
 8. MCP: `"extension"` in enums + `browser_extension_pair`/`browser_extension_status`.
 9. SDK: no change; add `sdk.test.ts` case opening `{engine:"extension"}` vs mocked bridge.
-10. Packaging: `extension/dist/` in `files`; `build:extension` in build chain; token store path under `~/.hasna/browser`.
+10. Packaging: `extension/dist/` in `files`; `build:extension` in build chain; token store path under the resolver-resolved browser data home (`@hasna/paths`; the legacy `~/.hasna/browser` default until the XDG data home is adopted).
 11. Run full `bun test` green incl. gated e2e.
 12. Docs: `ARCHITECTURE.md` engine table + "Extension engine" section; `README.md` `browser extension pair` / `--engine extension` + security.
 

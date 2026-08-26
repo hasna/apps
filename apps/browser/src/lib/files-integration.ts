@@ -30,7 +30,7 @@ export async function persistFile(
     // Not installed — fall back to local persistent dir
   }
 
-  // Fallback: copy to ~/.hasna/browser/persistent/{date}/{filename}
+  // Fallback: copy to the resolver-resolved browser data home persistent/{date}/{filename}
   const dataDir = getDataDir();
   const date = new Date().toISOString().split("T")[0];
   const dir = join(dataDir, "persistent", date);
