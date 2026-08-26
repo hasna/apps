@@ -152,6 +152,35 @@
  *   exactly as RULE 3: a skipped probe increments `skipped` and the runner
  *   exits 2.
  *
+ * RULE 5 — ROOT LOCK HOISTED PEER CONSISTENCY (finding dep-paths-1,
+ *   2026-08-26). The root lock can come to describe a graph whose hoisted
+ *   resolution of a peer does not satisfy the peer range recorded on the
+ *   package entry, while the workspace-entry checks (RULE 1/2) stay silent
+ *   because they compare declarations, never resolutions. Measured instance:
+ *   @types/react-dom@19.2.4 (pin landed 2026-08-26 by the dep-docs-1 fix)
+ *   records peer `@types/react ^19.2.0` and no `@types/react-dom/@types/react`
+ *   peer edge, so its peer falls to the hoisted @types/react@18.3.31 — a
+ *   version the peer range excludes. Root cause: the stale root
+ *   `overrides["@types/react"]: "18.3.31"` from the React-18 wave, forcing one
+ *   types version fleet-wide while docs/draw/slides/servers/shield moved to
+ *   React 19 (their standalone Docker-lane locks — which ignore root
+ *   overrides — resolve @types/react@19.2.x, e.g. apps/docs/bun.lock). That
+ *   is also why the root graph "lags" the per-app locks: one resolution
+ *   context honors the override, the other cannot. The react-dom@19.2.8 /
+ *   react@18.3.1 top-level pair is NOT the defect: bun records the `react-dom/
+ *   react` peer edge to react@19.2.8, which satisfies `^19.2.8` — the pair is
+ *   the hoisting shape of a legitimate two-version react graph (26 members on
+ *   ^18, 4 on ^19), reproduced identically by a from-scratch resolution.
+ *
+ *   The rule, so the class cannot return: for each top-level hoisted registry
+ *   entry in the root lock that records peerDependencies, the recorded peer
+ *   resolution (the `<pkg>/<peer>` edge when the lock records one, else the
+ *   hoisted `<peer>` entry) must satisfy the recorded peer range. Peers
+ *   targeting @hasna/* workspace members are skipped: at the root they
+ *   resolve as workspace members, whose declared peer ranges live in member
+ *   manifests and are satisfied at install time, not recorded against the
+ *   registry entry.
+ *
  * Not covered, stated so the boundary is visible:
  *   - Resolution-level drift that leaves the recorded workspace entry intact
  *     (bun's own frozen check covers that class where it applies).
@@ -672,11 +701,218 @@ async function checkMemberVersions(root: string, published: PublishedProbe): Pro
 export async function runCheck(root: string, published: PublishedProbe = defaultPublishedProbe): Promise<RegistryCheckResult> {
   const registry = await checkRegistryEdges(root, published);
   const memberVersions = await checkMemberVersions(root, published);
+/**
+ * RULE 5 — ROOT LOCK HOISTED PEER CONSISTENCY.
+ *
+ * For each top-level hoisted registry entry in the root lock that records
+ * peerDependencies, the recorded peer resolution must satisfy the recorded
+ * peer range. The recorded resolution is the `<pkg>/<peer>` edge when the
+ * lock records one; otherwise the peer falls to the hoisted `<peer>` entry.
+ * Unparseable range shapes and non-registry resolution specs (path, git,
+ * workspace) are unprovable and fail open — the rule only flags what it can
+ * prove. Peers targeting @hasna/* workspace members are skipped: at the root
+ * they resolve as workspace members (doc.workspaces, not doc.packages).
+ */
+/**
+ * RULE 5 exceptions — deliberate and attributable (the same discipline as the
+ * RULE 2/3 exceptions above). Each entry names a peer split that the CURRENT
+ * manifest set declares and that a lockfile regeneration reproduces every
+ * time (bun resolves to a warning, never an error), so no lock-only change
+ * can close it: the remedy is manifest-owed, and the member change that
+ * closes it removes the entry here.
+ */
+const RULE5_PEER_EXCEPTIONS = new Set<string>([
+  // "@anthropic-ai/claude-agent-sdk|zod" — the root zod override pins
+  // 3.25.76 fleet-wide (harmonization decision); the SDK's REQUIRED peer is
+  // ^4.0.0. The graph deliberately carries the one zod.
+  "@anthropic-ai/claude-agent-sdk|zod",
+  // "@glideapps/glide-data-grid|marked" — the grid's peer is ^4.0.10 while
+  // the graph carries marked@18.x — the version other members' ranges
+  // deliberately resolve.
+  "@glideapps/glide-data-grid|marked",
+  // "@opentui/solid|solid-js" — peer pins exact 1.9.12; the graph carries
+  // 1.9.13, the version other members' ranges deliberately resolve.
+  "@opentui/solid|solid-js",
+]);
+
+/**
+ * RULE 5 exempt predicates — beyond the exact key pairs above. The @tiptap
+ * starter-kit family splits its own core majors: apps/docs pins
+ * @tiptap/*@3.27.1 exactly while other members' transitive ranges admit
+ * 3.30.x, so the lock's single resolved core/pm (3.27.1) cannot satisfy the
+ * 3.30.x leaf peers. bun resolves the split to warnings. Manifest-owed.
+ */
+function isRule5Exempt(key: string, peer: string): boolean {
+  if (RULE5_PEER_EXCEPTIONS.has(`${key}|${peer}`)) return true;
+  if ((key.startsWith("@tiptap/extension-") || key === "@tiptap/extensions") && (peer === "@tiptap/core" || peer === "@tiptap/pm")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Parse a comparator operand that may carry 1 to 3 version components
+ * ("5", "1.0", "0.12"). A missing component means zero (semver floor).
+ */
+function parseVersionParts(spec: string): [number, number, number] | null {
+  const parts = spec.trim().split(".");
+  if (parts.length === 0 || parts.length > 3) return null;
+  const nums = parts.map((p) => Number(p));
+  if (nums.some((n) => !Number.isInteger(n) || n < 0)) return null;
+  while (nums.length < 3) nums.push(0);
+  return [nums[0], nums[1], nums[2]];
+}
+
+/** Components explicitly present in the operand, for tilde/caret ceiling rules. */
+function versionPartsCount(spec: string): number {
+  return spec.trim().split(".").length;
+}
+
+/**
+ * Peer-range satisfies, tolerant of the shapes recorded in this repo's lock
+ * metadata: exact ("^5", "0.1.8", "1.2"), caret ("^1.0", "^19.2.0"), tilde
+ * ("~3.2.1"), gte (">=7", ">=18", ">= 4.11"), gte-lt two-bound
+ * (">=0.12 <1"), "||" unions, and star. Unparseable comparators are
+ * unprovable and FAIL OPEN (return false never hard-proves a violation), so
+ * the rule only flags what it can prove.
+ */
+/** Strip a semver prerelease/build suffix ("0", "rc", "beta.2"). */
+function stripSuffix(part: string): string {
+  return part.replace(/[-+][0-9A-Za-z.-]+$/, "");
+}
+
+/** "\d+\.x" / "\d+\.\d+\.x" wildcard floors, npm semantics. */
+function wildcardFloor(part: string): [number, number, number] | null {
+  if (/^x$/i.test(part)) return [0, 0, 0];
+  const m = /^(\d+(?:\.\d+){0,2}\.)?x$/i.exec(part);
+  if (!m) return null;
+  return parseVersionParts(stripSuffix(part.replace(/\.x$/i, "")));
+}
+
+function peerSatisfies(range: string, version: string): boolean {
+  const v = parseVersion(version);
+  if (!v) return false;
+  for (let part of range.split("||")) {
+    part = part.trim();
+    if (part === "*" || part === "x" || part === "X") return true;
+    const wf = wildcardFloor(part);
+    if (wf) {
+      const count = part.replace(/\.x$/i, "").split(".").length;
+      const ceil: [number, number, number] = count === 1 ? [wf[0] + 1, 0, 0] : [wf[0], wf[1] + 1, 0];
+      if (versionCmp(v, wf) >= 0 && versionCmp(v, ceil) < 0) return true;
+      continue;
+    }
+    let m = /^(\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z.-]+)?$/.exec(part);
+    if (m) {
+      const [maj, min, pat] = parseVersionParts(m[1])!;
+      if (v[0] === maj && v[1] === min && v[2] === pat) return true;
+    }
+    const check = (floorSpec: string, ceilSpec: string): boolean => {
+      const floor = parseVersionParts(floorSpec);
+      const ceil = parseVersionParts(ceilSpec);
+      if (!floor || !ceil) return false;
+      return versionCmp(v, floor) >= 0 && versionCmp(v, ceil) < 0;
+    };
+    const ceilCaret = (spec: string): string => {
+      const [maj, min, pat] = parseVersionParts(spec)!;
+      const count = versionPartsCount(spec);
+      if (maj > 0) return `${maj + 1}.0.0`; // ^1, ^1.2, ^1.2.3 all ceiling at next major
+      if (count === 1) return "1.0.0"; // ^0 -> <1.0.0
+      if (count === 2) return `0.${min + 1}.0`; // ^0.2 -> <0.3.0
+      return `0.0.${pat + 1}`; // ^0.0.3 -> <0.0.4
+    };
+    const ceilTilde = (spec: string): string => {
+      const [maj, min] = parseVersionParts(spec)!;
+      return versionPartsCount(spec) === 1 ? `${maj + 1}.0.0` : `${maj}.${min + 1}.0`;
+    };
+    let cm = /^\^(\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z.-]+)?$/.exec(part);
+    if (cm) {
+      if (check(stripSuffix(cm[1]), ceilCaret(stripSuffix(cm[1])))) return true;
+      continue;
+    }
+    cm = /^~(\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z.-]+)?$/.exec(part);
+    if (cm) {
+      if (check(stripSuffix(cm[1]), ceilTilde(stripSuffix(cm[1])))) return true;
+      continue;
+    }
+    cm = /^>\s*=\s*(\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z.-]+)?\s+<\s*(\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z.-]+)?$/.exec(part);
+    if (cm) {
+      if (check(stripSuffix(cm[1]), stripSuffix(cm[2]))) return true;
+      continue;
+    }
+    cm = /^>\s*=\s*(\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z.-]+)?$/.exec(part);
+    if (cm) {
+      const floor = parseVersionParts(stripSuffix(cm[1]));
+      if (floor && versionCmp(v, floor) >= 0) return true;
+      continue;
+    }
+    // Unparseable comparator — unprovable, fail open.
+  }
+  return false;
+}
+
+/**
+ * A package key is a hoisted top-level entry when it is either unscoped
+ * (no "/") or a scoped package with exactly one "/" whose prefix is a scope
+ * ("@types", "@hasna", "@tiptap") rather than the key of a consumer entry.
+ * Consumer-edge keys are "<consumer>/<dep-spec>" — for a scoped top-level
+ * they carry more than one "/" ("@hasna/sheets/@types/react-dom"), and for
+ * unscoped consumers the prefix is itself a known entry.
+ */
+function isHoistedEntryKey(key: string, pkgs: Record<string, unknown>): boolean {
+  if (!key.includes("/")) return true;
+  const m = /^@[^/]+\/[^/]+$/.exec(key);
+  if (!m) return false;
+  return !(key.slice(0, key.lastIndexOf("/")) in pkgs);
+}
+
+function checkRootPeerConsistency(root: string): string[] {
+  const lock = path.join(root, "bun.lock");
+  if (!fs.existsSync(lock)) return [];
+  const doc = parseLockfile(lock);
+  const pkgs = doc.packages ?? {};
+  const problems: string[] = [];
+  for (const [key, tuple] of Object.entries(pkgs)) {
+    if (!isHoistedEntryKey(key, pkgs)) continue; // hoisted top-level entries only
+    if (!Array.isArray(tuple) || tuple.length < 3) continue;
+    const meta = tuple[2];
+    if (!meta || typeof meta !== "object") continue;
+    const peers = meta.peerDependencies;
+    if (!peers || typeof peers !== "object") continue;
+    const optionalPeers = Array.isArray(meta.optionalPeers) ? new Set<string>(meta.optionalPeers) : new Set<string>();
+    for (const [peer, range] of Object.entries(peers)) {
+      if (typeof range !== "string") continue;
+      if (optionalPeers.has(peer)) continue; // optional peer — the consumer may omit it
+      if (peer.startsWith("@hasna/")) continue; // workspace members - satisfied at install time
+      if (isRule5Exempt(key, peer)) continue; // documented deliberate split — manifest-owed
+      const edge = pkgs[`${key}/${peer}`];
+      let resolvedSpec: string | undefined;
+      if (Array.isArray(edge) && typeof edge[0] === "string") resolvedSpec = edge[0];
+      else {
+        const hoisted = pkgs[peer];
+        if (Array.isArray(hoisted) && typeof hoisted[0] === "string") resolvedSpec = hoisted[0];
+      }
+      if (!resolvedSpec) continue;
+      const seg = resolvedSpec.split("/").pop() ?? "";
+      if (seg.includes(":")) continue; // path / git / workspace spec — not a registry resolution
+      const version = seg.split("@").pop() ?? "";
+      if (!parseVersion(version)) continue; // not a registry semver resolution — unprovable
+      if (!peerSatisfies(range, version)) {
+        problems.push(
+          `root bun.lock ${key}: peer ${peer} range "${range}" resolved ${resolvedSpec} — unsatisfied hoisted peer (no "${key}/${peer}" edge the lock records)`,
+        );
+      }
+    }
+  }
+  return problems;
+}
+
   return {
     problems: [
       ...checkRootLockfile(root),
       ...checkAppLockfiles(root),
       ...checkDockerfileLockfiles(root),
+      ...checkRootPeerConsistency(root),
       ...registry.problems,
       ...memberVersions.problems,
     ],
@@ -1081,8 +1317,43 @@ async function selfTest(): Promise<void> {
     // silent at the runCheck level — the empty-packument class now reaches
     // that same proven path.
 
+    // RULE 5 controls — root-lock hoisted peer consistency. A peer with no
+    // recorded "<pkg>/<peer>" edge must be satisfied by the hoisted entry;
+    // the edge, when present, is the recorded resolution.
+    const r5Base = JSON.parse(JSON.stringify(hoistedExact));
+    r5Base.packages = {
+      "peer-host": ["peer-host@1.0.0", "", { peerDependencies: { "peer-child": "^1.0.0" } }, "sha-r5-host"],
+      "peer-child": ["peer-child@0.9.0", "", {}, "sha-r5-child"],
+    };
+    fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r5Base, null, 2));
+    const r5Hits = (await runCheck(dir, offlineProbe)).problems;
+    if (!r5Hits.some((p) => p.includes("peer-host") && p.includes("peer-child") && p.includes("0.9.0"))) {
+      throw new Error(`negative control 7 failed — unsatisfied hoisted peer not reported: ${r5Hits.join("; ")}`);
+    }
+    const r5Satisfied = JSON.parse(JSON.stringify(r5Base));
+    r5Satisfied.packages["peer-child"] = ["peer-child@1.5.0", "", {}, "sha-r5-child2"];
+    fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r5Satisfied, null, 2));
+    const r5OkHits = (await runCheck(dir, offlineProbe)).problems;
+    if (r5OkHits.some((p) => p.includes("peer-host") && p.includes("peer-child"))) {
+      throw new Error(`positive control 4 failed — satisfied hoisted peer reported: ${r5OkHits.join("; ")}`);
+    }
+    const r5Edge = JSON.parse(JSON.stringify(r5Base));
+    r5Edge.packages["peer-host/peer-child"] = ["peer-child@1.5.0", "", {}, "sha-r5-edge"];
+    fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r5Edge, null, 2));
+    const r5EdgeHits = (await runCheck(dir, offlineProbe)).problems;
+    if (r5EdgeHits.some((p) => p.includes("peer-host") && p.includes("peer-child"))) {
+      throw new Error(`peer-edge control failed — edge-satisfied peer reported: ${r5EdgeHits.join("; ")}`);
+    }
+    const r5EdgeStale = JSON.parse(JSON.stringify(r5Edge));
+    r5EdgeStale.packages["peer-host/peer-child"] = ["peer-child@0.9.0", "", {}, "sha-r5-edge-stale"];
+    fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r5EdgeStale, null, 2));
+    const r5EdgeStaleHits = (await runCheck(dir, offlineProbe)).problems;
+    if (!r5EdgeStaleHits.some((p) => p.includes("peer-host") && p.includes("peer-child") && p.includes("0.9.0"))) {
+      throw new Error(`stale peer-edge control failed — stale edge not reported: ${r5EdgeStaleHits.join("; ")}`);
+    }
+
     console.log(
-      "self-test PASS — positive controls clean; negative controls 1-6 + skip + 404 regression (edge and member) + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required; probe classification two-sided (200+latest, 404, empty-packument not-published, foreign-doc refusal, transient 429 recovery, persistent 429/error refusal); exception respected",
+      "self-test PASS — positive controls clean; negative controls 1-7 + skip + 404 regression (edge and member) + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 member (stale/current/ahead/skip) + RULE 5 peer (hoisted, satisfied, edge, stale-edge) + devDep drift/resolved/unresolved controls fired/silent as required; probe classification two-sided (200+latest, 404, empty-packument not-published, foreign-doc refusal, transient 429 recovery, persistent 429/error refusal); exception respected",
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
