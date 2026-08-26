@@ -171,7 +171,7 @@
     },
     "apps/brains": {
       "name": "@hasna/brains",
-      "version": "0.0.37",
+      "version": "0.0.38",
       "bin": {
         "brains": "dist/cli/index.js",
         "brains-mcp": "dist/mcp/index.js",
@@ -179,6 +179,7 @@
       },
       "dependencies": {
         "@hasna/events": "^0.1.6",
+        "@hasna/paths": "0.2.1",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
