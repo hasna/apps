@@ -1,6 +1,6 @@
 {
   "name": "@hasna/catalog",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Read-model app catalog for Hasna distribution: seed hasna.app.v1 records from opensource repos, query them via CLI/MCP/HTTP, and generate the public static catalog site.",
   "type": "module",
   "main": "dist/index.js",
@@ -94,6 +94,7 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "commander": "^13.1.0",
     "zod": "^3.25.76"

@@ -38,9 +38,14 @@ catalog site --out dist-site
 catalog serve
 ```
 
-The default database is `~/.hasna/catalog/catalog.db`. Set `CATALOG_HOME` to
-move the catalog directory or `CATALOG_DB_PATH` to select a database directly;
-every data command also accepts `--db <path>`.
+The catalog data home is resolved through `@hasna/paths` (XDG/macOS home
+layout). The legacy `~/.hasna/catalog` default stays the effective data home
+until the store is actually migrated to the XDG data home
+(`~/.local/share/hasna/catalog` on Linux; `~/Library/Application
+Support/Hasna/catalog` on macOS) or the operator sets the data-kind override
+`HASNA_DATA_HOME`, so an existing local store never becomes invisible on
+upgrade. Exact-app overrides win over that default: `CATALOG_HOME`, then the
+direct `CATALOG_DB_PATH`; every data command also accepts `--db <path>`.
 
 See [the CLI reference](docs/cli.md) for every command, option, default, and
 output mode.

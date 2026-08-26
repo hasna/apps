@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { program } from "../src/cli/index.js";
 import { CatalogStore } from "../src/store.js";
+import { VERSION } from "../src/version.js";
 import type { App } from "../src/contracts.js";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -193,7 +194,7 @@ describe("catalog CLI as a real process", () => {
   it("exits zero with exact stdout for --version and no stderr", () => {
     const result = runCli(["--version"]);
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("0.2.1");
+    expect(result.stdout.trim()).toBe(VERSION);
     expect(result.stderr).toBe("");
   });
 });
