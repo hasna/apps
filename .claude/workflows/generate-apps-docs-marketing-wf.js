@@ -498,7 +498,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass++) {
     finalRenderCheck = (safeText(renderCheck).match(/RENDER-CHECK:\s*(PASS|FAIL)/) ?? [])[1] ?? '';
     log(`pass ${pass}: claim check=${finalClaimCheck} render check=${finalRenderCheck}`);
   } else {
-    log('pass {pass}: no stale/unreleased claims — no produce phase this pass');
+    log(`pass ${pass}: no stale/unreleased claims — no produce phase this pass`);
   }
 
   finalFailures = failures.length;

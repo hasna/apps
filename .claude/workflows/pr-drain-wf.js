@@ -15,7 +15,7 @@ export const meta = {
 // interpolates ${APPS} — no hardcoded id.
 const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
 // Repo root (args-driven, 2026-08-26): args.repo overrides; default is the current
-// clones layout (~/.hasna/repos/clones/hasna/apps). The legacy
+// clones layout (~/.hasna/repos/clones/hasna/apps). The superseded
 // /home/hasna/.hasna/repos/clones/hasna/apps path is retired.
 const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
 
@@ -26,14 +26,14 @@ const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
 // 1,000-agent run cap, which stays the outer guard. Standing continuity comes
 // from the COORDINATOR re-launching this workflow, never an unbounded in-script
 // loop. args.maxPasses overrides.
-const MAX_PASSES = (args && args.maxPasses) || 30
+const MAX_PASSES = Math.min(500, Math.max(1, Number(args && args.maxPasses) || 30))
 
 // Idle window (owner 2026-08-25, args-driven): args.idleMinutes in MINUTES,
 // default 30. The census sleeps IDLE_SLEEP seconds then re-checks once —
 // min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
 // (the standing idle wait, also the safeAgent failure-banner sleep).
 const IDLE_MINUTES = Math.min(((args && args.idleMinutes) || 30), 300)
-const IDLE_SLEEP = Math.max(300, IDLE_MINUTES * 60)
+const IDLE_SLEEP = Math.min(Math.max(300, IDLE_MINUTES * 60), 1800)
 
 // RECORDING V2 (owner requirement): every workflow agent records while working.
 // Interpolated into every agent prompt below.

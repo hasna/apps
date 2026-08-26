@@ -72,7 +72,7 @@ export const meta = {
 // args — scope comes from args only; invalid/missing explicit scope throws
 // ---------------------------------------------------------------------------
 const raw = typeof args === 'undefined' ? {} : (args ?? {})
-const REPO = typeof raw.repo === 'string' && raw.repo.trim() ? raw.repo.trim() : '~/.hasna/repos/clones/hasna/apps'
+const REPO = typeof raw.repo === 'string' && raw.repo.trim() ? raw.repo.trim() : (() => { throw new Error('no input: pass args.repo') })()
 const PATHS = typeof raw.paths === 'string' && raw.paths.trim() ? raw.paths.trim() : 'apps/*'
 const PROJECT = typeof raw.project === 'string' && raw.project.trim() ? raw.project.trim() : 'hasna-apps'
 const IDLE_MINUTES = Number(raw.idleMinutes ?? 30)

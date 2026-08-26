@@ -28,7 +28,7 @@ const MAX_CONCURRENT = (args && args.maxConcurrent) || 3
 // which stays the outer guard). Standing continuity between runs comes from the
 // COORDINATOR re-launching this workflow, never an unbounded in-script loop.
 // args.maxPasses overrides.
-const MAX_PASSES = (args && args.maxPasses) || 40
+const MAX_PASSES = Math.min(500, Math.max(1, Number(args && args.maxPasses) || 40))
 // BOUNDED SESSION-SCOPED LOOP (owner 2026-08-25; bounded per fleet ground truth
 // 2026-08-26): census -> execute -> wait the idle window when idle -> re-census,
 // capped at MAX_PASSES per run. The idle wait lives INSIDE the census agent (bash
@@ -41,7 +41,7 @@ const CLAIM_TAG = 'task-drain-apps claim'
 // min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
 // (the standing idle wait, also the safeAgent failure-banner sleep).
 const IDLE_MINUTES = Math.min(((args && args.idleMinutes) || 30), 300)
-const IDLE_SLEEP = Math.max(300, IDLE_MINUTES * 60)
+const IDLE_SLEEP = Math.min(Math.max(300, IDLE_MINUTES * 60), 1800)
 
 // RECORDING V2 (owner requirement): every workflow agent records while working.
 // Interpolated into every agent prompt below.

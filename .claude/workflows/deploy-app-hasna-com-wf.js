@@ -447,6 +447,10 @@ async function runPass(pass) {
     schema: INTENT_SCHEMA,
   });
   log('pass ' + pass + ': intent=' + (intent && intent.posted ? intent.messageId : 'FAIL'));
+  if (!intent || !intent.messageId) {
+    log('INTENT NOT POSTED — structural gate: no upload, no confirm this pass');
+    continue
+  }
 
   // PHASE 3b — upload/publish
   const deploy = await safeAgent({

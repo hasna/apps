@@ -8,7 +8,7 @@ const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
 // min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
 // (the standing idle wait, also the safeAgent failure-banner sleep).
 const IDLE_MINUTES = Math.min(((args && args.idleMinutes) || 30), 300)
-const IDLE_SLEEP = Math.max(300, IDLE_MINUTES * 60)
+const IDLE_SLEEP = Math.min(Math.max(300, IDLE_MINUTES * 60), 1800)
 
 // Pass bound (fleet ground truth 2026-08-26): the standing 'infinite' lane runs a
 // BOUNDED pass loop — MAX_PASSES hard cap per run (4 agents per pass, so 40
@@ -16,7 +16,7 @@ const IDLE_SLEEP = Math.max(300, IDLE_MINUTES * 60)
 // guard). Standing continuity between runs comes from the COORDINATOR
 // re-launching this workflow, never an unbounded in-script loop.
 // args.maxPasses overrides.
-const MAX_PASSES = (args && args.maxPasses) || 40
+const MAX_PASSES = Math.min(500, Math.max(1, Number(args && args.maxPasses) || 40))
 
 // RECORDING V2 (owner requirement): every workflow agent records while working.
 // Interpolated into every agent prompt below.

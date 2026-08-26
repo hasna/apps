@@ -1,7 +1,8 @@
-// OWNER-NAMED EXCEPTION (naming ruling, ratified in review 2026-08-26): meta.name
-// is 'deploy-app-hasna-com' — the owner-mandated workflow name (invoked as
-// /deploy-app-hasna-com) for the standing deploy lane of the hasna/apps monorepo
-// (owner directive 2026-08-20); basename deploy-app-hasna-com-wf.js follows the
+// Standing services deployer for the hasna/apps monorepo (per-service ECS Fargate in
+// oss-fleet-prod, `<name>.hasna.xyz` routes). The app.hasna.com site has its OWN lane:
+// deploy-app-hasna-com-wf.js (first-ever, hasna-products account). Bounded pass loop
+// (MAX_PASSES) with agent-side idle (min(idleMinutes,300)+recheck); RECORDING V2 in
+// every agent prompt; registry name is `deploy-apps` (basename: `<registered>-wf.js`).
 // fleet <registered>-wf.js pattern. It is the documented exception to the
 // closed-verb workflow-name taxonomy: 'deploy' is NOT in the closed-verb set
 // (audit|fix|generate|migrate|monitor|research|review|triage|verify), so this
@@ -14,7 +15,7 @@
 // prose still name this lane 'deploy-apps' — rename them in the follow-up task;
 // agent-failure-hardening.test.js now references the new basename.
 export const meta = {
-  name: 'deploy-app-hasna-com',
+  name: 'deploy-apps',
   description: 'Deploy @hasna/* app services (hasna/apps monorepo members) to the oss-fleet-prod ECS surface, drain-to-zero. Surveys deployable services (serve surfaces + Dockerfile + published/ECS-deployed version), verifies the provider-role table per service (source/registry/ECS surface/database/route), executes the ECS deployment convention (build native arm64 -> ECR push sha-tagged -> migrate one-shot -> register task def -> update-service -> wait stable -> live HTTPS test), re-surveys each pass and loops while services remain deployable (hard bound MAX_PASSES), fails closed where provider roles are unverified. CORRECTED 2026-08-24: the internalapps-prod-host docker-compose convention is LEGACY — all services run as ECS Fargate in oss-fleet-prod (measured: 32 services, virgilius lane deploys via task defs). HARDENED 2026-08-25 (owner-directed harden-lanes-review-gates, temporary): after each service live test and BEFORE any [DEPLOY-CONFIRM], TWO independent agents (deploy-gate-1/deploy-gate-2) live-verify the DEPLOYED service non-destructively — every route (/health /ready /version 200 + identity + version match, one business read); [DEPLOY-CONFIRM] is posted only when BOTH return GO, otherwise the service is recorded DEPLOY UNVERIFIED with a filed todos task and is never confirmed. Owner directive 2026-08-20.',
   phases: [
     { title: 'Survey', detail: 'enumerate deployable services, verify versions + ECS surface + routes, classify ready / blocked' },
@@ -28,7 +29,7 @@ const DEPLOY = { type: 'object', properties: { deployed: { type: 'array' }, fail
 const DEPLOY_GATE = { type: 'object', additionalProperties: false, required: ['verdict', 'perCommand'], properties: { verdict: { enum: ['GO', 'NO_GO'] }, perCommand: { type: 'array', items: { type: 'object' } }, failures: { type: 'array', items: { type: 'string' } } } }
 
 // Repo root (args-driven, 2026-08-26): args.repo overrides; default is the current
-// clones layout (~/.hasna/repos/clones/hasna/apps). The legacy
+// clones layout (~/.hasna/repos/clones/hasna/apps). The superseded
 // /home/hasna/.hasna/repos/clones/hasna/apps path is retired.
 const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
 
@@ -42,14 +43,14 @@ const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
 // is the outer guard; ~6 agents per pass x 40 passes stays well inside it). The
 // standing continuity between runs comes from the COORDINATOR re-launching this
 // workflow, never from an unbounded in-script loop. args.maxPasses overrides.
-const MAX_PASSES = (args && args.maxPasses) || 40
+const MAX_PASSES = Math.min(500, Math.max(1, Number(args && args.maxPasses) || 40))
 
 // Idle window (owner 2026-08-25, args-driven): args.idleMinutes in MINUTES,
 // default 30. The survey sleeps IDLE_SLEEP seconds then re-checks once —
 // min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
 // (the standing idle wait, also the safeAgent failure-banner sleep).
 const IDLE_MINUTES = Math.min(((args && args.idleMinutes) || 30), 300)
-const IDLE_SLEEP = Math.max(300, IDLE_MINUTES * 60)
+const IDLE_SLEEP = Math.min(Math.max(300, IDLE_MINUTES * 60), 1800)
 
 // RECORDING V2 (owner requirement): every workflow agent records while working.
 // Interpolated into every agent prompt below.
