@@ -5,7 +5,7 @@
     "": {
       "name": "@hasna/bridge",
       "dependencies": {
-        "@hasna/paths": "0.1.0",
+        "@hasna/paths": "0.2.1",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "commander": "^13.1.0",
         "zod": "^3.25.76",
@@ -19,7 +19,7 @@
     },
   },
   "packages": {
-    "@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
+    "@hasna/paths": ["@hasna/paths@0.2.1", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ClSVUbU0vyStm9GTPzh5hiDPRwaHmRiedd3BY41HOQZdVHfCJI1st35P7vRBGKNSRy9vIwa2Wy8k5myqfW2a7g=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 

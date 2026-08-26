@@ -106,6 +106,20 @@
  * @hasna/todos@0.15.46 -> @hasna/contracts@0.13.4 and @hasna/mementos@0.14.86
  * -> @hasna/contracts@0.10.6.
  *
+ *   projects     — RE-ADDED 2026-08-27 by the version wave (hasna/apps#1289),
+ *                 and this re-addition is the documented shape, not a drift:
+ *                 the wave's changesets-generated pins @hasna/conversations@0.7.13,
+ *                 @hasna/todos@0.15.51 and @hasna/loops@>=0.6.5 are intra-wave
+ *                 versions NOT on the npm registry (measured 2026-08-27:
+ *                 `npm view` rc=1 for each), so the standalone regeneration the
+ *                 2026-08-23 exit from this set used now fails rc=1 "No version
+ *                 matching ... found" by construction. The member leaves this set
+ *                 in the change that publishes those pins (the publish-all lane),
+ *                 which then regenerates the lockfile.
+ *   loops        — @hasna/machines@0.2.39 rc=1 (intra-wave pin, wave hasna/apps#1289,
+ *                 measured 2026-08-27). Same class as projects above: the lockfile
+ *                 regenerates in the change that follows the machines 0.2.39 publish.
+ *
  * RULE 4 — DOCKERFILE LOCKFILE PRESENCE (see the implementation comment): a
  *   member whose Dockerfile COPYs an UNGLOBED `bun.lock` must ship its own
  *   `apps/<name>/bun.lock` — the exact `COPY package.json bun.lock ./` class
@@ -138,6 +152,8 @@ const UNRESOLVABLE_PINS = new Set<string>([
   "automations",
   "browser",
   "economy",
+  "loops",
+  "projects",
   "testers",
 ]);
 
