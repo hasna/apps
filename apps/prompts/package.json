@@ -67,11 +67,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/prompts.git"
+    "url": "git+https://github.com/hasna/apps.git",
+    "directory": "apps/prompts"
   },
-  "homepage": "https://github.com/hasna/prompts",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/prompts",
   "bugs": {
-    "url": "https://github.com/hasna/prompts/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
