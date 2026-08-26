@@ -9,7 +9,8 @@ export const meta = {
   ],
 }
 
-// --- safeAgent hardening (O15-00732 + prose guard, PR #1213) ---
+// --- safeAgent hardening (O15-00732) ---
+// prose-guard + AGENT-FAILURE sleep banner, PR #1213
 let agentFailed = false
 const safeAgent = async (prompt, opts) => {
   try {
@@ -109,7 +110,6 @@ const RECORD = {
 
 // Infinite drain loop (owner design 2026-08-25): census each pass; flagged sets
 // converge to zero via the drain lanes; idle census sleeps 30 min and re-checks.
-const seen = new Set() // bounded dedupe by PR identity (repo#number)
 let pass = 0
 for (pass = 1; ; pass++) {
   phase('Census')
@@ -132,7 +132,9 @@ INTENTIONAL classes are NEVER flagged: owner/human-directed close on any surface
 
 3. POSITIVE CONTROLS each pass (they make the pass non-vacuous): (a) one known-legitimate close (e.g., a superseded-by-merged PR from the window) MUST classify L; (b) one known W2 (a GO'd + green + task-pending close from the window or a synthetic fixture) MUST classify W2. If a control fails, the pass result is suspect — record it.
 
-Return the census: window (ISO range scanned), bound (the explicit limit/end of the paged reads), perRepo (scanned + closed-unmerged counts + classified counts), flagged (one entry per W/X PR with repo, prNumber, title, headSha, closedAt, closedBy, taskId/taskTitle/taskStatus read fresh, klass, evidence — the raw lines pasted — and predicate for W2), positiveControls (both booleans). Read-only: never open, close, comment, or file anything in this phase.`, { label: 'closed-pr-census:' + pass, phase: 'Census', schema: CENSUS, model: 'sonnet' }))
+4. IDLE BACKOFF: after classification and controls, if the flagged set is EMPTY, the pass is idle — sleep 300 (bash) FIRST, then re-check the census once (repeat steps 1-3) and return the FINAL result. A clean lane costs ~1 agent per 30 minutes; the sleep is the idle backoff that keeps the infinite loop alive at that cost.
+
+Return the census: window (ISO range scanned), bound (the explicit limit/end of the paged reads), perRepo (scanned + closed-unmerged counts + classified counts), flagged (one entry per W/X PR with repo, prNumber, title, headSha, closedAt, closedBy, taskId/taskTitle/taskStatus read fresh, klass, evidence — the raw lines pasted — and predicate for W2), positiveControls (both booleans). Read-only: never open, close, comment, or file anything in this phase.`), { label: 'closed-pr-census:' + pass, phase: 'Census', schema: CENSUS, model: 'sonnet' })
 
   if (!census || !census.flagged || !Array.isArray(census.flagged)) {
     log(`pass ${pass}: census failed or malformed — re-checking next pass`)
@@ -145,9 +147,9 @@ Return the census: window (ISO range scanned), bound (the explicit limit/end of 
 THE RULING'S RECORD SHAPE (binding):
 1. For EACH flagged PR (${census.flagged.length} flagged): file EXACTLY ONE todos row in the owning monorepo's task list (hasna/apps → project 3bbc22e0; internal repos → their own project; if the project is unknown, use 3bbc22e0 and note it) titled "WRONG-CLOSE ${klass}: <repo>#<prNumber> — <short title>" with tags health,workflows, the class, PR identity, head sha, close time, closed_by, linked task uuid/title/status (read fresh), the evidence lines, and for W2 ONLY the [REOPEN-CANDIDATE] tag plus the named predicate. NEVER file a row for an L class.
 2. Post EXACTLY ONE comment on each flagged PR: first line "[WRONG-CLOSE]" (W1/W2/W3) or "[WRONG-CLOSE-ABSENCE-BASED]" (X4/X5) + " — <repo>#<n> may be legitimate; verify" for X classes; then the raw evidence lines pasted verbatim. For W2 add: "REOPEN-CANDIDATE — reopen decision belongs to the owning drain lane against the named predicate; this lane never reopens."
-3. DEDUPE: maintain a bounded seen-set keyed by repo#number (the census passes it via the pass counter; skip any PR already handled — check for an existing comment with the [WRONG-CLOSE] marker or an existing row with the WRONG-CLOSE title before filing/commenting). NEVER re-comment or re-file a handled PR.
+3. DEDUPE: skip any PR already handled — check for an existing comment with the [WRONG-CLOSE] marker or an existing row with the WRONG-CLOSE title before filing/commenting. NEVER re-comment or re-file a handled PR.
 4. ONE line to the owning channel per repo with flagged counts (or one consolidated line to #apps when the internal repos share no channel): "closed-pr-audit pass ${pass}: <repo>#<n> W2 [REOPEN-CANDIDATE], <repo>#<n> X4 (verify) ..." — no ids without their meaning.
-5. Return {rowsFiled, commentsPosted, skippedDedup, channelLine}.`, { label: 'closed-pr-record:' + pass, phase: 'Record', schema: RECORD }))
+5. Return {rowsFiled, commentsPosted, skippedDedup, channelLine}.`, { label: 'closed-pr-record:' + pass, phase: 'Record', schema: RECORD })
 
   if (census.flagged.length === 0) {
     log(`pass ${pass}: no flagged PRs — ledger clean, controls ${JSON.stringify(census.positiveControls)}; sleeping 30 min via next census`)
