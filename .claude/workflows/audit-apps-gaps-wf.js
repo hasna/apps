@@ -73,6 +73,9 @@ NEVER print a credential value.`;
 
 const AT = ['Bash', 'Read', 'Grep'];
 
+// The runtime's phase(name) is a progress-group global only (no callback contract).
+const runPhase = async (name, fn) => { phase(name); return await fn(); }
+
 const repoPath = args.repoPath;
 if (!repoPath || typeof repoPath !== 'string' || repoPath.length === 0) {
   throw new Error(
@@ -323,7 +326,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   }
 
   // Phase: census (bounded, 1 agent) — the population is what all bounds key on.
-  const apps = await phase(`pass-${pass}-census`, async () => {
+  const apps = await runPhase(`pass-${pass}-census`, async () => {
     const censusOut = await safeAgent({
       prompt: withRecord(censusPrompt()),
       tools: AT,
@@ -368,7 +371,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   };
 
   // Phase 1: inventory survey — parallel bounded per-app agents.
-  const inventories = await phase(`pass-${pass}-inventory`, async () =>
+  const inventories = await runPhase(`pass-${pass}-inventory`, async () =>
     parallel(
       apps.map((app) =>
         safeAgent({ prompt: withRecord(inventoryPrompt(app)), tools: AT })
@@ -378,7 +381,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   );
 
   // Phase 2: verdicts per app — confirmed gaps with file evidence.
-  const verdicts = await phase(`pass-${pass}-verdicts`, async () => {
+  const verdicts = await runPhase(`pass-${pass}-verdicts`, async () => {
     const verdictOs = apps.map((app, i) =>
       parseObj(inventories[i], `inventory-${app}`)
     );
@@ -433,7 +436,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   }
 
   // Phase 3: create/update todos tasks ONLY for confirmed gaps.
-  const taskRows = await phase(`pass-${pass}-tasks`, async () =>
+  const taskRows = await runPhase(`pass-${pass}-tasks`, async () =>
     parallel(
       apps.map((app, i) => {
         const v = verdictOs[i];
@@ -474,7 +477,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
     return `- apps/${app}: created=${(t.created || []).length} updated=${(t.updated || []).length} duplicatesSkipped=${t.duplicatesSkipped ?? 0} errors=${(t.errors || []).length}`;
   });
 
-  const summary = await phase(`pass-${pass}-summary`, async () =>
+  const summary = await runPhase(`pass-${pass}-summary`, async () =>
     safeAgent({
       prompt: withRecord(
         summaryPrompt(apps, verdictLines.join('\n'), taskLines.join('\n'), lastScanned)
