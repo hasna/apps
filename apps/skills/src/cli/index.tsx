@@ -85,6 +85,9 @@ registerCompletion(program);
 const { registerCreateSync } = await import("./commands/create-sync-config.js");
 registerCreateSync(program);
 
+const { registerHydrate } = await import("./commands/hydrate.js");
+registerHydrate(program);
+
 const { registerPortableSkillCommands } = await import("./commands/portable-skills.js");
 registerPortableSkillCommands(program);
 

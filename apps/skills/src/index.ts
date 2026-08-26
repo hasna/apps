@@ -398,3 +398,43 @@ export type {
   CategoryInstallResponse,
   ErrorResponse,
 } from "./types/api.js";
+
+export {
+  STATION_SYNC_MANIFEST_SCHEMA,
+  StationSnapshotError,
+  sha256File,
+  planStationSnapshot,
+  validateStationId,
+  writeStationSnapshot,
+  type PortableSnapshotFile,
+  type ScannedHome,
+  type SnapshotPlan,
+  type StationSnapshotErrorCode,
+  type StationSnapshotManifestFile,
+  type StationSnapshotOptions,
+  type StationSnapshotResult,
+} from "./lib/station-snapshot.js";
+
+export {
+  STATION_HYDRATION_MANIFEST_SCHEMA,
+  planStationHydration,
+  writeStationHydration,
+  type HydrationCandidate,
+  type HydrationWinnerFile,
+  type HydrationWinnerSkill,
+  type StationHydrationOptions,
+  type StationHydrationResult,
+} from "./lib/station-hydrate.js";
+
+export {
+  REFUSED_SCANNER_FLAGGED,
+  SYNC_HOMES,
+  destinationFor,
+  homePathFor,
+  isExcludedSkillFileName,
+  isPortableWithinSkill,
+  isRegularFile,
+  walkEntries,
+  type SyncHomeDefinition,
+  type WalkEntry,
+} from "./lib/portable-snapshot-filter.js";
