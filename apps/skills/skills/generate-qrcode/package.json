@@ -16,7 +16,7 @@
     "sharp": "^0.33.5"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.3.14",
     "typescript": "^5.7.0"
   },
   "publishConfig": {
