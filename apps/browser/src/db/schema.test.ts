@@ -100,6 +100,8 @@ describe("DB schema", () => {
   it("migrates legacy ~/.browser files into ~/.hasna/browser", () => {
     const originalHome = process.env["HOME"];
     const originalUserProfile = process.env["USERPROFILE"];
+    const kindOverrides = ["HASNA_DATA_HOME", "HASNA_CONFIG_HOME", "HASNA_STATE_HOME", "HASNA_CACHE_HOME"];
+    const savedKindOverrides = Object.fromEntries(kindOverrides.map((k) => [k, process.env[k]]));
     const oldDir = join(tmpDir, ".browser");
     const newDir = join(tmpDir, ".hasna", "browser");
 
@@ -108,6 +110,7 @@ describe("DB schema", () => {
 
     delete process.env["BROWSER_DB_PATH"];
     delete process.env["BROWSER_DATA_DIR"];
+    for (const k of kindOverrides) delete process.env[k];
     process.env["HOME"] = tmpDir;
     delete process.env["USERPROFILE"];
     resetDatabase();
@@ -126,6 +129,10 @@ describe("DB schema", () => {
         delete process.env["USERPROFILE"];
       } else {
         process.env["USERPROFILE"] = originalUserProfile;
+      }
+      for (const k of kindOverrides) {
+        if (savedKindOverrides[k] === undefined) delete process.env[k];
+        else process.env[k] = savedKindOverrides[k];
       }
     }
   });

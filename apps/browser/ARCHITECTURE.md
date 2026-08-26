@@ -13,7 +13,7 @@ with Browser retaining authority for bounded execution and evidence capture.
 Browser owns reusable workflow storage. File-backed workflow manifests live in:
 
 ```text
-~/.hasna/browser/workflows/
+<resolver-resolved browser data home>/workflows/
 ```
 
 Other projects may generate evidence, tests, or site-specific runner code, but
@@ -116,7 +116,9 @@ browser/
 
 ## Storage
 
-Local state is stored under `~/.hasna/browser/` by default. SQLite owns local
+Local state is stored under the resolver-resolved browser data home
+(`@hasna/paths`; the legacy `~/.hasna/browser` default until the XDG data home
+is adopted or `BROWSER_DATA_DIR` is set) by default. SQLite owns local
 sessions, snapshots, recordings, screenshots, downloads, network logs, console
 logs, profiles, and gallery metadata. Optional package-local Postgres sync is
 available through the storage commands and `@hasna/browser/storage`.

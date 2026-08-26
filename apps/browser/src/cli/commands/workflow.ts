@@ -1,4 +1,4 @@
-// File-backed workflow commands: Browser-owned manifests under ~/.hasna/browser/workflows.
+// File-backed workflow commands: Browser-owned manifests under the resolver-resolved browser data home's workflows dir.
 
 import type { Command } from "commander";
 import chalk from "chalk";
