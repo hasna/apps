@@ -70,7 +70,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.14.1",
+    "@hasna/contracts": "0.14.2",
     "@types/bun": "^1.2.4",
     "@types/node": "^26.1.2",
     "@types/pg": "^8.11.0",

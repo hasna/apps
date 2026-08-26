@@ -76,7 +76,7 @@
     "commander": "^13.1.0"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.14.1",
+    "@hasna/contracts": "0.14.2",
     "@types/bun": "latest",
     "@types/pg": "^8.15.6",
     "pg": "^8.16.3",
