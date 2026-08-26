@@ -6,7 +6,9 @@ import { assertNoLegacyStorageMode } from "./generated/storage-kit/backend.js";
  * Canonical Hasna Service Contract v1 storage config for @hasna/billing.
  *
  * The server has one technical switch:
- *   - no DATABASE_URL: SQLite at ~/.hasna/billing/billing.db;
+ *   - no DATABASE_URL: SQLite at the effective billing data home's
+ *     `data/billing.db` (resolved via @hasna/paths; legacy `~/.hasna/billing`
+ *     default until the XDG data home is adopted);
  *   - DATABASE_URL or DATABASE_URL_FILE: PostgreSQL.
  *
  * Removed storage variables are rejected by the vendored contract helper.
@@ -56,7 +58,7 @@ export function resolveDatabaseUrl(env: Env = process.env): string | null {
   return firstEnv(env, DB_URL_KEYS) ?? null;
 }
 
-/** Canonical local SQLite path: ~/.hasna/billing/billing.db */
+/** Canonical local SQLite path: the effective data home's `data/billing.db` (resolved via @hasna/paths). */
 export function defaultSqlitePath(): string {
   return getDefaultBillingDbPath();
 }
