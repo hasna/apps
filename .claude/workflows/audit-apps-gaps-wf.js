@@ -342,6 +342,9 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
     return [...new Set(list)].sort();
   });
 
+  if (!apps) {
+    throw new Error(`fail-closed: census phase failed; app population unknown (pass ${pass})`);
+  }
   lastPopulation = apps.length;
   lastScanned = 0;
 
