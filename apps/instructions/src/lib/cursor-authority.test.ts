@@ -91,6 +91,89 @@ describe("Cursor fixed global authority detection", () => {
     expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
   });
 
+  test("re-stamps a stale marker whose hash no longer matches the payload", () => {
+    // Regression: the stamp used to be idempotent on marker PRESENCE, so a
+    // file whose payload changed after stamping (an out-of-band edit, or a
+    // template re-render that expanded variables) kept its stale marker hash
+    // forever. Every re-apply then propagated the invalid stamp, the observer
+    // reported marker-integrity-mismatch, and the cursor project render stayed
+    // blocked with no repair path (H-00154, station01 hasna-global.mdc).
+    const payload = [
+      "---",
+      "alwaysApply: true",
+      "---",
+      "# Managed global rule",
+      "",
+    ].join("\n");
+    const stamped = stampCursorGlobalAuthorityMarker(payload);
+
+    // Simulate an out-of-band edit AFTER stamping: same shape as the station01
+    // file, whose {{WORKSPACE_ROOT}} placeholders were expanded after the
+    // 0.4.34 stamping. The marker line survives verbatim; the payload changes.
+    const tampered = stamped.replace(
+      "# Managed global rule",
+      "# Managed global rule (edited after stamping)",
+    );
+
+    mkdirSync(join(root, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(authorityPath(), tampered);
+    expect(observeCursorGlobalAuthorityAtPath(authorityPath())).toMatchObject({
+      status: "invalid",
+      provenance: { detection: "marker-integrity-mismatch" },
+    });
+
+    // The stamp must repair the stale marker: hash of the CURRENT payload.
+    const repaired = stampCursorGlobalAuthorityMarker(tampered);
+    expect(repaired).not.toBe(tampered);
+    const match = repaired.match(/^<!-- Managed by @hasna\/configs cursor global authority hash=(sha256:[a-f0-9]{64}) -->$/m);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe(`sha256:${sha256(markerPayload(repaired, match![0], match!.index))}`);
+
+    // The repaired file round-trips as managed and unblocks the render.
+    writeFileSync(authorityPath(), repaired);
+    const observation = observeCursorGlobalAuthorityAtPath(authorityPath());
+    expect(observation).toMatchObject({
+      status: "managed",
+      fileType: "regular",
+      markers: [CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER],
+      provenance: { authority: "managed", detection: "managed-marker" },
+    });
+    expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
+
+    // And the repaired state is idempotent: a second stamp is a no-op.
+    expect(stampCursorGlobalAuthorityMarker(repaired)).toBe(repaired);
+  });
+
+  test("re-stamps a stale frontmatter-bearing marker in place, keeping frontmatter at byte 0", () => {
+    const payload = [
+      "---",
+      "alwaysApply: true",
+      "---",
+      "# Managed global rule",
+      "",
+    ].join("\n");
+    const stamped = stampCursorGlobalAuthorityMarker(payload);
+    // Insert a payload change after the marker line, leaving the marker in
+    // place — the station01 shape (rendered content grew after stamping).
+    const stale = stamped.replace(
+      "\n# Managed global rule",
+      "\n# Managed global rule (expanded after stamping)",
+    );
+    const repaired = stampCursorGlobalAuthorityMarker(stale);
+
+    expect(repaired.startsWith("---\n")).toBe(true);
+    expect(repaired.indexOf(`<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=`))
+      .toBeGreaterThan(repaired.indexOf("\n---\n"));
+    expect(repaired.match(/Managed by @hasna\/configs cursor global authority/g)).toHaveLength(1);
+
+    mkdirSync(join(root, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(authorityPath(), repaired);
+    expect(observeCursorGlobalAuthorityAtPath(authorityPath())).toMatchObject({
+      status: "managed",
+      provenance: { authority: "managed", detection: "managed-marker" },
+    });
+  });
+
   test("keeps frontmatter at byte 0 when stamping a frontmatter-bearing global rule", () => {
     // Cursor requires YAML frontmatter to start the file; a marker stamped in
     // front of `---` silently drops the frontmatter (gray-matter parses
