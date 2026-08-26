@@ -38,8 +38,10 @@ back to a neutral, non-resolving placeholder.
 
 ## What it does per machine
 
-1. Writes a per-app fleet env file `~/.hasna/cloud/<app>.env` (mode `0600`).
-   - **self_hosted**: `HASNA_<APP>_API_URL=https://<app>.<fleet-domain>` +
+1. Writes a per-app fleet env file `~/.hasna/fleet-env/<app>.env` (mode `0600`) —
+   the PRIMARY fleet credential location. The legacy `~/.hasna/cloud/<app>.env`
+   location is no longer written by flips (deprecated, removed after 2026-10-01).
+   - **api**: `HASNA_<APP>_API_URL=https://<app>.<fleet-domain>` +
      `HASNA_<APP>_API_KEY=<key>` (+ any non-secret extras).
    - **local** (revert): the env file is **removed entirely** so both vars are
      unset and the app falls back to its untouched local original.
@@ -52,7 +54,21 @@ back to a neutral, non-resolving placeholder.
 3. Verifies with `<app> storage status --json` — requires `mode=self_hosted` and
    `api_enabled!=false` (for revert: `mode=local`). Legacy `remote_enabled` is
    still accepted for back-compat.
-4. Halts before the next wave if any machine in the current wave fails.
+4. **Provenance gates (api mode)**: the flip only passes when the app's status
+   proves the freshly written `~/.hasna/fleet-env/<app>.env` supplied the
+   connection. It rejects:
+   - `apiKeyTier=legacy-env` (the key came from a process env var, not the file);
+   - any reported `transportSource`/`apiUrlSource`/`apiKeySource` under
+     `~/.hasna/cloud` (still resolving from the legacy dir);
+   - api mode whose exact source cannot be reported (no source fields, or a tier
+     that is not a fleet/disk tier).
+   The flip script also reports `FLIP_SHA256=<hash>` of the env file it wrote, so
+   the ledger records the exact file hash — a sterile probe, no values.
+5. **Per-run ledger**: every flip writes one JSONL row per machine to
+   `~/.hasna/machines/flip-ledger.jsonl` — `ts, machine, app, wave, mode, result,
+   sourceOfValue, envSha256, provenanceOk`. Dry-runs return the rows in the report
+   but never write the file. No credential value ever appears in a ledger row.
+6. Halts before the next wave if any machine in the current wave fails.
 
 ### Secret safety
 

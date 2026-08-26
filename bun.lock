@@ -1018,7 +1018,7 @@
     },
     "apps/machines": {
       "name": "@hasna/machines",
-      "version": "0.2.37",
+      "version": "0.2.38",
       "bin": {
         "machines": "dist/cli/index.js",
         "machines-mcp": "dist/mcp/index.js",

@@ -411,7 +411,14 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
         pointerLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
       }
       pointerLines.push(...buildEnvContractVerification(spec));
-      pointerLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
+      pointerLines.push(
+        'chmod 600 "$TMP_ENV"',
+        'mv -f "$TMP_ENV" "$ENV_FILE"',
+        // Sterile probe: report the sha256 of the file the flip ACTUALLY wrote,
+        // so the orchestrator's ledger can prove the new file supplied the
+        // connection without any credential value crossing the wire.
+        'S="$(sha256sum "$ENV_FILE")"; echo "FLIP_SHA256=${S%% *}"',
+      );
       lines.push("export APP ENV_DIR ENV_FILE", pointerLines.join("\n"));
     } else {
       // Fetch the API key on-target into the child environment; abort if the
@@ -428,7 +435,12 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
         writeEnvLines.push(`printf '%s\\n' ${sq(`${key}=${value}`)} >> "$TMP_ENV"`);
       }
       writeEnvLines.push(...buildEnvContractVerification(spec));
-      writeEnvLines.push('chmod 600 "$TMP_ENV"', 'mv -f "$TMP_ENV" "$ENV_FILE"');
+      writeEnvLines.push(
+        'chmod 600 "$TMP_ENV"',
+        'mv -f "$TMP_ENV" "$ENV_FILE"',
+        // Sterile probe: report the sha256 of the file the flip ACTUALLY wrote.
+        'S="$(sha256sum "$ENV_FILE")"; echo "FLIP_SHA256=${S%% *}"',
+      );
       lines.push(
         "export APP ENV_DIR ENV_FILE",
         buildSecretsExecShell(spec.apiKeySecretPath, "API_KEY", writeEnvLines.join("\n")),
@@ -517,6 +529,136 @@ export interface StorageStatusVerification {
   observedMode: string | null;
   apiEnabled: boolean | null;
   reason?: string;
+  /** Result of the provenance gates (P1-C): ok only when the new fleet-env file supplied the connection. */
+  provenanceOk?: boolean;
+  /** The source the app reported for its API key (absolute path or env key), or null. Never a value. */
+  apiKeySource?: string | null;
+  /** The source the app reported for its API URL, or null. Never a value. */
+  apiUrlSource?: string | null;
+  /** The credential tier the app reported (e.g. fleet-env / legacy-cloud / legacy-env), or null. */
+  apiKeyTier?: string | null;
+  /** The source that proved the new file supplied the connection. */
+  sourceOfValue?: string | null;
+  /** sha256 of the env file the flip wrote (from the FLIP_SHA256 marker), or null. */
+  envSha256?: string | null;
+}
+
+/** Match a source that names a file under the legacy cloud dir. */
+const LEGACY_CLOUD_SOURCE = /\/\.hasna\/cloud\//;
+
+/** Extract the sha256 the flip script reported for the env file it wrote. */
+export function extractFlipSha256(rawOutput: string): string | null {
+  const match = rawOutput.match(/FLIP_SHA256=([0-9a-f]{64})/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Provenance gates for a flip (P1-C, review P0-3 / Sol 5).
+ *
+ * The flip must PROVE the freshly written fleet-env file supplied the
+ * connection, not merely that required vars exist and the app reports api
+ * mode. When the app's status JSON reports the credential resolution fields
+ * (`apiKeyTier` / `apiUrlSource` / `apiKeySource`, the `@hasna/contracts`
+ * client-transport fields), this verifies them and rejects:
+ *
+ *   1. `apiKeyTier === "legacy-env"` — the key came from a process env var,
+ *      not the fleet file;
+ *   2. a `transportSource`/`apiUrlSource`/`apiKeySource` that names a file
+ *      under `~/.hasna/cloud` — the app is still resolving from the legacy
+ *      cloud dir;
+ *   3. api mode whose exact source cannot be reported — api-backed mode with
+ *      no reportable source fields (or a tier that is not a fleet/disk tier).
+ *
+ * Positive case: the reported key/URL source is the fleet-env file the flip
+ * just wrote (matched on its `/fleet-env/<app>.env` suffix so any HOME
+ * resolves), which proves the new file supplied the connection.
+ */
+export function verifyFlipProvenance(
+  rawOutput: string,
+  spec: FlipAppSpec,
+  expected: FlipMode,
+  options: { expectedEnvFile?: string } = {},
+): Pick<StorageStatusVerification, "provenanceOk" | "apiKeySource" | "apiUrlSource" | "apiKeyTier" | "sourceOfValue" | "envSha256" | "reason"> {
+  const envSha256 = extractFlipSha256(rawOutput);
+  const json = extractStatusJson(rawOutput);
+  const apiKeySource = typeof json?.apiKeySource === "string" ? json.apiKeySource : null;
+  const apiUrlSource = typeof json?.apiUrlSource === "string" ? json.apiUrlSource : null;
+  const transportSource = typeof json?.transportSource === "string" ? json.transportSource : null;
+  const apiKeyTier = typeof json?.apiKeyTier === "string" ? json.apiKeyTier : null;
+
+  // Revert (local) mode: the env file was removed; there is no connection
+  // source to prove. The gates apply to api mode only.
+  if (expected !== "api") {
+    return { provenanceOk: true, apiKeySource, apiUrlSource, apiKeyTier, sourceOfValue: null, envSha256 };
+  }
+
+  const fleetEnvSuffix = `/fleet-env/${spec.app}.env`;
+  const expectedSource = options.expectedEnvFile?.endsWith(fleetEnvSuffix)
+    ? options.expectedEnvFile
+    : fleetEnvSuffix;
+
+  // Gate 1: legacy process-env tier.
+  if (apiKeyTier === "legacy-env") {
+    return {
+      provenanceOk: false,
+      apiKeySource,
+      apiUrlSource,
+      apiKeyTier,
+      sourceOfValue: null,
+      envSha256,
+      reason: `provenance gate rejected: app '${spec.app}' resolved its API key from the legacy process env (apiKeyTier=legacy-env), not from the fleet file`,
+    };
+  }
+  // Gate 2: any source under the legacy cloud dir.
+  for (const [label, src] of [
+    ["transportSource", transportSource],
+    ["apiUrlSource", apiUrlSource],
+    ["apiKeySource", apiKeySource],
+  ] as const) {
+    if (src && LEGACY_CLOUD_SOURCE.test(src)) {
+      return {
+        provenanceOk: false,
+        apiKeySource,
+        apiUrlSource,
+        apiKeyTier,
+        sourceOfValue: null,
+        envSha256,
+        reason: `provenance gate rejected: app '${spec.app}' reports ${label}=${src}, a legacy ~/.hasna/cloud source; the flip must move it to ${fleetEnvSuffix}`,
+      };
+    }
+  }
+  // Gate 3: api mode whose exact source cannot be reported.
+  const keySourceIsFleet = apiKeySource !== null && (apiKeySource === expectedSource || apiKeySource.endsWith(fleetEnvSuffix));
+  const urlSourceIsFleet = apiUrlSource !== null && (apiUrlSource === expectedSource || apiUrlSource.endsWith(fleetEnvSuffix));
+  const tierIsFleet = apiKeyTier !== null && apiKeyTier !== "legacy-env" && apiKeyTier !== "legacy-cloud" && apiKeyTier !== "config-legacy";
+  if (!keySourceIsFleet || !tierIsFleet) {
+    const reported = [
+      apiKeyTier ? `apiKeyTier=${apiKeyTier}` : null,
+      apiKeySource ? `apiKeySource=${apiKeySource}` : null,
+      apiUrlSource ? `apiUrlSource=${apiUrlSource}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ") || "no source fields reported";
+    return {
+      provenanceOk: false,
+      apiKeySource,
+      apiUrlSource,
+      apiKeyTier,
+      sourceOfValue: null,
+      envSha256,
+      reason:
+        `provenance gate rejected: app '${spec.app}' reports api mode but its exact source cannot be confirmed ` +
+        `(reported ${reported}); the new fleet file (${fleetEnvSuffix}) must supply the connection before the flip is ok`,
+    };
+  }
+  return {
+    provenanceOk: true,
+    apiKeySource,
+    apiUrlSource,
+    apiKeyTier,
+    sourceOfValue: keySourceIsFleet ? apiKeySource : null,
+    envSha256,
+  };
 }
 
 /**
@@ -637,6 +779,29 @@ export interface FlipMachineResult {
   error?: string;
 }
 
+/** One row of the per-run flip ledger (P1-C). No credential values, ever. */
+export interface FlipLedgerEntry {
+  ts: string;
+  machine: string;
+  app: string;
+  wave: string;
+  mode: FlipMode;
+  /** dry-run | ok | FAIL */
+  result: string;
+  /** The source that supplied the connection (fleet-env file path) or null. */
+  sourceOfValue: string | null;
+  /** sha256 of the fleet env file the flip wrote, or null (dry-run / revert). */
+  envSha256: string | null;
+  /** Provenance gate verdict. */
+  provenanceOk: boolean;
+}
+
+/** Ledger sink, injectable for tests and CLI `--ledger` overrides. */
+export type FlipLedgerWriter = (entries: FlipLedgerEntry[]) => void;
+
+/** Default no-op ledger sink — the CLI wires the file writer. */
+export const NOOP_LEDGER_WRITER: FlipLedgerWriter = () => {};
+
 export interface RunFlipOptions {
   spec: FlipAppSpec;
   mode: FlipMode;
@@ -650,6 +815,8 @@ export interface RunFlipOptions {
   timeoutMs?: number;
   /** Abort remaining waves if any machine in a wave fails (default true). */
   stopOnWaveFailure?: boolean;
+  /** Ledger sink; defaults to NOOP (the CLI wires the file writer). */
+  ledger?: FlipLedgerWriter;
 }
 
 export interface RunFlipReport {
@@ -659,6 +826,8 @@ export interface RunFlipReport {
   results: FlipMachineResult[];
   aborted: boolean;
   abortReason?: string;
+  /** Per-run ledger rows (P1-C): machine, app, ts, result, source-of-value, sha256. */
+  ledger: FlipLedgerEntry[];
 }
 
 /**
@@ -671,11 +840,26 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
   const execute = options.execute ?? false;
   const expected: FlipMode = mode;
   const stopOnWaveFailure = options.stopOnWaveFailure ?? true;
-  const report: RunFlipReport = { app: spec.app, mode, execute, results: [], aborted: false };
+  const ledger: FlipLedgerEntry[] = [];
+  const report: RunFlipReport = { app: spec.app, mode, execute, results: [], aborted: false, ledger };
+  const expectedEnvFile = options.scriptOptions?.envDir
+    ? `${options.scriptOptions.envDir}/${spec.app}.env`
+    : undefined;
 
   for (const wave of waves) {
     let waveFailed = false;
     for (const target of wave.targets) {
+      const pushLedger = (entry: Omit<FlipLedgerEntry, "ts" | "machine" | "app" | "wave" | "mode">) => {
+        ledger.push({
+          ts: new Date().toISOString(),
+          machine: target.id,
+          app: spec.app,
+          wave: wave.name,
+          mode,
+          ...entry,
+        });
+      };
+
       // Freeze gate applies per-machine before any mutation (api mode only).
       if (execute && mode === "api" && spec.freezeRequired) {
         const freeze = runFreezeCheck(spec, runner, {
@@ -684,14 +868,16 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
           timeoutMs: options.timeoutMs,
         });
         if (!freeze.ok) {
+          const verification: StorageStatusVerification = { ok: false, observedMode: null, apiEnabled: null, reason: freeze.reason };
           report.results.push({
             machineId: target.id,
             wave: wave.name,
             applied: false,
-            verification: { ok: false, observedMode: null, apiEnabled: null, reason: freeze.reason },
+            verification,
             exitCode: -1,
             error: freeze.reason,
           });
+          pushLedger({ result: "FAIL", sourceOfValue: null, envSha256: null, provenanceOk: false });
           waveFailed = true;
           continue;
         }
@@ -706,19 +892,44 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
           verification: { ok: false, observedMode: null, apiEnabled: null, reason: "dry-run" },
           exitCode: 0,
         });
+        // Dry-run still shows the ledger row (source + provenance plan), so an
+        // operator can see exactly what an execute would record. No file is
+        // written and no hash exists yet.
+        pushLedger({
+          result: "dry-run",
+          sourceOfValue: expectedEnvFile ?? `$HOME/.hasna/fleet-env/${spec.app}.env (planned)`,
+          envSha256: null,
+          provenanceOk: false,
+        });
         continue;
       }
 
       const res = runner(target.id, script, { timeoutMs: options.timeoutMs ?? 120_000 });
       const verification = verifyStorageMode(res.stdout, expected, spec);
-      const ok = res.exitCode === 0 && verification.ok;
+      const provenance = verifyFlipProvenance(res.stdout, spec, expected, { expectedEnvFile });
+      // The provenance gates are mandatory in api mode: mode-ok alone is not a
+      // pass (P1-C, P0-3). Revert (local) has no connection source to prove.
+      const provenanceGate = mode === "api" ? (provenance.provenanceOk ?? false) : true;
+      const ok = res.exitCode === 0 && verification.ok && provenanceGate;
+      const combinedVerification: StorageStatusVerification = {
+        ...verification,
+        ...provenance,
+        ok: verification.ok && provenanceGate,
+        reason: !verification.ok ? verification.reason : !provenanceGate ? provenance.reason : undefined,
+      };
       report.results.push({
         machineId: target.id,
         wave: wave.name,
         applied: res.exitCode === 0,
-        verification,
+        verification: combinedVerification,
         exitCode: res.exitCode,
-        error: ok ? undefined : (res.stderr.trim().slice(0, 300) || verification.reason),
+        error: ok ? undefined : (res.stderr.trim().slice(0, 300) || combinedVerification.reason),
+      });
+      pushLedger({
+        result: ok ? "ok" : "FAIL",
+        sourceOfValue: combinedVerification.sourceOfValue ?? null,
+        envSha256: combinedVerification.envSha256 ?? null,
+        provenanceOk: provenanceGate,
       });
       if (!ok) waveFailed = true;
     }
@@ -728,6 +939,9 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
       break;
     }
   }
+  // Write the ledger only for a real run — a dry-run must not mutate state,
+  // though its rows are returned so `flip apply --dry-run` can display them.
+  if (execute) options.ledger?.(ledger);
   return report;
 }
 

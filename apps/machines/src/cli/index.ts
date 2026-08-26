@@ -11,8 +11,8 @@ import {
   type EventSeverity,
 } from "@hasna/events";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
 import { getLocalMachineId } from "../db.js";
@@ -207,7 +207,7 @@ import {
   uninstallHealService,
   healServiceStatus,
 } from "../commands/heal-daemon.js";
-import { getManifestPath, getClipboardKeyPath } from "../paths.js";
+import { getManifestPath, getClipboardKeyPath, getFlipLedgerPath } from "../paths.js";
 import { parseIntegerOption, renderKeyValueTable, renderList } from "../cli-utils.js";
 import type {
   AppsDiffResult,
@@ -3914,6 +3914,7 @@ flipCommand
     const spec = getFlipApp(app);
     const mode = normalizeFlipMode(options["mode"]);
     const { waves } = resolveFlipWaves(spec, options as never);
+    const ledgerPath = getFlipLedgerPath();
     const report = runFlip({
       spec,
       mode,
@@ -3921,6 +3922,13 @@ flipCommand
       runner: machineFlipRunner,
       execute: Boolean(options.execute),
       freezeCommand: options.freezeCheck,
+      // P1-C: the per-run ledger is written ONLY for a real execute; dry-runs
+      // return the rows in the report but never mutate the ledger file.
+      ledger: (entries) => {
+        const dir = dirname(resolve(ledgerPath));
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        for (const entry of entries) appendFileSync(ledgerPath, JSON.stringify(entry) + "\n");
+      },
     });
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
@@ -3929,6 +3937,13 @@ flipCommand
       for (const r of report.results) {
         const status = report.execute ? (r.verification.ok ? "ok" : "FAIL") : "planned";
         console.log(`  [${r.wave}] ${r.machineId}: ${status}${r.error ? ` — ${r.error}` : ""}`);
+      }
+      if (report.execute && report.ledger.length > 0) {
+        console.log(`flip ledger -> ${ledgerPath} (${report.ledger.length} rows)`);
+        for (const entry of report.ledger) {
+          const hash = entry.envSha256 ? entry.envSha256.slice(0, 12) : "-";
+          console.log(`  ${entry.ts} ${entry.machine} ${entry.app} ${entry.result} source=${entry.sourceOfValue ?? "-"} sha256=${hash} provenance=${entry.provenanceOk ? "ok" : "FAIL"}`);
+        }
       }
       if (report.aborted) console.log(`ABORTED: ${report.abortReason}`);
     }

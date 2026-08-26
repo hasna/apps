@@ -1,8 +1,9 @@
+import { type WorkstationTestVerification } from "../test-profile.js";
 import type { EffectiveTemplate } from "./schema.js";
 export type CheckStatus = "ok" | "drift" | "violation" | "skipped";
 export interface TemplateCheckItem {
     id: string;
-    kind: "file" | "ordering" | "sysctl" | "runtime-value" | "package" | "command" | "service" | "access-floor" | "unit-convention" | "tailscale" | "absence" | "swap" | "disk" | "journald";
+    kind: "file" | "ordering" | "sysctl" | "runtime-value" | "package" | "command" | "service" | "workstation-test-profile" | "access-floor" | "unit-convention" | "tailscale" | "absence" | "swap" | "disk" | "journald";
     status: CheckStatus;
     detail: string;
 }
@@ -64,6 +65,8 @@ export interface CheckOptions {
      * never shells out by accident.
      */
     commandProbe?: CommandProbe | null;
+    /** Exact semantic controller result for fixture checks; local checks read the live package-owned controller. */
+    workstationTestProfileVerification?: WorkstationTestVerification;
     /** Additional systemd unit dirs to scan for unit conventions. */
     unitDirs?: string[];
     /**
