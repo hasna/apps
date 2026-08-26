@@ -40,7 +40,7 @@
     },
     "apps/actions": {
       "name": "@hasna/actions",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "bin": {
         "actions": "dist/cli/index.js",
         "actions-mcp": "dist/mcp/index.js",
@@ -109,7 +109,7 @@
     },
     "apps/automations": {
       "name": "@hasna/automations",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "bin": {
         "automations": "dist/cli/index.js",
         "automations-daemon": "dist/daemon/index.js",
@@ -120,12 +120,12 @@
         "postgres": "^3.4.7",
       },
       "devDependencies": {
-        "@hasna/actions": "^0.2.1",
+        "@hasna/actions": "^0.2.4",
         "@types/bun": "latest",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
-        "@hasna/actions": "^0.2.1",
+        "@hasna/actions": "^0.2.4",
       },
     },
     "apps/banking": {
