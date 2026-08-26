@@ -7,6 +7,9 @@ bin/
 
 # Bun
 bun.lock
+# dep-connectors-aws-1: the aws connector's lockfile is tracked so the
+# standalone install's @aws-sdk resolution is frozen, not re-resolved.
+!connectors/aws/bun.lock
 
 # OS
 .DS_Store
