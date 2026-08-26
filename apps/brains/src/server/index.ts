@@ -8,7 +8,7 @@ import { getPackageVersion } from "../lib/package-metadata.js";
 import { gatherAll } from "../lib/gatherers/index.js";
 import { ensurePrivateDirectory, writePrivateTextFile } from "../lib/private-files.js";
 import { join } from "path";
-import { homedir } from "os";
+import { getBrainsDatasetsDir } from "../lib/app-home.js";
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
@@ -161,7 +161,7 @@ async function handleGather(req: Request): Promise<Response> {
 
   const sources = body.sources ?? ["todos", "mementos", "conversations", "sessions"];
   const limit = body.limit ?? 500;
-  const outDir = body.output_dir ?? join(homedir(), ".hasna", "brains", "datasets");
+  const outDir = body.output_dir ?? getBrainsDatasetsDir();
 
   ensurePrivateDirectory(outDir);
   const results = await gatherAll(sources, { limit });

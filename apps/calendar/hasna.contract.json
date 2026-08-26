@@ -3,7 +3,7 @@
   "name": "calendar",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.0",
+  "kitVersion": "0.14.1",
   "description": "Universal calendar management for AI coding agents. CLI + MCP + HTTP API (calendar-serve) + generated SDK. The server's data backend is selected by configuration: HASNA_CALENDAR_DATABASE_URL present selects postgresql, otherwise sqlite. On postgresql the serve process reads/writes that database directly with API-key auth via @hasna/contracts. The client connects to its local SQLite file or to the /v1 authority over HTTP (HASNA_CALENDAR_API_URL + HASNA_CALENDAR_API_KEY), and never opens Postgres directly.",
   "bins": [
     "calendar",

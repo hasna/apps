@@ -7,9 +7,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
-import { homedir } from "os";
 import { eq, desc, inArray } from "drizzle-orm";
 import { getDb, getRawDb, fineTunedModels, trainingDatasets } from "../db/index.js";
+import { getBrainsDatasetsDir } from "../lib/app-home.js";
 import { OpenAIProvider } from "../lib/providers/openai.js";
 import { TinkerProvider } from "../lib/providers/tinker.js";
 import { gatherFromTodos } from "../lib/gatherers/todos.js";
@@ -56,7 +56,7 @@ export function fineTunedModelIdCandidates(provider: string, jobId: string): str
 }
 
 function defaultOutputDir() {
-  return resolve(homedir(), ".hasna", "brains", "datasets");
+  return getBrainsDatasetsDir();
 }
 
 function parseMcpLimit(value: unknown, defaultValue = DEFAULT_LIST_LIMIT): number {
@@ -183,7 +183,7 @@ export function buildServer() {
             },
             output_dir: {
               type: "string",
-              description: "Directory to write JSONL files (default: ~/.hasna/brains/datasets/)",
+              description: "Directory to write JSONL files (default: the resolver-resolved brains datasets dir — the legacy ~/.hasna/brains/datasets until the XDG data home is adopted)",
             },
           },
           required: ["sources"],

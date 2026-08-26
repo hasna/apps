@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { getBankingHome, getDefaultDbPath } from "../core/app-home.ts";
 import type { ApprovalRecord } from "../core/approvals.ts";
 import type { AuditEvent } from "../core/audit.ts";
 import type { IdempotencyFingerprint, IdempotencyReplayDecision } from "../core/idempotency.ts";
@@ -14,19 +14,23 @@ export interface SqliteDevStoreOptions {
 }
 
 /**
- * The package-owned data root for @hasna/banking. Fleet law: app data lives at
- * ~/.hasna/<app>/ — never a hidden dot-dir, never a config/local-state dir, and
- * never cwd-relative. HASNA_BANKING_HOME overrides the root (the default is
- * what must stay canonical; the override is honored).
+ * The package-owned data root for @hasna/banking. Resolved through the @hasna/paths
+ * resolver (XDG / macOS home layout). The legacy `~/.hasna/banking` default (with the
+ * `HASNA_BANKING_HOME` exact-app override) stays the effective home until the store
+ * has actually been migrated to the XDG data home or the operator sets the data-kind
+ * override `HASNA_DATA_HOME` — an existing local store never becomes invisible on
+ * upgrade.
  */
+export { HASNA_BANKING_HOME_ENV } from "../core/app-home.ts";
+
+/** The package-owned data root for @hasna/banking (see {@link getBankingHome}). */
 export function bankingDataRoot(): string {
-  const home = process.env["HOME"] || homedir();
-  return process.env["HASNA_BANKING_HOME"] || join(home, ".hasna", "banking");
+  return getBankingHome();
 }
 
-/** The default dev-store database path beneath the canonical data root. */
+/** The default dev-store database path beneath the effective data root. */
 export function defaultDevStorePath(): string {
-  return join(bankingDataRoot(), "banking.db");
+  return getDefaultDbPath();
 }
 
 export function createSqliteDevStore(options: SqliteDevStoreOptions = {}): DevOnlyStore {

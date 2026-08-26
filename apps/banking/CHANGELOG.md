@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.10
+
+### Patch Changes
+
+- Switch @hasna/banking local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/banking` default (with the `HASNA_BANKING_HOME` exact-app override) stays the effective data home until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+
 ## 0.0.9
 
 ### Patch Changes

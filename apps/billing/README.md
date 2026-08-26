@@ -31,8 +31,16 @@ All three surfaces call the **same** `src/services/*` layer through one `runOp` 
 
 ## Storage
 
-- **SQLite** (default): `bun:sqlite` at `~/.hasna/billing/billing.db` is authoritative.
+- **SQLite** (default): `bun:sqlite` at the effective billing data home's `data/billing.db` is authoritative.
 - **PostgreSQL** (`HASNA_BILLING_DATABASE_URL` or `HASNA_BILLING_DATABASE_URL_FILE`): selected by the server through the vendored storage kit, with `sslmode=verify-full`. This build fails **closed** rather than silently writing money/audit data to ephemeral storage.
+
+The billing data home is resolved through `@hasna/paths`. The legacy
+`~/.hasna/billing` default (with the `HASNA_BILLING_HOME` / `BILLING_HOME`
+exact-app overrides) stays the effective home until the store has actually been
+migrated to the XDG data home (`~/.local/share/hasna/billing` on Linux;
+`~/Library/Application Support/Hasna/billing` on macOS) or the operator sets the
+data-kind override `HASNA_DATA_HOME`, so an existing local store never becomes
+invisible on upgrade.
 
 The append-only, hash-chained `audit_log` (SQLite triggers forbid UPDATE/DELETE) records money/lifecycle events and is excluded from `storage_push/pull/sync`.
 

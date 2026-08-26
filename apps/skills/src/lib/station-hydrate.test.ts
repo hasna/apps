@@ -168,6 +168,40 @@ describe("station hydration (port of fleet-resources hydrate-cache.mjs v1)", () 
     }
   });
 
+  test("fails closed when a manifest-recorded sha256 does not match the candidate bytes (review P1: presence is not a hash match)", () => {
+    const stationId = "station-test";
+    const { root } = buildSnapshot(stationId, CONTENT_MD, STUB_MD, { manifestRecords: "codewith" });
+    // The manifest records sha256Bytes(STUB_MD) for the codewith copy; poison
+    // the bytes after the manifest was written so record presence and content
+    // disagree. The hydrator must refuse (nothing written), never install the
+    // stale/tampered content into the canonical cache.
+    const codewithSkill = join(
+      root,
+      "resources",
+      stationId,
+      "skills",
+      "agent-homes",
+      "codewith",
+      "merge-pr",
+      "SKILL.md"
+    );
+    writeFileSync(codewithSkill, STUB_MD + "\n# tampered after snapshot\n");
+    const cache = tempCache();
+    try {
+      let thrown: StationSnapshotError | null = null;
+      try {
+        hydrate({ stationId, repoRoot: root, dryRun: false, cacheRoot: cache.skills });
+      } catch (error) {
+        thrown = error as StationSnapshotError;
+      }
+      expect(thrown?.code).toBe("MANIFEST_HASH_MISMATCH");
+      expect(existsSync(join(cache.skills, "merge-pr"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(cache.base, { recursive: true, force: true });
+    }
+  });
+
   test("dry-run is the default and writes nothing", () => {
     const stationId = "station-test";
     const { root } = buildSnapshot(stationId, CONTENT_MD, STUB_MD);

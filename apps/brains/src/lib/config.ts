@@ -1,5 +1,8 @@
 // Config file management for @hasna/brains
-// Priority: env vars > ~/.hasna/brains/config.json (auto-migrates from ~/.brains/)
+// Priority: env vars > the effective brains data home's config.json
+// (auto-migrates from ~/.brains/). The data home is resolved through
+// @hasna/paths — the legacy ~/.hasna/brains default stays the effective home
+// until the XDG data home is adopted (store migrated there or HASNA_DATA_HOME set).
 
 import {
   chmodSync,
@@ -16,7 +19,7 @@ import {
 } from "fs";
 import { randomUUID } from "crypto";
 import { join, dirname } from "path";
-import { homedir } from "os";
+import { effectiveHome, getBrainsHome } from "./app-home.js";
 
 export const CONFIG_KEYS = ["OPENAI_API_KEY", "TINKER_API_KEY", "TINKER_BASE_URL"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -52,12 +55,12 @@ function ensureConfigDirectory(dirPath: string): void {
 }
 
 function resolveConfigPath(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const hasnaDir = join(home, ".hasna");
-  const newDir = join(hasnaDir, "brains");
-  const oldDir = join(home, ".brains");
+  const newDir = getBrainsHome();
+  const oldDir = join(effectiveHome(), ".brains");
   const configPath = join(newDir, CONFIG_FILE_NAME);
-  ensureConfigDirectory(hasnaDir);
+  // Ensure the parent base only — not `newDir` itself — so the migration check
+  // below can still observe `!existsSync(newDir)` and run the `~/.brains` copy.
+  ensureConfigDirectory(dirname(newDir));
 
   // Auto-migrate: if old dir exists and new doesn't, copy files over
   if (existsSync(oldDir) && !existsSync(newDir)) {

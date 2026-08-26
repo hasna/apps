@@ -16,7 +16,7 @@ enabled.
 | npm package | `@hasna/banking` |
 | CLI | `banking` |
 | MCP binary | `banking-mcp` |
-| Reserved global state | `~/.hasna/banking/` |
+| Reserved global state | Effective banking data home (legacy `~/.hasna/banking/` by default, resolved via `@hasna/paths`) |
 
 ## Initial Provider Scope
 
@@ -56,12 +56,16 @@ Runtime and source-development commands require Bun 1.3 or newer.
 
 ## State and paths
 
-The SQLite development store defaults to a file-backed database at
-`~/.hasna/banking/banking.db` beneath the package-owned canonical data root
-(created on first use with mode `0700`). `HASNA_BANKING_HOME` overrides the
-root, and an explicit `path` passed to `createSqliteDevStore` wins over both;
-pass `":memory:"` for an in-memory store. The CLI, MCP entrypoint, and SDK do
-not initialize the store unless a command or caller creates it.
+The SQLite development store defaults to a file-backed database at the
+effective banking data home, resolved through `@hasna/paths`. The legacy
+`~/.hasna/banking` default stays the effective data home until the store is
+actually migrated to the XDG data home (`~/.local/share/hasna/banking` on
+Linux; `~/Library/Application Support/Hasna/banking` on macOS) or the operator
+sets the data-kind override `HASNA_DATA_HOME`, so an existing local store never
+becomes invisible on upgrade. `HASNA_BANKING_HOME` overrides the root
+unconditionally, and an explicit `path` passed to `createSqliteDevStore` wins
+over both; pass `":memory:"` for an in-memory store. The CLI, MCP entrypoint,
+and SDK do not initialize the store unless a command or caller creates it.
 
 Legacy global dotdirs are not read, and no package-owned project-local dotdir
 is supported. See [State layout](docs/STATE_LAYOUT.md) for the audited path

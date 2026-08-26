@@ -3,7 +3,7 @@
   "name": "shield",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.13.4",
+  "kitVersion": "0.14.1",
   "description": "AI-powered security scanner for git repos. Ships the shield CLI, an MCP server, and a REST/dashboard server (shield-serve) over a package-owned local SQLite store at ~/.hasna/security/shield.db. The server's active data backend is SQLite; PostgreSQL is declared as the forward-looking engine capability with an environment-gated live proof (pgTestGate).",
   "bins": [
     "shield",

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.4
+
+### Patch Changes
+
+- 984b147: Switch @hasna/actions local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/actions` default (with the `HASNA_ACTIONS_DIR` / `HASNA_ACTIONS_HOME` exact-app overrides) stays the effective home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+
+## 0.2.3
+
+### Patch Changes
+
+- Switch @hasna/actions local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/actions` default (with the `HASNA_ACTIONS_DIR` / `HASNA_ACTIONS_HOME` exact-app overrides) stays the effective home until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+
 ## 0.2.2
 
 ### Patch Changes

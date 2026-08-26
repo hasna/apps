@@ -3,6 +3,12 @@
 `hasna.contract.json` declares this repo against `hasna.service_contract.v1`. The gate is
 `bun run contracts:check` (`@hasna/contracts@0.13.4 repo-conformance .`).
 
+**Validator-version note (measured 2026-08-26):** the CI census
+(`tooling/ci/check-manifests.ts`) validates this repo at the pinned
+`@hasna/contracts@0.14.0`, and the latest published kit is `0.14.1`. All three kits —
+`0.13.4`, `0.14.0`, `0.14.1` — fail the identical four checks listed below, so the
+register is invariant across the app's own gate, the CI gate, and latest.
+
 **`bun run contracts:check` currently exits 1.** Four checks are open. They are recorded
 here rather than papered over, because the manifest is only allowed to describe surfaces
 that actually exist — declaring `api` and `sdk` as `supported`, or `postgres` as a storage

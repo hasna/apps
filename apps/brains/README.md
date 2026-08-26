@@ -101,13 +101,21 @@ brains storage push
 brains storage pull
 ```
 
-Set `HASNA_BRAINS_DATABASE_URL` for a direct PostgreSQL connection, or configure `~/.hasna/brains/storage/config.json` with `postgres` host settings.
-Legacy cloud aliases are not used. Configure remote storage with the storage
-environment variables above.
+Set `HASNA_BRAINS_DATABASE_URL` for a direct PostgreSQL connection, or configure the
+storage config file at the resolver-resolved brains data home (`storage/config.json`
+under the effective data home — the legacy `~/.hasna/brains` default until the XDG
+data home is adopted) with `postgres` host settings. Legacy cloud aliases are not
+used. Configure remote storage with the storage environment variables above.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/brains/`.
+The brains data home is resolved through `@hasna/paths` (XDG/macOS home layout).
+The legacy `~/.hasna/brains` default stays the effective data home until the store
+is actually migrated to the XDG data home (`~/.local/share/hasna/brains` on Linux;
+`~/Library/Application Support/Hasna/brains` on macOS) or the operator sets the
+data-kind override `HASNA_DATA_HOME`, so an existing local store never becomes
+invisible on upgrade. Exact-app overrides win over that default:
+`HASNA_BRAINS_DIR`, then the fallback `HASNA_BRAINS_HOME`.
 
 ## License
 

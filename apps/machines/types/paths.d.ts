@@ -16,3 +16,9 @@ export declare function getClipboardKeyPath(): string;
 export declare function getClipboardHistoryPath(): string;
 export declare function ensureParentDir(filePath: string): void;
 export declare function ensureDataDir(): string;
+/**
+ * The per-run flip ledger (P1-C). JSONL, one entry per machine per flip run.
+ * Every row is value-free: machine, app, ts, result, source-of-value, sha256,
+ * provenance-gate verdict.
+ */
+export declare function getFlipLedgerPath(): string;
