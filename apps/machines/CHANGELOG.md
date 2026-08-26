@@ -38,6 +38,10 @@
   and a ledger preflight opens the ledger for append BEFORE any machine is touched
   — an unwritable ledger aborts the flip before the first remote mutation.
 
+- Updated dependencies [cycle-2 review remediation]
+  - @hasna/contracts@0.14.2 (the release that ships the fleet-env primary disk
+    layer the flip's provenance gates rely on)
+
 ## 0.2.37
 
 ### Patch Changes
