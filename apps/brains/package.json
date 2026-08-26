@@ -71,7 +71,7 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
-    "drizzle-orm": "^0.40.0",
+    "drizzle-orm": "0.45.2",
     "ink": "^5.2.0",
     "openai": "^4.0.0",
     "pg": "^8.20.0",
