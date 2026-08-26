@@ -13,6 +13,7 @@ import { isIP } from "node:net";
 import { clientTransportEnvKeys } from "./env-keys.js";
 import {
   CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE,
+  completePointerCredential,
   explicitCredential,
   resolveCredential,
   validateAndSealResolvedCredential,
@@ -27,15 +28,29 @@ import {
 import { appConfigDiskValue, credentialDiskSources } from "./credentials.js";
 
 export {
+  LEGACY_CLOUD_REMOVAL_DEADLINE,
   appConfigDiskValue,
-  CredentialResolutionError,
+  completePointerCredential,
+  credentialDiskSourceList,
   credentialDiskSources,
+  CredentialResolutionError,
   explicitCredential,
   resolveCredential,
   __resetCredentialDeprecationNotices,
 } from "./credentials.js";
-export type { AppConfigDiskHit, CredentialChainOptions, CredentialTier, ResolvedCredential } from "./credentials.js";
-export { clientTransportEnvKeys, credentialOverrideEnvKey, CREDENTIAL_PROFILE_ENV_KEY } from "./env-keys.js";
+export type {
+  AppConfigDiskHit,
+  CredentialChainOptions,
+  CredentialTier,
+  DiskCredentialSource,
+  ResolvedCredential,
+} from "./credentials.js";
+export {
+  clientTransportEnvKeys,
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey,
+  CREDENTIAL_PROFILE_ENV_KEY,
+} from "./env-keys.js";
 export type { ClientTransportEnvKeys } from "./env-keys.js";
 
 const FLEET_API_DOMAIN_ENV_KEY = "HASNA_FLEET_API_DOMAIN";
@@ -570,6 +585,28 @@ function currentCredential(name: string, apiKey: string | CredentialProvider): R
 }
 
 /**
+ * Resolve the per-request credential, completing a secrets-vault pointer.
+ *
+ * A pointer-tier resolution (`tier === "pointer"`) carries the vault ITEM KEY,
+ * not the value; the value is fetched through the @hasna/secrets SDK HERE, at
+ * request time, and any failure is TERMINAL (never a fall-through). All other
+ * tiers resolve synchronously exactly as before. This is the seam the
+ * requirement "the transport resolves the pointer through the secrets SDK at
+ * request time" binds.
+ */
+async function resolveRequestCredential(
+  name: string,
+  apiKey: string | CredentialProvider,
+  env: Env = process.env,
+): Promise<ResolvedCredential> {
+  const resolved = currentCredential(name, apiKey);
+  if (resolved.tier === "pointer") {
+    return completePointerCredential(name, resolved, env);
+  }
+  return resolved;
+}
+
+/**
  * What a human should do about a 401/403, given where the key came from.
  *
  * The opaque "API key has been revoked" this replaces cost an engineer an hour:
@@ -881,7 +918,8 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
     // attempt would let a rotation land mid-request and send two attempts of the
     // same logical call under two different principals, which is precisely the
     // audit-log confusion that makes retry-on-401 the wrong pattern here.
-    const credential = currentCredential(options.name, options.apiKey);
+    // A pointer tier resolves through the secrets vault at this request boundary.
+    const credential = await resolveRequestCredential(options.name, options.apiKey);
 
     let last: { retryable: boolean; error: Error } | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {

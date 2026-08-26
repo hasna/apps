@@ -30,8 +30,17 @@ function makeHome(): string {
   return home;
 }
 
-/** Write `~/.hasna/cloud/<app>.env`. Path is composed from segments on purpose. */
-function writeCloudEnv(home: string, app: string, body: string): string {
+/** Write the PRIMARY fleet-env layer, `~/.hasna/fleet-env/<app>.env`. */
+function writeFleetEnv(home: string, app: string, body: string): string {
+  const dir = join(home, ".hasna", "fleet-env");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${app}.env`);
+  writeFileSync(path, body);
+  return path;
+}
+
+/** Write the legacy-cloud layer, `~/.hasna/cloud/<app>.env` (NOISY, deprecated). */
+function writeLegacyCloudEnv(home: string, app: string, body: string): string {
   const dir = join(home, ".hasna", "cloud");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${app}.env`);
@@ -39,8 +48,17 @@ function writeCloudEnv(home: string, app: string, body: string): string {
   return path;
 }
 
-/** Write the second on-disk layer, `~/.config/hasna/<app>-cloud.env`. */
+/** Write the config tier under its FINAL name, `~/.config/hasna/<app>.env`. */
 function writeConfigEnv(home: string, app: string, body: string): string {
+  const dir = join(home, ".config", "hasna");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${app}.env`);
+  writeFileSync(path, body);
+  return path;
+}
+
+/** Write the deprecated config alias, `~/.config/hasna/<app>-cloud.env` (NOISY). */
+function writeConfigLegacyEnv(home: string, app: string, body: string): string {
   const dir = join(home, ".config", "hasna");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${app}-cloud.env`);
@@ -59,7 +77,7 @@ afterEach(() => {
 describe("the measured failure: a stale shell must not outrank the disk", () => {
   test("a stale env key loses to a valid disk credential", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
+    writeFleetEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
 
     const resolved = resolveCredential("accounts", {
       HOME: home,
@@ -68,18 +86,19 @@ describe("the measured failure: a stale shell must not outrank the disk", () => 
 
     expect(resolved).not.toBeNull();
     expect(resolved!.apiKey).toBe(FRESH_DISK_KEY);
-    expect(resolved!.tier).toBe("disk");
+    expect(resolved!.tier).toBe("fleet-env");
+    expect(resolved!.deprecated).toBe(false);
   });
 
   test("the disk is re-read on every call, so a rotation heals without a new process", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=key-before-rotation\n");
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=key-before-rotation\n");
     const env = { HOME: home, HASNA_ACCOUNTS_API_KEY: STALE_ENV_KEY };
 
     expect(resolveCredential("accounts", env)!.apiKey).toBe("key-before-rotation");
 
     // The rotation lands on disk. The process env is untouched and still stale.
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=key-after-rotation\n");
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=key-after-rotation\n");
 
     expect(resolveCredential("accounts", env)!.apiKey).toBe("key-after-rotation");
   });
@@ -88,7 +107,7 @@ describe("the measured failure: a stale shell must not outrank the disk", () => 
 describe("tier 1 — an explicit argument", () => {
   test("an explicit apiKey outranks the override, the disk, and the legacy env", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
+    writeFleetEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
 
     const resolved = resolveCredential(
       "accounts",
@@ -109,7 +128,7 @@ describe("tier 1 — an explicit argument", () => {
 describe("tier 2 — a deliberate override never falls through to another identity", () => {
   test("the override wins even when a different, valid credential sits on disk", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
+    writeFleetEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
 
     const resolved = resolveCredential("accounts", {
       HOME: home,
@@ -124,7 +143,7 @@ describe("tier 2 — a deliberate override never falls through to another identi
 
   test("a blank override throws instead of silently resolving to the disk identity", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
+    writeFleetEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
 
     expect(() =>
       resolveCredential("accounts", {
@@ -136,7 +155,7 @@ describe("tier 2 — a deliberate override never falls through to another identi
 
   test("a HASNA_PROFILE pointer resolves the profile's own disk file", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
+    writeFleetEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
     const dir = join(home, ".hasna", "cloud");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "accounts.staging.env"), "HASNA_ACCOUNTS_API_KEY=staging-key\n");
@@ -150,7 +169,7 @@ describe("tier 2 — a deliberate override never falls through to another identi
 
   test("a HASNA_PROFILE naming a profile with no credential throws and names the paths tried", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
+    writeFleetEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
 
     let caught: unknown;
     try {
@@ -184,20 +203,21 @@ describe("tier 2 — a deliberate override never falls through to another identi
 });
 
 describe("tier 3 — disk", () => {
-  test("the primary cloud file outranks the secondary config file", () => {
+  test("the fleet-env file outranks the config file", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=primary-key\n");
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=primary-key\n");
     writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=secondary-key\n");
 
     const resolved = resolveCredential("accounts", { HOME: home });
 
     expect(resolved!.apiKey).toBe("primary-key");
-    expect(resolved!.tier).toBe("disk");
+    expect(resolved!.tier).toBe("fleet-env");
+    expect(resolved!.deprecated).toBe(false);
   });
 
   test("two disk layers holding DIFFERENT keys produce a split-brain warning with no key material", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=primary-key\n");
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=primary-key\n");
     writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=secondary-key\n");
 
     const resolved = resolveCredential("accounts", { HOME: home });
@@ -209,7 +229,7 @@ describe("tier 3 — disk", () => {
 
   test("two disk layers holding the SAME key produce no warning", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=same-key\n");
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=same-key\n");
     writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=same-key\n");
 
     expect(resolveCredential("accounts", { HOME: home })!.warning).toBeNull();
@@ -217,14 +237,14 @@ describe("tier 3 — disk", () => {
 
   test("the `export KEY=\"value\"` file shape is parsed", () => {
     const home = makeHome();
-    writeCloudEnv(home, "knowledge", 'export HASNA_KNOWLEDGE_API_KEY="quoted-exported-key"\n');
+    writeFleetEnv(home, "knowledge", 'export HASNA_KNOWLEDGE_API_KEY="quoted-exported-key"\n');
 
     expect(resolveCredential("knowledge", { HOME: home })!.apiKey).toBe("quoted-exported-key");
   });
 
   test("comments, blank lines, and trailing whitespace are ignored", () => {
     const home = makeHome();
-    writeCloudEnv(
+    writeFleetEnv(
       home,
       "accounts",
       "# a comment\n\n  HASNA_ACCOUNTS_API_KEY=spaced-key  \n# HASNA_ACCOUNTS_API_KEY=commented-out\n",
@@ -245,24 +265,24 @@ describe("tier 3 — disk", () => {
 
   test("the unprefixed <APP>_API_KEY alias is honoured, but only after the canonical name", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "ACCOUNTS_API_KEY=alias-key\n");
+    writeFleetEnv(home, "accounts", "ACCOUNTS_API_KEY=alias-key\n");
     expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("alias-key");
 
-    writeCloudEnv(home, "accounts", "ACCOUNTS_API_KEY=alias-key\nHASNA_ACCOUNTS_API_KEY=canonical-key\n");
+    writeFleetEnv(home, "accounts", "ACCOUNTS_API_KEY=alias-key\nHASNA_ACCOUNTS_API_KEY=canonical-key\n");
     expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("canonical-key");
   });
 
   test("a malformed file yields no credential and leaks no file content into the result", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "this is not an env file at all\x00\xff\n");
+    writeFleetEnv(home, "accounts", "this is not an env file at all\x00\xff\n");
 
     expect(resolveCredential("accounts", { HOME: home })).toBeNull();
   });
 
   test("an unreadable disk path is not fatal — resolution continues to the legacy tier", () => {
     const home = makeHome();
-    // `~/.hasna/cloud/accounts.env` is a DIRECTORY, so reading it throws EISDIR.
-    mkdirSync(join(home, ".hasna", "cloud", "accounts.env"), { recursive: true });
+    // `~/.hasna/fleet-env/accounts.env` is a DIRECTORY, so reading it throws EISDIR.
+    mkdirSync(join(home, ".hasna", "fleet-env", "accounts.env"), { recursive: true });
 
     const resolved = resolveCredential(
       "accounts",
@@ -271,6 +291,143 @@ describe("tier 3 — disk", () => {
     );
 
     expect(resolved!.tier).toBe("legacy-env");
+  });
+});
+
+describe("the fleet-env migration: primary order and the NOISY legacy-cloud fallback", () => {
+  test("fleet-env beats the legacy-cloud fallback", () => {
+    const home = makeHome();
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=fleet-key\n");
+    writeLegacyCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=legacy-key\n");
+
+    const resolved = resolveCredential("accounts", { HOME: home });
+
+    expect(resolved!.apiKey).toBe("fleet-key");
+    expect(resolved!.tier).toBe("fleet-env");
+    expect(resolved!.deprecated).toBe(false);
+  });
+
+  test("a legacy-cloud winner is NOISY: deprecated, warned, and deadline-named", () => {
+    const home = makeHome();
+    writeLegacyCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=legacy-key\n");
+    const messages: string[] = [];
+    const resolved = resolveCredential("accounts", { HOME: home }, { onDeprecation: (m) => messages.push(m) });
+
+    expect(resolved!.apiKey).toBe("legacy-key");
+    expect(resolved!.tier).toBe("legacy-cloud");
+    expect(resolved!.deprecated).toBe(true);
+    // The notice names the source, the primary target, and the deadline.
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain(join(home, ".hasna", "cloud", "accounts.env"));
+    expect(messages[0]).toContain(join(home, ".hasna", "fleet-env", "accounts.env"));
+    expect(messages[0]).toContain("2026-10-01");
+    // The resolution's warning also names the deadline, never the key.
+    expect(resolved!.warning).toContain("2026-10-01");
+    expect(resolved!.warning).not.toContain("legacy-key");
+  });
+
+  test("the legacy-cloud deprecation is emitted once per source, not per call", () => {
+    const home = makeHome();
+    writeLegacyCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=legacy-key\n");
+    const messages: string[] = [];
+    const options = { onDeprecation: (m: string) => messages.push(m) };
+    resolveCredential("accounts", { HOME: home }, options);
+    resolveCredential("accounts", { HOME: home }, options);
+    expect(messages).toHaveLength(1);
+  });
+
+  test("the config tier's final name beats its deprecated `-cloud.env` alias", () => {
+    const home = makeHome();
+    writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=config-key\n");
+    writeConfigLegacyEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=alias-key\n");
+
+    const resolved = resolveCredential("accounts", { HOME: home });
+
+    expect(resolved!.apiKey).toBe("config-key");
+    expect(resolved!.tier).toBe("config");
+    expect(resolved!.deprecated).toBe(false);
+  });
+
+  test("a config `-cloud.env` alias winner is deprecated and NOISY", () => {
+    const home = makeHome();
+    writeConfigLegacyEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=alias-key\n");
+    const messages: string[] = [];
+    const resolved = resolveCredential("accounts", { HOME: home }, { onDeprecation: (m) => messages.push(m) });
+
+    expect(resolved!.tier).toBe("config-legacy");
+    expect(resolved!.deprecated).toBe(true);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("2026-10-01");
+  });
+
+  test("the legacy-cloud fallback is used only when fleet-env is silent", () => {
+    const home = makeHome();
+    writeLegacyCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=legacy-key\n");
+    const resolved = resolveCredential("accounts", { HOME: home });
+    expect(resolved!.tier).toBe("legacy-cloud");
+  });
+});
+
+describe("the secrets-vault pointer tier", () => {
+  test("a present pointer returns a deliberate pointer resolution carrying the vault key, never a fall-through", () => {
+    const home = makeHome();
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=disk-key\n");
+    const resolved = resolveCredential("accounts", {
+      HOME: home,
+      HASNA_ACCOUNTS_API_KEY_REF: "hasna/apps/accounts/live/api_key",
+    });
+
+    expect(resolved!.tier).toBe("pointer");
+    expect(resolved!.deliberate).toBe(true);
+    expect(resolved!.pointerVaultKey).toBe("hasna/apps/accounts/live/api_key");
+    // The apiKey is an empty sentinel until the transport completes it; the
+    // disk credential sitting right there is NEVER used instead.
+    expect(resolved!.apiKey).toBe("");
+  });
+
+  test("a pointer outranks disk but loses to the override", () => {
+    const home = makeHome();
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=disk-key\n");
+    const resolved = resolveCredential("accounts", {
+      HOME: home,
+      HASNA_ACCOUNTS_API_KEY_REF: "hasna/apps/accounts/live/api_key",
+      HASNA_ACCOUNTS_API_KEY_OVERRIDE: "override-key",
+    });
+    expect(resolved!.tier).toBe("override");
+  });
+
+  test("an empty pointer is a TERMINAL failure, never a fall-through", () => {
+    const home = makeHome();
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=disk-key\n");
+    expect(() =>
+      resolveCredential("accounts", { HOME: home, HASNA_ACCOUNTS_API_KEY_REF: "  " }),
+    ).toThrow(CredentialResolutionError);
+  });
+
+  test("a pointer carrying a credential value (not a vault item key) is refused", () => {
+    const home = makeHome();
+    expect(() =>
+      resolveCredential("accounts", { HOME: home, HASNA_ACCOUNTS_API_KEY_REF: "literal-secret-value" }),
+    ).toThrow(/vault ITEM KEY/);
+  });
+
+  test("a literal API key shaped like a vault path is refused everywhere it is a literal", () => {
+    const home = makeHome();
+    // In the legacy env literal.
+    expect(() =>
+      resolveCredential("accounts", { HOME: home, HASNA_ACCOUNTS_API_KEY: "hasna/apps/accounts/live/api_key" }),
+    ).toThrow(/vault path is NEVER accepted as a literal API key/);
+    // In the override literal.
+    expect(() =>
+      resolveCredential("accounts", { HOME: home, HASNA_ACCOUNTS_API_KEY_OVERRIDE: "hasna/apps/accounts/live/api_key" }),
+    ).toThrow(/vault path is NEVER accepted as a literal API key/);
+    // As an explicit argument.
+    expect(() => resolveCredential("accounts", { HOME: home }, { apiKey: "hasna/apps/accounts/live/api_key" })).toThrow(
+      /vault path is NEVER accepted as a literal API key/,
+    );
+    // In a fleet-env disk file.
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=hasna/apps/accounts/live/api_key\n");
+    expect(() => resolveCredential("accounts", { HOME: home })).toThrow(/vault path is NEVER accepted as a literal API key/);
   });
 });
 
@@ -299,7 +456,7 @@ describe("tier 4 — the legacy process env is a fallback, not a default", () =>
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("HASNA_ACCOUNTS_API_KEY");
-    expect(messages[0]).toContain(join(home, ".hasna", "cloud", "accounts.env"));
+    expect(messages[0]).toContain(join(home, ".hasna", "fleet-env", "accounts.env"));
     expect(messages[0]).not.toContain(STALE_ENV_KEY);
   });
 
@@ -331,7 +488,7 @@ describe("tier 4 — the legacy process env is a fallback, not a default", () =>
 describe("precedence holds across all four tiers", () => {
   test("removing each tier in turn falls to exactly the next one", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=disk-key\n");
+    writeFleetEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=disk-key\n");
     const base = {
       HOME: home,
       HASNA_ACCOUNTS_API_KEY: "legacy-key",
@@ -343,9 +500,9 @@ describe("precedence holds across all four tiers", () => {
     expect(resolveCredential("accounts", base, silent)!.tier).toBe("override");
 
     const { HASNA_ACCOUNTS_API_KEY_OVERRIDE: _dropped, ...noOverride } = base;
-    expect(resolveCredential("accounts", noOverride, silent)!.tier).toBe("disk");
+    expect(resolveCredential("accounts", noOverride, silent)!.tier).toBe("fleet-env");
 
-    rmSync(join(home, ".hasna", "cloud", "accounts.env"));
+    rmSync(join(home, ".hasna", "fleet-env", "accounts.env"));
     expect(resolveCredential("accounts", noOverride, silent)!.tier).toBe("legacy-env");
 
     const { HASNA_ACCOUNTS_API_KEY: _alsoDropped, ...nothing } = noOverride;
@@ -359,10 +516,12 @@ describe("the disk tier is hermetic: it reads only the HOME it is given", () => 
     expect(resolveCredential("accounts", {})).toBeNull();
   });
 
-  test("credentialDiskSources reports both layers for a given HOME", () => {
+  test("credentialDiskSources reports all four layers for a given HOME, fleet-env first", () => {
     const home = makeHome();
     expect(credentialDiskSources("accounts", { HOME: home })).toEqual([
+      join(home, ".hasna", "fleet-env", "accounts.env"),
       join(home, ".hasna", "cloud", "accounts.env"),
+      join(home, ".config", "hasna", "accounts.env"),
       join(home, ".config", "hasna", "accounts-cloud.env"),
     ]);
   });
@@ -371,7 +530,7 @@ describe("the disk tier is hermetic: it reads only the HOME it is given", () => 
 describe("no key material ever escapes into diagnostics", () => {
   test("the resolution's source and warning never contain the secret", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
+    writeFleetEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
 
     const resolved = resolveCredential("accounts", { HOME: home })!;
 
@@ -396,7 +555,7 @@ describe("no key material ever escapes into diagnostics", () => {
 describe("appConfigDiskValue — non-secret config from the same file", () => {
   test("reads a declared value and names the file it came from", () => {
     const home = makeHome();
-    const path = writeCloudEnv(home, "todos", "HASNA_TODOS_API_URL=https://todos.example.invalid\n");
+    const path = writeFleetEnv(home, "todos", "HASNA_TODOS_API_URL=https://todos.example.invalid\n");
 
     const hit = appConfigDiskValue("todos", { HOME: home }, ["HASNA_TODOS_API_URL"]);
 
@@ -408,7 +567,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
 
   test("honours the caller's key precedence, not the file's line order", () => {
     const home = makeHome();
-    writeCloudEnv(
+    writeFleetEnv(
       home,
       "todos",
       "TODOS_API_URL=https://unprefixed.example.invalid\nHASNA_TODOS_API_URL=https://prefixed.example.invalid\n",
@@ -422,7 +581,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
 
   test("the first disk layer wins over the second", () => {
     const home = makeHome();
-    const first = writeCloudEnv(home, "todos", "HASNA_TODOS_API_URL=https://first.example.invalid\n");
+    const first = writeFleetEnv(home, "todos", "HASNA_TODOS_API_URL=https://first.example.invalid\n");
     writeConfigEnv(home, "todos", "HASNA_TODOS_API_URL=https://second.example.invalid\n");
 
     const hit = appConfigDiskValue("todos", { HOME: home }, ["HASNA_TODOS_API_URL"]);
@@ -433,7 +592,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
 
   test("falls through to the second layer when the first lacks the key", () => {
     const home = makeHome();
-    writeCloudEnv(home, "todos", "SOMETHING_ELSE=1\n");
+    writeFleetEnv(home, "todos", "SOMETHING_ELSE=1\n");
     const second = writeConfigEnv(home, "todos", "HASNA_TODOS_API_URL=https://second.example.invalid\n");
 
     const hit = appConfigDiskValue("todos", { HOME: home }, ["HASNA_TODOS_API_URL"]);
@@ -444,7 +603,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
   test("a missing file, an absent key, and no HOME are all just null", () => {
     const home = makeHome();
     expect(appConfigDiskValue("todos", { HOME: home }, ["HASNA_TODOS_API_URL"])).toBeNull();
-    writeCloudEnv(home, "todos", "SOMETHING_ELSE=1\n");
+    writeFleetEnv(home, "todos", "SOMETHING_ELSE=1\n");
     expect(appConfigDiskValue("todos", { HOME: home }, ["HASNA_TODOS_API_URL"])).toBeNull();
     expect(appConfigDiskValue("todos", {}, ["HASNA_TODOS_API_URL"])).toBeNull();
   });
@@ -460,7 +619,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
   // redacted on inspection; a plain `{ key, value }` hit would defeat that.
   test("REFUSES to return anything that looks like a credential key", () => {
     const home = makeHome();
-    writeCloudEnv(
+    writeFleetEnv(
       home,
       "accounts",
       `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n` +
@@ -484,7 +643,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
     // POSITIVE CONTROL for the refusal: the same file, same call shape, a
     // non-secret key — proves the refusal above is the filter doing its job and
     // not the reader simply failing to read this file at all.
-    writeCloudEnv(
+    writeFleetEnv(
       home,
       "accounts",
       `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\nHASNA_ACCOUNTS_API_URL=https://accounts.example.invalid\n`,
@@ -496,7 +655,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
 
   test("a credential-shaped key mixed into the request list is dropped, not honoured", () => {
     const home = makeHome();
-    writeCloudEnv(
+    writeFleetEnv(
       home,
       "accounts",
       `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\nHASNA_ACCOUNTS_API_URL=https://accounts.example.invalid\n`,
@@ -515,7 +674,7 @@ describe("appConfigDiskValue — non-secret config from the same file", () => {
   // disk must not resurrect it, and must not blow up over it either.
   test("a retired key in the file is neither returned nor fatal", () => {
     const home = makeHome();
-    writeCloudEnv(
+    writeFleetEnv(
       home,
       "todos",
       "HASNA_TODOS_STORAGE_MODE=postgres\nHASNA_TODOS_API_URL=https://todos.example.invalid\n",

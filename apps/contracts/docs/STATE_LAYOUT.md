@@ -33,6 +33,26 @@ state. In particular, `.codewith` and other `.hasna/<app>` paths in the secure
 local-store policy belong to their named packages, while `.hasna/cloud` appears
 in the no-cloud scanner as a forbidden legacy runtime path.
 
+## Credential resolution paths (read, never owned)
+
+`@hasna/contracts` does not own these directories, but its credential resolver
+reads them in precedence order (see CONTRACT.md §3a):
+
+```text
+~/.hasna/fleet-env/<name>.env        PRIMARY — re-read on every call
+~/.hasna/cloud/<name>.env            legacy-cloud fallback — NOISY, deprecated,
+                                     removed after 2026-10-01
+~/.config/hasna/<name>.env           config tier (final name; the `-cloud`
+                                     suffix was retired)
+~/.config/hasna/<name>-cloud.env     config legacy alias — NOISY, deprecated,
+                                     removed after 2026-10-01
+```
+
+A deprecated-source winner reports its granular tier in `apiKeyTier`
+(`legacy-cloud` / `config-legacy`) with `deprecated: true`, so a diagnostic can
+name the source. `@hasna/contracts` never writes, copies, moves, or deletes any
+of these files.
+
 The repository ignores `.hasna/` so local project metadata is not accidentally
 committed. The generated storage-kit manifest is outside that ignored directory
 and is intentionally checked into each target repository.

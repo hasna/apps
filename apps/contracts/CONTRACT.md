@@ -98,17 +98,33 @@ The credential is resolved by the transport, at call time, through
 | --- | --- | --- | --- |
 | 1 | argument | `--api-key` / `--profile` passed by the caller | Deliberate. |
 | 2 | override | `HASNA_<NAME>_API_KEY_OVERRIDE`, or the `HASNA_PROFILE` pointer | Deliberate. Nothing sets these automatically. |
-| 3 | **disk** | `$HOME/.hasna/cloud/<name>.env`, then `$HOME/.config/hasna/<name>-cloud.env` | **The default path.** Re-read on every call. |
+| 2.5 | pointer | `HASNA_<NAME>_API_KEY_REF` (a secrets-vault ITEM KEY) | Deliberate. Resolved through the `@hasna/secrets` SDK at request time; a vault that cannot be reached is TERMINAL, never a fall-through. |
+| 3 | **disk** | `$HOME/.hasna/fleet-env/<name>.env` (**primary**), then `$HOME/.hasna/cloud/<name>.env` (legacy-cloud, NOISY), then `$HOME/.config/hasna/<name>.env` (config), then `$HOME/.config/hasna/<name>-cloud.env` (config legacy alias, NOISY) | **The default path.** Re-read on every call. The two `-cloud`/legacy layers are deprecated and removed after `LEGACY_CLOUD_REMOVAL_DEADLINE` (`2026-10-01`). |
 | 4 | legacy env | `HASNA_<NAME>_API_KEY` / `<NAME>_API_KEY` | Deprecated fallback, used only when the disk yields nothing. Warns once per app. |
 
 Rules:
 
-- **A deliberate tier never falls through.** If tier 1 or 2 selects a
+- **A deliberate tier never falls through.** If tier 1, 2, or 2.5 selects a
   credential, the chain stops there. An override that is revoked MUST surface
   as a `401`; silently continuing to the next tier would authenticate as a
-  different principal than the operator named. There is **no retry-on-401**:
+  different principal than the operator named. A vault pointer whose vault is
+  unreachable is a TERMINAL `CredentialResolutionError` — never a fall-through
+  to a literal, an env var, or a local store. There is **no retry-on-401**:
   with a single static key, a retry makes identity nondeterministic per call
   and is precisely what rescues a revoked override as the wrong tenant.
+- **A literal API key is NEVER a vault path.** No literal tier
+  (`--api-key`, the override, `HASNA_<NAME>_API_KEY`, or any disk-file value)
+  dereferences a path-shaped value; a value that looks like a vault item key
+  (`namespace/app/live/api_key`) is refused with a message naming
+  `HASNA_<NAME>_API_KEY_REF` as the correct variable.
+- **The legacy-cloud fallback is NOISY.** A credential resolved from
+  `$HOME/.hasna/cloud/<name>.env` or from a config `-cloud.env` alias reports
+  `deprecated: true`, names its granular tier (`legacy-cloud` / `config-legacy`)
+  in `apiKeyTier`, emits a once-per-source deprecation notice naming the
+  primary `~/.hasna/fleet-env/<name>.env` target and the removal deadline, and
+  carries the deadline in its `warning`. `resolveClientTransport()`'s
+  `transportSource` / `apiKeySource` / `apiKeyTier` fields let a doctor see
+  exactly which source supplied the key, always value-free.
 - **Tier 3 is re-read per request**, not cached and not resolved once when the
   client is built — a cache is the same snapshot defect at a smaller timescale.
   This is what makes a rotation heal in any shell, however old.

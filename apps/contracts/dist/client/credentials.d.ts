@@ -1,6 +1,6 @@
 import type { Env } from "../env-token.js";
 /** Which link of the chain supplied the credential. */
-export type CredentialTier = "argument" | "override" | "profile" | "disk" | "legacy-env";
+export type CredentialTier = "argument" | "override" | "pointer" | "profile" | "disk" | "fleet-env" | "legacy-cloud" | "config" | "config-legacy" | "legacy-env";
 export interface ResolvedCredential {
     /**
      * The secret.
@@ -20,8 +20,14 @@ export interface ResolvedCredential {
     readonly source: string;
     /** True for tiers an operator sets on purpose. These never fall through. */
     readonly deliberate: boolean;
-    /** True when it came from the deprecated legacy process-env tier. */
+    /** True when it came from a deprecated legacy tier (legacy-env, legacy-cloud, config-legacy). */
     readonly deprecated: boolean;
+    /**
+     * When tier === "pointer", the vault ITEM KEY to resolve through the
+     * @hasna/secrets SDK at request time. Never a credential value. Non-enumerable
+     * like apiKey, so it cannot be spilled by enumeration or serialization.
+     */
+    readonly pointerVaultKey?: string;
     /**
      * The disk paths that were consulted before this credential was chosen.
      *
@@ -59,9 +65,36 @@ export declare class CredentialResolutionError extends Error {
     constructor(appName: string, message: string, attempted: readonly string[]);
 }
 /**
+ * The explicit removal deadline for the deprecated credential tiers
+ * (legacy-cloud `~/.hasna/cloud/<app>.env` and the config `-cloud.env` alias).
+ *
+ * Kept in code so the deprecation notice and the docs name the SAME date. After
+ * this date the deprecated sources are no longer consulted; the migration that
+ * lands the removal is tracked separately, this constant is the date it is
+ * measured against.
+ */
+export declare const LEGACY_CLOUD_REMOVAL_DEADLINE = "2026-10-01";
+/** One on-disk credential source: its absolute path, its tier, and whether it is deprecated. */
+export interface DiskCredentialSource {
+    path: string;
+    tier: CredentialTier;
+    /** True for the legacy-cloud and config `-cloud.env` sources — NOISY, removal-deadline bound. */
+    deprecated: boolean;
+}
+/**
+ * All on-disk credential sources for an app, in precedence order.
+ *
+ * Four layers exist, and the first entry wins. Returns an empty list when there
+ * is no HOME to anchor them, or when the app name is not safe to place in a
+ * path. The deprecated layers are consulted (loudly) until
+ * {@link LEGACY_CLOUD_REMOVAL_DEADLINE}; they are not dropped so an existing
+ * install keeps working while the fleet migrates.
+ */
+export declare function credentialDiskSourceList(name: string, env: Env, profile?: string | null): DiskCredentialSource[];
+/**
  * The disk files that may hold an app's credential, in precedence order.
  *
- * Two layers exist in the field, and the first entry wins. Returns an empty
+ * Four layers exist in the field, and the first entry wins. Returns an empty
  * list when there is no HOME to anchor them, or when the app name is not safe
  * to place in a path. Exported so callers and error messages can name the exact
  * paths consulted.
@@ -138,3 +171,20 @@ export declare function __resetCredentialDeprecationNotices(): void;
  * principal the operator named.
  */
 export declare function resolveCredential(name: string, env: Env, options?: CredentialChainOptions): ResolvedCredential | null;
+/**
+ * Complete a pointer-tier resolution through the secrets vault.
+ *
+ * Called by the transport at REQUEST time, never at construction. The pointer
+ * is a DELIBERATE selection, so every failure — SDK not installed, client
+ * unconfigured, vault unreachable, item missing or empty — is a TERMINAL
+ * {@link CredentialResolutionError}. The chain never falls through to a
+ * literal, an env var, or a local store: authenticating as a different
+ * principal than the one the operator named is exactly the failure a
+ * deliberate pointer exists to prevent.
+ *
+ * The @hasna/secrets module is imported lazily (via a non-literal specifier)
+ * so consumers that never set a pointer pay no import cost and need no peer
+ * dependency at load time; a pointer REQUIRES it, and its absence is one of
+ * the TERMINAL cases.
+ */
+export declare function completePointerCredential(name: string, pointerResolution: ResolvedCredential, env?: Env): Promise<ResolvedCredential>;

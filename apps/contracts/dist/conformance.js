@@ -9171,7 +9171,7 @@ function createDeploymentEnvelopeSchema(primitives) {
 
 // src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "0.14.1";
+var CONTRACTS_PACKAGE_VERSION = "0.14.2";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -16465,6 +16465,9 @@ function credentialOverrideEnvKey(name) {
   return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
 }
 var CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
+function credentialPointerEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_REF`;
+}
 
 // src/credential-seam.ts
 var SKIP_DIRS2 = new Set([

@@ -34,6 +34,9 @@ function credentialOverrideEnvKey(name) {
   return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
 }
 var CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
+function credentialPointerEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_REF`;
+}
 
 // src/client/credentials.ts
 import { readFileSync, statSync } from "fs";
@@ -49,30 +52,54 @@ class CredentialResolutionError extends Error {
   }
 }
 var HASNA_STATE_DIR = ".hasna";
-var FLEET_CREDENTIAL_DIR = "cloud";
+var FLEET_CREDENTIAL_DIR = "fleet-env";
+var LEGACY_CLOUD_DIR = "cloud";
 var CONFIG_DIR = ".config";
 var CONFIG_NAMESPACE = "hasna";
+var LEGACY_CLOUD_REMOVAL_DEADLINE = "2026-10-01";
 var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 var SAFE_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 var SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 var ILLEGAL_IN_HEADER_VALUE = /[^\t\x20-\x7e]/;
+var VAULT_POINTER_SHAPE = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-_.]*){2,}$/;
 function homeDir(env) {
   const home = env.HOME?.trim();
   return home ? home : null;
 }
-function credentialDiskSources(name, env) {
-  return profileDiskSources(name, env, null);
-}
-function profileDiskSources(name, env, profile) {
+function credentialDiskSourceList(name, env, profile = null) {
   const home = homeDir(env);
   if (!home || !SAFE_APP_SLUG.test(name))
     return [];
   const stem = profile ? `${name}.${profile}` : name;
   const configStem = profile ? `${name}-${profile}` : name;
   return [
-    join(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
-    join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`)
+    {
+      path: join(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
+      tier: "fleet-env",
+      deprecated: false
+    },
+    {
+      path: join(home, HASNA_STATE_DIR, LEGACY_CLOUD_DIR, `${stem}.env`),
+      tier: "legacy-cloud",
+      deprecated: true
+    },
+    {
+      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}.env`),
+      tier: "config",
+      deprecated: false
+    },
+    {
+      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`),
+      tier: "config-legacy",
+      deprecated: true
+    }
   ];
+}
+function credentialDiskSources(name, env) {
+  return credentialDiskSourceList(name, env, null).map((s) => s.path);
+}
+function profileDiskSources(name, env, profile) {
+  return credentialDiskSourceList(name, env, profile).map((s) => s.path);
 }
 function parseEnvFile(text) {
   const values = new Map;
@@ -141,6 +168,9 @@ function appConfigDiskValue(name, env, keys) {
   return null;
 }
 function assertUsableCredential(appName, source, value) {
+  if (VAULT_POINTER_SHAPE.test(value)) {
+    throw new CredentialResolutionError(appName, `The credential from ${source} looks like a secrets-vault pointer (a path-shaped reference like ` + `'namespace/app/live/api_key'). A vault path is NEVER accepted as a literal API key. ` + `Use ${credentialPointerEnvKey(appName)} to resolve the key through the vault, or provide the actual key value.`, [source]);
+  }
   if (!ILLEGAL_IN_HEADER_VALUE.test(value))
     return;
   throw new CredentialResolutionError(appName, `The credential from ${source} contains characters that cannot be sent in an HTTP header ` + `(a control character or non-ASCII byte). A file written with CR-only line endings is the usual ` + `cause. Rewrite that credential file with one LF-terminated KEY=value line. ` + `The value is not shown here, and is deliberately never logged.`, [source]);
@@ -165,6 +195,14 @@ function sealCredential(fields) {
     writable: false,
     configurable: false
   });
+  if (fields.pointerVaultKey !== undefined) {
+    Object.defineProperty(sealed, "pointerVaultKey", {
+      value: fields.pointerVaultKey,
+      enumerable: false,
+      writable: false,
+      configurable: false
+    });
+  }
   Object.defineProperty(sealed, INSPECT_CUSTOM, {
     value: () => ({ ...visible, apiKey: "[redacted]" }),
     enumerable: false,
@@ -216,7 +254,8 @@ function validateAndSealResolvedCredential(appName, credential) {
     deliberate: credential.deliberate,
     deprecated: credential.deprecated,
     diskCandidates: credential.diskCandidates,
-    warning: credential.warning
+    warning: credential.warning,
+    ...credential.pointerVaultKey !== undefined ? { pointerVaultKey: credential.pointerVaultKey } : {}
   });
 }
 function firstEnvValue(env, keys) {
@@ -280,6 +319,27 @@ function resolveCredential(name, env, options = {}) {
       warning: null
     });
   }
+  const pointerKeyName = credentialPointerEnvKey(name);
+  const pointerRaw = env[pointerKeyName];
+  if (pointerRaw !== undefined) {
+    const pointer = pointerRaw.trim();
+    if (!pointer) {
+      throw new CredentialResolutionError(name, `${pointerKeyName} is set but empty. It is a deliberate vault pointer, so it is not resolved around: ` + `either give it a vault item key or unset it to fall back to the credential on disk.`, [pointerKeyName]);
+    }
+    if (!VAULT_POINTER_SHAPE.test(pointer)) {
+      throw new CredentialResolutionError(name, `${pointerKeyName} must name a vault ITEM KEY (a path-shaped reference like ` + `'namespace/app/live/api_key'), not a credential value. A pointer that carries a literal is refused.`, [pointerKeyName]);
+    }
+    return sealCredential({
+      apiKey: "",
+      pointerVaultKey: pointer,
+      tier: "pointer",
+      source: pointerKeyName,
+      deliberate: true,
+      deprecated: false,
+      diskCandidates: diskPaths,
+      warning: null
+    });
+  }
   const profile = options.profile?.trim() || env[CREDENTIAL_PROFILE_ENV_KEY]?.trim();
   if (profile) {
     const profileSource = options.profile?.trim() ? "explicit profile argument" : CREDENTIAL_PROFILE_ENV_KEY;
@@ -304,26 +364,42 @@ function resolveCredential(name, env, options = {}) {
     }
     throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
   }
-  const diskHits = diskPaths.map((path) => ({ path, value: readCredentialFile(path, apiKeyKeys) })).filter((hit) => hit.value !== null);
+  const diskSourceList = credentialDiskSourceList(name, env, null);
+  const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) })).filter((hit) => hit.value !== null);
   if (diskHits.length > 0) {
     const winner = diskHits[0];
-    assertUsableCredential(name, winner.path, winner.value);
+    assertUsableCredential(name, winner.src.path, winner.value);
     const divergentSources = [
-      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.path),
+      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.src.path),
       ...(() => {
         const legacyHit = firstEnvValue(env, apiKeyKeys);
         return legacyHit && legacyHit.value !== winner.value ? [legacyHit.key] : [];
       })()
     ];
-    const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
+    const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.src.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.src.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
+    let deprecated = winner.src.deprecated;
+    let finalWarning = warning;
+    if (winner.src.deprecated) {
+      deprecated = true;
+      const sink = options.onDeprecation ?? defaultDeprecationSink;
+      const notified = deprecationNotified();
+      const noticeKey = `${name}:${winner.src.path}`;
+      if (!notified.has(noticeKey)) {
+        notified.add(noticeKey);
+        const target = diskSourceList[0]?.path ?? "<none>";
+        const message = `[${name}] DEPRECATED: the API key came from ${winner.src.path} \u2014 a legacy credential location. ` + `The primary location is ${target} (~/.hasna/fleet-env/<app>.env). The legacy 'cloud' tiers are ` + `removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}. Migrate the key to the primary location.`;
+        sink(message);
+      }
+      finalWarning = [warning, `Legacy credential source: ${winner.src.path}. Removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}.`].filter(Boolean).join(" ") || null;
+    }
     return sealCredential({
       apiKey: winner.value,
-      tier: "disk",
-      source: winner.path,
+      tier: winner.src.tier,
+      source: winner.src.path,
       deliberate: false,
-      deprecated: false,
+      deprecated,
       diskCandidates: diskPaths,
-      warning
+      warning: finalWarning
     });
   }
   const legacy = firstEnvValue(env, apiKeyKeys);
@@ -348,6 +424,46 @@ function resolveCredential(name, env, options = {}) {
     });
   }
   return null;
+}
+var SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
+async function completePointerCredential(name, pointerResolution, env = process.env) {
+  const vaultKey = pointerResolution.pointerVaultKey;
+  const pointerEnvKey = pointerResolution.source;
+  if (!vaultKey) {
+    throw new CredentialResolutionError(name, `Pointer resolution from ${pointerEnvKey} carries no vault item key; this is a defect in the resolver.`, [pointerEnvKey]);
+  }
+  let secretsSdk;
+  try {
+    secretsSdk = await import(SECRETS_PACKAGE_SPECIFIER);
+  } catch {
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets SDK (@hasna/secrets) is not installed in this process. A vault pointer is TERMINAL: install @hasna/secrets to resolve it, or unset ${pointerEnvKey}.`, [pointerEnvKey]);
+  }
+  let client;
+  try {
+    client = secretsSdk.createSecretsClientFromEnv(env);
+  } catch {
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets client could not be configured from this environment (the secrets service URL and key env are missing or invalid). A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
+  }
+  let secret;
+  try {
+    secret = await client.getSecret({ key: vaultKey });
+  } catch {
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the vault could not be reached or the item is unavailable. A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
+  }
+  const value = secret.value;
+  if (!value) {
+    throw new CredentialResolutionError(name, `${pointerEnvKey} resolved vault item '${vaultKey}', but it holds no value. A vault pointer is TERMINAL.`, [pointerEnvKey]);
+  }
+  assertUsableCredential(name, `${pointerEnvKey} -> vault:${vaultKey}`, value);
+  return sealCredential({
+    apiKey: value,
+    tier: "pointer",
+    source: `${pointerEnvKey} -> vault:${vaultKey}`,
+    deliberate: true,
+    deprecated: false,
+    diskCandidates: pointerResolution.diskCandidates,
+    warning: null
+  });
 }
 
 // src/client/transport.ts
@@ -664,6 +780,13 @@ function currentCredential(name, apiKey) {
   }
   return explicitCredential(name, apiKey);
 }
+async function resolveRequestCredential(name, apiKey, env = process.env) {
+  const resolved = currentCredential(name, apiKey);
+  if (resolved.tier === "pointer") {
+    return completePointerCredential(name, resolved, env);
+  }
+  return resolved;
+}
 function authFailureGuidance(credential) {
   const origin = `The API key for this request came from ${credential.source}`;
   if (credential.deliberate) {
@@ -819,7 +942,7 @@ function createHasnaHttpTransport(options) {
     const retry = resolveRetry(opts.retry);
     const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
     const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
-    const credential = currentCredential(options.name, options.apiKey);
+    const credential = await resolveRequestCredential(options.name, options.apiKey);
     let last = null;
     for (let attempt = 1;attempt <= maxAttempts; attempt++) {
       const result = await once(upper, rel, url, body, opts, credential);
@@ -883,14 +1006,18 @@ export {
   fleetApiDomain,
   explicitCredential,
   defaultCloudBaseUrl,
+  credentialPointerEnvKey,
   credentialOverrideEnvKey,
   credentialDiskSources,
+  credentialDiskSourceList,
   createHasnaHttpTransport,
   createClientTransport,
+  completePointerCredential,
   clientTransportEnvKeys,
   appendQuery,
   appConfigDiskValue,
   __resetCredentialDeprecationNotices,
+  LEGACY_CLOUD_REMOVAL_DEADLINE,
   HasnaHttpError,
   CredentialResolutionError,
   CREDENTIAL_PROFILE_ENV_KEY,

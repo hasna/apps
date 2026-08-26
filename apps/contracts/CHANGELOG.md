@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.2
+
+### Patch Changes
+
+- P1 fleet-env credential migration (todos 85c176bc): the client credential resolver's disk tier now reads `$HOME/.hasna/fleet-env/<name>.env` FIRST as the primary location. The legacy `$HOME/.hasna/cloud/<name>.env` and the config `-cloud.env` alias remain consulted as NOISY deprecated fallbacks (granular `apiKeyTier` `legacy-cloud`/`config-legacy`, `deprecated: true`, once-per-source deprecation notice naming the primary target and the removal deadline `LEGACY_CLOUD_REMOVAL_DEADLINE` = 2026-10-01) so existing installs keep working during the migration. The config tier's final filename is now `~/.config/hasna/<name>.env` (the `-cloud` suffix is retired).
+- New deliberate pointer tier: `HASNA_<NAME>_API_KEY_REF` names a secrets-vault ITEM KEY resolved through the `@hasna/secrets` SDK at request time; a vault that cannot be reached is a TERMINAL hard failure, never a fall-through to a literal/env/sqlite. The literal API-key tiers never accept a vault path — a path-shaped literal is refused with a message naming the pointer variable.
+
 ## 0.14.1
 
 ### Patch Changes

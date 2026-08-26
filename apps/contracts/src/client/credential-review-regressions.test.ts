@@ -27,7 +27,7 @@ function makeHome(): string {
 }
 
 function writeCloudEnv(home: string, app: string, body: string): string {
-  const dir = join(home, ".hasna", "cloud");
+  const dir = join(home, ".hasna", "fleet-env");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${app}.env`);
   writeFileSync(path, body);
@@ -37,7 +37,7 @@ function writeCloudEnv(home: string, app: string, body: string): string {
 function writeConfigEnv(home: string, app: string, body: string): string {
   const dir = join(home, ".config", "hasna");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${app}-cloud.env`);
+  const path = join(dir, `${app}.env`);
   writeFileSync(path, body);
   return path;
 }
@@ -79,7 +79,7 @@ describe("endpoint + disk credential select HTTP", () => {
     });
 
     expect(r.transport).toBe("http");
-    expect(r.apiKeyTier).toBe("disk");
+    expect(r.apiKeyTier).toBe("fleet-env");
     expect(r.apiKeySource).toBe(diskPath);
   });
 
@@ -186,7 +186,7 @@ describe("the secret cannot be enumerated or serialized", () => {
     // note in sealCredential about non-enumerable toJSON not being honoured.
     expect(serialized).not.toContain("apiKey");
     // ...and the diagnostic fields a caller actually logs are still there.
-    expect(JSON.parse(serialized).tier).toBe("disk");
+    expect(JSON.parse(serialized).tier).toBe("fleet-env");
   });
 
   test("Object.keys does not expose the key, but property access still works", () => {
@@ -245,7 +245,7 @@ describe("a stale file on disk cannot silently displace a working env key", () =
       HASNA_ACCOUNTS_API_KEY: "working-env-key",
     })!;
 
-    expect(resolved.tier).toBe("disk");
+    expect(resolved.tier).toBe("fleet-env");
     expect(resolved.warning).toContain("disagree");
     expect(resolved.warning).toContain("HASNA_ACCOUNTS_API_KEY");
     expect(resolved.warning).toContain(diskPath);
@@ -305,7 +305,7 @@ describe("hostile paths and files never reach a blocking or out-of-tree read", (
     // request — ahead of the transport's own AbortController, so no timeout
     // could rescue it. stat does not block, so the type check must come first.
     const home = makeHome();
-    const dir = join(home, ".hasna", "cloud");
+    const dir = join(home, ".hasna", "fleet-env");
     mkdirSync(dir, { recursive: true });
     const made = Bun.spawnSync(["mkfifo", join(dir, "accounts.env")]);
     if (made.exitCode !== 0) return; // mkfifo unavailable here; nothing to assert

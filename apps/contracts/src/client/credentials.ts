@@ -22,12 +22,23 @@
 //
 // PRECEDENCE (resolved fresh on every call):
 //   1. an explicit argument            — `--api-key` / `--profile`
-//   2. a deliberate env pointer        — `HASNA_<NAME>_API_KEY_OVERRIDE`, `HASNA_PROFILE`
-//   3. DISK, read at call time         — the default path
+//   2. a deliberate env pointer        — `HASNA_<NAME>_API_KEY_OVERRIDE`, `HASNA_PROFILE`,
+//                                        `HASNA_<NAME>_API_KEY_REF` (secrets-vault pointer)
+//   3. DISK, read at call time         — fleet-env primary, then the NOISY legacy-cloud
+//                                        fallback, then the config tier, then the
+//                                        deprecated config `-cloud.env` alias
 //   4. the legacy `HASNA_<NAME>_API_KEY` process env — fallback only, deprecated
 //
 // Tier 4 is the demotion that fixes stale shells IMMEDIATELY, without waiting
 // for shells to cycle or for a shell-init change to land on every machine.
+//
+// The disk tier is ordered by the migration under hasna/cloud retirement:
+//   `~/.hasna/fleet-env/<app>.env`         — PRIMARY (fleet-env)
+//   `~/.hasna/cloud/<app>.env`             — legacy-cloud, NOISY, removed after
+//                                            LEGACY_CLOUD_REMOVAL_DEADLINE
+//   `~/.config/hasna/<app>.env`            — config tier (renamed from `-cloud.env`)
+//   `~/.config/hasna/<app>-cloud.env`      — config legacy alias, NOISY, removed with the
+//                                            same deadline
 //
 // NEVER FALL BACK TO LOCAL DATA ON A 401. Serving local results when auth fails
 // prints healthy output while authentication is broken — a false green that is
@@ -42,10 +53,21 @@ import {
   CREDENTIAL_PROFILE_ENV_KEY,
   clientTransportEnvKeys,
   credentialOverrideEnvKey,
+  credentialPointerEnvKey,
 } from "./env-keys.js";
 
 /** Which link of the chain supplied the credential. */
-export type CredentialTier = "argument" | "override" | "profile" | "disk" | "legacy-env";
+export type CredentialTier =
+  | "argument"
+  | "override"
+  | "pointer"
+  | "profile"
+  | "disk"
+  | "fleet-env"
+  | "legacy-cloud"
+  | "config"
+  | "config-legacy"
+  | "legacy-env";
 
 export interface ResolvedCredential {
   /**
@@ -66,8 +88,14 @@ export interface ResolvedCredential {
   readonly source: string;
   /** True for tiers an operator sets on purpose. These never fall through. */
   readonly deliberate: boolean;
-  /** True when it came from the deprecated legacy process-env tier. */
+  /** True when it came from a deprecated legacy tier (legacy-env, legacy-cloud, config-legacy). */
   readonly deprecated: boolean;
+  /**
+   * When tier === "pointer", the vault ITEM KEY to resolve through the
+   * @hasna/secrets SDK at request time. Never a credential value. Non-enumerable
+   * like apiKey, so it cannot be spilled by enumeration or serialization.
+   */
+  readonly pointerVaultKey?: string;
   /**
    * The disk paths that were consulted before this credential was chosen.
    *
@@ -116,9 +144,23 @@ export class CredentialResolutionError extends Error {
 // `src/no-cloud.ts` forbids the joined literal anywhere in `src/`, and building
 // the path from parts is also what keeps this portable.
 const HASNA_STATE_DIR = ".hasna";
-const FLEET_CREDENTIAL_DIR = "cloud";
+/** Primary fleet credential dir — `~/.hasna/fleet-env/<app>.env`. */
+const FLEET_CREDENTIAL_DIR = "fleet-env";
+/** Deprecated legacy dir — `~/.hasna/cloud/<app>.env`. Removed after the deadline. */
+const LEGACY_CLOUD_DIR = "cloud";
 const CONFIG_DIR = ".config";
 const CONFIG_NAMESPACE = "hasna";
+
+/**
+ * The explicit removal deadline for the deprecated credential tiers
+ * (legacy-cloud `~/.hasna/cloud/<app>.env` and the config `-cloud.env` alias).
+ *
+ * Kept in code so the deprecation notice and the docs name the SAME date. After
+ * this date the deprecated sources are no longer consulted; the migration that
+ * lands the removal is tracked separately, this constant is the date it is
+ * measured against.
+ */
+export const LEGACY_CLOUD_REMOVAL_DEADLINE = "2026-10-01";
 
 /**
  * A credential file is small. The cap bounds how much a hostile or corrupt file
@@ -152,6 +194,17 @@ const SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const ILLEGAL_IN_HEADER_VALUE = /[^\t\x20-\x7e]/;
 
 /**
+ * The shape of a secrets-vault pointer: a path-shaped reference like
+ * `hasna/apps/todos/live/api_key` — at least three lowercase path segments.
+ *
+ * This is the grammar the resolver REFUSES to treat as a literal API key. A
+ * real API key (an `sk-…`, `npm_…`, base64, hex, or JWT value) never has this
+ * shape, so refusing it in the literal tiers is what makes "NEVER accept a
+ * vault path inside `HASNA_<APP>_API_KEY`" enforceable rather than a promise.
+ */
+const VAULT_POINTER_SHAPE = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-_.]*){2,}$/;
+
+/**
  * The home directory comes from the SAME env object that is passed in — never
  * from `os.homedir()`.
  *
@@ -166,19 +219,28 @@ function homeDir(env: Env): string | null {
   return home ? home : null;
 }
 
-/**
- * The disk files that may hold an app's credential, in precedence order.
- *
- * Two layers exist in the field, and the first entry wins. Returns an empty
- * list when there is no HOME to anchor them, or when the app name is not safe
- * to place in a path. Exported so callers and error messages can name the exact
- * paths consulted.
- */
-export function credentialDiskSources(name: string, env: Env): string[] {
-  return profileDiskSources(name, env, null);
+/** One on-disk credential source: its absolute path, its tier, and whether it is deprecated. */
+export interface DiskCredentialSource {
+  path: string;
+  tier: CredentialTier;
+  /** True for the legacy-cloud and config `-cloud.env` sources — NOISY, removal-deadline bound. */
+  deprecated: boolean;
 }
 
-function profileDiskSources(name: string, env: Env, profile: string | null): string[] {
+/**
+ * All on-disk credential sources for an app, in precedence order.
+ *
+ * Four layers exist, and the first entry wins. Returns an empty list when there
+ * is no HOME to anchor them, or when the app name is not safe to place in a
+ * path. The deprecated layers are consulted (loudly) until
+ * {@link LEGACY_CLOUD_REMOVAL_DEADLINE}; they are not dropped so an existing
+ * install keeps working while the fleet migrates.
+ */
+export function credentialDiskSourceList(
+  name: string,
+  env: Env,
+  profile: string | null = null,
+): DiskCredentialSource[] {
   const home = homeDir(env);
   // A name that is not a safe slug never reaches the filesystem. Without this,
   // `resolveCredential("../../elsewhere", env)` composes a path outside the
@@ -188,9 +250,47 @@ function profileDiskSources(name: string, env: Env, profile: string | null): str
   const stem = profile ? `${name}.${profile}` : name;
   const configStem = profile ? `${name}-${profile}` : name;
   return [
-    join(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
-    join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`),
+    // PRIMARY — fleet-env.
+    {
+      path: join(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
+      tier: "fleet-env",
+      deprecated: false,
+    },
+    // NOISY legacy-cloud fallback.
+    {
+      path: join(home, HASNA_STATE_DIR, LEGACY_CLOUD_DIR, `${stem}.env`),
+      tier: "legacy-cloud",
+      deprecated: true,
+    },
+    // Config tier — final name (the `-cloud` suffix was retired in this change).
+    {
+      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}.env`),
+      tier: "config",
+      deprecated: false,
+    },
+    // Config legacy alias — NOISY, removed with the same deadline.
+    {
+      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`),
+      tier: "config-legacy",
+      deprecated: true,
+    },
   ];
+}
+
+/**
+ * The disk files that may hold an app's credential, in precedence order.
+ *
+ * Four layers exist in the field, and the first entry wins. Returns an empty
+ * list when there is no HOME to anchor them, or when the app name is not safe
+ * to place in a path. Exported so callers and error messages can name the exact
+ * paths consulted.
+ */
+export function credentialDiskSources(name: string, env: Env): string[] {
+  return credentialDiskSourceList(name, env, null).map((s) => s.path);
+}
+
+function profileDiskSources(name: string, env: Env, profile: string | null): string[] {
+  return credentialDiskSourceList(name, env, profile).map((s) => s.path);
 }
 
 /**
@@ -340,8 +440,24 @@ export function appConfigDiskValue(
  *
  * Throws rather than falling through: a corrupt file at a deliberate location
  * must not silently hand the request to whatever identity is next in the chain.
+ *
+ * Also rejects a LITERAL that is shaped like a secrets-vault pointer. The
+ * literal API-key tiers (`HASNA_<APP>_API_KEY`, its disk-file values, the
+ * override, an explicit `--api-key`) NEVER dereference: a path-shaped value is
+ * a mistake — the operator meant `HASNA_<APP>_API_KEY_REF` — and acting on it
+ * verbatim would send a vault path as the API key. Refusing names the correct
+ * variable instead.
  */
 function assertUsableCredential(appName: string, source: string, value: string): void {
+  if (VAULT_POINTER_SHAPE.test(value)) {
+    throw new CredentialResolutionError(
+      appName,
+      `The credential from ${source} looks like a secrets-vault pointer (a path-shaped reference like ` +
+        `'namespace/app/live/api_key'). A vault path is NEVER accepted as a literal API key. ` +
+        `Use ${credentialPointerEnvKey(appName)} to resolve the key through the vault, or provide the actual key value.`,
+      [source],
+    );
+  }
   if (!ILLEGAL_IN_HEADER_VALUE.test(value)) return;
   throw new CredentialResolutionError(
     appName,
@@ -385,6 +501,7 @@ function sealCredential(fields: {
   deprecated: boolean;
   diskCandidates: readonly string[];
   warning: string | null;
+  pointerVaultKey?: string;
 }): ResolvedCredential {
   const { apiKey } = fields;
   const visible = {
@@ -402,6 +519,17 @@ function sealCredential(fields: {
     writable: false,
     configurable: false,
   });
+  // The pointer carries the vault ITEM KEY (never a value). Non-enumerable for
+  // the same reason apiKey is: enumeration and serialization must not expose
+  // which vault item this process authenticates with.
+  if (fields.pointerVaultKey !== undefined) {
+    Object.defineProperty(sealed, "pointerVaultKey", {
+      value: fields.pointerVaultKey,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  }
   // Non-enumerability covers enumeration and serialization: `Object.keys`,
   // `{ ...resolution }`, and `JSON.stringify` all omit the key, enforced by the
   // language rather than by a method a caller could strip or forget.
@@ -495,6 +623,9 @@ export function validateAndSealResolvedCredential(
       warning: null,
     });
   }
+  // A pointer resolution's apiKey is an empty sentinel until the transport
+  // completes it through the vault — its vault ITEM KEY must survive the
+  // re-seal so the request path can resolve it.
   return sealCredential({
     apiKey,
     tier: credential.tier,
@@ -503,6 +634,7 @@ export function validateAndSealResolvedCredential(
     deprecated: credential.deprecated,
     diskCandidates: credential.diskCandidates,
     warning: credential.warning,
+    ...(credential.pointerVaultKey !== undefined ? { pointerVaultKey: credential.pointerVaultKey } : {}),
   });
 }
 
@@ -609,6 +741,45 @@ export function resolveCredential(
     });
   }
 
+  // ---- Tier 2.5: the secrets-vault pointer. -------------------------------
+  // `HASNA_<APP>_API_KEY_REF` is a DELIBERATE pointer to a vault ITEM KEY. It
+  // never falls through: the literal tiers never accept a vault path (see
+  // assertUsableCredential), and when the vault cannot be reached the transport
+  // that completes the pointer at request time throws TERMINAL. The per-service
+  // override outranks it, so a manual emergency key beats a pointer when both
+  // are set.
+  const pointerKeyName = credentialPointerEnvKey(name);
+  const pointerRaw = env[pointerKeyName];
+  if (pointerRaw !== undefined) {
+    const pointer = pointerRaw.trim();
+    if (!pointer) {
+      throw new CredentialResolutionError(
+        name,
+        `${pointerKeyName} is set but empty. It is a deliberate vault pointer, so it is not resolved around: ` +
+          `either give it a vault item key or unset it to fall back to the credential on disk.`,
+        [pointerKeyName],
+      );
+    }
+    if (!VAULT_POINTER_SHAPE.test(pointer)) {
+      throw new CredentialResolutionError(
+        name,
+        `${pointerKeyName} must name a vault ITEM KEY (a path-shaped reference like ` +
+          `'namespace/app/live/api_key'), not a credential value. A pointer that carries a literal is refused.`,
+        [pointerKeyName],
+      );
+    }
+    return sealCredential({
+      apiKey: "",
+      pointerVaultKey: pointer,
+      tier: "pointer",
+      source: pointerKeyName,
+      deliberate: true,
+      deprecated: false,
+      diskCandidates: diskPaths,
+      warning: null,
+    });
+  }
+
   const profile = options.profile?.trim() || env[CREDENTIAL_PROFILE_ENV_KEY]?.trim();
   if (profile) {
     const profileSource = options.profile?.trim()
@@ -653,19 +824,27 @@ export function resolveCredential(
   // re-read on every call, so there is no snapshot to go stale. There is
   // deliberately NO CACHE here — a cache is the same defect at a smaller
   // timescale.
-  const diskHits = diskPaths
-    .map((path) => ({ path, value: readCredentialFile(path, apiKeyKeys) }))
-    .filter((hit): hit is { path: string; value: string } => hit.value !== null);
+  //
+  // The disk sources are ordered fleet-env -> legacy-cloud -> config ->
+  // config-legacy. A winner from a DEPRECATED source is NOISY: it emits a
+  // once-per-source deprecation line naming the migration target and the
+  // LEGACY_CLOUD_REMOVAL_DEADLINE, and it reports its granular tier so the
+  // doctor's transportSource/apiKeySource/apiKeyTier tell the operator exactly
+  // where the credential came from.
+  const diskSourceList = credentialDiskSourceList(name, env, null);
+  const diskHits = diskSourceList
+    .map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) }))
+    .filter((hit): hit is { src: DiskCredentialSource; value: string } => hit.value !== null);
 
   if (diskHits.length > 0) {
     const winner = diskHits[0]!;
-    assertUsableCredential(name, winner.path, winner.value);
+    assertUsableCredential(name, winner.src.path, winner.value);
     // The paths and the FACT of disagreement are the whole diagnostic. A
     // fingerprint of the secret — even a truncated digest — is a derived
     // encoding of credential material and a confirmation oracle, so none is
     // emitted.
     const divergentSources = [
-      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.path),
+      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.src.path),
       // Disk now OUTRANKS the legacy env var, which introduces a failure this
       // chain did not previously have: an operator whose environment key works
       // today starts using a DIFFERENT key the moment a stale file exists on
@@ -678,19 +857,42 @@ export function resolveCredential(
     ];
     const warning =
       divergentSources.length > 0
-        ? `Credential sources disagree for '${name}': ${winner.path} and ` +
-          `${divergentSources.join(", ")} hold different keys. ${winner.path} wins, because a file on ` +
+        ? `Credential sources disagree for '${name}': ${winner.src.path} and ` +
+          `${divergentSources.join(", ")} hold different keys. ${winner.src.path} wins, because a file on ` +
           `disk is re-read on every call while an environment variable is a snapshot. Reconcile them — ` +
           `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.`
         : null;
+
+    let deprecated = winner.src.deprecated;
+    let finalWarning = warning;
+    if (winner.src.deprecated) {
+      deprecated = true;
+      // NOISY: name the legacy source, the primary target, and the deadline.
+      const sink = options.onDeprecation ?? defaultDeprecationSink;
+      const notified = deprecationNotified();
+      const noticeKey = `${name}:${winner.src.path}`;
+      if (!notified.has(noticeKey)) {
+        notified.add(noticeKey);
+        const target = diskSourceList[0]?.path ?? "<none>";
+        const message =
+          `[${name}] DEPRECATED: the API key came from ${winner.src.path} — a legacy credential location. ` +
+          `The primary location is ${target} (~/.hasna/fleet-env/<app>.env). The legacy 'cloud' tiers are ` +
+          `removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}. Migrate the key to the primary location.`;
+        sink(message);
+      }
+      finalWarning = [warning, `Legacy credential source: ${winner.src.path}. Removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}.`]
+        .filter(Boolean)
+        .join(" ") || null;
+    }
+
     return sealCredential({
       apiKey: winner.value,
-      tier: "disk",
-      source: winner.path,
+      tier: winner.src.tier,
+      source: winner.src.path,
       deliberate: false,
-      deprecated: false,
+      deprecated,
       diskCandidates: diskPaths,
-      warning,
+      warning: finalWarning,
     });
   }
 
@@ -728,4 +930,104 @@ export function resolveCredential(
   }
 
   return null;
+}
+
+/** The runtime shape of the @hasna/secrets client used by the pointer tier. */
+interface SecretsPointerClient {
+  getSecret(query: { key: string }): Promise<{ value: string }>;
+}
+
+/** The runtime-loaded module shape of `@hasna/secrets` used by the pointer tier. */
+interface SecretsPointerModule {
+  createSecretsClientFromEnv(env: Record<string, string | undefined>): SecretsPointerClient;
+}
+
+// Non-literal by design — the same seam `src/cli/secrets-bridge.ts` uses, so
+// `bun build` leaves the import as a runtime import (the pointer is a rare,
+// deliberate path) and `tsc` never statically resolves it against a sibling
+// member whose dist is absent at install time.
+const SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
+
+/**
+ * Complete a pointer-tier resolution through the secrets vault.
+ *
+ * Called by the transport at REQUEST time, never at construction. The pointer
+ * is a DELIBERATE selection, so every failure — SDK not installed, client
+ * unconfigured, vault unreachable, item missing or empty — is a TERMINAL
+ * {@link CredentialResolutionError}. The chain never falls through to a
+ * literal, an env var, or a local store: authenticating as a different
+ * principal than the one the operator named is exactly the failure a
+ * deliberate pointer exists to prevent.
+ *
+ * The @hasna/secrets module is imported lazily (via a non-literal specifier)
+ * so consumers that never set a pointer pay no import cost and need no peer
+ * dependency at load time; a pointer REQUIRES it, and its absence is one of
+ * the TERMINAL cases.
+ */
+export async function completePointerCredential(
+  name: string,
+  pointerResolution: ResolvedCredential,
+  env: Env = process.env,
+): Promise<ResolvedCredential> {
+  const vaultKey = pointerResolution.pointerVaultKey;
+  const pointerEnvKey = pointerResolution.source;
+  if (!vaultKey) {
+    throw new CredentialResolutionError(
+      name,
+      `Pointer resolution from ${pointerEnvKey} carries no vault item key; this is a defect in the resolver.`,
+      [pointerEnvKey],
+    );
+  }
+  let secretsSdk: SecretsPointerModule;
+  try {
+    secretsSdk = (await import(SECRETS_PACKAGE_SPECIFIER)) as SecretsPointerModule;
+  } catch {
+    throw new CredentialResolutionError(
+      name,
+      `${pointerEnvKey} names vault item '${vaultKey}', but the secrets SDK (@hasna/secrets) is not installed ` +
+        `in this process. A vault pointer is TERMINAL: install @hasna/secrets to resolve it, or unset ${pointerEnvKey}.`,
+      [pointerEnvKey],
+    );
+  }
+  let client: SecretsPointerClient;
+  try {
+    client = secretsSdk.createSecretsClientFromEnv(env);
+  } catch {
+    throw new CredentialResolutionError(
+      name,
+      `${pointerEnvKey} names vault item '${vaultKey}', but the secrets client could not be configured from this ` +
+        `environment (the secrets service URL and key env are missing or invalid). A vault pointer is TERMINAL and ` +
+        `never falls through to a literal or disk credential.`,
+      [pointerEnvKey],
+    );
+  }
+  let secret: { value: string };
+  try {
+    secret = await client.getSecret({ key: vaultKey });
+  } catch {
+    throw new CredentialResolutionError(
+      name,
+      `${pointerEnvKey} names vault item '${vaultKey}', but the vault could not be reached or the item is ` +
+        `unavailable. A vault pointer is TERMINAL and never falls through to a literal or disk credential.`,
+      [pointerEnvKey],
+    );
+  }
+  const value = secret.value;
+  if (!value) {
+    throw new CredentialResolutionError(
+      name,
+      `${pointerEnvKey} resolved vault item '${vaultKey}', but it holds no value. A vault pointer is TERMINAL.`,
+      [pointerEnvKey],
+    );
+  }
+  assertUsableCredential(name, `${pointerEnvKey} -> vault:${vaultKey}`, value);
+  return sealCredential({
+    apiKey: value,
+    tier: "pointer",
+    source: `${pointerEnvKey} -> vault:${vaultKey}`,
+    deliberate: true,
+    deprecated: false,
+    diskCandidates: pointerResolution.diskCandidates,
+    warning: null,
+  });
 }
