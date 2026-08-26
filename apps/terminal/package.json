@@ -27,7 +27,7 @@
     "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "0.39.0",
     "@hasna/events": "^0.1.6",
     "@hasna/mementos": "^0.10.0",
     "@modelcontextprotocol/sdk": "^1.27.1",

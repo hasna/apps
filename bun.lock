@@ -1778,7 +1778,7 @@
         "terminal": "dist/cli.js",
       },
       "dependencies": {
-        "@anthropic-ai/sdk": "^0.39.0",
+        "@anthropic-ai/sdk": "0.39.0",
         "@hasna/events": "^0.1.6",
         "@hasna/mementos": "^0.10.0",
         "@modelcontextprotocol/sdk": "^1.27.1",
@@ -1812,7 +1812,7 @@
         "testers-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@anthropic-ai/sdk": "^0.52.0",
+        "@anthropic-ai/sdk": "0.52.0",
         "@e2b/code-interpreter": "^1.5.1",
         "@hasna/browser": "0.5.29",
         "@hasna/contracts": "^0.14.0",
