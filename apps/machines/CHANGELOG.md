@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.38
+
+### Patch Changes
+
+- P1-C flip provenance gates + per-run ledger (todos 0c0324c1): `machines flip`
+  now proves the freshly written `~/.hasna/fleet-env/<app>.env` supplied the
+  connection before reporting ok. Provenance gates reject `apiKeyTier=legacy-env`,
+  any reported transport/apiUrl/apiKey source under `~/.hasna/cloud`, and api mode
+  whose exact source cannot be reported. The flip script reports the sha256 of the
+  env file it wrote (`FLIP_SHA256`), and every flip writes one value-free JSONL
+  ledger row per machine to `~/.hasna/machines/flip-ledger.jsonl` (ts, machine,
+  app, wave, mode, result, sourceOfValue, envSha256, provenanceOk); dry-runs
+  return the rows in the report but never write the file. `docs/FLEET-FLIP.md`
+  updated to the fleet-env primary location (the `~/.hasna/cloud` writing is
+  retired).
+
 ## 0.2.37
 
 ### Patch Changes

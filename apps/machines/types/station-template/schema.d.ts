@@ -484,6 +484,8 @@ export declare const templateLayerSchema: z.ZodObject<{
         expectEnabled?: boolean | undefined;
         expectActive?: boolean | undefined;
     }>, "many">>;
+    /** Install, activate, and semantically verify the package-owned aggregate test controller. */
+    workstationTestProfile: z.ZodDefault<z.ZodBoolean>;
     /** Runtime sysctl expectations (key → value), checked via /proc/sys. */
     sysctls: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodString>>;
     runtimeValues: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -666,6 +668,7 @@ export declare const templateLayerSchema: z.ZodObject<{
         expectEnabled: boolean;
         expectActive: boolean;
     }[];
+    workstationTestProfile: boolean;
     sysctls: Record<string, string>;
     runtimeValues: {
         value: string;
@@ -745,6 +748,7 @@ export declare const templateLayerSchema: z.ZodObject<{
         expectEnabled?: boolean | undefined;
         expectActive?: boolean | undefined;
     }[] | undefined;
+    workstationTestProfile?: boolean | undefined;
     sysctls?: Record<string, string> | undefined;
     runtimeValues?: {
         value: string;
@@ -893,6 +897,8 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }>, "many">>;
+        /** Install, activate, and semantically verify the package-owned aggregate test controller. */
+        workstationTestProfile: z.ZodDefault<z.ZodBoolean>;
         /** Runtime sysctl expectations (key → value), checked via /proc/sys. */
         sysctls: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodString>>;
         runtimeValues: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -1075,6 +1081,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled: boolean;
             expectActive: boolean;
         }[];
+        workstationTestProfile: boolean;
         sysctls: Record<string, string>;
         runtimeValues: {
             value: string;
@@ -1154,6 +1161,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }[] | undefined;
+        workstationTestProfile?: boolean | undefined;
         sysctls?: Record<string, string> | undefined;
         runtimeValues?: {
             value: string;
@@ -1297,6 +1305,8 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }>, "many">>;
+        /** Install, activate, and semantically verify the package-owned aggregate test controller. */
+        workstationTestProfile: z.ZodDefault<z.ZodBoolean>;
         /** Runtime sysctl expectations (key → value), checked via /proc/sys. */
         sysctls: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodString>>;
         runtimeValues: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -1479,6 +1489,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled: boolean;
             expectActive: boolean;
         }[];
+        workstationTestProfile: boolean;
         sysctls: Record<string, string>;
         runtimeValues: {
             value: string;
@@ -1558,6 +1569,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }[] | undefined;
+        workstationTestProfile?: boolean | undefined;
         sysctls?: Record<string, string> | undefined;
         runtimeValues?: {
             value: string;
@@ -1635,6 +1647,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled: boolean;
             expectActive: boolean;
         }[];
+        workstationTestProfile: boolean;
         sysctls: Record<string, string>;
         runtimeValues: {
             value: string;
@@ -1713,6 +1726,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled: boolean;
             expectActive: boolean;
         }[];
+        workstationTestProfile: boolean;
         sysctls: Record<string, string>;
         runtimeValues: {
             value: string;
@@ -1798,6 +1812,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }[] | undefined;
+        workstationTestProfile?: boolean | undefined;
         sysctls?: Record<string, string> | undefined;
         runtimeValues?: {
             value: string;
@@ -1872,6 +1887,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }[] | undefined;
+        workstationTestProfile?: boolean | undefined;
         sysctls?: Record<string, string> | undefined;
         runtimeValues?: {
             value: string;
@@ -1949,6 +1965,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled: boolean;
             expectActive: boolean;
         }[];
+        workstationTestProfile: boolean;
         sysctls: Record<string, string>;
         runtimeValues: {
             value: string;
@@ -2027,6 +2044,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled: boolean;
             expectActive: boolean;
         }[];
+        workstationTestProfile: boolean;
         sysctls: Record<string, string>;
         runtimeValues: {
             value: string;
@@ -2112,6 +2130,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }[] | undefined;
+        workstationTestProfile?: boolean | undefined;
         sysctls?: Record<string, string> | undefined;
         runtimeValues?: {
             value: string;
@@ -2186,6 +2205,7 @@ export declare const stationTemplateSchema: z.ZodEffects<z.ZodObject<{
             expectEnabled?: boolean | undefined;
             expectActive?: boolean | undefined;
         }[] | undefined;
+        workstationTestProfile?: boolean | undefined;
         sysctls?: Record<string, string> | undefined;
         runtimeValues?: {
             value: string;
@@ -2254,6 +2274,7 @@ export interface EffectiveTemplate {
     };
     commands: TemplateCommand[];
     services: TemplateService[];
+    workstationTestProfile: boolean;
     sysctls: Record<string, string>;
     runtimeValues: z.infer<typeof runtimeValueSchema>[];
     unitConventions?: UnitConventions;

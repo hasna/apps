@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { FleetManifest } from "../src/types.js";
 import {
   FLIP_APPS,
   buildFlipPlan,
   buildFlipScript,
+  extractFlipSha256,
   getFlipApp,
   listFlipApps,
   normalizeFlipMode,
@@ -15,6 +16,7 @@ import {
   runFlip,
   runFreezeCheck,
   selectTargets,
+  verifyFlipProvenance,
   verifyStorageMode,
   type FlipTarget,
   type RunnerFn,
@@ -472,13 +474,16 @@ describe("orchestration", () => {
 
   test("execute verifies each machine and completes when all pass", () => {
     const runner: RunnerFn = () => ({
-      stdout: `FLIP_STATUS_BEGIN{"mode":"cloud","api_enabled":true}FLIP_STATUS_END`,
+      stdout: `FLIP_STATUS_BEGIN{"mode":"cloud","api_enabled":true,"apiKeyTier":"fleet-env","apiKeySource":"/home/u/.hasna/fleet-env/knowledge.env","apiUrlSource":"/home/u/.hasna/fleet-env/knowledge.env","transportSource":"/home/u/.hasna/fleet-env/knowledge.env"}FLIP_STATUS_END FLIP_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
       stderr: "",
       exitCode: 0,
     });
     const report = runFlip({ spec: knowledge, mode: "api", waves, runner, execute: true });
     expect(report.aborted).toBe(false);
     expect(report.results.every((r) => r.verification.ok)).toBe(true);
+    // The ledger carries the provenance verdict and the env-file sha256.
+    expect(report.ledger.every((e) => e.provenanceOk && e.result === "ok")).toBe(true);
+    expect(report.ledger[0]?.envSha256).toBe("a".repeat(64));
   });
 
   test("atomic --all-machines wave flips every machine together", () => {
@@ -486,7 +491,11 @@ describe("orchestration", () => {
     const seen: string[] = [];
     const runner: RunnerFn = (id) => {
       seen.push(id);
-      return { stdout: `{"mode":"cloud","api_enabled":true}`, stderr: "", exitCode: 0 };
+      return {
+        stdout: `{"mode":"cloud","api_enabled":true,"apiKeyTier":"fleet-env","apiKeySource":"/home/u/.hasna/fleet-env/knowledge.env","apiUrlSource":"/home/u/.hasna/fleet-env/knowledge.env"}`,
+        stderr: "",
+        exitCode: 0,
+      };
     };
     const report = runFlip({ spec: knowledge, mode: "api", waves: atomicWaves, runner, execute: true });
     expect(report.aborted).toBe(false);
@@ -527,5 +536,111 @@ describe("plan", () => {
   test("revert plan references no secrets", () => {
     const plan = buildFlipPlan(getFlipApp("mementos"), "local", planWaves(selectTargets(manifest)));
     expect(plan.secretPathsReferenced).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1-C provenance gates + per-run ledger (todos 0c0324c1, review P0-3 / Sol 5).
+// ---------------------------------------------------------------------------
+describe("provenance gates (P1-C)", () => {
+  const spec = getFlipApp("knowledge");
+  const fleetEnv = "/home/u/.hasna/fleet-env/knowledge.env";
+
+  test("positive: a fleet-env source + fleet tier passes, sourceOfValue = the fleet file", () => {
+    const out = `FLIP_STATUS_BEGIN{"mode":"cloud","api_enabled":true,"apiKeyTier":"fleet-env","apiKeySource":"${fleetEnv}","apiUrlSource":"${fleetEnv}","transportSource":"${fleetEnv}"}FLIP_STATUS_END FLIP_SHA256=${"c".repeat(64)}`;
+    const r = verifyFlipProvenance(out, spec, "api", { expectedEnvFile: fleetEnv });
+    expect(r.provenanceOk).toBe(true);
+    expect(r.sourceOfValue).toBe(fleetEnv);
+    expect(r.envSha256).toBe("c".repeat(64));
+  });
+
+  test("negative: apiKeyTier=legacy-env is rejected (the key did not come from the file)", () => {
+    const out = `{"mode":"cloud","api_enabled":true,"apiKeyTier":"legacy-env","apiKeySource":null,"apiUrlSource":"${fleetEnv}"}`;
+    const r = verifyFlipProvenance(out, spec, "api", { expectedEnvFile: fleetEnv });
+    expect(r.provenanceOk).toBe(false);
+    expect(r.reason).toContain("legacy-env");
+  });
+
+  test("negative: a source under ~/.hasna/cloud is rejected", () => {
+    const out = `{"mode":"cloud","api_enabled":true,"apiKeyTier":"disk","apiKeySource":"/home/u/.hasna/cloud/knowledge.env","apiUrlSource":"/home/u/.hasna/cloud/knowledge.env"}`;
+    const r = verifyFlipProvenance(out, spec, "api", { expectedEnvFile: fleetEnv });
+    expect(r.provenanceOk).toBe(false);
+    expect(r.reason).toContain(".hasna/cloud");
+  });
+
+  test("negative: api mode whose exact source cannot be reported is rejected", () => {
+    const out = `{"mode":"cloud","api_enabled":true}`;
+    const r = verifyFlipProvenance(out, spec, "api", { expectedEnvFile: fleetEnv });
+    expect(r.provenanceOk).toBe(false);
+    expect(r.reason).toContain("exact source cannot be confirmed");
+  });
+
+  test("revert (local) mode passes provenance trivially — there is no connection source to prove", () => {
+    const out = `{"mode":"local","api_enabled":false}`;
+    const r = verifyFlipProvenance(out, spec, "local");
+    expect(r.provenanceOk).toBe(true);
+  });
+
+  test("extractFlipSha256 reads the marker the script emits, and nothing when absent", () => {
+    expect(extractFlipSha256(`FLIP_SHA256=${"e".repeat(64)}`)).toBe("e".repeat(64));
+    expect(extractFlipSha256("no marker")).toBeNull();
+  });
+
+  test("the generated api script emits FLIP_SHA256 so the ledger can prove the file hash", () => {
+    const script = buildFlipScript(spec, "api", { envDir: "/x/fleet-env", skipRestart: true });
+    expect(script).toContain('S="$(sha256sum "$ENV_FILE")"; echo "FLIP_SHA256=${S%% *}"');
+  });
+
+  test("a dry-run flip returns ledger rows (source + provenance) but does not write them", () => {
+    let wrote = 0;
+    const runner: RunnerFn = () => {
+      wrote += 1;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const report = runFlip({
+      spec,
+      mode: "api",
+      waves: planWaves(selectTargets(manifest)),
+      runner,
+      execute: false,
+      ledger: () => {
+        wrote += 1;
+      },
+    });
+    // Dry-run executes nothing and the ledger sink is never called.
+    expect(wrote).toBe(0);
+    expect(report.ledger.length).toBe(4);
+    expect(report.ledger[0]).toMatchObject({
+      app: "knowledge",
+      result: "dry-run",
+      provenanceOk: false,
+      envSha256: null,
+    });
+    expect(report.ledger[0]!.sourceOfValue).toContain("fleet-env/knowledge.env");
+  });
+
+  test("an execute flip records ledger rows with the env-file sha256 and provenance verdict", () => {
+    const ledgerPath = join(mkdtempSync(join(tmpdir(), "machines-ledger-")), "flip-ledger.jsonl");
+    const runner: RunnerFn = () => ({
+      stdout: `{"mode":"cloud","api_enabled":true,"apiKeyTier":"fleet-env","apiKeySource":"${fleetEnv}","apiUrlSource":"${fleetEnv}"} FLIP_SHA256=${"b".repeat(64)}`,
+      stderr: "",
+      exitCode: 0,
+    });
+    const report = runFlip({
+      spec,
+      mode: "api",
+      waves: planWaves(selectTargets(manifest)),
+      runner,
+      execute: true,
+      ledger: (entries) => writeFileSync(ledgerPath, entries.map((e) => JSON.stringify(e)).join("\n") + "\n"),
+    });
+    expect(report.aborted).toBe(false);
+    expect(report.ledger).toHaveLength(4);
+    expect(report.ledger[0]).toMatchObject({ result: "ok", provenanceOk: true, envSha256: "b".repeat(64) });
+    const rows = readFileSync(ledgerPath, "utf8").trim().split("\n");
+    expect(rows).toHaveLength(4);
+    // Ledger rows are value-free: no credential material, ever.
+    expect(rows.join("\n")).not.toContain("API_KEY=");
+    rmSync(dirname(ledgerPath), { recursive: true, force: true });
   });
 });

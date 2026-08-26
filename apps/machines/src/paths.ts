@@ -77,3 +77,12 @@ export function ensureDataDir(): string {
   ensureParentDir(join(dir, ".keep"));
   return dir;
 }
+
+/**
+ * The per-run flip ledger (P1-C). JSONL, one entry per machine per flip run.
+ * Every row is value-free: machine, app, ts, result, source-of-value, sha256,
+ * provenance-gate verdict.
+ */
+export function getFlipLedgerPath(): string {
+  return process.env["HASNA_MACHINES_FLIP_LEDGER_PATH"] || join(getDataDir(), "flip-ledger.jsonl");
+}
