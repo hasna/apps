@@ -23,7 +23,20 @@ const DEPLOY_GATE = { type: 'object', additionalProperties: false, required: ['v
 let agentFailed = false
 const safeAgent = async (prompt, opts) => {
   try {
-    return await agent(prompt, opts)
+    const r = await agent(prompt, opts)
+    // A prose reply can come back as the agent's RAW RESULT (a string) instead
+    // of the schema'd object — measured 2026-08-26 on wf_a3a29325-194: the
+    // survey agent completed with prose and the run crashed at
+    // `survey.deployable.length` (a truthy string passes !survey). When a
+    // schema was requested, a non-object result is the SAME failure class as
+    // the throw — treat it as one so the existing null-guards hold.
+    if (opts && opts.schema && (typeof r !== 'object' || r === null)) {
+      agentFailed = true
+      const label = (opts && (opts.label || opts.phase)) || 'agent'
+      log('AGENT-PROSE (' + label + '): schema requested but the agent returned a non-object result — treating as failure; next pass census sleeps 300s first')
+      return null
+    }
+    return r
   } catch (err) {
     agentFailed = true
     const label = (opts && (opts.label || opts.phase)) || 'agent'
@@ -62,16 +75,16 @@ THE DEPLOY SURFACE (measured 2026-08-24): services run as ECS Fargate in the oss
    - database: migrations exist at origin/main (migrations/ dir or in-code migrations per the app's pattern);
    - routing: https://<name>.hasna.xyz/health answers 200 (curl, one probe; a product app uses its own domain).
 3. Classify: DEPLOYABLE = ECS surface exists AND the ECS-deployed image version (from the current task def image tag or the route /version) is BEHIND origin/main's src version (or the src version differs from what the ECS service runs); BLOCKED = any role missing or unverifiable, with the exact missing role named. Do NOT deploy anything.
-Return {deployable: [{name, packageName, version, ecsService, taskDef, route}], blocked: [{name, missingRole, reason}]}.`, { label: 'survey-deploy', phase: 'Survey', schema: SURVEY }))
-if (!survey || survey.deployable.length === 0) {
-  log(`pass ${pass}: no deployable services — the survey waited ~5 min and re-checked; re-checking next pass`)
+Return {deployable: [{name, packageName, version, ecsService, taskDef, route}], blocked: [{name, missingRole, reason}]}.`), { label: 'survey-deploy', phase: 'Survey', schema: SURVEY })
+if (!survey || !Array.isArray(survey.deployable) || survey.deployable.length === 0) {
+  log(`pass ${pass}: no deployable services (or malformed survey) — the survey waited ~5 min and re-checked; re-checking next pass`)
   continue
 }
 if (survey && survey.yielded) {
   log(`pass ${pass}: YIELDED to hotfix-drain (${survey.hotfixCount || 0} HOTFIX: row(s)) — waited inside the survey, re-checking next pass`)
   continue
 }
-log(`pass ${pass} survey: ${survey.deployable.length} deployable, ${survey.blocked.length} blocked`)
+log(`pass ${pass} survey: ${survey.deployable.length} deployable, ${Array.isArray(survey.blocked) ? survey.blocked.length : 0} blocked`)
 
 phase('Deploy')
 const d = await safeAgent(`DEPLOY the surveyed services ONE AT A TIME (the owner's one-at-a-time rule) to the oss-fleet-prod ECS surface (hasna-xyz-infra 789877399345, us-east-1). PASS ${pass} of the infinite loop. Deployable set: ${JSON.stringify(survey.deployable)}.
