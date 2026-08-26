@@ -15,6 +15,7 @@ conform to the hasna/apps standards. Complements the repo's own gates
 | 4. license | `license.test.ts` | `license === "Apache-2.0"` | HARD, recorded exceptions |
 | 5. dist hygiene | `dist-hygiene.test.ts` | no `files` entry pulls in `node_modules` (negated exclusions fine) | HARD |
 | 6. intra-wave unpublished pins | `published-pins.test.ts` | no publishable member exact-pins an intra-wave dep (`@hasna/*` member of this tree) to a version not on the npm registry (wave tooling must publish the bumped dep before/within the same wave, or hold pins at the last published version) | HARD, registry-backed |
+| 7. quarantine window admissions | `quarantine-pins.test.ts` | no finding-scope member's declared `dependencies` admit a version published inside the fleet 7-day `minimumReleaseAge` window (fresh resolution and pack-audit installs fail the 604800s guard; pin to the last version published before the window). Non-scope members' admissions are reported as a census, never asserted | HARD (scope), registry-backed |
 
 ## The census exception records are a REPORTING lane (f05fe292, 2026-08-15)
 
