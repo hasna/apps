@@ -11,6 +11,8 @@
 ### Patch Changes
 
 - 6356ce6: Resolve configured Changesets changelog modules from the Releases runtime when a target workspace has no installed dependencies.
+- 0e7b0592: Bump the VERSION constant to 0.1.4 so `releases --version` reports the released version.
+- 984cd984: releases-mcp answers --version/-V before any bind.
 
 ## 0.1.3
 
