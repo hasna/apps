@@ -40,7 +40,7 @@ import { spawnSync } from "node:child_process";
 const REPO_ROOT = path.resolve(import.meta.dir, "../../../..");
 
 /** Members whose Docker deps stage runs `bun install --frozen-lockfile`. */
-const WAVE_APPS = ["loops", "machines", "messages", "projects", "recordings", "sessions", "todos"];
+const WAVE_APPS = ["loops", "machines", "messages", "projects", "recordings", "todos"];
 
 /** Sub-workspace manifests the member's own Dockerfile COPYs into the image. */
 const SUB_WORKSPACES: Record<string, string[]> = {
