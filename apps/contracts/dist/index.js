@@ -20975,6 +20975,7 @@ import { isIP } from "net";
 
 // src/client/credentials.ts
 import { readFileSync as readFileSync6, statSync as statSync4 } from "fs";
+import { createRequire } from "module";
 import { join as join7 } from "path";
 class CredentialResolutionError extends Error {
   appName;
@@ -21361,6 +21362,7 @@ function resolveCredential(name, env, options = {}) {
   return null;
 }
 var SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
+var requireSecretsSdk = createRequire(import.meta.url);
 async function completePointerCredential(name, pointerResolution, env = process.env) {
   const vaultKey = pointerResolution.pointerVaultKey;
   const pointerEnvKey = pointerResolution.source;
@@ -21369,21 +21371,21 @@ async function completePointerCredential(name, pointerResolution, env = process.
   }
   let secretsSdk;
   try {
-    secretsSdk = await import(SECRETS_PACKAGE_SPECIFIER);
+    secretsSdk = requireSecretsSdk(SECRETS_PACKAGE_SPECIFIER);
   } catch {
-    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets SDK (@hasna/secrets) is not installed in this process. A vault pointer is TERMINAL: install @hasna/secrets to resolve it, or unset ${pointerEnvKey}.`, [pointerEnvKey]);
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets SDK (@hasna/secrets) is not installed ` + `in this process. A vault pointer is TERMINAL: install @hasna/secrets to resolve it, or unset ${pointerEnvKey}.`, [pointerEnvKey]);
   }
   let client;
   try {
     client = secretsSdk.createSecretsClientFromEnv(env);
   } catch {
-    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets client could not be configured from this environment (the secrets service URL and key env are missing or invalid). A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets client could not be configured from this ` + `environment (the secrets service URL and key env are missing or invalid). A vault pointer is TERMINAL and ` + `never falls through to a literal or disk credential.`, [pointerEnvKey]);
   }
   let secret;
   try {
     secret = await client.getSecret({ key: vaultKey });
   } catch {
-    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the vault could not be reached or the item is unavailable. A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the vault could not be reached or the item is ` + `unavailable. A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
   }
   const value = secret.value;
   if (!value) {

@@ -47,6 +47,7 @@
 // path. Nothing in this module may acquire such a fallback.
 
 import { readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { Env } from "../env-token.js";
 import {
@@ -948,6 +949,13 @@ interface SecretsPointerModule {
 // member whose dist is absent at install time.
 const SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
 
+// Runtime-only load of the secrets SDK. `createRequire` + a non-literal
+// specifier keeps this a runtime require in consumer bundles (`bun build
+// --compile` and friends), unlike `await import(<non-literal>)` which the
+// bundler refuses. The pointer tier is a rare, deliberate path; its SDK is
+// loaded only when a pointer is actually resolved.
+const requireSecretsSdk = createRequire(import.meta.url);
+
 /**
  * Complete a pointer-tier resolution through the secrets vault.
  *
@@ -980,7 +988,7 @@ export async function completePointerCredential(
   }
   let secretsSdk: SecretsPointerModule;
   try {
-    secretsSdk = (await import(SECRETS_PACKAGE_SPECIFIER)) as SecretsPointerModule;
+    secretsSdk = requireSecretsSdk(SECRETS_PACKAGE_SPECIFIER) as SecretsPointerModule;
   } catch {
     throw new CredentialResolutionError(
       name,
