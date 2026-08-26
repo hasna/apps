@@ -1,5 +1,12 @@
 # @hasna/prompts
 
+## 0.3.38
+
+### Patch Changes
+
+- Updated dependencies [2a65f40]
+  - @hasna/contracts@0.14.2
+
 ## 0.3.37
 
 ### Patch Changes

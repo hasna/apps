@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.4
+
+### Patch Changes
+
+- Updated dependencies [2a65f40]
+  - @hasna/contracts@0.14.2
+  - @hasna/conversations@0.7.13
+  - @hasna/loops@0.6.5
+  - @hasna/todos@0.15.51
+
 ## 1.0.3
 
 ### Patch Changes

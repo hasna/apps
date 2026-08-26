@@ -1,6 +1,6 @@
 {
   "name": "@hasna/billing",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Thin agent-facing billing/dunning orchestration over Stripe Billing: subscription lifecycle, decline-code retries, pre-dunning, graduated downgrades, multi-entity invoicing. CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
@@ -59,7 +59,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/paths": "0.1.0",
+    "@hasna/paths": "0.2.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "hono": "^4.6.0",
     "commander": "^13.1.0",
@@ -70,7 +70,7 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.9.0",
+    "@hasna/contracts": "0.14.2",
     "@types/bun": "^1.2.4",
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.18",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.116
+
+### Patch Changes
+
+- Updated dependencies [2a65f40]
+  - @hasna/contracts@0.14.2
+
 ## 0.2.115
 
 ### Patch Changes

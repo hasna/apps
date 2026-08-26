@@ -1,6 +1,6 @@
 {
   "name": "@hasna/brains",
-  "version": "0.0.38",
+  "version": "0.0.39",
   "description": "Fine-tuned model tracker and trainer — wraps OpenAI + Tinker, gathers training data from todos/mementos/conversations/sessions",
   "type": "module",
   "main": "./dist/index.js",
@@ -67,7 +67,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/events": "^0.1.6",
-    "@hasna/paths": "0.1.0",
+    "@hasna/paths": "0.2.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

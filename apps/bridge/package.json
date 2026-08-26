@@ -1,6 +1,6 @@
 {
   "name": "@hasna/bridge",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "Agent messaging bridge for Telegram and other channels",
   "type": "module",
   "main": "dist/index.js",
@@ -63,7 +63,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/paths": "0.1.0",
+    "@hasna/paths": "0.2.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^13.1.0",
     "zod": "^3.25.76"

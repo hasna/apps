@@ -1,6 +1,6 @@
 {
   "name": "@hasna/prompts",
-  "version": "0.3.37",
+  "version": "0.3.38",
   "description": "Reusable prompt library for AI agents — CLI + MCP server + REST API + web dashboard",
   "type": "module",
   "main": "dist/index.js",
@@ -87,10 +87,10 @@
     "ink": "^5.2.0",
     "react": "^18.3.1",
     "zod": "^3.24.2",
-    "@hasna/contracts": "0.14.1"
+    "@hasna/contracts": "0.14.2"
   },
   "devDependencies": {
-    "@hasna/contracts": "0.14.1",
+    "@hasna/contracts": "0.14.2",
     "@types/bun": "^1.2.4",
     "@types/react": "^18.3.18",
     "typescript": "^5.7.3",
