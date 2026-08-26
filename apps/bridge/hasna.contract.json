@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.11.1",
-  "description": "Agent messaging bridge for Telegram and other channels.",
+  "description": "Agent messaging bridge for Telegram and other channels. Config, state, and daemon metadata live at the effective bridge data home (~/.hasna/bridge by default, resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set).",
   "bins": [
     "bridge",
     "bridge-mcp"

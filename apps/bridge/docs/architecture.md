@@ -112,10 +112,12 @@ the shell environment, including Telegram token env vars. Installed launchd and
 systemd services do not store token values by default; operators must make token
 env vars available through their service manager.
 
-Daemon files live under `~/.hasna/bridge/daemon` by default. The directory is
-`0700`; metadata and log files are `0600`. Logs are considered sensitive because
-they can contain prompts, Telegram text, agent stdout/stderr, and routing
-errors.
+Daemon files live under the bridge home's `daemon` subdirectory —
+`~/.hasna/bridge/daemon` by default, or the `@hasna/paths` XDG data home's
+`daemon` subdirectory once the store has been migrated there or `HASNA_DATA_HOME`
+is set. The directory is `0700`; metadata and log files are `0600`. Logs are
+considered sensitive because they can contain prompts, Telegram text, agent
+stdout/stderr, and routing errors.
 
 `bridge serve` handles per-channel poll errors without exiting in long-running
 mode. `serve --once` still fails fast so health checks and tests can catch

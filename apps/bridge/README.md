@@ -225,11 +225,13 @@ bridge daemon stop
 ```
 
 The default process supervisor inherits the current environment and stores
-private metadata and logs under `~/.hasna/bridge/daemon`. For login-managed
-services, `daemon install/start/stop/uninstall --supervisor auto` selects a user
-launchd service on macOS or systemd service on Linux. Supervisor files do not
-contain Telegram token values; import those variables into the service manager
-before starting.
+private metadata and logs under the bridge home's `daemon` subdirectory
+(`~/.hasna/bridge/daemon` by default, or the XDG data home's `daemon`
+subdirectory once the store has been migrated to `@hasna/paths`). For
+login-managed services, `daemon install/start/stop/uninstall --supervisor auto`
+selects a user launchd service on macOS or systemd service on Linux. Supervisor
+files do not contain Telegram token values; import those variables into the
+service manager before starting.
 
 ## MCP
 
@@ -247,16 +249,21 @@ the agent but has no external response channel; inspect its structured result.
 
 ## Files And Environment
 
-Defaults:
+Defaults (resolved through `@hasna/paths`):
 
 - Config: `~/.hasna/bridge/config.json` (`0600`)
 - State: `~/.hasna/bridge/state.json` (`0600`)
 - Daemon directory: `~/.hasna/bridge/daemon` (`0700`)
 - Daemon metadata and logs: `0600`
 
-Set `BRIDGE_HOME` to move all defaults, or override config and state separately
-with `BRIDGE_CONFIG` and `BRIDGE_STATE`. `BRIDGE_DEBUG` prints action-handler
-stack traces after the normal one-line CLI error.
+The legacy `~/.hasna/bridge` home stays the effective home until the store has
+actually been migrated to the XDG data home (`~/.local/share/hasna/bridge` on
+Linux, `~/Library/Application Support/Hasna/bridge` on macOS) or the operator
+sets the data-kind override `HASNA_DATA_HOME` — an existing local store never
+becomes invisible on upgrade. Set `BRIDGE_HOME` (or the `HASNA_BRIDGE_HOME`
+alias) to move all defaults, or override config and state separately with
+`BRIDGE_CONFIG` and `BRIDGE_STATE`. `BRIDGE_DEBUG` prints action-handler stack
+traces after the normal one-line CLI error.
 
 Config stores Telegram token environment variable names, not token values.
 Treat state and logs as sensitive because they contain prompts, responses,
