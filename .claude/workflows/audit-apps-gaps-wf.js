@@ -380,7 +380,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   // Phase 1: inventory survey — parallel bounded per-app agents.
   const inventories = await runPhase(`pass-${pass}-inventory`, async () =>
     parallel(
-      apps.map((app) =>
+      apps.map((app) => () =>
         safeAgent({ prompt: withRecord(inventoryPrompt(app)), tools: AT })
       ),
       fanCfg
@@ -413,7 +413,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
         )
     );
     return parallel(
-      apps.map((app, i) =>
+      apps.map((app, i) => () =>
         safeAgent({
           prompt: withRecord(
             verdictPrompt(app, inventoryTexts[i], appSlug(app))
@@ -445,7 +445,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   // Phase 3: create/update todos tasks ONLY for confirmed gaps.
   const taskRows = await runPhase(`pass-${pass}-tasks`, async () =>
     parallel(
-      apps.map((app, i) => {
+      apps.map((app, i) => () => {
         const v = verdictOs[i];
         const verdictText = v
           ? JSON.stringify(v)
