@@ -18,12 +18,14 @@ answers context questions such as:
 
 ## Install
 
-`@hasna/orgs` is not currently published on the public npm registry. A registry
-check on 2026-06-26 returned `E404`, so do not use `bun install -g @hasna/orgs`
-as verified install guidance until an authorized publish has happened and the
-registry check succeeds.
+`@hasna/orgs` is published on the public npm registry (latest `0.1.1`, checked
+2026-08-26):
 
-Use a checkout for now:
+```bash
+bun install -g @hasna/orgs
+```
+
+Development from a checkout:
 
 ```bash
 bun install
@@ -38,9 +40,8 @@ bun run verify:release
 bun run verify:published
 ```
 
-`verify:published` is expected to fail with `E404` until the package is actually
-published. Do not publish from this repository without explicit permission and
-confidence in the release contents.
+`verify:published` verifies the published package. Do not publish from this
+repository without explicit permission and confidence in the release contents.
 
 ## CLI
 

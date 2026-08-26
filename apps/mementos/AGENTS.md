@@ -162,8 +162,8 @@ agent-workflow-<name>  -- process knowledge
 | **@hasna/todos** | Include `session_id` in memory_save when working on a task |
 | **@hasna/attachments** | Store attachment IDs as memory values |
 | **@hasna/conversations** | `update_agent(active_project_id)` → mementos as agent registry |
-| **@hasna/configs** | `memory_inject()` for context; config decisions as `fact` memories |
-| **open-brains** | `GET /api/memories?scope=shared&min_importance=6` for training data |
+| **@hasna/instructions** | `memory_inject()` for context; config decisions as `fact` memories |
+| **@hasna/brains** | `GET /api/memories?scope=shared&min_importance=6` for training data |
 
 ## Common Patterns
 

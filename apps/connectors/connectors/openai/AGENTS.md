@@ -10,7 +10,6 @@ connect-openai is a TypeScript CLI and library for OpenAI's API. It provides cha
 
 | Model | Description |
 |-------|-------------|
-| `gpt-5.4` | Latest, most capable |
 | `gpt-4.1-mini` | Fast, cheap — **use as default** |
 | `gpt-4.1` | High capability |
 | `o3` | Advanced reasoning |

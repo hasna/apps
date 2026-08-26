@@ -21,10 +21,11 @@ bunx turbo run build --affected
 bunx turbo run test --affected
 ```
 
-`bun run check` covers names, secrets, and the publish guard. The
-contract-manifest gate is not yet implemented — `tooling/ci/check-manifests.ts`
-is a placeholder that cannot refuse yet, so do not rely on it for manifest
-coverage. The Turbo commands cover affected build and test work.
+`bun run check` covers names, secrets, manifests, and the publish guard. The
+contract-manifest gate (`tooling/ci/check-manifests.ts`) is a real validator
+that runs the canonical manifest validator against every publishable member
+and refuses (exit 1); it is wired into the `ci.yml` `gates` job. The Turbo
+commands cover affected build and test work.
 
 This repository is licensed under Apache-2.0. Member packages carry their own
 licenses: some are Apache-2.0 and some are intentionally different (for

@@ -1,6 +1,6 @@
 # @hasna/skills
 
-Skills library for AI coding agents — discover, pin, and run reusable capabilities through the Skills CLI and MCP server. Registers with Claude, Codex, Cursor, OpenCode, Gemini, Windsurf and Pi, and works with any MCP host.
+Skills library for AI coding agents — discover, pin, and run reusable capabilities through the Skills CLI and MCP server. Registers with Claude, Codewith, Codex, OpenCode and Cursor, and works with any MCP host.
 
 [![npm](https://img.shields.io/npm/v/@hasna/skills)](https://www.npmjs.com/package/@hasna/skills)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
