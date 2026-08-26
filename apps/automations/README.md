@@ -72,8 +72,11 @@ automations-daemon --json serve --host 127.0.0.1 --port 7391
 
 Global `--dir` and `--json` options must appear before the command.
 
-The default data root is `~/.hasna/automations`. Override it with
-`HASNA_AUTOMATIONS_DIR` or `AUTOMATIONS_DATA_DIR`.
+The default data root is `~/.hasna/automations`, resolved through the
+`@hasna/paths` resolver. Override it with `HASNA_AUTOMATIONS_DIR` or
+`AUTOMATIONS_DATA_DIR`; the XDG data home
+(`~/.local/share/hasna/automations`, or `$HASNA_DATA_HOME/automations`) is
+adopted once the store has been migrated there or `HASNA_DATA_HOME` is set.
 
 `automations-daemon run` stays alive and maintains the local daemon lease until
 it receives `SIGINT` or `SIGTERM`. Use `--once` for smoke checks and tests.

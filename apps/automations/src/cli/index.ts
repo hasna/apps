@@ -745,7 +745,9 @@ Usage:
   ${name} [--dir <path>] [--json] runtimes
 
 Environment:
-  HASNA_AUTOMATIONS_DIR or AUTOMATIONS_DATA_DIR overrides ~/.hasna/automations`);
+  HASNA_AUTOMATIONS_DIR or AUTOMATIONS_DATA_DIR overrides the data root
+  (default ~/.hasna/automations, resolved via @hasna/paths; the XDG data home
+  is adopted once the store is migrated there or HASNA_DATA_HOME is set)`);
 }
 
 function printWebhooksHelp(options: RunAutomationsCliOptions = {}): void {
