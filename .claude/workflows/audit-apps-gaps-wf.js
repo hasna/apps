@@ -110,7 +110,11 @@ log(
 let failureCount = 0;
 async function safeAgent(cfg) {
   try {
-    return await agent(cfg);
+    // The runtime's agent() is POSITIONAL: agent(prompt, opts). Passing the cfg
+    // object whole stringifies it to '[object Object]' (measured 2026-08-26 —
+    // the census agent received the literal string '[object]').
+    const { prompt, ...opts } = cfg;
+    return await agent(prompt, opts);
   } catch (err) {
     failureCount += 1;
     log(
