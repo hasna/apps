@@ -118,27 +118,21 @@ describe('knowledge HTTP store resolver', () => {
     }
   });
 
-  test('search targets the deployed unified /v1/search contract and adapts its results envelope', async () => {
+  test('ranked search sends one producer request and preserves rank plus total', async () => {
     const requests: URL[] = [];
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       fetch(request) {
         requests.push(new URL(request.url));
-        // The deployed knowledge server (1.0.0-rc.6) serves the unified
-        // /v1/search envelope: { results, total, query } with rankless hits.
+        // The deployed knowledge server (0.2.114) serves search at
+        // /v1/notes/search: { items: [{ item, rank }], total,
+        // query_capability } — the pre-unified contract measured live at
+        // knowledge.hasna.xyz on 2026-08-26.
         return Response.json({
-          results: [
-            {
-              kind: 'note',
-              id: 'k_deployed_hit',
-              title: 'Deployed unified hit',
-              snippet: 'Excerpt produced by the deployed search endpoint.',
-              url: null,
-            },
-          ],
-          total: 1,
-          query: 'alpha OR beta',
+          items: [{ item: OLD_SERVER_ITEM, rank: 0.875 }],
+          total: 7,
+          query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
         });
       },
     });
@@ -154,33 +148,22 @@ describe('knowledge HTTP store resolver', () => {
         limit: 3,
         offset: 6,
       });
-      expect(result.total).toBe(1);
+      expect(result.total).toBe(7);
       expect(result.items).toHaveLength(1);
-      expect(result.items[0]).toEqual({
-        item: {
-          id: 'k_deployed_hit',
-          short_id: null,
-          title: 'Deployed unified hit',
-          content: 'Excerpt produced by the deployed search endpoint.',
-          url: null,
-          tags: [],
-          metadata: {},
-          created_at: '',
-          updated_at: '',
-        },
-        rank: null,
-      });
+      expect(result.items[0]!.rank).toBe(0.875);
+      expect(result.items[0]!.item).toEqual(OLD_SERVER_ITEM);
       expect(requests).toHaveLength(1);
-      expect(requests[0]!.pathname).toBe('/v1/search');
+      expect(requests[0]!.pathname).toBe('/v1/notes/search');
       expect(requests[0]!.searchParams.get('q')).toBe('alpha OR beta');
+      expect(requests[0]!.searchParams.get('archive')).toBe('active');
       expect(requests[0]!.searchParams.get('limit')).toBe('3');
-      expect(requests[0]!.searchParams.get('kind')).toBe('note');
+      expect(requests[0]!.searchParams.get('offset')).toBe('6');
     } finally {
       server.stop(true);
     }
   });
 
-  test('search refuses a malformed unified envelope instead of returning a plausible empty page', async () => {
+  test('search refuses malformed rank evidence instead of returning a plausible empty page', async () => {
     const requests: URL[] = [];
     const server = Bun.serve({
       port: 0,
@@ -188,9 +171,9 @@ describe('knowledge HTTP store resolver', () => {
       fetch(request) {
         requests.push(new URL(request.url));
         return Response.json({
-          results: [{ id: 'missing_title_and_snippet' }],
+          items: [{ item: null, rank: 0.5 }],
           total: 1,
-          query: 'alpha OR beta',
+          query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
         });
       },
     });
@@ -201,7 +184,37 @@ describe('knowledge HTTP store resolver', () => {
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;
       await expect(store.search({ query: 'alpha OR beta' })).rejects.toThrow(
-        /knowledge HTTP search response is missing producer evidence/,
+        /knowledge HTTP search response is missing producer rank or total evidence/,
+      );
+      expect(requests).toHaveLength(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('search fails closed when the producer omits the bounded-query capability', async () => {
+    const requests: URL[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(request) {
+        requests.push(new URL(request.url));
+        // Plausible ranked page, but no bounded-query marker: an unbounded
+        // page must never be consumed as if the server applied the query.
+        return Response.json({
+          items: [{ item: OLD_SERVER_ITEM, rank: 0.5 }],
+          total: 1,
+        });
+      },
+    });
+    try {
+      const store = resolveKnowledgeHttpStore({
+        NODE_ENV: 'test',
+        HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+      } as NodeJS.ProcessEnv)!;
+      await expect(store.search({ query: 'alpha OR beta' })).rejects.toThrow(
+        KnowledgeBoundedQueryCapabilityError,
       );
       expect(requests).toHaveLength(1);
     } finally {
@@ -279,15 +292,18 @@ describe('knowledge HTTP store resolver', () => {
     });
   }
 
-  test('search rejects a pre-unified ranked response shape under the deployed envelope contract', async () => {
+  test('search refuses a non-numeric rank in an otherwise plausible ranked page', async () => {
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       fetch() {
-        // The pre-unified /notes/search shape ({ items: [{ item, rank }] })
-        // is not what the deployed server serves. Refuse it rather than
-        // treating a foreign envelope as a search result page.
-        return Response.json({ items: [{ item: OLD_SERVER_ITEM, rank: 0.8 }], total: 5 });
+        // A ranked page whose rank is not a finite number is malformed
+        // producer evidence — refuse it rather than consuming the hit.
+        return Response.json({
+          items: [{ item: OLD_SERVER_ITEM, rank: 'high' }],
+          total: 5,
+          query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
+        });
       },
     });
     try {
@@ -297,7 +313,7 @@ describe('knowledge HTTP store resolver', () => {
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;
       await expect(store.search({ query: 'old response' })).rejects.toThrow(
-        /knowledge HTTP search response is missing producer evidence/,
+        /knowledge HTTP search response is missing producer rank or total evidence/,
       );
     } finally {
       server.stop(true);
