@@ -61,7 +61,8 @@ export type StationSnapshotErrorCode =
   | "SYMLINKS_REFUSED"
   | "CONFLICT"
   | "DESTINATION_ESCAPE"
-  | "MANIFEST_UNREADABLE";
+  | "MANIFEST_UNREADABLE"
+  | "MANIFEST_HASH_MISMATCH";
 
 export class StationSnapshotError extends Error {
   readonly code: StationSnapshotErrorCode;
