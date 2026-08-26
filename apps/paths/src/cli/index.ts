@@ -28,6 +28,7 @@ import {
   type PathKind,
   type PathsOptions,
 } from "../index";
+import { readPackageVersion } from "../version";
 
 const KIND_SET = new Set<string>(PATH_KINDS);
 
@@ -48,7 +49,22 @@ Options:
   --internal          Resolve the internal-app layout (hasna/internal/<app>).
   --base              Print the hasna base root instead of an app path.
   --json              Emit JSON.
+  -V, --version       Print the package version.
   --help              Show this help.`;
+
+// Binds-before-version class (T-00101 pattern): --version/--help must answer
+// BEFORE any argument validation. They previously exited 2 — --version fell
+// into the unknown-argument branch and --help was defeated by the
+// required-argument check running inside parseArgs.
+const EARLY_ARGV = process.argv.slice(2);
+if (EARLY_ARGV.includes("--version") || EARLY_ARGV.includes("-V")) {
+  console.log(readPackageVersion());
+  process.exit(0);
+}
+if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
