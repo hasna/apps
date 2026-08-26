@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.9.0",
-  "description": "Thin agent-facing billing/dunning orchestration over Stripe Billing CLI + MCP + serve. The server defaults to SQLite at ~/.hasna/billing/billing.db; HASNA_BILLING_DATABASE_URL selects the PostgreSQL backend.",
+  "description": "Thin agent-facing billing/dunning orchestration over Stripe Billing CLI + MCP + serve. The server defaults to SQLite at the effective data home's data/billing.db (resolved via @hasna/paths; legacy ~/.hasna/billing/billing.db until the XDG data home is adopted); HASNA_BILLING_DATABASE_URL selects the PostgreSQL backend.",
   "hosting": [
     "user-hosted"
   ],
