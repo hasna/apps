@@ -1,18 +1,25 @@
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { ActionAuditEvent, ActionManifest, ActionRun } from "./types.js";
+import { getActionsHome, HASNA_ACTIONS_DIR_ENV, HASNA_ACTIONS_HOME_ENV } from "./core/app-home.js";
 
-export const HASNA_ACTIONS_DIR_ENV = "HASNA_ACTIONS_DIR";
-export const HASNA_ACTIONS_HOME_ENV = "HASNA_ACTIONS_HOME";
+export { HASNA_ACTIONS_DIR_ENV, HASNA_ACTIONS_HOME_ENV } from "./core/app-home.js";
 export const ACTIONS_DATABASE_FILENAME = "actions.db";
 /** Metadata key recording that the one-time import of the legacy JSON files finished. */
 export const ACTIONS_JSON_MIGRATION_KEY = "json-store-migration-v1";
 
+/**
+ * Resolve the actions data directory, honoring (in order) an explicit override
+ * (CLI `--dir`), the exact-app overrides `HASNA_ACTIONS_DIR` then
+ * `HASNA_ACTIONS_HOME`, the @hasna/paths XDG data home once adopted
+ * (`HASNA_DATA_HOME` set or the store already migrated there), and finally the
+ * legacy `~/.hasna/actions` default.
+ */
 export function getActionsDataDir(override?: string): string {
-  return override || process.env[HASNA_ACTIONS_DIR_ENV] || process.env[HASNA_ACTIONS_HOME_ENV] || join(homedir(), ".hasna", "actions");
+  if (override) return override;
+  return getActionsHome();
 }
 
 export function getActiveActionsDirEnv(): typeof HASNA_ACTIONS_DIR_ENV | typeof HASNA_ACTIONS_HOME_ENV | null {

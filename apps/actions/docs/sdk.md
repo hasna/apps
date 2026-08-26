@@ -21,8 +21,10 @@ const client = new ActionsClient();
 await client.register(action);
 ```
 
-`new ActionsClient()` uses the default SQLite store at
-`~/.hasna/actions/actions.db`, backed by `bun:sqlite`. Outside Bun, pass an
+`new ActionsClient()` uses the default SQLite store at the effective actions
+data home — the legacy `~/.hasna/actions/actions.db` default, resolved through
+`@hasna/paths`, until the XDG data home is adopted (store migrated there or
+`HASNA_DATA_HOME` set) — backed by `bun:sqlite`. Outside Bun, pass an
 explicit store such as `new JsonActionsStore()`:
 
 ```ts

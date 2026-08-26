@@ -1,9 +1,27 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 const repoRoot = join(import.meta.dir, "..");
+
+/** The real path of the installed `@hasna/paths` package (bun resolves it from its `.bun` store). */
+const PATHS_PKG_DIR = realpathSync(join(repoRoot, "node_modules", "@hasna", "paths"));
+
+/**
+ * bun's bundler cannot re-inline the registry-installed `@hasna/paths` once the test
+ * runner has already loaded it through the module graph — the subsequent `Bun.build`
+ * throws `Unexpected reading file` (bun issue class oven-sh/bun#9517). The node-compat
+ * bundles therefore externalize `@hasna/paths`, exactly like the already-external
+ * `@hasna/contracts`. A real Node consumer installs `@hasna/paths` (it is a runtime
+ * dependency), so this provides node resolution through a real `node_modules` symlink
+ * in the scratch dir.
+ */
+function linkPathsForNode(dir: string): void {
+  const nm = join(dir, "node_modules", "@hasna");
+  mkdirSync(nm, { recursive: true });
+  symlinkSync(PATHS_PKG_DIR, join(nm, "paths"));
+}
 
 /** The error the default store raises when `bun:sqlite` cannot be loaded. */
 const BUN_REQUIRED_ERROR =
@@ -25,7 +43,7 @@ async function bundle(entrypoint: string): Promise<string> {
   const built = await Bun.build({
     entrypoints: [entrypoint],
     target: "bun",
-    external: ["@hasna/contracts"],
+    external: ["@hasna/contracts", "@hasna/paths"],
   });
   expect(built.success).toBe(true);
   return built.outputs[0]!.text();
@@ -42,6 +60,7 @@ describe("published entry points load under Node", () => {
 
       const dir = mkdtempSync(join(tmpdir(), "actions-node-compat-"));
       try {
+        linkPathsForNode(dir);
         const bundlePath = join(dir, "bundle.mjs");
         writeFileSync(bundlePath, code);
         const child = Bun.spawnSync([
@@ -72,6 +91,7 @@ describe("the default store outside Bun", () => {
     const code = await bundle(join(import.meta.dir, "index.ts"));
     const dir = mkdtempSync(join(tmpdir(), "actions-node-store-"));
     try {
+      linkPathsForNode(dir);
       const bundlePath = join(dir, "bundle.mjs");
       writeFileSync(bundlePath, code);
       const dataDir = join(dir, "data");

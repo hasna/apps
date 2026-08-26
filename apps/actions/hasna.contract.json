@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.11.1",
-  "description": "Local-first action manifests, runs, and audit events exposed through CLI, MCP, and SDK surfaces.",
+  "description": "Local-first action manifests, runs, and audit events exposed through CLI, MCP, and SDK surfaces. SQLite at ~/.hasna/actions/actions.db by default (resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set).",
   "bins": [
     "actions",
     "actions-mcp"
