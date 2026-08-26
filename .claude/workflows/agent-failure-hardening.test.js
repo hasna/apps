@@ -184,3 +184,63 @@ test('behavioral: deploy-apps survives a PROSE RESULT (non-object under a schema
   expect(logs.some((l) => l.includes('AGENT-PROSE')), 'the prose result is logged as the failure class').toBe(true)
   expect(prompts[1].includes('Sleep 300 (bash) FIRST'), 'the pass-2 census prompt carries the sleep-300 pause banner').toBe(true)
 })
+
+test('behavioral: closed-pr-audit completes a full census → record pass without template-eval ReferenceError', async () => {
+  // Cycle-1 review (2026-08-26) found an unbound template interpolation in the
+  // RECORD prompt — `"WRONG-CLOSE ${klass}: ..."` — evaluated as an argument
+  // BEFORE safeAgent is called, so `klass is not defined` killed every launch
+  // on pass 1, masked by the earlier parse failure. Structural tests cannot see
+  // this class; only a runtime probe can. The stub census returns one flagged
+  // W2 PR, the record agent returns a valid record, and the sentinel fires from
+  // log when pass 1's flagged-summary line lands — proving the full census →
+  // record pass completed without throwing.
+  const logs = []
+  const prompts = []
+  let calls = 0
+  let src = readFileSync(join(here, 'closed-pr-audit-wf.js'), 'utf8').replace(/^export /gm, '')
+  src = '__runPromise = (async () => {\n' + src + '\n})()'
+  const sandbox = {
+    agent: async (prompt) => {
+      calls++
+      prompts.push(String(prompt))
+      if (calls === 1) {
+        return {
+          window: '2026-08-26T00:00:00Z..2026-08-26T23:59:59Z',
+          bound: 'paged to exhaustion',
+          perRepo: [{ repo: 'hasna/apps', scanned: 5, closedUnmerged: 1, classified: { W2: 1 } }],
+          flagged: [
+            {
+              repo: 'hasna/apps', prNumber: 999, title: 'test PR', headSha: 'a1b2c3d4',
+              closedAt: '2026-08-26T10:00:00Z', closedBy: 'test', klass: 'W2',
+              evidence: ['[REVIEW] GO — hasna/apps#999 @ a1b2c3d4'], predicate: 'task pending',
+            },
+          ],
+          positiveControls: { legitimateCloseClassifiedL: true, knownW2ClassifiedW2: true },
+        }
+      }
+      return { rowsFiled: 1, commentsPosted: 1, skippedDedup: 0, channelLine: 'test line' }
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 1: 1 flagged')) throw new Error('__TEST_END__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  new Script(src).runInNewContext(sandbox)
+  let ended = null
+  await sandbox.__runPromise.catch((e) => {
+    ended = e
+  })
+  // WITHOUT the \${klass} escape, the record prompt evaluation throws
+  // `ReferenceError: klass is not defined` before safeAgent is called, and the
+  // sentinel never fires. WITH it, pass 1 runs census → record → summary log.
+  expect(ended && ended.message, 'loop terminated only via the test sentinel, never a ReferenceError').toBe('__TEST_END__')
+  expect(calls, 'census + record agents both ran').toBeGreaterThanOrEqual(2)
+  // The literal placeholder text reaches the record agent (the prompt is not
+  // evaluated with an unbound name).
+  expect(prompts[1].includes('WRONG-CLOSE ${klass}:'), 'record prompt carries the literal ${klass} placeholder').toBe(true)
+})
