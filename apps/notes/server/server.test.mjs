@@ -248,7 +248,7 @@ describe('notes CRUD', () => {
 
 describe('version label', () => {
   // I38-00565: /version reported the hardcoded server constant (0.1.0) while
-  // the source app manifest is at 0.3.0 — the deployed notes.hasna.xyz
+  // the source app manifest is at 0.3.0 — the deployed server
   // /version lied about the running image. The version must track the app
   // manifest that ships in the image (/app/package.json in the Docker build).
   test('VERSION matches the app manifest version and /version reports it', async () => {
