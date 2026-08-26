@@ -10,6 +10,7 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanComment, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, StaleLockHandoffReceipt, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
@@ -113,6 +114,10 @@ export interface TodosRemoteAuthorityConfigStatus {
   transport: string;
   api_url_configured: boolean;
   api_key_configured: boolean;
+  /** Where the API URL came from: the env key name or the fleet-env file PATH, or null. */
+  api_url_source: string | null;
+  /** Where the API key came from: the env key name or the fleet-env file PATH, or null. */
+  api_key_source: string | null;
   v1_base_url: string | null;
   issues: string[];
   local_fallback: false;
@@ -123,7 +128,13 @@ export interface TodosCliTransportResolution {
   transport: TodosCliTransport;
   selected: boolean;
   /** What selected the transport; `default` means the on-box SQLite file. */
-  source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY" | "default";
+  source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY" | "fleet-env" | "default";
+  /** The URL source: env key name or the fleet-env file path, or null on sqlite. */
+  apiUrlSource: string | null;
+  /** The key source: env key name or the fleet-env file path, or null on sqlite. */
+  apiKeySource: string | null;
+  /** The resolved API URL VALUE (not a credential), or null on sqlite. */
+  apiUrl: string | null;
 }
 
 /**
@@ -165,10 +176,44 @@ function emitTodosLocalFallbackNotice(env: Env): void {
 }
 
 /**
- * Resolve the CLI transport from the environment. Retired storage-mode
- * variables are inert — never read, never mapped, never a fallback — and the
- * transport is selected by the API env pair alone: URL set without KEY (or KEY
- * set without URL) is a hard error naming the missing variable.
+ * Read the fleet-env file (`$HOME/.hasna/fleet-env/todos.env`) that the
+ * machines flip writes and wires into the service. Returns the URL+key pair
+ * and the file PATH when both are present; null when the file is absent,
+ * unreadable, or incomplete. Composed from path segments on purpose.
+ */
+function fleetEnvValue(env: Env): { url: string; key: string; path: string } | null {
+  const home = env.HOME?.trim();
+  if (!home) return null;
+  const path = `${home}/.hasna/fleet-env/todos.env`;
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  let url: string | null = null;
+  let key: string | null = null;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.startsWith("HASNA_TODOS_API_URL=") && !line.startsWith("HASNA_TODOS_API_KEY=")) continue;
+    const eq = line.indexOf("=");
+    const value = line.slice(eq + 1).trim();
+    if (line.startsWith("HASNA_TODOS_API_URL=") && value) url = value;
+    if (line.startsWith("HASNA_TODOS_API_KEY=") && value) key = value;
+  }
+  if (!url || !key) return null;
+  return { url, key, path };
+}
+
+/**
+ * Resolve the CLI transport from the environment, then the fleet-env file.
+ * Retired storage-mode variables are inert — never read, never mapped, never a
+ * fallback — and the transport is selected by the API URL+KEY pair: URL set
+ * without KEY (or KEY set without URL) is a hard error naming the missing
+ * variable. When the environment is fully silent about the pair, the
+ * fleet-env file the `machines flip` writes is consulted and its PATH is
+ * reported as the source, so a flipped machine resolves from the same file in
+ * non-interactive shells (and the flip's provenance gates can verify it).
  */
 export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCliTransportResolution {
   const urlValue = env.HASNA_TODOS_API_URL?.trim();
@@ -178,6 +223,9 @@ export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCl
       transport: "http",
       selected: true,
       source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY",
+      apiUrlSource: "HASNA_TODOS_API_URL",
+      apiKeySource: "HASNA_TODOS_API_KEY",
+      apiUrl: urlValue,
     };
   }
   if (urlValue) {
@@ -190,11 +238,25 @@ export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCl
       "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
     );
   }
+  const fleet = fleetEnvValue(env);
+  if (fleet) {
+    return {
+      transport: "http",
+      selected: true,
+      source: "fleet-env",
+      apiUrlSource: fleet.path,
+      apiKeySource: fleet.path,
+      apiUrl: fleet.url,
+    };
+  }
   emitTodosLocalFallbackNotice(env);
   return {
     transport: "sqlite",
     selected: false,
     source: "default",
+    apiUrlSource: null,
+    apiKeySource: null,
+    apiUrl: null,
   };
 }
 
@@ -258,12 +320,14 @@ export function getTodosRemoteAuthorityConfigStatus(
       transport: "invalid",
       api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
       api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
+      api_url_source: null,
+      api_key_source: null,
       v1_base_url: null,
       issues: [issue],
       local_fallback: false,
     };
   }
-  const { transport, selected } = resolution;
+  const { transport, selected, apiUrlSource, apiKeySource } = resolution;
   if (!selected) {
     return {
       selected: false,
@@ -271,6 +335,8 @@ export function getTodosRemoteAuthorityConfigStatus(
       transport,
       api_url_configured: false,
       api_key_configured: false,
+      api_url_source: null,
+      api_key_source: null,
       v1_base_url: null,
       issues: [],
       local_fallback: false,
@@ -280,11 +346,13 @@ export function getTodosRemoteAuthorityConfigStatus(
   const issues: string[] = [];
   let apiUrl: string | null = null;
   try {
-    apiUrl = normalizeRemoteAuthorityUrl(env.HASNA_TODOS_API_URL);
+    apiUrl = normalizeRemoteAuthorityUrl(resolution.apiUrl ?? env.HASNA_TODOS_API_URL);
   } catch (error) {
     issues.push(error instanceof Error ? error.message : String(error));
   }
-  const apiKeyConfigured = Boolean(env.HASNA_TODOS_API_KEY?.trim());
+  const apiKeyConfigured = Boolean(
+    resolution.source === "fleet-env" ? true : env.HASNA_TODOS_API_KEY?.trim(),
+  );
   if (!apiUrl && issues.length === 0) {
     issues.push(
       "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
@@ -302,6 +370,8 @@ export function getTodosRemoteAuthorityConfigStatus(
     transport,
     api_url_configured: apiUrl !== null,
     api_key_configured: apiKeyConfigured,
+    api_url_source: apiUrlSource,
+    api_key_source: apiKeySource,
     v1_base_url: apiUrl ? `${apiUrl}/v1` : null,
     issues,
     local_fallback: false,

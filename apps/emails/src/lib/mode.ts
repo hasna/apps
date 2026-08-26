@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolveSelfHostedConfig } from "../db/self-hosted-store.js";
 import { API_BASE_URL_SETTING, StoreConfigurationError, planEmailStore } from "../store-resolution.js";
 import { loadConfig } from "./config.js";
@@ -267,6 +268,42 @@ function defaultSelectionStorageConflict(env: NodeJS.ProcessEnv): StoreConfigura
   );
 }
 
+/**
+ * Read the fleet-env file (`$HOME/.hasna/fleet-env/emails.env`) that the
+ * `machines flip` writes. Returns the URL and the file PATH when the URL plus
+ * a credential/pointer key are present; null when the file is absent,
+ * unreadable, or incomplete. Path composed from segments on purpose.
+ */
+function fleetEnvEmailsValue(env: NodeJS.ProcessEnv): { url: string; path: string } | null {
+  const home = env.HOME?.trim();
+  if (!home) return null;
+  const path = `${home}/.hasna/fleet-env/emails.env`;
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  let url: string | null = null;
+  let credentialSeen = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("EMAILS_SELF_HOSTED_URL=")) {
+      const value = line.slice("EMAILS_SELF_HOSTED_URL=".length).trim();
+      if (value) url = value;
+    } else if (
+      line.startsWith("EMAILS_SELF_HOSTED_API_KEY=") ||
+      line.startsWith("EMAILS_SESSION_TOKEN=") ||
+      line.startsWith("EMAILS_CLIENT_ENV_SECRET=")
+    ) {
+      const value = line.slice(line.indexOf("=") + 1).trim();
+      if (value) credentialSeen = true;
+    }
+  }
+  if (!url || !credentialSeen) return null;
+  return { url, path };
+}
+
 /** Resolve the process mode without requiring client transport credentials. */
 export function resolveEmailsModeSelection(env: NodeJS.ProcessEnv = process.env): EmailsModeResolution {
   assertNoLegacyHostedEnvironment(env, { allowHostedApiEnvWithExplicitSelfHosted: true });
@@ -292,6 +329,20 @@ export function resolveEmailsModeSelection(env: NodeJS.ProcessEnv = process.env)
       kind: "env",
       name: EMAILS_CLIENT_ENV_SECRET_ENV,
       value: clientEnvSecretPointer,
+    });
+  }
+
+  // The fleet-env file the `machines flip` writes
+  // (`$HOME/.hasna/fleet-env/emails.env`): when the environment is silent, a
+  // flipped machine resolves from this file and reports its PATH as the
+  // source, so the flip's provenance gates can verify the file supplied the
+  // connection. URL plus credential/pointer presence is required.
+  const fleetEnv = fleetEnvEmailsValue(env);
+  if (fleetEnv) {
+    return resolution("self_hosted", {
+      kind: "config",
+      name: fleetEnv.path,
+      value: fleetEnv.url,
     });
   }
 

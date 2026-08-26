@@ -114,6 +114,21 @@ export interface FlipAppSpec {
    * Emails reports its mode at `mode.current`.
    */
   verifyModePath?: string;
+  /**
+   * Per-app provenance extraction (release-review P1 remediation): dotted JSON
+   * paths into the app's REAL status payload for the URL source, the key
+   * source, and the credential tier. Defaults to the contracts client-transport
+   * top-level fields (`apiUrlSource` / `apiKeySource` / `apiKeyTier`) that
+   * contracts-based `storage status --json` reports. Emails reports its
+   * connection source at `mode.source.name` (the fleet-env file path, kind
+   * "config"); todos reports it at `remote_authority.api_url_source` /
+   * `remote_authority.api_key_source`.
+   */
+  provenance?: {
+    urlSourcePath?: string;
+    keySourcePath?: string;
+    tierPath?: string;
+  };
   /** Human note surfaced in plans/docs. */
   note?: string;
 }
@@ -189,7 +204,21 @@ const APP_SPEC_OVERRIDES: Record<string, Partial<FlipAppSpec>> = {
     statusArgs: "status --json",
     verifyModePath: "mode.current",
     keyViaSecretPointer: true,
+    // Real-shape extraction: emails reports its connection source at
+    // `mode.source.name` (the fleet-env file path, kind "config") and the tier
+    // at `mode.source.kind`. The credential is a Vault pointer, so the key
+    // side is the same source (the env file the flip wrote carries the
+    // pointer; presence is verified at write time by the env-contract check).
+    provenance: { urlSourcePath: "mode.source.name", keySourcePath: "mode.source.name", tierPath: "mode.source.kind" },
     note: "Emails routes via EMAILS_SELF_HOSTED_URL + EMAILS_CLIENT_ENV_SECRET (Vault pointer resolved by the emails CLI; no literal key is written).",
+  },
+};
+
+/** Per-app provenance extraction paths for apps with non-contracts status shapes. */
+const APP_PROVENANCE_OVERRIDES: Record<string, Partial<NonNullable<FlipAppSpec["provenance"]>>> = {
+  todos: {
+    urlSourcePath: "remote_authority.api_url_source",
+    keySourcePath: "remote_authority.api_key_source",
   },
 };
 
@@ -223,6 +252,8 @@ function defineFlipApp(app: string): FlipAppSpec {
   }
   const override = APP_SPEC_OVERRIDES[app];
   if (override) Object.assign(spec, override);
+  const provenanceOverride = APP_PROVENANCE_OVERRIDES[app];
+  if (provenanceOverride) spec.provenance = { ...spec.provenance, ...provenanceOverride };
   const extra = EXTRA_API_ENV[app];
   if (extra) spec.extraApiEnv = extra;
   return spec;
@@ -457,6 +488,24 @@ export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: Buil
     lines.push(buildServiceWiring(spec, mode));
   }
 
+  // Machine-level provenance probe: report the service unit's EnvironmentFiles
+  // so the orchestrator can prove the running service's connection env comes
+  // from the fleet-env file this flip wrote (systemd). launchd setenv has no
+  // EnvironmentFiles to show; there the app's own reported source carries it.
+  lines.push(
+    'if command -v systemctl >/dev/null 2>&1 && [ -n "${UNIT:-}" ]; then',
+    '  UNIT_ENVFILES="$(systemctl show "${UNIT}" -p EnvironmentFiles --value 2>/dev/null || true)"',
+    'else',
+    '  UNIT_ENVFILES=""',
+    'fi',
+    'if [ -n "$UNIT_ENVFILES" ]; then',
+    '  echo "FLIP_UNIT_ENVFILES_FOUND=1"',
+    '  echo "FLIP_UNIT_ENVFILES=$UNIT_ENVFILES"',
+    'else',
+    '  echo "FLIP_UNIT_ENVFILES_FOUND=0"',
+    'fi',
+  );
+
   // Emit the storage status for verification by the orchestrator.
   lines.push(
     'echo "FLIP_STATUS_BEGIN"',
@@ -553,25 +602,37 @@ export function extractFlipSha256(rawOutput: string): string | null {
 }
 
 /**
- * Provenance gates for a flip (P1-C, review P0-3 / Sol 5).
+ * Provenance gates for a flip (P1-C, review P0-3 / Sol 5; release-review
+ * P1 remediation: per-app extraction against REAL status shapes + machine-level
+ * unit probe).
  *
  * The flip must PROVE the freshly written fleet-env file supplied the
  * connection, not merely that required vars exist and the app reports api
- * mode. When the app's status JSON reports the credential resolution fields
- * (`apiKeyTier` / `apiUrlSource` / `apiKeySource`, the `@hasna/contracts`
- * client-transport fields), this verifies them and rejects:
+ * mode. The sources are extracted per-app from the REAL status payload the
+ * app's own command reports (spec.provenance paths; the contracts
+ * client-transport top-level fields for generic apps; emails reports
+ * `mode.source.name`; todos reports `remote_authority.api_url_source` /
+ * `api_key_source`). Two independent proofs are accepted:
  *
- *   1. `apiKeyTier === "legacy-env"` — the key came from a process env var,
- *      not the fleet file;
- *   2. a `transportSource`/`apiUrlSource`/`apiKeySource` that names a file
- *      under `~/.hasna/cloud` — the app is still resolving from the legacy
- *      cloud dir;
- *   3. api mode whose exact source cannot be reported — api-backed mode with
- *      no reportable source fields (or a tier that is not a fleet/disk tier).
+ *   (a) the app reports its URL/key source as the fleet-env file the flip
+ *       wrote (matched on its `/fleet-env/<app>.env` suffix so any HOME
+ *       resolves); or
+ *   (b) the flip script's machine-level probe reports the service unit's
+ *       EnvironmentFiles include that file (systemd), which proves the
+ *       running service's connection env comes from it even when the app
+ *       reports plain env-key names.
  *
- * Positive case: the reported key/URL source is the fleet-env file the flip
- * just wrote (matched on its `/fleet-env/<app>.env` suffix so any HOME
- * resolves), which proves the new file supplied the connection.
+ * Rejections stay as before, and now fire on real shapes:
+ *
+ *   1. a reported `apiKeyTier === "legacy-env"` — the key came from a process
+ *      env var, not the fleet file;
+ *   2. any reported source naming a file under `~/.hasna/cloud` — the app is
+ *      still resolving from the legacy cloud dir;
+ *   3. api mode with no reported source AND no unit probe — api-backed mode
+ *      whose exact source cannot be confirmed by either instrument.
+ *
+ * `FLIP_SHA256` (the sterile hash of the file the flip wrote) is required for
+ * an api-mode ok: without it the file was not proven written by this flip.
  */
 export function verifyFlipProvenance(
   rawOutput: string,
@@ -581,10 +642,13 @@ export function verifyFlipProvenance(
 ): Pick<StorageStatusVerification, "provenanceOk" | "apiKeySource" | "apiUrlSource" | "apiKeyTier" | "sourceOfValue" | "envSha256" | "reason"> {
   const envSha256 = extractFlipSha256(rawOutput);
   const json = extractStatusJson(rawOutput);
-  const apiKeySource = typeof json?.apiKeySource === "string" ? json.apiKeySource : null;
-  const apiUrlSource = typeof json?.apiUrlSource === "string" ? json.apiUrlSource : null;
+  const provenance = spec.provenance ?? {};
+  const apiKeySource = readStringPath(json, provenance.keySourcePath, "apiKeySource");
+  const apiUrlSource = readStringPath(json, provenance.urlSourcePath, "apiUrlSource");
   const transportSource = typeof json?.transportSource === "string" ? json.transportSource : null;
-  const apiKeyTier = typeof json?.apiKeyTier === "string" ? json.apiKeyTier : null;
+  const apiKeyTier = readStringPath(json, provenance.tierPath, "apiKeyTier");
+  const unitEnvFiles = extractFlipUnitEnvFiles(rawOutput);
+  const unitEnvFilesFound = /FLIP_UNIT_ENVFILES_FOUND=1/.test(rawOutput);
 
   // Revert (local) mode: the env file was removed; there is no connection
   // source to prove. The gates apply to api mode only.
@@ -597,6 +661,18 @@ export function verifyFlipProvenance(
     ? options.expectedEnvFile
     : fleetEnvSuffix;
 
+  // Gate 0: the flip must have written the env file (sterile sha marker).
+  if (!envSha256) {
+    return {
+      provenanceOk: false,
+      apiKeySource,
+      apiUrlSource,
+      apiKeyTier,
+      sourceOfValue: null,
+      envSha256,
+      reason: `provenance gate rejected: app '${spec.app}' reports api mode but no FLIP_SHA256 marker is present — the fleet env file was not proven written by this flip`,
+    };
+  }
   // Gate 1: legacy process-env tier.
   if (apiKeyTier === "legacy-env") {
     return {
@@ -627,15 +703,25 @@ export function verifyFlipProvenance(
       };
     }
   }
-  // Gate 3: api mode whose exact source cannot be reported.
-  const keySourceIsFleet = apiKeySource !== null && (apiKeySource === expectedSource || apiKeySource.endsWith(fleetEnvSuffix));
-  const urlSourceIsFleet = apiUrlSource !== null && (apiUrlSource === expectedSource || apiUrlSource.endsWith(fleetEnvSuffix));
-  const tierIsFleet = apiKeyTier !== null && apiKeyTier !== "legacy-env" && apiKeyTier !== "legacy-cloud" && apiKeyTier !== "config-legacy";
-  if (!keySourceIsFleet || !tierIsFleet) {
+
+  // Positive proofs: (a) a reported source naming the fleet-env file, or
+  // (b) the machine-level unit probe showing the service reads that file.
+  const isFleetSource = (src: string | null): boolean =>
+    src !== null && (src === expectedSource || src.endsWith(fleetEnvSuffix));
+  const urlSourceIsFleet = isFleetSource(apiUrlSource);
+  const keySourceIsFleet = isFleetSource(apiKeySource);
+  const unitProvesFleetEnv = unitEnvFilesFound && unitEnvFiles.some((p) => p.includes(`/fleet-env/${spec.app}.env`) || p === expectedSource);
+  const sourceReported = apiUrlSource !== null || apiKeySource !== null || apiKeyTier !== null;
+  const urlProven = urlSourceIsFleet || unitProvesFleetEnv;
+  const keyProven = keySourceIsFleet || unitProvesFleetEnv || spec.keyViaSecretPointer === true;
+
+  // Gate 3: api mode whose exact source cannot be confirmed by any instrument.
+  if (!urlProven || !keyProven) {
     const reported = [
       apiKeyTier ? `apiKeyTier=${apiKeyTier}` : null,
       apiKeySource ? `apiKeySource=${apiKeySource}` : null,
       apiUrlSource ? `apiUrlSource=${apiUrlSource}` : null,
+      unitEnvFilesFound ? `unitEnvFiles=${unitEnvFiles.join(",")}` : "unitEnvFiles=<none>",
     ]
       .filter(Boolean)
       .join(", ") || "no source fields reported";
@@ -656,9 +742,40 @@ export function verifyFlipProvenance(
     apiKeySource,
     apiUrlSource,
     apiKeyTier,
-    sourceOfValue: keySourceIsFleet ? apiKeySource : null,
+    sourceOfValue: urlSourceIsFleet
+      ? apiUrlSource
+      : unitProvesFleetEnv
+        ? (unitEnvFiles.find((p) => p.includes(`/fleet-env/${spec.app}.env`)) ?? unitEnvFiles[0] ?? apiKeySource)
+        : apiKeySource,
     envSha256,
   };
+}
+
+/** Read a string at a dotted path, falling back to a top-level field. */
+function readStringPath(json: StorageStatusJson | null, path: string | undefined, fallbackKey: string): string | null {
+  if (json === null) return null;
+  if (path) {
+    const value = readJsonPath(json, path);
+    if (typeof value === "string") return value;
+    return null;
+  }
+  const top = json[fallbackKey];
+  return typeof top === "string" ? top : null;
+}
+
+/**
+ * Extract the machine-level unit probe: the service unit's EnvironmentFiles
+ * as reported by the flip script (`FLIP_UNIT_ENVFILES=<comma-joined>` after
+ * `systemctl show <unit> -p EnvironmentFiles --value`). Proves the running
+ * service reads the fleet-env file the flip wrote.
+ */
+export function extractFlipUnitEnvFiles(rawOutput: string): string[] {
+  const match = rawOutput.match(/FLIP_UNIT_ENVFILES=(.*)$/m);
+  if (!match) return [];
+  return match[1]
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
 }
 
 /**
@@ -815,8 +932,21 @@ export interface RunFlipOptions {
   timeoutMs?: number;
   /** Abort remaining waves if any machine in a wave fails (default true). */
   stopOnWaveFailure?: boolean;
-  /** Ledger sink; defaults to NOOP (the CLI wires the file writer). */
+  /**
+   * Ledger sink; defaults to NOOP (the CLI wires the file writer). When
+   * `execute` is true each finalized row is appended through this sink BEFORE
+   * the next machine is flipped (release-review P1 remediation: no mutation
+   * without a durable audit row for it).
+   */
   ledger?: FlipLedgerWriter;
+  /**
+   * Preflight hook run ONCE before any wave when `execute` is true. It must
+   * create/open the ledger for append (or otherwise prove writability) and
+   * throws before ANY remote mutation when it cannot (release-review P1
+   * remediation: an unwritable ledger must abort the flip before the first
+   * machine is touched, never after).
+   */
+  ledgerPreflight?: () => void;
 }
 
 export interface RunFlipReport {
@@ -846,18 +976,30 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
     ? `${options.scriptOptions.envDir}/${spec.app}.env`
     : undefined;
 
+  // Ledger preflight BEFORE any remote mutation (release-review P1): an
+  // unwritable ledger must abort the flip before the first machine is touched,
+  // so a flip can never mutate machines and then throw without an audit row.
+  if (execute) {
+    options.ledgerPreflight?.();
+  }
+
   for (const wave of waves) {
     let waveFailed = false;
     for (const target of wave.targets) {
       const pushLedger = (entry: Omit<FlipLedgerEntry, "ts" | "machine" | "app" | "wave" | "mode">) => {
-        ledger.push({
+        const row: FlipLedgerEntry = {
           ts: new Date().toISOString(),
           machine: target.id,
           app: spec.app,
           wave: wave.name,
           mode,
           ...entry,
-        });
+        };
+        ledger.push(row);
+        // Append each finalized row BEFORE advancing to the next machine, so
+        // the audit trail is durable per attempt (release-review P1). A
+        // dry-run collects rows in the report but never writes.
+        if (execute) options.ledger?.([row]);
       };
 
       // Freeze gate applies per-machine before any mutation (api mode only).
@@ -939,9 +1081,9 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
       break;
     }
   }
-  // Write the ledger only for a real run — a dry-run must not mutate state,
-  // though its rows are returned so `flip apply --dry-run` can display them.
-  if (execute) options.ledger?.(ledger);
+  // Ledger rows were appended per-row during the run (see pushLedger). A
+  // dry-run never writes — its rows are returned so `flip apply --dry-run`
+  // can display them.
   return report;
 }
 

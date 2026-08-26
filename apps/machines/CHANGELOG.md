@@ -22,6 +22,22 @@
   updated to the fleet-env primary location (the `~/.hasna/cloud` writing is
   retired).
 
+- Release-review P1 remediation (2026-08-26, publish-all review): provenance
+  gates now extract per-app against the REAL status shapes instead of synthetic
+  top-level fields — emails reports its source at `mode.source.name`, todos at
+  `remote_authority.api_url_source` / `api_key_source`, and contracts-based apps
+  keep the client-transport top-level fields. The shared resolver gained genuine
+  fleet-env support: `~/.hasna/fleet-env/<app>.env` is the PRIMARY disk tier in
+  `@hasna/contracts` credential resolution (reported as the source path), and the
+  todos and emails resolvers read it too, so a flipped machine proves the file
+  supplied the connection in silent shells. The flip script also emits a
+  machine-level probe of the service unit's `EnvironmentFiles` (`FLIP_UNIT_ENVFILES`)
+  so the EnvironmentFile path is provable even when the app reports plain env-key
+  names. `FLIP_SHA256` is now required for an api-mode ok. `flip revert --execute`
+  writes ledger rows through the same sink as apply (one row per attempted target),
+  and a ledger preflight opens the ledger for append BEFORE any machine is touched
+  — an unwritable ledger aborts the flip before the first remote mutation.
+
 ## 0.2.37
 
 ### Patch Changes

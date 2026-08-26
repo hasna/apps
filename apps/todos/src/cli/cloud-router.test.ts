@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   planProjectLinkReceiptId,
   planProjectLinkResultDigest,
@@ -296,6 +299,33 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
     const pairOnly = { HASNA_TODOS_API_URL: "https://todos.example.com", HASNA_TODOS_API_KEY: "k" } as never;
     expect(getTodosCloudClient(pairOnly)).not.toBeNull();
     expect(isCloudRouting(pairOnly)).toBe(true);
+  });
+
+  test("env silent + fleet-env file selects http and reports the file PATH as the source (release-review P1)", () => {
+    // The `machines flip` file is a first-class tier: a flipped machine in a
+    // non-interactive shell resolves from ~/.hasna/fleet-env/todos.env and the
+    // provenance gates verify the reported path.
+    const home = mkdtempSync(join(tmpdir(), "todos-fleetenv-"));
+    const envDir = join(home, ".hasna", "fleet-env");
+    mkdirSync(envDir, { recursive: true });
+    writeFileSync(
+      join(envDir, "todos.env"),
+      "HASNA_TODOS_API_URL=https://todos.example.com\nHASNA_TODOS_API_KEY=fixture-key\n",
+    );
+    try {
+      const resolution = resolveTodosCliTransport({ HOME: home });
+      expect(resolution.transport).toBe("http");
+      expect(resolution.selected).toBe(true);
+      expect(resolution.source).toBe("fleet-env");
+      expect(resolution.apiUrlSource).toBe(join(envDir, "todos.env"));
+      expect(resolution.apiKeySource).toBe(join(envDir, "todos.env"));
+      const status = getTodosRemoteAuthorityConfigStatus({ HOME: home });
+      expect(status.transport).toBe("http");
+      expect(status.api_url_source).toBe(join(envDir, "todos.env"));
+      expect(status.api_key_source).toBe(join(envDir, "todos.env"));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("retired storage-mode variables are inert: never read, never selected", () => {
@@ -2866,7 +2896,14 @@ describe("local-fallback notice (incident 715712)", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       const resolution = resolveTodosCliTransport({});
-      expect(resolution).toEqual({ transport: "sqlite", selected: false, source: "default" });
+      expect(resolution).toEqual({
+        transport: "sqlite",
+        selected: false,
+        source: "default",
+        apiUrlSource: null,
+        apiKeySource: null,
+        apiUrl: null,
+      });
       expect(errSpy).toHaveBeenCalledTimes(1);
       const notice = JSON.parse(errSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
       expect(notice.event).toBe("todos-local-fallback");

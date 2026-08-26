@@ -2,7 +2,8 @@
 // credentials; self_hosted is explicit and fails closed without URL + credential.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
 import {
@@ -344,6 +345,33 @@ describe("resolveEmailsMode — EMAILS_CLIENT_ENV_SECRET", () => {
     // The source carries the (non-secret) vault POINTER, never the key value.
     expect(JSON.stringify(resolution)).not.toContain(SELF_HOSTED_KEY);
     expect(resolution.source.value).toBe("hasna/xyz/opensource/emails/prod/client-env");
+  });
+
+  it("selects self_hosted from the fleet-env file and reports its PATH (release-review P1)", () => {
+    // The `machines flip` file is a first-class tier: with the environment
+    // silent about the URL, the resolver reads ~/.hasna/fleet-env/emails.env
+    // and reports the file path as the source, which is the provenance the
+    // flip's gates verify.
+    const home = mkdtempSync(join(tmpdir(), "emails-fleetenv-"));
+    const envDir = join(home, ".hasna", "fleet-env");
+    mkdirSync(envDir, { recursive: true });
+    const envPath = join(envDir, "emails.env");
+    writeFileSync(
+      envPath,
+      "EMAILS_SELF_HOSTED_URL=https://emails.example.invalid\nEMAILS_CLIENT_ENV_SECRET=hasna/xyz/opensource/emails/prod/client-env\n",
+    );
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = home;
+    try {
+      const resolution = resolveEmailsModeSelection({ HOME: home });
+      expect(resolution).toMatchObject({
+        mode: "self_hosted",
+        source: { kind: "config", name: envPath },
+      });
+    } finally {
+      process.env["HOME"] = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("never invokes the secrets loader for local mode, but SAYS it overrode the pointer", () => {

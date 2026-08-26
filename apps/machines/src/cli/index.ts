@@ -11,7 +11,7 @@ import {
   type EventSeverity,
 } from "@hasna/events";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
@@ -69,6 +69,7 @@ import {
   planWaves,
   runFlip,
   selectTargets,
+  type FlipLedgerWriter,
   type FlipMode,
   type RunnerFn,
 } from "../commands/flip.js";
@@ -3897,6 +3898,32 @@ flipCommand
     console.log(buildFlipScript(spec, normalizeFlipMode(options.mode), { skipRestart: options.skipRestart }));
   });
 
+/**
+ * Build the per-run flip ledger sink + preflight for a ledger file.
+ *
+ * Shared by `flip apply` and `flip revert` (release-review P1: revert must
+ * write ledger rows too). The preflight creates the directory and opens the
+ * file for append BEFORE any remote mutation, so an unwritable ledger path
+ * aborts the flip before the first machine is touched; rows are then appended
+ * per finalized attempt.
+ */
+function buildFlipLedger(ledgerPath: string): {
+  ledger: FlipLedgerWriter;
+  ledgerPreflight: () => void;
+} {
+  const preflight = () => {
+    const dir = dirname(resolve(ledgerPath));
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    // Open for append to prove writability NOW; the sink appends per row.
+    const fd = openSync(ledgerPath, "a");
+    closeSync(fd);
+  };
+  const ledger: FlipLedgerWriter = (entries) => {
+    for (const entry of entries) appendFileSync(ledgerPath, JSON.stringify(entry) + "\n");
+  };
+  return { ledger, ledgerPreflight: preflight };
+}
+
 flipCommand
   .command("apply <app>")
   .description("Apply the flip across the fleet, wave by wave, verifying each machine")
@@ -3915,6 +3942,7 @@ flipCommand
     const mode = normalizeFlipMode(options["mode"]);
     const { waves } = resolveFlipWaves(spec, options as never);
     const ledgerPath = getFlipLedgerPath();
+    const { ledger, ledgerPreflight } = buildFlipLedger(ledgerPath);
     const report = runFlip({
       spec,
       mode,
@@ -3923,12 +3951,10 @@ flipCommand
       execute: Boolean(options.execute),
       freezeCommand: options.freezeCheck,
       // P1-C: the per-run ledger is written ONLY for a real execute; dry-runs
-      // return the rows in the report but never mutate the ledger file.
-      ledger: (entries) => {
-        const dir = dirname(resolve(ledgerPath));
-        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-        for (const entry of entries) appendFileSync(ledgerPath, JSON.stringify(entry) + "\n");
-      },
+      // return the rows in the report but never mutate the ledger file. The
+      // preflight proves the ledger is writable BEFORE any machine is touched.
+      ledger,
+      ledgerPreflight,
     });
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
@@ -3966,7 +3992,19 @@ flipCommand
   .action((app: string, options: Record<string, string | undefined> & { execute?: boolean; json?: boolean; allMachines?: boolean }) => {
     const spec = getFlipApp(app);
     const { waves } = resolveFlipWaves(spec, options as never);
-    const report = runFlip({ spec, mode: "local", waves, runner: machineFlipRunner, execute: Boolean(options.execute) });
+    const ledgerPath = getFlipLedgerPath();
+    const { ledger, ledgerPreflight } = buildFlipLedger(ledgerPath);
+    // P1-C ledger applies to reverts too (release-review P1): every attempted
+    // revert target records one value-free row, written per attempt.
+    const report = runFlip({
+      spec,
+      mode: "local",
+      waves,
+      runner: machineFlipRunner,
+      execute: Boolean(options.execute),
+      ledger,
+      ledgerPreflight,
+    });
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {
@@ -3974,6 +4012,9 @@ flipCommand
       for (const r of report.results) {
         const status = report.execute ? (r.verification.ok ? "ok" : "FAIL") : "planned";
         console.log(`  [${r.wave}] ${r.machineId}: ${status}${r.error ? ` — ${r.error}` : ""}`);
+      }
+      if (report.execute && report.ledger.length > 0) {
+        console.log(`revert ledger -> ${ledgerPath} (${report.ledger.length} rows)`);
       }
       if (report.aborted) console.log(`ABORTED: ${report.abortReason}`);
     }

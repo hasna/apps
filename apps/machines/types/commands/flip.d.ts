@@ -94,6 +94,21 @@ export interface FlipAppSpec {
      * Emails reports its mode at `mode.current`.
      */
     verifyModePath?: string;
+    /**
+     * Per-app provenance extraction (release-review P1 remediation): dotted JSON
+     * paths into the app's REAL status payload for the URL source, the key
+     * source, and the credential tier. Defaults to the contracts client-transport
+     * top-level fields (`apiUrlSource` / `apiKeySource` / `apiKeyTier`) that
+     * contracts-based `storage status --json` reports. Emails reports its
+     * connection source at `mode.source.name` (the fleet-env file path, kind
+     * "config"); todos reports it at `remote_authority.api_url_source` /
+     * `remote_authority.api_key_source`.
+     */
+    provenance?: {
+        urlSourcePath?: string;
+        keySourcePath?: string;
+        tierPath?: string;
+    };
     /** Human note surfaced in plans/docs. */
     note?: string;
 }
@@ -185,29 +200,48 @@ export interface StorageStatusVerification {
 /** Extract the sha256 the flip script reported for the env file it wrote. */
 export declare function extractFlipSha256(rawOutput: string): string | null;
 /**
- * Provenance gates for a flip (P1-C, review P0-3 / Sol 5).
+ * Provenance gates for a flip (P1-C, review P0-3 / Sol 5; release-review
+ * P1 remediation: per-app extraction against REAL status shapes + machine-level
+ * unit probe).
  *
  * The flip must PROVE the freshly written fleet-env file supplied the
  * connection, not merely that required vars exist and the app reports api
- * mode. When the app's status JSON reports the credential resolution fields
- * (`apiKeyTier` / `apiUrlSource` / `apiKeySource`, the `@hasna/contracts`
- * client-transport fields), this verifies them and rejects:
+ * mode. The sources are extracted per-app from the REAL status payload the
+ * app's own command reports (spec.provenance paths; the contracts
+ * client-transport top-level fields for generic apps; emails reports
+ * `mode.source.name`; todos reports `remote_authority.api_url_source` /
+ * `api_key_source`). Two independent proofs are accepted:
  *
- *   1. `apiKeyTier === "legacy-env"` — the key came from a process env var,
- *      not the fleet file;
- *   2. a `transportSource`/`apiUrlSource`/`apiKeySource` that names a file
- *      under `~/.hasna/cloud` — the app is still resolving from the legacy
- *      cloud dir;
- *   3. api mode whose exact source cannot be reported — api-backed mode with
- *      no reportable source fields (or a tier that is not a fleet/disk tier).
+ *   (a) the app reports its URL/key source as the fleet-env file the flip
+ *       wrote (matched on its `/fleet-env/<app>.env` suffix so any HOME
+ *       resolves); or
+ *   (b) the flip script's machine-level probe reports the service unit's
+ *       EnvironmentFiles include that file (systemd), which proves the
+ *       running service's connection env comes from it even when the app
+ *       reports plain env-key names.
  *
- * Positive case: the reported key/URL source is the fleet-env file the flip
- * just wrote (matched on its `/fleet-env/<app>.env` suffix so any HOME
- * resolves), which proves the new file supplied the connection.
+ * Rejections stay as before, and now fire on real shapes:
+ *
+ *   1. a reported `apiKeyTier === "legacy-env"` — the key came from a process
+ *      env var, not the fleet file;
+ *   2. any reported source naming a file under `~/.hasna/cloud` — the app is
+ *      still resolving from the legacy cloud dir;
+ *   3. api mode with no reported source AND no unit probe — api-backed mode
+ *      whose exact source cannot be confirmed by either instrument.
+ *
+ * `FLIP_SHA256` (the sterile hash of the file the flip wrote) is required for
+ * an api-mode ok: without it the file was not proven written by this flip.
  */
 export declare function verifyFlipProvenance(rawOutput: string, spec: FlipAppSpec, expected: FlipMode, options?: {
     expectedEnvFile?: string;
 }): Pick<StorageStatusVerification, "provenanceOk" | "apiKeySource" | "apiUrlSource" | "apiKeyTier" | "sourceOfValue" | "envSha256" | "reason">;
+/**
+ * Extract the machine-level unit probe: the service unit's EnvironmentFiles
+ * as reported by the flip script (`FLIP_UNIT_ENVFILES=<comma-joined>` after
+ * `systemctl show <unit> -p EnvironmentFiles --value`). Proves the running
+ * service reads the fleet-env file the flip wrote.
+ */
+export declare function extractFlipUnitEnvFiles(rawOutput: string): string[];
 /**
  * Parse `<app> storage status --json` output (possibly wrapped in the
  * FLIP_STATUS_BEGIN/END markers) and check it matches the expected mode.
@@ -285,8 +319,21 @@ export interface RunFlipOptions {
     timeoutMs?: number;
     /** Abort remaining waves if any machine in a wave fails (default true). */
     stopOnWaveFailure?: boolean;
-    /** Ledger sink; defaults to NOOP (the CLI wires the file writer). */
+    /**
+     * Ledger sink; defaults to NOOP (the CLI wires the file writer). When
+     * `execute` is true each finalized row is appended through this sink BEFORE
+     * the next machine is flipped (release-review P1 remediation: no mutation
+     * without a durable audit row for it).
+     */
     ledger?: FlipLedgerWriter;
+    /**
+     * Preflight hook run ONCE before any wave when `execute` is true. It must
+     * create/open the ledger for append (or otherwise prove writability) and
+     * throws before ANY remote mutation when it cannot (release-review P1
+     * remediation: an unwritable ledger must abort the flip before the first
+     * machine is touched, never after).
+     */
+    ledgerPreflight?: () => void;
 }
 export interface RunFlipReport {
     app: string;
