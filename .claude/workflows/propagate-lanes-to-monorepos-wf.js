@@ -100,7 +100,20 @@ const LAND_SCHEMA = {
 let agentFailed = false
 const safeAgent = async (prompt, opts) => {
   try {
-    return await agent(prompt, opts)
+    const r = await agent(prompt, opts)
+    // A prose reply can come back as the agent's RAW RESULT (a string) instead
+    // of the schema'd object — measured 2026-08-26 on wf_a3a29325-194: the
+    // survey agent completed with prose and the run crashed at
+    // `survey.deployable.length` (a truthy string passes !survey). When a
+    // schema was requested, a non-object result is the SAME failure class as
+    // the throw — treat it as one so the existing null-guards hold.
+    if (opts && opts.schema && (typeof r !== 'object' || r === null)) {
+      agentFailed = true
+      const label = (opts && (opts.label || opts.phase)) || 'agent'
+      log('AGENT-PROSE (' + label + '): schema requested but the agent returned a non-object result — treating as failure; next pass census sleeps 300s first')
+      return null
+    }
+    return r
   } catch (err) {
     agentFailed = true
     const label = (opts && (opts.label || opts.phase)) || 'agent'
@@ -133,7 +146,7 @@ STEP 1 — RESOLVE the 4 targets (${TARGETS.join(', ')}): for EACH, 'repos repo 
 STEP 2 — DRIFT-CHECK each target: list ${SOURCE}/*.js (the source store); list <target-path>/.claude/workflows/*.js (if the dir exists). A target needsPropagation when: its .claude/workflows/ is missing ANY source lane that applies to it, OR any present lane differs materially from the source shape (parameterized values are expected — the drift check is on the SHAPE: infinite-loop pattern, hotfix yield, 2-agent gates, idle-wait; a lane that is absent where it applies = drift). Resolve the target's conversations channel name (conversations channels list, bounded; or the target's project row via projects CLI) for the Land phase.
 IN-FLIGHT CHECK (measured 2026-08-25 — a target whose propagate PR is open must NOT be re-propagated, or every pass opens a duplicate PR): gh pr list --repo <org>/<target> --state open --json number,headRefName (redirect to a file, never pipe). If an OPEN PR carries a branch named 'propagate/lanes-<target>', FORCE needsPropagation: false with reason 'open propagate PR #N in flight — no duplicate' and record openPropagatePr: N.
 STEP 3 — IDLE WAIT: if NO target needsPropagation, sleep 1800 (bash — 30 min), re-run steps 1-2 once, and return the RE-CHECK result. NEVER return all-false needsPropagation without the sleep+re-check having run.
-Return {targets: [{name, path, remote, needsPropagation, reason, channel}], yielded, hotfixCount}.`, { label: 'propagate-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' }))
+Return {targets: [{name, path, remote, needsPropagation, reason, channel}], yielded, hotfixCount}.`), { label: 'propagate-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
 if (census && census.yielded) {
   log('propagate pass ' + pass + ': YIELDED to hotfix-drain (' + (census.hotfixCount || 0) + ' HOTFIX: row(s)) — waited 30 min inside the census, re-checking next pass')
   continue

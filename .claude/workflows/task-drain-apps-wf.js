@@ -73,7 +73,20 @@ const EXEC_SCHEMA = {
 let agentFailed = false
 const safeAgent = async (prompt, opts) => {
   try {
-    return await agent(prompt, opts)
+    const r = await agent(prompt, opts)
+    // A prose reply can come back as the agent's RAW RESULT (a string) instead
+    // of the schema'd object — measured 2026-08-26 on wf_a3a29325-194: the
+    // survey agent completed with prose and the run crashed at
+    // `survey.deployable.length` (a truthy string passes !survey). When a
+    // schema was requested, a non-object result is the SAME failure class as
+    // the throw — treat it as one so the existing null-guards hold.
+    if (opts && opts.schema && (typeof r !== 'object' || r === null)) {
+      agentFailed = true
+      const label = (opts && (opts.label || opts.phase)) || 'agent'
+      log('AGENT-PROSE (' + label + '): schema requested but the agent returned a non-object result — treating as failure; next pass census sleeps 300s first')
+      return null
+    }
+    return r
   } catch (err) {
     agentFailed = true
     const label = (opts && (opts.label || opts.phase)) || 'agent'
@@ -110,7 +123,7 @@ PRIORITY YIELD CHECK FIRST: if any UNOWNED row's title starts with "HOTFIX:", th
 6. Return the ordered candidates. Include rows already covered by a fix-lane in flight ONLY if their fix-lane is provably dead (transcript older than 60 min); otherwise exclude them (a live lane is a live fixer — never duplicate).
 
 IF THE QUEUE IS EMPTY (no unowned BUG rows AND no unowned UNVERIFIED rows): sleep 300 (bash), re-run the census steps once, and return the RE-CHECK result — the lane waits ~5 min between passes while idle. NEVER return an empty result without the sleep+re-check having run.
-Return candidates (max ${MAX_ROWS + 2}), queueSize (unowned BUG + UNVERIFIED rows remaining), blocked (excluded rows with reasons), yielded (bool), hotfixCount (int).`, { label: 'census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA }))
+Return candidates (max ${MAX_ROWS + 2}), queueSize (unowned BUG + UNVERIFIED rows remaining), blocked (excluded rows with reasons), yielded (bool), hotfixCount (int).`), { label: 'census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
 
 const candidates = (census && census.candidates) || []
 if (census && census.yielded) {

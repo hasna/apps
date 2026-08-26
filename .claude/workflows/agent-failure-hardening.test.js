@@ -3,6 +3,15 @@
 // StructuredOutput makes agent() throw; the uncaught throw killed the whole
 // 2.7h run wf_b4894f28-d61 after 37 agents, measured 2026-08-25).
 //
+// AMENDED 2026-08-26 — the SAME class arrived as a RESULT instead of a throw:
+// a schema-requested agent completed with prose and its raw string came back
+// from agent() as the survey value; `survey.deployable.length` on the string
+// crashed the deploy-apps resume (wf_a3a29325-194, after the O15-00732 fix
+// was already live). The safeAgent wrapper now treats a non-object result
+// under a schema as the same failure class (null + AGENT-PROSE log + next-census
+// sleep banner), and the deploy-apps survey consumption shape-guards
+// deployable/blocked.
+//
 // Two layers:
 //  1. STRUCTURAL — no bare `await agent(` / `() => agent(` may remain in the 9
 //     standing lane scripts outside the safeAgent helper; a lane added or
@@ -16,6 +25,7 @@ import { test, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
+import { Script } from 'node:vm'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -41,6 +51,45 @@ test('structural: every agent() call in the standing lanes is wrapped in safeAge
     expect(bare, f + ': bare await agent( calls outside safeAgent').toEqual([])
     expect(bareClosure, f + ': bare () => agent( closures outside safeAgent').toEqual([])
     expect(src.includes('safeAgent'), f + ': defines the safeAgent wrapper').toBe(true)
+  }
+})
+
+// The safeAgent migration (PR #1185, 2026-08-25) mis-parenthesized the census
+// calls in 5 of 9 lanes: `safeAgent(censusPrompt(`...`, { schema }))` — the opts
+// object landed INSIDE censusPrompt's parens, so safeAgent and agent() received
+// NO schema. The census agent then ran unconstrained, a prose reply came back as
+// the raw string result, and the run crashed at `survey.deployable.length`
+// (wf_a3a29325-194, measured 2026-08-26). This test pins the call shape.
+const censusSchemaReachesAgent = (src) => {
+  const start = src.indexOf('safeAgent(censusPrompt(')
+  if (start < 0) return null // no censusPrompt wrapper — not applicable
+  let depth = 2 // safeAgent( + censusPrompt(
+  let i = start + 'safeAgent(censusPrompt('.length
+  let inTpl = false
+  while (i < src.length) {
+    const c = src[i]
+    if (inTpl) {
+      if (c === '`' && src[i - 1] !== '\\') inTpl = false
+    } else if (c === '`') {
+      inTpl = true
+    } else if (c === '(') {
+      depth++
+    } else if (c === ')') {
+      depth--
+      if (depth === 1) return true // censusPrompt closed before any depth-2 comma
+    } else if (c === ',' && depth === 2) {
+      return false // opts comma inside censusPrompt — the schema is swallowed
+    }
+    i++
+  }
+  return null
+}
+
+test('structural: census opts (with the schema) reach safeAgent — never swallowed by censusPrompt', () => {
+  for (const f of LANES) {
+    const src = readFileSync(join(here, f), 'utf8')
+    const shape = censusSchemaReachesAgent(src)
+    expect(shape, f + ': census call must be safeAgent(censusPrompt(`...`), { schema ... }) — the opts object must sit OUTSIDE censusPrompt').not.toBe(false)
   }
 })
 
@@ -92,4 +141,45 @@ test('behavioral: hotfix-drain survives an agent() schema failure and pauses the
   // The pass-2 census prompt carries the sleep-300 pause banner.
   expect(prompts.length, 'pass-2 census prompt recorded').toBeGreaterThanOrEqual(2)
   expect(prompts[1].includes('Sleep 300 (bash) FIRST'), 'next census sleeps 300s first').toBe(true)
+})
+
+test('behavioral: deploy-apps survives a PROSE RESULT (non-object under a schema) — the run must not crash on survey.deployable.length', async () => {
+  const logs = []
+  const prompts = []
+  let calls = 0
+  // The lane is a CJS-style script (top-level return, top-level await) — load it
+  // the way the workflow runtime does (a classic script with globals), not as an
+  // ESM module: strip the `export ` keyword and wrap in an async IIFE so the
+  // top-level return and await are legal in the vm context.
+  let src = readFileSync(join(here, 'deploy-apps-wf.js'), 'utf8').replace(/^export /gm, '')
+  src = '__runPromise = (async () => {\n' + src + '\n})()'
+  const sandbox = {
+    agent: async (prompt) => {
+      calls++
+      prompts.push(String(prompt))
+      if (calls === 1) return 'Waiting on the armed re-check window; the monitor will deliver the completion event, after which the re-check runs and the final survey result is returned.'
+      return { deployable: [], blocked: [], yielded: false, hotfixCount: 0 }
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (logs.filter((l) => l.includes('no deployable services')).length >= 3) throw new Error('__TEST_END__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  new Script(src).runInNewContext(sandbox)
+  let ended = null
+  await sandbox.__runPromise.catch((e) => {
+    ended = e
+  })
+  // WITHOUT the prose guard, pass 1 binds the string and crashes with
+  // "undefined is not an object (evaluating 'survey.deployable.length')".
+  // WITH it, the string is treated as the failure class and the loop continues.
+  expect(ended && ended.message, 'loop terminated only via the test sentinel, never the TypeError').toBe('__TEST_END__')
+  expect(calls, 'run reached pass 3+ after the prose result').toBeGreaterThanOrEqual(3)
+  expect(logs.some((l) => l.includes('AGENT-PROSE')), 'the prose result is logged as the failure class').toBe(true)
+  expect(prompts[1].includes('Sleep 300 (bash) FIRST'), 'the pass-2 census prompt carries the sleep-300 pause banner').toBe(true)
 })

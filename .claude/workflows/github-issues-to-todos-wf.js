@@ -66,7 +66,20 @@ const FILE_SCHEMA = {
 let agentFailed = false
 const safeAgent = async (prompt, opts) => {
   try {
-    return await agent(prompt, opts)
+    const r = await agent(prompt, opts)
+    // A prose reply can come back as the agent's RAW RESULT (a string) instead
+    // of the schema'd object — measured 2026-08-26 on wf_a3a29325-194: the
+    // survey agent completed with prose and the run crashed at
+    // `survey.deployable.length` (a truthy string passes !survey). When a
+    // schema was requested, a non-object result is the SAME failure class as
+    // the throw — treat it as one so the existing null-guards hold.
+    if (opts && opts.schema && (typeof r !== 'object' || r === null)) {
+      agentFailed = true
+      const label = (opts && (opts.label || opts.phase)) || 'agent'
+      log('AGENT-PROSE (' + label + '): schema requested but the agent returned a non-object result — treating as failure; next pass census sleeps 300s first')
+      return null
+    }
+    return r
   } catch (err) {
     agentFailed = true
     const label = (opts && (opts.label || opts.phase)) || 'agent'
@@ -106,7 +119,7 @@ STEP 3 — NEW: every open issue that is NOT already tracked by (a) or (b) is ne
 
 STEP 4 — IDLE WAIT: if newIssues is empty, sleep 3600 (bash — one hour), re-run steps 1-3 once, and return the RE-CHECK result. NEVER return an empty newIssues without the sleep+re-check having run.
 
-Return {newIssues: [{number, title, body, labels, url}], openCount, yielded, hotfixCount}.`, { label: 'issues-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'sonnet' }))
+Return {newIssues: [{number, title, body, labels, url}], openCount, yielded, hotfixCount}.`), { label: 'issues-census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'sonnet' })
 
 const newIssues = (census && census.newIssues) || []
 if (census && census.yielded) {
