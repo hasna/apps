@@ -1,23 +1,27 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  adoptResolverHome,
   automationsDataDir,
   automationsDbPath,
   daemonLogPath,
   daemonPidFilePath,
   ensureAutomationsDataDir,
+  resolverHome,
 } from "./paths.js";
 
 const originalPrimaryDir = process.env.HASNA_AUTOMATIONS_DIR;
 const originalLegacyDir = process.env.AUTOMATIONS_DATA_DIR;
+const originalDataHome = process.env.HASNA_DATA_HOME;
 let scratchDir = "";
 
 beforeEach(() => {
   scratchDir = mkdtempSync(join(tmpdir(), "automations-paths-"));
   delete process.env.HASNA_AUTOMATIONS_DIR;
   delete process.env.AUTOMATIONS_DATA_DIR;
+  delete process.env.HASNA_DATA_HOME;
 });
 
 afterEach(() => {
@@ -25,6 +29,8 @@ afterEach(() => {
   else process.env.HASNA_AUTOMATIONS_DIR = originalPrimaryDir;
   if (originalLegacyDir === undefined) delete process.env.AUTOMATIONS_DATA_DIR;
   else process.env.AUTOMATIONS_DATA_DIR = originalLegacyDir;
+  if (originalDataHome === undefined) delete process.env.HASNA_DATA_HOME;
+  else process.env.HASNA_DATA_HOME = originalDataHome;
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
@@ -66,5 +72,33 @@ describe("automations data paths", () => {
     expect(automationsDbPath()).toBe(join(dataDir, "automations.db"));
     expect(daemonPidFilePath()).toBe(join(dataDir, "daemon.pid"));
     expect(daemonLogPath()).toBe(join(dataDir, "daemon.log"));
+  });
+
+  test("resolver home resolves under the HASNA_DATA_HOME override", () => {
+    process.env.HASNA_DATA_HOME = scratchDir;
+
+    expect(resolverHome()).toBe(join(scratchDir, "automations"));
+  });
+
+  test("resolver (XDG) data home is adopted when HASNA_DATA_HOME is set", () => {
+    process.env.HASNA_DATA_HOME = scratchDir;
+
+    expect(automationsDataDir()).toBe(join(scratchDir, "automations"));
+    expect(automationsDbPath()).toBe(join(scratchDir, "automations", "automations.db"));
+  });
+
+  test("adopts the resolver home only when the data override is set or the store already exists there", () => {
+    const resolved = join(scratchDir, "resolved", "automations");
+
+    expect(adoptResolverHome(resolved)).toBe(false);
+
+    mkdirSync(resolved, { recursive: true });
+    writeFileSync(join(resolved, "automations.db"), "");
+    expect(adoptResolverHome(resolved)).toBe(true);
+
+    // HASNA_DATA_HOME forces adoption even without an existing store.
+    rmSync(join(resolved, "automations.db"));
+    process.env.HASNA_DATA_HOME = join(scratchDir, "resolved");
+    expect(adoptResolverHome(resolved)).toBe(true);
   });
 });
