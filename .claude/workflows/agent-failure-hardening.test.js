@@ -40,6 +40,7 @@ const LANES = [
   'ship-latest-wf.js',
   'propagate-lanes-to-monorepos-wf.js',
   'closed-pr-audit-wf.js',
+  'leak-scan-wf.js',
 ]
 
 test('structural: every agent() call in the standing lanes is wrapped in safeAgent', () => {
