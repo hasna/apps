@@ -93,10 +93,8 @@ export declare function hybridSearchItems(items: KnowledgeItem[], options: Omit<
 /**
  * Adapt an already-ranked, bounded producer page into the public hybrid-search
  * result shape without fetching or re-ranking the collection in the client.
- * A null hit rank means the producer exposed no score; the keyword score then
- * degrades to zero.
  */
 export declare function hybridSearchFromProducerPage(hits: readonly {
     item: KnowledgeItem;
-    rank: number | null;
+    rank: number;
 }[], options: Pick<HybridSearchOptions, 'query' | 'limit' | 'offset' | 'semantic'>, warnings?: string[], producerTotal?: number): HybridSearchResult;

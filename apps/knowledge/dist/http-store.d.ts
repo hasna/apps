@@ -32,59 +32,15 @@ export interface KnowledgeHttpListOptions {
 }
 export interface KnowledgeHttpSearchOptions {
     query: string;
-    /**
-     * Retained for interface compatibility with the pre-unified contract. The
-     * deployed unified `/v1/search` endpoint searches active content and does
-     * not declare or honor an archive filter.
-     */
+    /** Archive scope forwarded to the server; defaults to active. */
     archive?: 'active' | 'archived' | 'all';
     limit?: number;
-    /**
-     * Retained for interface compatibility. The deployed unified `/v1/search`
-     * endpoint does not declare an offset parameter; pagination of the unified
-     * search is a server-side follow-up.
-     */
     offset?: number;
 }
-/**
- * One row of the deployed unified search envelope
- * (`GET /v1/search` — knowledge server 1.0.0-rc.6). Measured against the
- * deployed contract on 2026-08-18; the OpenAPI contract declares exactly
- * these fields.
- */
-export interface KnowledgeUnifiedSearchHit {
-    kind: string;
-    id: string;
-    title: string;
-    snippet: string;
-    url: string | null;
-}
-/**
- * The deployed unified search envelope. It carries no producer rank and no
- * capability marker; the echoed `query` and the bounded result list are the
- * evidence that the server applied the query.
- */
-export interface KnowledgeUnifiedSearchEnvelope {
-    results: KnowledgeUnifiedSearchHit[];
-    total: number;
-    query: string;
-}
-/**
- * Adapt a unified search hit into the item the rest of the client surface
- * consumes. The deployed envelope exposes only id/title/snippet/url; every
- * other KnowledgeItem field is synthesized as an explicit unknown rather than
- * guessed. Search results are rendered through id/title/text, so the
- * synthesized fields never reach user-visible output.
- */
-export declare function knowledgeItemFromUnifiedSearchHit(hit: KnowledgeUnifiedSearchHit): KnowledgeItem;
 export interface KnowledgeHttpSearchHit {
     item: KnowledgeItem;
-    /**
-     * Producer-computed relevance score. `null` when the producer contract does
-     * not expose one: the deployed unified `/v1/search` envelope returns
-     * rankless hits, and no score is fabricated client-side.
-     */
-    rank: number | null;
+    /** Producer-computed PostgreSQL ts_rank_cd score. */
+    rank: number;
 }
 export interface KnowledgeHttpCreateInput {
     /** Optional caller-supplied stable id. Forwarded to the server, which upserts

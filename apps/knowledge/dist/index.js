@@ -4938,19 +4938,6 @@ function transportOverrides(env) {
   };
 }
 var KNOWLEDGE_RESOURCE = "notes";
-function knowledgeItemFromUnifiedSearchHit(hit) {
-  return {
-    id: hit.id,
-    short_id: null,
-    title: hit.title,
-    content: hit.snippet,
-    url: hit.url ?? null,
-    tags: [],
-    metadata: {},
-    created_at: "",
-    updated_at: ""
-  };
-}
 
 class KnowledgeVersionConflictError extends Error {
   expected;
@@ -5036,24 +5023,22 @@ function wrap(client) {
     },
     async search(options) {
       const limit = boundedQueryInteger(options.limit, 20, "limit", 1, 200);
-      const response = await client.transport.get("/search", {
+      const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
+      const response = await client.transport.get(`/${KNOWLEDGE_RESOURCE}/search`, {
         query: {
           q: options.query,
+          archive: options.archive ?? "active",
           limit,
-          kind: "note"
+          offset
         }
       });
-      if (!Number.isInteger(response.total) || Number(response.total) < 0) {
-        throw new Error("knowledge HTTP search response is missing a valid producer total.");
+      if (!Number.isInteger(response.total) || response.total < 0 || !Array.isArray(response.items) || response.items.some((hit) => !hit || typeof hit !== "object" || !hit.item || typeof hit.rank !== "number" || !Number.isFinite(hit.rank))) {
+        throw new Error("knowledge HTTP search response is missing producer rank or total evidence.");
       }
-      if (!Array.isArray(response.results) || response.results.some((hit) => !hit || typeof hit !== "object" || typeof hit.id !== "string" || typeof hit.title !== "string" || typeof hit.snippet !== "string")) {
-        throw new Error("knowledge HTTP search response is missing producer evidence.");
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError("search", ["q", "rank", "total"]);
       }
-      const items = response.results.map((hit) => ({
-        item: knowledgeItemFromUnifiedSearchHit(hit),
-        rank: null
-      }));
-      return { items, total: Number(response.total) };
+      return { items: response.items, total: response.total };
     },
     async get(idOrShort) {
       return client.get(KNOWLEDGE_RESOURCE, idOrShort);
@@ -8714,7 +8699,7 @@ function legacyItemResult(item, keywordScore) {
     title: item.title,
     text: item.content,
     score: 0,
-    scores: { keyword: keywordScore ?? 0 },
+    scores: { keyword: keywordScore },
     source: {
       uri,
       ref: uri,

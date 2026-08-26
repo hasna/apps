@@ -70,75 +70,16 @@ export interface KnowledgeHttpListOptions {
 
 export interface KnowledgeHttpSearchOptions {
   query: string;
-  /**
-   * Retained for interface compatibility with the pre-unified contract. The
-   * deployed unified `/v1/search` endpoint searches active content and does
-   * not declare or honor an archive filter.
-   */
+  /** Archive scope forwarded to the server; defaults to active. */
   archive?: 'active' | 'archived' | 'all';
   limit?: number;
-  /**
-   * Retained for interface compatibility. The deployed unified `/v1/search`
-   * endpoint does not declare an offset parameter; pagination of the unified
-   * search is a server-side follow-up.
-   */
   offset?: number;
-}
-
-/**
- * One row of the deployed unified search envelope
- * (`GET /v1/search` — knowledge server 1.0.0-rc.6). Measured against the
- * deployed contract on 2026-08-18; the OpenAPI contract declares exactly
- * these fields.
- */
-export interface KnowledgeUnifiedSearchHit {
-  kind: string;
-  id: string;
-  title: string;
-  snippet: string;
-  url: string | null;
-}
-
-/**
- * The deployed unified search envelope. It carries no producer rank and no
- * capability marker; the echoed `query` and the bounded result list are the
- * evidence that the server applied the query.
- */
-export interface KnowledgeUnifiedSearchEnvelope {
-  results: KnowledgeUnifiedSearchHit[];
-  total: number;
-  query: string;
-}
-
-/**
- * Adapt a unified search hit into the item the rest of the client surface
- * consumes. The deployed envelope exposes only id/title/snippet/url; every
- * other KnowledgeItem field is synthesized as an explicit unknown rather than
- * guessed. Search results are rendered through id/title/text, so the
- * synthesized fields never reach user-visible output.
- */
-export function knowledgeItemFromUnifiedSearchHit(hit: KnowledgeUnifiedSearchHit): KnowledgeItem {
-  return {
-    id: hit.id,
-    short_id: null,
-    title: hit.title,
-    content: hit.snippet,
-    url: hit.url ?? null,
-    tags: [],
-    metadata: {},
-    created_at: '',
-    updated_at: '',
-  };
 }
 
 export interface KnowledgeHttpSearchHit {
   item: KnowledgeItem;
-  /**
-   * Producer-computed relevance score. `null` when the producer contract does
-   * not expose one: the deployed unified `/v1/search` envelope returns
-   * rankless hits, and no score is fabricated client-side.
-   */
-  rank: number | null;
+  /** Producer-computed PostgreSQL ts_rank_cd score. */
+  rank: number;
 }
 
 export interface KnowledgeHttpCreateInput {
@@ -312,42 +253,40 @@ function wrap(client: HasnaStorageClient): KnowledgeHttpStore {
 
     async search(options: KnowledgeHttpSearchOptions) {
       const limit = boundedQueryInteger(options.limit, 20, 'limit', 1, 200);
-      const response = await client.transport.get<KnowledgeUnifiedSearchEnvelope>(
-        '/search',
+      const offset = boundedQueryInteger(options.offset, 0, 'offset', 0, 10_000);
+      const response = await client.transport.get<{
+        items: KnowledgeHttpSearchHit[];
+        total: number;
+        query_capability?: string;
+      }>(
+        `/${KNOWLEDGE_RESOURCE}/search`,
         {
           query: {
             q: options.query,
+            archive: options.archive ?? 'active',
             limit,
-            // The unified endpoint is a notes contract here: restrict the
-            // producer's multi-kind search to notes so every hit maps to a
-            // KnowledgeItem. The deployed OpenAPI enum is the singular
-            // "note" (note,wiki,chunk,source) — distinct from the client's
-            // "notes" resource name. The deployed server (1.0.0-rc.6)
-            // declares no archive or offset parameters and ignores them.
-            kind: 'note',
+            offset,
           },
         },
       );
-      if (!Number.isInteger(response.total) || Number(response.total) < 0) {
-        throw new Error('knowledge HTTP search response is missing a valid producer total.');
-      }
       if (
-        !Array.isArray(response.results)
-        || response.results.some((hit) => (
+        !Number.isInteger(response.total)
+        || response.total < 0
+        || !Array.isArray(response.items)
+        || response.items.some((hit) => (
           !hit
           || typeof hit !== 'object'
-          || typeof hit.id !== 'string'
-          || typeof hit.title !== 'string'
-          || typeof hit.snippet !== 'string'
+          || !hit.item
+          || typeof hit.rank !== 'number'
+          || !Number.isFinite(hit.rank)
         ))
       ) {
-        throw new Error('knowledge HTTP search response is missing producer evidence.');
+        throw new Error('knowledge HTTP search response is missing producer rank or total evidence.');
       }
-      const items: KnowledgeHttpSearchHit[] = response.results.map((hit) => ({
-        item: knowledgeItemFromUnifiedSearchHit(hit),
-        rank: null,
-      }));
-      return { items, total: Number(response.total) };
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError('search', ['q', 'rank', 'total']);
+      }
+      return { items: response.items, total: response.total };
     },
 
     async get(idOrShort: string) {
