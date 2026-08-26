@@ -1,3 +1,15 @@
+export const meta = {
+  name: 'stale-tasks',
+  description: `Owner-authorized 2026-08-19: every 30 min, sweep pending/in_progress tasks in the hasna/apps project (the hasna/apps todos project (args.project)) — evidence-backed DONE-but-unmarked rows get completed with proof; stale in_progress with no live worker gets demoted to pending with unlock+comment; never complete without evidence, never cancel without an owner`,
+  phases: [
+    { title: 'Census', detail: 'enumerate pending+in_progress, gather per-row evidence signals (comments, PR links, merged shas)' },
+    { title: 'Classify', detail: 'per-row verdict: COMPLETE-EVIDENCED / DEMOTE-STALE / LIVE / OWNER / UNCHANGED, each with an evidence line' },
+    { title: 'Apply', detail: 'execute status corrections (todos complete with evidence; demote with unlock+comment); vocabulary-only, no deletes, no cancels' },
+    { title: 'Report', detail: 'counts + one #board line per change' },
+  ],
+}
+
+
 // hasna-apps todos project id (args-driven, 2026-08-26): args.project overrides;
 // the standing hasna/apps project id is the default. Every use below
 // interpolates ${APPS} — no hardcoded id.
@@ -32,16 +44,6 @@ Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasn
 NEVER print a credential value.
 `
 
-export const meta = {
-  name: 'stale-tasks',
-  description: `Owner-authorized 2026-08-19: every 30 min, sweep pending/in_progress tasks in the hasna/apps project (${APPS}) — evidence-backed DONE-but-unmarked rows get completed with proof; stale in_progress with no live worker gets demoted to pending with unlock+comment; never complete without evidence, never cancel without an owner`,
-  phases: [
-    { title: 'Census', detail: 'enumerate pending+in_progress, gather per-row evidence signals (comments, PR links, merged shas)' },
-    { title: 'Classify', detail: 'per-row verdict: COMPLETE-EVIDENCED / DEMOTE-STALE / LIVE / OWNER / UNCHANGED, each with an evidence line' },
-    { title: 'Apply', detail: 'execute status corrections (todos complete with evidence; demote with unlock+comment); vocabulary-only, no deletes, no cancels' },
-    { title: 'Report', detail: 'counts + one #board line per change' },
-  ],
-}
 
 const CONST = `
 You are a lane of the stale-tasks workflow (2026-08-19, owner-authorized). Mission: every 30 minutes, check the hasna/apps todos project (${APPS}) for STALE tasks and update their status CORRECTLY — including tasks that are DONE but were never marked done. Final text = machine-readable JSON.

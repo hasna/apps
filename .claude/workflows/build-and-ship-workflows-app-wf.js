@@ -1,13 +1,3 @@
-// Repo root (args-driven, 2026-08-26): args.repo overrides; default is the current
-// clones layout (~/.hasna/repos/clones/hasna/apps). The legacy
-// /home/hasna/.hasna/repos/clones/hasna/apps path is retired.
-const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
-
-// hasna/apps todos project id (args-driven, 2026-08-26): args.project overrides;
-// the standing hasna/apps project id is the default. Every use below
-// interpolates ${APPS_PROJECT} — no hardcoded id.
-const APPS_PROJECT = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
-
 export const meta = {
   name: 'build-and-ship-workflows-app',
   description: 'One-off build lane (owner-directed 2026-08-25, not durable): validate the hasna/workflows plan, file it in todos, build the @hasna/workflows app in the hasna/apps monorepo with a fix loop until green, verify it live locally, publish to npm, ship to oss-fleet-prod, then loop the full acceptance sweep until every command works. ALSO builds the 5 standing fleet workflow definitions (fix-deepsec, audit-apps-gaps, verify-apps-qa, generate-apps-docs-marketing, deploy-app-hasna-com) with authoring-skill validation (basename==meta.name, verb-first regex, no import(), no banned tokens) plus ONE adversarial review agent before each PR. While-loops used per owner amendment. Plan file: /tmp/workflows-plan-final.md',
@@ -22,6 +12,18 @@ export const meta = {
     { title: 'Harvest', detail: 'record + independent harvest' },
   ],
 }
+
+
+// Repo root (args-driven, 2026-08-26): args.repo overrides; default is the current
+// clones layout (~/.hasna/repos/clones/hasna/apps). The legacy
+// /home/hasna/.hasna/repos/clones/hasna/apps path is retired.
+const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
+
+// hasna/apps todos project id (args-driven, 2026-08-26): args.project overrides;
+// the standing hasna/apps project id is the default. Every use below
+// interpolates ${APPS_PROJECT} — no hardcoded id.
+const APPS_PROJECT = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
+
 
 const PLAN = MONOREPO + '/.claude/workflows/workflows-plan-final.md'
 const CHANNEL = 'board'
