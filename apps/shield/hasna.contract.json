@@ -3,7 +3,7 @@
   "name": "shield",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
+  "kitVersion": "0.14.2",
   "description": "AI-powered security scanner for git repos. Ships the shield CLI, an MCP server, and a REST/dashboard server (shield-serve) over a package-owned local SQLite store at ~/.hasna/security/shield.db. The server's active data backend is SQLite; PostgreSQL is declared as the forward-looking engine capability with an environment-gated live proof (pgTestGate).",
   "bins": [
     "shield",
@@ -65,7 +65,7 @@
       }
     },
     "conformance": {
-      "notes": "storage.engines postgresql is validator-forced: the kit refuses a waivedStorageEngines waiver for a service-capable cli-with-store shipping shield-serve (measured). The PostgreSQL backend is NOT implemented in this repo (no DATABASE_URL handling in src; bun:sqlite throughout) \u2014 the declaration and its pgTestGate are recorded in the census CONTRACTS_EXCEPTIONS entry and must be removed when the schema permits an honest waiver."
+      "notes": "storage.engines postgresql is validator-forced: the kit refuses a waivedStorageEngines waiver for a service-capable cli-with-store shipping shield-serve (measured). The PostgreSQL backend is NOT implemented in this repo (no DATABASE_URL handling in src; bun:sqlite throughout) — the declaration and its pgTestGate are recorded in the census CONTRACTS_EXCEPTIONS entry and must be removed when the schema permits an honest waiver."
     }
   }
 }

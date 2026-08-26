@@ -3,7 +3,7 @@
   "name": "domains",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
+  "kitVersion": "0.14.2",
   "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). The client uses local SQLite at ~/.hasna/domains/domains.db, or the hosted HTTP API when HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY are set; domains-serve reads and writes PostgreSQL directly (HASNA_DOMAINS_DATABASE_URL), no cache or sync in the service.",
   "bins": [
     "domains",

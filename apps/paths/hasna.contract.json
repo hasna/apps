@@ -4,7 +4,7 @@
   "name": "paths",
   "class": "library",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
+  "kitVersion": "0.14.2",
   "description": "Package-owned path resolver for Hasna apps: resolves config/data/state/cache homes honoring HASNA_*_HOME overrides and platform defaults (XDG on Linux, Application Support/Caches/Logs on macOS), with hasna/internal/<app> for internal apps. Ships types and a paths CLI only; no store.",
   "bins": [
     "paths"
