@@ -1,5 +1,11 @@
 # @hasna/catalog
 
+## 0.2.2
+
+### Patch Changes
+
+- Switch @hasna/catalog local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/catalog` default (with the `CATALOG_HOME` / `CATALOG_DB_PATH` exact-app overrides) stays the effective home until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+
 ## 0.2.1
 
 ### Patch Changes

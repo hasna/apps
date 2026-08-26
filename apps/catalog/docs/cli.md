@@ -143,7 +143,7 @@ The host defaults to `CATALOG_HOST`, then `127.0.0.1`. The port defaults to
 
 | Variable | Purpose | Fallback |
 | --- | --- | --- |
-| `CATALOG_HOME` | Catalog state directory | `~/.hasna/catalog` |
+| `CATALOG_HOME` | Catalog state directory (exact-app override) | `~/.hasna/catalog` until the XDG data home is adopted via `HASNA_DATA_HOME` or a migrated `catalog.db` |
 | `CATALOG_DB_PATH` | Default SQLite file | `$CATALOG_HOME/catalog.db` |
 | `CATALOG_OPENSOURCE_ROOT` | Default `seed` scan root | `~/workspace/hasna/opensource` |
 | `CATALOG_DUPLICATE_CHECKOUTS` | Duplicate alias JSON file | no aliases |
