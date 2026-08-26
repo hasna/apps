@@ -47,8 +47,9 @@ the first publication after that unpublish. Parity notes:
   the scaffold-template strings embedded in the bundle (the tarball shipped
   no db module; the runtime CLI never imported one).
 - The embedded `REGISTRY` (45 packages) is extracted verbatim and is STALE BY
-  DESIGN — it covers roughly a quarter of first-party packages and is not a
-  live census.
+  DESIGN — it is a point-in-time extract, not a live census. The live roster is
+  the repo census gate's output (`bun tooling/ci/check-names.ts`: 75 member
+  packages, rc=0, checked 2026-08-26).
 - One deliberate deviation: the 0.3.1 `init` prompt defaulted to a live
   internal RDS endpoint; the reconstructed source does not carry that
   internal-infra string (environment variables remain the operative path).

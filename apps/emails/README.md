@@ -23,9 +23,15 @@ CLI with Bun.
 bun install -g @hasna/emails
 ```
 
-## Deployment modes
+## Deployment
 
-Emails has exactly two modes: `local` and `self_hosted`. Local mode keeps SQLite, files, and credentials on the current machine. Self-hosted mode connects to an Emails service deployed in user-owned infrastructure. Provider integrations always use user-supplied credentials; the package has no hosted account or control-plane service.
+The data backend is selected by `EMAILS_DATABASE_URL`: unset or blank means
+local SQLite, a PostgreSQL URL means PostgreSQL. There is no deployment-mode
+selector or mode variable. Local SQLite storage keeps the database, files, and
+credentials on the current machine; a PostgreSQL backend serves the
+authenticated `/v1` API from operator-owned infrastructure. Provider
+integrations always use user-supplied credentials; the package has no hosted
+account or control-plane service.
 
 Local provider credentials are envelope-encrypted with a root key kept outside
 SQLite. Rotation, locked-keyring recovery, and backup rebind procedures are in
