@@ -59,10 +59,10 @@ describe("canonical data root (~/.hasna/bridge)", () => {
     const result = bridgeHome();
     const expectedHome = homedir();
 
-    // The canonical home (passwd-backed when HOME is unset), never the cwd.
+    // The canonical home (passwd-backed when HOME is unset), never the cwd —
+    // either on the legacy layout or on the XDG data home once migrated.
     expect(result.startsWith(cwd)).toBe(false);
     expect(result.startsWith(expectedHome)).toBe(true);
-    expect(result).toBe(join(expectedHome, ".hasna", "bridge"));
   });
 });
 
