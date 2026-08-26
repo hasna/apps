@@ -71,6 +71,7 @@ const CENSUS = {
   properties: {
     yielded: { type: 'boolean' },
     specPresent: { type: 'boolean' },
+    spec: { type: ['object', 'null'], description: 'the operating spec read from the state file; null when absent' },
     sweep: { type: 'integer' },
     sweepStarted: { type: 'boolean' },
     population: { type: 'array', items: { type: 'string' } },
@@ -91,7 +92,7 @@ const CENSUS = {
       },
     },
   },
-  required: ['yielded', 'specPresent', 'sweep', 'sweepStarted', 'population', 'populationComplete', 'reposTotal', 'remainingThisSweep', 'idle', 'queue'],
+  required: ['yielded', 'specPresent', 'spec', 'sweep', 'sweepStarted', 'population', 'populationComplete', 'reposTotal', 'remainingThisSweep', 'idle', 'queue'],
 }
 
 const SCAN_RESULT = {
@@ -160,7 +161,7 @@ for (pass = 1; ; pass++) {
   phase('Census')
   const census = await safeAgent(censusPrompt(`Census for the leak-scan lane. PASS ${pass}, script sweep counter ${sweep}. PRIORITY YIELD CHECK FIRST: todos list --project 3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8 --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-check once, return {yielded: true, specPresent: false, sweep: ${sweep}, sweepStarted: false, population: [], populationComplete: false, reposTotal: 0, remainingThisSweep: 0, idle: false, queue: []} and do NOT probe GitHub while yielding.
 
-1. READ THE STATE FILE (resume contract): if [ -f ${STATE_FILE} ] then cat it (it holds {spec, cursors, lastSweep}); else state is missing — this is a fresh start: full-scan mode for every repo. specPresent = (state.spec is a complete object).
+1. READ THE STATE FILE (resume contract): if [ -f ${STATE_FILE} ] then cat it (it holds {spec, cursors, lastSweep}); else state is missing — this is a fresh start: full-scan mode for every repo. specPresent = (state.spec is a complete object). Return the state's spec object as the census field "spec" (null when there is no state or no spec).
 2. ENUMERATE THE POPULATION fresh: for each org in [${ORGS.join(', ')}]: gh api "orgs/<org>/repos?per_page=100&type=public" --paginate --jq '.[].full_name' (redirect to a file, never pipe; 404/Not Found org → skip and record it absent). Population = union of all names. POSITIVE CONTROL: every name in the known set [${KNOWN_POPULATION.join(', ')}] MUST appear in the read — if any is missing, the read is INCOMPLETE: set populationComplete: false, queue: [] and do NOT scan (a capped read must never be presented as the population). New public repos not in the known set join the population with mode full (no cursor yet).
 3. SWEEP BOOKKEEPING: the state's lastSweep {number, scannedRepos, complete} governs. If state.lastSweep.number == ${sweep} and NOT complete: continue the current sweep — queue = the first 4 repos of the population NOT in state.lastSweep.scannedRepos, remainingThisSweep = population size - scannedRepos size. Otherwise (no state, number mismatch, or complete): START A NEW SWEEP — sweepStarted: true, sweep = ${sweep} + 1 (or 1 when no state), queue = the first 4 repos of the population, remainingThisSweep = population size. Never claim a full-census result from a capped read.
 4. MODES AND CURSORS: per queued repo, mode = state.cursors has the repo ? 'delta' : 'full'; cursor = state.cursors[repo] or null. IDLE CHECK: for each queued delta repo, compare its cursor to the remote HEAD — git ls-remote https://github.com/<repo>.git HEAD (redirect to a file; note the special case hasna-internal/dsh-TUI uses the same URL shape). If EVERY delta repo's remote HEAD equals its cursor (nothing new) AND lastSweep.complete: the fleet is clean — sleep 300 (bash), re-check once, then return the final queue with idle: true.
@@ -180,6 +181,7 @@ Return the census: yielded, specPresent, sweep (the sweep you are working), swee
     log(`pass ${pass}: population read incomplete (complete=${census.populationComplete}) or empty queue — re-checking next pass`)
     continue
   }
+  if (census.spec) sweepSpec = census.spec
   if (census.sweep > sweep) {
     log(`sweep ${sweep} complete — next sweep starts from scratch (fresh dispatch from repo 1; cursors keep later sweeps delta-only)`)
     sweep = census.sweep
@@ -249,7 +251,7 @@ Return {results: [...]} — one entry per assigned repo (empty array when none a
 ${JSON.stringify(allResults.filter((r) => !r.failed).map((r) => ({ repo: r.repo, mode: r.mode, scannedCommits: r.scannedCommits, scannedFiles: r.scannedFiles, cursor: r.cursor, truncated: r.truncated, findings: r.findings, controls: r.controls })))}
 
 1. FINDINGS → ROWS + COMMENTS (dedupe first): for EACH finding, skip if an existing [LEAK-FOUND] comment already stands on that commit (gh api repos/<org>/<name>/commits/<sha>/comments) or an existing todos row titled "LEAK-FOUND <repo>@<short-sha>" exists. Otherwise file EXACTLY ONE todos row in project 3bbc22e0 titled "LEAK-FOUND: <repo>@<short-sha> — <detector>" (tags leak-scan,security) whose body carries repo, commit sha, file:line, detector/marker, and the evidence rule — NEVER the matched value, NEVER a credential; the detector name + location IS the evidence. Then post ONE [LEAK-FOUND] commit comment via gh api repos/<org>/<name>/commits/<sha>/comments -f body="[LEAK-FOUND] <detector> @ <file>:<line> — <repo>@<short-sha>; row filed in hasna/todos (apps project)". Never post the matched value.
-2. STATE FILE (resume contract): write ${STATE_FILE} atomically (mkdir -p, write to state.json.tmp, mv over) with {spec: <the spec passed in the census summary context — reuse the existing spec from the state or the census>, cursors: {<repo>: <new cursor for every successfully scanned repo>}, lastSweep: {number: ${sweep}, scannedRepos: <previous scannedRepos ∪ successful repos this pass>, complete: <(${census.remainingThisSweep} - successful repos this pass) == 0>}}. If a repo scan failed, its cursor stays at the old value and it is NOT added to scannedRepos. Preserve the spec exactly as read.
+2. STATE FILE (resume contract): write ${STATE_FILE} atomically (mkdir -p, write to state.json.tmp, mv over) with {spec: ${JSON.stringify(sweepSpec)}, cursors: {<repo>: <new cursor for every successfully scanned repo>}, lastSweep: {number: ${sweep}, scannedRepos: <previous scannedRepos ∪ successful repos this pass>, complete: <(${census.remainingThisSweep} - successful repos this pass) == 0>}}. If a repo scan failed, its cursor stays at the old value and it is NOT added to scannedRepos. The spec object above is the actual operating spec (measured by Investigate or read from state) — write it verbatim.
 3. ONE line to #apps: "leak-scan pass ${pass}: <repo>@<short-sha> <detector> @ <file>:<line> (n findings, m rows, k comments); sweep ${sweep} remaining <n>" — no ids without their meaning; one line even when clean ("leak-scan pass ${pass}: clean — 0 findings across <repos>; sweep ${sweep} remaining <n>").
 4. Save ONE memento under leak-scan-pass-${pass}: the per-pass finding count and any new leak class discovered (one or two sentences; no values).
 
