@@ -1,14 +1,15 @@
 /**
- * Regression tests for O15-00671, O15-00758, O15-00762 and O15-00766: the prod
- * `schema_migrations` ledger carries out-of-band rows
+ * Regression tests for O15-00671, O15-00758, O15-00762, O15-00766 and
+ * todos 2b474505: the prod `schema_migrations` ledger carries out-of-band rows
  * (`domains_apikeys_tenancy_0001`, `domains_apikeys_tenancy_0002`,
- * `domains_tenancy_0001`, `domains_tenancy_0002`, `domains_tenancy_0003`) that
- * no build in this repo's history generates (verified across every published
- * tarball 0.0.30-0.0.46 and all git history — the rows date from the 2026-07
- * self-hosted cutover). The storage kit's downgrade guard refused them, so
- * `domains db migrate` failed and the domains deploy lane was blocked. The app
- * acknowledges the rows via `ACKNOWLEDGED_LEGACY_MIGRATION_IDS`, which the
- * kit's `acknowledgedLegacyIds` option honors.
+ * `domains_tenancy_0001`, `domains_tenancy_0002`, `domains_tenancy_0003`,
+ * `domains_tenancy_0004`) that no build in this repo's history generates
+ * (verified across every published tarball 0.0.30-0.0.46 and all git history —
+ * the rows date from the 2026-07 self-hosted cutover). The storage kit's
+ * downgrade guard refused them, so `domains db migrate` failed and the domains
+ * deploy lane was blocked. The app acknowledges the rows via
+ * `ACKNOWLEDGED_LEGACY_MIGRATION_IDS`, which the kit's `acknowledgedLegacyIds`
+ * option honors.
  *
  * Deploy evidence, 2026-08-25: the 02:00Z pass failed on `..._0001`; the 16:44Z
  * pass (image carrying the 0.14.1 kit with `_0001` acknowledged, hasna/apps#1176)
@@ -17,7 +18,9 @@
  * and the 2026-08-25 PASS-18 pass then failed on the fourth row
  * `domains_tenancy_0002` at `domains-prod-migrate:42` (O15-00762). A 2026-08-25
  * PASS pass then hit the fifth out-of-band row `domains_tenancy_0003` at
- * `domains-prod-migrate:42` (O15-00766).
+ * `domains-prod-migrate:42` (O15-00766). Deploy evidence 2026-08-26: passes
+ * 48-96 then failed on the sixth out-of-band row `domains_tenancy_0004` at
+ * `domains-prod-migrate:44` through `:49` (todos 2b474505).
  *
  * These tests run the REAL ledger and the REAL buildMigrations() against an
  * in-memory TypedQueryClient that emulates the ledger SQL the kit emits
@@ -86,9 +89,13 @@ async function seedProdShape(client: ReturnType<typeof inMemoryLedgerClient>): P
     `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
     ["domains_tenancy_0003", "sha256:not-reproducible-from-source"],
   );
+  await client.execute(
+    `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
+    ["domains_tenancy_0004", "sha256:not-reproducible-from-source"],
+  );
 }
 
-describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 / O15-00762 / O15-00766)", () => {
+describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 / O15-00762 / O15-00766 / 2b474505)", () => {
   test("the acknowledgment set names exactly the prod legacy rows", () => {
     expect(ACKNOWLEDGED_LEGACY_MIGRATION_IDS).toEqual([
       "domains_apikeys_tenancy_0001",
@@ -96,6 +103,7 @@ describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 
       "domains_tenancy_0001",
       "domains_tenancy_0002",
       "domains_tenancy_0003",
+      "domains_tenancy_0004",
     ]);
   });
 
@@ -122,6 +130,7 @@ describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 
         "domains_tenancy_0001",
         "domains_tenancy_0002",
         "domains_tenancy_0003",
+        "domains_tenancy_0004",
       ]),
     );
     // Nothing re-applied: the acknowledged run applies zero migrations.
