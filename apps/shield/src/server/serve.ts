@@ -58,6 +58,14 @@ import { seedAdvisories } from "../data/advisories.js";
 import { ScannerType, ScanStatus, Severity } from "../types/index.js";
 import type { FindingInput } from "../types/index.js";
 import { getFirstString, getQueryInt } from "./query.js";
+import {
+  apiKeyMiddleware,
+  assertBindPosture,
+  isPathAllowed,
+  isSystemScansEnabled,
+  resolveApiKey,
+  resolveScanRoots,
+} from "./security.js";
 
 // Seed builtin rules and advisory data on startup
 seedBuiltinRules();
@@ -78,8 +86,16 @@ function getCodeContext(filePath: string, line: number, contextLines = 10): stri
   }
 }
 
-export function startServer(port: number): Application {
+export function startServer(port: number, host = "127.0.0.1"): Application {
   const app = express();
+
+  // Resolve the server posture ONCE, before the socket is bound: a bind
+  // beyond loopback without SECURITY_API_KEY is a startup refusal, never a
+  // wide-open API surface.
+  const apiKey = resolveApiKey();
+  assertBindPosture(host, apiKey);
+  const scanRoots = resolveScanRoots();
+  const systemScansEnabled = isSystemScansEnabled();
 
   // REST is a trust boundary. Sanitize every response body, including legacy
   // rows and exception messages, even when an individual route forgets to do
@@ -110,6 +126,11 @@ export function startServer(port: number): Application {
     }
     next();
   });
+
+  // Every /api route is authenticated when SECURITY_API_KEY is configured
+  // (timing-safe bearer / x-api-key compare). Without a key the API is only
+  // served on loopback — enforced at startup by assertBindPosture.
+  app.use("/api", apiKeyMiddleware(apiKey));
 
   // Simple in-memory rate limiter for AI/LLM endpoints
   const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -151,6 +172,19 @@ export function startServer(port: number): Application {
       }
 
       const absPath = resolve(scanPath);
+
+      // The network can name an arbitrary filesystem path, so the scan source
+      // is confined to the configured roots (SECURITY_SCAN_ROOTS).
+      if (!isPathAllowed(absPath, scanRoots)) {
+        res.status(403).json({ error: "scan path is outside SECURITY_SCAN_ROOTS" });
+        return;
+      }
+      // Host-wide IOC checks cross the requested tree boundary and must be
+      // explicitly enabled by the server administrator.
+      if (include_system === true && !systemScansEnabled) {
+        res.status(403).json({ error: "include_system is disabled; set SECURITY_ALLOW_SYSTEM_SCANS=1 to enable" });
+        return;
+      }
 
       // Find or create project
       let project = getProjectByPath(absPath);
@@ -757,8 +791,8 @@ export function startServer(port: number): Application {
     }
   });
 
-  app.listen(port, () => {
-    console.log(`security dashboard: http://localhost:${port}`);
+  app.listen(port, host, () => {
+    console.log(`security dashboard: http://${host}:${port}`);
   });
 
   return app;

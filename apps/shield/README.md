@@ -133,6 +133,21 @@ API endpoints:
 - `GET /api/findings` — query scan findings
 - `POST /api/scans` — trigger a new scan
 
+### REST security posture
+
+- **Bind.** `shield serve` binds `127.0.0.1` by default. `--host <host>` opts
+  into a non-loopback bind, and doing so **requires** `SECURITY_API_KEY` — the
+  server refuses to start otherwise.
+- **Auth.** With `SECURITY_API_KEY` set, every `/api` request must present it
+  (`x-api-key: <key>` or `Authorization: Bearer <key>`; the dashboard sends the
+  key entered in its header field, and the SDK takes it as the second
+  constructor argument). Without a key the API is served on loopback only,
+  matching the CLI's local-only trust level.
+- **Scan source boundary.** `POST /api/scans` only scans under
+  `SECURITY_SCAN_ROOTS` (comma-separated absolute paths, default `$HOME`);
+  other paths get `403`. Host-wide `include_system` checks additionally require
+  `SECURITY_ALLOW_SYSTEM_SCANS=1`.
+
 CLI, library, SDK, MCP, REST, and dashboard-triggered aggregate scans inspect
 only the requested filesystem tree by default. REST/SDK/MCP callers must send
 `include_git_history: true` or `include_system: true` for the corresponding

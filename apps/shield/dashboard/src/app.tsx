@@ -24,6 +24,14 @@ const tabs: { id: Tab; label: string }[] = [
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [scanFilter, setScanFilter] = useState<string | undefined>();
+  const [apiKey, setApiKey] = useState<string>(() =>
+    typeof localStorage === "undefined" ? "" : (localStorage.getItem("shield-api-key") || ""),
+  );
+
+  function updateApiKey(value: string) {
+    setApiKey(value);
+    if (typeof localStorage !== "undefined") localStorage.setItem("shield-api-key", value);
+  }
 
   function navigateToFindings(scanId: string) {
     setScanFilter(scanId);
@@ -50,6 +58,15 @@ export function App() {
             </svg>
             <h1 className="text-xl font-bold tracking-tight">security</h1>
           </div>
+
+          <input
+            type="password"
+            placeholder="API key"
+            value={apiKey}
+            onChange={(event) => updateApiKey(event.target.value)}
+            title="Required when the server runs with SECURITY_API_KEY set"
+            className="w-40 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-600 focus:outline-none"
+          />
 
           <nav className="flex gap-1">
             {tabs.map((tab) => (

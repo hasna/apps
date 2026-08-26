@@ -11,10 +11,21 @@ import type {
 
 const BASE = "/api";
 
+function getApiKey(): string {
+  if (typeof localStorage === "undefined") return "";
+  return localStorage.getItem("shield-api-key") || "";
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const apiKey = getApiKey();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...init?.headers,
+  };
+  if (apiKey) headers["x-api-key"] = apiKey;
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { startServer } from "./serve.js";
 import { PACKAGE_VERSION } from "../lib/version.js";
-import { parseServerArgs } from "./args.js";
+import { parseServerArgs, resolveServerHost } from "./args.js";
 
 export { startServer };
 
@@ -12,4 +12,7 @@ if (parsedArgs) {
 }
 
 const port = parseInt(process.env.PORT || "19428");
-startServer(port);
+const host = resolveServerHost(process.argv.slice(2));
+// Loopback by default; a remote bind requires SECURITY_API_KEY (enforced
+// inside startServer — it refuses to start otherwise).
+startServer(port, host || undefined);

@@ -10,15 +10,21 @@ import type {
 
 export class OpenSecurityClient {
   private baseUrl: string;
+  private apiKey: string;
 
-  constructor(baseUrl: string = "http://localhost:19428") {
+  constructor(baseUrl: string = "http://localhost:19428", apiKey: string = "") {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.apiKey = apiKey;
   }
 
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...options,
-      headers: { "Content-Type": "application/json", ...options?.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
+        ...options?.headers,
+      },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
     return res.json() as Promise<T>;
