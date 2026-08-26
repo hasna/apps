@@ -19445,7 +19445,7 @@ var package_default = {
     "@ai-sdk/openai": "^3.0.68",
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
-    "@hasna/contracts": "0.14.1",
+    "@hasna/contracts": "0.14.2",
     "@hasna/events": "0.1.14",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
