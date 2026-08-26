@@ -32,12 +32,6 @@ create one.**
 | `verify-apps-qa-wf.js` | review-verify | QA via the testers app + credential-zero E2B sandbox (rsync from the task worktree), budget-capped, artifact-based PASS/FAIL; also integrable into the drains |
 | `generate-apps-docs-marketing-wf.js` | coordinate-steer / docs | docs + marketing page sync from release/issue state, claim-traced; owner-only copy -> follow-up tasks |
 | `deploy-app-hasna-com-wf.js` | build-and-deploy | FIRST-EVER deploy of the hasna/apps app to app.hasna.com, separate check-then-create lane: account resolution -> hasna-products (verified: no dedicated per-app account; org-admin list-accounts -> assume-role OrganizationAccountAccessRole -> sts ID assertion) -> provider-role table -> smallest-target creation -> [DEPLOY INTENT] -> deploy -> 2 independent live gates -> [DEPLOY-CONFIRM] |
-| \`fix-deepsec-wf.js\` | fix-and-ship | deep security audit + fix lane (deps 7-day pin, secrets tree+staged, app-code OWASP; P0/P1 fixers with 2-cycle cap; P2/P3 filed as todos follow-ups) |
-| \`audit-apps-gaps-wf.js\` | coordinate-steer / intake | whole-repo standards audit -> confirmed gaps filed as hasna/todos tasks with evidence comments (dedupe-first, never delete) |
-| \`verify-apps-qa-wf.js\` | review-verify | QA via the testers app + credential-zero E2B sandbox (rsync from task worktree), budget-capped, artifact-based PASS/FAIL; also integrable into the drains |
-| \`generate-apps-docs-marketing-wf.js\` | coordinate-steer / docs | docs + marketing page sync from release/issue state, claim-traced (every added sentence traces to an artifact); owner-only copy -> follow-up tasks |
-| \`deploy-app-hasna-com-wf.js\` | build-and-deploy | FIRST-EVER deploy of the hasna/apps app to app.hasna.com, separate check-then-create lane: account resolution -> hasna-products (verified: no dedicated per-app account; org-admin list-accounts -> assume-role OrganizationAccountAccessRole -> sts ID assertion) -> provider-role table -> smallest-target creation -> [DEPLOY INTENT] -> deploy -> 2 independent live gates -> [DEPLOY-CONFIRM] |
-]] |
 
 ## Standing-loop semantics (updated 2026-08-26)
 

@@ -449,7 +449,7 @@ async function runPass(pass) {
   log('pass ' + pass + ': intent=' + (intent && intent.posted ? intent.messageId : 'FAIL'));
   if (!intent || !intent.messageId) {
     log('INTENT NOT POSTED — structural gate: no upload, no confirm this pass');
-    continue
+    return { pass, check, accountId, roles, net, create, build, intent, deploy: null, verify: null, gate1: null, gate2: null, confirm: null, failrec: null, record: null, outcome: 'blocked' };
   }
 
   // PHASE 3b — upload/publish

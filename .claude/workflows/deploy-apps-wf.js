@@ -3,17 +3,6 @@
 // deploy-app-hasna-com-wf.js (first-ever, hasna-products account). Bounded pass loop
 // (MAX_PASSES) with agent-side idle (min(idleMinutes,300)+recheck); RECORDING V2 in
 // every agent prompt; registry name is `deploy-apps` (basename: `<registered>-wf.js`).
-// fleet <registered>-wf.js pattern. It is the documented exception to the
-// closed-verb workflow-name taxonomy: 'deploy' is NOT in the closed-verb set
-// (audit|fix|generate|migrate|monitor|research|review|triage|verify), so this
-// meta.name does NOT match the verb-first regex. Review ruling: NO rename to a
-// closed-verb name — the owner name stands, with this header note as the
-// exemption record (the authoring gate in build-and-ship-workflows-app-wf.js
-// documents the same exemption, item (b) of the PRE-PR AUTHORING GATE).
-// Renamed from 'deploy-apps' (2026-08-26). FOLLOW-UP NOTES (docs-only, NOT
-// touchable here): README.md's workflow rows and propagate-lanes-to-monorepos-wf.js
-// prose still name this lane 'deploy-apps' — rename them in the follow-up task;
-// agent-failure-hardening.test.js now references the new basename.
 export const meta = {
   name: 'deploy-apps',
   description: 'Deploy @hasna/* app services (hasna/apps monorepo members) to the oss-fleet-prod ECS surface, drain-to-zero. Surveys deployable services (serve surfaces + Dockerfile + published/ECS-deployed version), verifies the provider-role table per service (source/registry/ECS surface/database/route), executes the ECS deployment convention (build native arm64 -> ECR push sha-tagged -> migrate one-shot -> register task def -> update-service -> wait stable -> live HTTPS test), re-surveys each pass and loops while services remain deployable (hard bound MAX_PASSES), fails closed where provider roles are unverified. CORRECTED 2026-08-24: the internalapps-prod-host docker-compose convention is LEGACY — all services run as ECS Fargate in oss-fleet-prod (measured: 32 services, virgilius lane deploys via task defs). HARDENED 2026-08-25 (owner-directed harden-lanes-review-gates, temporary): after each service live test and BEFORE any [DEPLOY-CONFIRM], TWO independent agents (deploy-gate-1/deploy-gate-2) live-verify the DEPLOYED service non-destructively — every route (/health /ready /version 200 + identity + version match, one business read); [DEPLOY-CONFIRM] is posted only when BOTH return GO, otherwise the service is recorded DEPLOY UNVERIFIED with a filed todos task and is never confirmed. Owner directive 2026-08-20.',
