@@ -1,6 +1,6 @@
 {
   "name": "@hasna/automations",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Deterministic automation control plane and daemon for Hasna open-source apps",
   "type": "module",
   "main": "./dist/index.js",
@@ -106,10 +106,10 @@
     "postgres": "^3.4.7"
   },
   "peerDependencies": {
-    "@hasna/actions": "^0.2.1"
+    "@hasna/actions": "^0.2.4"
   },
   "devDependencies": {
-    "@hasna/actions": "^0.2.1",
+    "@hasna/actions": "^0.2.4",
     "@types/bun": "latest",
     "typescript": "^5.7.3"
   },
