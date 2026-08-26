@@ -1214,7 +1214,7 @@
         "notes-server": "./index.mjs",
       },
       "dependencies": {
-        "hono": "^4.6.0",
+        "hono": "4.13.3",
       },
     },
     "apps/orgs": {

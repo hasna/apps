@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { REPOSITORY_ROOT } from "./helpers";
 
 /**
@@ -20,7 +20,11 @@ import { REPOSITORY_ROOT } from "./helpers";
  * A caret range (`^4.6.0`..`^4.12.7`) admits both window releases, so a fresh
  * resolution drifts onto the violation; the exact pin format (`4.13.3`) is
  * what keeps the declared range stable on the quarantine boundary. The fix
- * pins every `hono` declaration in apps/<app>/package.json to `4.13.3`.
+ * pins every `hono` declaration to `4.13.3` — and the scan is RECURSIVE:
+ * a nested package (apps/notes/server) and a connector definition
+ * (apps/connectors/connectors/clickbank) are resolution surfaces of their own
+ * and were missed by the flat one-deep scan of apps/<dir>/package.json
+ * (review finding on dep-hono-1).
  *
  * The forbidden list is hardcoded (published versions + timestamps above) —
  * this suite is deliberately offline/hermetic and cannot probe the registry.
@@ -69,6 +73,27 @@ function satisfiesRange(range: string, version: string): boolean {
 
 const FORBIDDEN = ["4.13.4", "4.13.5"];
 
+// Every package.json under apps/, recursively. A flat apps/<dir> scan
+// silently excludes nested resolution surfaces; the shallow one was the
+// review finding on this lane (notes/server and clickbank both sit deeper).
+const SKIP_DIRS = new Set(["node_modules", ".test-home", ".git", "dist"]);
+
+function collectPackageManifests(root: string): string[] {
+  const found: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) visit(path);
+      } else if (entry.isFile() && entry.name === "package.json") {
+        found.push(path);
+      }
+    }
+  };
+  visit(root);
+  return found.sort();
+}
+
 describe("third-party quarantine pins", () => {
   test("the range matcher discriminates (prove-it-can-fail arms)", () => {
     // Positive arms: the shapes that must fire on window releases.
@@ -86,9 +111,7 @@ describe("third-party quarantine pins", () => {
   test("no app hono range admits quarantine-window releases (dep-hono-1)", () => {
     const appsRoot = join(REPOSITORY_ROOT, "apps");
     const offenders: string[] = [];
-    for (const dir of readdirSync(appsRoot).sort()) {
-      const manifestPath = join(appsRoot, dir, "package.json");
-      if (!existsSync(manifestPath)) continue;
+    for (const manifestPath of collectPackageManifests(appsRoot)) {
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
       for (const section of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const) {
         const deps = manifest[section];
@@ -97,7 +120,7 @@ describe("third-party quarantine pins", () => {
         if (typeof range !== "string") continue;
         for (const version of FORBIDDEN) {
           if (satisfiesRange(range, version)) {
-            offenders.push(`apps/${dir} ${section}[hono] = "${range}" admits hono@${version} (quarantine window)`);
+            offenders.push(`${relative(REPOSITORY_ROOT, manifestPath)} ${section}[hono] = "${range}" admits hono@${version} (quarantine window)`);
           }
         }
       }
