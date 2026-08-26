@@ -4,6 +4,9 @@
 
 ### Patch Changes
 
+- 1ddfc86: Regenerate apps/skills/bun.lock standalone to cover declared deps (yaml@2.9.0 resolution edge) and add a regression test asserting every declared dependency resolves in the standalone lockfile (O15-00754).
+- 37fe056: Scrub fleet-internal references from the oss-app-two-backend-storage recipe so the public corpus carries no internal references and every recipe carries an explicit public classification (review P1).
+- aa9f925: Fix the publish-gate timeout on the docker-build-context test (test-only change matching the sanctioned pattern).
 - 38257b7: New `skills sync --station <id>` and `skills hydrate` commands (station snapshot + hydrate): snapshot portable skill files from the fleet agent homes into `resources/<station>/skills/` with a sync-manifest, then dedupe and hydrate the canonical corpus cache.
 - 457bc60: Hydration now verifies each sync-manifest-recorded sha256 against the candidate's actual bytes before winner selection. A mismatch is `MANIFEST_HASH_MISMATCH` and refuses the whole hydration (nothing written); a manifest record is never treated as a hash match by presence alone, so stale or tampered snapshot content cannot be installed into the canonical cache.
 
