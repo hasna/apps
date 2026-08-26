@@ -1,7 +1,7 @@
 import { DEPLOYMENT_SCHEMA_IDS } from "./deployment";
 import { z } from "zod";
 export declare const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-export declare const CONTRACTS_PACKAGE_VERSION = "0.14.2";
+export declare const CONTRACTS_PACKAGE_VERSION = "0.14.1";
 export declare const SCHEMA_IDS: {
     readonly actorRef: "hasna.actor_ref.v1";
     readonly resourceRef: "hasna.resource_ref.v1";

@@ -122,7 +122,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1083.0",
-    "@hasna/contracts": "0.14.2",
+    "@hasna/contracts": "0.14.1",
     "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "2.9.1",

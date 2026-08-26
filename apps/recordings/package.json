@@ -84,7 +84,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@hasna/contracts": "0.14.2",
+    "@hasna/contracts": "0.14.1",
     "@hasna/events": "0.1.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
