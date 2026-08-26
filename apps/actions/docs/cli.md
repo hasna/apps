@@ -12,7 +12,7 @@ actions --help
 
 | Option | Behavior |
 | --- | --- |
-| `--dir <path>` | Use this data directory instead of `HASNA_ACTIONS_DIR`, `HASNA_ACTIONS_HOME`, or `~/.hasna/actions`. |
+| `--dir <path>` | Use this data directory instead of `HASNA_ACTIONS_DIR`, `HASNA_ACTIONS_HOME`, the adopted XDG data home (via `@hasna/paths`), or `~/.hasna/actions`. |
 | `-V, --version` | Print the package CLI version. |
 | `-h, --help` | Print help for the current command. |
 

@@ -9,11 +9,16 @@ The default database is:
 ~/.hasna/actions/actions.db
 ```
 
-Directory precedence is an explicit constructor or CLI `--dir` override,
-`HASNA_ACTIONS_DIR`, `HASNA_ACTIONS_HOME`, then `~/.hasna/actions`. SQLite
-initialization creates the data directory with mode `0700` and the database
-file with mode `0600` on a best-effort basis. Directories or volumes that reject
-`chmod` remain usable.
+The data home is resolved through `@hasna/paths`. Directory precedence is an
+explicit constructor or CLI `--dir` override, `HASNA_ACTIONS_DIR`,
+`HASNA_ACTIONS_HOME`, then the XDG data home once adopted (the store is migrated
+to `~/.local/share/hasna/actions` on Linux / `~/Library/Application
+Support/Hasna/actions` on macOS, or the operator sets `HASNA_DATA_HOME`), and
+finally the legacy `~/.hasna/actions` default. Until the XDG home is adopted, the
+legacy default stays the effective data home so an existing store never becomes
+invisible on upgrade. SQLite initialization creates the data directory with mode
+`0700` and the database file with mode `0600` on a best-effort basis.
+Directories or volumes that reject `chmod` remain usable.
 
 On first open, the SQLite store imports any legacy JSON records from:
 
