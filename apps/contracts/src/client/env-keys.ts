@@ -41,3 +41,17 @@ export function credentialOverrideEnvKey(name: string): string {
 
 /** The global profile pointer. Selects WHICH identity, never carries a secret. */
 export const CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
+
+/**
+ * The deliberate secrets-vault pointer key.
+ *
+ * `HASNA_<APP>_API_KEY_REF` names a vault ITEM KEY, never a credential value.
+ * When set, the transport resolves it through the @hasna/secrets SDK at request
+ * time, and a vault that cannot be reached is a TERMINAL failure — the pointer
+ * is a deliberate selection and never falls through to a literal, an env var,
+ * or a local store. The literal `HASNA_<APP>_API_KEY` tiers never accept a
+ * vault path (enforced by the resolver's literal guard).
+ */
+export function credentialPointerEnvKey(name: string): string {
+  return `HASNA_${envToken(name)}_API_KEY_REF`;
+}

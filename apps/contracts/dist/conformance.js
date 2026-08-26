@@ -16465,6 +16465,9 @@ function credentialOverrideEnvKey(name) {
   return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
 }
 var CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
+function credentialPointerEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_REF`;
+}
 
 // src/credential-seam.ts
 var SKIP_DIRS2 = new Set([

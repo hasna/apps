@@ -811,7 +811,7 @@ describe("credential resolution at the seam", () => {
   }
 
   function writeKeyFile(home: string, app: string, key: string): string {
-    const dir = join(home, ".hasna", "cloud");
+    const dir = join(home, ".hasna", "fleet-env");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${app}.env`);
     writeFileSync(path, `HASNA_${app.toUpperCase()}_API_KEY=${key}\n`);
@@ -834,7 +834,7 @@ describe("credential resolution at the seam", () => {
     });
 
     expect(r.transport).toBe("http");
-    expect(r.apiKeyTier).toBe("disk");
+    expect(r.apiKeyTier).toBe("fleet-env");
     expect(r.apiKeySource).toBe(diskPath);
   });
 
@@ -1050,7 +1050,7 @@ describe("credential resolution at the seam", () => {
 
     expect(r.transport).toBe("http");
     expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
-    expect(r.apiKeyTier).toBe("disk");
+    expect(r.apiKeyTier).toBe("fleet-env");
     expect(r.apiKeySource).toBe(diskPath);
     expect(r.misconfigured).toBe(false);
     expect(JSON.stringify(r)).not.toContain("disk-key");
@@ -1083,7 +1083,7 @@ describe("credential resolution at the seam", () => {
     });
 
     expect(r.transport).toBe("http");
-    expect(r.apiKeyTier).toBe("disk");
+    expect(r.apiKeyTier).toBe("fleet-env");
     expect(r.apiKeySource).toBe(diskPath);
   });
 
@@ -1188,20 +1188,20 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     return home;
   }
 
-  /** Write `~/.hasna/cloud/<app>.env` — the first on-disk layer. */
+  /** Write the PRIMARY fleet-env layer, `~/.hasna/fleet-env/<app>.env`. */
   function writeCloudEnv(home: string, app: string, body: string): string {
-    const dir = join(home, ".hasna", "cloud");
+    const dir = join(home, ".hasna", "fleet-env");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${app}.env`);
     writeFileSync(path, body);
     return path;
   }
 
-  /** Write `~/.config/hasna/<app>-cloud.env` — the second on-disk layer. */
+  /** Write the config tier under its final name, `~/.config/hasna/<app>.env`. */
   function writeConfigEnv(home: string, app: string, body: string): string {
     const dir = join(home, ".config", "hasna");
     mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${app}-cloud.env`);
+    const path = join(dir, `${app}.env`);
     writeFileSync(path, body);
     return path;
   }
@@ -1303,7 +1303,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     expect(r.warning).toBeTruthy();
     expect(r.apiKeyPresent).toBe(false);
     // The warning must name the file it consulted, and never a key value.
-    expect(r.warning!).toContain(join(home, ".hasna", "cloud", "todos.env"));
+    expect(r.warning!).toContain(join(home, ".hasna", "fleet-env", "todos.env"));
   });
 
   test("an unusable URL on disk is misconfigured rather than silently ignored", () => {
@@ -1377,7 +1377,7 @@ describe("transport selection is explicit configuration, never pointer presence"
   }
 
   function writeUrlFile(h: string, app: string, url: string): string {
-    const dir = join(h, ".hasna", "cloud");
+    const dir = join(h, ".hasna", "fleet-env");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${app}.env`);
     writeFileSync(
