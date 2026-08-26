@@ -157,6 +157,39 @@ export async function fetchAdmittedVersions(dep: string, spec: string): Promise<
   }
 }
 
+/**
+ * Nested dashboards — apps/<name>/dashboard. These are private (private: true),
+ * invisible to the publishable-member census above, and NOT workspace
+ * members (workspaces: ["apps/*"]), so no workspace lockfile pins their
+ * resolution: each dashboard installs standalone and a dashboard with no
+ * committed bun.lock resolves its declared ranges fresh on every install.
+ * That is the exact drift the quarantine gate exists to close
+ * (dep-connectors-dashboard-1, measured 2026-08-27):
+ *
+ *   - apps/connectors/dashboard, apps/hooks/dashboard and
+ *     apps/telephony/dashboard declare "^19.0.0"; apps/instructions/dashboard
+ *     declares "^19.2.3" — all four admit @types/react-dom 19.2.5
+ *     (published 2026-08-23, inside the 604800s window) — and none commits
+ *     a bun.lock.
+ *   - A nested dashboard that DOES commit a bun.lock has its resolution
+ *     pinned by that lock and is outside this check's vulnerable path.
+ */
+export function nestedDashboards(): Array<{ member: string; spec: string }> {
+  const out: Array<{ member: string; spec: string }> = [];
+  for (const app of fs.readdirSync(APPS_DIR, { withFileTypes: true })) {
+    if (!app.isDirectory()) continue;
+    const dashDir = path.join(APPS_DIR, app.name, "dashboard");
+    const pkgPath = path.join(dashDir, "package.json");
+    if (!fs.existsSync(pkgPath)) continue;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as Record<string, unknown>;
+    const spec = declaredSpec(pkg);
+    if (!spec) continue;
+    if (fs.existsSync(path.join(dashDir, "bun.lock"))) continue; // resolution locked
+    out.push({ member: `${app.name}/dashboard`, spec });
+  }
+  return out;
+}
+
 describe("standard-adherence: quarantine admission (7-day minimumReleaseAge window)", () => {
   test("self-test: a range admitting a window-fresh version fires", () => {
     const nowMs = Date.parse("2026-08-26T12:00:00Z");
@@ -298,5 +331,47 @@ describe("standard-adherence: quarantine admission (7-day minimumReleaseAge wind
       console.info(`[standard] quarantine-window admissions (HARD):\n${lines.join("\n")}`);
     }
     expect(violations, `members whose declared spec admits a quarantine-window release:\n${lines.join("\n")}`).toEqual([]);
+  }, 120_000);
+
+  test("no lockfile-less nested dashboard declares @types/react-dom admitting a version younger than the 7-day quarantine window (HARD)", async () => {
+    const declarations = nestedDashboards();
+    if (declarations.length === 0) {
+      console.info("[SKIP quarantine-admission] no lockfile-less nested dashboard declares @types/react-dom; nothing to assert");
+      return;
+    }
+
+    const times = await fetchPublishedTimes(DEPENDENCY);
+    if (times === null) {
+      console.info(`[SKIP quarantine-admission] registry unreachable for ${DEPENDENCY}; offline/network route`);
+      return;
+    }
+
+    const nowMs = Date.now();
+    const violations: QuarantineAdmission[] = [];
+    const admittedCache = new Map<string, string[] | null>();
+    for (const decl of declarations) {
+      let admitted = admittedCache.get(decl.spec);
+      if (admitted === undefined) {
+        admitted = await fetchAdmittedVersions(DEPENDENCY, decl.spec);
+        if (admitted === null) {
+          console.info(`[SKIP quarantine-admission] registry unreachable for ${DEPENDENCY}@${decl.spec}; offline/network route`);
+          return;
+        }
+        admittedCache.set(decl.spec, admitted);
+      }
+      const hit = findQuarantineAdmissions(decl.member, decl.spec, admitted, times, nowMs);
+      if (hit) violations.push(hit);
+    }
+
+    const lines = violations.map(
+      (v) =>
+        `  ${v.member} declares "${v.spec}" for ${v.dependency}; admitted window-fresh version(s): ` +
+        `${v.freshVersions.map((x) => `${x} (${times[x]})`).join(", ").trim() || v.freshVersions.join(", ")} — ` +
+        `pin the pre-window version exactly and regenerate a dashboard bun.lock`,
+    );
+    if (lines.length > 0) {
+      console.info(`[standard] quarantine-window admissions in nested dashboards (HARD):\n${lines.join("\n")}`);
+    }
+    expect(violations, `lockfile-less nested dashboards whose declared spec admits a quarantine-window release:\n${lines.join("\n")}`).toEqual([]);
   }, 120_000);
 });

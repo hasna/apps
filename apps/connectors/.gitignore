@@ -5,8 +5,8 @@ node_modules/
 dist/
 bin/
 
-# Bun
-bun.lock
+# Bun (root workspace member only — the standalone dashboard commits its own lock)
+/bun.lock
 # dep-connectors-aws-1: the aws connector's lockfile is tracked so the
 # standalone install's @aws-sdk resolution is frozen, not re-resolved.
 !connectors/aws/bun.lock
