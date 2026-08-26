@@ -32,10 +32,26 @@
  * dep-connectors-1 (measured 2026-08-27): @types/bun 'latest' and every ^1.x
  * caret range across the member manifests resolve to 1.4.0 (published
  * 2026-08-20T19:46:32.487Z), inside the window; the pinned remedy is the
+ * dep-connectors-1 (measured 2026-08-27): @types/bun 'latest' and every ^1.x
+ * caret range across the member manifests resolve to 1.4.0 (published
+ * 2026-08-20T19:46:32.487Z), inside the window; the pinned remedy is the
  * monorepo override version 1.3.14, exact — checked by this gate now.
  *
+ * Why this extends (dep-notes-2): the same shape was measured on
+ * @electric-sql/pglite 2026-08-26 — 0.5.7 published 2026-08-23T16:46:21Z and
+ * 0.5.8 published 2026-08-26T18:40:08Z, both inside the window; apps/notes and
+ * apps/knowledge both declared `"@electric-sql/pglite": "^0.5.4"`, which
+ * admits them. The version is absent from minimumReleaseAgeExcludes.
+ * Remediation was the same doctrine: an exact pre-window pin (0.5.4,
+ * published 2026-06-27) in both member manifests. 0.5.5 (2026-08-13) is also
+ * pre-window and was tried first, but under bun 1.3.14 the notes PostgreSQL
+ * suite (in-process PGlite) exits 99 after a 0-fail summary with it — a
+ * runner-level regression — so the pin stayed on the version main already
+ * runs green (0.5.4).
+ *
  * SCOPE: this check scans every publishable member's direct declaration of
- * @types/react-dom, @smithy/core and @types/bun and fires when the specifier
+ * @types/react-dom, @smithy/core, @types/bun and @electric-sql/pglite and
+ * fires when the specifier
  * admits ANY version published within the last 604800 seconds (measured at
  * run time). Members declaring 18.x @types/react-dom ranges stay silent — no
  * 18.x version is younger than the window.
@@ -51,7 +67,7 @@ import * as path from "node:path";
 import { APPS_DIR, publishableMembers } from "./census";
 
 export const QUARANTINE_WINDOW_SECONDS = 604800; // fleet minimumReleaseAge, 7 days
-export const DEPENDENCIES = ["@types/react-dom", "@smithy/core", "@types/bun"] as const;
+export const DEPENDENCIES = ["@types/react-dom", "@smithy/core", "@types/bun", "@electric-sql/pglite"] as const;
 export type CheckedDependency = (typeof DEPENDENCIES)[number];
 const NETWORK_FAILURE = /EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ETIMEDOUT|ERR_SOCKET_TIMEOUT|ENOTFOUND/i;
 
