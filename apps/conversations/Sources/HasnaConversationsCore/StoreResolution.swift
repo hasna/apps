@@ -47,8 +47,11 @@ import Foundation
 /// Canonical fleet config for the conversations client. Written by the fleet
 /// provisioning path and read by the CLI; the app must not invent its own
 /// location and must never embed a URL or key of its own.
+/// P1-B (todos 12e26c2b): retargeted to the PRIMARY fleet credential location
+/// `~/.hasna/fleet-env/conversations.env`; the legacy `~/.hasna/cloud/...`
+/// location is deprecated (removed after 2026-10-01).
 public let fleetCloudEnvPath = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".hasna/cloud/conversations.env").path
+    .appendingPathComponent(".hasna/fleet-env/conversations.env").path
 
 /// Distinguishes "no such file" from "present but unreadable". Collapsing those
 /// two makes the error message name the wrong cause — an unreadable but perfectly

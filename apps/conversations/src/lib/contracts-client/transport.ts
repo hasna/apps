@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from "node:fs";
 // Client-side transport resolver for the Hasna Service Contract v1.
 //
 // THIS IS THE B2 CORE FIX. Historically, a client was told to use the hosted
@@ -105,17 +106,92 @@ export interface ClientTransportResolution {
   warning: string | null;
 }
 
+/** The PRIMARY fleet credential dir — `~/.hasna/fleet-env/<app>.env`. */
+const FLEET_CREDENTIAL_DIR = "fleet-env";
+
+/**
+ * Read the PRIMARY fleet-env disk tier (P1-B, todos 12e26c2b). The legacy
+ * `~/.hasna/cloud/<app>.env` location is deprecated (removed after 2026-10-01);
+ * the fleet-env file is re-read on every call so a rotation heals without a
+ * new process. Values are never logged; only key NAMES are surfaced.
+ */
+function readFleetEnvFile(name: string, env: Env): Map<string, string> | null {
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
+  if (!home) return null;
+  const safeSlug = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(name);
+  if (!safeSlug) return null;
+  const path = `${home}/.hasna/${FLEET_CREDENTIAL_DIR}/${name}.env`;
+  let text: string;
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile() || stat.size > 64 * 1024) return null;
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  const values = new Map<string, string>();
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith("#")) continue;
+    const withoutExport = line.startsWith("export ") ? line.slice("export ".length).trim() : line;
+    const equals = withoutExport.indexOf("=");
+    if (equals <= 0) continue;
+    const key = withoutExport.slice(0, equals).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let value = withoutExport.slice(equals + 1).trim();
+    const quote = value[0];
+    if (quote === '"' || quote === "'") {
+      if (value.length < 2 || !value.endsWith(quote)) continue;
+      value = value.slice(1, -1);
+    }
+    if (value.length === 0) continue;
+    values.set(key, value);
+  }
+  return values;
+}
+
 /**
  * Resolve how a client should reach an app's data given the environment.
  *
  * The API url + key pair selects the hosted API; anything else selects the
  * local store. A partial pair is ambiguous and is flagged `misconfigured`
  * rather than resolved to either store silently.
+ *
+ * P1-B: when the environment is fully silent, the PRIMARY fleet-env disk tier
+ * (`~/.hasna/fleet-env/<name>.env`) is consulted before falling to local —
+ * the same order the @hasna/contracts resolver uses. The legacy
+ * `~/.hasna/cloud/<name>.env` location is deprecated (removed after
+ * 2026-10-01).
  */
 export function resolveClientTransport(name: string, env: Env = process.env): ClientTransportResolution {
   const keys = clientTransportEnvKeys(name);
-  const urlHit = firstEnv(env, keys.apiUrlKeys);
-  const keyHit = firstEnv(env, keys.apiKeyKeys);
+  let urlHit = firstEnv(env, keys.apiUrlKeys);
+  let keyHit = firstEnv(env, keys.apiKeyKeys);
+  let diskSource: string | null = null;
+
+  // P1-B disk tier: consult the fleet-env file only when the environment is
+  // fully silent about the URL, so an explicit env always wins over disk.
+  if (!urlHit && !keyHit) {
+    const disk = readFleetEnvFile(name, env);
+    if (disk) {
+      const home = env.HOME?.trim() || env.USERPROFILE?.trim() || "<HOME>";
+      diskSource = `${home}/.hasna/${FLEET_CREDENTIAL_DIR}/${name}.env`;
+      for (const urlKey of keys.apiUrlKeys) {
+        const v = disk.get(urlKey)?.trim();
+        if (v) {
+          urlHit = { key: diskSource, value: v };
+          break;
+        }
+      }
+      for (const keyKey of keys.apiKeyKeys) {
+        const v = disk.get(keyKey)?.trim();
+        if (v) {
+          keyHit = { key: diskSource, value: v };
+          break;
+        }
+      }
+    }
+  }
 
   const warnings: string[] = [];
 
