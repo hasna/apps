@@ -6,11 +6,18 @@ created on first use. Installing the package does not modify a home directory.
 The CLI, MCP entrypoint, and SDK do not initialize the store unless a command
 or caller creates it (the CLI and MCP entrypoint do not open it today).
 
-The package's only canonical data root is:
+The data root is resolved through `@hasna/paths`. The legacy canonical root
+remains:
 
 ```text
 ~/.hasna/banking
 ```
+
+and stays the effective data home until the store has actually been migrated to
+the XDG data home (`~/.local/share/hasna/banking` on Linux;
+`~/Library/Application Support/Hasna/banking` on macOS) or the operator sets the
+data-kind override `HASNA_DATA_HOME`, so an existing local store never becomes
+invisible on upgrade.
 
 The legacy roots `~/.banking` and `~/.open-banking` (the retired `open-`-prefixed name) are not operational read
 paths. The package never copies, moves, rewrites, or deletes them. There is no
@@ -25,7 +32,8 @@ and `.open-banking` are not runtime paths and are not ignored by this
 repository.
 
 The exported SQLite development store defaults to a file-backed database at
-`~/.hasna/banking/banking.db` beneath the canonical root above, created on
+`banking.db` beneath the effective data root above (the legacy
+`~/.hasna/banking/banking.db` until the resolver home is adopted), created on
 first use with mode `0700`. `HASNA_BANKING_HOME` overrides the root, and an
 explicit `path` passed to `createSqliteDevStore` wins over both; pass
 `":memory:"` for an in-memory store. A caller-supplied path and its lifecycle
