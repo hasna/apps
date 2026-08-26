@@ -306,11 +306,31 @@ export function isCursorGlobalAuthorityPath(path: string): boolean {
  * opens with a `---` frontmatter block is stamped AFTER the closing `---`,
  * matching how the package's own session-render cursor files place their
  * managed marker; plain content without frontmatter is stamped at the top.
- * Content that already carries a valid marker anywhere is returned unchanged
- * (idempotent re-apply).
+ *
+ * Idempotency is hash-correctness-based, not presence-based: content whose
+ * existing marker's hash still matches its current payload is returned
+ * unchanged (re-apply no-op), while content carrying a STALE marker — the
+ * payload changed after stamping, e.g. a template re-render that expanded
+ * {{VAR}} placeholders — is re-stamped in place with the hash of the current
+ * payload. Presence-based idempotency propagated an invalid stamp forever:
+ * the observer recomputed the payload hash, reported
+ * marker-integrity-mismatch, and every re-apply reproduced the same invalid
+ * file, leaving the cursor project render blocked with no repair path
+ * (H-00154, station01 ~/.cursor/rules/hasna-global.mdc).
  */
 export function stampCursorGlobalAuthorityMarker(content: string): string {
-  if (CURSOR_GLOBAL_AUTHORITY_MARKER_PATTERN.test(content)) return content;
+  const existing = content.match(CURSOR_GLOBAL_AUTHORITY_MARKER_PATTERN);
+  if (existing) {
+    const markerLine = existing[0];
+    const index = existing.index ?? content.indexOf(markerLine);
+    const payload = markerPayload(content, markerLine, index);
+    if (sha256(payload) === existing[1]!.slice("sha256:".length)) {
+      return content;
+    }
+    const digest = sha256(payload);
+    const freshMarkerLine = `<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=sha256:${digest} -->`;
+    return content.slice(0, index) + freshMarkerLine + content.slice(index + markerLine.length);
+  }
   const digest = sha256(content);
   const markerLine = `<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=sha256:${digest} -->`;
   const frontmatter = content.match(CURSOR_GLOBAL_AUTHORITY_FRONTMATTER_PATTERN)?.[0];
