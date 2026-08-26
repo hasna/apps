@@ -510,7 +510,7 @@ Expose the service through an HTTPS reverse proxy or load balancer with edge
 rate limits, the 1 MiB request limit, bounded upstream timeouts, and network
 rules that keep Postgres and the container port private. The generated client
 rejects remote plaintext HTTP. Self-hosted sends require an idempotency key and
-support at most five inline attachments (512 KiB each, 768 KiB total);
+support at most five inline attachments (10 MiB each, 20 MiB total);
 scheduled sends are not implemented by the self-hosted API. Mailbox read,
 star, archive, label, delete, bulk-by-explicit-id, and authenticated attachment
 retrieval are supported. Outbound rows carrying a send idempotency key are a

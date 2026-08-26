@@ -355,8 +355,8 @@ strings are length-bounded and control characters are rejected before storage.
 
 Emission and storage rules:
 
-- a grant-aware resolver commits grant creation and rotation events in the same
-  transaction as the state change; `secret.rotated` links opaque version ids only
+- grant creation and rotation commit their event in the same transaction as the
+  state change; `secret.rotated` links opaque version ids only
 - allowed resolution is followed by use under the same `correlation_id`; a
   resolution may have no use, but a use may not exist without a resolution
 - an allowed path fails closed if its audit event cannot be persisted before the

@@ -128,6 +128,8 @@ requirements explicitly document local provider use.
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
+| `skills sync --station <id>` | | Per-station snapshot mode: snapshot the installed skill homes into `resources/<station>/skills` with a v3 sync-manifest (dry-run by default; `--populate` writes) |
+| `skills hydrate --station <id>` | | Restore the canonical corpus cache from a reviewed per-station snapshot (dry-run by default; `--apply` writes) |
 | `skills validate <name>` | | Check a skill's directory structure |
 | `skills schedule add <skill> <cron>` | | Set up recurring skill execution |
 | `skills schedule list` | | List all schedules (enabled/disabled/last run) |
