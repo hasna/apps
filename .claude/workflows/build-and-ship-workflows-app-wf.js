@@ -1,9 +1,19 @@
+// Repo root (args-driven, 2026-08-26): args.repo overrides; default is the current
+// clones layout (~/.hasna/repos/clones/hasna/apps). The legacy
+// /home/hasna/.hasna/repos/clones/hasna/apps path is retired.
+const MONOREPO = (args && args.repo) || '~/.hasna/repos/clones/hasna/apps'
+
+// hasna/apps todos project id (args-driven, 2026-08-26): args.project overrides;
+// the standing hasna/apps project id is the default. Every use below
+// interpolates ${APPS_PROJECT} — no hardcoded id.
+const APPS_PROJECT = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
+
 export const meta = {
   name: 'build-and-ship-workflows-app',
-  description: 'One-off build lane (owner-directed 2026-08-25, not durable): validate the hasna/workflows plan, file it in todos, build the @hasna/workflows app in the hasna/apps monorepo with a fix loop until green, verify it live locally, publish to npm, ship to oss-fleet-prod, then loop the full acceptance sweep until every command works. While-loops used per owner amendment. Plan file: /tmp/workflows-plan-final.md',
+  description: 'One-off build lane (owner-directed 2026-08-25, not durable): validate the hasna/workflows plan, file it in todos, build the @hasna/workflows app in the hasna/apps monorepo with a fix loop until green, verify it live locally, publish to npm, ship to oss-fleet-prod, then loop the full acceptance sweep until every command works. ALSO builds the 5 standing fleet workflow definitions (fix-deepsec, audit-apps-gaps, verify-apps-qa, generate-apps-docs-marketing, deploy-app-hasna-com) with authoring-skill validation (basename==meta.name, verb-first regex, no import(), no banned tokens) plus ONE adversarial review agent before each PR. While-loops used per owner amendment. Plan file: /tmp/workflows-plan-final.md',
   phases: [
     { title: 'PlanValidate', detail: 'read the plan, verify the build contract against repo laws + SDK pins' },
-    { title: 'TodosFile', detail: 'create the todos plan + Build/Publish/Ship tasks in project 3bbc22e0' },
+    { title: 'TodosFile', detail: `create the todos plan + Build/Publish/Ship tasks in project ${APPS_PROJECT}` },
     { title: 'Build', detail: 'worktree scaffold + slice implementation, fix-loop until suite + check green' },
     { title: 'LocalVerify', detail: 'CLI live test, control surfaces, -serve live run, sdk import, interrupted-run resume' },
     { title: 'Publish', detail: 'release review, intent, npm publish, two-sided verify, install + smoke' },
@@ -13,12 +23,24 @@ export const meta = {
   ],
 }
 
-const MONOREPO = '/home/hasna/.hasna/repos/clones/hasna/apps'
-const PLAN = '/home/hasna/.hasna/repos/clones/hasna/apps/.claude/workflows/workflows-plan-final.md'
-const APPS_PROJECT = '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
+const PLAN = MONOREPO + '/.claude/workflows/workflows-plan-final.md'
 const CHANNEL = 'board'
 const GITPUB = 'git-publishing'
 const GITDEP = 'git-deployments'
+
+// RECORDING V2 (owner requirement): every workflow agent records while working.
+// Interpolated into every agent prompt below.
+const RECORDING = `
+RECORD WHILE WORKING (required, every workflow agent):
+(1) conversations: claim/post to #hasna-apps at start (create via 'conversations channel create hasna-apps' if missing), milestone after each phase, done at the end; deploy lane additionally posts [DEPLOY INTENT] to git-deployments BEFORE and [DEPLOY-CONFIRM] in-thread AFTER with the 2-live-gate GO.
+(2) todos: one task per work item (todos add --project hasna-apps), todos comment with evidence as you go, status start/complete only with proof (merged PR / verified live).
+(3) mementos: mementos save key apps-<topic> on every non-obvious root cause/decision.
+(4) knowledge: on durable doctrine, file a follow-up task 'KNOWLEDGE: <item>' for the knowledge lane (never silent add).
+(5) skills: on a repeated procedure, file 'SKILL: <name>' follow-up.
+(6) instructions: only when the workflow itself changes rules (then file 'INSTRUCTIONS: <config>').
+Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done.
+NEVER print a credential value.
+`
 
 const CONST = `
 You are a phase of the build-and-ship-workflows-app workflow (owner-directed 2026-08-25, one-off). Mission: build @hasna/workflows (the universal graph workflow app) in the hasna/apps monorepo, publish it, ship it, and loop until every command works. Final text = machine-readable JSON.
@@ -27,7 +49,8 @@ Non-negotiable rules (all agents):
 - ${MONOREPO} is READ/context only. Work in task worktrees ~/.hasna/repos/worktrees/apps/build-<slice> from origin/main (fetch first). NEVER push to main. Commits carry 'Agent: build-workflows-<your-role>' (the ONLY attribution line). PR-first landing.
 - No secrets: never print/capture/commit credential values in any encoding; consume ONLY via 'secrets exec <key> --as VAR -- <cmd>'. No internal-infra strings in artifacts. Capture path: redirect to files, read both + $?, never pipe large reads. Paste literal output lines.
 - Gates before every commit/push: staged secrets scan rc=0 with real bytes; bun tooling/ci/check-secrets.ts --base origin/main rc=0; check-names rc=0.
-- Record as you go: todos comments on the plan's tasks, posts to #${CHANNEL}. English. Distinguish measured vs inferred; state what you did not check.
+${RECORDING}
+- English. Distinguish measured vs inferred; state what you did not check.
 - NEVER run bash -x / set -x (trace mode) — the shell profile sources ~/.hasna/cloud/*.env and trace echoes credential lines into the transcript.
 - The while loop IS in v1 (owner amendment 2026-08-25): the graph language supports a while node; this workflow's own loops iterate with declared bounds and exit only on a verified green state.
 - MAX 4 SUB-AGENTS PER STEP (owner 2026-08-25): no phase spawns more than 4 agents; a phase that needs more splits into sub-steps. Current phases use 1-2; never raise the cap.
@@ -190,8 +213,45 @@ const PANEL_SCHEMA = {
   },
 }
 
+// --- safeAgent hardening (O15-00732) ---
+// A subagent that completes WITHOUT calling StructuredOutput (prose reply) makes
+// agent() throw; an uncaught throw kills the whole run (measured 2026-08-25:
+// wf_b4894f28-d61 died after 37 agents / 2.7h — and 2026-08-26 on
+// wf_a3a29325-194, where a schema'd prompt returned a truthy prose string).
+// safeAgent catches, logs, and returns null so the run continues through the
+// existing null-guards; the failure flag makes the next dispatched agent sleep
+// 300s first (the established idle-wait primitive) instead of hot-looping.
+let agentFailed = false
+const safeAgent = async (prompt, opts) => {
+  try {
+    const r = await agent(prompt, opts)
+    // A prose reply can come back as the agent's RAW RESULT (a string) instead
+    // of the schema'd object — the SAME failure class as the throw.
+    if (opts && opts.schema && (typeof r !== 'object' || r === null)) {
+      agentFailed = true
+      const label = (opts && (opts.label || opts.phase)) || 'agent'
+      log('AGENT-PROSE (' + label + '): schema requested but the agent returned a non-object result — treating as failure; next agent sleeps 300s first')
+      return null
+    }
+    return r
+  } catch (err) {
+    agentFailed = true
+    const label = (opts && (opts.label || opts.phase)) || 'agent'
+    log('AGENT-FAILURE (' + label + '): ' + (err && err.message ? err.message : String(err)) + ' — continuing; next agent sleeps 300s first')
+    return null
+  }
+}
+const waitBanner = (body) => {
+  if (agentFailed) {
+    agentFailed = false
+    return "NOTE: a previous agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then continue exactly as instructed.\n\n" + body
+  }
+  return body
+}
+// --- /safeAgent ---
+
 phase('PlanValidate')
-const plan = await agent(`${CONST}
+const plan = await safeAgent(waitBanner(`${CONST}
 ROLE: plan validation (Opus). READ the plan file ${PLAN} in full (it exists on disk — cat it). The plan file carries an 'OWNER AMENDMENTS — 2026-08-25' section at the end that SUPERSEDES the body where they conflict: (1) the while-loop IS in v1 (the body's 'No while-loop in v1' clause is overruled — the v1 language includes the while node with condition/maxIterations/exitOnVerifiedState); (2) verification is agent live-verification of EVERY CLI command as a real user with per-command GO/NO_GO — never just bun test; (3) the kai adapter plugin seam is defined (adapter load path, registration + version-pin manifest, publish-guard extended to check packed deps for the private scope); (4) the CLI surface is 14 verbs (sessions pull and lanes probe count as their own verbs); (5) the SDK integration scope is EXACTLY FOUR lanes for starters: codex (@openai/codex-sdk), claude code (@anthropic-ai/claude-agent-sdk — our own harness), cursor (@cursor/sdk, local mode), grok (xAI Grok SDK) — codewith/opencode/kai are NOT wired in the starter scope, only listed not-ready. Verify against the repo and the world:
 1. Package: @hasna/workflows, apps/workflows directory, four surfaces (bin workflows, bin workflows-mcp, bin workflows-serve, ./sdk) — check the monorepo law (AGENTS.md + .claude/rules).
 2. SDK pins re-verified live (npm view, not assumed): @anthropic-ai/claude-agent-sdk (0.3.x), @openai/codex-sdk (0.149.x), @cursor/sdk (1.0.28), and the xAI Grok SDK (grok — record the actual package + latest) — record actual latest for all four.
@@ -208,8 +268,8 @@ if (plan.observations && plan.observations.length) log('plan observations (non-b
 log('plan validated: ' + plan.contract.packageName + ' — ' + plan.contract.commands.length + ' commands')
 
 phase('TodosFile')
-const todos = await agent(`${CONST}
-ROLE: todos filing. Create the plan in todos project ${APPS_PROJECT}: root plan title 'PLAN: hasna/workflows app — build, publish, ship (owner-directed 2026-08-25)'. Under it create the tasks (todos add --plan <planId> or the CLI's plan verb): scaffold apps/workflows + four surfaces; graph language v1 + validate (with while node per owner amendment); 3-table store + sessions WAL + torn-run repair + memoization + output secrets gate; daemon skeleton (claims, leases, reaper); claude adapter; codex adapter; CLI surface (14 commands); unit+integration suite; local live-run verification; publish; deploy. Each task: status pending, description = the plan contract's exit gate for it. Comment the plan id + task ids on ${CHANNEL} post. Return {planId, tasks}.`, { label: 'todos-file', phase: 'TodosFile', schema: TODOS_SCHEMA })
+const todos = await safeAgent(`${CONST}
+ROLE: todos filing. Create the plan in todos project ${APPS_PROJECT}: root plan title 'PLAN: hasna/workflows app — build, publish, ship (owner-directed 2026-08-25)'. Under it create the tasks (todos add --plan <planId> or the CLI's plan verb): scaffold apps/workflows + four surfaces; graph language v1 + validate (with while node per owner amendment); 3-table store + sessions WAL + torn-run repair + memoization + output secrets gate; daemon skeleton (claims, leases, reaper); claude adapter; codex adapter; CLI surface (14 commands); unit+integration suite; standing workflow definitions (fix-deepsec, audit-apps-gaps, verify-apps-qa, generate-apps-docs-marketing, deploy-app-hasna-com); local live-run verification; publish; deploy. Each task: status pending, description = the plan contract's exit gate for it. Comment the plan id + task ids on ${CHANNEL} post. Return {planId, tasks}.`, { label: 'todos-file', phase: 'TodosFile', schema: TODOS_SCHEMA })
 
 // BUILD LOOP (owner amendment: while loop; exits ONLY on LIVE GO, never on the
 // suite alone — measured 2026-08-25: the suite went green on slice 1 (scaffold)
@@ -225,9 +285,13 @@ let verifyResult = null
 let local = null
 for (let b = 1; b <= MAX_BUILD && !buildGreen; b++) {
   log('build cycle ' + b + '/' + MAX_BUILD)
-  buildResult = await agent(`${CONST}
-ROLE: build slice ${b} (Opus). Worktree ~/.hasna/repos/worktrees/apps/build-workflows from origin/main, branch build/workflows. CRASH-RESUME FIRST: if the worktree already exists, run the suite BEFORE implementing anything — slices already green stay green (never redo completed work); implement only the failing/missing slices. Contract status from previous cycle: ${JSON.stringify(verifyResult)}. LIVE-VERIFY FEEDBACK from the previous cycle (the real-user gate — these are the FAILURES the app must fix, not suggestions): ${JSON.stringify(local ? local.failures : [])}. Slice order: scaffold+surfaces -> graph language v1 + validate (while node included) -> 3-table store -> sessions WAL + torn-run repair + memoization + secrets write-gate -> daemon (claims/leases/reaper) -> FOUR LANE ADAPTERS (exactly these, per owner 2026-08-25): claude (@anthropic-ai/claude-agent-sdk) -> codex (@openai/codex-sdk) -> cursor (@cursor/sdk, local mode) -> grok (xAI Grok SDK) -> CLI (14 commands) -> tests. Regression-test-first per slice. Never fabricate a passing test. Return {status, done, failures}.`, { label: 'build:' + b, phase: 'Build', schema: BUILD_SCHEMA, model: 'opus' })
-  verifyResult = await agent(`${CONST}
+  buildResult = await safeAgent(`${CONST}
+ROLE: build slice ${b} (Opus). Worktree ~/.hasna/repos/worktrees/apps/build-workflows from origin/main, branch build/workflows. CRASH-RESUME FIRST: if the worktree already exists, run the suite BEFORE implementing anything — slices already green stay green (never redo completed work); implement only the failing/missing slices. Contract status from previous cycle: ${JSON.stringify(verifyResult)}. LIVE-VERIFY FEEDBACK from the previous cycle (the real-user gate — these are the FAILURES the app must fix, not suggestions): ${JSON.stringify(local ? local.failures : [])}. Slice order: scaffold+surfaces -> graph language v1 + validate (while node included) -> 3-table store -> sessions WAL + torn-run repair + memoization + secrets write-gate -> daemon (claims/leases/reaper) -> FOUR LANE ADAPTERS (exactly these, per owner 2026-08-25): claude (@anthropic-ai/claude-agent-sdk) -> codex (@openai/codex-sdk) -> cursor (@cursor/sdk, local mode) -> grok (xAI Grok SDK) -> CLI (14 commands) -> STANDING WORKFLOW DEFINITIONS (the 5 new fleet workflow files in apps/.claude/workflows: fix-deepsec, audit-apps-gaps, verify-apps-qa, generate-apps-docs-marketing, deploy-app-hasna-com — the 5th keeps its owner-named basename with an explicit header note naming the exemption) -> tests. Regression-test-first per slice. Never fabricate a passing test.
+
+PRE-PR AUTHORING GATE (before opening ANY PR that touches the standing workflow definitions): each of the 5 workflow files MUST pass the authoring-skill validation checks — (a) basename == meta.name; (b) meta.name matches ^(audit|fix|generate|migrate|monitor|research|review|triage|verify)-[a-z0-9]+(?:-[a-z0-9]+)*$ (deploy-app-hasna-com is the explicit owner-named exception, documented by the header note); (c) NO import() anywhere in the workflow script; (d) no banned tokens in the surface — no credential shapes, no internal-infra strings (*.hasna.xyz, @hasna-internal/*, ARNs, AWS account ids, /home/hasna/ paths). Then run ONE adversarial review agent (an independent reviewer agent run on the default model) over the workflow-definition changes at the exact head, with the 2-cycle cap: [REVIEW] GO|NO_GO at head; NO_GO at head -> fix within 2 cycles and re-review — NEVER open the PR while an unresolved head NO_GO stands.
+
+Return {status, done, failures}.`, { label: 'build:' + b, phase: 'Build', schema: BUILD_SCHEMA, model: 'opus' })
+  verifyResult = await safeAgent(`${CONST}
 ROLE: build verification (Opus). In the worktree ~/.hasna/repos/worktrees/apps/build-workflows: run 'bun test' (or the app's suite) and 'bun run check' at the repo root (redirect to files, read $?). GREEN = suite passes AND bun run check rc=0 (names+secrets+manifests+publish-guard+deps) AND node --check clean on the app's bins. Report exact failures otherwise. Return {green, suite, check, failures}.`, { label: 'verify-build:' + b, phase: 'Build', schema: VERIFY_BUILD_SCHEMA, model: 'opus' })
   if (!(verifyResult && verifyResult.green)) {
     log('build cycle ' + b + ' suite not green: ' + JSON.stringify(verifyResult ? verifyResult.failures : ['verify failed']))
@@ -236,7 +300,7 @@ ROLE: build verification (Opus). In the worktree ~/.hasna/repos/worktrees/apps/b
   // Suite + check green is NECESSARY but NOT SUFFICIENT (measured 2026-08-25).
   // The real-user live verify is the exit gate: every command exercised live.
   phase('LocalVerify')
-  local = await agent(`${CONST}
+  local = await safeAgent(`${CONST}
 ROLE: local live verification (Opus) — YOU ARE THE REAL USER. In a scratch dir (mktemp -d, never the repo), exercise EVERY CLI command live as a user actually would: real operations against the real store, real effects, real outputs read and checked — never --help-only, never rc=0-only. For EACH command return {command, verdict: GO|NO_GO, evidence} where evidence is the actual output line(s) that prove the behavior.
 
 THE FULL COMMAND SET (14 verbs — every one verified live):
@@ -267,10 +331,10 @@ log('local verify: GO — ' + (local ? local.perCommand.length : 0) + ' commands
 
 // PUBLISH
 phase('Publish')
-const pub = await agent(`${CONST}
+const pub = await safeAgent(`${CONST}
 ROLE: publish (the npm-release rule: independent agent verdict bound to repo+sha+package+version+registry; never publish without a GO).
 1. Version: patch bump per the publish law via changeset in the worktree; commit 'Agent: build-workflows-publish'; open the PR, get it reviewed and merged (bounded review, two-cycle cap).
-2. RELEASE REVIEW: an independent Fable adversarial review of the exact release candidate (repo hasna/apps, head sha, diff since last published, packed content, changelog, version bump, regression risk). First line: [REVIEW] GO|NO_GO — @hasna/workflows@<v> @ <sha> — registry npmjs. NO_GO: remediate the named P0/P1 via PR, re-review — at most 2 cycles; third NO_GO = skip, never publish unreviewed.
+2. RELEASE REVIEW: an independent adversarial review by a reviewer agent run on the default model of the exact release candidate (repo hasna/apps, head sha, diff since last published, packed content, changelog, version bump, regression risk). First line: [REVIEW] GO|NO_GO — @hasna/workflows@<v> @ <sha> — registry npmjs. NO_GO: remediate the named P0/P1 via PR, re-review — at most 2 cycles; third NO_GO = skip, never publish unreviewed.
 3. INTENT: post to ${GITPUB}: 'PUBLISH INTENT: @hasna/workflows@<v> — <one-line changelog>' BEFORE publishing; note the message id.
 4. PUBLISH from the app dir with the sanctioned form: NPMRC="\$(mktemp)"; chmod 600 "\$NPMRC"; printf '//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}\n' > "\$NPMRC"; secrets exec hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- npm publish --userconfig "\$NPMRC" --access public; rm -f "\$NPMRC". NEVER the token value. Negative control first: npm view @hasna/workflows version must NOT already show the version being published — CRASH-RESUME: if it DOES already show it, the publish already happened in a prior run: skip the publish, verify the installed version matches, and return published:true with the note 'already-published'.
 5. VERIFY two-sided: npm view @hasna/workflows version = the new version AND the negative control held; npm view time --json timestamp fresh. CONFIRM in-thread on ${GITPUB}.
@@ -281,7 +345,7 @@ log('published @hasna/workflows@' + pub.version)
 
 // SHIP
 phase('Ship')
-const ship = await agent(`${CONST}
+const ship = await safeAgent(`${CONST}
 ROLE: ship (deploy-intent-confirm protocol; one service at a time). Deploy @hasna/workflows to oss-fleet-prod ECS (hasna-xyz-infra account 789877399345, us-east-1, service workflows-prod, route https://workflows.hasna.xyz). Source sha: the merged build PR head; version: ${pub.version}.
 0. INTENT: post to ${GITDEP}: '[DEPLOY INTENT] workflows@${pub.version} -> https://workflows.hasna.xyz — <one-line changelog>'; note the message id.
 1. BUILD: docker build --platform linux/arm64 -t workflows:<source-sha> from the app Dockerfile (in the worktree at the merged head).
@@ -319,7 +383,7 @@ for (let s = 1; s <= MAX_SWEEP && !allGreen; s++) {
       brief: `Our own harness: the claude lane drives Claude Code through @anthropic-ai/claude-agent-sdk — one real node executes via the Agent SDK and its transcript mirrors into sessions/<run>/agent/. A drain-shaped workflow (our standing-lane shape: census -> drain -> loop) executes end-to-end through the app. Live route: https://workflows.hasna.xyz/health + /version return 200 with the published version (${pub.version}) matching npm.` },
   ]
   const round1 = await parallel(LENSES.map((l, i) => () =>
-    agent(`${CONST}
+    safeAgent(`${CONST}
 ROLE: independent verifier ${i + 1} of 4 — lens: ${l.lens}. You are the REAL USER of the published + deployed product. ${l.brief}
 Return {lens, verdict: GO|NO_GO, perCommand: [{command, verdict, evidence}], failures}. GO only when every item in YOUR lens is GO with evidence.
 POST your verdict to #${CHANNEL}: '[VERIFY] ${l.lens}: GO|NO_GO — <one-line evidence>'. If your verdict is NO_GO, FILE a todos task in project ${APPS_PROJECT} ('BUILD-VERIFY NO_GO: ${l.lens} — <symptom>', description = the exact failure lines + evidence) and return its taskId.`, { label: 'verify-' + l.key + ':' + s, phase: 'FullValidate', schema: VERIFIER_SCHEMA, model: 'opus' }),
@@ -327,20 +391,20 @@ POST your verdict to #${CHANNEL}: '[VERIFY] ${l.lens}: GO|NO_GO — <one-line ev
 
   // ROUND 2: communication — each verifier sees the other three's verdicts and reconciles
   const round2 = await parallel(LENSES.map((l, i) => () =>
-    agent(`${CONST}
+    safeAgent(`${CONST}
 ROLE: reconciliation ${i + 1} of 4 — lens: ${l.lens}. YOUR OWN round-1 verdict: ${JSON.stringify(round1[i])}. THE OTHER THREE VERIFIERS' VERDICTS (communicate with them by reading their evidence): ${JSON.stringify(round1.filter((_, j) => j !== i))}.
 Decide your FINAL verdict: keep or change it based on their evidence. A NO_GO stands unless another verifier's evidence refutes it. A GO may become NO_GO if another verifier's evidence reveals a defect in your lens you missed. Post your final verdict to #${CHANNEL}: '[VERIFY-FINAL] ${l.lens}: GO|NO_GO — <reason>'. Return {lens, finalVerdict, evidence: [string], failures}.`, { label: 'reconcile-' + l.key + ':' + s, phase: 'FullValidate', schema: RECONCILE_SCHEMA, model: 'opus' }),
   ))
 
   // ROUND 3: adjudicator — GO only when ALL FOUR final verdicts are GO
-  panel = await agent(`${CONST}
+  panel = await safeAgent(`${CONST}
 ROLE: panel adjudicator. The four verifiers' FINAL verdicts after communication: ${JSON.stringify(round2)}.
 Overall verdict: GO only when ALL FOUR are GO. If ANY is NO_GO: for EACH NO_GO lens, ensure a todos task exists in project ${APPS_PROJECT} (title 'BUILD-VERIFY NO_GO: <lens> — <symptom>' — dedupe: reuse the round-1 taskId if the verifier filed one, else file it now with the evidence). Post the panel outcome to #${CHANNEL}: '[PANEL] validation cycle ${s}: GO|NO_GO — <per-lens verdicts>'. Return {verdict: GO|NO_GO, noGoLenses: [string], failures: [string]}.`, { label: 'panel:' + s, phase: 'FullValidate', schema: PANEL_SCHEMA, model: 'opus' })
   allGreen = !!(panel && panel.verdict === 'GO')
   if (!allGreen) {
     log('validation cycle ' + s + ' panel NO_GO on: ' + JSON.stringify(panel ? panel.noGoLenses : ['panel agent failed']))
     // Loop back into the failing phase: fix the NO_GO lenses' failures, re-publish patch if the tarball/install broke, re-ship if the route broke.
-    const fix = await agent(`${CONST}
+    const fix = await safeAgent(`${CONST}
 ROLE: remediation cycle ${s} (Opus). The panel failed on lenses: ${JSON.stringify(panel ? panel.noGoLenses : [])}. Failures: ${JSON.stringify(panel ? panel.failures : [])} (see the filed todos tasks in project ${APPS_PROJECT} for the full evidence). For EACH failure: locate the owning phase (build/local-verify/publish/ship), fix the root cause in the appropriate worktree (regression-test-first), land via PR (reviewed, merged), and if the fix changes the published artifact: bump patch, re-run the publish phase form (intent -> review -> publish -> two-sided verify -> install), and if it changes the deployed artifact: re-run the ship phase form (intent -> ECR -> task def -> update -> live test -> confirm). Comment the filed todos tasks with the fix + merge sha. Return {fixed: [string], changedArtifact: bool}.`, { label: 'remediate:' + s, phase: 'FullValidate', schema: { type: 'object', additionalProperties: false, required: ['fixed', 'changedArtifact'], properties: { fixed: { type: 'array', items: { type: 'string' } }, changedArtifact: { type: 'boolean' } } }, model: 'opus' })
     log('remediation ' + s + ': ' + JSON.stringify(fix))
   }
@@ -348,7 +412,7 @@ ROLE: remediation cycle ${s} (Opus). The panel failed on lenses: ${JSON.stringif
 if (!allGreen) return { status: 'validation-failed-after-' + MAX_SWEEP, plan: plan.contract, build: buildResult, local, publish: pub, ship, panel }
 
 phase('Harvest')
-const harvest = await agent(`${CONST}
+const harvest = await safeAgent(`${CONST}
 ROLE: harvest (Opus, independent). ROW-DEDUPE FIRST: search todos project ${APPS_PROJECT} for an open HARVEST row carrying this run's signature before creating one. Comment each category on the row the moment it is decided: SKILLS / TODOS / MEMENTOS / KNOWLEDGE / FILES (create/update/none + reason; 'none' is complete). Complete the todos plan: mark every task completed with evidence (published version ${pub.version}, installed version ${pub.installedVersion}, deployed version ${ship.version}, live-test lines). Save mementos. Post the final state to #${CHANNEL}. Return {categories: {skills: {decision}, todos: {decision}, mementos: {decision}, knowledge: {decision}, files: {decision}}, planDone: bool}.`, { label: 'harvest', phase: 'Harvest', model: 'opus' })
 
 return {

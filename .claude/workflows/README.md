@@ -27,14 +27,21 @@ create one.**
 | `fix-lane-wf.js` | fix-and-ship | generic bug-fix lane template (regression-first, PR-first, one review, merge) |
 | `propagate-lanes-to-monorepos-wf.js` | coordinate-steer / ship | standing propagation lane: 4 targets (internal-apps, harnesses, business-engines, products) in parallel — parameterize + install applicable lanes into each target's own `.claude/workflows/`, own worktree via hasna/repos, PR-first, per-PR adversarial GO/NO-GO, merge on GO, update the clone, post to the target channel |
 
-## Infinite session-scoped loops (owner design, 2026-08-25)
+| `fix-deepsec-wf.js` | fix-and-ship | deep security audit + fix lane (deps 7-day pin, secrets tree+staged, app-code OWASP; P0/P1 fixers with 2-cycle cap; P2/P3 filed as todos follow-ups) |
+| `audit-apps-gaps-wf.js` | coordinate-steer / intake | whole-repo standards audit -> confirmed gaps filed as hasna/todos tasks with evidence comments (dedupe-first, never delete) |
+| `verify-apps-qa-wf.js` | review-verify | QA via the testers app + credential-zero E2B sandbox (rsync from the task worktree), budget-capped, artifact-based PASS/FAIL; also integrable into the drains |
+| `generate-apps-docs-marketing-wf.js` | coordinate-steer / docs | docs + marketing page sync from release/issue state, claim-traced; owner-only copy -> follow-up tasks |
+| `deploy-app-hasna-com-wf.js` | build-and-deploy | FIRST-EVER deploy of the hasna/apps app to app.hasna.com, separate check-then-create lane: account resolution -> hasna-products (verified: no dedicated per-app account; org-admin list-accounts -> assume-role OrganizationAccountAccessRole -> sts ID assertion) -> provider-role table -> smallest-target creation -> [DEPLOY INTENT] -> deploy -> 2 independent live gates -> [DEPLOY-CONFIRM] |
 
-The standing lanes run **infinitely for the life of the session** — no pass
-bound. "Run until I stop it": each pass re-censuses; while the queue is
-non-zero the pass restarts inside the same run; when idle, the census agent
-itself sleeps (5 min task-drain, 30 min stale/propagate, 1h issues) and
-re-checks once, so the run stays alive at ~1 agent per idle window. Stop =
-the owner stops the run or the session ends.
+## Standing-loop semantics (updated 2026-08-26)
+
+Standing continuity is now **bounded passes + coordinator relaunch**, per the
+runtime ground truth (1,000-agent cap per run): every standing lane bounds its
+passes with `MAX_PASSES` (args `maxPasses` override; 30/40 defaults), sleeps
+inside the census agent (args `idleMinutes`, floor 300 s, cap 1800 s) and
+re-checks once before returning empty, and the 10-minute coordination loop
+relaunches the run — so the fleet never stops while the session lives, and a
+single run can never run away. Stop = the owner stops the coordinator/data run.
 
 - **PRIORITY YIELD**: every lane's census checks todos 3bbc22e0 for UNOWNED
   rows titled `HOTFIX:` first — if any exist, the lane yields (sleeps and

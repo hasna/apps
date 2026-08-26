@@ -9,7 +9,7 @@ export const meta = {
   ],
 }
 
-const MONOREPO = '/home/hasna/workspace/repos/hasna/apps'
+const MONOREPO = '/home/hasna/.hasna/repos/clones/hasna/apps'
 const TASK = '248f6ed8-d849-48ce-912c-1e7c5d8e69f0'
 const CHANNEL = 'board'
 const ACCOUNTS = ['account006', 'account025', 'account026', 'account030']

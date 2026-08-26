@@ -7,7 +7,7 @@ export const meta = {
   ],
 }
 
-const MONOREPO = '/home/hasna/workspace/repos/hasna/apps'
+const MONOREPO = '/home/hasna/.hasna/repos/clones/hasna/apps'
 const TASK = '9ef14d65'
 const PRS = [217, 220, 234, 241, 242, 248, 252, 256]
 
