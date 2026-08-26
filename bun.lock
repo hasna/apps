@@ -1222,7 +1222,7 @@
     },
     "apps/paths": {
       "name": "@hasna/paths",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "paths": "dist/cli/index.js",
       },
