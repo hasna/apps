@@ -65,8 +65,7 @@
     "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
-    "bun": ">=1.0.0",
-    "node": ">=20.0.0"
+    "bun": ">=1.0.0"
   },
   "author": "Hasna",
   "license": "Apache-2.0",
