@@ -137,6 +137,15 @@ function withRecord(promptText) {
 // Parsing helpers — a subagent result that cannot be parsed counts as a failure
 // (fail-closed: no parse = no scan of that app).
 // ----------------------------------------------------------------------------
+// Structured-aware consumption: a schema'd agent() result IS the object.
+// Feeding an object into the text-only parseObj yields '[object Object]' and a
+// guaranteed null — measured 2026-08-26 (the #1242 half-migration the reviewer
+// caught). Objects pass through; prose goes through the tolerant parser.
+function asObj(x, label) {
+  if (x != null && typeof x === 'object' && !Array.isArray(x)) return x;
+  return parseObj(x, label);
+}
+
 function parseObj(text, label) {
   if (text == null || String(text).trim() === '') {
     failureCount += 1;
@@ -393,7 +402,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   // Phase 2: verdicts per app — confirmed gaps with file evidence.
   const verdicts = await runPhase(`pass-${pass}-verdicts`, async () => {
     const verdictOs = apps.map((app, i) =>
-      parseObj(inventories[i], `inventory-${app}`)
+      asObj(inventories[i], `inventory-${app}`)
     );
     const inventoryTexts = apps.map(
       (app, i) =>
@@ -430,7 +439,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   });
 
   const verdictOs = apps.map((app, i) =>
-    parseObj(verdicts[i], `verdict-${app}`)
+    asObj(verdicts[i], `verdict-${app}`)
   );
   lastScanned = verdictOs.filter(Boolean).length;
   log(
@@ -470,7 +479,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   );
 
   const taskOs = apps.map((app, i) =>
-    parseObj(taskRows[i], `task-${app}`)
+    asObj(taskRows[i], `task-${app}`)
   );
 
   // Phase 4: summary + #hasna-apps post.
