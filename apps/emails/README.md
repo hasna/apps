@@ -26,8 +26,12 @@ bun install -g @hasna/emails
 ## Deployment
 
 The data backend is selected by `EMAILS_DATABASE_URL`: unset or blank means
-local SQLite, a PostgreSQL URL means PostgreSQL. There is no deployment-mode
-selector or mode variable. Local SQLite storage keeps the database, files, and
+local SQLite, a PostgreSQL URL means PostgreSQL. On the client, store selection
+still follows the mode selector `EMAILS_MODE` — `local` by default, or
+`self_hosted` to talk to a server's HTTP API (`HASNA_EMAILS_MODE` and the
+`emails_mode` config key carry the same choice). Only `local` and `self_hosted`
+are supported; legacy Mailery-era selectors and `cloud`/`remote`/`hybrid`
+values are rejected. Local SQLite storage keeps the database, files, and
 credentials on the current machine; a PostgreSQL backend serves the
 authenticated `/v1` API from operator-owned infrastructure. Provider
 integrations always use user-supplied credentials; the package has no hosted
