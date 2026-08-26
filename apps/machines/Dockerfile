@@ -9,6 +9,8 @@
 FROM --platform=linux/arm64 oven/bun:1.2 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
+# I38-00554: skip lifecycle scripts here — `prepare` ("bun run build") must not
+# run before src/ is copied into this stage. The build runs explicitly below.
 RUN bun install --frozen-lockfile --ignore-scripts
 COPY . .
 RUN bun run build

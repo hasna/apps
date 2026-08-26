@@ -55,6 +55,7 @@
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "schema:generate": "bun run scripts/generate-consumer-schema.ts",
     "kit:check": "bunx @hasna/contracts@0.10.6 vendor-kit --check .",
+    "docker:check": "bash scripts/docker-build-check.sh",
     "smoke:consumer-conformance": "bun scripts/consumer-conformance.mjs",
     "verify:pack": "bun run build && bun run scripts/verify-release.ts",
     "verify:release": "bun run typecheck && bun run test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
