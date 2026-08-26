@@ -1,6 +1,6 @@
 {
   "name": "@hasna/access",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Non-human-identity governance: CLI + MCP + serve over a Hasna-contract store. Identity inventory, credential & MCP-scope mapping, JIT elevation, access reviews, one-click revocation, and the cohort MCP bearer-token issuer.",
   "type": "module",
   "main": "dist/index.js",
@@ -23,7 +23,8 @@
     "docker-compose.yml",
     "LICENSE",
     "README.md",
-    "docs"
+    "docs",
+    "postinstall.js"
   ],
   "scripts": {
     "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external hono --external pg && bun build src/index.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
@@ -40,7 +41,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8887",
     "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "node -e \"try{const os=require('os'),fs=require('fs'),p=require('path');const b=p.join(os.homedir(),'.hasna','access');for(const d of ['','config','data','exports','backups','logs','tmp']) fs.mkdirSync(p.join(b,d),{recursive:true});}catch(e){}\""
+    "postinstall": "node postinstall.js"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -60,6 +61,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/paths": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

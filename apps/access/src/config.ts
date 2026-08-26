@@ -1,13 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { getDefaultDbPath } from "./core/app-home.js";
 
 /**
  * Canonical Hasna Service Contract v1 storage config for iapp-access.
  *
  * The server storage backend is `sqlite | postgresql` only (owner directive
- * 2026-07-29): SQLite at ~/.hasna/access/access.db when no DATABASE_URL is
- * configured; Postgres (the app-owned cloud store) when one is. The retired
+ * 2026-07-29): SQLite at the @hasna/paths data home
+ * (~/.local/share/hasna/access/access.db) when no DATABASE_URL is configured;
+ * Postgres (the app-owned cloud store) when one is. The retired
  * HASNA_ACCESS_STORAGE_MODE variable is no longer read.
  */
 export const APP_NAME = "access";
@@ -62,9 +62,9 @@ export function scrubDatabaseDsn(env: Env = process.env): void {
   for (const key of DB_URL_KEYS) delete env[key];
 }
 
-/** Canonical local SQLite path: ~/.hasna/access/access.db */
+/** Canonical local SQLite path, resolved through @hasna/paths (data home). */
 export function defaultSqlitePath(): string {
-  return join(homedir(), ".hasna", APP_NAME, `${APP_NAME}.db`);
+  return getDefaultDbPath();
 }
 
 /** Resolve the SQLite path, honoring the HASNA_ACCESS_DB_PATH override (used by tests). */

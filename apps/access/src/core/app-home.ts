@@ -1,26 +1,45 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { cacheDir, configDir, dataDir, stateDir } from "@hasna/paths";
 
 /**
- * Resolves ~/.hasna/access and its subdirs, enforcing 0700 permissions so that
- * SQLite data, exports, and pre-migration backups are never world-readable.
+ * Resolves the access home directories via the @hasna/paths resolver (XDG /
+ * macOS home layout), enforcing 0700 permissions so that SQLite data, exports,
+ * and pre-migration backups are never world-readable.
+ *
+ * Subdir mapping onto the XDG kinds:
+ *   config   -> config home          (~/.config/hasna/access)
+ *   data     -> data home            (~/.local/share/hasna/access) — holds access.db
+ *   exports  -> data home/exports
+ *   backups  -> data home/backups
+ *   logs     -> state home/logs      (~/.local/state/hasna/access/logs)
+ *   tmp      -> cache home/tmp       (~/.cache/hasna/access/tmp)
  */
 export const APP_SUBDIRS = ["config", "data", "exports", "backups", "logs", "tmp"] as const;
 export type AppSubdir = typeof APP_SUBDIRS[number];
 
-function homeDir(): string {
-  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-}
+const OPTIONS = { app: "access" } as const;
 
+/** The data home for the access app (canonical SQLite, exports, and backups root). */
 export function getAppHome(): string {
-  return resolve(
-    process.env["HASNA_ACCESS_HOME"] ?? process.env["ACCESS_HOME"] ?? join(homeDir(), ".hasna", "access"),
-  );
+  return dataDir(OPTIONS);
 }
 
 export function getAppDir(name: AppSubdir): string {
-  return join(getAppHome(), name);
+  switch (name) {
+    case "config":
+      return configDir(OPTIONS);
+    case "data":
+      return dataDir(OPTIONS);
+    case "exports":
+      return join(dataDir(OPTIONS), "exports");
+    case "backups":
+      return join(dataDir(OPTIONS), "backups");
+    case "logs":
+      return join(stateDir(OPTIONS), "logs");
+    case "tmp":
+      return join(cacheDir(OPTIONS), "tmp");
+  }
 }
 
 function ensureDir0700(dir: string): void {

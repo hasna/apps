@@ -12,13 +12,14 @@
     },
     "apps/access": {
       "name": "@hasna/access",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "bin": {
         "access": "dist/cli/index.js",
         "access-mcp": "dist/mcp/index.js",
         "access-serve": "dist/server/index.js",
       },
       "dependencies": {
+        "@hasna/paths": "^0.1.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",

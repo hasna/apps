@@ -5,9 +5,9 @@ import { getBackupDir } from "../core/app-home.js";
 /**
  * Backup-on-migration (§4.4, hardened). Before applying any shape-changing
  * migration to an existing local DB, snapshot it to
- * ~/.hasna/access/backups/access-<ISO>-pre-migration.db (mode 0600), keeping at
- * most N=10 snapshots. A migration MUST refuse to run if the pre-backup cannot
- * be created.
+ * <data-home>/backups/access-<ISO>-pre-migration.db (mode 0600) — resolved via
+ * @hasna/paths, ~/.local/share/hasna/access/backups — keeping at most N=10
+ * snapshots. A migration MUST refuse to run if the pre-backup cannot be created.
  */
 
 const RETENTION = 10;

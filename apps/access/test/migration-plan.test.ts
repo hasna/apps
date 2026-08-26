@@ -13,7 +13,7 @@ afterEach(() => {
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = null;
   delete process.env["HASNA_ACCESS_DB_PATH"];
-  delete process.env["HASNA_ACCESS_HOME"];
+  delete process.env["HASNA_DATA_HOME"];
 });
 
 function createOldV1Database(path: string): void {
@@ -73,7 +73,7 @@ describe("forward migrations", () => {
     tempDir = mkdtempSync(join(tmpdir(), "access-migration-"));
     const dbPath = join(tempDir, "access.db");
     process.env["HASNA_ACCESS_DB_PATH"] = dbPath;
-    process.env["HASNA_ACCESS_HOME"] = join(tempDir, "home");
+    process.env["HASNA_DATA_HOME"] = join(tempDir, "home");
     createOldV1Database(dbPath);
 
     const db = openDatabase();
@@ -93,7 +93,7 @@ describe("forward migrations", () => {
     );
     closeDatabase();
 
-    const backups = readdirSync(join(tempDir, "home", "backups"));
+    const backups = readdirSync(join(tempDir, "home", "access", "backups"));
     expect(backups.some((name) => name.endsWith("-pre-migration.db"))).toBe(true);
   });
 });

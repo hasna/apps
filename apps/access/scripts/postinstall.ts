@@ -1,18 +1,19 @@
 #!/usr/bin/env bun
-// Creates ~/.hasna/access/{config,data,exports,backups,logs,tmp} with dir mode 0700.
+// Dev-time creation of the access home dirs, resolved via @hasna/paths
+// (XDG / macOS layout): config, data, exports, backups, logs, tmp, mode 0700.
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { cacheDir, configDir, dataDir, stateDir } from "@hasna/paths";
 
-const SUBDIRS = ["config", "data", "exports", "backups", "logs", "tmp"];
-
-function home(): string {
-  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-}
-
-function appHome(): string {
-  return resolve(process.env["HASNA_ACCESS_HOME"] ?? join(home(), ".hasna", "access"));
-}
+const OPTIONS = { app: "access" };
+const SUBDIRS = [
+  configDir(OPTIONS),
+  dataDir(OPTIONS),
+  join(dataDir(OPTIONS), "exports"),
+  join(dataDir(OPTIONS), "backups"),
+  join(stateDir(OPTIONS), "logs"),
+  join(cacheDir(OPTIONS), "tmp"),
+];
 
 function ensure(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -23,7 +24,5 @@ function ensure(dir: string): void {
   }
 }
 
-const root = appHome();
-ensure(root);
-for (const name of SUBDIRS) ensure(join(root, name));
-console.log(`access: ensured ${root} (0700) with subdirs ${SUBDIRS.join(", ")}`);
+for (const dir of SUBDIRS) ensure(dir);
+console.log(`access: ensured ${SUBDIRS.join(", ")} (0700)`);
