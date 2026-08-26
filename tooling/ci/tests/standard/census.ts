@@ -459,11 +459,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos d166125e (contracts task — logs)",
   },
   {
-    member: "markdown",
-    cause: "surface_matrix (api/sdk missing or unwaived; cli-with-store shipping markdown-serve requires all four surfaces) and service_api_topology (a supported API surface is required — markdown-serve implements GET /health and POST /validate,/compile,/inspect,/lint,/run but no GET /ready or GET /version); self_host_artifact (no Dockerfile/compose at the app root); storage_capabilities (storage.pgTestGate is required to prove live PostgreSQL support — the optional Postgres feedback mirror has no PG test command). Manifest created by the contracts-alignment-r2 missing-manifest lane; server-topology and self-host work is the follow-up.",
-    task: "todos 1bfb26b7-05eb-4cf5-9762-e554afd02de6 (contracts-alignment-r2 missing-manifest lane)",
-  },
-  {
     member: "monitor",
     cause: "bins_match_package: package.json ships bins monitor-server and monitor-web that the manifest does not declare (manifest declares monitor, monitor-mcp only). Imported by #97 after the original census; validated at kitVersion 0.8.5 (no pinned dep).",
     task: "todos d2c6d20f-7c80-4b84-ae35-a92ce866bc14 (contracts task — monitor)",
@@ -539,7 +534,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "instructions", kitVersion: "0.13.1", pinned: "0.14.0" },
   { member: "knowledge", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "machines", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "markdown", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "messages", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "prompts", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "secrets", kitVersion: "0.13.3", pinned: "^0.14.0" },
