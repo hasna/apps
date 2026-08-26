@@ -1186,3 +1186,5 @@ bun run verify:release
 
 `verify:release` runs typecheck, tests, example conformance, build, a smoke test
 against the packaged CLI entrypoint in `dist/cli/index.js`, and a pack dry-run.
+
+Fleet-env credential resolution: see CHANGELOG 0.14.2.
