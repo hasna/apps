@@ -552,7 +552,7 @@
         "typescript": "^5.7.3",
       },
       "optionalDependencies": {
-        "e2b": "^2.14.1",
+        "e2b": "2.40.0",
         "playwright": "^1.50.0",
       },
     },
