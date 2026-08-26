@@ -16,15 +16,19 @@
  * (`kind: executable` + the catalog pointer sentence — the defect output of
  * the absent-kind coercion, task 568efaaa / P-01641); a stub wins only when
  * every candidate is a stub. Among the eligible copies the winner is the one
- * whose (agent, path) pair is recorded in the snapshot's sync-manifest
- * (hash-winner rule; the port preserves the source script's
- * presence-of-record comparison exactly), otherwise the freshest mtime; ties
- * break by agent order claude < codewith < codex < opencode < cursor.
+ * whose (agent, path) pair is recorded in the snapshot's sync-manifest AND
+ * whose bytes hash to the recorded sha256 (hash-winner rule; the manifest
+ * record is a hash claim, verified against the candidate bytes — a record
+ * whose hash does not match the bytes is an integrity violation and refuses
+ * the whole hydration), otherwise the freshest mtime; ties break by agent
+ * order claude < codewith < codex < opencode < cursor.
  *
  * Same fail-closed contract as the snapshot: symlinks refused, an existing
- * destination with different content is terminal non-acceptance. The port
- * additionally makes "nothing written" true by detecting conflicts across the
- * whole plan before writing anything.
+ * destination with different content is terminal non-acceptance, a
+ * manifest-recorded sha256 that does not match the candidate bytes is
+ * terminal non-acceptance (MANIFEST_HASH_MISMATCH). The port additionally
+ * makes "nothing written" true by detecting conflicts across the whole plan
+ * before writing anything.
  */
 import { createHash } from "node:crypto";
 import {
@@ -80,6 +84,8 @@ export interface HydrationCandidate {
   mtimeMs: number;
   /** The manifest's recorded sha256 for (agent, home-relative path), if any. */
   manifestHash: string | null;
+  /** True when the candidate's bytes hash to the manifest record (verified match). */
+  verified: boolean;
 }
 
 export interface HydrationWinnerFile {
@@ -216,6 +222,7 @@ export function planStationHydration(
 
   const candidates: HydrationCandidate[] = [];
   const symlinks: Array<{ ident: string; agent: SyncAgent; relativePath: string }> = [];
+  const hashMismatches: Array<{ ident: string; agent: SyncAgent; relativePath: string }> = [];
   const skippedByRule: HydrationPlan["skippedByRule"] = [];
   for (const agent of SYNC_AGENTS) {
     const agentRoot = join(snapshotRoot, "agent-homes", agent);
@@ -269,6 +276,23 @@ export function planStationHydration(
           continue;
         }
         const info = statSync(entry.fullPath);
+        const manifestHash =
+          manifestHashes.get(`${agent}${MANIFEST_HASH_KEY_SEP}${homeRelative}`) ?? null;
+        // A manifest record is a hash claim: verify the candidate's bytes
+        // against it. Presence alone must never rank as a match (release
+        // review P1) — a stale or tampered file whose bytes differ from the
+        // reviewed record is an integrity violation, not a winner.
+        let verified = false;
+        if (manifestHash !== null) {
+          verified = sha256File(entry.fullPath) === manifestHash;
+          if (!verified) {
+            hashMismatches.push({
+              ident: identEntry.name,
+              agent,
+              relativePath: entry.relativePath
+            });
+          }
+        }
         candidates.push({
           ident: identEntry.name,
           agent,
@@ -276,7 +300,8 @@ export function planStationHydration(
           fullPath: entry.fullPath,
           size: info.size,
           mtimeMs: info.mtimeMs,
-          manifestHash: manifestHashes.get(`${agent}${MANIFEST_HASH_KEY_SEP}${homeRelative}`) ?? null
+          manifestHash,
+          verified
         });
       }
     }
@@ -285,6 +310,16 @@ export function planStationHydration(
     fail(
       "SYMLINKS_REFUSED",
       `${symlinks.length} symlink(s) inside the snapshot; symlinks are refused (fail closed)`
+    );
+  }
+  if (hashMismatches.length > 0) {
+    fail(
+      "MANIFEST_HASH_MISMATCH",
+      `${hashMismatches.length} snapshot file(s) no longer match their sync-manifest sha256; ` +
+        "stale or tampered content is refused (fail closed), nothing written — re-run sync to refresh the manifest",
+      hashMismatches.map(
+        (mismatch) => `agent-homes/${mismatch.agent}/${mismatch.ident}/${mismatch.relativePath}`
+      )
     );
   }
 
@@ -330,8 +365,8 @@ export function planStationHydration(
         }
       }
       eligible.sort((left, right) => {
-        const leftHash = left.manifestHash !== null;
-        const rightHash = right.manifestHash !== null;
+        const leftHash = left.verified;
+        const rightHash = right.verified;
         if (leftHash !== rightHash) {
           return leftHash ? -1 : 1;
         }
