@@ -179,7 +179,7 @@
       },
       "dependencies": {
         "@hasna/events": "^0.1.6",
-        "@hasna/paths": "0.2.1",
+        "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
@@ -1294,7 +1294,7 @@
     },
     "apps/prompts": {
       "name": "@hasna/prompts",
-      "version": "0.3.36",
+      "version": "0.3.37",
       "bin": {
         "prompts": "dist/cli/index.js",
         "prompts-mcp": "dist/mcp/index.js",
