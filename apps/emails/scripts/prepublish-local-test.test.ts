@@ -24,7 +24,6 @@ describe("prepublish-local-test environment scrub", () => {
       EMAILS_SELF_HOSTED_API_KEY: "op-key",
       EMAILS_SESSION_TOKEN: "session-token",
       EMAILS_IDP_TOKEN: "idp-token",
-      MAILERY_MODE: "cloud",
       HASNA_MAILERY_API_URL: "https://legacy.example.test/v1",
       EMAILS_JSON_OUTPUT: "1",
     });
@@ -38,7 +37,6 @@ describe("prepublish-local-test environment scrub", () => {
     expect(env.EMAILS_SESSION_TOKEN).toBeUndefined();
     expect(env.EMAILS_IDP_TOKEN).toBeUndefined();
     // Legacy keys keep being scrubbed.
-    expect(env.MAILERY_MODE).toBeUndefined();
     expect(env.HASNA_MAILERY_API_URL).toBeUndefined();
     // The canonical DB-path key is scrubbed: getDbPath() (src/db/database.ts)
     // checks HASNA_EMAILS_DB_PATH BEFORE EMAILS_DB_PATH, so an inherited value

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { formatMailboxSources, formatMailboxStatus } from "./inbox.remote.js";
+import { formatMailboxSources, formatMailboxStatus } from "./inbox.api.js";
 import type { MailboxSourceSummary, MailboxStatusSummary } from "../../lib/mail-types.js";
 
 // Renderer pins for the O15-00350 `countsComplete` contract — the same class

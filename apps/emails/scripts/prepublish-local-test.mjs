@@ -34,9 +34,6 @@ const legacyKeys = [
 
 const scrubbedKeys = legacyKeys.map((parts) => parts.join("_"));
 
-const env = { ...process.env, HOME: tmpHome, EMAILS_DB_PATH: ":memory:" };
-for (const key of legacyKeys) delete env[key.join("_")];
-
 /**
  * The environment the prepublish local-test suite runs in: the process env with
  * a fresh HOME, the local store forced, and every hosted/legacy client env key
