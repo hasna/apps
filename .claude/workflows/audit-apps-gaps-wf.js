@@ -73,6 +73,9 @@ NEVER print a credential value.`;
 
 const AT = ['Bash', 'Read', 'Grep'];
 const CENSUS_SCHEMA = { type: 'object', required: ['apps'], properties: { apps: { type: 'array', items: { type: 'string', maxLength: 80 } } } };
+const INVENTORY_SCHEMA = { type: 'object', required: ['app', 'dirExists'], properties: { app: { type: 'string' }, dirExists: { type: 'boolean' }, pkgName: { type: ['string', 'null'] }, binKeys: { type: ['string', 'null'] }, exportKeys: { type: ['string', 'null'] }, scriptKeys: { type: ['string', 'null'] }, hasManifest: { type: ['boolean', 'null'] }, manifestPath: { type: ['string', 'null'] }, tests: { type: ['boolean', 'null'] }, readmeExists: { type: ['boolean', 'null'] }, readmeModes: { enum: ['2-mode', 'partial', 'missing', 'unknown'] }, storageCheck: { enum: ['dual', 'mono', 'unknown'] }, notes: { type: ['string', 'null'] } } };
+const VERDICT_SCHEMA = { type: 'object', required: ['app', 'clean'], properties: { app: { type: 'string' }, gaps: { type: 'array', items: { type: 'object', required: ['id', 'kind', 'summary'], properties: { id: { type: 'string' }, kind: { type: 'string' }, summary: { type: 'string' }, evidence: { type: 'string' }, priority: { type: 'string' } } } }, unverified: { type: 'array', items: { type: 'string' } }, clean: { type: 'boolean' } } };
+const TASK_SCHEMA = { type: 'object', required: ['app'], properties: { app: { type: 'string' }, created: { type: 'array', items: { type: 'string' } }, updated: { type: 'array', items: { type: 'string' } }, duplicatesSkipped: { type: 'integer' }, errors: { type: 'array', items: { type: 'string' } } } };
 
 // The runtime's phase(name) is a progress-group global only (no callback contract).
 const runPhase = async (name, fn) => { phase(name); return await fn(); }
@@ -381,7 +384,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
   const inventories = await runPhase(`pass-${pass}-inventory`, async () =>
     parallel(
       apps.map((app) => () =>
-        safeAgent({ prompt: withRecord(inventoryPrompt(app)), tools: AT })
+        safeAgent({ prompt: withRecord(inventoryPrompt(app)), tools: AT, schema: INVENTORY_SCHEMA })
       ),
       fanCfg
     )
@@ -419,6 +422,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
             verdictPrompt(app, inventoryTexts[i], appSlug(app))
           ),
           tools: AT,
+          schema: VERDICT_SCHEMA,
         })
       ),
       fanCfg
@@ -458,6 +462,7 @@ for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
         return safeAgent({
           prompt: withRecord(taskPrompt(app, verdictText, repoPath)),
           tools: AT,
+          schema: TASK_SCHEMA,
         });
       }),
       fanCfg
