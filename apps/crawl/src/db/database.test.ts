@@ -111,6 +111,44 @@ describe("getDataDir", () => {
     expect(existsSync(dataDir)).toBe(true);
     delete process.env["HASNA_DATA_HOME"];
   });
+
+  it("migrates the legacy ~/.hasna/crawl store when HASNA_DATA_HOME redirects the root", () => {
+    const home = tempHome();
+    const legacyRoot = join(home, ".hasna", "crawl");
+    const dataHome = join(home, "xdg-data");
+    mkdirSync(join(legacyRoot, "screenshots"), { recursive: true });
+    writeFileSync(join(legacyRoot, "data.db"), "live-db");
+    writeFileSync(join(legacyRoot, "config.json"), "live-config");
+    writeFileSync(join(legacyRoot, "screenshots", "page.txt"), "live-screenshot");
+    process.env["HASNA_DATA_HOME"] = dataHome;
+
+    const dataDir = getDataDir();
+
+    expect(dataDir).toBe(join(dataHome, "crawl"));
+    expect(readFileSync(join(dataDir, "data.db"), "utf8")).toBe("live-db");
+    expect(readFileSync(join(dataDir, "config.json"), "utf8")).toBe("live-config");
+    expect(readFileSync(join(dataDir, "screenshots", "page.txt"), "utf8")).toBe("live-screenshot");
+    // Legacy source is preserved, not deleted.
+    expect(existsSync(join(legacyRoot, "data.db"))).toBe(true);
+    delete process.env["HASNA_DATA_HOME"];
+  });
+
+  it("does not copy the legacy root into an exact override nested inside it", () => {
+    const home = tempHome();
+    const legacyRoot = join(home, ".hasna", "crawl");
+    mkdirSync(join(legacyRoot, "screenshots"), { recursive: true });
+    writeFileSync(join(legacyRoot, "data.db"), "live-db");
+    const override = join(legacyRoot, "redirected");
+    process.env["HASNA_CRAWL_HOME"] = override;
+
+    const dataDir = getDataDir();
+
+    expect(dataDir).toBe(override);
+    // No runaway nesting: the override is not copied into itself.
+    expect(existsSync(join(override, "redirected"))).toBe(false);
+    expect(existsSync(join(override, "data.db"))).toBe(false);
+    delete process.env["HASNA_CRAWL_HOME"];
+  });
 });
 
 describe("package install", () => {

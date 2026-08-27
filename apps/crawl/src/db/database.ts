@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, resolve, sep } from "path";
 import { FEEDBACK_TABLE_SQL, runMigrations } from "./migrations";
 import { getDataRoot } from "./paths.js";
 
@@ -32,16 +32,30 @@ function copyMissingRecursive(src: string, dest: string): void {
   }
 }
 
+/** Whether `candidate` is the `ancestor` path or lives inside it. */
+function isSameOrDescendant(candidate: string, ancestor: string): boolean {
+  return candidate === ancestor || candidate.startsWith(ancestor + sep);
+}
+
 function migrateLegacyDataDir(dest: string): void {
   // Copy forward any legacy files that are missing from the effective data
   // root — even when the effective root already exists — without deleting the
   // legacy source or overwriting existing canonical files. `.open-crawl`
-  // takes precedence over `.crawl` on name collisions.
+  // takes precedence over `.crawl` on name collisions, and the pre-XDG
+  // canonical root `~/.hasna/crawl` (the newest legacy store, which absorbed
+  // `.open-crawl`/`.crawl` on earlier upgrades) takes precedence over both so
+  // a live store never becomes invisible when `HASNA_DATA_HOME` (or an exact
+  // override) redirects the effective root. A legacy source is never copied
+  // into itself or its own descendant (an exact override nested inside the
+  // legacy root would otherwise recurse forever).
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "/tmp";
-  for (const legacyName of [".open-crawl", ".crawl"]) {
+  const destResolved = resolve(dest);
+  const legacyNames: string[] = [".hasna/crawl", ".open-crawl", ".crawl"];
+  for (const legacyName of legacyNames) {
     const legacyDir = join(home, legacyName);
     if (!existsSync(legacyDir)) continue;
     if (!statSync(legacyDir).isDirectory()) continue;
+    if (isSameOrDescendant(destResolved, resolve(legacyDir))) continue;
     copyMissingRecursive(legacyDir, dest);
   }
 }

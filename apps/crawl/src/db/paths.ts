@@ -62,8 +62,12 @@ export function adoptResolverDataRoot(
 
 /** The exact-app override root, when set: `HASNA_CRAWL_HOME`, then `CRAWL_HOME`. */
 export function exactDataRoot(): string | undefined {
-  const dir = process.env["HASNA_CRAWL_HOME"] ?? process.env["CRAWL_HOME"];
-  if (dir && dir.trim()) return resolve(dir.trim());
+  // First non-blank override wins. A blank or whitespace-only primary must not
+  // shadow a valid secondary (nullish `??` does not fall through on "").
+  for (const key of ["HASNA_CRAWL_HOME", "CRAWL_HOME"] as const) {
+    const dir = process.env[key]?.trim();
+    if (dir) return resolve(dir);
+  }
   return undefined;
 }
 

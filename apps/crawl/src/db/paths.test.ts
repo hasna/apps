@@ -83,6 +83,24 @@ describe("crawl data-root resolution", () => {
     expect(getDataRoot()).toBe(legacyDataRoot());
   });
 
+  it("falls through to CRAWL_HOME when HASNA_CRAWL_HOME is blank or whitespace-only", () => {
+    // Restore immediately (try/finally): the afterAll restore only replays the
+    // last beforeEach-saved value, which can re-leak a value set mid-file into
+    // sibling test files running in the same process.
+    process.env["CRAWL_HOME"] = "/tmp/crawl-home-b";
+    try {
+      process.env["HASNA_CRAWL_HOME"] = "";
+      expect(exactDataRoot()).toBe("/tmp/crawl-home-b");
+      expect(getDataRoot()).toBe("/tmp/crawl-home-b");
+      process.env["HASNA_CRAWL_HOME"] = "   ";
+      expect(exactDataRoot()).toBe("/tmp/crawl-home-b");
+      expect(getDataRoot()).toBe("/tmp/crawl-home-b");
+    } finally {
+      delete process.env["HASNA_CRAWL_HOME"];
+      delete process.env["CRAWL_HOME"];
+    }
+  });
+
   it("trims valid HASNA_CRAWL_HOME values", () => {
     process.env["HASNA_CRAWL_HOME"] = "  /tmp/crawl-home  ";
     expect(exactDataRoot()).toBe("/tmp/crawl-home");
