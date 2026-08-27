@@ -78,3 +78,17 @@ export function getConfigsStoreHome(env: NodeJS.ProcessEnv = process.env): strin
 export function getConfigsStoreDbPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(getConfigsStoreHome(env), "instructions.db");
 }
+
+/**
+ * The local database path surfaced by server status/health surfaces (e.g. the
+ * MCP server's `db_path` field). The exact `HASNA_INSTRUCTIONS_DB_PATH`
+ * override wins; otherwise the resolver-derived store db path (legacy
+ * `~/.hasna/instructions/instructions.db` until the XDG config home is
+ * adopted, matching `db/database.ts`). A server status must never hardcode the
+ * legacy literal — the store can live at the resolver home.
+ */
+export function getReportedDbPath(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env["HASNA_INSTRUCTIONS_DB_PATH"];
+  if (typeof override === "string" && override.length > 0) return override;
+  return getConfigsStoreDbPath(env);
+}

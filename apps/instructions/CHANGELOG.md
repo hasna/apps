@@ -1,3 +1,9 @@
+## 0.5.5
+
+### Patch Changes
+
+- The MCP server's `check_all` status now reports `db_path` through the @hasna/paths resolver (`getReportedDbPath`), never a hardcoded legacy `~/.hasna/instructions/instructions.db` literal — so the reported store path tracks the effective store home once the XDG config home is adopted (`HASNA_CONFIG_HOME` set or the store migrated to `~/.config/hasna/configs`). The exact `HASNA_INSTRUCTIONS_DB_PATH` override still wins. Complements the #1291 configs store-root resolver switch; dependency remains exactly pinned to `@hasna/paths@0.1.0`. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+
 ## 0.5.4
 
 ### Patch Changes
