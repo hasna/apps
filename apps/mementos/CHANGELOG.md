@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.87
+
+### Patch Changes
+
+- 6adaf39: redact credential-shaped keys from list output on read (I24-00018) — collection list reads project credential-shaped keys out of JSON/YAML/CSV/compact output while preserving ordinary keys and required metadata.
+
+
 ## 0.14.86
 
 ### Patch Changes
