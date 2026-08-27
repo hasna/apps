@@ -1,6 +1,6 @@
 {
   "name": "@hasna/computers",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Durable lifetime computers for AI employees",
   "type": "module",
   "license": "Apache-2.0",
@@ -88,5 +88,8 @@
   "devDependencies": {
     "@types/bun": "1.3.14",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@hasna/paths": "0.1.0"
   }
 }
