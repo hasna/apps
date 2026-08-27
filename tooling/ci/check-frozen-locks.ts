@@ -33,6 +33,14 @@
  *   manifest devDeps the lockfile root entry does not record — lane passes).
  *   So RULE 2 compares dependencies only, exactly as strict as the lane.
  *
+ *   AMENDED 2026-08-27 (I38-01124): devDependencies are compared too, but with
+ *   the lane's exact tolerance — a devDep ABSENT from the ws entry fires only
+ *   when the lockfile's packages map has no resolution satisfying the declared
+ *   spec (the guardrails bun-types shape stays silent; the router
+ *   @hasna/contracts@0.11.1-with-no-resolution shape fires). A devDep whose
+ *   ws-entry spec differs from the manifest is the wave class (files
+ *   @hasna/contracts 0.14.0-vs-0.14.1) and fires like the lane does.
+ *
  * RULE 3 — REGISTRY @hasna/* EDGES BEHIND THE PUBLISHED VERSION (see the
  *   implementation comment). A dependency edge — including a hoisted top-level
  *   entry, judged by the declaring workspace member manifests — resolving a
@@ -455,12 +463,50 @@ function checkAppLockfiles(root: string): string[] {
     if (!fs.existsSync(lock)) continue;
     const doc = parseLockfile(lock);
     const entry = doc.workspaces?.[""];
-    const problemsFor = compareEntry(`apps/${member}/bun.lock (root entry)`, entry, manifestOf(root, member), [
+    const manifest = manifestOf(root, member);
+    const problemsFor = compareEntry(`apps/${member}/bun.lock (root entry)`, entry, manifest, [
       "dependencies",
     ]);
     problems.push(...problemsFor);
+    // devDependencies — the wave class measured 2026-08-27 (I38-01124): the
+    // version wave bumped @hasna/contracts in member devDependencies without
+    // regenerating the per-app lockfiles, and bun's frozen check — which the
+    // Docker deploy lane runs — fires on that drift ("lockfile had changes,
+    // but lockfile is frozen"; measured clean-room rc=1 on apps/{files,access,
+    // dispatch,holdings,shield} @hasna/contracts 0.14.0-vs-0.14.1 and on
+    // apps/router @hasna/contracts@0.11.1 with NO resolution in the lockfile
+    // at all). RULE 2 previously compared dependencies only, so devDeps drift
+    // passed the gate while the lane failed. A devDep ABSENT from the ws entry
+    // is tolerated exactly when the lockfile's packages map resolves the
+    // declared spec (measured: apps/guardrails bun-types@1.3.14 absent from
+    // ws entry, resolved in packages — clean-room frozen rc=0).
+    const devDeps = manifest.devDependencies ?? {};
+    for (const [name, spec] of Object.entries(devDeps)) {
+      const recorded = entry?.devDependencies?.[name];
+      if (recorded === undefined) {
+        if (!lockfileResolves(doc.packages ?? {}, name, String(spec))) {
+          problems.push(
+            `apps/${member}/bun.lock: devDependencies["${name}"] manifest ${spec} — no matching resolution in lockfile`,
+          );
+        }
+      } else if (recorded !== spec) {
+        problems.push(`apps/${member}/bun.lock: devDependencies["${name}"] lockfile ${recorded} != manifest ${spec}`);
+      }
+    }
   }
   return problems;
+}
+
+/** Does the lockfile's packages map resolve `name` at a version satisfying `spec`? */
+function lockfileResolves(packages: Record<string, unknown>, name: string, spec: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^${escaped}@(\\d+\\.\\d+\\.\\d+)(?:[-+][0-9A-Za-z.-]+)?$`);
+  for (const tuple of Object.values(packages)) {
+    if (!Array.isArray(tuple) || tuple.length === 0) continue;
+    const m = re.exec(String(tuple[0]));
+    if (m && satisfiesRange(spec, m[1])) return true;
+  }
+  return false;
 }
 
 /**
@@ -644,6 +690,43 @@ function selfTest(): void {
       throw new Error(`negative control 2 failed — stale app lockfile not reported: ${appHits.join("; ")}`);
     }
 
+    // devDependencies controls (I38-01124 wave class, measured 2026-08-27):
+    // a devDep whose ws-entry spec differs from the manifest must fire (the
+    // apps/files @hasna/contracts 0.14.0-vs-0.14.1 drift — clean-room frozen
+    // rc=1); a devDep absent from the ws entry but resolved in packages must
+    // stay silent (apps/guardrails bun-types@1.3.14 — clean-room frozen rc=0);
+    // a devDep absent from the ws entry AND packages must fire (apps/router
+    // @hasna/contracts@0.11.1 — clean-room frozen rc=1).
+    const alphaWithDevDep = JSON.parse(JSON.stringify(alphaLock));
+    alphaWithDevDep.workspaces[""].devDependencies["typescript"] = "^4.0.0";
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaWithDevDep, null, 2));
+    const devDriftHits = runCheck(dir, offlineProbe).problems;
+    if (!devDriftHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("typescript"))) {
+      throw new Error(`devDep-drift control failed — ws-entry devDep spec drift not reported: ${devDriftHits.join("; ")}`);
+    }
+
+    // Restore matching lockfile; a devDep absent from the ws entry but
+    // resolved in packages must stay silent.
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaLock, null, 2));
+    const absentResolvedLock = JSON.parse(JSON.stringify(alphaLock));
+    delete absentResolvedLock.workspaces[""].devDependencies["typescript"];
+    absentResolvedLock.packages = { typescript: ["typescript@5.0.0", "", {}, "sha-ts"] };
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(absentResolvedLock, null, 2));
+    const absentResolvedHits = runCheck(dir, offlineProbe).problems;
+    if (absentResolvedHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("typescript"))) {
+      throw new Error(`devDep-resolved control failed — ws-entry-absent but packages-resolved devDep reported: ${absentResolvedHits.join("; ")}`);
+    }
+
+    // A devDep absent from the ws entry AND packages must fire.
+    const absentUnresolvedLock = JSON.parse(JSON.stringify(absentResolvedLock));
+    absentUnresolvedLock.packages = {};
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(absentUnresolvedLock, null, 2));
+    const absentUnresolvedHits = runCheck(dir, offlineProbe).problems;
+    if (!absentUnresolvedHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("typescript"))) {
+      throw new Error(`devDep-unresolved control failed — ws-entry-absent and packages-absent devDep not reported: ${absentUnresolvedHits.join("; ")}`);
+    }
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaLock, null, 2));
+
     // A member in the exception registry with a stale app lockfile must NOT
     // fire (the root entry must be present — RULE 1 legitimately requires it).
     fs.mkdirSync(path.join(dir, "apps", "economy"), { recursive: true });
@@ -799,7 +882,7 @@ function selfTest(): void {
     }
 
     console.log(
-      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip controls fired/silent as required; exception respected",
+      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required; exception respected",
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
