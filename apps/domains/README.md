@@ -33,7 +33,7 @@ Domain portfolio, registrar, marketplace, and DNS management for AI agents. The 
 npm install -g @hasna/domains
 ```
 
-Data is stored in the local domains data directory (`~/.hasna/domains`; existing legacy installs continue using their current directory). Override with `DOMAINS_DB_PATH`, `DOMAINS_DIR`, or the legacy `HASNA_DOMAINS_DB_PATH` / `HASNA_DOMAINS_DIR` names.
+Data is stored in the local domains data directory. The home is resolved through `@hasna/paths` (XDG / macOS home layout, honoring `HASNA_*_HOME` overrides). The legacy `~/.hasna/domains` default stays the effective home until the XDG data home is adopted — the operator sets `HASNA_DATA_HOME`, or the store is physically migrated there (`domains.db` exists at the resolver home) — so an existing local store never becomes invisible on upgrade. `HASNA_DOMAINS_HOME` / `DOMAINS_HOME` / `HASNA_DOMAINS_DIR` / `DOMAINS_DIR` are exact-app overrides that win unconditionally; override the db file itself with `DOMAINS_DB_PATH` / `HASNA_DOMAINS_DB_PATH`.
 
 ## Optional Command Groups
 
