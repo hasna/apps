@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.3.27",
+  "version": "0.3.28",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, OpenCode, Cursor, Pi, and Hermes, with legacy Gemini CLI session and Gemini API billing ingestion",
   "repository": {
     "type": "git",
@@ -33,6 +33,7 @@
     "dist",
     "docs",
     "dashboard/dist",
+    "postinstall.js",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
@@ -55,7 +56,7 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "dev:otel": "bun run src/otel/index.ts",
-    "postinstall": "mkdir -p $HOME/.hasna/economy/training 2>/dev/null || true"
+    "postinstall": "node postinstall.js"
   },
   "keywords": [
     "economy",
@@ -81,6 +82,7 @@
     "@hasna/contracts": "0.13.4",
     "@hasna/events": "^0.1.16",
     "@hasna/mcp-harness": "^0.1.0",
+    "@hasna/paths": "0.1.0",
     "@hasna/projects": "1.0.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
