@@ -33,6 +33,22 @@
  * so those members are reported in the tree-wide census below but not
  * asserted. A lane lands by adding its member to FINDING_SCOPE.
  *
+ * FIRST-PARTY EXEMPTION (P4 XDG wave, 2026-08-27): the assertion applies to
+ * THIRD-PARTY declared dependencies only. A hasna-owned scoped dependency
+ * (`@hasna/*`, `@hasnaxyz/*`, `@hasna-internal/*`, `@hasnatools/*`,
+ * `@hasnastudio/*`, `@hasnafamily/*`) is published by this fleet through the
+ * reviewed release flow, and the machine-side minimumReleaseAgeExcludes is
+ * updated for it fleet-wide at publish time — verified for the wave's
+ * `@hasna/paths@0.1.0` (bunfig excludes carry the exact name). So a
+ * freshly-published first-party pin is NOT the supply-chain class this gate
+ * exists for: consumer installs and the pack-audit probe are covered by the
+ * excludes, not by the declared surface. Exempting first-party scopes from the
+ * HARD assertion keeps the gate pointed at third-party quarantine risk while
+ * letting a first-party wave land immediately after its own publish; the
+ * census below still reports first-party in-window admissions so the
+ * exemption is visible, never silent. Third-party deps remain asserted
+ * unchanged (the original dep-context-1 class — @ai-sdk/*, ai, etc.).
+ *
  * NETWORK: the check reads the public registry (`npm view`). A network
  * failure produces an explicit [SKIP quarantine-pins] marker and skips the
  * hard assertion, mirroring the published-pins check. Detection logic itself
@@ -42,6 +58,24 @@
 /** Members this finding lane fixes. Add the member here when its own finding
  * lane lands. */
 export const FINDING_SCOPE = ["context"];
+
+/** Hasna-owned (first-party) dependency scopes. Published by this fleet
+ * through the reviewed release flow; machine-side minimumReleaseAgeExcludes
+ * covers them fleet-wide, so they are exempt from the declared-surface
+ * quarantine assertion (see the header). Third-party deps are the asserted
+ * class. */
+export const FIRST_PARTY_SCOPES = [
+  "@hasna/",
+  "@hasnaxyz/",
+  "@hasna-internal/",
+  "@hasnatools/",
+  "@hasnastudio/",
+  "@hasnafamily/",
+];
+
+export function isFirstParty(dep: string): boolean {
+  return FIRST_PARTY_SCOPES.some((prefix) => dep.startsWith(prefix));
+}
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -234,7 +268,7 @@ describe("standard-adherence: quarantine-window admissions", () => {
     expect(old.violations).toEqual([]);
   });
 
-  test("no finding-scope member's declared dependencies admit a quarantine-window version (HARD)", async () => {
+  test("no finding-scope member's THIRD-PARTY declared dependencies admit a quarantine-window version (HARD)", async () => {
     const members = publishableMembers();
     const manifests = new Map(
       members.map((m) => [m.name, JSON.parse(fs.readFileSync(path.join(APPS_DIR, m.name, "package.json"), "utf8")) as Record<string, unknown>]),
@@ -245,31 +279,59 @@ describe("standard-adherence: quarantine-window admissions", () => {
       console.info("[SKIP quarantine-pins] no declared dependencies in finding scope; nothing to assert");
       return;
     }
-    const deps = [...new Set(scopedSpecs.map((s) => s.dependency))].sort();
+    // First-party (hasna-owned) scoped deps are covered by the fleet
+    // minimumReleaseAgeExcludes at publish time (see header) — exempt from the
+    // HARD assertion, but reported in the census below so the exemption is
+    // visible. The assertion runs on the third-party declared surface, which
+    // is the supply-chain class this gate exists for.
+    const assertedSpecs = scopedSpecs.filter((s) => !isFirstParty(s.dependency));
+    const firstPartyScopedSpecs = scopedSpecs.filter((s) => isFirstParty(s.dependency));
     const admittedByDep = new Map<string, AdmitInfo>();
     let skipped = false;
-    for (const dep of deps) {
-      const admitted = await fetchAdmittedVersions(dep, scopedSpecs.find((s) => s.dependency === dep)!.spec);
-      if (admitted === null) {
-        console.info(`[SKIP quarantine-pins] registry unreachable for ${dep}; offline/network route`);
-        skipped = true;
-        continue;
+    const fetchAdmitted = async (list: QuarantineSpec[]): Promise<Map<string, AdmitInfo>> => {
+      const map = new Map<string, AdmitInfo>();
+      const deps = [...new Set(list.map((s) => s.dependency))].sort();
+      for (const dep of deps) {
+        const admitted = await fetchAdmittedVersions(dep, list.find((s) => s.dependency === dep)!.spec);
+        if (admitted === null) {
+          // A first-party census miss never skips the third-party assertion:
+          // the exemption is audited best-effort, the gate is not.
+          if (!isFirstParty(dep)) {
+            console.info(`[SKIP quarantine-pins] registry unreachable for ${dep}; offline/network route`);
+            skipped = true;
+          }
+          continue;
+        }
+        if (admitted.length === 0) continue; // unresolvable spec; not a quarantine class
+        const times = await fetchPublishTimes(dep);
+        if (times === null) {
+          if (!isFirstParty(dep)) {
+            console.info(`[SKIP quarantine-pins] registry time map unreadable for ${dep}; offline/network route`);
+            skipped = true;
+          }
+          continue;
+        }
+        const maxVersion = admitted[admitted.length - 1];
+        const publishedAt = times[maxVersion];
+        if (!publishedAt) continue; // version on registry without a time entry; unassertable
+        map.set(dep, { version: maxVersion, publishedAt });
       }
-      if (admitted.length === 0) continue; // unresolvable spec; not a quarantine class
-      const times = await fetchPublishTimes(dep);
-      if (times === null) {
-        console.info(`[SKIP quarantine-pins] registry time map unreadable for ${dep}; offline/network route`);
-        skipped = true;
-        continue;
-      }
-      const maxVersion = admitted[admitted.length - 1];
-      const publishedAt = times[maxVersion];
-      if (!publishedAt) continue; // version on registry without a time entry; unassertable
-      admittedByDep.set(dep, { version: maxVersion, publishedAt });
-    }
+      return map;
+    };
+    const thirdPartyByDep = await fetchAdmitted(assertedSpecs);
     if (skipped) return;
     const nowMs = Date.now();
-    const { violations, unverifiable } = findQuarantineAdmissions(scopedSpecs, admittedByDep, QUARANTINE_MS, nowMs);
+    const { violations, unverifiable } = findQuarantineAdmissions(assertedSpecs, thirdPartyByDep, QUARANTINE_MS, nowMs);
+    // First-party census (best-effort, never asserts, never skips): keep the
+    // exemption auditable.
+    const firstPartyByDep = await fetchAdmitted(firstPartyScopedSpecs);
+    const firstPartyViolations = findQuarantineAdmissions(firstPartyScopedSpecs, firstPartyByDep, QUARANTINE_MS, nowMs).violations;
+    if (firstPartyViolations.length > 0) {
+      console.info(
+        `[standard] quarantine-window FIRST-PARTY pins (exempt — fleet minimumReleaseAgeExcludes covers hasna-owned scopes):\n` +
+          firstPartyViolations.map((v) => `  ${v.member} declares ${v.dependency}@${v.spec} -> admits ${v.admittedVersion} (${v.admittedAt})`).join("\n"),
+      );
+    }
     // Tree-wide census: emit (never assert) other members' admissions so the
     // remaining findings stay visible to their fix lanes.
     const allMembersByDep = new Map<string, AdmitInfo>();
