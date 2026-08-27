@@ -179,15 +179,30 @@ deploy_service() {
   preflight_service
   resolve_candidate
 
+  # The production host/Origin allowlist for state-changing requests is
+  # deployment config, not a code default: without it the server refuses every
+  # state-changing request with 403 "Host is not allowed" (CONFIGURATION.md).
+  # Fail the deploy loudly rather than silently shipping a write-refusing
+  # service.
+  require_env MEMENTOS_CORS_ORIGIN
+
   local taskdef_json="$TMP_DIR/new-task-definition.json"
   jq --arg image "$CANDIDATE_IMAGE" \
     --arg container "$WEB_CONTAINER" \
-    --arg family "$WEB_FAMILY" '
+    --arg family "$WEB_FAMILY" \
+    --arg cors_origin "$MEMENTOS_CORS_ORIGIN" '
       .taskDefinition
       | .family=$family
       | .containerDefinitions |= map(
           if .name==$container
-          then (.image=$image | .command=["mementos-deploy"] | del(.entryPoint))
+          then (.image=$image
+               | .command=["mementos-deploy"]
+               | del(.entryPoint)
+               | .environment = ((.environment // [])
+                   | if any(.name == "MEMENTOS_CORS_ORIGIN")
+                     then .
+                     else . + [{"name":"MEMENTOS_CORS_ORIGIN","value":$cors_origin}]
+                     end))
           else .
           end
         )

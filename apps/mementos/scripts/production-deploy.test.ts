@@ -46,7 +46,10 @@ function laggingService(taskDefinition: string) {
   return value;
 }
 
-function taskDefinition(command: string[]) {
+function taskDefinition(
+  command: string[],
+  environment: Array<{ name: string; value: string }> = [],
+) {
   return {
     taskDefinition: {
       taskDefinitionArn: "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
@@ -61,13 +64,17 @@ function taskDefinition(command: string[]) {
           image: "example.invalid/mementos:previous",
           command,
           entryPoint: ["/entrypoint.sh"],
+          ...(environment.length > 0 ? { environment } : {}),
         },
       ],
     },
   };
 }
 
-function makeFixture(command: string[]) {
+function makeFixture(
+  command: string[],
+  liveEnv: Array<{ name: string; value: string }> = [],
+) {
   const dir = mkdtempSync(resolve(tmpdir(), "mementos-production-deploy-"));
   fixtureDirs.push(dir);
   const fakeAws = resolve(dir, "aws");
@@ -76,13 +83,14 @@ function makeFixture(command: string[]) {
   const state = resolve(dir, "updated.state");
   const readbackCount = resolve(dir, "readback-count.txt");
   const githubOutput = resolve(dir, "github-output.txt");
+  const registerInputCapture = resolve(dir, "register-input.json");
 
   writeJson(resolve(dir, "service-before.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16"));
   writeJson(resolve(dir, "service-after.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17"));
   writeJson(resolve(dir, "service-lagging.json"), laggingService("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17"));
   writeJson(resolve(dir, "service-rollback.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16"));
   writeJson(resolve(dir, "service-drift.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:18"));
-  writeJson(resolve(dir, "taskdef.json"), taskDefinition(command));
+  writeJson(resolve(dir, "taskdef.json"), taskDefinition(command, liveEnv));
   writeJson(resolve(dir, "image.json"), {
     imageDetails: [{ imageDigest: digest, imageTags: ["b".repeat(40)] }],
   });
@@ -148,7 +156,16 @@ case " $* " in
     ;;
   *" ecs describe-task-definition "*) sed -n '1,999p' "$FIXTURE_DIR/taskdef.json" ;;
   *" ecr describe-images "*) sed -n '1,999p' "$FIXTURE_DIR/image.json" ;;
-  *" ecs register-task-definition "*) sed -n '1,999p' "$FIXTURE_DIR/register.json" ;;
+  *" ecs register-task-definition "*)
+    if [ -n "\${REGISTER_INPUT_CAPTURE_PATH:-}" ]; then
+      for a in "$@"; do
+        case "$a" in
+          file://*) cat "\${a#file://}" >> "$REGISTER_INPUT_CAPTURE_PATH" ;;
+        esac
+      done
+    fi
+    sed -n '1,999p' "$FIXTURE_DIR/register.json"
+    ;;
   *" ecs update-service "*)
     case "$*" in
       *"mementos-prod:17"*) printf 'new\n' > "$STATE_PATH" ;;
@@ -193,14 +210,15 @@ esac
   );
   chmodSync(fakeCurl, 0o755);
 
-  return { dir, fakeAws, fakeCurl, trace, state, readbackCount, githubOutput };
+  return { dir, fakeAws, fakeCurl, trace, state, readbackCount, githubOutput, registerInputCapture };
 }
 
 async function runDeploy(
   command: string[],
   readbackMode: ReadbackMode = "complete",
+  liveEnv: Array<{ name: string; value: string }> = [],
 ) {
-  const fixture = makeFixture(command);
+  const fixture = makeFixture(command, liveEnv);
   const proc = Bun.spawn(
     ["bash", resolve(root, "scripts/production-deploy.sh"), "deploy"],
     {
@@ -214,6 +232,8 @@ async function runDeploy(
         READBACK_MODE: readbackMode,
         FIXTURE_DIR: fixture.dir,
         GITHUB_OUTPUT: fixture.githubOutput,
+        REGISTER_INPUT_CAPTURE_PATH: fixture.registerInputCapture,
+        MEMENTOS_CORS_ORIGIN: "https://mementos.hasna.xyz",
         AWS_REGION: "us-east-1",
         CLUSTER: "fixture-cluster",
         SERVICE: "mementos-prod",
@@ -386,5 +406,29 @@ describe("production deploy orchestration", () => {
       "deployment rejected and rollback could not be proven",
     );
     expect(result.stderr).not.toContain("rollback restored one stable PRIMARY");
+  });
+
+  test("deploy injects MEMENTOS_CORS_ORIGIN into the registered task definition when the live definition lacks it", async () => {
+    const result = await runDeploy(["mementos-deploy"]);
+    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+    const env = payload.containerDefinitions[0].environment;
+
+    expect(result.exitCode).toBe(0);
+    expect(env).toEqual([
+      { name: "MEMENTOS_CORS_ORIGIN", value: "https://mementos.hasna.xyz" },
+    ]);
+  });
+
+  test("deploy does not duplicate MEMENTOS_CORS_ORIGIN when the live definition already carries it", async () => {
+    const result = await runDeploy(["mementos-deploy"], "complete", [
+      { name: "MEMENTOS_CORS_ORIGIN", value: "https://mementos.hasna.xyz" },
+    ]);
+    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+    const env = payload.containerDefinitions[0].environment;
+
+    expect(result.exitCode).toBe(0);
+    expect(env).toEqual([
+      { name: "MEMENTOS_CORS_ORIGIN", value: "https://mementos.hasna.xyz" },
+    ]);
   });
 });
