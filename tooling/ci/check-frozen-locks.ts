@@ -115,6 +115,28 @@
  *   I38-00566) and stays exempt — a globbed COPY with no lockfile resolves
  *   from the manifest and is a deliberate sibling pattern, not a defect.
  *
+ * RULE 5 — MEMBER MANIFEST VERSION BEHIND THE PUBLISHED LATEST (O15-00772).
+ *   A member whose OWN manifest version is BELOW the npm-published latest is
+ *   a src-vs-registry drift: something published a newer version without
+ *   landing the bump on main — a ship lane publishing from a branch, a wave
+ *   PR closed-unmerged after publishing. Deploying src then DOWNGRADES
+ *   production. Measured 2026-08-24 (deploy pass 43): mementos-prod ran
+ *   @hasna/mementos@0.14.87 (npm latest, published 2026-08-24T15:08Z from
+ *   ship/I24-00018-mementos-0.14.87) while origin/main's manifest was still
+ *   0.14.86 — the bump never reached main, blocking every later mementos
+ *   deploy. RULE 3 covers registry EDGES behind the published max; this
+ *   covers the member's own manifest.
+ *
+ *   The comparison is against the npm `latest` dist-tag, deliberately: the
+ *   version wave bumps manifests BEFORE publish-all runs, so an offline
+ *   comparison against the workspace would fire on every wave from bump to
+ *   publish and deadlock the release cadence — the same reason RULE 3 is
+ *   npm-backed. Only manifest < published fires; the wave direction
+ *   (manifest > published) stays silent. npm unreachability is a REFUSAL
+ *   exactly as RULE 3: a skipped probe increments `skipped` and the runner
+ *   exits 2. A member that has never been published (no `latest` to compare)
+ *   surfaces the same way — publish it first, or the gate cannot run.
+ *
  * Not covered, stated so the boundary is visible:
  *   - Resolution-level drift that leaves the recorded workspace entry intact
  *     (bun's own frozen check covers that class where it applies).
@@ -471,11 +493,49 @@ function checkDockerfileLockfiles(root: string): string[] {
   return problems;
 }
 
+/**
+ * RULE 5 — member manifest version behind the published latest. See the
+ * header for the class and the wave-direction boundary.
+ */
+function checkMemberVersions(root: string, published: PublishedProbe): { problems: string[]; skipped: number } {
+  const problems: string[] = [];
+  let skipped = 0;
+  for (const member of memberDirs(root)) {
+    const manifest = manifestOf(root, member);
+    const name = manifest?.name;
+    const version = manifest?.version;
+    if (typeof name !== "string" || !name.startsWith("@hasna/")) continue;
+    const mv = typeof version === "string" ? parseVersion(version) : null;
+    if (!mv) continue; // no comparable manifest version
+    const latest = published(name);
+    if (latest === null) {
+      skipped++;
+      console.error(`check-frozen-locks: npm unreachable — skipped published-version check for ${name}`);
+      continue;
+    }
+    const lv = parseVersion(latest);
+    if (!lv) continue;
+    if (versionCmp(mv, lv) < 0) {
+      problems.push(
+        `${name} (apps/${member}): manifest ${version} — behind published ${name}@${latest}; land the bump on main before deploying`,
+      );
+    }
+  }
+  return { problems, skipped };
+}
+
 export function runCheck(root: string, published: PublishedProbe = defaultPublishedProbe): RegistryCheckResult {
   const registry = checkRegistryEdges(root, published);
+  const memberVersions = checkMemberVersions(root, published);
   return {
-    problems: [...checkRootLockfile(root), ...checkAppLockfiles(root), ...checkDockerfileLockfiles(root), ...registry.problems],
-    skipped: registry.skipped,
+    problems: [
+      ...checkRootLockfile(root),
+      ...checkAppLockfiles(root),
+      ...checkDockerfileLockfiles(root),
+      ...registry.problems,
+      ...memberVersions.problems,
+    ],
+    skipped: registry.skipped + memberVersions.skipped,
     failedProbes: registry.failedProbes,
   };
 }
@@ -712,8 +772,34 @@ function selfTest(): void {
       throw new Error(`hoisted exact-pin control failed — deliberate old pin reported: ${hoistedExactHits.join("; ")}`);
     }
 
+    // RULE 5 controls — member manifest version BEHIND the published latest
+    // must fire (the O15-00772 drift class); AT the published latest (steady
+    // state) and AHEAD of it (version wave: bump merged, publish-all not run
+    // yet — the direction that must never deadlock the cadence) must stay
+    // silent. An unreachable member probe must surface as a skip, never as a
+    // silent pass.
+    const r5Stale: PublishedProbe = (pkg) => (pkg === "@hasna/alpha" ? "1.2.1" : null);
+    const r5StaleHits = runCheck(dir, r5Stale).problems;
+    if (!r5StaleHits.some((p) => p.includes("@hasna/alpha") && p.includes("1.2.1"))) {
+      throw new Error(`RULE 5 control failed — manifest behind published latest not reported: ${r5StaleHits.join("; ")}`);
+    }
+    const r5Current: PublishedProbe = (pkg) => (pkg === "@hasna/alpha" ? "1.2.0" : null);
+    const r5CurrentHits = runCheck(dir, r5Current).problems;
+    if (r5CurrentHits.some((p) => p.includes("@hasna/alpha"))) {
+      throw new Error(`RULE 5 control failed — manifest at published latest reported: ${r5CurrentHits.join("; ")}`);
+    }
+    const r5Ahead: PublishedProbe = (pkg) => (pkg === "@hasna/alpha" ? "1.1.0" : null);
+    const r5AheadHits = runCheck(dir, r5Ahead).problems;
+    if (r5AheadHits.some((p) => p.includes("@hasna/alpha"))) {
+      throw new Error(`RULE 5 control failed — wave-in-flight manifest ahead of published reported: ${r5AheadHits.join("; ")}`);
+    }
+    const r5Skip = runCheck(dir, offlineProbe).skipped;
+    if (r5Skip < 1) {
+      throw new Error(`RULE 5 skip control failed — unreachable member probe did not surface as a skip`);
+    }
+
     console.log(
-      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present controls fired/silent as required; exception respected",
+      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip controls fired/silent as required; exception respected",
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

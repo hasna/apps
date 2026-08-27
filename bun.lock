@@ -217,7 +217,7 @@
         "@hasna/connectors": "1.4.3",
         "@hasna/conversations": "0.7.8",
         "@hasna/events": "0.1.3",
-        "@hasna/mementos": "0.14.86",
+        "@hasna/mementos": "0.14.87",
         "@hasna/paths": "0.1.0",
         "@hasna/secrets": "0.3.10",
         "@hasna/sessions": "0.12.20",
@@ -1070,7 +1070,7 @@
     },
     "apps/mementos": {
       "name": "@hasna/mementos",
-      "version": "0.14.86",
+      "version": "0.14.87",
       "bin": {
         "mementos": "dist/cli/index.js",
         "mementos-mcp": "dist/mcp/index.js",
