@@ -1,5 +1,11 @@
 # @hasna/monitor
 
+## 0.1.29
+
+### Patch Changes
+
+- Switch @hasna/monitor local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/monitor` default (with the `MONITOR_CONFIG_DIR` / `HASNA_MONITOR_HOME` exact-app overrides) stays the effective home until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+
 ## 0.1.28
 
 ### Patch Changes

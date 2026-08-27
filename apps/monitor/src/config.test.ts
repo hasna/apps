@@ -154,6 +154,50 @@ describe("loadConfig()", () => {
     }
   });
 
+  it("adopts the resolver data home when HASNA_DATA_HOME is set (no MONITOR_CONFIG_DIR)", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "monitor-home-"));
+    const dataRoot = mkdtempSync(join(tmpdir(), "monitor-data-"));
+
+    try {
+      const result = runIsolatedBunScript(
+        `
+          import { existsSync } from "node:fs";
+          import { join } from "node:path";
+          import { loadConfig } from "./src/config.ts";
+          import { getMonitorDir } from "./src/app-home.ts";
+
+          const config = loadConfig();
+          console.log(JSON.stringify({
+            monitorDir: getMonitorDir(),
+            resolverHome: join(process.env.HASNA_DATA_HOME, "monitor"),
+            configAtResolver: existsSync(join(process.env.HASNA_DATA_HOME, "monitor", "config.json")),
+            legacyConfigExists: existsSync(join(process.env.HOME, ".hasna", "monitor", "config.json")),
+          }));
+        `,
+        withoutConfigDirOverride({
+          ...process.env,
+          HOME: homeDir,
+          HASNA_DATA_HOME: dataRoot,
+        })
+      ) as {
+        monitorDir: string;
+        resolverHome: string;
+        configAtResolver: boolean;
+        legacyConfigExists: boolean;
+      };
+
+      expect(result).toEqual({
+        monitorDir: join(dataRoot, "monitor"),
+        resolverHome: join(dataRoot, "monitor"),
+        configAtResolver: true,
+        legacyConfigExists: false,
+      });
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
   it("uses MONITOR_CONFIG_DIR for default SQLite storage", () => {
     const homeDir = mkdtempSync(join(tmpdir(), "monitor-home-"));
     const isolatedConfigDir = mkdtempSync(join(tmpdir(), "monitor-config-"));

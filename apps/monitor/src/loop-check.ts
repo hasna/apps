@@ -12,8 +12,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { getMonitorDir } from "./app-home.js";
 import { getCollectorForMachine, type Collector } from "./collectors/index.js";
 import type { ProcessRow } from "./db/schema.js";
 import { processInfoToRow } from "./process-manager/index.js";
@@ -372,7 +372,7 @@ function normalizeEvidence(value: Record<string, unknown>[], maxEvidenceItems: n
 
 function resolveEvidenceDir(kind: MonitorLoopCheckKind, evidenceDir: string | false | undefined): string | null {
   if (evidenceDir === false) return null;
-  return evidenceDir ?? join(homedir(), ".hasna", "monitor", "loop-check", kind);
+  return evidenceDir ?? join(getMonitorDir(), "loop-check", kind);
 }
 
 function finalizeLoopCheckResult(

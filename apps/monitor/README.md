@@ -196,7 +196,7 @@ output, such as `monitor ps`.
 | `cron add <name> <schedule> <command>` | Add a cron job |
 | `cron run <job-id>` | Run a cron job immediately |
 | `search <query>` | Full-text search |
-| `migrate` | Move legacy config and database files into `~/.hasna/monitor/` |
+| `migrate` | Move legacy config and database files into the effective monitor home |
 | `retention` | Downsample old metrics and prune stale database rows |
 | `integrations list` | List integration status |
 | `integrations test <name>` | Test an integration |
@@ -406,9 +406,11 @@ reference is available in [docs/api.md](docs/api.md).
 
 ## Configuration
 
-Config is stored at `~/.hasna/monitor/config.json`. Set `MONITOR_CONFIG_DIR`
-to use a different config/database directory for CI, tests, or isolated agent
-runs.
+Config is stored at the effective monitor home — `~/.hasna/monitor/config.json`
+by default, resolved through `@hasna/paths` to the XDG data home once the store is
+migrated there or `HASNA_DATA_HOME` is set. Set `MONITOR_CONFIG_DIR` (or the
+`HASNA_MONITOR_HOME` alias) to use a different config/database directory for CI,
+tests, or isolated agent runs.
 
 ```json
 {
@@ -451,6 +453,8 @@ runs.
     "loadAvg": 10
   },
   "dbPath": "~/.hasna/monitor/monitor.db",
+  // resolved through @hasna/paths; the XDG data home is adopted once the store is
+  // migrated there or HASNA_DATA_HOME is set.
   "apiPort": 3847,
   "webPort": 3848,
   "integrations": {
@@ -552,7 +556,7 @@ monitor completions bash >> ~/.bashrc
 
 ## Database
 
-By default uses SQLite at `~/.hasna/monitor/monitor.db`. For production or multi-agent setups, use PostgreSQL:
+By default uses SQLite at the effective monitor home — `~/.hasna/monitor/monitor.db` by default, resolved through `@hasna/paths` to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set. For production or multi-agent setups, use PostgreSQL:
 
 Set `MONITOR_DATABASE_URL` environment variable:
 

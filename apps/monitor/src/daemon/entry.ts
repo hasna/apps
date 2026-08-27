@@ -17,6 +17,7 @@ import { SystemClock } from "./clock.js";
 import { ensureV2Schema } from "./schema.js";
 import { Daemon } from "./daemon.js";
 import { CommandCheckExecutor } from "./shell-executor.js";
+import { getDefaultDbPath } from "../config.js";
 
 interface Options {
   dbPath: string;
@@ -33,7 +34,7 @@ const USAGE = `Usage: monitor-daemon <verb> [options]
 Verbs: run | status | start | pause | resume | drain | stop | recover | replace
 
 Options:
-  --db-path <path>          Store path (default: HASNA_MONITOR_DB_PATH or ~/.hasna/monitor/monitor.db)
+  --db-path <path>          Store path (default: HASNA_MONITOR_DB_PATH or the resolver-resolved monitor.db)
   --daemon-id <id>          Daemon identity (default: HASNA_MONITOR_DAEMON_ID or local-1)
   --interval-ms <ms>        run-loop interval (default: 5000)
   --capacity <n>            Worker capacity (default: 4)
@@ -47,7 +48,7 @@ function parseArgs(argv: string[]): { verb: string; opts: Options } {
   const args = argv.slice(2);
   const verb = args[0] ?? "run";
   const opts: Options = {
-    dbPath: process.env["HASNA_MONITOR_DB_PATH"] ?? `${process.env["HOME"]}/.hasna/monitor/monitor.db`,
+    dbPath: process.env["HASNA_MONITOR_DB_PATH"] ?? getDefaultDbPath(),
     daemonId: process.env["HASNA_MONITOR_DAEMON_ID"] ?? "local-1",
     intervalMs: 5_000,
     capacity: 4,
