@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { MementosConfig, MemoryCategory, MemoryScope } from "../types";
+import { getDataRoot } from "./paths.js";
 
 // ============================================================================
 // Default configuration
@@ -105,7 +106,7 @@ function isValidCategory(value: string): value is MemoryCategory {
 // ============================================================================
 
 export function loadConfig(): MementosConfig {
-  const configPath = join(homeDir(), ".hasna", "mementos", "config.json");
+  const configPath = join(getDataRoot(), "config.json");
 
   let fileConfig: Record<string, unknown> = {};
 
@@ -201,11 +202,11 @@ function findGitRoot(): string | null {
 // ============================================================================
 
 function profilesDir(): string {
-  return join(homeDir(), ".hasna", "mementos", "profiles");
+  return join(getDataRoot(), "profiles");
 }
 
 function globalConfigPath(): string {
-  return join(homeDir(), ".hasna", "mementos", "config.json");
+  return join(getDataRoot(), "config.json");
 }
 
 function readGlobalConfig(): Record<string, unknown> {
@@ -272,9 +273,9 @@ export function deleteProfile(name: string): boolean {
 }
 
 export function getDbPath(): string {
-  // 0. Auto-migrate: copy old ~/.mementos/ to ~/.hasna/mementos/ if needed
+  // 0. Auto-migrate: copy old ~/.mementos/ to the effective data root if needed
   const _home = homeDir();
-  const _newDir = join(_home, ".hasna", "mementos");
+  const _newDir = getDataRoot();
   const _oldDir = join(_home, ".mementos");
   if (!existsSync(_newDir) && existsSync(_oldDir)) {
     mkdirSync(join(_home, ".hasna"), { recursive: true });
@@ -318,8 +319,8 @@ export function getDbPath(): string {
     return found;
   }
 
-  // 5. Fallback — ~/.hasna/mementos/mementos.db
-  const fallback = join(homeDir(), ".hasna", "mementos", "mementos.db");
+  // 5. Fallback — the effective data root's mementos.db
+  const fallback = join(getDataRoot(), "mementos.db");
   ensureDir(dirname(fallback));
   return fallback;
 }

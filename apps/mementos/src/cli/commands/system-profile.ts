@@ -1,6 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
+import { join } from "node:path";
 import { getActiveProfile, setActiveProfile, listProfiles, deleteProfile } from "../../lib/config.js";
+import { getDataRoot } from "../../lib/paths.js";
 import { outputJson, type GlobalOpts } from "../helpers.js";
 
 export function registerProfileCommand(program: Command): void {
@@ -43,7 +45,7 @@ export function registerProfileCommand(program: Command): void {
       if (active) {
         console.log(chalk.green(`Active profile: ${active}`));
         if (!process.env["MEMENTOS_PROFILE"]) {
-          console.log(chalk.dim("(persisted in ~/.hasna/mementos/config.json)"));
+          console.log(chalk.dim(`(persisted in ${join(getDataRoot(), "config.json")})`));
         } else {
           console.log(chalk.dim("(from MEMENTOS_PROFILE env var)"));
         }
@@ -63,7 +65,7 @@ export function registerProfileCommand(program: Command): void {
       }
       setActiveProfile(clean);
       console.log(chalk.green(`✓ Active-profile metadata set: ${clean}`));
-      console.log(chalk.dim(`  Profile file: ~/.hasna/mementos/profiles/${clean}.db`));
+      console.log(chalk.dim(`  Profile file: ${join(getDataRoot(), "profiles", `${clean}.db`)}`));
       console.log(chalk.dim("  Run `mementos storage mode` to verify the live runtime database."));
     });
 

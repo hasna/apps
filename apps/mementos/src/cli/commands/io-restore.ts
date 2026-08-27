@@ -1,10 +1,11 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { existsSync, statSync, copyFileSync, readdirSync } from "node:fs";
 import { getDatabase, getDbPath, resetDatabase } from "../../db/database.js";
 import { isApiMode } from "../../db/api-mode.js";
 import { bulkUpsertMemories } from "../../db/memories.js";
+import { getDataRoot } from "../../lib/paths.js";
 import {
   outputJson,
   makeHandleError,
@@ -41,13 +42,12 @@ export function registerRestoreCommand(program: Command): void {
   program
     .command("restore [file]")
     .description("Restore the database from a backup file")
-    .option("--latest", "Restore the most recent backup from ~/.hasna/mementos/backups/")
+    .option("--latest", "Restore the most recent backup from the mementos backups dir")
     .option("--force", "Skip confirmation and perform the restore")
     .action((filePath: string | undefined, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
-        const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-        const backupsDir = resolve(home, ".hasna", "mementos", "backups");
+        const backupsDir = join(getDataRoot(), "backups");
 
         let source: string;
 
