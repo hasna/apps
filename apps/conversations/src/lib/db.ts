@@ -1,8 +1,9 @@
 import { Database as BunDatabase } from "bun:sqlite";
 import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, resolve } from "path";
 import { homedir } from "os";
+import { dataDir } from "@hasna/paths";
 import { buildLegacyChannelNameMap, normalizeChannelName } from "./channel-names.js";
 import { backfilledChannelIdForName } from "./channel-id.js";
 
@@ -104,24 +105,90 @@ type LegacyChannelRow = {
   topic: string | null;
 };
 
-export function getDataDir(): string {
+/**
+ * Resolve the user's home directory: $HOME, then $USERPROFILE (Windows), then
+ * the OS user database. A home that cannot be resolved is a hard error — never
+ * a literal "~" path (relative to cwd) and never an "undefined"-prefixed path.
+ */
+export function getHomeDir(): string {
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const newDir = join(home, ".hasna", "conversations");
-  const oldDir = join(home, ".conversations");
+  if (!home) throw new Error("Could not resolve the user home directory");
+  return home;
+}
 
-  // Auto-migrate old dir to new location
-  if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
+/**
+ * The @hasna/paths-resolved (XDG / macOS home layout) data root for
+ * conversations. This is the forward-looking home the XDG migration (hotfixes
+ * plan 0f49f56a, task P3.3) moves the store toward: `~/.local/share/hasna/
+ * conversations` on Linux, `~/Library/Application Support/Hasna/conversations`
+ * on macOS. The home override mirrors the pre-existing $HOME-first resolution
+ * so the resolver follows the same home the legacy path does.
+ */
+export function getResolverDataRoot(): string {
+  return dataDir({ app: "conversations", home: getHomeDir() });
+}
+
+/** The legacy (pre-XDG) data root: ~/.hasna/conversations */
+export function getLegacyDataRoot(): string {
+  return join(getHomeDir(), ".hasna", "conversations");
+}
+
+/**
+ * Whether the resolver (XDG) data root should be adopted as the effective data
+ * root. The resolver root is adopted only when the operator has set
+ * `HASNA_DATA_HOME` (the data-kind override — a deliberate opt-in to the XDG
+ * layout) or the store has already been physically migrated there
+ * (`messages.db` exists). A machine that only redirects another kind (e.g.
+ * cache to tmpfs) must NOT have its data home moved, and a live store at the
+ * legacy home must never become invisible on upgrade.
+ */
+export function adoptResolverDataRoot(
+  resolved: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const dataOverride = env.HASNA_DATA_HOME;
+  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
+  return existsSync(join(resolved, "messages.db"));
+}
+
+/** The exact-app override root, when set: `HASNA_CONVERSATIONS_HOME`, then `CONVERSATIONS_HOME`. */
+export function getExactDataRoot(): string | undefined {
+  const dir = process.env["HASNA_CONVERSATIONS_HOME"] ?? process.env["CONVERSATIONS_HOME"];
+  if (dir && dir.trim()) return dir.trim();
+  return undefined;
+}
+
+/**
+ * The effective data root for conversations: an exact-app override
+ * (`HASNA_CONVERSATIONS_HOME`, then `CONVERSATIONS_HOME`) wins
+ * unconditionally; otherwise the resolver (XDG) data root once adopted;
+ * otherwise the legacy `~/.hasna/conversations` default — an existing store
+ * never becomes invisible on upgrade. The store path (`HASNA_CONVERSATIONS_DB_PATH`
+ * / `CONVERSATIONS_DB_PATH`) is layered on top of this by `getDbPath`, so an
+ * explicit store path always wins regardless.
+ */
+export function getDataDir(): string {
+  const exact = getExactDataRoot();
+  const effective = exact
+    ? resolve(exact)
+    : adoptResolverDataRoot(getResolverDataRoot())
+      ? resolve(getResolverDataRoot())
+      : getLegacyDataRoot();
+  const oldDir = join(getHomeDir(), ".conversations");
+
+  // Auto-migrate old dir to the effective data root
+  if (existsSync(oldDir) && !existsSync(effective)) {
+    mkdirSync(effective, { recursive: true });
     for (const file of readdirSync(oldDir)) {
       const oldPath = join(oldDir, file);
       if (statSync(oldPath).isFile()) {
-        copyFileSync(oldPath, join(newDir, file));
+        copyFileSync(oldPath, join(effective, file));
       }
     }
   }
 
-  mkdirSync(newDir, { recursive: true });
-  return newDir;
+  mkdirSync(effective, { recursive: true });
+  return effective;
 }
 
 /**

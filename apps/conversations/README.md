@@ -154,9 +154,11 @@ way:
 2. the `CONVERSATIONS_AGENT_ID` env var,
 3. the agent that registered on this MCP connection (stdio only, see below),
 4. the identity registered for `CONVERSATIONS_SESSION_ID`, stored in a
-   session-keyed file under `~/.hasna/conversations/session-identities/`,
-5. this installation's identity, `~/.hasna/conversations/agent-id` — **only when
-   the process opts in with `CONVERSATIONS_USE_MACHINE_IDENTITY=1`**.
+   session-keyed file under the data home (`session-identities/` — legacy
+   `~/.hasna/conversations/session-identities/`),
+5. this installation's identity, the data home's `agent-id` (legacy
+   `~/.hasna/conversations/agent-id`) — **only when the process opts in with
+   `CONVERSATIONS_USE_MACHINE_IDENTITY=1`**.
 
 **There is no sixth rung. A session that declares nothing gets an error, not a
 name.** Resolution used to fall through to the machine-wide file for everyone,
@@ -367,7 +369,15 @@ resolved deterministically with suffixes.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/conversations/`.
+The local SQLite store and per-install files (config, agent identity, exports,
+attachments, training) are resolved through the `@hasna/paths` resolver (XDG /
+macOS home layout). The legacy `~/.hasna/conversations/` data root stays the
+effective root until the store has been migrated to the resolver data home
+(`~/.local/share/hasna/conversations` on Linux) or the operator sets the
+data-kind override `HASNA_DATA_HOME`. An explicit store path
+(`HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`) always wins; the
+exact-app overrides `HASNA_CONVERSATIONS_HOME` / `CONVERSATIONS_HOME` name an
+explicit data root.
 
 ## License
 
