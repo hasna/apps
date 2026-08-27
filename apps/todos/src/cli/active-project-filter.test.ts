@@ -189,6 +189,40 @@ describe("active project filters", () => {
     expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
   }, cliSpawnBudgetMs(1));
 
+  test("reports an unsupported format when it precedes the command", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["--format", "json", "active", "--json"], dbPath, home);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format when it precedes the command via inline equals", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["--format=json", "active", "--json"], dbPath, home);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format preceding the command after a global project option", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(
+      [`--project=${join(home, "active-project")}`, "--format", "json", "active", "--json"],
+      dbPath,
+      home,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
   test("does not apply the active format guard to a nested roadmap command", async () => {
     const home = tempRoot();
     const dbPath = join(home, "todos.db");

@@ -133,6 +133,11 @@ function commandForArgs(root: Command, args: readonly string[]): Command {
         // in the NEXT position, and skipping the inline form would walk past
         // the command name and bypass the active-format guard.
         if (exact) index += 1;
+      } else if (!option && !arg.includes("=")) {
+        // Unknown option: its separate-token value is never a command name,
+        // so skip it to keep resolving the command (`--format json active`).
+        const next = args[index + 1];
+        if (next !== undefined && !next.startsWith("-")) index += 1;
       }
       continue;
     }
@@ -149,9 +154,14 @@ function unsupportedActiveFormatOption(command: Command, args: readonly string[]
   if (command.name() !== "active") return null;
   const activeIndex = args.indexOf("active");
   if (activeIndex < 0) return null;
-  return args
-    .slice(activeIndex + 1)
-    .find((arg) => arg === "--format" || arg.startsWith("--format=")) ?? null;
+  const format = (arg: string) => arg === "--format" || arg.startsWith("--format=");
+  // The option may sit after the command (`active --format json`) or before
+  // it (`--format json active`); both spellings are unsupported on `active`.
+  return (
+    args.slice(activeIndex + 1).find(format) ??
+    args.slice(0, activeIndex).find(format) ??
+    null
+  );
 }
 
 // Global options
