@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { getStorageConnectionString } from "../../storage.js";
+import { getStorageConnectionStringForOperator } from "../../storage.js";
 
 export function registerMiscCommands(program: Command): void {
 
@@ -47,7 +47,7 @@ export function registerMiscCommands(program: Command): void {
         connStr = opts.connectionString;
       } else {
         try {
-          connStr = getStorageConnectionString("mementos");
+          connStr = getStorageConnectionStringForOperator("mementos");
         } catch {
           const msg = "Remote storage database is not configured. Use --connection-string or set HASNA_MEMENTOS_DATABASE_URL.";
           if (useJson) {

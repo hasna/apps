@@ -1,5 +1,5 @@
 import type { SystemToolDeps, CreateMemoryInput } from "./system-tools-shared.js";
-import { getStorageConnectionString } from "../../storage.js";
+import { getStorageConnectionStringForOperator } from "../../storage.js";
 import { createSubscription, deleteSubscription } from "../../db/subscriptions.js";
 import { saveFeedback } from "../../db/feedback.js";
 
@@ -158,7 +158,7 @@ export function registerSystemEventTools({ server, z, createMemory, saveToolEven
         if (connection_string) {
           connStr = connection_string;
         } else {
-          connStr = getStorageConnectionString("mementos");
+          connStr = getStorageConnectionStringForOperator("mementos");
         }
 
         const result = await applyPgMigrations(connStr);

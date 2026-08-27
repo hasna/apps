@@ -7,6 +7,7 @@ import {
   STORAGE_TABLES,
   getStorageBackend,
   getStorageConnectionString,
+  getStorageConnectionStringForOperator,
   getStorageDatabaseEnv,
   getStorageDatabaseEnvName,
   getStorageDatabaseUrl,
@@ -106,6 +107,20 @@ describe("mementos storage configuration", () => {
     });
     expect(getStorageDatabaseEnvName()).toBe("MEMENTOS_DATABASE_URL");
     expect(getStorageDatabaseUrl()).toBe("postgres://fallback");
+  });
+
+  it("keeps the client DSN guard fail-closed outside the serve process (O15-02695)", () => {
+    // The client data path must NEVER resolve a DSN outside the serve process,
+    // even when the env DSN is present. The operator migrate escape is the ONLY
+    // unguarded surface; this is the negative control for that boundary.
+    resetServerContextForTests();
+    process.env["HASNA_MEMENTOS_DATABASE_URL"] = "postgres://client-should-not-use";
+
+    expect(() => getStorageConnectionString()).toThrow(/mementos-serve/);
+    // ...but the deliberately-invoked migrate operator verb resolves the same
+    // env-configured DSN (this is what the deploy one-shot migrate gate runs).
+    expect(getStorageConnectionStringForOperator()).toBe("postgres://client-should-not-use");
+    expect(getPgMigrationDiagnostics().ok).toBe(true);
   });
 
   it("selects the server backend by DATABASE_URL presence", () => {

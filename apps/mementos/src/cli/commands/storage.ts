@@ -3,7 +3,7 @@ import chalk from "chalk";
 import {
   getSafeStorageConfigSummary,
   getStorageConfig,
-  getStorageConnectionString,
+  getStorageConnectionStringForOperator,
   getStorageStatus,
 } from "../../storage.js";
 import { getStorageSyncStatus, pullStorageChanges, pushStorageChanges } from "../../lib/storage-sync.js";
@@ -264,7 +264,7 @@ function installStorageSubcommands(storage: Command, program: Command): void {
           return;
         }
 
-        const connectionString = opts.connectionString || getStorageConnectionString("mementos");
+        const connectionString = opts.connectionString || getStorageConnectionStringForOperator("mementos");
         const result = await applyPgMigrations(connectionString);
         if (useJson) {
           outputJson(true, result);

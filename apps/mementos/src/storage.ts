@@ -1089,18 +1089,15 @@ function getConfiguredConnectionString(): string | undefined {
   return getStorageDatabaseUrl() ?? undefined;
 }
 
-export function getStorageConnectionString(dbName = "mementos"): string {
-  assertNoLegacyStorageMode();
-  // Fail closed on clients: the raw RDS DSN is server-only (CLAUDE.md §2). A
-  // client machine must use the HTTP API, never a Postgres DSN.
-  if (!isServerContext()) {
-    throw new Error(
-      "Refusing to construct an RDS Postgres DSN outside the mementos-serve server. " +
-        "The raw database DSN is NEVER distributed to client machines. " +
-        "Clients must use the HTTP API: set HASNA_MEMENTOS_API_URL and " +
-        "HASNA_MEMENTOS_API_KEY (and unset HASNA_MEMENTOS_DATABASE_URL)."
-    );
-  }
+/**
+ * Resolve the configured remote storage DSN (env `HASNA_MEMENTOS_DATABASE_URL`
+ * first, then `~/.hasna/mementos/storage/config.json`) with full validation,
+ * WITHOUT the client-context guard. Callers decide whether the guard applies:
+ * {@link getStorageConnectionString} applies it to every client data path;
+ * {@link getStorageConnectionStringForOperator} is the explicitly-invoked
+ * operator escape used ONLY by the migrate commands (see its doc comment).
+ */
+function resolveConfiguredConnectionString(dbName: string): string {
   const envConnectionString = getConfiguredConnectionString();
   if (envConnectionString) {
     const validation = validatePostgresConnectionString(envConnectionString);
@@ -1134,6 +1131,43 @@ export function getStorageConnectionString(dbName = "mementos"): string {
 
   const sslParam = ssl ? "?sslmode=require" : "";
   return `postgres://${username}:${encodeURIComponent(password)}@${host}:${port}/${dbName}${sslParam}`;
+}
+
+export function getStorageConnectionString(dbName = "mementos"): string {
+  assertNoLegacyStorageMode();
+  // Fail closed on clients: the raw RDS DSN is server-only (CLAUDE.md §2). A
+  // client machine must use the HTTP API, never a Postgres DSN.
+  if (!isServerContext()) {
+    throw new Error(
+      "Refusing to construct an RDS Postgres DSN outside the mementos-serve server. " +
+        "The raw database DSN is NEVER distributed to client machines. " +
+        "Clients must use the HTTP API: set HASNA_MEMENTOS_API_URL and " +
+        "HASNA_MEMENTOS_API_KEY (and unset HASNA_MEMENTOS_DATABASE_URL)."
+    );
+  }
+  return resolveConfiguredConnectionString(dbName);
+}
+
+/**
+ * Operator-only DSN resolution for the migrate commands.
+ *
+ * `storage migrate` / `migrate-pg` are deliberately-invoked operator commands
+ * (docs/CUTOVER-RUNBOOK.md §3): they run from an approved, database-reachable
+ * administrative environment — on this fleet, the ECS one-shot migrate task
+ * that holds the DSN via Secrets Manager as HASNA_MEMENTOS_DATABASE_URL, the
+ * same credential the serve task uses. The explicit `--connection-string` form
+ * was already sanctioned; this resolves the SAME configured DSN for the
+ * operator verb without forcing the value onto the command line.
+ *
+ * This is NOT the client data path. Every read/write surface (getDatabase,
+ * getCloudDatabase, storage-sync, MCP data tools) keeps the fail-closed guard
+ * in {@link getStorageConnectionString}. Only the migrate operator surfaces
+ * call this, and only they may: a DSN must already be present on the machine
+ * for the env/config form to resolve, so this adds no exfiltration surface.
+ */
+export function getStorageConnectionStringForOperator(dbName = "mementos"): string {
+  assertNoLegacyStorageMode();
+  return resolveConfiguredConnectionString(dbName);
 }
 
 export const SYNC_EXCLUDED_TABLE_PATTERNS = [

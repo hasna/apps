@@ -254,8 +254,12 @@ feedback <message> [--email <email>] [--category bug|feature|general]
 `storage mode` is the safe backend probe: it performs no database or network
 access and does not print credential values. Live PostgreSQL migration mutates a
 remote database; dry-run performs validation and redaction without connecting.
-Direct database credentials are for server/administrative environments, never
-fleet clients. See [Configuration and storage](CONFIGURATION.md).
+`storage migrate` is an operator verb: with no `--connection-string` it uses the
+env-configured DSN (`HASNA_MEMENTOS_DATABASE_URL`) — the form the deploy
+one-shot migrate task runs — while client DATA commands still fail closed on a
+DSN outside the serve process. Direct database credentials are for
+server/administrative environments, never fleet clients. See [Configuration and
+storage](CONFIGURATION.md).
 
 The profile commands manage profile files and the persisted active-profile
 setting. The primary database resolver currently selects its live SQLite path
