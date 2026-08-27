@@ -22,10 +22,18 @@
  * containment this check exists to defend. The policy's own rule is "never
  * lower the quarantine"; the pinned version is the only compliant fix.
  *
+ * dep-secrets-1 (measured 2026-08-26): apps/secrets declared
+ * "@smithy/core": "^3.25.1", which admits every 3.x release — including
+ * 3.33.3, published 2026-08-20T16:03:38.635Z (6 days old at measurement,
+ * inside the window). The member pins the newest pre-window release exactly
+ * (3.33.2, published 2026-08-15T17:24:51.591Z) and @smithy/core is checked
+ * by this gate now.
+ *
  * SCOPE: this check scans every publishable member's direct declaration of
- * @types/react-dom and fires when the specifier admits ANY version published
- * within the last 604800 seconds (measured at run time). Members declaring
- * 18.x ranges stay silent — no 18.x version is younger than the window.
+ * @types/react-dom and @smithy/core and fires when the specifier admits ANY
+ * version published within the last 604800 seconds (measured at run time).
+ * Members declaring 18.x @types/react-dom ranges stay silent — no 18.x
+ * version is younger than the window.
  *
  * NETWORK: the check reads the public registry (npm view <dep> time /
  * version). A network failure produces an explicit [SKIP quarantine-admission]
@@ -38,7 +46,8 @@ import * as path from "node:path";
 import { APPS_DIR, publishableMembers } from "./census";
 
 export const QUARANTINE_WINDOW_SECONDS = 604800; // fleet minimumReleaseAge, 7 days
-export const DEPENDENCY = "@types/react-dom";
+export const DEPENDENCIES = ["@types/react-dom", "@smithy/core"] as const;
+export type CheckedDependency = (typeof DEPENDENCIES)[number];
 const NETWORK_FAILURE = /EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ETIMEDOUT|ERR_SOCKET_TIMEOUT|ENOTFOUND/i;
 
 export interface QuarantineAdmission {
@@ -49,11 +58,11 @@ export interface QuarantineAdmission {
 }
 
 /** Collect one member's declared specifier for the checked dependency. */
-export function declaredSpec(manifest: Record<string, unknown>): string | null {
+export function declaredSpec(manifest: Record<string, unknown>, dependency: CheckedDependency): string | null {
   for (const section of ["dependencies", "devDependencies", "optionalDependencies"] as const) {
     const deps = manifest[section];
     if (!deps || typeof deps !== "object" || Array.isArray(deps)) continue;
-    const spec = (deps as Record<string, unknown>)[DEPENDENCY];
+    const spec = (deps as Record<string, unknown>)[dependency];
     if (typeof spec === "string" && spec.length > 0) return spec;
   }
   return null;
@@ -68,6 +77,7 @@ export function declaredSpec(manifest: Record<string, unknown>): string | null {
  */
 export function findQuarantineAdmissions(
   member: string,
+  dependency: CheckedDependency,
   spec: string,
   admittedVersions: string[],
   publishedTimes: Record<string, string | null>,
@@ -83,7 +93,7 @@ export function findQuarantineAdmissions(
     return nowMs - publishedMs < windowMs;
   });
   if (fresh.length === 0) return null;
-  return { member, dependency: DEPENDENCY, spec, freshVersions: fresh };
+  return { member, dependency, spec, freshVersions: fresh };
 }
 
 /** Fetch a dep's publish times from the npm registry; null on network failure.
@@ -152,6 +162,7 @@ describe("standard-adherence: quarantine admission (7-day minimumReleaseAge wind
     const nowMs = Date.parse("2026-08-26T12:00:00Z");
     const result = findQuarantineAdmissions(
       "docs",
+      "@types/react-dom",
       "^19.0.0",
       ["19.2.4", "19.2.5"],
       { "19.2.4": "2026-07-30T21:53:05.684Z", "19.2.5": "2026-08-23T21:05:23.671Z" },
@@ -169,6 +180,7 @@ describe("standard-adherence: quarantine admission (7-day minimumReleaseAge wind
     const nowMs = Date.parse("2026-08-26T12:00:00Z");
     const result = findQuarantineAdmissions(
       "docs",
+      "@types/react-dom",
       "19.2.4",
       ["19.2.4"],
       { "19.2.4": "2026-07-30T21:53:05.684Z" },
@@ -181,6 +193,7 @@ describe("standard-adherence: quarantine admission (7-day minimumReleaseAge wind
     const nowMs = Date.parse("2026-08-26T12:00:00Z");
     const result = findQuarantineAdmissions(
       "docs",
+      "@types/react-dom",
       "^19.0.0",
       ["19.2.4"],
       { "19.2.4": "2026-07-30T21:53:05.684Z" },
@@ -191,60 +204,96 @@ describe("standard-adherence: quarantine admission (7-day minimumReleaseAge wind
 
   test("self-test: an unverifiable publish time is not provably fresh — silent", () => {
     const nowMs = Date.parse("2026-08-26T12:00:00Z");
-    const result = findQuarantineAdmissions("docs", "^19.0.0", ["19.2.5"], { "19.2.5": null }, nowMs);
+    const result = findQuarantineAdmissions("docs", "@types/react-dom", "^19.0.0", ["19.2.5"], { "19.2.5": null }, nowMs);
+    expect(result).toBeNull();
+  });
+
+  test("self-test: @smithy/core range admitting a window-fresh version fires (dep-secrets-1)", () => {
+    const nowMs = Date.parse("2026-08-26T12:00:00Z");
+    const result = findQuarantineAdmissions(
+      "secrets",
+      "@smithy/core",
+      "^3.25.1",
+      ["3.25.1", "3.33.3"],
+      { "3.33.3": "2026-08-20T16:03:38.635Z" },
+      nowMs,
+    );
+    expect(result).toEqual({
+      member: "secrets",
+      dependency: "@smithy/core",
+      spec: "^3.25.1",
+      freshVersions: ["3.33.3"],
+    });
+  });
+
+  test("self-test: exact pre-window @smithy/core pin stays silent (dep-secrets-1)", () => {
+    const nowMs = Date.parse("2026-08-26T12:00:00Z");
+    const result = findQuarantineAdmissions(
+      "secrets",
+      "@smithy/core",
+      "3.33.2",
+      ["3.33.2"],
+      { "3.33.2": "2026-08-15T17:24:51.591Z" },
+      nowMs,
+    );
     expect(result).toBeNull();
   });
 
   test("self-test: declaredSpec reads first matching section and ignores absent dep", () => {
-    expect(declaredSpec({ devDependencies: { [DEPENDENCY]: "^19.0.0" } })).toBe("^19.0.0");
-    expect(declaredSpec({ dependencies: { [DEPENDENCY]: "19.2.4" } })).toBe("19.2.4");
-    expect(declaredSpec({ dependencies: { react: "^19.0.0" } })).toBeNull();
+    expect(declaredSpec({ devDependencies: { "@types/react-dom": "^19.0.0" } }, "@types/react-dom")).toBe("^19.0.0");
+    expect(declaredSpec({ dependencies: { "@types/react-dom": "19.2.4" } }, "@types/react-dom")).toBe("19.2.4");
+    expect(declaredSpec({ dependencies: { react: "^19.0.0" } }, "@types/react-dom")).toBeNull();
+    expect(declaredSpec({ dependencies: { "@smithy/core": "^3.25.1" } }, "@smithy/core")).toBe("^3.25.1");
   });
 
-  test("no publishable member declares @types/react-dom admitting a version younger than the 7-day quarantine window (HARD)", async () => {
+  test("no publishable member declares a checked dependency admitting a version younger than the 7-day quarantine window (HARD)", async () => {
     const members = publishableMembers();
-    const declarations: Array<{ member: string; spec: string }> = [];
-    for (const m of members) {
-      const pkg = JSON.parse(
-        fs.readFileSync(path.join(APPS_DIR, m.name, "package.json"), "utf8"),
-      ) as Record<string, unknown>;
-      const spec = declaredSpec(pkg);
-      if (spec) declarations.push({ member: m.name, spec });
-    }
-    if (declarations.length === 0) {
-      console.info("[SKIP quarantine-admission] no member declares @types/react-dom; nothing to assert");
-      return;
-    }
-
-    const times = await fetchPublishedTimes(DEPENDENCY);
-    if (times === null) {
-      console.info(`[SKIP quarantine-admission] registry unreachable for ${DEPENDENCY}; offline/network route`);
-      return;
-    }
-
-    const nowMs = Date.now();
     const violations: QuarantineAdmission[] = [];
-    const admittedCache = new Map<string, string[] | null>();
-    for (const decl of declarations) {
-      let admitted = admittedCache.get(decl.spec);
-      if (admitted === undefined) {
-        admitted = await fetchAdmittedVersions(DEPENDENCY, decl.spec);
-        if (admitted === null) {
-          console.info(`[SKIP quarantine-admission] registry unreachable for ${DEPENDENCY}@${decl.spec}; offline/network route`);
-          return;
-        }
-        admittedCache.set(decl.spec, admitted);
+    const lines: string[] = [];
+    for (const dependency of DEPENDENCIES) {
+      const declarations: Array<{ member: string; spec: string }> = [];
+      for (const m of members) {
+        const pkg = JSON.parse(
+          fs.readFileSync(path.join(APPS_DIR, m.name, "package.json"), "utf8"),
+        ) as Record<string, unknown>;
+        const spec = declaredSpec(pkg, dependency);
+        if (spec) declarations.push({ member: m.name, spec });
       }
-      const hit = findQuarantineAdmissions(decl.member, decl.spec, admitted, times, nowMs);
-      if (hit) violations.push(hit);
+      if (declarations.length === 0) {
+        console.info(`[SKIP quarantine-admission] no member declares ${dependency}; nothing to assert`);
+        continue;
+      }
+
+      const times = await fetchPublishedTimes(dependency);
+      if (times === null) {
+        console.info(`[SKIP quarantine-admission] registry unreachable for ${dependency}; offline/network route`);
+        continue;
+      }
+
+      const nowMs = Date.now();
+      const admittedCache = new Map<string, string[] | null>();
+      for (const decl of declarations) {
+        let admitted = admittedCache.get(`${dependency}@${decl.spec}`);
+        if (admitted === undefined) {
+          admitted = await fetchAdmittedVersions(dependency, decl.spec);
+          if (admitted === null) {
+            console.info(`[SKIP quarantine-admission] registry unreachable for ${dependency}@${decl.spec}; offline/network route`);
+            continue;
+          }
+          admittedCache.set(`${dependency}@${decl.spec}`, admitted);
+        }
+        const hit = findQuarantineAdmissions(decl.member, dependency, decl.spec, admitted, times, nowMs);
+        if (hit) {
+          violations.push(hit);
+          lines.push(
+            `  ${hit.member} declares "${hit.spec}" for ${hit.dependency}; admitted window-fresh version(s): ` +
+              `${hit.freshVersions.map((x) => `${x} (${times[x] ?? "unknown"})`).join(", ").trim() || hit.freshVersions.join(", ")} — ` +
+              `pin the pre-window version exactly`,
+          );
+        }
+      }
     }
 
-    const lines = violations.map(
-      (v) =>
-        `  ${v.member} declares "${v.spec}" for ${v.dependency}; admitted window-fresh version(s): ` +
-        `${v.freshVersions.map((x) => `${x} (${times[x]})`).join(", ").trim() || v.freshVersions.join(", ")} — ` +
-        `pin the pre-window version exactly`,
-    );
     if (lines.length > 0) {
       console.info(`[standard] quarantine-window admissions (HARD):\n${lines.join("\n")}`);
     }
