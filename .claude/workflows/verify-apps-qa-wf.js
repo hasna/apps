@@ -29,7 +29,7 @@
 // [FACTS] this file depends on (verified 2026-08-26):
 // - testers CLI: testers run <url> --json --output <file>, testers quick-qa,
 //   testers repo prepare . / testers repo run . (repo-native), testers doctor,
-//   testers project list (cloud env required: ~/.hasna/cloud/todos|conversations|
+//   testers project list (cloud env required: ~/.hasna/fleet-env/todos|conversations|
 //   mementos|knowledge.env — the RECORD preamble sources them).
 // - E2B box (credential-zero): hasna/sandboxes (sandboxes create, sandboxes exec
 //   <id>, sandboxes files sync <id> <localDir> <remoteDir>, sandboxes logs
@@ -89,7 +89,7 @@ const RECORD = 'RECORDING V2 — do this WHILE working, never batched at the end
   + '(4) KNOWLEDGE: on durable doctrine, file a follow-up task "KNOWLEDGE: <item>" for the knowledge lane — never silently add to knowledge.\n'
   + '(5) SKILLS: on a repeated procedure, file "SKILL: <name>" follow-up.\n'
   + '(6) INSTRUCTIONS: only when the workflow itself changes rules — then file "INSTRUCTIONS: <config>".\n'
-  + 'CLOUD ENV (source before any CLI call that reads the cloud): for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done\n'
+  + 'CLOUD ENV (source before any CLI call that reads the cloud; fleet-env primary): for f in todos conversations mementos knowledge; do if [ -f "$HOME/.hasna/fleet-env/$f.env" ]; then set -a; . "$HOME/.hasna/fleet-env/$f.env"; set +a; elif [ -f "$HOME/.hasna/cloud/$f.env" ]; then set -a; . "$HOME/.hasna/cloud/$f.env"; set +a; fi; done\n'
   + 'NEVER print a credential value. Consume with secrets exec <key> --as VAR -- <cmd>; prove presence with secrets get <key> --check (length + sha256 only).';
 
 // ---- safeAgent hardening (fleet pattern, O15-00732 / wf_b4894f28-d61 lesson) ----

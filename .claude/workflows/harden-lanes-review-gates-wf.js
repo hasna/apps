@@ -23,7 +23,7 @@ Non-negotiable rules (all agents):
 - No secrets: never print/capture/commit credential values. Capture path: redirect to files, read both + $?, never pipe large reads. Paste literal output lines.
 - Gates before any commit: staged secrets scan rc=0 with real bytes; bun tooling/ci/check-secrets.ts --base origin/main rc=0.
 - Record as you go: comments on the todos row, posts to #${CHANNEL}. English. Distinguish measured vs inferred; state what you did not check.
-- NEVER run bash -x / set -x (trace mode) — the shell profile sources ~/.hasna/cloud/*.env and trace echoes credential lines into the transcript.
+- NEVER run bash -x / set -x (trace mode) — the shell profile sources the fleet env files (~/.hasna/fleet-env/*.env; legacy ~/.hasna/cloud/*.env until 2026-10-01) and trace echoes credential lines into the transcript.
 - The inserted gates go BEFORE the lane's confirm step: after publish's two-sided verify, before [PUBLISH-CONFIRM]; after deploy's live test, before [DEPLOY-CONFIRM]. The gate is 2 agents in parallel (parallel([...2 agents...])), each returning {verdict: GO|NO_GO, perCommand: [{command, verdict, evidence}], failures}; the lane proceeds only when BOTH verdicts are GO.
 `
 

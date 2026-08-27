@@ -29,8 +29,9 @@ export LANG="en_US.UTF-8"
 export LC_ALL="en_US.UTF-8"
 MACHINE="$(hostname 2>/dev/null | sed -E 's/[^A-Za-z0-9-]/_/g' || echo unknown)"
 export CONVERSATIONS_AGENT_ID="${CONVERSATIONS_AGENT_ID:-${MACHINE}-snapshot-freshness}"
-CONV_ENV="$HOME/.hasna/cloud/conversations.env"
-if [ -r "$CONV_ENV" ]; then set -a; . "$CONV_ENV"; set +a; fi
+CONV_ENV="$HOME/.hasna/fleet-env/conversations.env"
+if [ -r "$CONV_ENV" ]; then set -a; . "$CONV_ENV"; set +a
+elif [ -r "$HOME/.hasna/cloud/conversations.env" ]; then set -a; . "$HOME/.hasna/cloud/conversations.env"; set +a; fi
 BIN="${SNAPSHOTS_BIN:-$(command -v snapshots)}"
 LOG="$HOME/.hasna/logs/snapshots-freshness.log"
 mkdir -p "$(dirname "$LOG")"

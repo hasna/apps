@@ -18,7 +18,7 @@ Non-negotiable rules (all agents):
 - Capture path: redirect to files, read both + $?, never pipe large reads. Paste literal output lines.
 - No secrets: never print/capture/commit credential values. gh api only (authenticated internally) — never curl with a token.
 - Record as you go: posts to #${CHANNEL}. English. Distinguish measured vs inferred; state what you did not check.
-- NEVER run bash -x / set -x (trace mode) — the shell profile sources ~/.hasna/cloud/*.env and trace echoes credential lines into the transcript.
+- NEVER run bash -x / set -x (trace mode) — the shell profile sources the fleet env files (~/.hasna/fleet-env/*.env; legacy ~/.hasna/cloud/*.env until 2026-10-01) and trace echoes credential lines into the transcript.
 - PRIORITY YIELD: if any UNOWNED row in project ${APPS_PROJECT} has a title starting with "HOTFIX:", the hotfix-drain lane owns the priority class — sleep 3600 (bash), re-check once, return {yielded: true, hotfixCount: N, newIssues: []}. Do NOT file while yielding.
 `
 

@@ -25,7 +25,7 @@ Non-negotiable rules (all agents):
 - No secrets: never print/capture/commit credential values; staged secrets scan (redirect + 'secrets scan input', rc 0 clean) before every commit/push. No internal-infra strings in published artifacts. Capture path: redirect to files, read both + $?, never pipe large reads. Paste literal output lines.
 - Gates before every commit/push: staged secrets scan rc=0 with real bytes.
 - Record as you go: comments on the target's PRs, posts to the target's channel. English. Distinguish measured vs inferred; state what you did not check.
-- NEVER run bash -x / set -x (trace mode) — the shell profile sources ~/.hasna/cloud/*.env and trace echoes credential lines into the transcript.
+- NEVER run bash -x / set -x (trace mode) — the shell profile sources the fleet env files (~/.hasna/fleet-env/*.env; legacy ~/.hasna/cloud/*.env until 2026-10-01) and trace echoes credential lines into the transcript.
 - PRIORITY YIELD: if any UNOWNED row in todos project ${APPS_PROJECT} has a title starting with "HOTFIX:", the hotfix-drain lane owns the priority class — sleep 1800 (bash), re-check once, return {yielded: true, hotfixCount: N}.
 `
 
