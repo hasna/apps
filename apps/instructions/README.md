@@ -169,9 +169,14 @@ concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
 
 ## Data Directory
 
-Local data (the SQLite store and backups) lives under the canonical data root
-`~/.hasna/instructions/` by default. `HASNA_CONFIGS_HOME` remains a supported
-override of the root for legacy setups.
+Local data (the SQLite store and backups) lives under the configs store home,
+resolved through `@hasna/paths`. The legacy `~/.hasna/instructions/` default
+(with the `HASNA_CONFIGS_HOME` exact-app override) stays the effective store
+home until the store has actually been migrated to the XDG config home
+(`~/.config/hasna/configs` on Linux; `~/Library/Application
+Support/Hasna/configs` on macOS) or the operator sets the config-kind override
+`HASNA_CONFIG_HOME` — an existing local store never becomes invisible on
+upgrade.
 
 ## Session Instruction Rendering
 

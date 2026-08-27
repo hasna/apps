@@ -903,7 +903,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
@@ -914,6 +914,7 @@
       "dependencies": {
         "@hasna/contracts": "0.14.1",
         "@hasna/events": "^0.1.16",
+        "@hasna/paths": "0.2.1",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
