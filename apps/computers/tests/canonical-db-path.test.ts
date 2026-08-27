@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
-import { getDefaultDbPath, migrateLegacyDb, resolveDbPath } from "../src/paths";
+import { adoptResolverDataRoot, getDataRoot, getDefaultDbPath, getExactDataRoot, getLegacyDataRoot, getResolverDataRoot, migrateLegacyDb, resolveDbPath } from "../src/paths";
 import { SQLiteStorage } from "../src/storage";
 
-const ENV_KEYS = ["HOME", "USERPROFILE", "COMPUTERS_DB"] as const;
+const ENV_KEYS = ["HOME", "USERPROFILE", "COMPUTERS_DB", "HASNA_DATA_HOME", "HASNA_CACHE_HOME", "HASNA_COMPUTERS_HOME", "COMPUTERS_HOME"] as const;
 
 let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 let tempHome: string | null = null;
@@ -33,6 +33,10 @@ function isolateHome(): string {
   process.env.HOME = tempHome;
   delete process.env.USERPROFILE;
   delete process.env.COMPUTERS_DB;
+  delete process.env.HASNA_DATA_HOME;
+  delete process.env.HASNA_CACHE_HOME;
+  delete process.env.HASNA_COMPUTERS_HOME;
+  delete process.env.COMPUTERS_HOME;
   return tempHome;
 }
 
@@ -197,5 +201,141 @@ describe("canonical database root", () => {
     expect(worker.code).toBe(0);
     expect(worker.stderr).toBe("");
     expect(existsSync(join(home, ".hasna", "computers", "computers.db"))).toBe(true);
+  });
+});
+
+describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
+  test("resolver data root follows @hasna/paths under a fake HOME", () => {
+    const home = isolateHome();
+    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "computers"));
+    expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "computers"));
+  });
+
+  test("legacy ~/.hasna/computers stays the effective root until adopted", () => {
+    const home = isolateHome();
+    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
+    expect(getDataRoot()).toBe(getLegacyDataRoot());
+    expect(getDefaultDbPath()).toBe(join(home, ".hasna", "computers", "computers.db"));
+  });
+
+  test("HASNA_DATA_HOME adopts the resolver (XDG) data root", () => {
+    isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "computers-data-home-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base;
+    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
+    expect(getDataRoot()).toBe(join(base, "computers"));
+    expect(getDefaultDbPath()).toBe(join(base, "computers", "computers.db"));
+  });
+
+  test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
+    const home = isolateHome();
+    const xdg = join(home, ".local", "share", "hasna", "computers");
+    mkdirSync(xdg, { recursive: true });
+    writeFileSync(join(xdg, "computers.db"), "existing-migrated-store");
+    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
+    expect(getDataRoot()).toBe(xdg);
+  });
+
+  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
+    const home = isolateHome();
+    const cache = mkdtempSync(join(tmpdir(), "computers-cache-home-")); cleanups.push(cache);
+    process.env.HASNA_CACHE_HOME = cache;
+    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
+    expect(getDataRoot()).toBe(join(home, ".hasna", "computers"));
+  });
+
+  test("HASNA_COMPUTERS_HOME exact override wins over both roots", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "computers-hasna-home-")); cleanups.push(override);
+    const base = mkdtempSync(join(tmpdir(), "computers-data-home2-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base; // would adopt the XDG root, but the override must win
+    process.env.HASNA_COMPUTERS_HOME = override;
+    expect(getExactDataRoot()).toBe(override);
+    expect(getDataRoot()).toBe(override);
+    expect(getDefaultDbPath()).toBe(join(override, "computers.db"));
+  });
+
+  test("COMPUTERS_HOME exact override wins over both roots", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "computers-home-")); cleanups.push(override);
+    process.env.COMPUTERS_HOME = override;
+    expect(getExactDataRoot()).toBe(override);
+    expect(getDataRoot()).toBe(override);
+  });
+
+  test("exact data-root overrides are resolved to absolute paths", () => {
+    isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "computers-abs-")); cleanups.push(base);
+    const raw = join(base, "..", "computers-abs-rel");
+    process.env.COMPUTERS_HOME = raw;
+    expect(getExactDataRoot()).toBe(resolve(raw));
+    expect(getExactDataRoot()?.startsWith("/")).toBe(true);
+  });
+
+  test("COMPUTERS_DB still wins over every data root", () => {
+    const home = isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "computers-db-override-")); cleanups.push(override);
+    const base = mkdtempSync(join(tmpdir(), "computers-data-home3-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base;
+    const explicit = join(override, "explicit.db");
+    expect(resolveDbPath(explicit)).toBe(explicit);
+    expect(existsSync(join(home, ".hasna", "computers"))).toBe(false); // no migration, no data root created
+    expect(existsSync(join(base, "computers"))).toBe(false);
+  });
+
+  test("migration targets the resolver data root once HASNA_DATA_HOME is set", () => {
+    isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "computers-migrate-xdg-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base;
+    const cwd = mkdtempSync(join(tmpdir(), "computers-migrate-cwd4-")); cleanups.push(cwd);
+    const legacy = makeLegacyDb(cwd);
+
+    const receipt = migrateLegacyDb(cwd);
+
+    const target = join(base, "computers", "computers.db");
+    expect(receipt).toEqual({ migrated: true, from: legacy, to: target });
+    expect(existsSync(target)).toBe(true);
+    expect(existsSync(legacy)).toBe(true); // original preserved
+    expect(readFileSync(target)).toEqual(readFileSync(legacy)); // copy verified byte-for-byte
+  });
+
+  test("migrate bin migrates into the resolver data root when HASNA_DATA_HOME is set", async () => {
+    const home = isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "computers-bin-migrate-xdg-")); cleanups.push(base);
+    const cwd = mkdtempSync(join(tmpdir(), "computers-bin-migrate-cwd2-")); cleanups.push(cwd);
+    const legacy = makeLegacyDb(cwd);
+
+    const result = await runBin("computers-migrate.ts", [], cwd, { HOME: home, HASNA_DATA_HOME: base });
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    const target = join(base, "computers", "computers.db");
+    const payload = JSON.parse(result.stdout) as { migrated: boolean; database: string };
+    expect(payload.database).toBe(target);
+    expect(payload.migrated).toBe(true);
+    expect(existsSync(target)).toBe(true);
+    expect(existsSync(legacy)).toBe(true); // original preserved
+  });
+
+  test("cli bin resolves the legacy default (not the resolver home) with no adoption", async () => {
+    const home = isolateHome();
+    const cwd = mkdtempSync(join(tmpdir(), "computers-bin-cwd4-")); cleanups.push(cwd);
+    const result = await runBin("computers.ts", ["doctor"], cwd, { HOME: home });
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as { database: string };
+    expect(payload.database).toBe(join(home, ".hasna", "computers", "computers.db"));
+    // The resolver (XDG) data root must not have been created by the default run.
+    expect(existsSync(join(home, ".local", "share", "hasna", "computers"))).toBe(false);
+  });
+
+  test("cli bin resolves the resolver data root under HASNA_DATA_HOME", async () => {
+    const home = isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "computers-bin-xdg-")); cleanups.push(base);
+    const cwd = mkdtempSync(join(tmpdir(), "computers-bin-cwd5-")); cleanups.push(cwd);
+    const result = await runBin("computers.ts", ["doctor"], cwd, { HOME: home, HASNA_DATA_HOME: base });
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as { database: string };
+    expect(payload.database).toBe(join(base, "computers", "computers.db"));
+    expect(existsSync(join(home, ".hasna", "computers"))).toBe(false); // legacy never created
   });
 });

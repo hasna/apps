@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
 # @hasna/computers — computers-serve HTTP API image (controller surface).
-# ARM64 / Bun. The service reads/writes its SQLite store at
-# ~/.hasna/computers/computers.db (or COMPUTERS_DB); the shipped PostgreSQL
+# ARM64 / Bun. The service reads/writes its SQLite store at the effective data
+# home resolved via @hasna/paths (legacy ~/.hasna/computers until the resolver
+# (XDG) home is adopted, or COMPUTERS_DB when set); the shipped PostgreSQL
 # migrations are proven by scripts/test-postgres-migrations.sh.
 # =============================================================================
 FROM --platform=linux/arm64 oven/bun:1-alpine AS base

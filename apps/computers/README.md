@@ -26,6 +26,8 @@ bun run src/bin/computers.ts computer create \
 bun run src/bin/computers.ts provider readiness --db ./computers.db
 ```
 
+The controller's SQLite store path is resolved through the `@hasna/paths` resolver (XDG/macOS home layout). An explicit store path (`--db` or `COMPUTERS_DB`) always wins; otherwise the effective data root is the legacy `~/.hasna/computers` until the store has been migrated to the resolver data home (`~/.local/share/hasna/computers` on Linux) or the operator sets the data-kind override `HASNA_DATA_HOME`. The exact-app overrides `HASNA_COMPUTERS_HOME` / `COMPUTERS_HOME` name an explicit data root. On first run without an explicit path, a cwd-relative `./computers.db` is migrated once into the effective data root.
+
 The local CLI uses the same authorization engine as the API under an explicit local administrator context. The HTTP server fails closed without hashed bearer-principal configuration, except when `COMPUTERS_DEV_MODE=loopback` and the listener is bound to a loopback address:
 
 ```sh
