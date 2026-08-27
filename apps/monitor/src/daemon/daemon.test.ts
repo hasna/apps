@@ -573,6 +573,27 @@ describe("recovery", () => {
     expect(runs[0]!.outcome).toBe("cancelled");
     expect(countReceiptsForRun(db, runs[0]!.id)).toBe(1);
   });
+
+  it("recover on a cleanly stopped daemon restores STOPPED so restart works", async () => {
+    const daemon = makeDaemon({ workerCapacity: 1 });
+    registerRunningSlug(intervalDefinition());
+    await daemon.start();
+    await daemon.stop();
+    await daemon.tick();
+    expect(getDaemonState(db, "test-daemon")!.state).toBe("STOPPED");
+
+    // The supported `monitor-daemon recover` path must not wedge the daemon
+    // in RECOVERING: a cleanly stopped daemon comes back to STOPPED.
+    const result = daemon.recover();
+    expect(result.ok).toBe(true);
+    expect(getDaemonState(db, "test-daemon")!.state).toBe("STOPPED");
+
+    // Restart from the recovered STOPPED state must succeed (previously the
+    // daemon stayed RECOVERING and start() refused with recovering_retry).
+    const started = await daemon.start();
+    expect(started.ok).toBe(true);
+    expect(getDaemonState(db, "test-daemon")!.state).toBe("RUNNING");
+  });
 });
 
 // ── Pause / resume ────────────────────────────────────────────────────────────
