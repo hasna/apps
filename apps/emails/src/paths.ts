@@ -53,8 +53,12 @@ export function adoptResolverDataRoot(
 
 /** The exact-app override root, when set: `HASNA_EMAILS_HOME`, then `EMAILS_HOME`. */
 export function getExactDataRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const dir = env["HASNA_EMAILS_HOME"] ?? env["EMAILS_HOME"];
-  if (dir && dir.trim()) return resolve(dir.trim());
+  // First-nonblank selection: a set-but-whitespace override must not suppress
+  // a valid fallback (release-review P1, publish-all lane 248f6ed8). The
+  // postinstall script (scripts/ensure-private-data-dir.mjs) selects with the
+  // same `?.trim() ||` semantics, so the two surfaces stay in parity.
+  const dir = env["HASNA_EMAILS_HOME"]?.trim() || env["EMAILS_HOME"]?.trim();
+  if (dir) return resolve(dir);
   return undefined;
 }
 
