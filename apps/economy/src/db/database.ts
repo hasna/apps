@@ -1640,6 +1640,18 @@ export function getIngestState(db: Database, source: string, key: string): strin
   return row?.value ?? null
 }
 
+/**
+ * Load every ingest_state row for one source into a Map. Ingest loops that
+ * check one key per corpus file (e.g. tens of thousands of session jsonl
+ * files) must use this instead of calling getIngestState per file — one
+ * prepared query per file turns an O(n) scan into an O(n) query blowup that
+ * dominates the whole ingest pass.
+ */
+export function loadIngestState(db: Database, source: string): Map<string, string> {
+  const rows = db.prepare(`SELECT key, value FROM ingest_state WHERE source = ?`).all(source) as Array<{ key: string; value: string }>
+  return new Map(rows.map((row) => [row.key, row.value]))
+}
+
 export function setIngestState(db: Database, source: string, key: string, value: string): void {
   db.prepare(`INSERT OR REPLACE INTO ingest_state (source, key, value) VALUES (?, ?, ?)`).run(source, key, value)
 }

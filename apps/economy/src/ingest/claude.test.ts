@@ -230,3 +230,46 @@ describe('ingestClaude', () => {
     expect(legacy.cost_usd).toBeCloseTo(0.018)
   })
 })
+
+describe('ingestJsonlProjects batched ingest-state cache', () => {
+  it('skips unchanged files via the batched cache map and processes only new/changed ones', async () => {
+    const projectDir = join(projectsDir, '-tmp-economy-batched')
+    mkdirSync(projectDir, { recursive: true })
+    const sessionId = '55555555-5555-4555-8555-555555555555'
+    const firstFile = join(projectDir, `${sessionId}.jsonl`)
+    writeFileSync(firstFile, jsonl({
+      type: 'assistant',
+      uuid: 'batched-req-1',
+      requestId: 'batched-req-1',
+      cwd: '/tmp/economy-batched',
+      sessionId,
+      timestamp: '2026-05-08T13:00:00.000Z',
+      message: { role: 'assistant', model: 'claude-sonnet-4', usage: { input_tokens: 100, output_tokens: 50 } },
+    }))
+
+    const first = await ingestJsonlProjects(db, projectsDir, 'claude', false)
+    expect(first).toEqual({ files: 1, requests: 1, sessions: 1 })
+    const stateRows = db.prepare(`SELECT COUNT(*) AS n FROM ingest_state WHERE source = 'claude'`).get() as { n: number }
+    expect(stateRows.n).toBe(1)
+
+    // Same content, later mtime: the batched map must skip it.
+    const second = await ingestJsonlProjects(db, projectsDir, 'claude', false)
+    expect(second).toEqual({ files: 0, requests: 0, sessions: 0 })
+
+    // A genuinely new file is still picked up while the unchanged one stays skipped.
+    const secondSession = '66666666-6666-4666-8666-666666666666'
+    writeFileSync(join(projectDir, `${secondSession}.jsonl`), jsonl({
+      type: 'assistant',
+      uuid: 'batched-req-2',
+      requestId: 'batched-req-2',
+      cwd: '/tmp/economy-batched',
+      sessionId: secondSession,
+      timestamp: '2026-05-08T13:05:00.000Z',
+      message: { role: 'assistant', model: 'claude-sonnet-4', usage: { input_tokens: 200, output_tokens: 100 } },
+    }))
+    const third = await ingestJsonlProjects(db, projectsDir, 'claude', false)
+    expect(third).toEqual({ files: 1, requests: 1, sessions: 1 })
+    const stored = db.prepare(`SELECT id FROM requests WHERE source_request_id = 'batched-req-2'`).get()
+    expect(stored).not.toBeNull()
+  })
+})

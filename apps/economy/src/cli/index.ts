@@ -19,6 +19,7 @@ import { syncAllToCloud, billingSyncToCloud } from '../lib/cloud-ingest.js'
 import { economyCloudStorage } from '../lib/cloud-storage.js'
 import { backfillMachineId, recalculateZeroCostRequests } from '../lib/sync-maintenance.js'
 import { billingDeltaPct } from '../lib/billing-diff.js'
+import { autoSyncDue, markAutoSync } from '../lib/autosync-gate.js'
 import { HasnaHttpError } from '../lib/contracts-client/transport.js'
 import type { AccountBreakdown, CostSummary, CostCenterKind, ProjectBreakdown, Period } from '../types/index.js'
 
@@ -32,16 +33,28 @@ program
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
+  // Staleness gate: the full ingest walks every on-box provider file (the
+  // claude corpus alone can hold tens of thousands of session jsonl files),
+  // which takes minutes on a grown machine — every read-only verb would hang
+  // before answering. Auto-sync at most once per interval (default 10 min,
+  // HASNA_ECONOMY_AUTOSYNC_INTERVAL seconds, 0 = always sync); the explicit
+  // `economy sync` verb always runs the full ingest.
+  if (!autoSyncDue(undefined, process.env)) return
+
   // self_hosted/cloud mode: ingest this machine's on-box provider files into
   // the shared API first; the reads that follow come straight from the cloud.
   if (isCloudStore()) {
     const cloud = economyCloudStorage()
-    if (cloud.active) await syncAllToCloud(cloud, opts)
+    if (cloud.active) {
+      await syncAllToCloud(cloud, opts)
+      markAutoSync(undefined, process.env)
+    }
     return
   }
   const db = openDatabase()
   ensurePricingSeeded(db)
   await syncAll(db, opts)
+  markAutoSync(db, process.env)
 }
 
 // ── Sparkline helper ──────────────────────────────────────────────────────────

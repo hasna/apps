@@ -4,7 +4,7 @@ import { join, basename } from 'path'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import {
   upsertRequest, upsertSession, rollupSession,
-  getIngestState, setIngestState, getMachineId,
+  loadIngestState, setIngestState, getMachineId,
 } from '../db/database.js'
 
 function autoDetectProject(cwd: string, projects: Array<{path: string, name: string}>): { path: string; name: string } | undefined {
@@ -15,8 +15,10 @@ import { defaultCostBasisForAgent } from '../lib/savings.js'
 import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 import type { EconomySession, Agent } from '../types/index.js'
 
-const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
-const TAKUMI_PROJECTS_DIR = join(homedir(), '.takumi', 'projects')
+// Env overrides keep CLI-level tests hermetic on machines whose real corpus
+// is large (mirrors the HASNA_ECONOMY_INGEST_CACHE override pattern).
+const CLAUDE_PROJECTS_DIR = process.env['HASNA_ECONOMY_CLAUDE_PROJECTS_DIR'] ?? join(homedir(), '.claude', 'projects')
+const TAKUMI_PROJECTS_DIR = process.env['HASNA_ECONOMY_TAKUMI_PROJECTS_DIR'] ?? join(homedir(), '.takumi', 'projects')
 
 interface MessageUsage {
   input_tokens?: number
@@ -112,6 +114,11 @@ export async function ingestJsonlProjects(
   const registeredProjects = db.prepare(`SELECT path, name FROM projects ORDER BY LENGTH(path) DESC`).all() as Array<{path: string, name: string}>
   const account = await resolveAccountForAgent(agentName)
 
+  // Load the ingest-state cache for this agent once. The corpus can hold tens
+  // of thousands of files, so a per-file prepared query would dominate the
+  // pass; a single SELECT into a Map keeps the skip-check O(1) per file.
+  const ingestState = loadIngestState(db, agentName)
+
   const projectDirs = readdirSync(projectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
 
@@ -126,7 +133,7 @@ export async function ingestJsonlProjects(
       let fileMtime = '0'
       try { fileMtime = statSync(filePath).mtimeMs.toString() } catch { continue }
 
-      const processed = getIngestState(db, agentName, stateKey)
+      const processed = ingestState.get(stateKey) ?? null
       if (processed === fileMtime) continue
 
       let lines: string[]
