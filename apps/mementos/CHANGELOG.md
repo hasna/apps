@@ -5,6 +5,9 @@
 ### Patch Changes
 
 - Switch @hasna/mementos local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout, hotfixes plan 0f49f56a task P3.3). The legacy `~/.hasna/mementos` data root stays the effective data root until the store has actually been migrated to the XDG data home (`mementos.db` present there) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing live store never becomes invisible on upgrade. The exact-app overrides `HASNA_MEMENTOS_HOME` / `MEMENTOS_HOME` win unconditionally, and the per-file `HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH` overrides are preserved and layered on top. The install-time postinstall now provisions the same effective data root the runtime resolves instead of hardcoding `$HOME/.hasna/mementos`. Nothing moves on disk in this phase.
+- Fix write-path tuple collisions on archived rows: the dedupe:error and dedupe:create conflict pre-checks now treat a row in any status (active, archived, expired) as occupying the tuple, matching the unique index which covers every status. Create → archive → recreate with dedupe:error previously fell through the status='active'-only pre-check and surfaced the raw DB constraint (SQLite 400 / Postgres 500) instead of a handled 409.
+- Fix storage migrate resolving the env-configured DSN outside the serve context (O15-02695) — `storage migrate` now reads the configured database URL directly instead of failing the guard that blocks deploys.
+- Tuple-collision write paths (dedupe create/error on an occupied tuple, PATCH scope-change into an occupied tuple) return a handled 409 naming the existing row instead of a driver-dependent 400/500 (PLA8-00141).
 
 
 ## 0.14.87

@@ -122,6 +122,23 @@ describe("POST /api/memories — write-path tuple collisions are handled 409s (P
     expect(String(second.data?.error ?? "")).toContain("Memory conflict");
   });
 
+  test("dedupe error on an ARCHIVED tuple returns 409, not 400/500", async () => {
+    // The unique index covers every status, so archiving does not free the
+    // tuple. The error-mode pre-check must not filter status='active' or the
+    // re-create would surface the raw constraint (400 on SQLite, 500 on
+    // Postgres) instead of a handled 409.
+    const key = "k-error-archived-collision";
+    const first = await post("/api/memories", { ...sharedTuple(key), dedupe: "create" });
+    expect(first.status).toBe(201);
+
+    const archived = await patch(`/api/memories/${first.data.id}`, { status: "archived" });
+    expect(archived.status).toBe(200);
+
+    const recreated = await post("/api/memories", { ...sharedTuple(key), value: `${TOKEN} after archive`, dedupe: "error" });
+    expect(recreated.status).toBe(409);
+    expect(String(recreated.data?.error ?? "")).toContain("Memory conflict");
+  });
+
   test("dedupe create still forks when a tuple field differs", async () => {
     const key = "k-fork-ok";
     const first = await post("/api/memories", { ...sharedTuple(key), dedupe: "create" });

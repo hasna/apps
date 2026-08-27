@@ -59,6 +59,19 @@ describe("createMemory - error dedupe mode (lines 129-141)", () => {
     const forked = createMemory({ key: "fork-key", value: "fork value", scope: "global", session_id: "s2" }, "version-fork");
     expect(forked.value).toBe("fork value");
   });
+
+  it("throws MemoryConflictError when the same tuple exists but is archived (unique index covers all statuses)", () => {
+    // The unique index idx_memories_unique_key includes every status, so an
+    // archived row still blocks a re-insert of the same tuple. The error-mode
+    // pre-check must not filter status='active' or the insert hits the raw DB
+    // constraint (SQLite 400 / Postgres 500) instead of a handled 409.
+    const mem = createMemory({ key: "archived-conflict-key", value: "first", scope: "private" });
+    updateMemory(mem.id, { status: "archived", version: 1 });
+
+    expect(() => {
+      createMemory({ key: "archived-conflict-key", value: "second", scope: "private" }, "error");
+    }).toThrow(MemoryConflictError);
+  });
 });
 
 // ============================================================================
