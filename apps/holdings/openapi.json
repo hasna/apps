@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Hasna IP Portfolio API",
-    "version": "0.1.6",
+    "version": "0.1.7",
     "description": "Trademarks, patents, copyrights, brand assets — registrations, renewals, Nice classes, filing docs. Entity-anchored."
   },
   "paths": {

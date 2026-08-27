@@ -1,19 +1,20 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getHoldingsAppHome } from "./core/app-home.js";
 
 /**
  * Canonical Hasna Service Contract v1 storage config for the holdings app.
  *
  * The server storage backend is `sqlite | postgresql` only (owner directive
- * 2026-07-29): SQLite at ~/.hasna/holdings/holdings.db when no DATABASE_URL is
- * configured; Postgres (the app-owned cloud store) when one is.
+ * 2026-07-29): SQLite at <effective app home>/holdings.db when no DATABASE_URL
+ * is configured; Postgres (the app-owned cloud store) when one is.
  * Legacy storage env variables are no longer read.
  *
  * The npm package is `@hasna/holdings` and the manifest identity is `holdings`;
  * every name-derived storage token uses the bare token `holdings`: env prefix
- * HASNA_HOLDINGS_, data dir ~/.hasna/holdings, secret ref
- * hasna/oss/holdings/database-url.
+ * HASNA_HOLDINGS_, data home resolved through `@hasna/paths` (legacy
+ * ~/.hasna/holdings until the XDG data home is adopted, hotfixes plan
+ * 0f49f56a, task P3.3), secret ref hasna/oss/holdings/database-url.
  */
 export const APP_NAME = "holdings";
 export const ENV_TOKEN = "HOLDINGS";
@@ -45,9 +46,9 @@ export function resolveServerBackend(env: Env = process.env): ServerDataBackend 
   return databaseUrlPresent(env) ? "postgresql" : "sqlite";
 }
 
-/** Canonical local SQLite path: ~/.hasna/holdings/holdings.db */
+/** Canonical local SQLite path: <effective app home>/holdings.db */
 export function defaultSqlitePath(): string {
-  return join(homedir(), ".hasna", APP_NAME, `${APP_NAME}.db`);
+  return join(getHoldingsAppHome(), `${APP_NAME}.db`);
 }
 
 /** Resolve the SQLite path, honoring the HASNA_HOLDINGS_DB_PATH override (used by tests). */
