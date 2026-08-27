@@ -17,6 +17,7 @@ import {
   resolvePath,
   stateDir,
   PATH_KINDS,
+  type PathKind,
   type PathsOptions,
 } from "./index";
 
@@ -169,6 +170,26 @@ describe("validation", () => {
   test("valid slugs resolve", () => {
     expect(dataDir(opts({ app: "hasna-cli" }))).toBe("/home/user/.local/share/hasna/hasna-cli");
     expect(dataDir(opts({ app: "a" }))).toBe("/home/user/.local/share/hasna/a");
+  });
+});
+
+describe("invalid kind fails closed", () => {
+  test("baseDir with an unknown kind throws a clear TypeError instead of returning undefined", () => {
+    expect(() => baseDir("logs" as PathKind, opts())).toThrow(/invalid path kind "logs"/);
+    expect(() => baseDir("" as PathKind, opts())).toThrow(/invalid path kind/);
+  });
+
+  test("resolvePath with an unknown kind throws the same clear error", () => {
+    expect(() => resolvePath("logs" as PathKind, opts())).toThrow(/invalid path kind "logs"/);
+    expect(() => resolvePath("DATA" as PathKind, opts())).toThrow(/invalid path kind "DATA"/);
+  });
+
+  test("the four real kinds still resolve (positive control)", () => {
+    expect(configDir(opts())).toBe("/home/user/.config/hasna/todos");
+    expect(dataDir(opts())).toBe("/home/user/.local/share/hasna/todos");
+    expect(stateDir(opts())).toBe("/home/user/.local/state/hasna/todos");
+    expect(cacheDir(opts())).toBe("/home/user/.cache/hasna/todos");
+    expect(Object.keys(dirs(opts()))).toEqual([...PATH_KINDS]);
   });
 });
 
