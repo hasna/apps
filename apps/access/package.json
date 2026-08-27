@@ -1,6 +1,6 @@
 {
   "name": "@hasna/access",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Non-human-identity governance: CLI + MCP + serve over a Hasna-contract store. Identity inventory, credential & MCP-scope mapping, JIT elevation, access reviews, one-click revocation, and the cohort MCP bearer-token issuer.",
   "type": "module",
   "main": "dist/index.js",
@@ -40,7 +40,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8887",
     "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "node -e \"try{const os=require('os'),fs=require('fs'),p=require('path');const b=p.join(os.homedir(),'.hasna','access');for(const d of ['','config','data','exports','backups','logs','tmp']) fs.mkdirSync(p.join(b,d),{recursive:true});}catch(e){}\""
+    "postinstall": "node -e \"const os=require('os'),fs=require('fs'),p=require('path');const APP='access',SUB=['config','data','exports','backups','logs','tmp'];const legacy=p.join(os.homedir(),'.hasna',APP);const mk=b=>{for(const d of ['',...SUB])fs.mkdirSync(p.join(b,d),{recursive:true})};(async()=>{let root=legacy;try{const paths=await import('@hasna/paths');const resolved=paths.dataDir({app:APP});const adopted=!!(process.env.HASNA_DATA_HOME&&process.env.HASNA_DATA_HOME.trim())||fs.existsSync(p.join(resolved,APP+'.db'));root=process.env.HASNA_ACCESS_HOME||process.env.ACCESS_HOME||(adopted?resolved:legacy)}catch(e){}try{mk(root)}catch(e){}})()\""
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -60,6 +60,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
