@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { createMemory, listMemories } from "../db/memories.js";
 import type { MemoryFilter } from "../types/index.js";
+import { getDataRoot } from "./paths.js";
 
 export interface ProfileSyncOptions {
   filter?: MemoryFilter;
@@ -23,10 +24,13 @@ export interface ProfileSyncResult {
 
 /**
  * Get the database path for a named profile.
+ *
+ * Profiles live under the SAME effective data root the rest of the package
+ * resolves (getDataRoot() — exact-app override, adopted XDG root, or legacy
+ * ~/.hasna/mementos default), matching config.ts profilesDir().
  */
 function getProfileDbPath(profile: string): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "mementos", "profiles", `${profile}.db`);
+  return join(getDataRoot(), "profiles", `${profile}.db`);
 }
 
 /**

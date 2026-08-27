@@ -9,6 +9,7 @@ import { DB_PATH_ENV_KEYS, isApiMode } from "./api-mode.js";
 import { existsSync, mkdirSync, cpSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { MIGRATIONS } from "./migrations.js";
+import { getDataRoot } from "../lib/paths.js";
 
 // ============================================================================
 // Path resolution
@@ -44,12 +45,16 @@ function findGitRoot(startDir: string): string | null {
 }
 
 function migrateGlobalDir(): void {
+  // The legacy ~/.mementos home db is migrated to the EFFECTIVE data root —
+  // the same root getDataRoot() returns (exact-app override, adopted XDG root,
+  // or legacy ~/.hasna/mementos default) — so the migration and the store the
+  // runtime actually opens can never diverge.
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const newDir = join(home, ".hasna", "mementos");
+  const newDir = getDataRoot();
   const oldDir = join(home, ".mementos");
 
   if (!existsSync(newDir) && existsSync(oldDir)) {
-    mkdirSync(join(home, ".hasna"), { recursive: true });
+    mkdirSync(dirname(newDir), { recursive: true });
     cpSync(oldDir, newDir, { recursive: true });
   }
 }
@@ -76,8 +81,13 @@ export function getDbPath(): string {
   }
 
   migrateGlobalDir();
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "mementos", "mementos.db");
+  // The store lives at the effective data root's mementos.db. getDataRoot()
+  // returns the legacy ~/.hasna/mementos default until HASNA_DATA_HOME is set
+  // or the store is physically migrated to the XDG data home, so a live store
+  // never becomes invisible on upgrade; once adopted, the SAME root the rest
+  // of the package (config.json, profiles, backups, agents sync) uses is the
+  // root this DB opener opens.
+  return join(getDataRoot(), "mementos.db");
 }
 
 function ensureDir(filePath: string): void {
