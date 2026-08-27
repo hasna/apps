@@ -31,7 +31,7 @@ mcps --help
 - `mcps providers search github`
 - `mcps providers install github`
 - `mcps env list <server-id>`
-- `mcps env ref <server-id> API_KEY=UPSTREAM_API_KEY --source env`
+- `mcps env ref <server-id> API_KEY=<upstream-key> --source env`
 - `mcps machines list`
 - `mcps machines add --host linux-node-a --platform linux --arch arm64`
 - `mcps machines seed-defaults`
@@ -103,14 +103,15 @@ Use credential references instead so exports, MCP tools, API responses, logs, an
 diagnostics never contain raw credential values.
 
 ```bash
-mcps add --yes --name notion npx -y @notion/mcp --credential-env NOTION_TOKEN=NOTION_TOKEN
-mcps env ref notion API_KEY=UPSTREAM_API_KEY --source env
-mcps env ref notion API_KEY=notion-token --source local-vault
-mcps env ref notion API_KEY=cred_123 --source hosted
+mcps add --yes --name notion npx -y @notion/mcp --credential-env NOTION_TOKEN=<notion-token>
+mcps env ref notion API_KEY=<upstream-key> --source env
+mcps env ref notion API_KEY=<notion-token> --source local-vault
+mcps env ref notion API_KEY=<cred-id> --source hosted
 ```
 
 Local runtime resolution supports `env` and `local-vault` references. The local
-vault defaults to `~/.hasna/mcps/credentials.local.json`; set
+vault defaults to `credentials.local.json` inside the effective data home (resolved
+via `@hasna/paths`, default `~/.hasna/mcps`); set
 `HASNA_MCPS_CREDENTIAL_VAULT_PATH` to use a different JSON file. Hosted
 credential references are recorded for platforms that resolve credentials outside
 the local runtime.
@@ -125,9 +126,15 @@ The MCP server exposes registry, finder, machine registry, and fleet orchestrati
 
 ## Data Directory
 
-Data is stored locally in `~/.hasna/mcps/` by default.
+Data is stored locally in the effective data home by default (resolved via
+`@hasna/paths`): the legacy `~/.hasna/mcps` stays effective until the store is
+migrated to the XDG data home (`~/.local/share/hasna/mcps` on Linux,
+`~/Library/Application Support/Hasna/mcps` on macOS) or the data-kind override
+`HASNA_DATA_HOME` is set — an existing local store never becomes invisible on
+upgrade.
 
 - Set `HASNA_MCPS_DATA_DIR` to override the data directory.
+- Set `HASNA_DATA_HOME` to move the data home to a custom base (XDG data layout).
 - Set `HASNA_MCPS_DB_PATH` to point at a specific SQLite database file.
 - Set `HASNA_MCPS_STORAGE_MODE=local` to make the storage mode explicit.
 

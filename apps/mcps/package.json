@@ -1,6 +1,6 @@
 {
   "name": "@hasna/mcps",
-  "version": "0.0.31",
+  "version": "0.0.32",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "keywords": [
     "mcp",
@@ -58,11 +58,11 @@
     "no-cloud:pack": "bun run build && bun run artifact-scan",
     "typecheck": "tsc --noEmit",
     "prepack": "bun run build && bun run artifact-scan",
-    "prepublishOnly": "bun test && bun run build && bun run artifact-scan",
-    "postinstall": "mkdir -p $HOME/.hasna/mcps/cache 2>/dev/null || true"
+    "prepublishOnly": "bun test && bun run build && bun run artifact-scan"
   },
   "dependencies": {
     "@hasna/events": "^0.1.16",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
