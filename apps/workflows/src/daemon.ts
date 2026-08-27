@@ -444,9 +444,9 @@ export class WorkflowsDaemon {
 
     const output = { ok: result.ok, exitCode: result.exitCode, output: result.output, durationMs: result.durationMs };
     if (!result.ok) {
-      const retriesLeft = (node.maxRetries ?? 0) + 1 - nodeRow.attempts;
-      if (retriesLeft > 0) {
-        this.store.bumpAttemptsNode(nodeRow.id);
+      const shouldRetry = nodeRow.attempts < (node.maxRetries ?? 0);
+      this.store.bumpAttemptsNode(nodeRow.id);
+      if (shouldRetry) {
         this.store.setRunNodeStatus(nodeRow.id, "pending", { error: result.error ?? `exit ${result.exitCode}` });
         return { kind: "advanced", nodeId }; // cursor unchanged -> retried next cycle
       }

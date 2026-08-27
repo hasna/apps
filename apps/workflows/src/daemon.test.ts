@@ -362,21 +362,56 @@ describe("run engine", () => {
     expect(final.error).toContain("maxIterations");
   });
 
-  test("a step retries up to maxRetries then fails the run", async () => {
+  test("a step executes once plus the explicit maxRetries budget", async () => {
+    for (const maxRetries of [0, 1, 2]) {
+      const graph: WorkflowGraph = {
+        name: `retry-${maxRetries}`,
+        version: "1.0.0",
+        nodes: [
+          { id: "start", type: "start", next: "flaky" },
+          { id: "flaky", type: "step", command: "exit 1", maxRetries, next: "done" },
+          { id: "done", type: "end" },
+        ],
+      };
+      let executions = 0;
+      const final = await runGraphToCompletion(store, wal, graph, {}, {
+        time: () => clock.now,
+        laneRunner: async () => {
+          executions++;
+          return { ok: false, exitCode: 1, output: "", durationMs: 1 };
+        },
+      });
+
+      expect(final.status).toBe("failed");
+      expect(executions).toBe(maxRetries + 1);
+      const node = store.listRunNodes(final.id).find((n) => n.nodeId === "flaky")!;
+      expect(node.attempts).toBe(maxRetries + 1);
+    }
+  });
+
+  test("a failing step without maxRetries executes once", async () => {
     const graph: WorkflowGraph = {
-      name: "retry",
+      name: "no-retry",
       version: "1.0.0",
       nodes: [
-        { id: "start", type: "start", next: "flaky" },
-        { id: "flaky", type: "step", command: "exit 1", maxRetries: 2, next: "done" },
+        { id: "start", type: "start", next: "fail" },
+        { id: "fail", type: "step", command: "exit 1", next: "done" },
         { id: "done", type: "end" },
       ],
     };
-    const daemon = makeDaemon();
-    const final = await runGraphToCompletion(store, wal, graph, {}, { time: () => clock.now });
+    let executions = 0;
+    const final = await runGraphToCompletion(store, wal, graph, {}, {
+      time: () => clock.now,
+      laneRunner: async () => {
+        executions++;
+        return { ok: false, exitCode: 1, output: "", durationMs: 1 };
+      },
+    });
+
     expect(final.status).toBe("failed");
-    const node = store.listRunNodes(final.id).find((n) => n.nodeId === "flaky")!;
-    expect(node.attempts).toBe(3); // 1 initial + 2 retries
+    expect(executions).toBe(1);
+    const node = store.listRunNodes(final.id).find((n) => n.nodeId === "fail")!;
+    expect(node.attempts).toBe(1);
   });
 
   test("memoized steps reuse cached output across runs without re-execution", async () => {
