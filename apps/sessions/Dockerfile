@@ -17,10 +17,19 @@ RUN bun run build:cli && bun run build:mcp && bun run build:server && bun run bu
 # ---- runtime: slim image with dist + prod deps + migrations ---------------
 FROM oven/bun:1-slim AS runtime
 WORKDIR /app
+# Amazon RDS global CA bundle so TLS verification to the shared cloud Postgres
+# succeeds. The vendored storage kit (src/generated/storage-kit/tls.ts)
+# resolves the CA from PGSSLROOTCERT / NODE_EXTRA_CA_CERTS and verifies with
+# rejectUnauthorized: true under sslmode=require; without the RDS root in the
+# image the handshake fails with 'self signed certificate in certificate
+# chain' and the container never serves /ready — see O15-04014.
+COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3456 \
-    HASNA_SESSIONS_STORAGE_MODE=cloud
+    HASNA_SESSIONS_STORAGE_MODE=cloud \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
+    PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
 
 # curl for the container HEALTHCHECK against /health.
 RUN apt-get update \
