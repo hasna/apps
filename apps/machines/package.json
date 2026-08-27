@@ -1,6 +1,6 @@
 {
   "name": "@hasna/machines",
-  "version": "0.2.38",
+  "version": "0.2.39",
   "description": "Machine fleet management CLI + MCP for developers",
   "type": "module",
   "license": "Apache-2.0",
@@ -40,6 +40,7 @@
     "schemas",
     "templates",
     "hasna.contract.json",
+    "postinstall.js",
     "scripts/consumer-conformance.mjs",
     "LICENSE",
     "README.md",
@@ -65,7 +66,7 @@
     "dev:serve": "bun run src/server/index.ts",
     "prepack": "bun run verify:pack",
     "prepublishOnly": "bun run verify:release",
-    "postinstall": "mkdir -p $HOME/.hasna/machines 2>/dev/null || true",
+    "postinstall": "node postinstall.js",
     "prepare": "bun run build:js",
     "build:js": "rm -rf dist && bun build src/exact-bun-bootstrap.ts --outfile dist/exact-bun-bootstrap.js --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/events --external @hasna/events/* --external @modelcontextprotocol/sdk --external @hasna/mcp-harness --external @hasna/mcp-harness/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/contracts --external @hasna/contracts/* && bun build src/index.ts src/storage.ts src/consumer.ts src/test-profile.ts --outdir dist --target bun --external @hasna/events --external @hasna/contracts --external @hasna/contracts/* --external @hasna/events/* --external pg"
   },
@@ -97,6 +98,7 @@
     "@hasna/contracts": "0.14.1",
     "@hasna/events": "^0.1.7",
     "@hasna/mcp-harness": "^0.1.0",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.6.2",
     "commander": "^13.1.0",

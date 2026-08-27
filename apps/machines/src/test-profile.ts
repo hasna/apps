@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, hostname, platform, totalmem } from "node:os";
 import { dirname, join } from "node:path";
+import { getDataDir } from "./paths.js";
 
 const GIB = 1024 ** 3;
 const REQUIRED_CONTROLLERS = ["cpu", "memory", "pids"] as const;
@@ -218,7 +219,7 @@ export function serializeWorkstationTestProfile(profile: WorkstationTestProfile)
 }
 
 export function workstationTestProfilePaths(options: { homeDir: string }): WorkstationTestProfilePaths {
-  const managedDir = join(options.homeDir, ".hasna", "machines", "profiles");
+  const managedDir = join(getDataDir(), "profiles");
   return {
     profilePath: join(managedDir, "workstation-test-profile.json"),
     slicePath: join(options.homeDir, ".config", "systemd", "user", "hasna-tests.slice.d", "50-workstation-test-profile.conf"),

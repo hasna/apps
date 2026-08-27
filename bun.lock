@@ -1025,7 +1025,7 @@
     },
     "apps/machines": {
       "name": "@hasna/machines",
-      "version": "0.2.38",
+      "version": "0.2.39",
       "bin": {
         "machines": "dist/cli/index.js",
         "machines-mcp": "dist/mcp/index.js",
@@ -1036,6 +1036,7 @@
         "@hasna/contracts": "0.14.1",
         "@hasna/events": "^0.1.7",
         "@hasna/mcp-harness": "^0.1.0",
+        "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.26.0",
         "chalk": "^5.6.2",
         "commander": "^13.1.0",
@@ -4730,6 +4731,8 @@
     "@hasna/loops/ai": ["ai@6.0.204", "", { "dependencies": { "@ai-sdk/gateway": "3.0.130", "@ai-sdk/provider": "3.0.10", "@ai-sdk/provider-utils": "4.0.29", "@opentelemetry/api": "^1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-SudB8rUwaVhpWF8+qTJcxUptXPIdN9rWMknzTT3WbKa2QwiGRshyepFKNkDILWm882LgqlEyRZgKhNT14j0jpQ=="],
 
     "@hasna/loops/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/machines/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/machines/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
