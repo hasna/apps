@@ -107,4 +107,61 @@ describe("dns apply provider contract", () => {
 
     expect(applied).toEqual([desired[1]!, desired[2]!]);
   });
+
+  it("routes delete plans through a provider delete capability and converges (regression PLA23-00589)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "domains-dns-apply-"));
+    tempDirs.push(dir);
+    const file = join(dir, "desired.json");
+    const desired: ProviderDnsRecord[] = [
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 300 },
+      { type: "CNAME", name: "www", value: "target.example.com", ttl: 300 },
+    ];
+    const current: ProviderDnsRecord[] = [
+      { type: "TXT", name: "@", value: "old", ttl: 300 },
+      { type: "A", name: "@", value: "192.0.2.10", ttl: 60 },
+      desired[1]!,
+    ];
+    writeFileSync(file, JSON.stringify({ domain: "example.com", records: desired }));
+
+    let reads = 0;
+    let deleted: ProviderDnsRecord[] | undefined;
+    let applied: ProviderDnsRecord[] | undefined;
+    const provider: DnsProvider = {
+      name: "changed-groups-delete-fixture",
+      dnsWriteScope: "changed-groups",
+      getDnsRecords: async () => reads++ === 0 ? current : desired,
+      setDnsRecords: async (_domain, records) => {
+        applied = records;
+        return true;
+      },
+      deleteDnsRecords: async (_domain, records) => {
+        deleted = records;
+        return true;
+      },
+    };
+    const program = new Command();
+    program.exitOverride();
+    registerDnsCommands(program, { getDnsProvider: () => provider });
+
+    await program.parseAsync([
+      "node",
+      "domains",
+      "dns",
+      "apply",
+      "example.com",
+      "--file",
+      file,
+      "--provider",
+      provider.name,
+      "--yes",
+      "--allow-delete",
+      "--json",
+    ]);
+
+    expect(deleted).toEqual([{ type: "TXT", name: "@", value: "old", ttl: 300, priority: undefined }]);
+    // The delete-only TXT group is handled by the delete route; setDnsRecords receives
+    // only the desired siblings of change-bearing groups (A update group), never the
+    // unchanged CNAME group.
+    expect(applied).toEqual([desired[0]!]);
+  });
 });

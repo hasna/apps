@@ -142,10 +142,14 @@ export function selectChangedDnsRecords(plan: DnsPlan, desired: ProviderDnsRecor
   );
 }
 
-export function getDnsApplyBlockReason(plan: DnsPlan, opts: { yes?: boolean; allowDelete?: boolean }): DnsApplyBlockReason | undefined {
+export function getDnsApplyBlockReason(
+  plan: DnsPlan,
+  opts: { yes?: boolean; allowDelete?: boolean },
+  deleteSupported = false,
+): DnsApplyBlockReason | undefined {
   if (!planHasChanges(plan)) return undefined;
   if (!opts.yes) return "confirmation-required";
   if (plan.deletes > 0 && !opts.allowDelete) return "delete-confirmation-required";
-  if (plan.deletes > 0) return "delete-apply-unsupported";
+  if (plan.deletes > 0 && !deleteSupported) return "delete-apply-unsupported";
   return undefined;
 }

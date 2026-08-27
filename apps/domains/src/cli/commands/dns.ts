@@ -140,7 +140,11 @@ export function registerDnsCommands(
           else printDnsPlan(plan);
           return;
         }
-        const blockReason = getDnsApplyBlockReason(plan, { yes: opts.yes, allowDelete: opts.allowDelete });
+        const blockReason = getDnsApplyBlockReason(
+          plan,
+          { yes: opts.yes, allowDelete: opts.allowDelete },
+          typeof provider.deleteDnsRecords === "function",
+        );
         if (blockReason) {
           if (opts.json) printLine(JSON.stringify({ applied: false, reason: blockReason, plan }, null, 2));
           else {
@@ -150,6 +154,24 @@ export function registerDnsCommands(
             if (blockReason === "delete-apply-unsupported") printErrorLine(`Refusing to apply delete plan on ${providerName}: this provider path cannot guarantee delete convergence without partial mutation yet.`);
           }
           process.exit(1);
+        }
+        // Live deletes run BEFORE the create/update write: a group that mixes a delete
+        // with a recreate converges in one pass instead of transiently duplicating, and
+        // a delete-only group is expressed through the provider's own delete route
+        // rather than being dropped as a change group with no desired siblings.
+        if (plan.deletes > 0 && provider.deleteDnsRecords) {
+          const deleteRecords = plan.operations
+            .filter((operation) => operation.op === "delete")
+            .map((operation) => operation.record);
+          const deleted = await provider.deleteDnsRecords(planDomain, deleteRecords);
+          if (!deleted) {
+            if (opts.json) {
+              printLine(JSON.stringify({ applied: false, provider: providerName, reason: "delete-failed", plan }, null, 2));
+            } else {
+              printErrorLine(`Provider ${providerName} could not delete the recorded DNS records for ${planDomain}.`);
+            }
+            process.exit(1);
+          }
         }
         const recordsToApply = provider.dnsWriteScope === "changed-groups"
           ? selectChangedDnsRecords(plan, desired.records)
