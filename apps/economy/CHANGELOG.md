@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.28
+
+### Patch Changes
+
+- Switch @hasna/economy local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/economy` data root (with the `HASNA_ECONOMY_HOME` / `ECONOMY_HOME` exact-app overrides layered on top of the existing `HASNA_ECONOMY_DB_PATH` / `ECONOMY_DB` store override) stays the effective data root until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The install-time postinstall now creates the same effective data root (and its `training` subdir) the runtime resolves. The OpenLoops ingest read (`economy sync --loops`) resolves the loops store through the resolver with a legacy-read fallback, so it keeps working whichever side of the XDG migration `@hasna/loops` is on. Dependency pinned exactly to `@hasna/paths@0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+
 ## 0.3.27
 
 ### Patch Changes

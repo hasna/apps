@@ -3,7 +3,8 @@ import { execFileSync } from 'child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { hostname, platform } from 'os'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
+import { dataDir } from '@hasna/paths'
 import type {
   EconomyRequest,
   EconomySession,
@@ -55,24 +56,94 @@ export function getMachineId(): string {
   return hostMachine
 }
 
-export function getDataDir(): string {
+/**
+ * Resolve the user's home directory: $HOME, then $USERPROFILE (Windows), then
+ * the OS user database. A home that cannot be resolved is a hard error — never
+ * a literal "~" path (relative to cwd) and never an "undefined"-prefixed path.
+ */
+export function getHomeDir(): string {
   const home = process.env['HOME'] || process.env['USERPROFILE'] || homedir()
-  const newDir = join(home, '.hasna', 'economy')
-  const oldDir = join(home, '.economy')
+  if (!home) throw new Error('Could not resolve the user home directory')
+  return home
+}
 
-  // Auto-migrate old dir to new location
-  if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true })
+/**
+ * The @hasna/paths-resolved (XDG / macOS home layout) data root for economy.
+ * This is the forward-looking home the XDG migration (hotfixes plan
+ * `0f49f56a`, task P3.3) moves the store toward: `~/.local/share/hasna/economy`
+ * on Linux, `~/Library/Application Support/Hasna/economy` on macOS. The home
+ * override mirrors the pre-existing $HOME-first resolution so the resolver
+ * follows the same home the legacy path does.
+ */
+export function getResolverDataRoot(): string {
+  return dataDir({
+    app: 'economy',
+    home: process.env['HOME'] || process.env['USERPROFILE'] || undefined,
+  })
+}
+
+/** The legacy (pre-XDG) data root: ~/.hasna/economy */
+export function getLegacyDataRoot(): string {
+  return join(getHomeDir(), '.hasna', 'economy')
+}
+
+/**
+ * Whether the resolver (XDG) data root should be adopted as the effective data
+ * root. The resolver root is adopted only when the operator has set
+ * `HASNA_DATA_HOME` (the data-kind override — a deliberate opt-in to the XDG
+ * layout) or the store has already been physically migrated there
+ * (`economy.db` exists). A machine that only redirects another kind (e.g.
+ * cache to tmpfs) must NOT have its data home moved, and a live store at the
+ * legacy home must never become invisible on upgrade.
+ */
+export function adoptResolverDataRoot(
+  resolved: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const dataOverride = env.HASNA_DATA_HOME
+  if (typeof dataOverride === 'string' && dataOverride.trim().length > 0) return true
+  return existsSync(join(resolved, 'economy.db'))
+}
+
+/** The exact-app override root, when set: `HASNA_ECONOMY_HOME`, then `ECONOMY_HOME`. */
+export function getExactDataRoot(): string | undefined {
+  const dir = process.env['HASNA_ECONOMY_HOME'] ?? process.env['ECONOMY_HOME']
+  if (dir && dir.trim()) return dir.trim()
+  return undefined
+}
+
+/**
+ * The effective data root for economy: an exact-app override
+ * (`HASNA_ECONOMY_HOME`, then `ECONOMY_HOME`) wins unconditionally; otherwise
+ * the resolver (XDG) data root once adopted; otherwise the legacy
+ * `~/.hasna/economy` default — an existing store never becomes invisible on
+ * upgrade. The store path (`HASNA_ECONOMY_DB_PATH` / `ECONOMY_DB`) is layered
+ * on top of this by `getDbPath`, so an explicit store path always wins
+ * regardless. The legacy `~/.economy` files are auto-migrated into the
+ * effective root, preserving the historical behavior.
+ */
+export function getDataDir(): string {
+  const exact = getExactDataRoot()
+  const effective = exact
+    ? resolve(exact)
+    : adoptResolverDataRoot(getResolverDataRoot())
+      ? resolve(getResolverDataRoot())
+      : getLegacyDataRoot()
+  const oldDir = join(getHomeDir(), '.economy')
+
+  // Auto-migrate old dir to the effective data root
+  if (existsSync(oldDir) && !existsSync(effective)) {
+    mkdirSync(effective, { recursive: true })
     for (const file of readdirSync(oldDir)) {
       const oldPath = join(oldDir, file)
       if (statSync(oldPath).isFile()) {
-        copyFileSync(oldPath, join(newDir, file))
+        copyFileSync(oldPath, join(effective, file))
       }
     }
   }
 
-  mkdirSync(newDir, { recursive: true })
-  return newDir
+  mkdirSync(effective, { recursive: true })
+  return effective
 }
 
 export function getDbPath(): string {

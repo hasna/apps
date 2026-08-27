@@ -1,5 +1,6 @@
 // Model config for @hasna/economy
-// Reads/writes the active fine-tuned model ID from ~/.hasna/economy/config.json
+// Reads/writes the active fine-tuned model ID from the economy data root (config.json;
+// legacy ~/.hasna/economy until the @hasna/paths XDG data root is adopted)
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { dirname, join } from 'path'
@@ -40,7 +41,7 @@ export function getActiveModel(): string {
   return loadConfig().activeModel ?? DEFAULT_MODEL
 }
 
-/** Persists the active fine-tuned model ID to ~/.hasna/economy/config.json. */
+/** Persists the active fine-tuned model ID to the economy data root (config.json). */
 export function setActiveModel(id: string): void {
   const config = loadConfig()
   config.activeModel = id

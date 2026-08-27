@@ -2,6 +2,7 @@ import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { Database as BunDatabase } from 'bun:sqlite'
+import { dataDir } from '@hasna/paths'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import {
   getIngestState,
@@ -14,7 +15,6 @@ import {
 } from '../db/database.js'
 import { computeCostFromDb } from '../lib/pricing.js'
 
-const DEFAULT_LOOPS_DB_PATH = join(homedir(), '.hasna', 'loops', 'loops.db')
 const LOOPS_INGEST_VERSION = 'goal-runs-orchestration-v1'
 
 type LoopGoalRunRow = {
@@ -36,8 +36,32 @@ type LoopGoalRunRow = {
   account_tool: string | null
 }
 
-function loopsDbPath(): string {
-  return process.env['HASNA_ECONOMY_LOOPS_DB_PATH'] ?? DEFAULT_LOOPS_DB_PATH
+/**
+ * The default OpenLoops store path, resolved through the @hasna/paths resolver
+ * (XDG / macOS home layout): the resolver data root for `loops` once its store
+ * has been migrated there (`loops.db` present), otherwise the legacy
+ * `~/.hasna/loops/loops.db` — a legacy-read fallback, so economy keeps reading
+ * loops' store whichever side of the XDG migration loops is on. The exact-app
+ * override `HASNA_ECONOMY_LOOPS_DB_PATH` still wins unconditionally.
+ */
+export function defaultLoopsDbPath(): string {
+  const resolved = dataDir({
+    app: 'loops',
+    home: process.env['HOME'] || process.env['USERPROFILE'] || undefined,
+  })
+  const legacy = join(
+    process.env['HOME'] || process.env['USERPROFILE'] || homedir(),
+    '.hasna',
+    'loops',
+    'loops.db',
+  )
+  return existsSync(join(resolved, 'loops.db'))
+    ? join(resolved, 'loops.db')
+    : legacy
+}
+
+export function loopsDbPath(): string {
+  return process.env['HASNA_ECONOMY_LOOPS_DB_PATH'] ?? defaultLoopsDbPath()
 }
 
 function loopsModel(): string {
