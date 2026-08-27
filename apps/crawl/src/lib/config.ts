@@ -3,8 +3,8 @@ import { join } from "path";
 import type { CrawlConfig } from "../types/index.js";
 import { getDataDir } from "../db/database.js";
 
-// Lazy, not module scope: getDataDir() migrates the legacy data dir and
-// mkdirs ~/.hasna/crawl as a side effect. Running it at import time would
+// Lazy, not module scope: getDataDir() resolves the effective data root and
+// migrates the legacy dir as a side effect. Running it at import time would
 // make `crawl-mcp --version`/`crawl-serve --version` touch the data dir
 // before the early-arg guard answers (todos row 7e5f8f3d).
 function configDir(): string {
