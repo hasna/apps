@@ -6,9 +6,10 @@ import { randomUUID } from "crypto";
 import { getDb, fineTunedModels, trainingJobs, trainingDatasets } from "../db/index.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { gatherAll } from "../lib/gatherers/index.js";
-import { ensurePrivateDirectory, writePrivateTextFile } from "../lib/private-files.js";
-import { join } from "path";
+import { ensurePrivateDirectory, isInsidePath, writePrivateTextFile } from "../lib/private-files.js";
+import { join, resolve } from "path";
 import { getBrainsDatasetsDir } from "../lib/app-home.js";
+import { authenticate, resolveSecurityConfig } from "./security.js";
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
@@ -23,6 +24,7 @@ function badRequest(message: string): Response {
 }
 
 export function createServerFetchHandler() {
+  const security = resolveSecurityConfig();
   return function fetch(req: Request): Response | Promise<Response> {
     const url = new URL(req.url);
     const { pathname } = url;
@@ -32,6 +34,11 @@ export function createServerFetchHandler() {
     if (pathname === "/health" && method === "GET") {
       return json({ status: "ok", service: "brains", version: getPackageVersion() });
     }
+
+    // Every other route owns model records, training jobs, or dataset files:
+    // require the API key (HASNA_BRAINS_API_KEY) before routing.
+    const authError = authenticate(req, security);
+    if (authError) return authError;
 
     // GET /models
     if (pathname === "/models" && method === "GET") {
@@ -151,41 +158,61 @@ async function handleListDatasets(): Promise<Response> {
   return json(datasets);
 }
 
+// A gather runs LLM-backed collection over several sources; serialize them so
+// an authorized client cannot stack overlapping expensive jobs or race on
+// same-millisecond dataset file names.
+let gatherInFlight = false;
+
 async function handleGather(req: Request): Promise<Response> {
-  let body: { sources?: string[]; limit?: number; output_dir?: string };
+  if (gatherInFlight) {
+    return json({ error: "A dataset gather is already in progress" }, 429);
+  }
+  gatherInFlight = true;
   try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return badRequest("Invalid JSON body");
+    let body: { sources?: string[]; limit?: number; output_dir?: string };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch {
+      return badRequest("Invalid JSON body");
+    }
+
+    // Dataset files are private training data: confine writes to the brains
+    // datasets directory, never an operator-supplied arbitrary path.
+    const datasetsDir = getBrainsDatasetsDir();
+    const outDir = body.output_dir ? resolve(body.output_dir) : datasetsDir;
+    if (!isInsidePath(datasetsDir, outDir)) {
+      return badRequest("output_dir must be inside the brains datasets directory");
+    }
+
+    const sources = body.sources ?? ["todos", "mementos", "conversations", "sessions"];
+    const limit = body.limit ?? 500;
+
+    ensurePrivateDirectory(outDir);
+    const results = await gatherAll(sources, { limit });
+    const db = getDb();
+    const now = Date.now();
+    const saved = [];
+
+    for (const result of results) {
+      if (result.count === 0) continue;
+      const fileName = `${result.source}-${now}.jsonl`;
+      const filePath = join(outDir, fileName);
+      writePrivateTextFile(filePath, result.examples.map((e) => JSON.stringify(e)).join("\n") + "\n");
+      const id = randomUUID();
+      await db.insert(trainingDatasets).values({
+        id,
+        source: result.source as "todos" | "mementos" | "conversations" | "sessions" | "mixed",
+        filePath,
+        exampleCount: result.count,
+        createdAt: now,
+      });
+      saved.push({ id, source: result.source, count: result.count, file_path: filePath });
+    }
+
+    return json({ datasets: saved, total_examples: saved.reduce((s, d) => s + d.count, 0) });
+  } finally {
+    gatherInFlight = false;
   }
-
-  const sources = body.sources ?? ["todos", "mementos", "conversations", "sessions"];
-  const limit = body.limit ?? 500;
-  const outDir = body.output_dir ?? getBrainsDatasetsDir();
-
-  ensurePrivateDirectory(outDir);
-  const results = await gatherAll(sources, { limit });
-  const db = getDb();
-  const now = Date.now();
-  const saved = [];
-
-  for (const result of results) {
-    if (result.count === 0) continue;
-    const fileName = `${result.source}-${now}.jsonl`;
-    const filePath = join(outDir, fileName);
-    writePrivateTextFile(filePath, result.examples.map((e) => JSON.stringify(e)).join("\n") + "\n");
-    const id = randomUUID();
-    await db.insert(trainingDatasets).values({
-      id,
-      source: result.source as "todos" | "mementos" | "conversations" | "sessions" | "mixed",
-      filePath,
-      exampleCount: result.count,
-      createdAt: now,
-    });
-    saved.push({ id, source: result.source, count: result.count, file_path: filePath });
-  }
-
-  return json({ datasets: saved, total_examples: saved.reduce((s, d) => s + d.count, 0) });
 }
 
 const USAGE = `Usage: brains-serve [options]\n\nOptions:\n  -p, --port <number>   Port to bind (default: PORT env or 7020)\n  -h, --help            Show this help message`;
