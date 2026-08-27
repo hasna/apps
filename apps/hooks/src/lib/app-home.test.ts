@@ -198,4 +198,43 @@ describe("explicit data-dir overrides", () => {
     process.env.HASNA_HOOKS_DB_PATH = db;
     expect(getDbPath()).toBe(db);
   });
+
+  // Release-review P1: nullish selection before blank rejection made a
+  // set-but-whitespace HASNA_HOOKS_DATA_DIR / HASNA_HOOKS_DB_PATH suppress a
+  // valid HOOKS_DATA_DIR / HOOKS_DB_PATH fallback (first-nonblank semantics).
+  test("a whitespace-only HASNA_HOOKS_DATA_DIR falls through to a valid HOOKS_DATA_DIR", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "hooks-data-dir-fallback-")); cleanups.push(override);
+    process.env.HASNA_HOOKS_DATA_DIR = "   ";
+    process.env.HOOKS_DATA_DIR = override;
+    expect(getExplicitDataDir()).toBe(override);
+    expect(getEffectiveDataRoot()).toBe(override);
+    expect(getHooksDataDir()).toBe(override);
+    expect(getDbPath()).toBe(join(override, "hooks.db"));
+  });
+
+  test("an empty HASNA_HOOKS_DATA_DIR falls through to a valid HOOKS_DATA_DIR", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "hooks-data-dir-empty-")); cleanups.push(override);
+    process.env.HASNA_HOOKS_DATA_DIR = "";
+    process.env.HOOKS_DATA_DIR = override;
+    expect(getExplicitDataDir()).toBe(override);
+    expect(getEffectiveDataRoot()).toBe(override);
+  });
+
+  test("a whitespace-only HASNA_HOOKS_DB_PATH falls through to a valid HOOKS_DB_PATH", () => {
+    const home = isolateHome();
+    const db = join(home, "fallback.db");
+    process.env.HASNA_HOOKS_DB_PATH = "\t ";
+    process.env.HOOKS_DB_PATH = db;
+    expect(getDbPath()).toBe(db);
+  });
+
+  test("whitespace-only granular overrides fall through to the legacy root", () => {
+    const home = isolateHome();
+    process.env.HASNA_HOOKS_DATA_DIR = "   ";
+    process.env.HOOKS_DATA_DIR = "";
+    expect(getExplicitDataDir()).toBeUndefined();
+    expect(getEffectiveDataRoot()).toBe(join(home, ".hasna", "hooks"));
+  });
 });

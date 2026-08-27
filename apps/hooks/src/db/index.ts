@@ -21,8 +21,12 @@ function resolveDataDir(): string {
   const effective = getEffectiveDataRoot();
   const oldDir = join(getHomeDir(), ".hooks");
 
-  // Auto-migrate: copy old data to the effective root if needed
-  if (!existsSync(effective) && existsSync(oldDir)) {
+  // Auto-migrate: copy old data to the effective root if needed. The guard
+  // is the store marker, NOT directory existence: the postinstall
+  // (scripts/ensure-profiles-dir.mjs) pre-creates the effective root, so a
+  // dir-existence guard would skip the migration and make a live ~/.hooks
+  // store invisible on upgrade (release-review P1).
+  if (existsSync(oldDir) && !existsSync(join(effective, "hooks.db"))) {
     mkdirSync(effective, { recursive: true });
     cpSync(oldDir, effective, { recursive: true });
   }
@@ -31,7 +35,9 @@ function resolveDataDir(): string {
 }
 
 export function getDbPath(): string {
-  const explicitDb = process.env.HASNA_HOOKS_DB_PATH ?? process.env.HOOKS_DB_PATH;
+  // First-nonblank: a set-but-whitespace HASNA_HOOKS_DB_PATH must not
+  // suppress a valid HOOKS_DB_PATH (release-review P1).
+  const explicitDb = process.env.HASNA_HOOKS_DB_PATH?.trim() || process.env.HOOKS_DB_PATH?.trim();
   if (explicitDb) return explicitDb;
 
   const dataDir = resolveDataDir();

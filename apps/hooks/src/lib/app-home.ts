@@ -147,8 +147,11 @@ export function adoptResolverDataRoot(
  * behavior verbatim (first-nonblank; a set-but-empty value falls through).
  */
 export function getExplicitDataDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const dir = env.HASNA_HOOKS_DATA_DIR ?? env.HOOKS_DATA_DIR;
-  if (typeof dir === "string" && dir.trim().length > 0) return dir.trim();
+  // First-nonblank: a set-but-whitespace HASNA_HOOKS_DATA_DIR must not
+  // suppress a valid HOOKS_DATA_DIR (release-review P1). Same semantics as
+  // getExactDataRoot and the emails lane's first-nonblank ruling.
+  const dir = env.HASNA_HOOKS_DATA_DIR?.trim() || env.HOOKS_DATA_DIR?.trim();
+  if (dir) return dir;
   return undefined;
 }
 
@@ -197,7 +200,9 @@ export function getReportedDbPath(env: NodeJS.ProcessEnv = process.env): string 
 
 /** The explicit DB-path override, when set: `HASNA_HOOKS_DB_PATH`, then `HOOKS_DB_PATH`. */
 function getExplicitDbPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const db = env.HASNA_HOOKS_DB_PATH ?? env.HOOKS_DB_PATH;
-  if (typeof db === "string" && db.trim().length > 0) return db.trim();
+  // First-nonblank: a set-but-whitespace HASNA_HOOKS_DB_PATH must not
+  // suppress a valid HOOKS_DB_PATH (release-review P1).
+  const db = env.HASNA_HOOKS_DB_PATH?.trim() || env.HOOKS_DB_PATH?.trim();
+  if (db) return db;
   return undefined;
 }

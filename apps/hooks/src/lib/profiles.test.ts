@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, rmSync, mkdirSync, writeFileSync, mkdtempSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import {
   createProfile,
@@ -9,6 +10,7 @@ import {
   deleteProfile,
   touchProfile,
   getProfilesDir,
+  resolveProfilesDir,
   type AgentProfile,
 } from "./profiles.js";
 
@@ -25,6 +27,76 @@ function cleanup(): void {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("~/.hooks profiles migration (release-review P1 guard)", () => {
+  const ENV_KEYS = ["HOME", "USERPROFILE", "HASNA_HOOKS_DATA_DIR", "HOOKS_DATA_DIR"] as const;
+  let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+  const cleanups: string[] = [];
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const value = saved[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    saved = {};
+    for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function isolate(): { home: string; effective: string } {
+    const home = mkdtempSync(join(tmpdir(), "hooks-profiles-migrate-home-"));
+    const effective = mkdtempSync(join(tmpdir(), "hooks-profiles-migrate-root-"));
+    cleanups.push(home, effective);
+    for (const key of ENV_KEYS) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.HOME = home;
+    delete process.env.USERPROFILE;
+    process.env.HASNA_HOOKS_DATA_DIR = effective;
+    return { home, effective };
+  }
+
+  test("migrates ~/.hooks/profiles into a postinstall-created (existing, empty) profiles dir", () => {
+    const { home, effective } = isolate();
+    // Postinstall simulation: the profiles dir already exists (created by
+    // scripts/ensure-profiles-dir.mjs) but holds no profiles yet.
+    mkdirSync(join(effective, "profiles"), { recursive: true });
+
+    const oldProfiles = join(home, ".hooks", "profiles");
+    mkdirSync(oldProfiles, { recursive: true });
+    writeFileSync(join(oldProfiles, "abc12345.json"), JSON.stringify({ agent_id: "abc12345" }));
+
+    const dir = resolveProfilesDir();
+    expect(dir).toBe(join(effective, "profiles"));
+    // The regression: the old dir-existence guard skipped the copy because
+    // postinstall created the dir; the migrated profile must exist now.
+    expect(existsSync(join(effective, "profiles", "abc12345.json"))).toBe(true);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".json"))).toContain("abc12345.json");
+  });
+
+  test("does NOT copy when the target already holds profiles", () => {
+    const { home, effective } = isolate();
+    const newProfiles = join(effective, "profiles");
+    mkdirSync(newProfiles, { recursive: true });
+    writeFileSync(join(newProfiles, "existing01.json"), JSON.stringify({ agent_id: "existing01" }));
+
+    const oldProfiles = join(home, ".hooks", "profiles");
+    mkdirSync(oldProfiles, { recursive: true });
+    writeFileSync(join(oldProfiles, "stale0001.json"), JSON.stringify({ agent_id: "stale0001" }));
+
+    const dir = resolveProfilesDir();
+    expect(dir).toBe(newProfiles);
+    expect(existsSync(join(newProfiles, "stale0001.json"))).toBe(false);
+  });
+
+  test("no ~/.hooks profiles means no migration", () => {
+    const { effective } = isolate();
+    const dir = resolveProfilesDir();
+    expect(dir).toBe(join(effective, "profiles"));
+    expect(existsSync(dir)).toBe(false);
+  });
 });
 
 describe("profiles", () => {

@@ -12,6 +12,17 @@
   adopted, then the legacy `~/.hasna/hooks` default). Nothing moves on disk in
   this phase — the legacy home stays effective until the XDG root is
   deliberately adopted, so a live store never becomes invisible on upgrade.
+- Fix the one-time `~/.hooks` auto-migration guard: it now keys on the store
+  marker (`hooks.db`) and on the presence of profile JSONs at the target,
+  not on directory existence — the postinstall pre-creates the effective
+  root and `profiles/`, which previously suppressed the migration and made a
+  live `~/.hooks` store invisible on upgrade (release-review P1).
+- Fix first-nonblank env-var selection: a set-but-whitespace
+  `HASNA_HOOKS_DATA_DIR` / `HASNA_HOOKS_DB_PATH` no longer suppresses a valid
+  `HOOKS_DATA_DIR` / `HOOKS_DB_PATH` fallback (release-review P1).
+- Add the standalone `hooks-mcp` MCP server bin and the `./sdk` import
+  export, completing the four-surface release gate (CLI, MCP bin, `-serve`,
+  `./sdk`) (release-review P1).
 
 ## 0.7.9
 

@@ -27,12 +27,17 @@ export interface CreateProfileInput {
   name?: string;
 }
 
-function resolveProfilesDir(): string {
+export function resolveProfilesDir(): string {
   const newDir = join(getEffectiveDataRoot(), "profiles");
   const oldDir = join(getHomeDir(), ".hooks", "profiles");
 
-  // Auto-migrate: copy old profiles to the effective root if needed
-  if (!existsSync(newDir) && existsSync(oldDir)) {
+  // Auto-migrate: copy old profiles to the effective root if needed. The
+  // guard is "no profiles yet at the target", NOT directory existence: the
+  // postinstall pre-creates the profiles dir, which must not suppress the
+  // one-time ~/.hooks profiles migration (release-review P1).
+  const hasProfiles =
+    existsSync(newDir) && readdirSync(newDir).some((f) => f.endsWith(".json"));
+  if (!hasProfiles && existsSync(oldDir)) {
     mkdirSync(newDir, { recursive: true });
     cpSync(oldDir, newDir, { recursive: true });
   }

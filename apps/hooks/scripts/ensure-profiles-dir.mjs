@@ -73,8 +73,11 @@ function adoptResolverRoot(resolved) {
 }
 
 async function effectiveDataRoot() {
-  const explicit = process.env.HASNA_HOOKS_DATA_DIR ?? process.env.HOOKS_DATA_DIR;
-  if (typeof explicit === "string" && explicit.trim().length > 0) return explicit.trim();
+  // First-nonblank: a set-but-whitespace HASNA_HOOKS_DATA_DIR must not
+  // suppress a valid HOOKS_DATA_DIR (release-review P1) — same semantics as
+  // src/lib/app-home.ts.
+  const explicit = process.env.HASNA_HOOKS_DATA_DIR?.trim() || process.env.HOOKS_DATA_DIR?.trim();
+  if (explicit) return explicit;
 
   const exact = process.env.HASNA_HOOKS_HOME?.trim() || process.env.HOOKS_HOME?.trim();
   if (exact) return resolve(exact);
