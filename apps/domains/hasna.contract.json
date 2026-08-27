@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.14.1",
-  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). The client uses local SQLite at ~/.hasna/domains/domains.db, or the hosted HTTP API when HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY are set; domains-serve reads and writes PostgreSQL directly (HASNA_DOMAINS_DATABASE_URL), no cache or sync in the service.",
+  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). The client uses local SQLite at ~/.local/share/hasna/domains/domains.db (resolved via @hasna/paths; legacy ~/.hasna/domains default until the XDG home is adopted), or the hosted HTTP API when HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY are set; domains-serve reads and writes PostgreSQL directly (HASNA_DOMAINS_DATABASE_URL), no cache or sync in the service.",
   "bins": [
     "domains",
     "domains-mcp",
@@ -18,7 +18,7 @@
     "envPrefix": "HASNA_DOMAINS_",
     "aliasEnvPrefix": "DOMAINS_",
     "backend": "sqlite",
-    "sqlitePath": "~/.hasna/domains/domains.db",
+    "sqlitePath": "~/.local/share/hasna/domains/domains.db",
     "pgTestGate": {
       "envVar": "HASNA_DOMAINS_TEST_DATABASE_URL",
       "command": "HASNA_DOMAINS_DATABASE_URL=\"${HASNA_DOMAINS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" bun test src/server"

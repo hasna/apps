@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { adoptResolverHome, getDefaultConfigPath, resolverHome } from "./app-home.js";
 
 export interface DomainContact {
   first_name?: string;
@@ -110,17 +111,22 @@ export function migrateLegacyConfig(
 }
 
 /**
- * The default config location: ~/.hasna/domains/config.json. Env overrides
- * (DOMAINS_CONFIG_PATH / DOMAINS_CONFIG_DIR) are honored unchanged and win
- * over the default.
+ * The default config location — `config.json` at the root of the effective
+ * domains home, resolved through `@hasna/paths` (legacy `~/.hasna/domains`
+ * until the XDG data home is adopted). Env overrides (DOMAINS_CONFIG_PATH /
+ * DOMAINS_CONFIG_DIR) are honored unchanged and win over the default.
  */
 export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env["DOMAINS_CONFIG_PATH"]) return env["DOMAINS_CONFIG_PATH"];
   const dir = env["DOMAINS_CONFIG_DIR"];
   if (dir) return join(dir, "config.json");
 
-  migrateLegacyConfig(env);
-  return join(canonicalHome(env), ".hasna", "domains", "config.json");
+  // The one-time migration from the previous XDG config default targets the
+  // legacy home; when the resolver home is adopted it is unnecessary.
+  if (!adoptResolverHome(resolverHome(env), env)) {
+    migrateLegacyConfig(env);
+  }
+  return getDefaultConfigPath(env);
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DomainsConfig {

@@ -33,6 +33,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDbPath, migrateLegacyDataDir } from "./database.js";
 import { getConfigPath, loadConfig, migrateLegacyConfig, saveConfig } from "../lib/config.js";
+import {
+  adoptResolverHome,
+  appHome,
+  exactAppOverride,
+  getDefaultConfigPath,
+  getDefaultDbPath,
+  legacyHomeDir,
+  resolverHome,
+} from "../lib/app-home.js";
 
 interface FakeEnv {
   HOME: string;
@@ -42,6 +51,9 @@ interface FakeEnv {
   HASNA_DOMAINS_DB_PATH?: string;
   DOMAINS_DIR?: string;
   HASNA_DOMAINS_DIR?: string;
+  HASNA_DOMAINS_HOME?: string;
+  DOMAINS_HOME?: string;
+  HASNA_DATA_HOME?: string;
   DOMAINS_CONFIG_PATH?: string;
   DOMAINS_CONFIG_DIR?: string;
 }
@@ -269,6 +281,93 @@ describe("one-time migration from the previous XDG default", () => {
     try {
       migrateLegacyDataDir(env);
       expect(existsSync(join(env.HOME, ".hasna", "domains"))).toBe(false);
+    } finally {
+      rmHome(env);
+    }
+  });
+});
+
+describe("@hasna/paths resolver adoption — legacy default must never become invisible", () => {
+  test("legacy ~/.hasna/domains default stays until the XDG store exists or HASNA_DATA_HOME is set", () => {
+    const env = fakeHomeEnv();
+    try {
+      expect(legacyHomeDir(env)).toBe(join(env.HOME, ".hasna", "domains"));
+      // No HASNA_*_HOME overrides and no store migrated to the resolver home:
+      // the effective home, db path and config path MUST stay on the legacy layout.
+      expect(appHome(env)).toBe(join(env.HOME, ".hasna", "domains"));
+      expect(getDefaultDbPath(env)).toBe(join(env.HOME, ".hasna", "domains", "domains.db"));
+      expect(getDbPath(env)).toBe(join(env.HOME, ".hasna", "domains", "domains.db"));
+      expect(getDefaultConfigPath(env)).toBe(join(env.HOME, ".hasna", "domains", "config.json"));
+      expect(getConfigPath(env)).toBe(join(env.HOME, ".hasna", "domains", "config.json"));
+    } finally {
+      rmHome(env);
+    }
+  });
+
+  test("HASNA_DOMAINS_HOME exact-app override wins and keeps the legacy layout", () => {
+    const env = fakeHomeEnv({ HASNA_DOMAINS_HOME: "/tmp/domains-exact" });
+    try {
+      expect(exactAppOverride(env)).toBe("/tmp/domains-exact");
+      expect(appHome(env)).toBe("/tmp/domains-exact");
+      expect(getDbPath(env)).toBe(join("/tmp/domains-exact", "domains.db"));
+      expect(getConfigPath(env)).toBe(join("/tmp/domains-exact", "config.json"));
+    } finally {
+      rmHome(env);
+    }
+  });
+
+  test("DOMAINS_HOME legacy alias exact-app override wins", () => {
+    const env = fakeHomeEnv({ DOMAINS_HOME: "/tmp/domains-alias" });
+    try {
+      expect(appHome(env)).toBe("/tmp/domains-alias");
+      expect(getDbPath(env)).toBe(join("/tmp/domains-alias", "domains.db"));
+    } finally {
+      rmHome(env);
+    }
+  });
+
+  test("HASNA_DATA_HOME data-kind override adopts the resolver home", () => {
+    const env = fakeHomeEnv({ HASNA_DATA_HOME: "/tmp/data-home" });
+    try {
+      expect(resolverHome(env)).toBe(join("/tmp/data-home", "domains"));
+      expect(appHome(env)).toBe(join("/tmp/data-home", "domains"));
+      expect(getDbPath(env)).toBe(join("/tmp/data-home", "domains", "domains.db"));
+      expect(getConfigPath(env)).toBe(join("/tmp/data-home", "domains", "config.json"));
+    } finally {
+      rmHome(env);
+    }
+  });
+
+  test("adoptResolverHome is true only for the data-kind override or a migrated store", () => {
+    const env = fakeHomeEnv();
+    const resolved = join(env.HOME, ".local", "share", "hasna", "domains");
+    try {
+      // No override, no store -> legacy default stays.
+      expect(adoptResolverHome(resolved, env)).toBe(false);
+      // Non-data HASNA_*_HOME kinds alone must NOT move the data home.
+      expect(adoptResolverHome(resolved, { ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(false);
+      expect(adoptResolverHome(resolved, { ...env, HASNA_CONFIG_HOME: "/tmp/config" })).toBe(false);
+      // Data-kind override adopts even before a store exists.
+      expect(adoptResolverHome(resolved, { ...env, HASNA_DATA_HOME: "/tmp/data" })).toBe(true);
+      // A migrated store at the resolver home adopts without any override.
+      mkdirSync(resolved, { recursive: true });
+      writeFileSync(join(resolved, "domains.db"), "");
+      expect(adoptResolverHome(resolved, env)).toBe(true);
+      expect(adoptResolverHome(resolved, { ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(true);
+    } finally {
+      rmHome(env);
+    }
+  });
+
+  test("a migrated store at the resolver home adopts it for the db and config paths", () => {
+    const env = fakeHomeEnv();
+    try {
+      const resolved = join(env.HOME, ".local", "share", "hasna", "domains");
+      mkdirSync(resolved, { recursive: true });
+      writeFileSync(join(resolved, "domains.db"), "");
+      expect(appHome(env)).toBe(resolved);
+      expect(getDbPath(env)).toBe(join(resolved, "domains.db"));
+      expect(getConfigPath(env)).toBe(join(resolved, "config.json"));
     } finally {
       rmHome(env);
     }

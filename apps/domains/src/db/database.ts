@@ -16,6 +16,13 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { MIGRATIONS } from "./migrations.js";
+import {
+  adoptResolverHome,
+  exactAppOverride,
+  getDefaultDbPath,
+  legacyHomeDir,
+  resolverHome,
+} from "../lib/app-home.js";
 
 let _db: Database | null = null;
 
@@ -105,26 +112,30 @@ export function migrateLegacyDataDir(
 }
 
 /**
- * The default data root: ~/.hasna/domains. Env overrides
- * (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH / DOMAINS_DIR / HASNA_DOMAINS_DIR)
- * are honored unchanged and win over the default.
+ * The default data root — the effective domains home, resolved through
+ * `@hasna/paths` (legacy `~/.hasna/domains` until the XDG data home is
+ * adopted). Env overrides (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH) and the
+ * exact-app overrides (HASNA_DOMAINS_HOME / DOMAINS_HOME / HASNA_DOMAINS_DIR /
+ * DOMAINS_DIR) are honored unchanged and win over the default.
  */
 export function getDbPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env["DOMAINS_DB_PATH"]) return env["DOMAINS_DB_PATH"];
   if (env["HASNA_DOMAINS_DB_PATH"]) return env["HASNA_DOMAINS_DB_PATH"];
 
-  const explicit = env["DOMAINS_DIR"] ?? env["HASNA_DOMAINS_DIR"];
+  // Exact-app override wins and keeps the legacy layout under the override root.
+  const explicit = exactAppOverride(env);
   if (explicit) {
     return join(explicit, "domains.db");
   }
 
-  const home = canonicalHome(env);
-  const canonicalDir = join(home, ".hasna", "domains");
+  // The one-time migrations from the pre-XDG layout only target the legacy
+  // home; when the resolver home is adopted they are unnecessary.
+  if (!adoptResolverHome(resolverHome(env), env)) {
+    migrateLegacyDataDir(env);
+    migrateDotfile("domains", legacyHomeDir(env), env);
+  }
 
-  migrateLegacyDataDir(env);
-  migrateDotfile("domains", canonicalDir, env);
-
-  return join(canonicalDir, "domains.db");
+  return getDefaultDbPath(env);
 }
 
 function migrateDotfile(name: string, newDir: string, env: NodeJS.ProcessEnv): void {
