@@ -1,6 +1,6 @@
 {
   "name": "@hasna/instructions",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "AI coding agent instruction & configuration manager — store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
@@ -41,7 +41,7 @@
     "dev:serve": "bun run src/server/index.ts",
     "seed": "bun run scripts/seed.ts",
     "prepublishOnly": "bun run scripts/check-publish-hold.ts && bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/instructions $HOME/.hasna/instructions/backups 2>/dev/null || true",
+    "postinstall": "node -e \"const fs=require('node:fs'),path=require('node:path'),os=require('node:os');const home=process.env.HOME||process.env.USERPROFILE||os.homedir();const exact=process.env.HASNA_CONFIGS_HOME;const configHome=process.env.HASNA_CONFIG_HOME;const root=exact&&exact.trim()?path.resolve(exact.trim()):(configHome&&configHome.trim()?path.join(configHome.trim(),'configs'):path.join(home,'.hasna','instructions'));try{fs.mkdirSync(root,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'backups'),{recursive:true,mode:0o700});}catch{}\"",
     "prepack": "bun run build"
   },
   "keywords": [
@@ -78,6 +78,7 @@
   "dependencies": {
     "@hasna/contracts": "0.14.1",
     "@hasna/events": "^0.1.16",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

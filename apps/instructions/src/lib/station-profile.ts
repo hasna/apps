@@ -51,8 +51,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { arch as osArch, homedir, hostname as osHostname, platform as osPlatform, userInfo as osUserInfo } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import type { SessionInstructionSource } from "./session-render.js";
+import { getRawStoreRoot } from "./raw-store-root.js";
 
 /** Cache filename inside the instructions data root (see getRawStoreRoot). */
 export const STATION_PROFILE_CACHE_FILENAME = "station-profile.md";
@@ -130,8 +131,7 @@ function homeDir(env: NodeJS.ProcessEnv = process.env): string {
  *  resolution as getRawStoreRoot) so tests that override HASNA_CONFIGS_HOME
  *  get full isolation. */
 export function getStationProfileCachePath(env: NodeJS.ProcessEnv = process.env): string {
-  const root = env["HASNA_CONFIGS_HOME"] || join(homeDir(env), ".hasna", "instructions");
-  return join(resolve(root), STATION_PROFILE_CACHE_FILENAME);
+  return join(getRawStoreRoot(env), STATION_PROFILE_CACHE_FILENAME);
 }
 
 export function getMachinesManifestPath(env: NodeJS.ProcessEnv = process.env): string {
