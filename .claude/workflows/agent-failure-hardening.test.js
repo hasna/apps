@@ -305,32 +305,86 @@ test('behavioral: publish-all retry finds an already-posted [PUBLISH-CONFIRM] an
   expect(logs.some((l) => l.includes('CONFIRM-FAILED')), 'NO CONFIRM-FAILED when the confirm exists').toBe(false)
 })
 
-// O15-04231 review cycle 1, P1-3: the follow-up row filing FAILS CLOSED — a
+// O15-04231 review cycles 1-2, P1-3: the follow-up row filing FAILS CLOSED — a
 // throwing follow-up agent or an EMPTY taskId (minLength violation) is a
 // failure, the filing is retried once, and if it still fails the app is queued
-// so the NEXT pass's census retries the row before its registry census.
-// Sentinel: the pass-2 census prompt (recorded by the stub at the START of
-// pass 2) must carry the queue note; the run is ended at the 'pass 2 complete'
-// log so the prompts have all been recorded. (An agent-stub throw cannot be the
-// sentinel — safeAgent swallows it.)
-test('behavioral: publish-all queues an unfiled RELEASE CONFIRM MISSING row for the next pass census — fail closed, never UNFILED-and-done (O15-04231 P1-3)', async () => {
+// so the NEXT pass's census retries the row before its registry census. The
+// queue is cleared ONLY on a verified non-empty taskId receipt for the exact
+// package@version (confirmFollowupFiling); a census that fails, yields, or
+// returns no receipt leaves the entries queued for the following pass.
+const PUBLISH_ALL_FAILING_STUBS = {
+  agent: async (prompt) => {
+    const p = String(prompt)
+    if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+    if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+    if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+    if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+    if (p.includes('GATE CONFIRM')) throw new Error('agent({schema}): confirm agent failed')
+    if (p.includes('RELEASE CONFIRM MISSING')) return { taskId: '' } // empty taskId: minLength violation — must NOT be accepted
+    return {}
+  },
+  parallel: (fns) => Promise.all(fns.map((f) => f())),
+  phase: () => {},
+  args: {},
+  __runPromise: null,
+}
+
+test('behavioral: publish-all retains the queued RELEASE CONFIRM MISSING row when the census returns NO receipt — fail closed across passes (O15-04231 P1-3)', async () => {
   const logs = []
   const prompts = []
-  let calls = 0
+  const sandbox = {
+    ...PUBLISH_ALL_FAILING_STUBS,
+    agent: async (prompt) => {
+      prompts.push(String(prompt))
+      return PUBLISH_ALL_FAILING_STUBS.agent(prompt)
+    },
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 3 complete')) throw new Error('__TEST_RETAINED__')
+      if (logs.filter((l) => l.includes('AGENT-FAILURE')).length >= 10) throw new Error('__TEST_END__')
+    },
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  expect(ended && ended.message, 'terminated at pass 3 complete').toBe('__TEST_RETAINED__')
+  // The note must appear in BOTH the pass-2 and pass-3 census prompts: no
+  // receipt was returned, so the queue survived pass 2.
+  const notedCensus = prompts.filter((p) => p.includes('RETRY filing those rows') && p.includes('@hasna/fixlane-test'))
+  expect(notedCensus.length, 'the retry note is carried into every subsequent census while unverified').toBeGreaterThanOrEqual(2)
+  expect(logs.some((l) => l.includes('QUEUED for the next pass census')), 'the queueing is logged').toBe(true)
+})
+
+test('behavioral: publish-all clears the queued row only on a VERIFIED census receipt — acknowledged success drops the note (O15-04231 P1-3)', async () => {
+  const logs = []
+  const prompts = []
+  let confirmCalls = 0
   let followupCalls = 0
   const sandbox = {
     agent: async (prompt) => {
-      calls++
       prompts.push(String(prompt))
       const p = String(prompt)
-      if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+      if (p.includes('ROLE: census')) {
+        // Pass 2+ (the queue exists by then): return a VERIFIED receipt for the
+        // queued entry; pass 1 has nothing queued yet.
+        const queued = prompts.filter((x) => x.includes('RETRY filing those rows')).length
+        const receipt = queued > 0 ? { confirmFollowupFiling: [{ pkgName: '@hasna/fixlane-test', gateV: '0.1.0', taskId: 'cf-row-1' }] } : {}
+        return { ...PUBLISH_ALL_CENSUS, ...receipt }
+      }
       if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
       if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
       if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
-      if (p.includes('GATE CONFIRM')) throw new Error('agent({schema}): confirm agent failed')
+      if (p.includes('GATE CONFIRM')) {
+        confirmCalls++
+        if (confirmCalls <= 2) throw new Error('agent({schema}): confirm agent failed (pass 1 only)')
+        return { confirmId: 'c-ok', posted: true }
+      }
       if (p.includes('RELEASE CONFIRM MISSING')) {
         followupCalls++
-        if (followupCalls % 2 === 1) return { taskId: '' } // empty taskId: minLength violation — must NOT be accepted
+        if (followupCalls === 1) return { taskId: '' }
         throw new Error('agent({schema}): follow-up agent failed on retry')
       }
       return {}
@@ -339,8 +393,8 @@ test('behavioral: publish-all queues an unfiled RELEASE CONFIRM MISSING row for 
     log: (m) => {
       const s = String(m)
       logs.push(s)
-      if (s.includes('pass 2 complete')) throw new Error('__TEST_QUEUED__')
-      if (logs.filter((l) => l.includes('AGENT-FAILURE')).length >= 7) throw new Error('__TEST_END__')
+      if (s.includes('pass 3 complete')) throw new Error('__TEST_CLEARED__')
+      if (logs.filter((l) => l.includes('AGENT-FAILURE')).length >= 10) throw new Error('__TEST_END__')
     },
     phase: () => {},
     args: {},
@@ -351,10 +405,13 @@ test('behavioral: publish-all queues an unfiled RELEASE CONFIRM MISSING row for 
   await run.catch((e) => {
     ended = e
   })
-  // WITHOUT the fail-closed fix the empty taskId would be accepted (UNFILED) and
-  // the queue note would never reach the pass-2 census — the sentinel never fires.
-  expect(ended && ended.message, 'terminated at pass 2 complete after the queue note reached the census').toBe('__TEST_QUEUED__')
-  expect(prompts.some((p) => p.includes('RETRY filing those rows') && p.includes('@hasna/fixlane-test')), 'the pass-2 census carries the queued RELEASE CONFIRM MISSING retry').toBe(true)
+  expect(ended && ended.message, 'terminated at pass 3 complete').toBe('__TEST_CLEARED__')
+  // Pass 2 census carried the note (the queue existed); after the verified
+  // receipt the queue cleared, so pass 3's census prompt has NO note and the
+  // pass-2 confirm succeeded without re-queueing.
+  const notedCensus = prompts.filter((p) => p.includes('RETRY filing those rows') && p.includes('@hasna/fixlane-test'))
+  expect(notedCensus.length, 'the note appears exactly once (pass 2) — cleared after the receipt').toBe(1)
+  expect(logs.some((l) => l.includes('CONFIRM-FOLLOWUP-FILED')), 'the verified receipt clearing is logged').toBe(true)
   expect(logs.some((l) => l.includes('QUEUED for the next pass census')), 'the queueing is logged').toBe(true)
 })
 

@@ -74,7 +74,7 @@ const CENSUS_SCHEMA = {
           title: { type: 'string' },
           createdAt: { type: 'string' },
           reason: { type: 'string' },
-          kind: { type: 'string', enum: ['bug', 'unverified'] },
+          kind: { type: 'string', enum: ['bug', 'unverified', 'confirm-missing'] },
         },
       },
     },

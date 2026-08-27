@@ -86,6 +86,21 @@ const CENSUS_SCHEMA = {
     counts: { type: 'object' },
     yielded: { type: 'boolean' },
     hotfixCount: { type: 'integer' },
+    // O15-04231 cycle-2 P1-3: verified receipt for RELEASE CONFIRM MISSING rows
+    // the census filed/reused this pass — {pkgName, gateV, taskId(minLength 1)}.
+    // Queued entries stay queued until their exact package@version receipt lands.
+    confirmFollowupFiling: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['pkgName', 'gateV', 'taskId'],
+        properties: {
+          pkgName: { type: 'string' },
+          gateV: { type: 'string' },
+          taskId: { type: 'string', minLength: 1 },
+        },
+      },
+    },
   },
   required: ['queue', 'current', 'counts'],
 }
@@ -160,23 +175,39 @@ const safeAgent = async (prompt, opts) => {
     return null
   }
 }
-// Fail-closed queue (O15-04231, review cycle 1 P1-3): RELEASE CONFIRM MISSING
+// Fail-closed queue (O15-04231, review cycles 1-2 P1-3): RELEASE CONFIRM MISSING
 // rows a prior pass could NOT file (both confirm attempts AND both follow-up
 // attempts failed). The NEXT pass's census retries the filing BEFORE its
 // registry census — a durable retry row must exist; recording UNFILED and
-// moving on would recreate the original silent-drop state.
+// moving on would recreate the original silent-drop state. Entries are retained
+// until the census returns a VERIFIED non-empty taskId receipt for the exact
+// package@version (confirmFollowupFiling); a census that fails, yields, or
+// returns no receipt leaves the entries queued for the following pass.
 let pendingConfirmFollowups = []
 const censusPrompt = (body) => {
   let prefix = ''
   if (pendingConfirmFollowups.length) {
-    prefix = "NOTE: a prior pass could NOT file RELEASE CONFIRM MISSING rows for: " + JSON.stringify(pendingConfirmFollowups) + ". RETRY filing those rows FIRST — dedupe (todos list --project 3bbc22e0 --status pending --json AND --status in_progress, redirect to a file, never pipe; reuse an existing row for the exact package@version, otherwise todos add with title 'RELEASE CONFIRM MISSING: <pkg>@<v> — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId + the two gate GO verdicts; no credential values anywhere), then run this census exactly as instructed. The filed task ids must appear in your queue comments.\n\n"
-    pendingConfirmFollowups = []
+    prefix = "NOTE: a prior pass could NOT file RELEASE CONFIRM MISSING rows for: " + JSON.stringify(pendingConfirmFollowups) + ". RETRY filing those rows FIRST — dedupe (todos list --project 3bbc22e0 --status pending --json AND --status in_progress, redirect to a file, never pipe; reuse an existing row for the exact package@version, otherwise todos add with title 'RELEASE CONFIRM MISSING: <pkg>@<v> — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId + the two gate GO verdicts; no credential values anywhere), then run this census exactly as instructed. RETURN a confirmFollowupFiling receipt for every row you filed or reused: [{pkgName, gateV, taskId}] with taskId the VERIFIED non-empty row id (falsy taskIds are rejected — the row stays queued).\n\n"
   }
   if (agentFailed) {
     agentFailed = false
     return prefix + "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
   }
   return prefix + body
+}
+// Receipt reconciliation: drop only the queued entries the census verified with
+// a non-empty taskId; everything else stays for the next pass.
+const reconcileConfirmFollowups = (census) => {
+  const receipts = (census && census.confirmFollowupFiling) || []
+  const verified = new Map()
+  for (const r of receipts) {
+    if (r && r.pkgName && r.gateV && r.taskId) verified.set(r.pkgName + '@' + r.gateV, r.taskId)
+  }
+  if (verified.size) {
+    const before = pendingConfirmFollowups.length
+    pendingConfirmFollowups = pendingConfirmFollowups.filter((q) => !verified.has(q.pkgName + '@' + q.gateV))
+    if (pendingConfirmFollowups.length !== before) log(`CONFIRM-FOLLOWUP-FILED: ${before - pendingConfirmFollowups.length} RELEASE CONFIRM MISSING receipt(s) verified — queue cleared; ${pendingConfirmFollowups.length} still pending`)
+  }
 }
 // --- /safeAgent ---
 
@@ -189,6 +220,10 @@ let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
 census = await safeAgent(censusPrompt(CENSUS), { label: 'census-publish-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+// O15-04231 cycle-2 P1-3: drop queued CONFIRM MISSING entries ONLY on a
+// verified non-empty taskId receipt; a failed/yielded/receipt-less census
+// leaves them queued for the next pass (fail closed).
+reconcileConfirmFollowups(census)
 if (census && census.yielded) {
   log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
   continue
