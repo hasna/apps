@@ -211,10 +211,15 @@ export function createMemory(
     : dedupeMode;
 
   if (effectiveMode === "error") {
-    // Fail if any memory with the same key exists in this scope (regardless of agent)
+    // Fail if any memory with the same key exists in this scope (regardless of agent).
+    // The unique index idx_memories_unique_key covers EVERY status, so an
+    // archived/expired row still blocks the re-insert of the same tuple; the
+    // pre-check must therefore not filter status='active' or the insert would
+    // surface the raw DB constraint (SQLite 400 / Postgres 500) instead of a
+    // handled 409.
     const existing = d.query(
       `SELECT id, agent_id, updated_at FROM memories
-       WHERE key = ? AND scope = ? AND COALESCE(project_id, '') = ? AND status = 'active'
+       WHERE key = ? AND scope = ? AND COALESCE(project_id, '') = ?
        LIMIT 1`
     ).get(
       input.key,
