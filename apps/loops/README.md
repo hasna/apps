@@ -1101,7 +1101,7 @@ loops list --archived
 loops list --all
 ```
 
-Archived loops are hidden from the default `loops list`, excluded from daemon scheduling and doctor preflight, and cannot be run manually until restored with `loops unarchive`. `loops remove` deletes the loop record; prefer `archive` for superseded loops that may need audit history.
+Archived loops are hidden from the default `loops list`, excluded from daemon scheduling and doctor preflight, and cannot be run manually until restored with `loops unarchive`. `loops remove` deletes the loop record; prefer `archive` for superseded loops that may need audit history. On the hosted control plane (`connection=api`), `loops remove` currently fails — `DELETE /v1/loops/{id}` returns HTTP 500 with route `unknown_route` (hasna/apps #1233, verified 2026-08-26, server 0.6.4); `loops archive` is the available deletion path there.
 
 `loops run-now` reports the manual run source:
 
