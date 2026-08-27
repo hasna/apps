@@ -12,9 +12,10 @@ import {
   writeSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
+import { dataDir } from "../lib/paths.js";
 import { LoopsApiError, RunnerRefusalError } from "./errors.js";
 
 /**
@@ -176,7 +177,7 @@ export interface RunnerEpisodeRecorder {
 }
 
 export interface RunnerEpisodeRecorderOptions {
-  /** Defaults to the package data dir (`LOOPS_DATA_DIR` or `~/.hasna/loops`). */
+  /** Defaults to the package data dir (resolved through @hasna/paths, `LOOPS_DATA_DIR` or `~/.hasna/loops` until the XDG home is adopted). */
   dataDir?: string;
   statePath?: string;
   outboxPath?: string;
@@ -430,7 +431,7 @@ function withLock<T>(lockPath: string, fn: () => T): { value: T } | undefined {
 export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions = {}): RunnerEpisodeRecorder {
   // A construction failure here must degrade to a no-op recorder, not break the run.
   try {
-    const dataDirValue = opts.dataDir ?? defaultDataDir();
+    const dataDirValue = opts.dataDir ?? dataDir();
     const statePath = opts.statePath ?? runnerEpisodesStatePath(dataDirValue);
     const outboxPath = opts.outboxPath ?? runnerEventsOutboxPath(dataDirValue);
     const lockPath = `${statePath}.lock`;
@@ -789,12 +790,3 @@ export function createRunnerEpisodeRecorder(opts: RunnerEpisodeRecorderOptions =
   }
 }
 
-function defaultDataDir(): string {
-  // Mirrors src/lib/paths.ts dataDir() resolution: honor a runtime HOME
-  // override (os.homedir() snapshots HOME at process start under Bun).
-  const env = process.env;
-  if (env.LOOPS_DATA_DIR?.trim()) return env.LOOPS_DATA_DIR.trim();
-  const home = env.HOME?.trim();
-  const base = home ? home : homedir();
-  return join(base, ".hasna", "loops");
-}

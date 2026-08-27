@@ -26,7 +26,10 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 ## Storage And Connections
 
 Loops has no deployment modes. Storage is SQLite (the zero-configuration local
-file at `~/.hasna/loops/loops.db`, or `$LOOPS_DATA_DIR/loops.db`) or PostgreSQL
+file at the effective Loops data home — `~/.hasna/loops/loops.db` by default,
+resolved through `@hasna/paths` to the XDG data home once the store is migrated
+there or `HASNA_DATA_HOME` is set, or `$LOOPS_DATA_DIR/loops.db` when the
+exact-app override is set) or PostgreSQL
 (explicitly configured on `loops-serve` via `HASNA_LOOPS_DATABASE_URL`).
 Clients connect either to the local file (`connection=file`, the default) or to
 a control-plane HTTP API (`connection=api`, selected by `HASNA_LOOPS_API_URL`
@@ -145,7 +148,7 @@ bun run build
 bun link
 ```
 
-The CLI stores state in `~/.hasna/loops` by default. Set `LOOPS_DATA_DIR` to isolate state for tests or another profile.
+The CLI stores state in `~/.hasna/loops` by default (resolved through `@hasna/paths`; the XDG data home is adopted once the store is migrated there or `HASNA_DATA_HOME` is set). Set `LOOPS_DATA_DIR` to isolate state for tests or another profile.
 
 ## MCP Server
 
