@@ -173,8 +173,10 @@ async function validateExtractedSmoke(pkg: PackageJson): Promise<void> {
     const dataDir = join(workspace, "data");
     const binIndex = join(packageDir, "bin", "index.js");
     const binServe = join(packageDir, "bin", "serve.js");
+    const binMcp = join(packageDir, "bin", "mcp.js");
     if (!existsSync(binIndex)) throw new Error(`packed tarball is missing bin/index.js (CLI bin)`);
     if (!existsSync(binServe)) throw new Error(`packed tarball is missing bin/serve.js (serve bin)`);
+    if (!existsSync(binMcp)) throw new Error(`packed tarball is missing bin/mcp.js (hooks-mcp bin)`);
 
     const env = {
       ...process.env,
@@ -210,8 +212,11 @@ async function validateExtractedSmoke(pkg: PackageJson): Promise<void> {
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    // 3. MCP stdio startup: an initialize handshake must get a response.
-    const mcpProc = spawn("bun", ["run", binIndex, "mcp", "--stdio"], {
+    // 3. MCP stdio startup from the STANDALONE hooks-mcp bin: an initialize
+    // handshake must get a response (release-review P1-3: previously only
+    // the `hooks mcp` CLI subcommand was smoked; the standalone bin must
+    // work from the packed tarball too).
+    const mcpProc = spawn("bun", ["run", binMcp, "--stdio"], {
       cwd: smokeDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -252,7 +257,7 @@ async function validateExtractedSmoke(pkg: PackageJson): Promise<void> {
       // pg link is best-effort; the import below will fail loudly if needed.
     }
     const sdkSmoke = join(smokeDir, "sdk-smoke.ts");
-    await writeFile(sdkSmoke, `import { HOOKS, getStorageStatus } from "@hasna/hooks";\nimport { getStorageStatus as ss } from "@hasna/hooks/storage";\nconsole.log(JSON.stringify({ count: HOOKS.length, backend: getStorageStatus().backend, ss: ss().backend }));\n`);
+    await writeFile(sdkSmoke, `import { HOOKS, getStorageStatus } from "@hasna/hooks";\nimport { getStorageStatus as ss } from "@hasna/hooks/storage";\nimport { getStorageStatus as sdkSs } from "@hasna/hooks/sdk";\nconsole.log(JSON.stringify({ count: HOOKS.length, backend: getStorageStatus().backend, ss: ss().backend, sdk: sdkSs().backend }));\n`);
     const sdk = spawnSync("bun", ["run", sdkSmoke], { cwd: smokeDir, env, encoding: "utf8", timeout: 20000 });
     if (sdk.status !== 0) throw new Error(`packed SDK import failed: ${sdk.stderr}`);
     const sdkOut = JSON.parse(sdk.stdout.trim()) as { count: number; backend: string };

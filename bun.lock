@@ -488,6 +488,7 @@
       "bin": {
         "hooks": "bin/index.js",
         "hooks-serve": "bin/serve.js",
+        "hooks-mcp": "bin/mcp.js",
       },
       "dependencies": {
         "@hasna/contracts": "0.14.2",

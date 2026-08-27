@@ -59,9 +59,14 @@ describe("hooks-mcp early arguments (binds-before-help class, row dc92977d)", ()
   });
 
   test(
-    "plain HTTP start (no early args) still binds and keeps serving (negative probe)",
+    "default HTTP start (bare invocation, no early args) binds and keeps serving (negative probe)",
     async () => {
-      const result = await runMcp("--http", "--port", PINNED_PORT);
+      // The regression (release-review P1-3): the bin printed help and
+      // exited on a zero-argument invocation instead of starting its
+      // documented default Streamable HTTP server. Bare invocation must take
+      // the real start path, bind the pinned port, and keep serving until
+      // killed.
+      const result = await runMcp("--port", PINNED_PORT);
       expect(result.timedOut).toBe(true);
       expect(result.stderr).toContain("listening on");
     },

@@ -27,7 +27,7 @@ if (args.includes("--version") || args.includes("-v")) {
   process.exit(0);
 }
 
-if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+if (args.includes("--help") || args.includes("-h")) {
   console.log(`Usage: hooks-mcp [options]
 
 Standalone MCP server for @hasna/hooks v${pkg.version}.
@@ -53,6 +53,9 @@ async function main(): Promise<void> {
     const port = portIdx >= 0 && portIdx < args.length ? Number(args[portIdx]) : 39427;
     await startSSEServer({ port });
   } else {
+    // Default (including zero-argument invocation): shared Streamable HTTP
+    // server — identical to `hooks mcp` (release-review P1-3: the standalone
+    // bin must not exit after printing help on bare invocation).
     const { createHooksServer } = await import("./server.js");
     const { resolveMcpHttpPort, startMcpHttpServer } = await import("./http.js");
     startMcpHttpServer({

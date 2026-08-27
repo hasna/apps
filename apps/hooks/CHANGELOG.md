@@ -22,7 +22,9 @@
   `HOOKS_DATA_DIR` / `HOOKS_DB_PATH` fallback (release-review P1).
 - Add the standalone `hooks-mcp` MCP server bin and the `./sdk` import
   export, completing the four-surface release gate (CLI, MCP bin, `-serve`,
-  `./sdk`) (release-review P1).
+  `./sdk`) (release-review P1). The standalone bin answers `--version` /
+  `--help` before any bind and defaults to the shared Streamable HTTP
+  transport on bare invocation, matching `hooks mcp`.
 
 ## 0.7.9
 
