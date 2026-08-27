@@ -1,15 +1,51 @@
-import { applyDurableCredentials, listActiveProviders } from "../db/providers.js";
+import { listActiveProviders } from "../db/providers.js";
 import { listDomainsByProviderIds } from "../db/domains.js";
 import { listAddressesByProviderIds } from "../db/addresses.js";
 import { getAdapter } from "../providers/index.js";
+import type { ProviderAdapter } from "../providers/interface.js";
 import type { Provider } from "../types/index.js";
 import type { ProviderHealth } from "./provider-health-format.js";
 
 export { formatProviderHealth } from "./provider-health-format.js";
 export type { ProviderHealth } from "./provider-health-format.js";
 
+/**
+ * Bound for one provider credential probe. `emails provider status` ran
+ * UNBOUNDED: `checkCredentialState` awaited `adapter.listDomains()` with no
+ * timeout, so one stalled SES/Resend probe (an AWS credential-chain stall, a
+ * hung network route) hung the whole `Promise.all` forever — rc=124 at 25s
+ * and 45s with 0 bytes out (gate O15-04113 NO_GO, row O15-04143). Each probe
+ * now races against this bound and reports "timed out" instead of hanging.
+ */
+export const DEFAULT_PROVIDER_HEALTH_TIMEOUT_MS = 5_000;
+
+/**
+ * Race `promise` against a timer. A provider API call that never settles
+ * rejects with a timeout error naming the probe, so a health check always
+ * completes in bounded time.
+ */
+export function withHealthCheckTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export interface ProviderHealthOptions {
   validateCredentials?: boolean;
+  /** Bounds each provider API probe; overrides DEFAULT_PROVIDER_HEALTH_TIMEOUT_MS. */
+  adapterTimeoutMs?: number;
+  /**
+   * @internal for testing — inject an adapter factory (e.g. one whose
+   * `listDomains` never settles) instead of the configured provider registry.
+   * Mirrors the injectable seams in doctor.ts and cloudflare-dns-rest.ts.
+   */
+  adapterFactory?: (executable: Provider) => ProviderAdapter;
 }
 
 interface ProviderLocalHealthMetrics {
@@ -44,12 +80,21 @@ function emptyLocalHealthMetrics(): ProviderLocalHealthMetrics {
 }
 
 async function checkCredentialState(provider: Provider, opts: ProviderHealthOptions): Promise<Pick<ProviderHealth, "credentialsValid" | "credentialsChecked" | "credentialError">> {
-  const executable = applyDurableCredentials(provider);
+  // O15-04143: the provider is passed to getAdapter as-is. getAdapter is the
+  // single place that overlays durable credentials, and it skips the overlay in
+  // self-hosted mode where the server returns credential-free records by design
+  // (the remote arm ignores the unwrap flag) — so a per-provider overlay here
+  // was a SYNCHRONOUS HTTP round-trip that added nothing: 500 providers ×
+  // ~400ms serialized curl ≈ 200s, the unbounded `emails provider status` hang.
   const credentialsChecked = opts.validateCredentials !== false;
   if (credentialsChecked) {
     try {
-      const adapter = getAdapter(executable);
-      await adapter.listDomains();
+      const adapter = opts.adapterFactory ? opts.adapterFactory(provider) : getAdapter(provider);
+      await withHealthCheckTimeout(
+        adapter.listDomains(),
+        opts.adapterTimeoutMs ?? DEFAULT_PROVIDER_HEALTH_TIMEOUT_MS,
+        `Provider health check for "${provider.name}"`,
+      );
       return { credentialsChecked, credentialsValid: true };
     } catch (e) {
       return {
@@ -60,7 +105,7 @@ async function checkCredentialState(provider: Provider, opts: ProviderHealthOpti
     }
   }
 
-  const local = locallyConfigured(executable);
+  const local = locallyConfigured(provider);
   return {
     credentialsChecked,
     credentialsValid: local.ok,
