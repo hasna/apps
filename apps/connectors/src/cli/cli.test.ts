@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
+import { connectorsHome } from "../lib/paths.js";
 
 const CLI = join(import.meta.dir, "..", "..", "bin", "index.js");
 const TEST_DIR = join(import.meta.dir, "..", "..", ".test-cli-tmp");
@@ -666,8 +667,7 @@ describe("CLI", () => {
       expect(data.imported).toBe(1);
 
       // Cleanup
-      const { homedir } = await import("os");
-      const dir = join(homedir(), ".hasna", "connectors", `connect-zzztest${process.pid}imp`);
+      const dir = join(connectorsHome(), `connect-zzztest${process.pid}imp`);
       if (existsSync(dir)) rmSync(dir, { recursive: true });
     });
   });
@@ -984,9 +984,7 @@ describe("CLI", () => {
 
     afterEach(async () => {
       const { rmSync, existsSync } = await import("fs");
-      const { join } = await import("path");
-      const { homedir } = await import("os");
-      const dir = join(homedir(), ".hasna", "connectors", "connect-anthropic");
+      const dir = join(connectorsHome(), "connect-anthropic");
       if (existsSync(dir)) rmSync(dir, { recursive: true });
     });
 

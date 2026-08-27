@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { connectorsHome, effectiveHome } from "../lib/paths.js";
 
 const MCP = join(import.meta.dir, "..", "..", "bin", "mcp.js");
 const TEST_DIR = join(import.meta.dir, "..", "..", ".test-mcp-tmp");
@@ -9,9 +9,9 @@ const MANIFEST_PATH = join(TEST_DIR, ".connectors", "manifest.json");
 
 function gmailOAuthStateFiles(): string[] {
   return [
-    join(homedir(), ".hasna", "connectors"),
-    join(homedir(), ".connectors"),
-    join(homedir(), ".connect"),
+    connectorsHome(),
+    join(effectiveHome(), ".connectors"),
+    join(effectiveHome(), ".connect"),
   ].flatMap((rootDir) =>
     ["gmail", "connect-gmail"].flatMap((dirName) => {
       const connectorDir = join(rootDir, dirName);
@@ -505,9 +505,8 @@ describe("MCP Server", () => {
     test("reports gmail configured when credentials.json is stored", async () => {
       const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("fs");
       const { join } = await import("path");
-      const { homedir } = await import("os");
 
-      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
+      const configDir = join(connectorsHome(), "connect-gmail");
       const credsFile = join(configDir, "credentials.json");
       const hadCreds = existsSync(credsFile);
       const previous = hadCreds ? readFileSync(credsFile, "utf-8") : null;
@@ -544,9 +543,8 @@ describe("MCP Server", () => {
     afterEach(async () => {
       const { rmSync, existsSync } = await import("fs");
       const { join } = await import("path");
-      const { homedir } = await import("os");
       for (const n of [authName1, authName2]) {
-        const dir = join(homedir(), ".hasna", "connectors", `connect-${n}`);
+        const dir = join(connectorsHome(), `connect-${n}`);
         if (existsSync(dir)) rmSync(dir, { recursive: true });
       }
     });
@@ -580,13 +578,12 @@ describe("MCP Server", () => {
 
       const { readFileSync, existsSync, rmSync } = await import("fs");
       const { join } = await import("path");
-      const { homedir } = await import("os");
-      const credsFile = join(homedir(), ".hasna", "connectors", oauthName, "credentials.json");
+      const credsFile = join(connectorsHome(), oauthName, "credentials.json");
       expect(existsSync(credsFile)).toBe(true);
       const creds = JSON.parse(readFileSync(credsFile, "utf-8"));
       expect(creds.clientId).toBe("mcp-oauth-client-id");
       expect(creds.clientSecret).toBe("mcp-oauth-client-secret");
-      rmSync(join(homedir(), ".hasna", "connectors", oauthName), { recursive: true });
+      rmSync(join(connectorsHome(), oauthName), { recursive: true });
     });
 
     test("errors when neither key nor fields are provided", async () => {
@@ -626,11 +623,10 @@ describe("MCP Server", () => {
     test("reports already authenticated when valid tokens exist", async () => {
       const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("fs");
       const { join } = await import("path");
-      const { homedir } = await import("os");
 
-      const profileDir = join(homedir(), ".hasna", "connectors", "connect-gmail", "profiles", "default");
+      const profileDir = join(connectorsHome(), "connect-gmail", "profiles", "default");
       const tokensFile = join(profileDir, "tokens.json");
-      const currentProfileFile = join(homedir(), ".hasna", "connectors", "connect-gmail", "current_profile");
+      const currentProfileFile = join(connectorsHome(), "connect-gmail", "current_profile");
       const hadTokens = existsSync(tokensFile);
       const previousTokens = hadTokens ? readFileSync(tokensFile, "utf-8") : null;
       const hadCurrentProfile = existsSync(currentProfileFile);

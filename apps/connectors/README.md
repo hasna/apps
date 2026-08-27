@@ -17,7 +17,7 @@ bun install -g @hasna/connectors
 
 - connectors stay inside this repo and package
 - projects enable the connectors they want through `.connectors/manifest.json`
-- credentials live in `~/.hasna/connectors/`
+- credentials live in the connectors data home (resolved through `@hasna/paths`; `~/.hasna/connectors/` until the XDG data home is adopted)
 - CLI, MCP, REST, and the dashboard all use the same connector registry
 
 ## CLI
@@ -40,7 +40,7 @@ Key commands:
 - `connectors install` writes project enablement to `.connectors/manifest.json`
 - `connectors list` and `connectors search` browse the shared catalog
 - `connectors docs` reads connector docs from the internal registry
-- `connectors auth` stores credentials in `~/.hasna/connectors/`
+- `connectors auth` stores credentials in the connectors data home (resolved through `@hasna/paths`)
 - `connectors run` executes connector commands from the one-product runtime
 - `connectors status` and `connectors doctor` verify setup and auth state
 
@@ -168,7 +168,7 @@ The package no longer copies full connector source trees into each project.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/connectors/`.
+The connectors data home is resolved through `@hasna/paths` (XDG/macOS home layout). The legacy `~/.hasna/connectors/` default stays the effective data home until the store is actually migrated to the XDG data home (`~/.local/share/hasna/connectors` on Linux, with `connectors.db` present there) or the operator sets the data-kind override `HASNA_DATA_HOME`. The exact-app override `HASNA_CONNECTORS_DIR` wins unconditionally. An existing live store never becomes invisible on upgrade.
 
 ## Contributor Notes
 

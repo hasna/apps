@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { refreshOAuthToken } from "./auth.js";
+import { connectorsHome } from "../lib/paths.js";
 
 const TEST_ID = `zzztest${process.pid}`;
 const originalFetch = global.fetch;
 
 function testConfigDir(name: string): string {
-  return join(homedir(), ".hasna", "connectors", name);
+  return join(connectorsHome(), name);
 }
 
 function legacyTestConfigDir(name: string): string {
-  return join(homedir(), ".hasna", "connectors", `connect-${name}`);
+  return join(connectorsHome(), `connect-${name}`);
 }
 
 function cleanupTestConnectors(...names: string[]) {

@@ -16,7 +16,8 @@ import {
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
+import { connectorsHome } from "../lib/paths.js";
 import {
   getAuthType,
   getAuthStatus,
@@ -34,22 +35,21 @@ import { startServer } from "./serve.js";
 
 // ── Test isolation strategy ──
 // Bun's os.homedir() does not respect runtime changes to process.env.HOME,
-// so we write to the real ~/.hasna/connectors/ directory using unique test connector
+// so we write to the real connectors home directory using unique test connector
 // names (prefixed with "zzztest") that are cleaned up after each test.
 
-const HOME = homedir();
 const TEST_ID = `zzztest${process.pid}`;
 
-/** Get the real ~/.hasna/connectors/<name> path */
+/** Get the real connectors home /<name> path */
 function testConfigDir(name: string): string {
-  return join(HOME, ".hasna", "connectors", name);
+  return join(connectorsHome(), name);
 }
 
 function legacyTestConfigDir(name: string): string {
-  return join(HOME, ".hasna", "connectors", `connect-${name}`);
+  return join(connectorsHome(), `connect-${name}`);
 }
 
-/** Clean up test connector directories from ~/.hasna/connectors/ */
+/** Clean up test connector directories from the connectors home */
 function cleanupTestConnectors(...names: string[]) {
   for (const name of names) {
     for (const dir of [testConfigDir(name), legacyTestConfigDir(name)]) {
@@ -109,7 +109,7 @@ describe("auth", () => {
 
     test("returns configured=true when env var is set", () => {
       const originalValue = process.env.STRIPE_API_KEY;
-      process.env.STRIPE_API_KEY = "sk_test_fake_key";
+      process.env.STRIPE_API_KEY = "fixture-stripe-value";
       try {
         const status = getAuthStatus("stripe");
         expect(status.type).toBe("bearer");
@@ -131,7 +131,7 @@ describe("auth", () => {
 
     test("returns configured=true for TomTom when TOMTOM_API_KEY is set", () => {
       const originalValue = process.env.TOMTOM_API_KEY;
-      process.env.TOMTOM_API_KEY = "tomtom_test_fake_key";
+      process.env.TOMTOM_API_KEY = "fixture-tomtom-value";
       try {
         const status = getAuthStatus("tomtom");
         expect(status.type).toBe("apikey");

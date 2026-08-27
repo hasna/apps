@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { basename, join } from "path";
+import { connectorsHome } from "../../lib/paths.js";
 import { z } from "zod";
 import { defineConnector } from "../connector.js";
 
@@ -350,7 +350,7 @@ function saveTokens(profile: string, tokens: OAuth2Tokens): void {
 function configDirs(): string[] {
   const explicit = process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR ?? process.env.GOOGLE_DRIVE_CONNECTOR_DIR;
   if (explicit) return [explicit];
-  const baseDir = process.env.HASNA_CONNECTORS_DIR ?? join(homedir(), ".hasna", "connectors");
+  const baseDir = connectorsHome();
   return [join(baseDir, "googledrive"), join(baseDir, "connect-googledrive")];
 }
 
