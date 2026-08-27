@@ -1,0 +1,5 @@
+---
+"@hasna/notes": patch
+---
+
+Switch @hasna/notes local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The client data root (`tools/notes-lib.mjs`) and the server default SQLite path (`server/paths.mjs`) now resolve from the effective data root: an exact-app override (`HASNA_NOTES_HOME`, then the pre-existing `HASNA_NOTES_ROOT`, then `NOTES_HOME`) wins unconditionally; otherwise the resolver data home (`~/.local/share/hasna/notes` on Linux, `~/Library/Application Support/Hasna/notes` on macOS) is adopted only when the operator sets the data-kind override `HASNA_DATA_HOME` or the store has already been physically migrated there — the legacy `~/.hasna/notes` root stays the effective data home until then, so an existing local store never becomes invisible on upgrade. The one-time copy-forward migrations from the legacy nested roots (`~/.hasna/apps/notes`, `~/.hasna/apps/notes-server/server.db`) are unchanged. The dependency is pinned exactly to `@hasna/paths@0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).

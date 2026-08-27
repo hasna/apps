@@ -3,9 +3,12 @@
 // Zero-ops run: `bun server/index.mjs` (repo) or `bunx notes-server`.
 // Two backends, one wire dialect (personalnotes/v1):
 //   HASNA_NOTES_DATABASE_URL present -> PostgreSQL
-//   absent                          -> SQLite (default, ~/.hasna/notes/server.db;
-//                                        a legacy ~/.hasna/apps/notes-server/
-//                                        server.db is copied forward once)
+//   absent                          -> SQLite (default resolved via
+//                                        @hasna/paths: legacy ~/.hasna/notes/
+//                                        server.db until the XDG data home is
+//                                        adopted; a legacy
+//                                        ~/.hasna/apps/notes-server/server.db
+//                                        is copied forward once)
 // The DSN is never logged. The PostgreSQL schema is applied by
 // scripts/apply-postgres-migrations.mjs (owner role) before first run.
 // Flags: --port <n> --host [addr] --db <path> --auto-approve --dev
@@ -35,7 +38,9 @@ Usage: notes-serve [--port <n>] [--host [addr]] [--db <path>] [--auto-approve] [
 
   --port <n>       listen port (default 8788; env HASNA_NOTES_SERVER_PORT or PORT)
   --host [addr]    bind address (default 127.0.0.1; bare --host binds 0.0.0.0)
-  --db <path>      SQLite file (default ~/.hasna/notes/server.db;
+  --db <path>      SQLite file (default ~/.hasna/notes/server.db via @hasna/paths,
+                   the XDG data home is adopted once HASNA_DATA_HOME is set or the
+                   store is migrated there;
                    PostgreSQL is selected by HASNA_NOTES_DATABASE_URL instead)
   --auto-approve   auto-approve device logins from loopback (single-user convenience)
   --dev            include devCode in OTP login responses (for tests/dev)

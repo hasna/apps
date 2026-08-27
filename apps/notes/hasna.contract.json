@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.10.6",
-  "description": "Local-first personal notes CLI, MCP server, SDK, and self-hosted notes server. Clients use the local SQLite+markdown store or the HTTP API selected by HASNA_NOTES_API_URL; notes-serve reads PostgreSQL selected by HASNA_NOTES_DATABASE_URL or SQLite by default. The personalnotes/v1 wire dialect is served identically on both backends.",
+  "description": "Local-first personal notes CLI, MCP server, SDK, and self-hosted notes server. Clients use the local SQLite+markdown store or the HTTP API selected by HASNA_NOTES_API_URL; notes-serve reads PostgreSQL selected by HASNA_NOTES_DATABASE_URL or SQLite by default. The local store path resolves via @hasna/paths: the XDG data home (~/.local/share/hasna/notes on Linux) is adopted only once the store is migrated there or HASNA_DATA_HOME is set, and HASNA_NOTES_HOME / HASNA_NOTES_ROOT / NOTES_HOME win unconditionally; the legacy ~/.hasna/notes default stays effective until then. The personalnotes/v1 wire dialect is served identically on both backends.",
   "hosting": [
     "user-hosted"
   ],
