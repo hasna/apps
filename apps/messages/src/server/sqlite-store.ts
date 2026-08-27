@@ -12,17 +12,25 @@
  */
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Agent, Message, MessageDelivery, MessageDeliveryReport, Thread } from "../types";
 import type { MessagesStore } from "../service";
+import { getDataRoot } from "../paths";
 
-export function defaultSqlitePath(): string {
-  const explicit = process.env.HASNA_MESSAGES_SQLITE_PATH;
+/**
+ * The local database file used when no path is configured: `<effective data
+ * root>/messages.db` — the legacy `~/.hasna/messages/messages.db` until the
+ * store is migrated to the resolver (XDG / macOS) data home or the operator
+ * sets `HASNA_DATA_HOME`; the exact-app override `HASNA_MESSAGES_HOME` names
+ * an explicit root. `src/paths.ts` owns the root resolution; the
+ * file-level `HASNA_MESSAGES_SQLITE_PATH` override wins over all of it.
+ */
+export function defaultSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.HASNA_MESSAGES_SQLITE_PATH;
   if (explicit) return explicit;
-  const home = process.env.HASNA_MESSAGES_HOME ?? path.join(os.homedir(), ".hasna", "messages");
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  return path.join(home, "messages.db");
+  const dataRoot = getDataRoot(env);
+  fs.mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
+  return path.join(dataRoot, "messages.db");
 }
 
 const SCHEMA = `
