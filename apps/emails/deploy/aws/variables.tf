@@ -80,9 +80,9 @@ variable "container_image" {
 }
 
 variable "container_architecture" {
-  description = "CPU architecture matching the operator-built image."
+  description = "CPU architecture matching the operator-built image. Defaults to the production architecture (X86_64): emails-prod Fargate has no runtimePlatform override, so Fargate runs X86_64, and DEPLOYMENT_CUTOVER.md mandates -var=\"container_architecture=X86_64\" at every apply. An ARM64 default silently flipped the service architecture and produced the exec-format-error deploy (O15-04098/O15-04099)."
   type        = string
-  default     = "ARM64"
+  default     = "X86_64"
 
   validation {
     condition     = contains(["ARM64", "X86_64"], var.container_architecture)
