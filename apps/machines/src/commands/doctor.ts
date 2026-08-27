@@ -1,5 +1,6 @@
 import { getLocalMachineId } from "../db.js";
 import { findManifestMachine, readManifestWithSource, type ManifestSourceAdapter } from "../manifests.js";
+import { getDataDir } from "../paths.js";
 import { redactIdentifier, redactManifestForDiagnostics, redactPath, redactSensitiveValue } from "../redaction.js";
 import { runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { DoctorCheck, DoctorProbe, DoctorReport, FleetManifest, ManifestLoadInfo } from "../types.js";
@@ -60,8 +61,9 @@ function parseKeyValueOutput(stdout: string): Record<string, string> {
 }
 
 function buildDoctorCommand(): string {
+  const defaultDataDir = getDataDir();
   return [
-    'data_dir="${HASNA_MACHINES_DIR:-$HOME/.hasna/machines}"',
+    `data_dir="\${HASNA_MACHINES_DIR:-${defaultDataDir}}"`,
     'manifest_path="${HASNA_MACHINES_MANIFEST_PATH:-$data_dir/machines.json}"',
     'db_path="${HASNA_MACHINES_DB_PATH:-$data_dir/machines.db}"',
     'notifications_path="${HASNA_MACHINES_NOTIFICATIONS_PATH:-$data_dir/notifications.json}"',

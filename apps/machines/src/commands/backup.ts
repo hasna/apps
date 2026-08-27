@@ -1,5 +1,6 @@
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
+import { getDataDir } from "../paths.js";
 import type { SetupResult, SetupStep } from "../types.js";
 
 export const MACHINES_BACKUP_BUCKET_ENV = "HASNA_MACHINES_S3_BUCKET";
@@ -73,7 +74,7 @@ function defaultBackupSources(): string[] {
 
 export function buildBackupPlan(bucket?: string, prefix?: string): SetupResult {
   const target = resolveBackupTarget({ bucket, prefix });
-  const archivePath = join(homedir(), ".hasna", "machines", "backup.tgz");
+  const archivePath = join(getDataDir(), "backup.tgz");
   const sources = defaultBackupSources();
   const steps: SetupStep[] = [
     {
