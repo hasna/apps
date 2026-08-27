@@ -8,8 +8,11 @@ identity can use which reference.
 
 - **npm:** `@hasna/access` · **bins:** `access`, `access-mcp`, `access-serve`
 - **serve port:** 3483 · **MCP HTTP port:** 8887
-- **store:** local `bun:sqlite` at `~/.hasna/access/access.db`, or cloud
-  Postgres (`HASNA_ACCESS_STORAGE_MODE=cloud`, pure remote, `sslmode=verify-full`)
+- **store:** local `bun:sqlite` at the effective access home — the legacy
+  `~/.hasna/access/access.db` default, resolved through `@hasna/paths`, until the
+  XDG data home is adopted (the store is migrated there or `HASNA_DATA_HOME` is
+  set; `HASNA_ACCESS_HOME` / `ACCESS_HOME` win unconditionally) — or cloud
+  Postgres (present `HASNA_ACCESS_DATABASE_URL`, pure remote, `sslmode=verify-full`)
   through the vendored `@hasna/contracts` storage kit
 
 `access` is intentionally not a secret vault. It never stores raw provider
