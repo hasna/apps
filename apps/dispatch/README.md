@@ -465,7 +465,9 @@ with your normal machine-management policy. macOS launchd support is not built i
 yet; use `dispatch daemon ensure` there and track launchd as a small follow-up if
 needed.
 
-The queue is persisted (sqlite under `~/.hasna/dispatch`), so it **survives a daemon
+The queue is persisted (sqlite under the dispatch data home — the legacy
+`~/.hasna/dispatch` until the store is migrated to the XDG data home or
+`HASNA_DATA_HOME` is set), so it **survives a daemon
 restart** — a schedule created while the daemon was down still fires once it's back up.
 The daemon processes due schedules serially; interval loops compute their next run only
 after the previous dispatch attempt completes, so runs do not overlap by default. If a
@@ -653,7 +655,7 @@ dispatch daemon status --json
 
 | Variable | Purpose |
 |---|---|
-| `DISPATCH_DATA_DIR` | State dir (default `~/.hasna/dispatch`) |
+| `DISPATCH_DATA_DIR` | State dir (default: legacy `~/.hasna/dispatch` until the store is migrated to the XDG data home or `HASNA_DATA_HOME` is set, then the @hasna/paths-resolved data home) |
 | `DISPATCH_BACKEND` | Default backend: `tmux` (default) or `mosaic` |
 | `DISPATCH_MOSAIC_BIN` | Mosaic executable name/path (default `mosaic`) |
 | `DISPATCH_REMOTE_TIMEOUT_MS` | Timeout for each resolved remote machine command (default 30000ms) |

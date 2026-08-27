@@ -1,6 +1,6 @@
 {
   "name": "@hasna/dispatch",
-  "version": "0.0.29",
+  "version": "0.0.30",
   "author": "Andrei Hasna <andrei@hasna.com>",
   "repository": {
     "type": "git",
@@ -8,6 +8,7 @@
   },
   "main": "dist/index.js",
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.6.2",
     "commander": "^13.1.0",
@@ -50,7 +51,8 @@
     "docs",
     "hasna.contract.json",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "postinstall.js"
   ],
   "homepage": "https://github.com/hasna/dispatch",
   "keywords": [
@@ -81,7 +83,7 @@
     "dev:daemon": "bun run src/daemon/index.ts",
     "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run build && bun run scan:artifact",
-    "postinstall": "mkdir -p $HOME/.hasna/dispatch 2>/dev/null || true"
+    "postinstall": "node postinstall.js"
   },
   "type": "module",
   "types": "dist/index.d.ts",
