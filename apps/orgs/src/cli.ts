@@ -111,8 +111,11 @@ Human output is compact by default. Use --verbose for extra fields, --json for
 stable full records, --limit/--cursor for pagination, and --filter <text> to
 filter list output.
 
-Data is stored in ~/.hasna/orgs/orgs.json by default.
-Set OPEN_ORGS_STORE/OPEN_ORGS_AUDIT or pass --store for isolated local stores.`;
+Data is stored in the effective orgs data root by default: the legacy
+~/.hasna/orgs/orgs.json until the resolver (XDG) data home is adopted
+(HASNA_DATA_HOME set, or the store already migrated to
+~/.local/share/hasna/orgs/orgs.json). HASNA_ORGS_HOME sets an exact data root;
+OPEN_ORGS_STORE/OPEN_ORGS_AUDIT or --store override the store/audit paths.`;
 
 export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): Promise<void> {
   const out = deps.out ?? ((text: string) => console.log(text));

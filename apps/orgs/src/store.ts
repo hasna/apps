@@ -1,9 +1,9 @@
 import { appendFile, chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { getDataRoot } from "./paths.js";
 import {
   ORG_GRAPH_SCHEMA_VERSION,
   type AlternateStoreEvidence,
@@ -118,7 +118,7 @@ export interface JsonOrgStoreOptions {
 }
 
 export function getOrgDataDir(): string {
-  return join(homedir(), ".hasna", "orgs");
+  return getDataRoot();
 }
 
 export function getOrgStorePath(): string {

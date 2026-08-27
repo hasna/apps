@@ -1,6 +1,6 @@
 {
   "name": "@hasna/orgs",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Open organization graph and delegation-context layer for agentic systems",
   "type": "module",
   "main": "dist/index.js",
@@ -27,7 +27,8 @@
     "docs",
     "examples",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "postinstall.js"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -38,7 +39,7 @@
     "verify:published": "npm view @hasna/orgs version --json",
     "dev:cli": "bun run src/cli.ts",
     "prepublishOnly": "bun run verify:release",
-    "postinstall": "mkdir -p $HOME/.hasna/orgs 2>/dev/null || true",
+    "postinstall": "node postinstall.js",
     "scan:artifact": "bun scripts/artifact-scan.ts",
     "prepack": "bun run build && bun run scan:artifact"
   },
@@ -73,5 +74,8 @@
     "@types/node": "^22.13.4",
     "typescript": "^5.7.3",
     "@hasna/contracts": "0.11.1"
+  },
+  "dependencies": {
+    "@hasna/paths": "0.1.0"
   }
 }
