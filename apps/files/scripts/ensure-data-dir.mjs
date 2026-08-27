@@ -10,12 +10,25 @@
 // byte-identical; the resolver root is what the XDG home migration (hotfixes
 // plan 0f49f56a, task P3.3) moves toward. Nothing else moves on disk — this
 // only provisions the effective home so a first run lands in the right place.
+//
+// Best-effort: an override pointing at an uncreatable path, or a resolver that
+// cannot be resolved at install time, must never fail the install — the runtime
+// provisions the effective home on first use the same way.
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { dataDir } from "@hasna/paths";
 
-function effectiveDataRoot() {
+function legacyDataRoot(home) {
+  return join(home, ".hasna", "files");
+}
+
+function adoptResolverRoot(resolved) {
+  const override = process.env.HASNA_DATA_HOME;
+  if (typeof override === "string" && override.trim().length > 0) return true;
+  return existsSync(join(resolved, "files.db"));
+}
+
+async function effectiveDataRoot() {
   const exact =
     process.env.HASNA_FILES_DATA_DIR?.trim() ||
     process.env.FILES_DATA_DIR?.trim() ||
@@ -23,10 +36,21 @@ function effectiveDataRoot() {
     process.env.FILES_HOME?.trim();
   if (exact) return resolve(exact);
   const home = process.env.HOME || process.env.USERPROFILE || homedir();
-  const resolverRoot = dataDir({ app: "files", home });
-  if (process.env.HASNA_DATA_HOME?.trim()) return resolverRoot;
-  if (existsSync(join(resolverRoot, "files.db"))) return resolverRoot;
-  return join(home, ".hasna", "files");
+  let resolverRoot = null;
+  try {
+    const { dataDir } = await import("@hasna/paths");
+    resolverRoot = dataDir({ app: "files", home });
+  } catch {
+    // @hasna/paths unavailable — fall back to the legacy root.
+  }
+  if (resolverRoot && adoptResolverRoot(resolverRoot)) return resolve(resolverRoot);
+  return legacyDataRoot(home);
 }
 
-mkdirSync(effectiveDataRoot(), { recursive: true });
+// Best-effort: a data-dir creation failure must never block install.
+try {
+  const root = await effectiveDataRoot();
+  mkdirSync(root, { recursive: true });
+} catch {
+  // ignore
+}

@@ -33,6 +33,7 @@
     "dist",
     "dashboard/dist",
     "docs",
+    "scripts",
     "LICENSE",
     "README.md"
   ],
