@@ -1452,7 +1452,15 @@ const CEILINGS: Record<string, number> = {
   selfHostedResourceBranches: 9,
   selfHostedResourceReferences: 36,
   isSelfHostedModeReferences: 31,
-  getEmailsModeReferences: 55,
+  // 2026-08-27, row O15-04143: 55 -> 57. ARGUED RAISE: the provider adapter
+  // registry (src/providers/index.ts) gained one import and one read of the
+  // process-wide mode predicate to SKIP the durable-credential overlay in the
+  // self-hosted arm, whose records are credential-free by design. That overlay
+  // was a synchronous HTTP round-trip per provider — 500 providers × ~400ms
+  // serialized curl ≈ 200s, the unbounded `emails provider status` hang the
+  // row fixes. The reads add no mode branch and no second implementation;
+  // they REMOVE a per-provider cost the existing self-hosted branch imposed.
+  getEmailsModeReferences: 57,
   resolveEmailsModeReferences: 64,
   normalizeEmailsModeReferences: 16,
   emailsModeEnvReferences: 203,

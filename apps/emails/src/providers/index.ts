@@ -1,6 +1,7 @@
 import type { DnsPublishingSupport, DnsRecord, DnsStatus, Provider, SendEmailOptions, Stats } from "../types/index.js";
 import { ProviderConfigError } from "../types/index.js";
 import { applyDurableCredentials } from "../db/providers.js";
+import { getEmailsMode } from "../lib/mode.js";
 import type { ProviderAdapter, RemoteAddress, RemoteDomain, RemoteEvent } from "./interface.js";
 
 class LazyProviderAdapter implements ProviderAdapter {
@@ -142,7 +143,13 @@ export function getAdapter(provider: Provider): ProviderAdapter {
   // credential values and therefore never touch the durable keyring. Only the
   // secret fields are overlaid, so the caller's own provider type still selects
   // the adapter that is built.
-  const executable = provider.id && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(provider.id)
+  //
+  // O15-04143: in self-hosted mode the server returns credential-free records
+  // by design (the remote arm ignores the unwrap flag), so the overlay here is
+  // a SYNCHRONOUS HTTP round-trip per provider that adds nothing — 500 providers
+  // × ~400ms serialized curl ≈ 200s, the unbounded `emails provider status`
+  // hang. Skip it when the store cannot supply credentials.
+  const executable = provider.id && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(provider.id) && getEmailsMode() !== "self_hosted"
     ? applyDurableCredentials(provider)
     : provider;
   assertProviderConfig(executable);
