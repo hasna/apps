@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -8,6 +7,7 @@ import pg from "pg";
 import type { Pool, PoolClient } from "pg";
 import { resolveServerDataBackend, resolveDatabaseUrl, type ServerDataBackend } from "./generated/storage-kit/backend.js";
 import { assertNoLegacyStorageMode } from "./lib/retired-storage-mode.js";
+import { getDataRoot } from "./lib/paths.js";
 
 // ============================================================================
 // Server-only DSN boundary (project CLAUDE.md §2, NON-NEGOTIABLE)
@@ -625,7 +625,7 @@ export interface StorageConfig {
   };
 }
 
-const LOCAL_DATA_DIR = join(homedir(), ".hasna", "mementos");
+const LOCAL_DATA_DIR = getDataRoot();
 const DEFAULT_STORAGE_CONFIG: StorageConfig = {
   rds: {
     host: "",
@@ -1120,7 +1120,7 @@ function resolveConfiguredConnectionString(dbName: string): string {
   }
   if (missing.length > 0) {
     throw new Error(
-      `Remote storage database is not configured. Missing ${missing.join(", ")}. Set HASNA_MEMENTOS_DATABASE_URL or configure ~/.hasna/mementos/storage/config.json.`
+      `Remote storage database is not configured. Missing ${missing.join(", ")}. Set HASNA_MEMENTOS_DATABASE_URL or configure ${STORAGE_CONFIG_PATH}.`
     );
   }
 

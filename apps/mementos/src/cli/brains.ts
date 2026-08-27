@@ -8,10 +8,10 @@ import {
   writeFileSync,
   readdirSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
 import { gatherTrainingData } from "../lib/gatherer.js";
+import { getDataRoot } from "../lib/paths.js";
 import {
   getActiveModel,
   setActiveModel,
@@ -50,7 +50,7 @@ export function makeBrainsCommand(): Command {
     .description("Gather training data from memories and write to JSONL")
     .option("--limit <n>", "Maximum number of examples to gather", parseInt)
     .option("--since <date>", "Only include memories created since this date (ISO 8601)")
-    .option("--output <dir>", "Output directory (default: ~/.hasna/mementos/training/)")
+    .option("--output <dir>", "Output directory (default: the mementos training data dir)")
     .option("--json", "Output result summary as JSON")
     .action(
       async (opts: {
@@ -76,7 +76,7 @@ export function makeBrainsCommand(): Command {
           });
 
           const outputDir =
-            opts.output ?? join(homedir(), ".hasna", "mementos", "training");
+            opts.output ?? join(getDataRoot(), "training");
           if (!existsSync(outputDir)) {
             mkdirSync(outputDir, { recursive: true });
           }
@@ -138,12 +138,7 @@ export function makeBrainsCommand(): Command {
           // Resolve dataset path
           let datasetPath = opts.dataset;
           if (!datasetPath) {
-            const trainingDir = join(
-              homedir(),
-              ".hasna",
-              "mementos",
-              "training"
-            );
+            const trainingDir = join(getDataRoot(), "training");
             if (!existsSync(trainingDir)) {
               printError(
                 "No training data found. Run `mementos brains gather` first."

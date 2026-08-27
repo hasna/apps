@@ -1,8 +1,9 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { resolve, dirname } from "node:path";
+import { join, resolve, dirname } from "node:path";
 import { existsSync, statSync, copyFileSync, mkdirSync, readdirSync } from "node:fs";
 import { getDbPath } from "../../db/database.js";
+import { getDataRoot } from "../../lib/paths.js";
 import {
   outputJson,
   makeHandleError,
@@ -15,12 +16,11 @@ export function registerBackupCommand(program: Command): void {
   program
     .command("backup [path]")
     .description("Backup the SQLite database to a file")
-    .option("--list", "List available backups in ~/.hasna/mementos/backups/")
+    .option("--list", "List available backups in the mementos backups dir")
     .action((targetPath: string | undefined, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
-        const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-        const backupsDir = resolve(home, ".hasna", "mementos", "backups");
+        const backupsDir = join(getDataRoot(), "backups");
 
         // --list: show available backups
         if (opts.list) {

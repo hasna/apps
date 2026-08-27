@@ -1,13 +1,13 @@
 // Model configuration for @hasna/mementos
-// Reads/writes ~/.hasna/mementos/config.json to store the active fine-tuned model ID
+// Reads/writes config.json under the effective data root to store the active fine-tuned model ID
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getDataRoot } from "./paths.js";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
 
-const CONFIG_DIR = join(homedir(), ".hasna", "mementos");
+const CONFIG_DIR = getDataRoot();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 interface ModelConfigJson {
@@ -41,7 +41,7 @@ export function getActiveModel(): string {
 }
 
 /**
- * Sets the active fine-tuned model ID in ~/.hasna/mementos/config.json.
+ * Sets the active fine-tuned model ID in config.json under the effective data root.
  */
 export function setActiveModel(modelId: string): void {
   const config = readConfig();

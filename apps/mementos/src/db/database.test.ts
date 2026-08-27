@@ -15,7 +15,8 @@ import { createMemory } from "./memories.js";
 import { SqliteAdapter as Database } from "../storage.js";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { getDataRoot } from "../lib/paths.js";
 
 beforeEach(() => {
   resetDatabase();
@@ -250,6 +251,159 @@ describe("getDbPath", () => {
       expect(path).toContain("mementos.db");
     } finally {
       process.chdir(origCwd);
+    }
+  });
+});
+
+// ============================================================================
+// getDbPath — the ACTUAL store opener must resolve under the SAME root the
+// package's resolver (src/lib/paths.ts getDataRoot) adopts. These tests exist
+// because the resolver switch is only complete when the store that
+// getDatabase()/io-backup/io-restore/system-doctor open follows the same
+// effective data root as config.json / profiles / backups / agents sync — a
+// store physically migrated to the XDG home must never become invisible.
+// ============================================================================
+
+const ROOT_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "HASNA_MEMENTOS_HOME",
+  "MEMENTOS_HOME",
+  "HASNA_DATA_HOME",
+  "MEMENTOS_DB_PATH",
+  "HASNA_MEMENTOS_DB_PATH",
+  "MEMENTOS_DB_SCOPE",
+] as const;
+
+function saveRootEnv(): Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>> {
+  const saved: Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>> = {};
+  for (const key of ROOT_ENV_KEYS) saved[key] = process.env[key];
+  return saved;
+}
+function clearRootEnv(): void {
+  for (const key of ROOT_ENV_KEYS) delete process.env[key];
+}
+function restoreRootEnv(saved: Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>>): void {
+  for (const key of ROOT_ENV_KEYS) {
+    const value = saved[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+describe("getDbPath — store resolution follows the adopted data root", () => {
+  test("legacy ~/.hasna/mementos stays the store path until the resolver root is adopted", () => {
+    const saved = saveRootEnv();
+    clearRootEnv();
+    const origCwd = process.cwd();
+    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    try {
+      process.env["HOME"] = tempHome;
+      process.chdir("/tmp");
+      const path = getDbPath();
+      expect(path).toBe(join(tempHome, ".hasna", "mementos", "mementos.db"));
+      expect(dirname(path)).toBe(getDataRoot());
+    } finally {
+      process.chdir(origCwd);
+      restoreRootEnv(saved as Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>>);
+      rmSync(tempHome, { recursive: true, force: true });
+      process.env["MEMENTOS_DB_PATH"] = ":memory:";
+    }
+  });
+
+  test("HASNA_DATA_HOME routes the ACTUAL store path under the adopted root", () => {
+    const saved = saveRootEnv();
+    clearRootEnv();
+    const origCwd = process.cwd();
+    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    const dataHome = mkdtempSync(join(tmpdir(), "mementos-data-"));
+    try {
+      process.env["HOME"] = tempHome;
+      process.env["HASNA_DATA_HOME"] = dataHome;
+      process.chdir("/tmp");
+      const path = getDbPath();
+      expect(getDataRoot()).toBe(join(dataHome, "mementos"));
+      expect(path).toBe(join(dataHome, "mementos", "mementos.db"));
+    } finally {
+      process.chdir(origCwd);
+      restoreRootEnv(saved as Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>>);
+      rmSync(tempHome, { recursive: true, force: true });
+      rmSync(dataHome, { recursive: true, force: true });
+      process.env["MEMENTOS_DB_PATH"] = ":memory:";
+    }
+  });
+
+  test("a store physically present at the resolver root adopts it for the actual store path", () => {
+    const saved = saveRootEnv();
+    clearRootEnv();
+    const origCwd = process.cwd();
+    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    try {
+      process.env["HOME"] = tempHome;
+      const xdg = join(tempHome, ".local", "share", "hasna", "mementos");
+      mkdirSync(xdg, { recursive: true });
+      writeFileSync(join(xdg, "mementos.db"), "migrated-store");
+      process.chdir("/tmp");
+      const path = getDbPath();
+      expect(getDataRoot()).toBe(xdg);
+      expect(path).toBe(join(xdg, "mementos.db"));
+    } finally {
+      process.chdir(origCwd);
+      restoreRootEnv(saved as Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>>);
+      rmSync(tempHome, { recursive: true, force: true });
+      process.env["MEMENTOS_DB_PATH"] = ":memory:";
+    }
+  });
+
+  test("the exact-app override routes the ACTUAL store path under it", () => {
+    const saved = saveRootEnv();
+    clearRootEnv();
+    const origCwd = process.cwd();
+    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    const override = mkdtempSync(join(tmpdir(), "mementos-exact-"));
+    try {
+      process.env["HOME"] = tempHome;
+      process.env["HASNA_MEMENTOS_HOME"] = override;
+      process.chdir("/tmp");
+      const path = getDbPath();
+      expect(getDataRoot()).toBe(override);
+      expect(path).toBe(join(override, "mementos.db"));
+    } finally {
+      process.chdir(origCwd);
+      restoreRootEnv(saved as Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>>);
+      rmSync(tempHome, { recursive: true, force: true });
+      rmSync(override, { recursive: true, force: true });
+      process.env["MEMENTOS_DB_PATH"] = ":memory:";
+    }
+  });
+
+  test("io-backup DB source and backupsDir agree on one root", () => {
+    // io-backup.ts backs up `getDbPath()` into `join(getDataRoot(), "backups")`.
+    // Under adoption both must live under the SAME effective root, or a backup
+    // would be taken from one store and listed/restored against another.
+    const saved = saveRootEnv();
+    clearRootEnv();
+    const origCwd = process.cwd();
+    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    const dataHome = mkdtempSync(join(tmpdir(), "mementos-data-"));
+    try {
+      process.env["HOME"] = tempHome;
+      process.env["HASNA_DATA_HOME"] = dataHome;
+      process.chdir("/tmp");
+      const root = getDataRoot();
+      const dbPath = getDbPath();
+      const backupsDir = join(root, "backups");
+      expect(root).toBe(join(dataHome, "mementos"));
+      expect(dirname(dbPath)).toBe(root);
+      expect(backupsDir.startsWith(root)).toBe(true);
+      // the store and its backups are not split across the legacy and XDG roots
+      expect(dbPath.startsWith(join(tempHome, ".hasna"))).toBe(false);
+    } finally {
+      process.chdir(origCwd);
+      restoreRootEnv(saved as Partial<Record<(typeof ROOT_ENV_KEYS)[number], string | undefined>>);
+      rmSync(tempHome, { recursive: true, force: true });
+      rmSync(dataHome, { recursive: true, force: true });
+      process.env["MEMENTOS_DB_PATH"] = ":memory:";
     }
   });
 });

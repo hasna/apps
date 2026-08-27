@@ -6,6 +6,7 @@ import {
   PgAdapter,
   MEMENTOS_STORAGE_TABLES,
   getStorageBackend,
+  getConfigPath,
   getStorageConnectionString,
   getStorageStatus,
   incrementalSyncPull,
@@ -669,7 +670,7 @@ function runStorageSync(
 ): MementosStorageSyncResult {
   const backend = getStorageBackend();
   if (backend === "sqlite" && !options.remote) {
-    throw new Error("Remote storage is not configured. Set HASNA_MEMENTOS_DATABASE_URL or configure ~/.hasna/mementos/storage/config.json.");
+    throw new Error(`Remote storage is not configured. Set HASNA_MEMENTOS_DATABASE_URL or configure ${getConfigPath()}.`);
   }
 
   return withManagedAdapters(options, (local, remote, currentMachineId) => {
