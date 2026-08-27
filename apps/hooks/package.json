@@ -83,6 +83,7 @@
     "dist/",
     "hooks/",
     "!hooks/*/dist/",
+    "scripts/",
     "README.md",
     "LICENSE"
   ],
