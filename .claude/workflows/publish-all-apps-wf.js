@@ -225,8 +225,41 @@ for (let i = 0; i < queue.length; i += 4) {
     const publishAllGo = publishGates.filter(Boolean).every(g => g && g.verdict === 'GO')
     if (publishAllGo) {
       r.gate = 'GO'
-      const confirm = await safeAgent(`GATE CONFIRM (publish gate protocol): both live gates returned GO for ${pkgName}@${gateV}. Reply IN-THREAD to the intent post in git-publishing (conversations send --channel git-publishing --reply-to ${r.intentId || 'MISSING'}): [PUBLISH-CONFIRM] ${pkgName}@${gateV} — <live-test evidence line: two-sided verify + live install/smoke + both gates GO>. If the intent id is missing or unresolvable, locate the [PUBLISH INTENT] post for this package in git-publishing and reply to its real message id — never invent an id. Return {confirmId, posted: true}.`, { label: 'confirm-publish-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['confirmId', 'posted'], properties: { confirmId: { type: 'string' }, posted: { type: 'boolean' } } } })
-      r.confirmId = confirm ? confirm.confirmId : null
+      // O15-04231 (sibling I38-01298): a failed [PUBLISH-CONFIRM] agent must NEVER
+      // be dropped silently. Pre-fix, `r.confirmId = confirm ? confirm.confirmId :
+      // null` recorded a gate-verified release whose in-thread confirm was never
+      // posted — no retry, no marker, no follow-up — and the app is CURRENT on the
+      // registry, so no later pass ever revisited the missing confirm (a
+      // release-gate record defect). Now: retry ONCE (the lane's established
+      // transient-failure pattern), with the retry deduped so a first attempt that
+      // actually posted is not duplicated; if both attempts fail, record the
+      // release as confirmed-never (confirmPosted false / confirmFailed true),
+      // log CONFIRM-FAILED, and file a RELEASE CONFIRM MISSING row — the class the
+      // task-drain lane already remediates for RELEASE UNVERIFIED.
+      const CONFIRM_SCHEMA = { type: 'object', additionalProperties: false, required: ['confirmId', 'posted'], properties: { confirmId: { type: 'string' }, posted: { type: 'boolean' } } }
+      const confirmPrompt = `GATE CONFIRM (publish gate protocol): both live gates returned GO for ${pkgName}@${gateV}. Reply IN-THREAD to the intent post in git-publishing (conversations send --channel git-publishing --reply-to ${r.intentId || 'MISSING'}): [PUBLISH-CONFIRM] ${pkgName}@${gateV} — <live-test evidence line: two-sided verify + live install/smoke + both gates GO>. If the intent id is missing or unresolvable, locate the [PUBLISH INTENT] post for this package in git-publishing and reply to its real message id — never invent an id. Return {confirmId, posted: true}.`
+      const confirmLabel = 'confirm-publish-' + (r.app || 'app')
+      let confirm = await safeAgent(confirmPrompt, { label: confirmLabel, phase: 'Release', schema: CONFIRM_SCHEMA })
+      if (!confirm) {
+        // Retry once, deduped: the first attempt may have posted before failing to
+        // return the schema — the retry must return the EXISTING confirm instead of
+        // posting a duplicate [PUBLISH-CONFIRM].
+        log(`CONFIRM-RETRY (${pkgName}@${gateV}): the [PUBLISH-CONFIRM] agent failed — retrying once, with an in-thread dedupe check`)
+        confirm = await safeAgent(`The prior [PUBLISH-CONFIRM] agent for ${pkgName}@${gateV} failed after possibly posting. FIRST check git-publishing for an existing [PUBLISH-CONFIRM] reply for this package@version in the intent thread (conversations digest git-publishing --since 24h --json redirected to a file; conversations show <id> --json for bodies): if one exists, return {confirmId: <its message id>, posted: false} WITHOUT posting again. Otherwise post the confirm IN-THREAD now and return {confirmId, posted: true}. The confirm to post: ${confirmPrompt}`, { label: confirmLabel + '-retry', phase: 'Release', schema: CONFIRM_SCHEMA })
+      }
+      if (confirm) {
+        r.confirmId = confirm.confirmId
+        r.confirmPosted = true
+      } else {
+        // NEVER silently drop: the release was published and both gates returned
+        // GO, but the in-thread [PUBLISH-CONFIRM] was never recorded. Mark it
+        // explicitly and file a follow-up row so a later pass retries the confirm.
+        r.confirmPosted = false
+        r.confirmFailed = true
+        const cf = await safeAgent(`RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — the publish lane published and both live gates returned GO, but the [PUBLISH-CONFIRM] agent failed twice and the in-thread confirm was never posted on git-publishing (a release-gate record defect, O15-04231). Check whether a todos row for this exact class already exists (todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress, redirect to a file, never pipe); reuse it if it exists, otherwise todos add in project 3bbc22e0: title 'RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId (${r.intentId || 'MISSING'}) + the two gate GO verdicts; no credential values anywhere in the description. Return {taskId, reused: bool}.`, { label: 'confirm-followup-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['taskId'], properties: { taskId: { type: 'string' }, reused: { type: 'boolean' } } } })
+        r.confirmFollowupTaskId = cf ? cf.taskId : null
+        log(`CONFIRM-FAILED (${pkgName}@${gateV}): both [PUBLISH-CONFIRM] attempts failed — release recorded confirmed-never (confirmPosted false) with follow-up row ${r.confirmFollowupTaskId || 'UNFILED'}`)
+      }
     } else {
       // NEVER confirm: file the UNVERIFIED todos row with the gate evidence (a REAL row
       // per the tracking rule — cite only a created/verified short id) and post the NO_GO
