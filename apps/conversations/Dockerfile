@@ -21,8 +21,13 @@ RUN apt-get update \
  && bun --version
 
 # ---- deps (cached) ----
+# --ignore-scripts: the postinstall only pre-creates the host ~/.hasna/conversations
+# data home (and its `training` subdir), which a container does not use — this
+# image is Postgres-only, no local state, and the runtime getDataDir() creates
+# the same directories on first use. Running it here would fail the build:
+# postinstall.js is not copied into this layer.
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 # ---- source ----
 COPY tsconfig.json ./
