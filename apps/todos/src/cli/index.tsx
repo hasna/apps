@@ -134,10 +134,18 @@ function commandForArgs(root: Command, args: readonly string[]): Command {
         // the command name and bypass the active-format guard.
         if (exact) index += 1;
       } else if (!option && !arg.includes("=")) {
-        // Unknown option: its separate-token value is never a command name,
-        // so skip it to keep resolving the command (`--format json active`).
+        // Unknown option: skip its separate-token value when the value is not
+        // itself a command name, so the command still resolves
+        // (`--format json active`), while a command token that merely follows
+        // an unknown option (`--nonsense active`) is not swallowed.
         const next = args[index + 1];
-        if (next !== undefined && !next.startsWith("-")) index += 1;
+        const nextIsCommand =
+          next !== undefined &&
+          !next.startsWith("-") &&
+          command.commands.some(
+            (candidate) => candidate.name() === next || candidate.aliases().includes(next),
+          );
+        if (next !== undefined && !next.startsWith("-") && !nextIsCommand) index += 1;
       }
       continue;
     }
