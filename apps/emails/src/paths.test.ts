@@ -128,6 +128,24 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     expect(getDataRoot()).toBe(override);
   });
 
+  test("a whitespace-only HASNA_EMAILS_HOME falls through to a valid EMAILS_HOME (release-review P1)", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "emails-hasna-home-")); cleanups.push(override);
+    process.env.HASNA_EMAILS_HOME = "   ";
+    process.env.EMAILS_HOME = override;
+    expect(getExactDataRoot()).toBe(override);
+    expect(getDataRoot()).toBe(override);
+    expect(getEmailsDataDir()).toBe(override);
+  });
+
+  test("whitespace-only exact overrides fall through to the legacy root (release-review P1)", () => {
+    const home = isolateHome();
+    process.env.HASNA_EMAILS_HOME = "   ";
+    process.env.EMAILS_HOME = "\t ";
+    expect(getExactDataRoot()).toBeUndefined();
+    expect(getDataRoot()).toBe(join(home, ".hasna", "emails"));
+  });
+
   test("exact data-root overrides are resolved to absolute paths", () => {
     isolateHome();
     const base = mkdtempSync(join(tmpdir(), "emails-abs-")); cleanups.push(base);

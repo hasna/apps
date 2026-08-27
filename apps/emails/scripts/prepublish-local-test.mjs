@@ -36,6 +36,15 @@ const legacyKeys = [
   // inherited value would silently select an operator database and the suite
   // would run against it (release-review P1, publish-all lane 248f6ed8).
   ["HASNA", "EMAILS", "DB", "PATH"],
+  // The resolver (XDG) path variables that became authoritative in 1.4.10
+  // (src/paths.ts): an inherited value would move the local-test suite's
+  // effective data root to operator data despite the temp HOME and the
+  // EMAILS_DB_PATH=:memory: store override (release-review P1, publish-all
+  // lane 248f6ed8).
+  ["HASNA", "DATA", "HOME"],
+  ["HASNA", "EMAILS", "HOME"],
+  ["EMAILS", "HOME"],
+  ["XDG", "DATA", "HOME"],
 ];
 
 const scrubbedKeys = legacyKeys.map((parts) => parts.join("_"));

@@ -26,6 +26,10 @@ describe("prepublish-local-test environment scrub", () => {
       EMAILS_IDP_TOKEN: "idp-token",
       MAILERY_MODE: "cloud",
       HASNA_MAILERY_API_URL: "https://legacy.example.test/v1",
+      HASNA_DATA_HOME: "/operator/data",
+      HASNA_EMAILS_HOME: "/operator/emails",
+      EMAILS_HOME: "/operator/emails-legacy",
+      XDG_DATA_HOME: "/operator/xdg",
       EMAILS_JSON_OUTPUT: "1",
     });
 
@@ -44,6 +48,14 @@ describe("prepublish-local-test environment scrub", () => {
     // checks HASNA_EMAILS_DB_PATH BEFORE EMAILS_DB_PATH, so an inherited value
     // would silently select an operator database despite the :memory: below.
     expect(env.HASNA_EMAILS_DB_PATH).toBeUndefined();
+    // The resolver (XDG) path variables authoritative since 1.4.10
+    // (src/paths.ts) are scrubbed: an inherited value would move the suite's
+    // effective data root to operator data despite the temp HOME
+    // (release-review P1, publish-all lane 248f6ed8).
+    expect(env.HASNA_DATA_HOME).toBeUndefined();
+    expect(env.HASNA_EMAILS_HOME).toBeUndefined();
+    expect(env.EMAILS_HOME).toBeUndefined();
+    expect(env.XDG_DATA_HOME).toBeUndefined();
     // The local store stays forced.
     expect(env.EMAILS_MODE).toBe("local");
     expect(env.EMAILS_DB_PATH).toBe(":memory:");

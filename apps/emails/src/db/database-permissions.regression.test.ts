@@ -53,22 +53,28 @@ function mode(path: string): number {
   return statSync(path).mode & 0o777;
 }
 
-function runPostinstall(rootPath: string) {
+function runPostinstallWith(rootPath: string, extra: Record<string, string>) {
   const packageRoot = join(import.meta.dir, "..", "..");
   const packageJson = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
     scripts: { postinstall: string };
   };
   expect(packageJson.scripts.postinstall).toBe("bun ./scripts/ensure-private-data-dir.mjs");
   // The postinstall resolves the effective data root through @hasna/paths; scrub
-  // the resolver overrides so the legacy default is exercised deterministically.
+  // the resolver overrides so the legacy default is exercised deterministically,
+  // then apply `extra` so a case can pass the overrides explicitly.
   const env = { ...process.env, HOME: rootPath, PATH: join(rootPath, "empty-path") };
   delete env.HASNA_DATA_HOME;
   delete env.HASNA_EMAILS_HOME;
   delete env.EMAILS_HOME;
+  Object.assign(env, extra);
   return Bun.spawnSync([process.execPath, "./scripts/ensure-private-data-dir.mjs"], {
     cwd: packageRoot,
     env,
   });
+}
+
+function runPostinstall(rootPath: string) {
+  return runPostinstallWith(rootPath, {});
 }
 
 function restoreEnv(): void {
@@ -182,6 +188,20 @@ if (process.platform !== "win32") {
         mode(join(root, ".hasna")),
         mode(join(root, ".hasna", "emails")),
       ]).toEqual([0o755, 0o700]);
+    });
+
+    it("postinstall applies first-nonblank exact-override precedence, matching src/paths.ts (release-review P1)", () => {
+      const custom = join(root, "custom-emails");
+      const result = runPostinstallWith(root, {
+        HASNA_EMAILS_HOME: "   ",
+        EMAILS_HOME: custom,
+      });
+
+      expect(result.exitCode).toBe(0);
+      // The whitespace-only HASNA_EMAILS_HOME must not suppress EMAILS_HOME...
+      expect(mode(custom)).toBe(0o700);
+      // ...and the legacy root must not be created instead.
+      expect(existsSync(join(root, ".hasna", "emails"))).toBe(false);
     });
 
     it("postinstall preserves a safe shared root and repairs an existing permissive emails directory", () => {
