@@ -34,25 +34,30 @@ const LEGACY_DSN_ENV = "DATABASE_URL";
  * are never re-applied or re-inserted.
  *
  * `domains_apikeys_tenancy_0001`, `domains_apikeys_tenancy_0002`,
- * `domains_tenancy_0001`, `domains_tenancy_0002`, `domains_tenancy_0003` and
- * `domains_tenancy_0004` were recorded against the prod ledger out-of-band
- * during the 2026-07 self-hosted cutover. Deploy evidence 2026-08-25: the
- * 02:00Z pass failed on `_0001` (O15-00671 filed); the 16:44Z pass, carrying
- * the kit with `_0001` acknowledged (hasna/apps#1176), advanced to `_0002`;
- * the next pass then failed on the third row `domains_tenancy_0001`
- * (O15-00758 filed), the 2026-08-25 PASS-18 pass then failed on the fourth
- * row `domains_tenancy_0002` at `domains-prod-migrate:42` (O15-00762 filed),
- * and the 2026-08-25 pass then failed on the fifth row `domains_tenancy_0003`
- * at `domains-prod-migrate:42` (O15-00766 filed). Deploy evidence 2026-08-26:
- * passes 48-96 then failed on the sixth row `domains_tenancy_0004` at
- * `domains-prod-migrate:44` through `:49` (todos 2b474505). All six rows are
- * present in the prod ledger. The apikeys rows' substance — the api-keys
- * tenancy (`tid`) column — is carried today by `hasna_auth_0003_api_keys_tenant`;
- * the substance of the `domains_tenancy_*` rows is not reproducible from any
- * source in this repo, and no build generates the ids, so they are
- * acknowledged as history rather than re-applied. Acknowledging all six
- * unblocks `domains db migrate` (the ECS migrate task) and therefore the
- * domains deploy lane.
+ * `domains_tenancy_0001`..`domains_tenancy_0010` were recorded against the
+ * prod ledger out-of-band during the 2026-07 self-hosted cutover. Deploy
+ * evidence 2026-08-25: the 02:00Z pass failed on `_0001` (O15-00671 filed);
+ * the 16:44Z pass, carrying the kit with `_0001` acknowledged
+ * (hasna/apps#1176), advanced to `_0002`; the next pass then failed on the
+ * third row `domains_tenancy_0001` (O15-00758 filed), the 2026-08-25 PASS-18
+ * pass then failed on the fourth row `domains_tenancy_0002` at
+ * `domains-prod-migrate:42` (O15-00762 filed), and the 2026-08-25 pass then
+ * failed on the fifth row `domains_tenancy_0003` at `domains-prod-migrate:42`
+ * (O15-00766 filed). Deploy evidence 2026-08-26: passes 48-96 then failed on
+ * the sixth row `domains_tenancy_0004` at `domains-prod-migrate:44` through
+ * `:49` (todos 2b474505). Deploy evidence 2026-08-26/27: the 2026-08-27
+ * 06:47Z pass failed on the seventh row `domains_tenancy_0005` at
+ * `domains-prod-migrate:50` (O15-01822 filed). The ledger census (inspection
+ * task oss-fleet-prod/4b7c37626965439e96d5386c8e8a73d4) shows the complete
+ * out-of-band set is the 12 rows below — `domains_apikeys_tenancy_0001-0002`
+ * plus `domains_tenancy_0001..0010` — so this list covers the full measured
+ * prod ledger rather than one row per deploy pass. The apikeys rows'
+ * substance — the api-keys tenancy (`tid`) column — is carried today by
+ * `hasna_auth_0003_api_keys_tenant`; the substance of the `domains_tenancy_*`
+ * rows is not reproducible from any source in this repo, and no build
+ * generates the ids, so they are acknowledged as history rather than
+ * re-applied. Acknowledging all twelve unblocks `domains db migrate` (the ECS
+ * migrate task) and therefore the domains deploy lane.
  */
 export const ACKNOWLEDGED_LEGACY_MIGRATION_IDS: readonly string[] = [
   "domains_apikeys_tenancy_0001",
@@ -61,6 +66,12 @@ export const ACKNOWLEDGED_LEGACY_MIGRATION_IDS: readonly string[] = [
   "domains_tenancy_0002",
   "domains_tenancy_0003",
   "domains_tenancy_0004",
+  "domains_tenancy_0005",
+  "domains_tenancy_0006",
+  "domains_tenancy_0007",
+  "domains_tenancy_0008",
+  "domains_tenancy_0009",
+  "domains_tenancy_0010",
 ];
 
 /** The ordered migration set: app schema first, then the shared api-keys table. */

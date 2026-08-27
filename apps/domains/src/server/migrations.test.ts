@@ -1,15 +1,14 @@
 /**
- * Regression tests for O15-00671, O15-00758, O15-00762, O15-00766 and
- * todos 2b474505: the prod `schema_migrations` ledger carries out-of-band rows
- * (`domains_apikeys_tenancy_0001`, `domains_apikeys_tenancy_0002`,
- * `domains_tenancy_0001`, `domains_tenancy_0002`, `domains_tenancy_0003`,
- * `domains_tenancy_0004`) that no build in this repo's history generates
- * (verified across every published tarball 0.0.30-0.0.46 and all git history —
- * the rows date from the 2026-07 self-hosted cutover). The storage kit's
- * downgrade guard refused them, so `domains db migrate` failed and the domains
- * deploy lane was blocked. The app acknowledges the rows via
- * `ACKNOWLEDGED_LEGACY_MIGRATION_IDS`, which the kit's `acknowledgedLegacyIds`
- * option honors.
+ * Regression tests for O15-00671, O15-00758, O15-00762, O15-00766, todos
+ * 2b474505 and O15-01822: the prod `schema_migrations` ledger carries
+ * out-of-band rows (`domains_apikeys_tenancy_0001`,
+ * `domains_apikeys_tenancy_0002`, `domains_tenancy_0001`..`domains_tenancy_0010`)
+ * that no build in this repo's history generates (verified across every
+ * published tarball 0.0.30-0.0.46 and all git history — the rows date from the
+ * 2026-07 self-hosted cutover). The storage kit's downgrade guard refused them,
+ * so `domains db migrate` failed and the domains deploy lane was blocked. The
+ * app acknowledges the rows via `ACKNOWLEDGED_LEGACY_MIGRATION_IDS`, which the
+ * kit's `acknowledgedLegacyIds` option honors.
  *
  * Deploy evidence, 2026-08-25: the 02:00Z pass failed on `..._0001`; the 16:44Z
  * pass (image carrying the 0.14.1 kit with `_0001` acknowledged, hasna/apps#1176)
@@ -20,7 +19,13 @@
  * PASS pass then hit the fifth out-of-band row `domains_tenancy_0003` at
  * `domains-prod-migrate:42` (O15-00766). Deploy evidence 2026-08-26: passes
  * 48-96 then failed on the sixth out-of-band row `domains_tenancy_0004` at
- * `domains-prod-migrate:44` through `:49` (todos 2b474505).
+ * `domains-prod-migrate:44` through `:49` (todos 2b474505). Deploy evidence
+ * 2026-08-26/27: the 2026-08-27 06:47Z pass failed on the seventh row
+ * `domains_tenancy_0005` at `domains-prod-migrate:50` (O15-01822); the ledger
+ * census (inspection task oss-fleet-prod/4b7c37626965439e96d5386c8e8a73d4)
+ * shows the full out-of-band set is `domains_apikeys_tenancy_0001-0002` plus
+ * `domains_tenancy_0001..0010` (12 rows total), so the acknowledgment set below
+ * covers the complete measured prod ledger rather than one row per deploy pass.
  *
  * These tests run the REAL ledger and the REAL buildMigrations() against an
  * in-memory TypedQueryClient that emulates the ledger SQL the kit emits
@@ -65,46 +70,36 @@ function inMemoryLedgerClient(): TypedQueryClient & { appliedDdl: string[] } {
   };
 }
 
+const PROD_LEGACY_ROWS: readonly string[] = [
+  "domains_apikeys_tenancy_0001",
+  "domains_apikeys_tenancy_0002",
+  "domains_tenancy_0001",
+  "domains_tenancy_0002",
+  "domains_tenancy_0003",
+  "domains_tenancy_0004",
+  "domains_tenancy_0005",
+  "domains_tenancy_0006",
+  "domains_tenancy_0007",
+  "domains_tenancy_0008",
+  "domains_tenancy_0009",
+  "domains_tenancy_0010",
+];
+
 async function seedProdShape(client: ReturnType<typeof inMemoryLedgerClient>): Promise<void> {
   // Apply the full declared migration set exactly as `domains db migrate` does.
   await new MigrationLedger(client, buildMigrations()).migrate();
   // Then record the out-of-band legacy rows exactly as the prod ledger holds them.
-  await client.execute(
-    `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
-    ["domains_apikeys_tenancy_0001", "sha256:not-reproducible-from-source"],
-  );
-  await client.execute(
-    `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
-    ["domains_apikeys_tenancy_0002", "sha256:not-reproducible-from-source"],
-  );
-  await client.execute(
-    `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
-    ["domains_tenancy_0001", "sha256:not-reproducible-from-source"],
-  );
-  await client.execute(
-    `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
-    ["domains_tenancy_0002", "sha256:not-reproducible-from-source"],
-  );
-  await client.execute(
-    `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
-    ["domains_tenancy_0003", "sha256:not-reproducible-from-source"],
-  );
-  await client.execute(
-    `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
-    ["domains_tenancy_0004", "sha256:not-reproducible-from-source"],
-  );
+  for (const id of PROD_LEGACY_ROWS) {
+    await client.execute(
+      `INSERT INTO schema_migrations (id, checksum, applied_at) VALUES ($1, $2, now())`,
+      [id, "sha256:not-reproducible-from-source"],
+    );
+  }
 }
 
-describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 / O15-00762 / O15-00766 / 2b474505)", () => {
+describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 / O15-00762 / O15-00766 / 2b474505 / O15-01822)", () => {
   test("the acknowledgment set names exactly the prod legacy rows", () => {
-    expect(ACKNOWLEDGED_LEGACY_MIGRATION_IDS).toEqual([
-      "domains_apikeys_tenancy_0001",
-      "domains_apikeys_tenancy_0002",
-      "domains_tenancy_0001",
-      "domains_tenancy_0002",
-      "domains_tenancy_0003",
-      "domains_tenancy_0004",
-    ]);
+    expect(ACKNOWLEDGED_LEGACY_MIGRATION_IDS).toEqual(PROD_LEGACY_ROWS);
   });
 
   test("REGRESSION: without the acknowledgment the prod ledger shape is refused (downgrade guard)", async () => {
@@ -123,16 +118,7 @@ describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 
       acknowledgedLegacyIds: ACKNOWLEDGED_LEGACY_MIGRATION_IDS,
     });
     const result = await ledger.migrate();
-    expect(result.applied.map((m) => m.id)).toEqual(
-      expect.arrayContaining([
-        "domains_apikeys_tenancy_0001",
-        "domains_apikeys_tenancy_0002",
-        "domains_tenancy_0001",
-        "domains_tenancy_0002",
-        "domains_tenancy_0003",
-        "domains_tenancy_0004",
-      ]),
-    );
+    expect(result.applied.map((m) => m.id)).toEqual(expect.arrayContaining([...PROD_LEGACY_ROWS]));
     // Nothing re-applied: the acknowledged run applies zero migrations.
     expect(client.appliedDdl.length).toBe(ddlBefore);
   });
