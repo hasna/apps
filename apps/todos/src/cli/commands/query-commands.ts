@@ -619,8 +619,16 @@ export function registerQueryCommands(program: Command) {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
       const filters: Record<string, string> = {};
-      if (opts.project) filters.project_id = opts.project;
+      const projectRef = opts.project ?? globalOpts.project;
+      if (typeof projectRef === "string" && projectRef.trim() === "") {
+        handleError(new Error("--project requires a non-empty project reference"));
+      }
       const cloud = getTodosCloudClient();
+      if (projectRef) {
+        filters.project_id = cloud
+          ? await cloudResolveProjectRef(cloud, projectRef)
+          : resolveExplicitProject(projectRef).id;
+      }
       const work = cloud
         ? await cloudActiveWork(cloud, Object.keys(filters).length ? (filters as never) : {})
         : getActiveWork(Object.keys(filters).length ? filters : undefined, getDatabase());

@@ -113,6 +113,65 @@ async function registerOptionalEventsCommands(program: Command): Promise<void> {
   registerUnavailableEventsCommands(program);
 }
 
+function commandForArgs(root: Command, args: readonly string[]): Command {
+  let command = root;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg.startsWith("-")) {
+      const exact = command.options.find(
+        (candidate) => candidate.long === arg || candidate.short === arg,
+      );
+      const inline = command.options.find(
+        (candidate) =>
+          (candidate.long !== undefined && arg.startsWith(`${candidate.long}=`)) ||
+          (candidate.short !== undefined && arg.startsWith(`${candidate.short}=`)),
+      );
+      const option = exact ?? inline;
+      if (option?.required || option?.optional) {
+        // The value is already consumed when the option was spelled inline
+        // (`--opt=value`); only the separate-token spelling leaves the value
+        // in the NEXT position, and skipping the inline form would walk past
+        // the command name and bypass the active-format guard.
+        if (exact) index += 1;
+      } else if (!option && !arg.includes("=")) {
+        // Unknown option: skip its separate-token value when the value is not
+        // itself a command name, so the command still resolves
+        // (`--format json active`), while a command token that merely follows
+        // an unknown option (`--nonsense active`) is not swallowed.
+        const next = args[index + 1];
+        const nextIsCommand =
+          next !== undefined &&
+          !next.startsWith("-") &&
+          command.commands.some(
+            (candidate) => candidate.name() === next || candidate.aliases().includes(next),
+          );
+        if (next !== undefined && !next.startsWith("-") && !nextIsCommand) index += 1;
+      }
+      continue;
+    }
+    const child = command.commands.find((candidate) =>
+      candidate.name() === arg || candidate.aliases().includes(arg),
+    );
+    if (!child) break;
+    command = child;
+  }
+  return command;
+}
+
+function unsupportedActiveFormatOption(command: Command, args: readonly string[]): string | null {
+  if (command.name() !== "active") return null;
+  const activeIndex = args.indexOf("active");
+  if (activeIndex < 0) return null;
+  const format = (arg: string) => arg === "--format" || arg.startsWith("--format=");
+  // The option may sit after the command (`active --format json`) or before
+  // it (`--format json active`); both spellings are unsupported on `active`.
+  return (
+    args.slice(activeIndex + 1).find(format) ??
+    args.slice(0, activeIndex).find(format) ??
+    null
+  );
+}
+
 // Global options
 program
   .name("todos")
@@ -284,6 +343,16 @@ applyTodosCliHelpVisibility(program, authority.route, remoteCommandCapabilities)
 // mirror) surfaces as a clean red message + exit(1) instead of an unhandled
 // promise-rejection stack trace.
 try {
+  const activeFormat = unsupportedActiveFormatOption(
+    commandForArgs(program, process.argv.slice(2)),
+    process.argv.slice(2),
+  );
+  if (activeFormat) {
+    throw new Error(
+      `ACTIVE_FORMAT_UNSUPPORTED: ${activeFormat} is not supported by todos active; ` +
+        "use --json for machine-readable output",
+    );
+  }
   if (metadataRequested) {
     const unavailableCommand = getUnavailableTodosCliRemoteMetadataCommand(
       authority.route,

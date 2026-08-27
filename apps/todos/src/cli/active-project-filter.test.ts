@@ -1,0 +1,243 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { cliSpawnBudgetMs } from "../test/spawn-budget.js";
+
+const REPO_ROOT = join(import.meta.dir, "../..");
+const tempRoots: string[] = [];
+
+type CliResult = { exitCode: number; stdout: string; stderr: string };
+
+function tempRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "todos-active-project-filter-"));
+  tempRoots.push(root);
+  return root;
+}
+
+async function runCli(args: string[], dbPath: string, home: string): Promise<CliResult> {
+  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+    cwd: REPO_ROOT,
+    env: localRoutingTestEnv({
+      HOME: home,
+      TMPDIR: home,
+      TODOS_DB_PATH: dbPath,
+      TODOS_AUTO_PROJECT: "false",
+    }),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+describe("active project filters", () => {
+  test("rejects an explicitly empty project filter instead of returning unfiltered work", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const project = await runCli(
+      ["--json", "projects", "--add", join(home, "active-project"), "--name", "Active Project"],
+      dbPath,
+      home,
+    );
+    expect(project.exitCode).toBe(0);
+    const projectId = (JSON.parse(project.stdout) as { id: string }).id;
+
+    const task = await runCli(
+      ["--json", "add", "Active task", "--status", "in_progress", "--project", projectId, "--unassigned"],
+      dbPath,
+      home,
+    );
+    expect(task.exitCode).toBe(0);
+
+    const result = await runCli(["--json", "active", "--project", ""], dbPath, home);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr + result.stdout).toMatch(/--project requires a non-empty/i);
+    expect(result.stdout).not.toContain("Active task");
+  }, cliSpawnBudgetMs(3));
+
+  test("returns an empty JSON list for a valid project with no active tasks", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const project = await runCli(
+      ["--json", "projects", "--add", join(home, "empty-project"), "--name", "Empty Project"],
+      dbPath,
+      home,
+    );
+    expect(project.exitCode).toBe(0);
+    const projectId = (JSON.parse(project.stdout) as { id: string }).id;
+
+    const result = await runCli(["--json", "active", "--project", projectId], dbPath, home);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([]);
+  }, cliSpawnBudgetMs(2));
+
+  test("returns only active tasks for a valid non-empty project", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const project = await runCli(
+      ["--json", "projects", "--add", join(home, "active-project"), "--name", "Active Project"],
+      dbPath,
+      home,
+    );
+    expect(project.exitCode).toBe(0);
+    const projectId = (JSON.parse(project.stdout) as { id: string }).id;
+
+    const active = await runCli(
+      ["--json", "add", "Active task", "--status", "in_progress", "--project", projectId, "--unassigned"],
+      dbPath,
+      home,
+    );
+    expect(active.exitCode).toBe(0);
+    const activeTaskId = (JSON.parse(active.stdout) as { id: string }).id;
+
+    const result = await runCli(["--json", "active", "--project", projectId], dbPath, home);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as Array<{ id: string }>).map((task) => task.id)).toEqual([activeTaskId]);
+  }, cliSpawnBudgetMs(3));
+
+  test("resolves a global filesystem-path project filter before listing active tasks", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+    const projectPath = join(home, "active-project");
+
+    const project = await runCli(
+      ["--json", "projects", "--add", projectPath, "--name", "Active Project"],
+      dbPath,
+      home,
+    );
+    expect(project.exitCode).toBe(0);
+    const projectId = (JSON.parse(project.stdout) as { id: string }).id;
+
+    const task = await runCli(
+      ["--json", "add", "Path active task", "--status", "in_progress", "--project", projectId, "--unassigned"],
+      dbPath,
+      home,
+    );
+    expect(task.exitCode).toBe(0);
+    const taskId = (JSON.parse(task.stdout) as { id: string }).id;
+
+    const result = await runCli(["--project", projectPath, "--json", "active"], dbPath, home);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as Array<{ id: string }>).map((item) => item.id)).toEqual([taskId]);
+  }, cliSpawnBudgetMs(3));
+
+  test("reports an unsupported format option instead of exiting silently", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["active", "--format", "json"], dbPath, home);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports the full unsupported project-name and format invocation instead of exiting silently", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(
+      ["active", "--project-name", "agent-chief-research", "--format", "json"],
+      dbPath,
+      home,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/unknown option|unsupported.*--format|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format when a global project path precedes the command", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(
+      ["--project", join(home, "active-project"), "active", "--format", "json"],
+      dbPath,
+      home,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format when a global project path precedes the command via inline equals", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(
+      [`--project=${join(home, "active-project")}`, "active", "--format", "json"],
+      dbPath,
+      home,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format when it precedes the command", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["--format", "json", "active", "--json"], dbPath, home);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format when it precedes the command via inline equals", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["--format=json", "active", "--json"], dbPath, home);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format preceding the command after a global project option", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(
+      [`--project=${join(home, "active-project")}`, "--format", "json", "active", "--json"],
+      dbPath,
+      home,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("still resolves active when an unknown option value equals a command name", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["--nonsense", "active", "--format", "json"], dbPath, home);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
+
+  test("does not apply the active format guard to a nested roadmap command", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(["roadmap", "show", "active", "--format", "json"], dbPath, home);
+    expect(result.stderr).not.toContain("ACTIVE_FORMAT_UNSUPPORTED");
+  }, cliSpawnBudgetMs(1));
+});
