@@ -3,6 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { resolveConfigStore } from "../data/config-store.js";
+import { getReportedDbPath } from "../lib/app-home.js";
 import { applyConfigsWithReport } from "../lib/apply.js";
 import { findConfigsByTargetPath, findReferenceConfigsByName } from "../lib/config-target-identity.js";
 import { syncFromDir, syncToDir } from "../lib/sync-dir.js";
@@ -305,7 +306,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           drifted,
           drifted_configs: driftedSlugs.slice(0, 5),
           missing,
-          db_path: process.env["HASNA_INSTRUCTIONS_DB_PATH"] || "~/.hasna/instructions/instructions.db",
+          db_path: getReportedDbPath(),
         });
       }
       case "sync_known": {

@@ -17,6 +17,7 @@ import {
   adoptResolverStoreHome,
   getConfigsStoreDbPath,
   getConfigsStoreHome,
+  getReportedDbPath,
   legacyStoreHome,
   resolverStoreHome,
 } from "./app-home.js";
@@ -107,5 +108,35 @@ describe("resolver (XDG) config home adoption — legacy default must never beco
     writeFileSync(join(resolved, "instructions.db"), "");
     expect(getConfigsStoreHome()).toBe(resolved);
     expect(getConfigsStoreDbPath()).toBe(join(resolved, "instructions.db"));
+  });
+});
+
+describe("getReportedDbPath — server status surfaces must never hardcode the legacy literal", () => {
+  it("HASNA_INSTRUCTIONS_DB_PATH exact override wins", () => {
+    const saved = process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+    try {
+      process.env["HASNA_INSTRUCTIONS_DB_PATH"] = "/srv/db/instructions.db";
+      expect(getReportedDbPath()).toBe("/srv/db/instructions.db");
+    } finally {
+      if (saved === undefined) delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+      else process.env["HASNA_INSTRUCTIONS_DB_PATH"] = saved;
+    }
+  });
+
+  it("falls back to the resolver-derived store db path (legacy default before adoption)", () => {
+    process.env["HOME"] = tempHome;
+    expect(getReportedDbPath()).toBe(
+      join(tempHome, ".hasna", "instructions", "instructions.db"),
+    );
+  });
+
+  it("reports the resolver home once the XDG store is adopted — not the legacy literal", () => {
+    process.env["HOME"] = tempHome;
+    const resolved = join(tempHome, ".config", "hasna", "configs");
+    mkdirSync(resolved, { recursive: true });
+    writeFileSync(join(resolved, "instructions.db"), "");
+    const reported = getReportedDbPath();
+    expect(reported).toBe(join(resolved, "instructions.db"));
+    expect(reported).not.toContain(join(tempHome, ".hasna", "instructions"));
   });
 });
