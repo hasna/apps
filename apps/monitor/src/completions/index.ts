@@ -6,7 +6,7 @@ import {
   mkdirSync,
 } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { effectiveHome, getMonitorDir } from "../app-home.js";
 
 /**
  * Generate shell completion script for the given shell.
@@ -30,16 +30,17 @@ export function detectShell(): "zsh" | "bash" {
 
 /**
  * Install shell completions by writing the completion script to
- * ~/.hasna/monitor/completions/ and appending a source line to
- * ~/.zshrc or ~/.bashrc (only once).
+ * <monitor home>/completions/ (the effective monitor home resolved through
+ * @hasna/paths) and appending a source line to ~/.zshrc or ~/.bashrc (only
+ * once).
  */
 export function installCompletions(shell?: "zsh" | "bash"): void {
   const targetShell = shell ?? detectShell();
 
-  const completionDir = join(homedir(), ".hasna", "monitor", "completions");
+  const completionDir = join(getMonitorDir(), "completions");
   const scriptFile = targetShell === "zsh" ? "monitor.zsh" : "monitor.bash";
   const completionScript = join(completionDir, scriptFile);
-  const rcFile = join(homedir(), targetShell === "zsh" ? ".zshrc" : ".bashrc");
+  const rcFile = join(effectiveHome(), targetShell === "zsh" ? ".zshrc" : ".bashrc");
 
   // Write completion script to user config dir
   if (!existsSync(completionDir)) {

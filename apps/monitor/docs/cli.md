@@ -106,7 +106,7 @@ and `custom`.
 
 | Command | Options and behavior |
 |---------|----------------------|
-| `migrate` | Move supported legacy config and database files into `~/.hasna/monitor/`. |
+| `migrate` | Move supported legacy config and database files into the effective monitor home. |
 | `integrations list` | Show open-* integration settings; supports `--json`. |
 | `integrations test <name>` | Send a test through `todos`, `conversations`, `mementos`, or `emails`. |
 | `serve` | Start the REST API on `127.0.0.1:3847`; supports `--host` and `--port`. |

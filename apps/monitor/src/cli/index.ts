@@ -2315,7 +2315,7 @@ program
 
 program
   .command("migrate")
-  .description("Migrate config and database from legacy locations to ~/.hasna/monitor/")
+  .description("Migrate config and database from legacy locations to the effective monitor home")
   .action(() => {
     console.log(chalk.cyan("  Checking for legacy monitor config locations..."));
     migrateConfig();
@@ -2409,7 +2409,7 @@ integrationsCmd
 
     const cfg = (integrations as IntegrationsConfig)[name as keyof IntegrationsConfig];
     if (!cfg) {
-      console.error(chalk.yellow(`  Integration '${name}' is not configured. Add it to ~/.hasna/monitor/config.json`));
+      console.error(chalk.yellow(`  Integration '${name}' is not configured. Add it to ${getConfigPath()}`));
       process.exit(1);
     }
     if (!cfg.enabled) {

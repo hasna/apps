@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.11.1",
-  "description": "System monitoring tool for multiple computers — local, SSH, EC2.",
+  "description": "System monitoring tool for multiple computers — local, SSH, EC2. Local state lives at the effective monitor home (~/.hasna/monitor by default, resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set).",
   "bins": [
     "monitor",
     "monitor-mcp",

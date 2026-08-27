@@ -3,6 +3,7 @@ import { execSync } from "child_process";
 import { existsSync, readdirSync, statSync, rmSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { getMonitorDir } from "../app-home.js";
 import { loadConfig } from "../config.js";
 import type { CronJobRow, CronRunRow } from "../db/schema.js";
 import { logCronRun, pruneOldMetrics, pruneOldProcesses, pruneOldAlerts, pruneOldCronRuns } from "../db/queries.js";
@@ -167,7 +168,7 @@ export async function runJobAction(
         join(home, ".cache", "pip"),
         join(home, ".cache", "ms-playwright"),
         "/tmp",
-        join(home, ".hasna", "monitor"),
+        getMonitorDir(),
       ];
 
       const targets = (config["targets"] as string[] | undefined) ?? DEFAULT_TARGETS;
@@ -223,8 +224,9 @@ export async function runJobAction(
         }
       }
 
+      const monitorDir = getMonitorDir();
       for (const target of targets) {
-        const isMonitorLogs = target.includes(".hasna");
+        const isMonitorLogs = target === monitorDir;
         const isPlaywright = target.includes("ms-playwright");
         const playwrightMaxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
         const age = isPlaywright ? playwrightMaxAge : maxAgeMs;

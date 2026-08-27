@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync, readdirSync } from "fs";
-import { homedir } from "os";
 import { basename, dirname, join, resolve } from "path";
 import { z } from "zod";
+import { effectiveHome, getMonitorDir, hasExactMonitorOverride } from "./app-home.js";
 
 type ConfigMigrationOptions = {
   quiet?: boolean;
@@ -86,15 +86,19 @@ export interface MonitorConfig {
   integrations?: IntegrationsConfig;
 }
 
-const CONFIG_DIR_ENV = "MONITOR_CONFIG_DIR";
-
+/**
+ * The effective monitor home, resolved through @hasna/paths: an exact-app
+ * override (`MONITOR_CONFIG_DIR`, then the `HASNA_MONITOR_HOME` alias) wins
+ * unconditionally; otherwise the XDG data home once adopted; otherwise the
+ * legacy `~/.hasna/monitor` default. See `./app-home.ts` for the gated legacy
+ * adoption semantics.
+ */
 function getConfigDir(): string {
-  const override = process.env[CONFIG_DIR_ENV]?.trim();
-  return override ? override : join(homedir(), ".hasna", "monitor");
+  return getMonitorDir();
 }
 
 function hasConfigDirOverride(): boolean {
-  return Boolean(process.env[CONFIG_DIR_ENV]?.trim());
+  return hasExactMonitorOverride();
 }
 
 export function getConfigPath(): string {
@@ -232,8 +236,8 @@ function applyDefaults(config: MonitorConfig): MonitorConfig {
 // ── Legacy paths to check during migration ────────────────────────────────────
 
 const LEGACY_PATHS = [
-  join(homedir(), ".monitor"),
-  join(homedir(), "Library", "Application Support", "monitor"),
+  join(effectiveHome(), ".monitor"),
+  join(effectiveHome(), "Library", "Application Support", "monitor"),
 ];
 
 /**
