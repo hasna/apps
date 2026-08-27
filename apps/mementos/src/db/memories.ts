@@ -228,6 +228,33 @@ export function createMemory(
     // No conflict — fall through to insert below
   }
 
+  if (effectiveMode === "create") {
+    // A fork under the same key is only possible when the unique tuple differs
+    // (idx_memories_unique_key: key, scope, agent, project, session). An
+    // identical tuple cannot be inserted, and surfacing the raw database
+    // constraint error made the write path fail as 500 on the Postgres server
+    // and 400 with a misleading enum message on SQLite (PLA8-00141). Check the
+    // exact tuple before the insert so the caller gets a handled conflict.
+    const existing = d.query(
+      `SELECT id, agent_id, updated_at FROM memories
+       WHERE key = ? AND scope = ?
+         AND COALESCE(agent_id, '') = ?
+         AND COALESCE(project_id, '') = ?
+         AND COALESCE(session_id, '') = ?`
+    ).get(
+      input.key,
+      input.scope || "private",
+      input.agent_id || "",
+      input.project_id || "",
+      input.session_id || ""
+    ) as { id: string; agent_id: string | null; updated_at: string } | null;
+
+    if (existing) {
+      throw new MemoryConflictError(input.key, existing);
+    }
+    // No conflict — fall through to insert below
+  }
+
   if (effectiveMode === "merge") {
     // Try upsert: if key+scope+agent+project+session already exists, update value
     const existing = d
@@ -1357,6 +1384,34 @@ export function updateMemory(
 
   if (existing.version !== input.version) {
     throw new VersionConflictError(id, input.version, existing.version);
+  }
+
+  // A scope change can move the row into a unique tuple (idx_memories_unique_key:
+  // key, scope, agent, project, session) that another row already occupies.
+  // Surfacing the raw database constraint error made this fail as 500 on the
+  // Postgres server and 400 with a misleading message on SQLite (PLA8-00141);
+  // check the target tuple up front so the caller gets a handled conflict.
+  if (input.scope !== undefined && input.scope !== existing.scope) {
+    const conflict = d
+      .query(
+        `SELECT id, agent_id, updated_at FROM memories
+         WHERE key = ? AND scope = ?
+           AND COALESCE(agent_id, '') = ?
+           AND COALESCE(project_id, '') = ?
+           AND COALESCE(session_id, '') = ?
+           AND id != ?`
+      )
+      .get(
+        existing.key,
+        input.scope,
+        existing.agent_id || "",
+        existing.project_id || "",
+        existing.session_id || "",
+        memoryId
+      ) as { id: string; agent_id: string | null; updated_at: string } | null;
+    if (conflict) {
+      throw new MemoryConflictError(existing.key, conflict);
+    }
   }
 
   const sets: string[] = ["version = version + 1", "updated_at = ?"];

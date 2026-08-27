@@ -361,6 +361,56 @@ describe("semanticSearch - embedding paths (lines 860-867)", () => {
   });
 });
 
+// ============================================================================
+// PLA8-00141: tuple-collision write paths must be handled conflicts, not 500s.
+// The unique index idx_memories_unique_key (key, scope, COALESCE(agent_id,''),
+// COALESCE(project_id,''), COALESCE(session_id,'')) forbids a second row with
+// the identical tuple. create dedupe mode and scope-change updates used to
+// blind-write and surface the driver-dependent constraint error (500 on the
+// deployed Postgres server, 400 with a misleading message on SQLite) instead
+// of a handled conflict.
+// ============================================================================
+
+describe("createMemory - create dedupe mode tuple collision (PLA8-00141)", () => {
+  it("throws MemoryConflictError when the identical unique tuple already exists", () => {
+    createMemory({ key: "collision-key", value: "first", scope: "shared" });
+
+    expect(() => {
+      createMemory({ key: "collision-key", value: "second", scope: "shared" }, "create");
+    }).toThrow(MemoryConflictError);
+  });
+
+  it("still forks a new row when a tuple field differs", () => {
+    createMemory({ key: "fork-collision-key", value: "first", scope: "shared" });
+
+    const forked = createMemory(
+      { key: "fork-collision-key", value: "second", scope: "shared", session_id: "s9" },
+      "create"
+    );
+    expect(forked.id).toBeTruthy();
+    expect(forked.session_id).toBe("s9");
+    expect(forked.value).toBe("second");
+  });
+});
+
+describe("updateMemory - scope-change tuple collision (PLA8-00141)", () => {
+  it("throws MemoryConflictError when moving scope into an occupied tuple", () => {
+    createMemory({ key: "scope-collision-key", value: "shared row", scope: "shared" });
+    const privateRow = createMemory({ key: "scope-collision-key", value: "private row", scope: "private" });
+
+    expect(() => {
+      updateMemory(privateRow.id, { scope: "shared", version: privateRow.version });
+    }).toThrow(MemoryConflictError);
+  });
+
+  it("allows a scope change into an unoccupied tuple", () => {
+    const row = createMemory({ key: "scope-ok-key", value: "private row", scope: "private" });
+
+    const updated = updateMemory(row.id, { scope: "shared", version: row.version });
+    expect(updated.scope).toBe("shared");
+  });
+});
+
 afterAll(() => {
   // Restore the env: the module-scope set above leaks into sibling test files
   // that share this process (bun batches listed files), and the api-test-guard

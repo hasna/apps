@@ -20,7 +20,7 @@ import { addRoute } from "../router.js";
 import { json, errorResponse, readJson, getSearchParams, checkWriteOriginOrHost } from "../helpers.js";
 import { getDatabase } from "../../db/database.js";
 import { validateMemoryEnums, formatEnumViolation } from "../../lib/enum-validation.js";
-import { MemoryNotFoundError, VersionConflictError, DuplicateMemoryError } from "../../types/index.js";
+import { MemoryNotFoundError, VersionConflictError, DuplicateMemoryError, MemoryConflictError } from "../../types/index.js";
 
 // GET /api/memories — list memories
 addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
@@ -137,6 +137,9 @@ addRoute("POST", "/api/memories", async (req) => {
     if (e instanceof DuplicateMemoryError) {
       return errorResponse(e.message, 409);
     }
+    if (e instanceof MemoryConflictError) {
+      return errorResponse(e.message, 409);
+    }
     throw e;
   }
 });
@@ -198,6 +201,9 @@ addRoute("PATCH", "/api/memories/:id", async (req, _url, params) => {
         expected: e.expected,
         actual: e.actual,
       });
+    }
+    if (e instanceof MemoryConflictError) {
+      return errorResponse(e.message, 409);
     }
     throw e;
   }
