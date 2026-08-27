@@ -1,29 +1,13 @@
 import { Database } from "bun:sqlite";
 import { join } from "path";
-import { mkdirSync, existsSync, cpSync } from "fs";
-import { homedir } from "os";
+import { getDataDir } from "../lib/paths.js";
+export { getDataDir } from "../lib/paths.js";
 
-function resolveDataDir(): string {
-  const explicit = process.env.HASNA_FILES_DATA_DIR ?? process.env.FILES_DATA_DIR;
-  if (explicit) return explicit;
-
-  const newDir = join(homedir(), ".hasna", "files");
-  const oldDir = join(homedir(), ".files");
-
-  // Auto-migrate: copy old data to new location if needed
-  if (!existsSync(newDir) && existsSync(oldDir)) {
-    mkdirSync(join(homedir(), ".hasna"), { recursive: true });
-    cpSync(oldDir, newDir, { recursive: true });
-  }
-
-  return newDir;
-}
-
-export function getDataDir(): string {
-  const dir = resolveDataDir();
-  mkdirSync(dir, { recursive: true });
-  return dir;
-}
+// The effective data dir now resolves through @hasna/paths (XDG / macOS home
+// layout) with gated legacy adoption — see src/lib/paths.ts. The pre-resolver
+// explicit data-dir overrides (HASNA_FILES_DATA_DIR / FILES_DATA_DIR) are
+// preserved as exact-app overrides and win there, and the one-time ~/.files
+// auto-migration is preserved and targets the effective root.
 
 export function getDbPath(): string {
   return process.env.HASNA_FILES_DB_PATH ?? process.env.FILES_DB_PATH ?? join(getDataDir(), "files.db");

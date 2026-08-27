@@ -12,6 +12,7 @@ import {
 import { homedir } from "os";
 import { dirname, join, relative, resolve, sep } from "path";
 import { spawnSync } from "child_process";
+import { getFilesDataDir } from "./paths.js";
 
 export interface DiscoveredDatabase {
   path: string;
@@ -259,7 +260,7 @@ function normalizeRoots(roots?: string[]): string[] {
 function normalizeSnapshotRoots(roots?: string[]): string[] {
   if (roots && roots.length > 0) return [...new Set(roots.map((root) => resolve(root)))];
   return [
-    join(homedir(), ".hasna", "files"),
+    getFilesDataDir(),
     join(homedir(), ".hasna", "todos"),
     join(homedir(), ".hasna", "loops"),
     join(homedir(), ".hasna", "repos"),
@@ -280,7 +281,7 @@ function normalizeSnapshotDir(path?: string): string {
 
 function defaultSnapshotRoot(): string {
   if (process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"]) return process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"];
-  return join(homedir(), ".hasna", "files", "snapshots", "ops-state");
+  return join(getFilesDataDir(), "snapshots", "ops-state");
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {

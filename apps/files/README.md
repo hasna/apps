@@ -282,7 +282,8 @@ The client has exactly two transports, selected by the environment, and no
 SQLite/PostgreSQL sync engine:
 
 - Local: the default. Reads and writes use SQLite at
-  `~/.hasna/files/files.db`.
+  `~/.hasna/files/files.db` (the resolver-resolved data root — see the
+  [Data Directory](#data-directory) section below).
 - Hosted HTTP API: routing supported data-plane reads and writes to
   `<API_URL>/v1`. It does not read or update the local SQLite index.
 
@@ -334,8 +335,17 @@ public-safe descriptor.
 
 ## Data Directory
 
-Local data is stored in `~/.hasna/files/`. Override the directory with
-`HASNA_FILES_DATA_DIR` or only the SQLite path with `HASNA_FILES_DB_PATH`.
+Local data resolves through the `@hasna/paths` resolver (XDG/macOS home
+layout, XDG home-migration plan `0f49f56a`): `~/.local/share/hasna/files/`
+on Linux, `~/Library/Application Support/Hasna/files` on macOS. The legacy
+`~/.hasna/files/` stays the effective data root until the store has been
+migrated to the XDG data home or the operator sets the data-kind override
+`HASNA_DATA_HOME` — an existing local store never becomes invisible on
+upgrade.
+
+Override the data root with `HASNA_FILES_DATA_DIR`, `FILES_DATA_DIR`,
+`HASNA_FILES_HOME`, or `FILES_HOME` (first-nonblank wins, in that order); or
+only the SQLite path with `HASNA_FILES_DB_PATH`.
 
 ## License
 

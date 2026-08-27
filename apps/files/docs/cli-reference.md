@@ -7,10 +7,13 @@ the current CLI.
 
 ## Client Transports
 
-The local transport is the default and uses `~/.hasna/files/files.db`. The
-hosted API transport is selected when `HASNA_FILES_API_URL` and
-`HASNA_FILES_API_KEY` are both configured. It sends supported data-plane
-operations to `<API_URL>/v1`; it is not a local cache or a SQLite/PostgreSQL
+The local transport is the default and uses the resolver-resolved data root
+(`~/.local/share/hasna/files/files.db` on Linux, `~/Library/Application
+Support/Hasna/files/files.db` on macOS; the legacy `~/.hasna/files/files.db`
+stays effective until migrated or `HASNA_DATA_HOME` is set). The hosted API
+transport is selected when `HASNA_FILES_API_URL` and `HASNA_FILES_API_KEY`
+are both configured. It sends supported data-plane operations to
+`<API_URL>/v1`; it is not a local cache or a SQLite/PostgreSQL
 synchronization layer.
 
 Commands marked **on-box** require local files, a local SQLite index, or local
