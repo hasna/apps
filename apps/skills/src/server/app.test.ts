@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import pkg from "../../package.json" with { type: "json" };
 import { RemoteSkillsClient } from "../lib/remote-client.js";
 import { packSkillBundle } from "../lib/skill-bundle.js";
 import { verifyBundleSignature } from "../lib/skill-bundles.js";
@@ -120,6 +121,27 @@ for (const backend of backends) {
           expect(deniedPin.status).toBe(401);
           expect(await deniedPin.json()).toMatchObject({ code: "AUTH_REQUIRED" });
         }
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("serves /version for the deploy gate (200 + service identity + version match)", async () => {
+      // Deploy gate criterion (O15-03836): GET /version must return 200 with
+      // the service identity and the package version, so the gate can verify
+      // which build is live. It previously fell through to the 404 handler,
+      // so the gate could never pass at skills.hasna.xyz.
+      const ctx = await testServer(backend);
+      try {
+        const res = await fetch(`${ctx.baseUrl}/version`);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body).toMatchObject({ ok: true, service: "skills" });
+        expect(body.version).toBe(pkg.version);
+        // The deploy gate must never confuse this endpoint with an API route:
+        // it is unauthenticated, like /health and /ready.
+        const denied = await fetch(`${ctx.baseUrl}/version`, { method: "POST" });
+        expect(denied.status).toBe(404);
       } finally {
         await ctx.stop();
       }

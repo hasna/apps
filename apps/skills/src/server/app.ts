@@ -1,3 +1,4 @@
+import pkg from "../../package.json" with { type: "json" };
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { signBundleBytes } from "../lib/skill-bundles.js";
 import { createCancelService } from "../sdk/cancel.js";
@@ -102,6 +103,14 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 
       if (request.method === "GET" && url.pathname === "/ready") {
         return json({ ok: true, service: "skills" });
+      }
+
+      // Deploy-gate contract (todos O15-03836): the fleet deploy gate verifies a
+      // live build by GET /version -> 200 with the service identity and the
+      // package version. It previously fell through to the 404 handler, so the
+      // gate could never pass at skills.hasna.xyz.
+      if (request.method === "GET" && url.pathname === "/version") {
+        return json({ ok: true, service: "skills", version: pkg.version });
       }
 
       if (url.pathname.startsWith("/api/")) {
