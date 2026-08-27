@@ -61,7 +61,7 @@
   "dependencies": {
     "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "hono": "^4.6.0",
+    "hono": "4.13.3",
     "commander": "^13.1.0",
     "ink": "^5.2.0",
     "react": "^18.3.1",
