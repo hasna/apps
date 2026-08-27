@@ -122,10 +122,11 @@ describe("createTask", () => {
     // The API/JSON contract allows an explicit null for the optional description
     // (Task.description: string | null), and the pre-write secret sanitizer must
     // pass it through instead of text-redacting the null value.
-    const input = { title: "Null description", description: null } as unknown as Parameters<typeof createTask>[0];
+    const input = { title: "Null description", description: null, reason: null } as unknown as Parameters<typeof createTask>[0];
     const task = createTask(input, db);
     expect(task.id).toBeTruthy();
     expect(task.description).toBeNull();
+    expect(task.reason).toBeNull();
 
     const updated = updateTask(
       task.id,
