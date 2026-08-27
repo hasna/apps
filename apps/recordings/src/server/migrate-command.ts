@@ -32,8 +32,16 @@ export async function applyRecordedCloudMigrations(
 }
 
 /** Run owner-role migration steps without requiring the pre-migration schema to be ready. */
-export async function runCloudMigration(steps: CloudMigrationSteps): Promise<void> {
+export async function runCloudMigration(
+  steps: CloudMigrationSteps,
+  runtimePostureValidate?: () => Promise<unknown>,
+): Promise<void> {
   await steps.pingConnectivity();
   await steps.applyMigrations();
   await steps.validateContract();
+  // In the two-role deploy model (migration DSN != runtime DSN) the runtime
+  // role's DML-only posture is validated right after the schema lands, so a
+  // misconfigured runtime role fails the migrate with the exact contract
+  // message instead of surfacing later as an opaque /ready or /v1 503.
+  if (runtimePostureValidate) await runtimePostureValidate();
 }

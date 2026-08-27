@@ -16,13 +16,15 @@ import { PgAdapterAsync } from "../db/remote-storage.js";
 import {
   requireSigningSecret,
   resolveDatabaseUrl,
+  resolveMigrationDatabaseUrl,
 } from "./cloud-config.js";
 import {
+  assertCloudSchemaContract,
   assertCloudSchemaReady,
   pingCloudConnectivity as pingCloudConnectivityWith,
   pingCloudReadiness,
 } from "./cloud-readiness.js";
-import { applyRecordedCloudMigrations } from "./migrate-command.js";
+import { applyRecordedCloudMigrations, runCloudMigration } from "./migrate-command.js";
 
 export const RECORDINGS_APP_SLUG = "recordings";
 export {
@@ -30,6 +32,7 @@ export {
   resolveDataBackend,
   requireSigningSecret,
   resolveDatabaseUrl,
+  resolveMigrationDatabaseUrl,
   resolveSigningSecret,
 } from "./cloud-config.js";
 export type { DataBackend } from "./cloud-config.js";
@@ -57,8 +60,7 @@ export function getCloudPg(): PgAdapterAsync {
  * ({ many, get, execute }). The store emits `$1`-style SQL; `PgAdapterAsync`
  * only rewrites `?` placeholders, so those statements pass through untouched.
  */
-function authClient(): AuthQueryClient {
-  const pg = getCloudPg();
+function authClient(pg: PgAdapterAsync = getCloudPg()): AuthQueryClient {
   return {
     async many<T extends Record<string, unknown>>(sql: string, params: readonly unknown[] = []): Promise<T[]> {
       return (await pg.all(sql, ...(params as unknown[]))) as T[];
@@ -108,12 +110,59 @@ export function getCloudVerifier(): ApiKeyVerifier {
 }
 
 /**
+ * The one-shot migrate operator adapter: resolves the MIGRATION DSN
+ * (`HASNA_RECORDINGS_MIGRATE_DATABASE_URL` / `RECORDINGS_MIGRATE_DATABASE_URL`,
+ * falling back to the runtime DSN). In the two-role deploy model this role
+ * owns the schema (runs DDL); the runtime `DATABASE_URL` role is DML-only.
+ */
+export function getMigrationPg(): PgAdapterAsync {
+  const url = resolveMigrationDatabaseUrl();
+  if (!url) {
+    throw new Error(
+      "migrate requires a database URL (HASNA_RECORDINGS_MIGRATE_DATABASE_URL / RECORDINGS_MIGRATE_DATABASE_URL / HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL).",
+    );
+  }
+  return new PgAdapterAsync(url);
+}
+
+/**
  * Apply the owner-managed relational and API-key schemas. This is intentionally
  * separate from runtime readiness so it can bootstrap an empty database and
  * upgrade a migration-17 database before the migration-18 contract is checked.
  */
-export async function migrateCloudSchema(): Promise<void> {
-  await applyRecordedCloudMigrations(getCloudPg(), () => getApiKeyStore().ensureSchema());
+export async function migrateCloudSchema(pg: PgAdapterAsync = getCloudPg()): Promise<void> {
+  await applyRecordedCloudMigrations(pg, () => new ApiKeyStore(authClient(pg)).ensureSchema());
+}
+
+/**
+ * One-shot `recordings-serve migrate` orchestration shared by the compiled
+ * server entrypoint and the source `scripts/migrate.ts` runner.
+ *
+ * The schema is applied with the MIGRATION role; the shape contract is then
+ * validated. When a dedicated migration DSN is configured (two-role deploy
+ * model), the RUNTIME role's full DML-only posture is validated afterwards so
+ * a misconfigured runtime role fails here with the exact contract message
+ * instead of surfacing later as an opaque /ready or /v1 503.
+ */
+export async function runRecordedMigration(): Promise<void> {
+  const migrationPg = getMigrationPg();
+  const runtimeUrl = resolveDatabaseUrl();
+  const migrationUrl = resolveMigrationDatabaseUrl();
+  const separateRoles = runtimeUrl !== undefined && migrationUrl !== undefined && runtimeUrl !== migrationUrl;
+  await runCloudMigration(
+    {
+      pingConnectivity: () => pingCloudConnectivity(migrationPg),
+      applyMigrations: async () => {
+        await migrateCloudSchema(migrationPg);
+      },
+      validateContract: () => assertCloudSchemaContract(migrationPg),
+    },
+    separateRoles
+      ? async () => {
+          await assertCloudSchemaReady(getCloudPg());
+        }
+      : undefined,
+  );
 }
 
 /** Request-path gate: validate the externally managed schema and DML-only role. */

@@ -29,32 +29,16 @@ async function runPublishedEntrypoint(): Promise<boolean> {
 async function main() {
   // Published packages ship the compiled server but intentionally omit src/.
   if (await runPublishedEntrypoint()) return;
-  const {
-    closeCloud,
-    getCloudPg,
-    migrateCloudSchema,
-    pingCloudConnectivity,
-    resolveDatabaseUrl,
-  } = await import("../src/server/cloud.js");
-  const { assertCloudSchemaContract } = await import("../src/server/cloud-readiness.js");
-  const { runCloudMigration } = await import("../src/server/migrate-command.js");
-  const url = resolveDatabaseUrl();
-  if (!url) {
+  const { closeCloud, resolveMigrationDatabaseUrl, runRecordedMigration } = await import("../src/server/cloud.js");
+  if (!resolveMigrationDatabaseUrl()) {
     console.error(
-      "migrate: no database URL (HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL)",
+      "migrate: no database URL (HASNA_RECORDINGS_MIGRATE_DATABASE_URL / RECORDINGS_MIGRATE_DATABASE_URL / HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL)",
     );
     process.exitCode = 2;
     return;
   }
   console.log("migrate: connecting…");
-  await runCloudMigration({
-    pingConnectivity: pingCloudConnectivity,
-    applyMigrations: async () => {
-      console.log("migrate: applying schema (recordings tables + api_keys)…");
-      await migrateCloudSchema();
-    },
-    validateContract: () => assertCloudSchemaContract(getCloudPg()),
-  });
+  await runRecordedMigration();
   console.log("migrate: done");
   await closeCloud();
 }
