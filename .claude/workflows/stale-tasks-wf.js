@@ -30,6 +30,15 @@ const IDLE_SLEEP = Math.min(Math.max(300, IDLE_MINUTES * 60), 1800)
 // args.maxPasses overrides.
 const MAX_PASSES = Math.min(500, Math.max(1, Number(args && args.maxPasses) || 40))
 
+// Batch rotation (O15-04308 — coverage fix): the census evaluates ONE bounded
+// batch per pass and rotates through the FULL population, so every row is
+// evaluated (the old census capped at 'the 150 most recently updated rows' and
+// ~531 of 681 rows were never evaluated, measured 2026-08-27). BATCH_SIZE is
+// sized to the ~30KB compact-payload gate (measured 2026-08-20): a 150-row
+// compact array weighs ~34KB and truncates mid-JSON; 100 rows weigh ~23KB with
+// headroom. args.batchSize overrides.
+const BATCH_SIZE = Math.min(150, Math.max(50, Number(args && args.batchSize) || 100))
+
 // RECORDING V2 (owner requirement): every workflow agent records while working.
 // Interpolated into every agent prompt below.
 const RECORDING = `
@@ -63,8 +72,10 @@ ${RECORDING}
 const CENSUS = CONST + `
 ROLE: census lane (Opus). PRIORITY YIELD CHECK FIRST: if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class — sleep 1800 (bash), re-check once, return {rows: [], bound: 0, yielded: true, hotfixCount: N}. Do NOT enumerate while yielding.
 
-Otherwise enumerate: todos list --project ${APPS} --status pending --limit 300 --json AND --status in_progress --limit 300 --json (redirect to files, never pipe; parse both). For EACH row capture: id, title (trimmed to 80 chars), status, assigned_to, updated_at, created_at, lastActivity (the most recent comment date), and any PR/merge references in comments (gh pr list --repo hasna/apps --search '<package> in:title' bounded ONLY for rows whose comments lack a PR reference). Also note open PRs per package (bounded) as live-workstream markers. Cap: process the 150 most recently updated rows; record the bound.
-COMPACT PAYLOAD (measured cap, 2026-08-20): the census return MUST stay under ~30KB — a ~88KB rows array with comment bodies truncates mid-JSON and fails the schema gate (5 retries, workflow failed). Do NOT include comment bodies in the census. The classify lane fetches each row's own comments itself when a decision needs them.
+Otherwise enumerate the FULL population (O15-04308 — a truncated census is the defect): todos list --project ${APPS} --status pending --limit 2000 --json AND --status in_progress --limit 2000 --json (redirect to files, never pipe; parse both). VERIFY COMPLETENESS: if either read prints the CLI truncation warning ('has more than --limit N rows'), the fetch is a PARTIAL population — return { rows: [], bound: 0, yielded: false, hotfixCount: 0, residue: ['LIST-TRUNCATED: the census fetch was truncated by the --limit; raise the census limit before the next pass'] } and do NOT proceed — the old census silently evaluated a fraction of the project (measured 2026-08-27: ~150 of 681 rows; 531 never evaluated). Merge both arrays, dedupe by id, drop rows without updated_at, sort by updated_at DESCENDING (newest first).
+ROTATING BATCH — every row gets evaluated (the coverage guarantee): PASS {PASS} of the bounded loop (max ${MAX_PASSES}); total = merged length; numBatches = max(1, ceil(total / ${BATCH_SIZE})); batchIndex = (passNumber - 1) % numBatches, where passNumber is the PASS value above ({PASS}); take rows[batchIndex * ${BATCH_SIZE} .. (batchIndex + 1) * ${BATCH_SIZE}). Pass 1 evaluates the newest ${BATCH_SIZE} rows; every pass advances one batch; after numBatches passes the rotation wraps. Every row is in exactly one batch per full rotation, and numBatches (≤ ceil(692/100) = 7 at the 2026-08-27 population) is far below MAX_PASSES, so a single run covers the whole population several times over. Record bound = rows.length (the number evaluated this pass, schema-typed as a number) and add one compact rotation line to residue: ['batch N/M of TOTAL — pass X'].
+For EACH row in the batch capture: id, title (trimmed to 80 chars), status, assigned_to, updated_at, created_at, lastActivity (the most recent comment date), and any PR/merge references in comments (gh pr list --repo hasna/apps --search '<package> in:title' bounded ONLY for rows whose comments lack a PR reference). Also note open PRs per package (bounded) as live-workstream markers.
+COMPACT PAYLOAD (measured cap, 2026-08-20): the census return MUST stay under ~30KB — a ~88KB rows array with comment bodies truncates mid-JSON and fails the schema gate (5 retries, workflow failed). Do NOT include comment bodies in the census. The classify lane fetches each row's own comments itself when a decision needs them. BATCH_SIZE=${BATCH_SIZE} is sized under the gate (measured 2026-08-27: 100 compact rows ≈ 23KB; 150 ≈ 34KB).
 IF NOTHING NEEDS THE SWEEP (no rows older than 24h with no live marker — i.e. the classify pass would be a no-op): sleep ${IDLE_SLEEP} (bash — the args-driven idle window, ${IDLE_MINUTES} min default), re-run the census once, and return the RE-CHECK result — the lane waits the idle window between passes while idle. NEVER return an empty rows without the sleep+re-check having run.
 Return (JSON): { rows: [{id, title, status, assignedTo, updatedAt, lastActivity, prRefs: [string]}], bound: number, yielded: bool, hotfixCount: int, residue: [string] }
 `
@@ -147,7 +158,7 @@ const censusPrompt = (body) => {
 let pass = 0
 for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Census')
-const census = await safeAgent(censusPrompt(CENSUS), { label: 'stale-tasks-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+const census = await safeAgent(censusPrompt(CENSUS.replaceAll('{PASS}', String(pass))), { label: 'stale-tasks-census-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
 log(`pass ${pass} census: ${census && census.rows ? census.rows.length + ' rows' : 'FAILED'}`)
 if (census && census.yielded) {
   log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited ${IDLE_SLEEP}s inside the census, re-checking next pass`)
