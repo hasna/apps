@@ -2189,6 +2189,13 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
   const adopted: AdoptedWorktree[] = [];
   for (const path of candidates) {
     const existing = leaseByPath(db, path);
+    // A released lease row is not a live lease: `repos worktree list` only
+    // counts status != 'released', so a path whose row says released is still
+    // flagged no-lease. Treating any existing row as "already leased" made
+    // `adopt --apply` no-op on exactly those rows while reporting
+    // applied:true/already_leased:true — the stale-sweep adopt loop could
+    // never clear them (PLA8-00126).
+    const liveLease = existing && existing.status !== "released";
     const commonDir = realpathOrSelf(
       gitOut(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { allowFailure: true }),
     );
@@ -2203,14 +2210,17 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
       repo_catalog_id: repo?.id ?? null,
       lease_id: existing?.lease_id ?? null,
       mode: "adopted",
-      already_leased: Boolean(existing),
+      already_leased: Boolean(liveLease),
     };
 
-    if (request.apply && !existing) {
+    if (request.apply && !liveLease) {
       const timestamp = nowIso();
       const headSha = gitOut(path, ["rev-parse", "HEAD"], { allowFailure: true }) || "";
       const lease: WorktreeLease = {
-        lease_id: newLeaseId(),
+        // Reuse the released row's id (worktree_path is UNIQUE) so the
+        // re-claim refreshes that row instead of violating the constraint —
+        // the same reuse pattern `addWorktree` uses.
+        lease_id: existing?.lease_id ?? newLeaseId(),
         repo_id: repo ? repoIdentity(repo) : `path:${commonDir}`,
         repo_path: repo?.path ?? commonDir.replace(/\/\.git\/?$/, ""),
         repo_catalog_id: repo?.id ?? null,
@@ -2226,7 +2236,7 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
         cleanup_policy: "keep",
         status: "claimed",
         git_common_dir: commonDir,
-        created_at: timestamp,
+        created_at: existing?.created_at ?? timestamp,
         updated_at: timestamp,
         claimed_at: timestamp,
         verified_at: timestamp,

@@ -993,6 +993,43 @@ describe("adoptWorktrees", () => {
     expect(result.adopted.map((row) => row.worktree_name).sort()).toEqual(["stray-a", "stray-b"]);
     expect(result.applied).toBe(false);
   });
+
+  // PLA8-00126 — `adopt --apply` no-oped on released-lease rows: the sweep saw
+  // applied:true/already_leased:true and moved on, but the released row was
+  // never re-claimed, so `repos worktree list` (which only counts status !=
+  // 'released') kept flagging the path no-lease. 15/17 stale-sweep adopt
+  // targets hit this. A released lease is not a live lease: `--apply` must
+  // re-claim the same row.
+  test("--apply re-claims a worktree whose lease row is released", () => {
+    const { repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "adopt-released" });
+    const released = releaseWorktree({ leaseId: created.lease.lease_id, keep: true });
+    expect(released.lease.status).toBe("released");
+    expect(existsSync(created.path)).toBe(true);
+
+    const result = adoptWorktrees({ path: created.path, apply: true });
+    expect(result.applied).toBe(true);
+    expect(result.adopted).toHaveLength(1);
+    expect(result.adopted[0]!.already_leased).toBe(false);
+
+    // The path must now carry a durable claimed lease: the same row refreshed
+    // (worktree_path is UNIQUE, so a second row would violate the constraint),
+    // with the released state cleared.
+    const rows = getDb()
+      .query("SELECT lease_id, status, released_at FROM worktree_leases WHERE worktree_path = ?")
+      .all(created.path) as { lease_id: string; status: string; released_at: string | null }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.lease_id).toBe(created.lease.lease_id);
+    expect(rows[0]!.status).toBe("claimed");
+    expect(rows[0]!.released_at).toBeNull();
+
+    // `repos worktree list` only counts non-released leases, so the re-claimed
+    // row must now be visible to it.
+    const listed = listWorktrees({ now: new Date() });
+    expect(listed.entries.find((entry) => entry.path === created.path)?.lease_id).toBe(
+      created.lease.lease_id,
+    );
+  });
 });
 
 describe("releaseWorktree", () => {
