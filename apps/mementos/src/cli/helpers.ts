@@ -8,6 +8,7 @@ import { getMemory, getMemoryByKey } from "../db/memories.js";
 import { getAgent } from "../db/agents.js";
 import { getProject } from "../db/projects.js";
 import { getEntityByName, getEntity } from "../db/entities.js";
+import { getDataRoot } from "../lib/paths.js";
 import type { Command } from "commander";
 import type {
   Memory,
@@ -825,8 +826,7 @@ export function validateConfigKeyValue(key: string, value: unknown, DEFAULT_CONF
 }
 
 export function getConfigPath(): string {
-  const { homedir } = require("node:os") as typeof import("node:os");
-  return join(homedir(), ".hasna", "mementos", "config.json");
+  return join(getDataRoot(), "config.json");
 }
 
 export function readFileConfig(): Record<string, unknown> {

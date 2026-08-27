@@ -1,6 +1,5 @@
 import { SqliteAdapter as Database } from "../storage.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
   ConflictResolution,
@@ -9,13 +8,14 @@ import type {
   SyncResult,
 } from "../types/index.js";
 import { createMemory, listMemories } from "../db/memories.js";
+import { getDataRoot } from "./paths.js";
 
 // ============================================================================
 // Sync — export/import memories between agents via JSON files
 // ============================================================================
 
 function getAgentSyncDir(agentName: string): string {
-  const dir = join(homedir(), ".hasna", "mementos", "agents", agentName);
+  const dir = join(getDataRoot(), "agents", agentName);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
