@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { cliSpawnBudgetMs } from "../test/spawn-budget.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const tempRoots: string[] = [];
@@ -66,7 +67,7 @@ describe("active project filters", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr + result.stdout).toMatch(/--project requires a non-empty/i);
     expect(result.stdout).not.toContain("Active task");
-  });
+  }, cliSpawnBudgetMs(3));
 
   test("returns an empty JSON list for a valid project with no active tasks", async () => {
     const home = tempRoot();
@@ -83,7 +84,7 @@ describe("active project filters", () => {
     const result = await runCli(["--json", "active", "--project", projectId], dbPath, home);
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([]);
-  });
+  }, cliSpawnBudgetMs(2));
 
   test("returns only active tasks for a valid non-empty project", async () => {
     const home = tempRoot();
@@ -108,7 +109,7 @@ describe("active project filters", () => {
     const result = await runCli(["--json", "active", "--project", projectId], dbPath, home);
     expect(result.exitCode).toBe(0);
     expect((JSON.parse(result.stdout) as Array<{ id: string }>).map((task) => task.id)).toEqual([activeTaskId]);
-  });
+  }, cliSpawnBudgetMs(3));
 
   test("resolves a global filesystem-path project filter before listing active tasks", async () => {
     const home = tempRoot();
@@ -134,7 +135,7 @@ describe("active project filters", () => {
     const result = await runCli(["--project", projectPath, "--json", "active"], dbPath, home);
     expect(result.exitCode).toBe(0);
     expect((JSON.parse(result.stdout) as Array<{ id: string }>).map((item) => item.id)).toEqual([taskId]);
-  });
+  }, cliSpawnBudgetMs(3));
 
   test("reports an unsupported format option instead of exiting silently", async () => {
     const home = tempRoot();
@@ -144,7 +145,7 @@ describe("active project filters", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.trim()).not.toBe("");
     expect(result.stderr).toMatch(/unknown option|--format.*not supported/i);
-  });
+  }, cliSpawnBudgetMs(1));
 
   test("reports the full unsupported project-name and format invocation instead of exiting silently", async () => {
     const home = tempRoot();
@@ -158,7 +159,7 @@ describe("active project filters", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.trim()).not.toBe("");
     expect(result.stderr).toMatch(/unknown option|unsupported.*--format|--format.*not supported/i);
-  });
+  }, cliSpawnBudgetMs(1));
 
   test("reports an unsupported format when a global project path precedes the command", async () => {
     const home = tempRoot();
@@ -172,7 +173,21 @@ describe("active project filters", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.trim()).not.toBe("");
     expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
-  });
+  }, cliSpawnBudgetMs(1));
+
+  test("reports an unsupported format when a global project path precedes the command via inline equals", async () => {
+    const home = tempRoot();
+    const dbPath = join(home, "todos.db");
+
+    const result = await runCli(
+      [`--project=${join(home, "active-project")}`, "active", "--format", "json"],
+      dbPath,
+      home,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(result.stderr).toMatch(/ACTIVE_FORMAT_UNSUPPORTED|unknown option|--format.*not supported/i);
+  }, cliSpawnBudgetMs(1));
 
   test("does not apply the active format guard to a nested roadmap command", async () => {
     const home = tempRoot();
@@ -180,5 +195,5 @@ describe("active project filters", () => {
 
     const result = await runCli(["roadmap", "show", "active", "--format", "json"], dbPath, home);
     expect(result.stderr).not.toContain("ACTIVE_FORMAT_UNSUPPORTED");
-  });
+  }, cliSpawnBudgetMs(1));
 });

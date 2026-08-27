@@ -118,12 +118,22 @@ function commandForArgs(root: Command, args: readonly string[]): Command {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
     if (arg.startsWith("-")) {
-      const option = command.options.find((candidate) =>
-        candidate.long === arg || candidate.short === arg ||
-        (candidate.long !== undefined && arg.startsWith(`${candidate.long}=`)) ||
-        (candidate.short !== undefined && arg.startsWith(`${candidate.short}=`)),
+      const exact = command.options.find(
+        (candidate) => candidate.long === arg || candidate.short === arg,
       );
-      if (option?.required || option?.optional) index += 1;
+      const inline = command.options.find(
+        (candidate) =>
+          (candidate.long !== undefined && arg.startsWith(`${candidate.long}=`)) ||
+          (candidate.short !== undefined && arg.startsWith(`${candidate.short}=`)),
+      );
+      const option = exact ?? inline;
+      if (option?.required || option?.optional) {
+        // The value is already consumed when the option was spelled inline
+        // (`--opt=value`); only the separate-token spelling leaves the value
+        // in the NEXT position, and skipping the inline form would walk past
+        // the command name and bypass the active-format guard.
+        if (exact) index += 1;
+      }
       continue;
     }
     const child = command.commands.find((candidate) =>
