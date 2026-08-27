@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.116
+
+### Patch Changes
+
+- Resolve @hasna/knowledge local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout, hotfixes plan 0f49f56a task P3.3). The legacy `~/.hasna/knowledge` home stays the effective home until the store is migrated to the XDG data home or `HASNA_DATA_HOME` is set; `HASNA_KNOWLEDGE_HOME` remains the exact-app override. Covers the global store home, the project-scoped `projects/<key>` sub-root, and the auth store default.
+- Updated dependencies
+  - @hasna/paths@0.1.0
+
 ## 0.2.115
 
 ### Patch Changes

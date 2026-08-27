@@ -4263,30 +4263,133 @@ function createArtifactStore(config, workspace) {
 // src/service.ts
 import { createHash as createHash20 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync12 } from "fs";
+import { existsSync as existsSync15, readFileSync as readFileSync12 } from "fs";
 import { hostname as hostname3 } from "os";
-import { join as join8, resolve as resolve5 } from "path";
+import { join as join10, resolve as resolve6 } from "path";
 
 // src/app-wiki.ts
 import { createHash as createHash6, randomUUID as randomUUID3 } from "crypto";
 
 // src/storage-contract.ts
 import { createHash, randomUUID } from "crypto";
-import { existsSync as existsSync3, readdirSync } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync4, readdirSync } from "fs";
+import { join as join5 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
 // src/workspace.ts
-import { chmodSync as chmodSync2, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
+import { chmodSync as chmodSync2, existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname2, join as join4, resolve as resolve2 } from "path";
+
+// src/paths.ts
+import { existsSync as existsSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join3, resolve } from "path";
+
+// ../../node_modules/.bun/@hasna+paths@0.1.0/node_modules/@hasna/paths/dist/index.js
 import { homedir } from "os";
-import { dirname as dirname2, join as join2, resolve } from "path";
-var HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "knowledge");
-var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "apps", "knowledge");
-function homeRoot() {
-  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+import { join as join2 } from "path";
+var KIND_ENV = {
+  config: "HASNA_CONFIG_HOME",
+  data: "HASNA_DATA_HOME",
+  state: "HASNA_STATE_HOME",
+  cache: "HASNA_CACHE_HOME"
+};
+var APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function assertApp(app) {
+  if (typeof app !== "string" || app.length === 0) {
+    throw new TypeError("paths: app must be a non-empty string");
+  }
+  if (!APP_SLUG_RE.test(app)) {
+    throw new TypeError(`paths: invalid app slug "${app}" \u2014 expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`);
+  }
 }
+function envOf(options) {
+  return options.env ?? process.env;
+}
+function envValue(options, kind) {
+  const value = envOf(options)[KIND_ENV[kind]];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function isMacOS(platform) {
+  return platform === "darwin";
+}
+function baseDir(kind, options) {
+  const override = envValue(options, kind);
+  if (override)
+    return override;
+  const home = options.home ?? homedir();
+  const platform = options.platform ?? process.platform;
+  if (isMacOS(platform)) {
+    switch (kind) {
+      case "config":
+      case "data":
+        return join2(home, "Library", "Application Support", "Hasna");
+      case "cache":
+        return join2(home, "Library", "Caches", "Hasna");
+      case "state":
+        return join2(home, "Library", "Logs", "Hasna");
+    }
+  }
+  switch (kind) {
+    case "config":
+      return join2(home, ".config", "hasna");
+    case "data":
+      return join2(home, ".local", "share", "hasna");
+    case "state":
+      return join2(home, ".local", "state", "hasna");
+    case "cache":
+      return join2(home, ".cache", "hasna");
+  }
+}
+function resolvePath(kind, options) {
+  assertApp(options.app);
+  const appSegment = options.internal === true ? join2("internal", options.app) : options.app;
+  return join2(baseDir(kind, options), appSegment);
+}
+function dataDir(options) {
+  return resolvePath("data", options);
+}
+
+// src/paths.ts
+var KNOWLEDGE_DATA_HOME_ENV = "HASNA_KNOWLEDGE_HOME";
+function getHomeDir(env = process.env) {
+  const home = env.HOME || env.USERPROFILE || homedir2();
+  if (!home)
+    throw new Error("Could not resolve the user home directory");
+  return home;
+}
+function getResolverDataHome(env = process.env) {
+  return dataDir({ app: "knowledge", home: getHomeDir(env), env });
+}
+function getLegacyDataHome(env = process.env) {
+  return join3(getHomeDir(env), ".hasna", "knowledge");
+}
+function adoptResolverDataHome(resolved, env = process.env) {
+  const dataOverride = env.HASNA_DATA_HOME;
+  if (typeof dataOverride === "string" && dataOverride.trim().length > 0)
+    return true;
+  return existsSync2(join3(resolved, "knowledge.db")) || existsSync2(join3(resolved, "config.json"));
+}
+function getExactDataHome(env = process.env) {
+  const dir = env[KNOWLEDGE_DATA_HOME_ENV]?.trim();
+  if (dir)
+    return resolve(dir);
+  return;
+}
+function getDataHome(env = process.env) {
+  const exact = getExactDataHome(env);
+  if (exact)
+    return exact;
+  const resolved = getResolverDataHome(env);
+  return adoptResolverDataHome(resolved, env) ? resolve(resolved) : getLegacyDataHome(env);
+}
+
+// src/workspace.ts
+var HASNA_KNOWLEDGE_APP_PATH = join4(".hasna", "knowledge");
+var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join4(".hasna", "apps", "knowledge");
 function projectKey(cwd = process.cwd()) {
-  const slugified = resolve(cwd).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const slugified = resolve2(cwd).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return slugified || "project";
 }
 var EXAMPLE_KNOWLEDGE_CANONICAL = {
@@ -4326,22 +4429,23 @@ function canonicalExampleKnowledgeStorage() {
   };
 }
 function legacyGlobalStorePath() {
-  return join2(homedir(), ".open-knowledge", "db.json");
+  return join4(homedir3(), ".open-knowledge", "db.json");
 }
 function globalKnowledgeHome() {
-  return join2(homeRoot(), ".hasna", "knowledge");
+  return getDataHome();
 }
-function projectKnowledgeHome(cwd = process.cwd(), home = homeRoot()) {
-  return join2(home, ".hasna", "knowledge", "projects", projectKey(cwd));
+function projectKnowledgeHome(cwd = process.cwd(), home = undefined) {
+  const knowledgeRoot = home === undefined ? globalKnowledgeHome() : join4(home, ".hasna", "knowledge");
+  return join4(knowledgeRoot, "projects", projectKey(cwd));
 }
 function previousProjectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
+  return resolve2(cwd, HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyGlobalKnowledgeHome() {
-  return join2(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+  return join4(homedir3(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyProjectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+  return resolve2(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
 }
 function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
   if (scope === "project" || scope === "local") {
@@ -4352,17 +4456,17 @@ function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
 function workspaceForHome(home) {
   return {
     home,
-    configPath: join2(home, "config.json"),
-    jsonStorePath: join2(home, "db.json"),
-    knowledgeDbPath: join2(home, "knowledge.db"),
-    artifactsDir: join2(home, "artifacts"),
-    cacheDir: join2(home, "cache"),
-    exportsDir: join2(home, "exports"),
-    indexesDir: join2(home, "indexes"),
-    logsDir: join2(home, "logs"),
-    runsDir: join2(home, "runs"),
-    schemasDir: join2(home, "schemas"),
-    wikiDir: join2(home, "wiki")
+    configPath: join4(home, "config.json"),
+    jsonStorePath: join4(home, "db.json"),
+    knowledgeDbPath: join4(home, "knowledge.db"),
+    artifactsDir: join4(home, "artifacts"),
+    cacheDir: join4(home, "cache"),
+    exportsDir: join4(home, "exports"),
+    indexesDir: join4(home, "indexes"),
+    logsDir: join4(home, "logs"),
+    runsDir: join4(home, "runs"),
+    schemasDir: join4(home, "schemas"),
+    wikiDir: join4(home, "wiki")
   };
 }
 function defaultKnowledgeConfig() {
@@ -4434,7 +4538,7 @@ function ensureKnowledgeWorkspace(home) {
   ]) {
     mkdirSync2(dir, { recursive: true, mode: 448 });
   }
-  if (!existsSync2(workspace.configPath)) {
+  if (!existsSync3(workspace.configPath)) {
     writeFileSync2(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
 `, { mode: 384 });
     chmodSync2(workspace.configPath, 384);
@@ -4505,11 +4609,11 @@ var FORBIDDEN_WORKSPACE_FILES = [
 ];
 function forbiddenWorkspaceFilesPresent(workspace) {
   const present = [];
-  if (existsSync3(join3(workspace.home, "cloud.env")))
+  if (existsSync4(join5(workspace.home, "cloud.env")))
     present.push("cloud.env");
-  if (existsSync3(join3(workspace.home, "migration-exports")))
+  if (existsSync4(join5(workspace.home, "migration-exports")))
     present.push("migration-exports");
-  if (existsSync3(workspace.home)) {
+  if (existsSync4(workspace.home)) {
     for (const entry of readdirSync(workspace.home)) {
       if (/^(?:knowledge\.db|db\.json)\.pre-cloud-.+\.bak$/i.test(entry))
         present.push(entry);
@@ -5862,12 +5966,12 @@ function withProvenance(metadata, provenance) {
 
 // src/source-ingest.ts
 import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync4 } from "fs";
 import { basename as basename2 } from "path";
 
 // src/manifest-ingest.ts
 import { createHash as createHash4 } from "crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync3 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync3 } from "fs";
 import { basename } from "path";
 
 // src/source-ref.ts
@@ -5944,7 +6048,7 @@ function isSupportedSourceRef(uri) {
 
 // src/safety.ts
 import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
-import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+import { relative as relative2, resolve as resolve3, sep as sep2 } from "path";
 function envEnabled(name) {
   const value = process.env[name];
   return value === "1" || value === "true" || value === "yes";
@@ -5970,7 +6074,7 @@ function resolveSafetyPolicy(config, workspace) {
       workspace.runsDir,
       workspace.schemasDir,
       workspace.wikiDir
-    ].map((entry) => resolve2(entry)),
+    ].map((entry) => resolve3(entry)),
     readOnlySourceAccess: true,
     network: {
       webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled("HASNA_KNOWLEDGE_WEB_SEARCH"),
@@ -5990,9 +6094,9 @@ function isInside(root, target) {
   return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep2}`);
 }
 function assertWriteAllowed(targetPath, policy) {
-  const resolved = resolve2(targetPath);
+  const resolved = resolve3(targetPath);
   if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
-    throw new Error(`Safety policy denied write outside .hasna/knowledge: ${targetPath}`);
+    throw new Error(`Safety policy denied write outside the knowledge workspace: ${targetPath}`);
   }
 }
 function assertS3ReadAllowed(uri, policy) {
@@ -6127,7 +6231,7 @@ REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
 // src/private-ref.ts
 import { createHash as createHash3 } from "crypto";
 import { realpathSync } from "fs";
-import { homedir as homedir2, tmpdir } from "os";
+import { homedir as homedir4, tmpdir } from "os";
 var PATH_TAIL = String.raw`[^\s"'<>),\]}]`;
 var PATH_SEGMENT = String.raw`[^/\\\s"'<>]+`;
 var FILE_URI_RE = /file:\/\/[^\s"'<>),\]}]+/gi;
@@ -6154,7 +6258,7 @@ var hostRootCacheKey = null;
 var hostRootCache = [];
 function hostRootPatterns() {
   const roots = new Set;
-  for (const root of [homedir2(), tmpdir()]) {
+  for (const root of [homedir4(), tmpdir()]) {
     if (!root)
       continue;
     roots.add(root);
@@ -6500,7 +6604,7 @@ async function readS3Text(uri, config, safetyPolicy) {
 }
 async function readManifestInput(input, config, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
   const text = input.startsWith("s3://") ? await readS3Text(input, config, safetyPolicy) : (() => {
-    if (!existsSync4(input))
+    if (!existsSync5(input))
       throw new Error(`Manifest not found: ${input}`);
     return readFileSync3(input, "utf8");
   })();
@@ -7117,7 +7221,7 @@ function titleForRef(parsed) {
 }
 async function readDirectSourceText(parsed, config, safetyPolicy) {
   if (parsed.kind === "file") {
-    if (!existsSync5(parsed.path))
+    if (!existsSync6(parsed.path))
       throw new Error(`Source file not found: ${parsed.path}`);
     const text = readFileSync4(parsed.path, "utf8");
     return {
@@ -7746,9 +7850,8 @@ async function ingestAppWikiSourceRef(options) {
 }
 
 // src/auth.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync3, readFileSync as readFileSync5, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
-import { homedir as homedir3 } from "os";
-import { dirname as dirname3, join as join4 } from "path";
+import { existsSync as existsSync7, mkdirSync as mkdirSync3, readFileSync as readFileSync5, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
+import { dirname as dirname3, join as join6 } from "path";
 var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
@@ -7768,8 +7871,8 @@ function normalizeKnowledgeApiOrigin(apiUrl) {
 function knowledgeAuthPath(env = process.env) {
   if (env.HASNA_KNOWLEDGE_AUTH_PATH)
     return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join4(homedir3(), ".hasna", "knowledge");
-  return join4(root, "auth.json");
+  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? getDataHome(env);
+  return join6(root, "auth.json");
 }
 function resolveKnowledgeApiUrl(env = process.env) {
   const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.map((key) => env[key]?.trim()).find((value) => Boolean(value));
@@ -7778,7 +7881,7 @@ function resolveKnowledgeApiUrl(env = process.env) {
 function getKnowledgeAuth(env = process.env) {
   try {
     const path = knowledgeAuthPath(env);
-    if (!existsSync6(path))
+    if (!existsSync7(path))
       return null;
     const parsed = JSON.parse(readFileSync5(path, "utf8"));
     return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
@@ -8041,7 +8144,7 @@ function recordProviderUsage(db, input) {
 import { createHash as createHash8 } from "crypto";
 
 // src/search.ts
-import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync6 } from "fs";
 
 // src/embeddings.ts
 import { createHash as createHash7 } from "crypto";
@@ -8623,7 +8726,7 @@ function selectKnowledgeIndexes(db, terms, limit) {
      LIMIT ?`).all(...likeParams(terms, fields.length), limit);
 }
 function readLegacyItems(path) {
-  if (!path || !existsSync7(path))
+  if (!path || !existsSync8(path))
     return [];
   try {
     const parsed = JSON.parse(readFileSync6(path, "utf8"));
@@ -10158,10 +10261,10 @@ import { randomUUID as randomUUID7 } from "crypto";
 
 // src/sync.ts
 import { createHash as createHash10, randomUUID as randomUUID6 } from "crypto";
-import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync7 } from "fs";
 import { hostname } from "os";
 import { fileURLToPath as fileURLToPath2 } from "url";
-import { extname, relative as relative3, resolve as resolve3, sep as sep3 } from "path";
+import { extname, relative as relative3, resolve as resolve4, sep as sep3 } from "path";
 var KNOWLEDGE_SYNC_TABLES = [
   "sources",
   "wiki_pages",
@@ -10587,8 +10690,8 @@ function keyForArtifactRow(row, artifactsDir) {
     return null;
   try {
     const path = fileURLToPath2(row.artifact_uri);
-    const root = resolve3(artifactsDir);
-    const target = resolve3(path);
+    const root = resolve4(artifactsDir);
+    const target = resolve4(path);
     if (!assertInside2(root, target))
       return null;
     const rel = relative3(root, target).replace(/\\/g, "/");
@@ -10959,7 +11062,7 @@ function createKnowledgeSyncBundle(options) {
       if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith("file://")) {
         try {
           const path = fileURLToPath2(row.artifact_uri);
-          if (existsSync8(path)) {
+          if (existsSync9(path)) {
             if (!isTextArtifact(row.content_type, key)) {
               warnings.push(`artifact_content_not_embedded_binary:${row.id}`);
             } else {
@@ -12297,7 +12400,7 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
 
 // src/outbox-consume.ts
 import { createHash as createHash11, randomUUID as randomUUID8 } from "crypto";
-import { existsSync as existsSync9, readFileSync as readFileSync8 } from "fs";
+import { existsSync as existsSync10, readFileSync as readFileSync8 } from "fs";
 import { basename as basename3 } from "path";
 function stableId6(prefix, value) {
   return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
@@ -12442,7 +12545,7 @@ async function readS3Text3(uri, config, safetyPolicy) {
 async function readOutboxInput(input, config, safetyPolicy) {
   if (input.startsWith("s3://"))
     return readS3Text3(input, config, safetyPolicy);
-  if (!existsSync9(input))
+  if (!existsSync10(input))
     throw new Error(`Outbox not found: ${input}`);
   return readFileSync8(input, "utf8");
 }
@@ -14577,15 +14680,15 @@ async function refreshEmbeddingIndex(options) {
 
 // src/rules-provenance.ts
 import { createHash as createHash14 } from "crypto";
-import { existsSync as existsSync11, lstatSync as lstatSync2, readdirSync as readdirSync2, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
-import { basename as basename5, extname as extname2, join as join6, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
+import { existsSync as existsSync12, lstatSync as lstatSync2, readdirSync as readdirSync2, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
+import { basename as basename5, extname as extname2, join as join8, relative as relative4, resolve as resolve5, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // src/store.ts
 import {
   chmodSync as chmodSync3,
   closeSync,
-  existsSync as existsSync10,
+  existsSync as existsSync11,
   fsyncSync,
   lstatSync,
   openSync,
@@ -14595,15 +14698,15 @@ import {
   writeFileSync as writeFileSync4
 } from "fs";
 import { randomUUID as randomUUID10 } from "crypto";
-import { basename as basename4, dirname as dirname4, join as join5 } from "path";
+import { basename as basename4, dirname as dirname4, join as join7 } from "path";
 function defaultStorePath() {
   return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
 }
 function ensureStore(path) {
-  if (path === defaultStorePath() && existsSync10(legacyGlobalStorePath())) {
+  if (path === defaultStorePath() && existsSync11(legacyGlobalStorePath())) {
     importLegacyGlobalStore();
   }
-  if (!existsSync10(path)) {
+  if (!existsSync11(path)) {
     ensureParentDir(path);
     writeFileAtomic(path, `${JSON.stringify({ items: [] }, null, 2)}
 `);
@@ -14663,8 +14766,8 @@ function importLegacyGlobalStoreUnlocked(options = {}) {
   const workspace = workspaceForHome(globalKnowledgeHome());
   const legacyPath = legacyGlobalStorePath();
   const canonicalPath = workspace.jsonStorePath;
-  const legacyExists = existsSync10(legacyPath);
-  const canonicalExisted = existsSync10(canonicalPath);
+  const legacyExists = existsSync11(legacyPath);
+  const canonicalExisted = existsSync11(canonicalPath);
   const result = {
     ok: true,
     dry_run: dryRun,
@@ -14729,16 +14832,16 @@ function importLegacyGlobalStoreUnlocked(options = {}) {
     return result;
   const suffix = `${timestampForPath(now)}-${randomUUID10().slice(0, 8)}`;
   if (canonicalExisted) {
-    result.backup_path = join5(workspace.exportsDir, `legacy-open-knowledge-db-before-import-${suffix}.json`);
+    result.backup_path = join7(workspace.exportsDir, `legacy-open-knowledge-db-before-import-${suffix}.json`);
     writeJsonFile(result.backup_path, canonicalStore);
   }
   writeJsonFile(canonicalPath, merged);
-  result.report_path = join5(workspace.runsDir, `legacy-open-knowledge-import-${suffix}.json`);
+  result.report_path = join7(workspace.runsDir, `legacy-open-knowledge-import-${suffix}.json`);
   writeJsonFile(result.report_path, result);
   return result;
 }
 function loadStoreIfExists(path) {
-  if (!existsSync10(path))
+  if (!existsSync11(path))
     return { exists: false, items: [] };
   const raw = readFileSync9(path, "utf8");
   const parsed = JSON.parse(raw);
@@ -14773,7 +14876,7 @@ function syncParentDir(path) {
 var heldLockPaths = new Set;
 function writeFileAtomic(path, contents) {
   ensureParentDir(path);
-  const tmp = join5(dirname4(path), `.${basename4(path)}.tmp.${randomUUID10()}`);
+  const tmp = join7(dirname4(path), `.${basename4(path)}.tmp.${randomUUID10()}`);
   let fd = null;
   try {
     fd = openSync(tmp, "wx", 384);
@@ -14909,7 +15012,7 @@ function acquireLock(lockPath2, ownerId) {
 }
 function releaseLock(lockPath2, ownerId) {
   try {
-    if (existsSync10(lockPath2)) {
+    if (existsSync11(lockPath2)) {
       const lock = JSON.parse(readFileSync9(lockPath2, "utf8"));
       if (lock.owner === ownerId) {
         unlinkSync2(lockPath2);
@@ -15147,8 +15250,8 @@ function ruleSpecs() {
 function collectFiles(root, skipped) {
   const candidates = new Map;
   for (const entry of ruleSpecs()) {
-    const basePath = resolve4(root, entry.base);
-    if (!existsSync11(basePath))
+    const basePath = resolve5(root, entry.base);
+    if (!existsSync12(basePath))
       continue;
     const rootStats = statSync2(basePath);
     if (rootStats.isFile()) {
@@ -15181,7 +15284,7 @@ function walkRuleDirectory(input) {
   if (input.depth > input.maxDepth)
     return;
   for (const dirent of readdirSync2(input.basePath, { withFileTypes: true })) {
-    const absPath = join6(input.basePath, dirent.name);
+    const absPath = join8(input.basePath, dirent.name);
     const rel = relativePath(rootBasePath, absPath);
     if (dirent.isSymbolicLink())
       continue;
@@ -15203,7 +15306,7 @@ function walkRuleDirectory(input) {
     }
     if (!dirent.isFile())
       continue;
-    const sourceRelativePath = relativePath(resolve4(rootBasePath), absPath);
+    const sourceRelativePath = relativePath(resolve5(rootBasePath), absPath);
     if (hasSensitivePathPart(sourceRelativePath)) {
       input.skipped.push({ source_family: input.spec.family, source_path: absPath, reason: "sensitive_path" });
       continue;
@@ -15371,7 +15474,7 @@ function prepareLegacyRecord(input) {
   };
 }
 function deprecateLegacyNotes(input) {
-  if (!input.legacyStorePath || !existsSync11(input.legacyStorePath))
+  if (!input.legacyStorePath || !existsSync12(input.legacyStorePath))
     return 0;
   const byId = new Map(input.records.filter((record) => record.legacy_json_id && record.importable).map((record) => [record.legacy_json_id, record]));
   if (byId.size === 0)
@@ -15408,7 +15511,7 @@ function deprecateLegacyNotes(input) {
   });
 }
 async function importRulesProvenance(options = {}) {
-  const root = resolve4(options.root ?? process.cwd());
+  const root = resolve5(options.root ?? process.cwd());
   const scope = options.scope ?? "global";
   const owner = options.owner ?? "global-agent-rules-standard";
   const dryRun = options.dryRun !== false;
@@ -16299,7 +16402,7 @@ function lintWiki(options) {
 }
 
 // src/item-store.ts
-import { existsSync as existsSync12 } from "fs";
+import { existsSync as existsSync13 } from "fs";
 class VersionHistoryUnsupportedError extends Error {
   location;
   code = "version_history_unsupported";
@@ -16380,7 +16483,7 @@ class LocalItemStore {
     return this.storePath;
   }
   get exists() {
-    return existsSync12(this.storePath);
+    return existsSync13(this.storePath);
   }
   async list(options = {}) {
     const store = loadStoreIfExists(this.storePath);
@@ -16761,7 +16864,7 @@ import { createHash as createHash18 } from "crypto";
 import {
   cpSync,
   chmodSync as chmodSync4,
-  existsSync as existsSync13,
+  existsSync as existsSync14,
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync4,
   readdirSync as readdirSync3,
@@ -16770,16 +16873,16 @@ import {
   rmSync,
   writeFileSync as writeFileSync5
 } from "fs";
-import { dirname as dirname5, join as join7, relative as relative5 } from "path";
+import { dirname as dirname5, join as join9, relative as relative5 } from "path";
 function walkFiles(root, base = root) {
-  if (!existsSync13(root))
+  if (!existsSync14(root))
     return [];
   const stat = lstatSync3(root);
   if (stat.isFile())
     return [relative5(base, root) || "."];
   if (!stat.isDirectory())
     return [];
-  return readdirSync3(root).flatMap((entry) => walkFiles(join7(root, entry), base)).sort();
+  return readdirSync3(root).flatMap((entry) => walkFiles(join9(root, entry), base)).sort();
 }
 function hashFiles(root, files) {
   if (files.length === 0)
@@ -16787,7 +16890,7 @@ function hashFiles(root, files) {
   const tree = createHash18("sha256");
   let bytes = 0;
   for (const file of files) {
-    const path = join7(root, file);
+    const path = join9(root, file);
     const body = readFileSync11(path);
     const fileHash = createHash18("sha256").update(body).digest("hex");
     bytes += body.byteLength;
@@ -16799,13 +16902,13 @@ function hashFiles(root, files) {
   return { sha256: tree.digest("hex"), bytes };
 }
 function jsonItemCount(path) {
-  if (!existsSync13(path))
+  if (!existsSync14(path))
     return null;
   const parsed = JSON.parse(readFileSync11(path, "utf8"));
   return Array.isArray(parsed.items) ? parsed.items.length : null;
 }
 function sqliteSummary(path) {
-  if (!existsSync13(path)) {
+  if (!existsSync14(path)) {
     return { exists: false, integrity_check: null, table_counts: {} };
   }
   const db = openKnowledgeDbReadonly(path);
@@ -16829,17 +16932,17 @@ function summarizeWorkspaceTree(workspace, options = {}) {
   const treeHash = hashFiles(workspace.home, files);
   const artifactFiles = walkFiles(workspace.artifactsDir);
   const artifactHash = hashFiles(workspace.artifactsDir, artifactFiles);
-  const sqliteExists = existsSync13(workspace.knowledgeDbPath);
+  const sqliteExists = existsSync14(workspace.knowledgeDbPath);
   return {
     path: workspace.home,
-    exists: existsSync13(workspace.home),
+    exists: existsSync14(workspace.home),
     file_count: files.length,
     total_bytes: treeHash.bytes,
     tree_sha256: treeHash.sha256,
     json_items: jsonItemCount(workspace.jsonStorePath),
     sqlite: options.includeSqlite === false ? { exists: sqliteExists, integrity_check: null, table_counts: {} } : sqliteSummary(workspace.knowledgeDbPath),
     artifacts: {
-      exists: existsSync13(workspace.artifactsDir),
+      exists: existsSync14(workspace.artifactsDir),
       file_count: artifactFiles.length,
       total_bytes: artifactHash.bytes,
       tree_sha256: artifactHash.sha256
@@ -16882,7 +16985,7 @@ function itemShortId(item) {
   return typeof item.short_id === "string" && item.short_id.trim().length > 0 ? item.short_id : null;
 }
 function readMergeStore(path) {
-  if (!existsSync13(path))
+  if (!existsSync14(path))
     return { items: [] };
   const parsed = JSON.parse(readFileSync11(path, "utf8"));
   if (!parsed || !Array.isArray(parsed.items)) {
@@ -16996,8 +17099,8 @@ function mergeLegacyKnowledgeWorkspace(options) {
   const currentBefore = summarizeWorkspaceTree(options.current);
   const checks = {
     legacy_exists: legacyBefore.exists,
-    legacy_store_exists: existsSync13(options.legacy.jsonStorePath),
-    current_store_exists: existsSync13(options.current.jsonStorePath),
+    legacy_store_exists: existsSync14(options.legacy.jsonStorePath),
+    current_store_exists: existsSync14(options.current.jsonStorePath),
     approval_present: options.approveWrite === true && Boolean(options.approvedBy),
     legacy_backup_written: false,
     no_conflicts: false,
@@ -17175,14 +17278,14 @@ function removeWorkspaceWithRetries(path) {
   throw lastError;
 }
 function chmodOwnerOnlyTree(path) {
-  if (!existsSync13(path))
+  if (!existsSync14(path))
     return;
   const stat = lstatSync3(path);
   chmodSync4(path, stat.isDirectory() ? 448 : 384);
   if (!stat.isDirectory())
     return;
   for (const entry of readdirSync3(path))
-    chmodOwnerOnlyTree(join7(path, entry));
+    chmodOwnerOnlyTree(join9(path, entry));
 }
 function isRetainedTombstoneFile(file) {
   return file === "TOMBSTONE.md" || file === "migration.json" || file === "knowledge.db" || file === "knowledge.db-shm" || file === "knowledge.db-wal" || file === "knowledge.db-journal";
@@ -17192,7 +17295,7 @@ function prepareLegacyTombstoneDirectory(home) {
     if (file === "TOMBSTONE.md" || file === "migration.json")
       continue;
     try {
-      rmSync(join7(home, file), { recursive: true, force: false });
+      rmSync(join9(home, file), { recursive: true, force: false });
     } catch (error) {
       if (!isRetriableFsLock(error) || !file.startsWith("knowledge.db"))
         throw error;
@@ -17232,7 +17335,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
   if (summary.files.some((file) => !isRetainedTombstoneFile(file)))
     return false;
   try {
-    const metadata = JSON.parse(readFileSync11(join7(workspace.home, "migration.json"), "utf8"));
+    const metadata = JSON.parse(readFileSync11(join9(workspace.home, "migration.json"), "utf8"));
     return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
   } catch {
     return false;
@@ -17284,7 +17387,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: null,
-      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join9(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -17312,7 +17415,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: `${options.legacy.home}.backup-${migrationTimestamp(now)}`,
-      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join9(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -17348,7 +17451,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   const currentAfter = summarizeWorkspaceTree(options.current);
   const legacyBeforeOutput = { ...backupAfter, path: options.legacy.home };
   mkdirSync4(options.legacy.home, { recursive: true });
-  const tombstonePath = join7(options.legacy.home, "TOMBSTONE.md");
+  const tombstonePath = join9(options.legacy.home, "TOMBSTONE.md");
   writeFileSync5(tombstonePath, [
     "# Migrated OpenKnowledge Workspace",
     "",
@@ -17362,7 +17465,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   ].join(`
 `), { mode: 384 });
   chmodSync4(tombstonePath, 384);
-  const migrationJsonPath = join7(options.legacy.home, "migration.json");
+  const migrationJsonPath = join9(options.legacy.home, "migration.json");
   writeFileSync5(migrationJsonPath, `${JSON.stringify({
     migrated_at: now.toISOString(),
     approved_by: options.approvedBy,
@@ -17374,7 +17477,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   }, null, 2)}
 `, { mode: 384 });
   chmodSync4(migrationJsonPath, 384);
-  checks.tombstone_written = existsSync13(tombstonePath);
+  checks.tombstone_written = existsSync14(tombstonePath);
   const ok = checks.backup_matches_legacy && checks.migrated_matches_backup && checks.tombstone_written;
   return {
     ok,
@@ -19346,7 +19449,7 @@ function createKnowledgeProjectLinksHttpClient(options) {
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.115",
+  version: "0.2.116",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -19447,6 +19550,7 @@ var package_default = {
     "@aws-sdk/credential-providers": "^3.1063.0",
     "@hasna/contracts": "0.14.1",
     "@hasna/events": "0.1.14",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
     ai: "^6.0.197",
@@ -19464,8 +19568,8 @@ var package_default = {
 
 // src/service.ts
 function resolvePeerWorkspace(input) {
-  const target = resolve5(input);
-  if (existsSync14(join8(target, "knowledge.db")) || existsSync14(join8(target, "config.json"))) {
+  const target = resolve6(input);
+  if (existsSync15(join10(target, "knowledge.db")) || existsSync15(join10(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
@@ -19803,7 +19907,7 @@ function selectInventoryRows(db, sql, params = []) {
   return db.query(sql).all(...params);
 }
 function readLegacyInventoryStore(path) {
-  if (!existsSync14(path))
+  if (!existsSync15(path))
     return { exists: false, read_error: null, items: [] };
   try {
     const parsed = JSON.parse(readFileSync12(path, "utf8"));
@@ -19911,11 +20015,11 @@ function emptyContextPack(query, limit, semantic = false) {
 }
 function legacyStorePathForRead(scope, workspace, preferred) {
   const current = preferred ?? workspace.jsonStorePath;
-  if (existsSync14(current))
+  if (existsSync15(current))
     return current;
   if (scope === "global") {
     const legacy = legacyGlobalStorePath();
-    if (existsSync14(legacy))
+    if (existsSync15(legacy))
       return legacy;
   }
   return current;
@@ -20547,8 +20651,8 @@ class KnowledgeService {
   }
   config(options = {}) {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
-    if (!this.cachedConfig || options.ensure || existsSync14(workspace.configPath)) {
-      this.cachedConfig = existsSync14(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
+    if (!this.cachedConfig || options.ensure || existsSync15(workspace.configPath)) {
+      this.cachedConfig = existsSync15(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
     }
     return this.cachedConfig;
   }
@@ -20664,13 +20768,13 @@ class KnowledgeService {
       ok: true,
       scope: this.scope,
       home: workspace.home,
-      exists: existsSync14(workspace.home),
+      exists: existsSync15(workspace.home),
       config_path: workspace.configPath,
-      config_exists: existsSync14(workspace.configPath),
+      config_exists: existsSync15(workspace.configPath),
       json_store_path: workspace.jsonStorePath,
-      json_store_exists: existsSync14(workspace.jsonStorePath),
+      json_store_exists: existsSync15(workspace.jsonStorePath),
       knowledge_db_path: workspace.knowledgeDbPath,
-      knowledge_db_exists: existsSync14(workspace.knowledgeDbPath),
+      knowledge_db_exists: existsSync15(workspace.knowledgeDbPath),
       artifacts_dir: workspace.artifactsDir,
       indexes_dir: workspace.indexesDir,
       logs_dir: workspace.logsDir,
@@ -20687,7 +20791,7 @@ class KnowledgeService {
   dbStats() {
     assertSqliteClientTransport("reading knowledge.db stats");
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath))
+    if (!existsSync15(workspace.knowledgeDbPath))
       return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
@@ -20754,9 +20858,9 @@ class KnowledgeService {
       limit,
       paths: {
         json_store_path: workspace.jsonStorePath,
-        json_store_exists: existsSync14(workspace.jsonStorePath),
+        json_store_exists: existsSync15(workspace.jsonStorePath),
         knowledge_db_path: workspace.knowledgeDbPath,
-        knowledge_db_exists: existsSync14(workspace.knowledgeDbPath),
+        knowledge_db_exists: existsSync15(workspace.knowledgeDbPath),
         artifacts_dir: workspace.artifactsDir,
         indexes_dir: workspace.indexesDir,
         logs_dir: workspace.logsDir,
@@ -20811,7 +20915,7 @@ class KnowledgeService {
     const legacyStore = readLegacyInventoryStore(storePath);
     const activeItems = legacyStore.items.filter((item) => item.archived !== true);
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
-    const dbExists = existsSync14(workspace.knowledgeDbPath);
+    const dbExists = existsSync15(workspace.knowledgeDbPath);
     if (!dbExists) {
       return this.itemOnlyInventory({
         items: legacyStore.items,
@@ -21141,7 +21245,7 @@ class KnowledgeService {
   }
   listAppWikiNotes(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath))
+    if (!existsSync15(workspace.knowledgeDbPath))
       return [];
     return listAppWikiNotes({
       dbPath: workspace.knowledgeDbPath,
@@ -21150,7 +21254,7 @@ class KnowledgeService {
   }
   async getAppWikiNote(id, options = {}) {
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath))
+    if (!existsSync15(workspace.knowledgeDbPath))
       return null;
     return getAppWikiNote({
       dbPath: workspace.knowledgeDbPath,
@@ -21279,7 +21383,7 @@ class KnowledgeService {
   }
   reindexHealth(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath))
+    if (!existsSync15(workspace.knowledgeDbPath))
       return emptyReindexHealth();
     return reindexHealth({
       ...options,
@@ -21311,7 +21415,7 @@ class KnowledgeService {
   }
   embeddingStatus() {
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath))
+    if (!existsSync15(workspace.knowledgeDbPath))
       return emptyEmbeddingStatus();
     return embeddingIndexStatus(workspace.knowledgeDbPath);
   }
@@ -21341,7 +21445,7 @@ class KnowledgeService {
     if (this.usesHttpTransport()) {
       throw new KnowledgeSemanticSearchUnavailableError;
     }
-    if (!existsSync14(workspace.knowledgeDbPath)) {
+    if (!existsSync15(workspace.knowledgeDbPath)) {
       return {
         provider: "openai",
         model: "text-embedding-3-small",
@@ -21371,8 +21475,8 @@ class KnowledgeService {
       return hybridSearchFromProducerPage(producer.items, options, [], producer.total);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync14(workspace.knowledgeDbPath)) {
-      if (existsSync14(legacyStorePath)) {
+    if (!existsSync15(workspace.knowledgeDbPath)) {
+      if (existsSync15(legacyStorePath)) {
         return hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -21397,8 +21501,8 @@ class KnowledgeService {
       });
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync14(workspace.knowledgeDbPath)) {
-      if (existsSync14(legacyStorePath)) {
+    if (!existsSync15(workspace.knowledgeDbPath)) {
+      if (existsSync15(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -21429,9 +21533,9 @@ class KnowledgeService {
       return emptyAgentContextPack(options);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync14(workspace.knowledgeDbPath)) {
+    if (!existsSync15(workspace.knowledgeDbPath)) {
       const query = (options.query ?? options.topic ?? "").trim();
-      if (query && options.source !== "loops" && options.source !== "runs" && existsSync14(legacyStorePath)) {
+      if (query && options.source !== "loops" && options.source !== "runs" && existsSync15(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           query,
@@ -21514,7 +21618,7 @@ class KnowledgeService {
   }
   syncStatus() {
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath)) {
+    if (!existsSync15(workspace.knowledgeDbPath)) {
       return emptySyncStatus({
         scope: this.scope,
         workspaceHome: workspace.home
@@ -21735,7 +21839,7 @@ class KnowledgeService {
   }
   syncConflicts(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath))
+    if (!existsSync15(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
@@ -21808,7 +21912,7 @@ class KnowledgeService {
   }
   syncMachines() {
     const workspace = this.workspace;
-    if (!existsSync14(workspace.knowledgeDbPath))
+    if (!existsSync15(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
@@ -21953,7 +22057,7 @@ class KnowledgeService {
     const direction = options.direction ?? "both";
     const localWorkspace = this.ensureWorkspace();
     migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
-    const peerWorkspaceInput = resolve5(options.peerWorkspace);
+    const peerWorkspaceInput = resolve6(options.peerWorkspace);
     const peerWorkspace = resolvePeerWorkspace(peerWorkspaceInput);
     migrateKnowledgeDb(peerWorkspace.knowledgeDbPath);
     const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
@@ -29663,7 +29767,7 @@ function queryFrame(descriptor, action) {
   };
 }
 function collectBounded(stream, maxBytes = 64 * 1024) {
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     const chunks = [];
     let total = 0;
     stream.on("data", (chunk) => {
@@ -29676,12 +29780,12 @@ function collectBounded(stream, maxBytes = 64 * 1024) {
       }
       chunks.push(encoded);
     });
-    stream.on("end", () => resolve6(Buffer.concat(chunks, total).toString("utf8")));
+    stream.on("end", () => resolve7(Buffer.concat(chunks, total).toString("utf8")));
     stream.on("error", () => reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_stream_failed")));
   });
 }
 function collectPrivateIpc(child) {
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     const cleanup = () => {
       child.off("message", onMessage);
       child.off("disconnect", onDisconnect);
@@ -29696,7 +29800,7 @@ function collectPrivateIpc(child) {
         reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_private_result_cap_exceeded"));
         return;
       }
-      resolve6(message);
+      resolve7(message);
     };
     const onDisconnect = () => {
       cleanup();
@@ -29713,13 +29817,13 @@ function sendPrivateIpc(child, value, didTimeout) {
   if (Buffer.byteLength(value, "utf8") > PRIVATE_FD_MAX_BYTES) {
     return Promise.reject(new KnowledgeGuardedCliDescriptorError("private_request_byte_cap_exceeded"));
   }
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     child.send(value, (error) => {
       if (error && !didTimeout()) {
         reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_private_request_failed"));
         return;
       }
-      resolve6();
+      resolve7();
     });
   });
 }
@@ -29753,9 +29857,9 @@ async function executeDescriptorFrame(frame, options) {
   const resultText = collectPrivateIpc(child);
   let timeoutExpired = false;
   const requestFinished = sendPrivateIpc(child, canonicalKnowledgeGuardedJson(frame), () => timeoutExpired);
-  const exited = new Promise((resolve6, reject) => {
+  const exited = new Promise((resolve7, reject) => {
     child.once("error", () => reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_spawn_failed")));
-    child.once("close", (code) => resolve6(code ?? 1));
+    child.once("close", (code) => resolve7(code ?? 1));
   });
   let timeout;
   const timedOut = new Promise((_resolve, reject) => {
