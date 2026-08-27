@@ -81,12 +81,14 @@ function sanitizeCreateTaskInput(input: CreateTaskInput): CreateTaskInput {
   return {
     ...input,
     title: sanitizePreWriteText(input.title, "task.title"),
-    description: input.description !== undefined
-      ? sanitizePreWriteText(input.description, "task.description")
-      : undefined,
+    description: input.description == null
+      ? input.description
+      : sanitizePreWriteText(input.description, "task.description"),
     tags: input.tags !== undefined ? sanitizePreWriteValue(input.tags, "task.tags") : undefined,
     metadata: input.metadata !== undefined ? sanitizePreWriteValue(input.metadata, "task.metadata") : undefined,
-    reason: input.reason !== undefined ? sanitizePreWriteText(input.reason, "task.reason") : undefined,
+    reason: input.reason == null
+      ? input.reason
+      : sanitizePreWriteText(input.reason, "task.reason"),
   };
 }
 
@@ -94,7 +96,9 @@ function sanitizeUpdateTaskInput(input: UpdateTaskInput): UpdateTaskInput {
   return {
     ...input,
     title: input.title !== undefined ? sanitizePreWriteText(input.title, "task.title") : undefined,
-    description: input.description !== undefined ? sanitizePreWriteText(input.description, "task.description") : undefined,
+    description: input.description == null
+      ? input.description
+      : sanitizePreWriteText(input.description, "task.description"),
     tags: input.tags !== undefined ? sanitizePreWriteValue(input.tags, "task.tags") : undefined,
     metadata: input.metadata !== undefined ? sanitizePreWriteValue(input.metadata, "task.metadata") : undefined,
   };

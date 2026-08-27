@@ -647,7 +647,7 @@ export interface TaskWithRelations extends Task {
 
 export interface CreateTaskInput {
   title: string;
-  description?: string;
+  description?: string | null;
   project_id?: string;
   parent_id?: string;
   plan_id?: string;
@@ -693,7 +693,7 @@ export interface UpsertTaskByFingerprintResult {
 
 export interface UpdateTaskInput {
   title?: string;
-  description?: string;
+  description?: string | null;
   status?: TaskStatus;
   priority?: TaskPriority;
   project_id?: string | null;

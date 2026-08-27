@@ -117,6 +117,23 @@ describe("createTask", () => {
 
     expect(listTasks({ include_subtasks: true }, db)).toEqual([]);
   });
+
+  it("REGRESSION: accepts an explicit description: null on create and update", () => {
+    // The API/JSON contract allows an explicit null for the optional description
+    // (Task.description: string | null), and the pre-write secret sanitizer must
+    // pass it through instead of text-redacting the null value.
+    const input = { title: "Null description", description: null } as unknown as Parameters<typeof createTask>[0];
+    const task = createTask(input, db);
+    expect(task.id).toBeTruthy();
+    expect(task.description).toBeNull();
+
+    const updated = updateTask(
+      task.id,
+      { version: task.version, description: null } as unknown as Parameters<typeof updateTask>[1],
+      db,
+    );
+    expect(updated.description).toBeNull();
+  });
 });
 
 describe("getTask", () => {
