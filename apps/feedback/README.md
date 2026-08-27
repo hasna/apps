@@ -33,7 +33,9 @@ feedback serve --port 8787
 ## HTTP API
 
 The HTTP API is a **local development server**. It serves the append-only JSONL
-store at `~/.hasna/feedback/feedback.jsonl` and has no PostgreSQL support. A
+store at the effective data dir (`~/.hasna/feedback` by default; the
+`@hasna/paths`-resolved XDG/macOS data home once adopted) and has no PostgreSQL
+support. A
 PostgreSQL selection is rejected unless the host injects a `FeedbackStore`
 adapter. To run feedback as a real service, mount
 `createFeedbackHandler()` from `@hasna/feedback/api` inside your own app and pass
@@ -263,10 +265,17 @@ Feedback submitted through the MCP server goes through the same store, so it cre
 
 ## Storage
 
-By default, Hasna Feedback stores feedback in a local **SQLite** database:
+By default, Hasna Feedback stores feedback in a local **SQLite** database in the
+effective data dir. That dir resolves through the `@hasna/paths` resolver
+(XDG/macOS home layout): the legacy `~/.hasna/feedback` stays the effective root
+until the store has been migrated to the XDG data home
+(`~/.local/share/hasna/feedback` on Linux — `feedback.db` / `feedback.jsonl`
+present there) or the operator sets the data-kind override `HASNA_DATA_HOME`;
+the exact-app overrides `HASNA_FEEDBACK_HOME` / `FEEDBACK_HOME` name an explicit
+root.
 
 ```text
-~/.hasna/feedback/feedback.db
+~/.hasna/feedback/feedback.db   (legacy default until the XDG data home is adopted)
 ```
 
 Override the directory with `HASNA_FEEDBACK_DATA_DIR`, or name the database
@@ -279,15 +288,15 @@ Select this package's storage implementation with `HASNA_FEEDBACK_STORE`:
 
 | value | backend |
 | --- | --- |
-| unset, `sqlite`, `db` | SQLite at `~/.hasna/feedback/feedback.db` (default) |
+| unset, `sqlite`, `db` | SQLite at the effective data dir (legacy `~/.hasna/feedback/feedback.db` until adopted) |
 | `postgres`, `postgresql` | a host-injected PostgreSQL `FeedbackStore` adapter |
-| `jsonl`, `file`, `local` | legacy migration and rollback access to `~/.hasna/feedback/feedback.jsonl`, not a third server backend |
+| `jsonl`, `file`, `local` | legacy migration and rollback access to the effective data dir's `feedback.jsonl`, not a third server backend |
 
 ### Migrating from `feedback.jsonl`
 
 **This happens automatically and needs no action.** The first time a SQLite
 store opens, it imports any `feedback.jsonl` from the **data directory**
-(`HASNA_FEEDBACK_DATA_DIR`, default `~/.hasna/feedback`) and records that it has
+(`HASNA_FEEDBACK_DATA_DIR`, default the effective data dir) and records that it has
 done so, so the import runs once and cannot duplicate rows. Relocating only the
 database with `HASNA_FEEDBACK_SQLITE_PATH` still imports that log; a log sitting
 beside the database is picked up too, if the data directory has none.
