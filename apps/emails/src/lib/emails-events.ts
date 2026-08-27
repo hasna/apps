@@ -1,12 +1,12 @@
 import { join } from "node:path";
+import { getDataRoot } from "../paths.js";
 import { EventsClient, type EmitOptions, type EmitResult, type EventInput } from "@hasna/events";
 
 // Self-hosted-only client: the local SQLite `getDataDir()` is gone, but the
 // workflow event log is a local append-only store independent of any database.
-// Resolve its base directory directly.
+// Resolve its base directory through the effective data root (src/paths.ts).
 function emailsDataDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "emails");
+  return getDataRoot();
 }
 
 export const EMAILS_EVENT_SOURCE = "emails";

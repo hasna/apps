@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "fs";
 import { join } from "path";
+import { getDataRoot } from "../paths.js";
 import { resolveCloudflareAuth, type CloudflareAuth } from "./cloudflare-auth.js";
 import { getEmailsMode } from "./mode.js";
 import { isSensitiveKey } from "./redaction.js";
@@ -14,10 +15,15 @@ import { isSensitiveKey } from "./redaction.js";
  * in src/db/database.ts resolves the same directory but additionally enforces
  * SQLite parent-directory ownership/mode rules and creates it — correct before a
  * database open, wrong for a read that never touches one.
+ *
+ * The directory is the effective data root resolved through `src/paths.ts`
+ * (XDG/macOS home layout via @hasna/paths): the legacy `~/.hasna/emails` stays
+ * effective until the store is migrated to the resolver data home or the
+ * operator sets the data-kind override `HASNA_DATA_HOME`; the exact-app
+ * overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
  */
 export function getEmailsDataDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "emails");
+  return getDataRoot();
 }
 function getConfigDir(): string { return getEmailsDataDir(); }
 function getConfigPath(): string { return join(getConfigDir(), "config.json"); }

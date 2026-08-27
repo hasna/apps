@@ -584,7 +584,12 @@ There is no hybrid cache or bidirectional database synchronization mode.
 
 ## Data
 
-Local mode stores SQLite data and attachment files in `~/.hasna/emails/`.
+Local mode stores SQLite data and attachment files in the effective data root
+resolved through the `@hasna/paths` resolver (XDG/macOS home layout): the
+legacy `~/.hasna/emails/` stays effective until the store is migrated to the
+resolver data home (`~/.local/share/hasna/emails` on Linux) or the operator
+sets the data-kind override `HASNA_DATA_HOME`; the exact-app overrides
+`HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
 Self-hosted mode uses the operator-configured PostgreSQL and object-storage
 services and never falls back to that local directory.
 

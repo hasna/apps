@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { dataDir } from "@hasna/paths";
 
 function lstatIfExists(path) {
   try {
@@ -135,16 +136,34 @@ function validateOwnedDirectory(path, expectedMode, repairMode) {
   }
 }
 
+// Resolve the effective data root this install will harden. Mirrors
+// src/paths.ts: an exact-app override (HASNA_EMAILS_HOME, then EMAILS_HOME)
+// wins; otherwise the @hasna/paths (XDG/macOS home layout) data root once
+// adopted (the operator set the data-kind override HASNA_DATA_HOME, or an
+// emails.db already exists there); otherwise the legacy ~/.hasna/emails
+// default. The legacy default is what keeps today's machines byte-identical;
+// the resolver root is what the XDG home migration (hotfixes plan 0f49f56a,
+// task P3.3) moves toward.
+function effectiveDataRoot(canonicalHome) {
+  const exact = process.env.HASNA_EMAILS_HOME?.trim() || process.env.EMAILS_HOME?.trim();
+  if (exact) return resolve(exact);
+  const resolverRoot = dataDir({ app: "emails", home: canonicalHome });
+  if (process.env.HASNA_DATA_HOME?.trim()) return resolverRoot;
+  if (lstatIfExists(join(resolverRoot, "emails.db"))) return resolverRoot;
+  return join(canonicalHome, ".hasna", "emails");
+}
+
 if (process.platform !== "win32") {
   const home = process.env.HOME || process.env.USERPROFILE || homedir();
   // Canonicalize HOME once so stable aliases such as macOS /var and /tmp are
   // accepted, then operate only beneath their canonical target. App-owned
-  // .hasna/emails components are still validated without following symlinks.
+  // data-directory components are still validated without following symlinks.
   const canonicalHome = canonicalizeFromExistingAncestor(home);
   validateAncestorChain(canonicalHome);
-  const hasnaDir = join(canonicalHome, ".hasna");
-  // ~/.hasna is shared by Hasna applications. Preserve safe modes such as
-  // 0755; only this package's own data directory is repaired to 0700.
+  const dataRoot = effectiveDataRoot(canonicalHome);
+  const hasnaDir = dirname(dataRoot);
+  // The hasna-level root is shared by Hasna applications. Preserve safe modes
+  // such as 0755; only this package's own data directory is repaired to 0700.
   validateOwnedDirectory(hasnaDir, 0o755, false);
-  validateOwnedDirectory(join(hasnaDir, "emails"), 0o700, true);
+  validateOwnedDirectory(dataRoot, 0o700, true);
 }

@@ -24,9 +24,14 @@ breaks for each one.
 - **Manage** domains, addresses, templates, contacts, sequences
 - **Serve** a local dashboard and REST API
 
-All local data is stored in `~/.hasna/emails/emails.db` by default. Existing
-`~/.emails` data is migrated forward automatically. Use `HASNA_EMAILS_DB_PATH`
-or `EMAILS_DB_PATH` for isolated tests and smoke runs.
+Local data is stored in the effective data root resolved through the
+`@hasna/paths` resolver (XDG/macOS home layout): the legacy
+`~/.hasna/emails/emails.db` stays the default until the store is migrated to
+the resolver data home (`~/.local/share/hasna/emails` on Linux) or the operator
+sets the data-kind override `HASNA_DATA_HOME`; the exact-app overrides
+`HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root. Existing `~/.emails`
+data is migrated forward automatically. Use `HASNA_EMAILS_DB_PATH` or
+`EMAILS_DB_PATH` for isolated tests and smoke runs.
 
 ## MCP Setup (Recommended for AI Agents)
 
@@ -191,7 +196,7 @@ emails://recent-errors     → latest provisioning/source errors
 
 ## Important Constraints
 
-1. **DB location**: Default is `~/.hasna/emails/emails.db`; old `~/.emails` data is auto-migrated. Use `HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` for testing.
+1. **DB location**: Default is `~/.hasna/emails/emails.db` (the legacy data root; it stays effective until the store is migrated to the resolver data home or the operator sets the data-kind override `HASNA_DATA_HOME` — the exact-app overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root); old `~/.emails` data is auto-migrated. Use `HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` for testing.
 2. **Provider credentials**: Never expose credentials in code — they're stored in the local DB. When listing providers, credentials are automatically redacted (`"***"`).
 3. **Domain warming**: If a warming schedule is active for a domain, `send_email` will block at the daily limit. Use `get_warming_status(domain)` first.
 4. **Suppression**: Always check `list_contacts(suppressed=true)` before bulk sends.
