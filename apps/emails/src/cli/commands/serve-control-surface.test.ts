@@ -13,9 +13,10 @@ import { join } from "node:path";
  * throws on a retired-mode contradiction — so the throw landed before
  * commander ever got to answer the control surface.
  *
- * The gate environment is exactly the legacy one: EMAILS_MODE set (fleet
- * profile), EMAILS_DATABASE_URL unset. Control surfaces must answer rc=0 in
- * that environment; an ACTUAL serve invocation must still refuse.
+ * The gate environment is exactly the legacy one: EMAILS_MODE set (the
+ * legacy deployment-mode environment), EMAILS_DATABASE_URL unset. Control
+ * surfaces must answer rc=0 in that environment; an ACTUAL serve invocation
+ * must still refuse.
  */
 
 const EMAILS_ROOT = join(import.meta.dir, "../../..");
