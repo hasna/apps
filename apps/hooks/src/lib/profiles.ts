@@ -1,14 +1,17 @@
 /**
  * Agent profile management — identity system for hooks
  *
- * Each agent instance gets a unique 8-char UUID stored at ~/.hasna/hooks/profiles/<id>.json.
+ * Each agent instance gets a unique 8-char UUID stored at
+ * <effective-data-root>/profiles/<id>.json, where the effective data root is
+ * resolved through @hasna/paths (legacy ~/.hasna/hooks until adopted, then
+ * the XDG data home).
  * Profiles are injected into HookInput when hooks are run with --profile <id>,
  * allowing hooks to identify which agent is calling them.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, cpSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { getEffectiveDataRoot, getHomeDir } from "./app-home.js";
 
 export interface AgentProfile {
   agent_id: string;
@@ -25,12 +28,12 @@ export interface CreateProfileInput {
 }
 
 function resolveProfilesDir(): string {
-  const newDir = join(homedir(), ".hasna", "hooks", "profiles");
-  const oldDir = join(homedir(), ".hooks", "profiles");
+  const newDir = join(getEffectiveDataRoot(), "profiles");
+  const oldDir = join(getHomeDir(), ".hooks", "profiles");
 
-  // Auto-migrate: copy old profiles to new location if needed
+  // Auto-migrate: copy old profiles to the effective root if needed
   if (!existsSync(newDir) && existsSync(oldDir)) {
-    mkdirSync(join(homedir(), ".hasna", "hooks"), { recursive: true });
+    mkdirSync(newDir, { recursive: true });
     cpSync(oldDir, newDir, { recursive: true });
   }
 

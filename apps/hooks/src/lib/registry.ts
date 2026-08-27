@@ -2,6 +2,8 @@
  * Hook registry - metadata about all available hooks
  */
 
+import { getReportedDbPath } from "./app-home.js";
+
 export type HookEvent =
   | "PreToolUse"
   | "PostToolUse"
@@ -386,7 +388,7 @@ export const HOOKS: HookMeta[] = [
   {
     name: "sessionlog",
     displayName: "Session Log",
-    description: "Logs every tool call to SQLite (~/.hasna/hooks/hooks.db)",
+    description: `Logs every tool call to SQLite (${getReportedDbPath()})`,
     version: "0.1.0",
     category: "Observability",
     event: "PostToolUse",
@@ -396,7 +398,7 @@ export const HOOKS: HookMeta[] = [
   {
     name: "commandlog",
     displayName: "Command Log",
-    description: "Logs every Bash command to SQLite (~/.hasna/hooks/hooks.db)",
+    description: `Logs every Bash command to SQLite (${getReportedDbPath()})`,
     version: "0.1.0",
     category: "Observability",
     event: "PostToolUse",
@@ -416,7 +418,7 @@ export const HOOKS: HookMeta[] = [
   {
     name: "errornotify",
     displayName: "Error Notify",
-    description: "Detects tool failures and logs errors to SQLite (~/.hasna/hooks/hooks.db)",
+    description: `Detects tool failures and logs errors to SQLite (${getReportedDbPath()})`,
     version: "0.1.0",
     category: "Observability",
     event: "PostToolUse",

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.10
+
+### Patch Changes
+
+- Route the local data root through the @hasna/paths resolver (XDG home
+  migration, hotfixes plan 0f49f56a): config, SQLite store, lock, and agent
+  profiles now resolve through the effective data root (granular
+  `HASNA_HOOKS_DATA_DIR`/`HOOKS_DATA_DIR` override, then exact-app
+  `HASNA_HOOKS_HOME`/`HOOKS_HOME`, then the @hasna/paths data home once
+  adopted, then the legacy `~/.hasna/hooks` default). Nothing moves on disk in
+  this phase — the legacy home stays effective until the XDG root is
+  deliberately adopted, so a live store never becomes invisible on upgrade.
+
 ## 0.7.9
 
 ### Patch Changes

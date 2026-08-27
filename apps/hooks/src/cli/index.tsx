@@ -46,11 +46,14 @@ import {
   touchProfile,
   exportProfiles,
   importProfiles,
+  getProfilesDir,
 } from "../lib/profiles.js";
 import { readCustomManifest, listCustomHooks } from "../lib/manifest.js";
 import { resolveHookMeta } from "../lib/resolve.js";
 import { getPinnedHook } from "../lib/store.js";
 import { SEMVER_PATTERN } from "../lib/semver.js";
+import { getReportedDbPath } from "../lib/app-home.js";
+import { getCustomHooksDir } from "../config.js";
 
 const program = new Command();
 
@@ -272,7 +275,7 @@ program
     if (profile.name) {
       console.log(`  ${chalk.dim("Name:")}       ${profile.name}`);
     }
-    console.log(`  ${chalk.dim("Profile:")}    ~/.hasna/hooks/profiles/${profile.agent_id}.json`);
+    console.log(`  ${chalk.dim("Profile:")}    ${join(getProfilesDir(), `${profile.agent_id}.json`)}`);
     console.log();
     console.log(chalk.dim("  Install hooks with this profile:"));
     console.log(`    hooks install gitguard --profile ${profile.agent_id}`);
@@ -955,7 +958,7 @@ program
     const { readCustomManifest } = await import("../lib/manifest.js");
     const custom = readCustomManifest(meta.name);
     const source = custom ? "custom" : "bundled";
-    const sourceNote = custom ? "custom (~/.hasna/hooks/hooks/) overrides the bundled registry" : "bundled registry";
+    const sourceNote = custom ? `custom (${getCustomHooksDir()}/) overrides the bundled registry` : "bundled registry";
 
     if (options.json) {
       console.log(JSON.stringify({ ...meta, source, source_note: sourceNote, global: globalInstalled, project: projectInstalled }));
@@ -1515,7 +1518,7 @@ program
 // Log command group — query hook events from SQLite
 const logCmd = program
   .command("log")
-  .description("Query hook event logs from SQLite (~/.hasna/hooks/hooks.db)");
+  .description(`Query hook event logs from SQLite (${getReportedDbPath()})`);
 
 logCmd
   .command("list")
