@@ -132,6 +132,23 @@ describe("getDataDir", () => {
     expect(existsSync(join(legacyRoot, "data.db"))).toBe(true);
     delete process.env["HASNA_DATA_HOME"];
   });
+
+  it("does not copy the legacy root into an exact override nested inside it", () => {
+    const home = tempHome();
+    const legacyRoot = join(home, ".hasna", "crawl");
+    mkdirSync(join(legacyRoot, "screenshots"), { recursive: true });
+    writeFileSync(join(legacyRoot, "data.db"), "live-db");
+    const override = join(legacyRoot, "redirected");
+    process.env["HASNA_CRAWL_HOME"] = override;
+
+    const dataDir = getDataDir();
+
+    expect(dataDir).toBe(override);
+    // No runaway nesting: the override is not copied into itself.
+    expect(existsSync(join(override, "redirected"))).toBe(false);
+    expect(existsSync(join(override, "data.db"))).toBe(false);
+    delete process.env["HASNA_CRAWL_HOME"];
+  });
 });
 
 describe("package install", () => {

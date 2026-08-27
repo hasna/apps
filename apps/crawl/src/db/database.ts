@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { dirname, join, resolve } from "path";
+import { dirname, join, resolve, sep } from "path";
 import { FEEDBACK_TABLE_SQL, runMigrations } from "./migrations";
-import { getDataRoot, legacyDataRoot } from "./paths.js";
+import { getDataRoot } from "./paths.js";
 
 let instance: Database | null = null;
 let instancePath: string | null = null;
@@ -32,6 +32,11 @@ function copyMissingRecursive(src: string, dest: string): void {
   }
 }
 
+/** Whether `candidate` is the `ancestor` path or lives inside it. */
+function isSameOrDescendant(candidate: string, ancestor: string): boolean {
+  return candidate === ancestor || candidate.startsWith(ancestor + sep);
+}
+
 function migrateLegacyDataDir(dest: string): void {
   // Copy forward any legacy files that are missing from the effective data
   // root — even when the effective root already exists — without deleting the
@@ -40,16 +45,17 @@ function migrateLegacyDataDir(dest: string): void {
   // canonical root `~/.hasna/crawl` (the newest legacy store, which absorbed
   // `.open-crawl`/`.crawl` on earlier upgrades) takes precedence over both so
   // a live store never becomes invisible when `HASNA_DATA_HOME` (or an exact
-  // override) redirects the effective root.
+  // override) redirects the effective root. A legacy source is never copied
+  // into itself or its own descendant (an exact override nested inside the
+  // legacy root would otherwise recurse forever).
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "/tmp";
-  const legacyNames: string[] = [".open-crawl", ".crawl"];
-  if (resolve(dest) !== resolve(legacyDataRoot())) {
-    legacyNames.unshift(".hasna/crawl");
-  }
+  const destResolved = resolve(dest);
+  const legacyNames: string[] = [".hasna/crawl", ".open-crawl", ".crawl"];
   for (const legacyName of legacyNames) {
     const legacyDir = join(home, legacyName);
     if (!existsSync(legacyDir)) continue;
     if (!statSync(legacyDir).isDirectory()) continue;
+    if (isSameOrDescendant(destResolved, resolve(legacyDir))) continue;
     copyMissingRecursive(legacyDir, dest);
   }
 }
