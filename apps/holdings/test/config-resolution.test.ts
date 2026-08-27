@@ -7,9 +7,9 @@
 // both prefix keys, whitespace-trimmed presence — and the integration arm Sol
 // names: the DSN is scrubbed from process.env AFTER openDatabase connects, so
 // child processes cannot read it (§2.4).
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   databaseUrlPresent,
@@ -19,7 +19,19 @@ import {
   resolveServerBackend,
   scrubDatabaseUrl,
 } from "../src/config.js";
+import { getHoldingsAppHome } from "../src/core/app-home.js";
 import { openDatabase } from "../src/db/database.js";
+
+// Isolate to a throwaway HOME so the default-sqlite-path assertions never depend
+// on whether this machine already has a migrated store under the real home.
+const testHome = join(tmpdir(), `holdings-cfg-home-${Date.now()}`);
+mkdirSync(join(testHome, ".hasna", "holdings"), { recursive: true });
+const savedHome = process.env.HOME;
+process.env.HOME = testHome;
+afterAll(() => {
+  process.env.HOME = savedHome;
+  rmSync(testHome, { recursive: true, force: true });
+});
 
 const URL_KEY = "HASNA_HOLDINGS_DATABASE_URL";
 const BARE_URL_KEY = "HOLDINGS_DATABASE_URL";
@@ -77,8 +89,11 @@ describe("server backend resolution (sqlite | postgresql)", () => {
 });
 
 describe("sqlite path resolution", () => {
-  it("defaultSqlitePath is the canonical ~/.hasna/holdings/holdings.db", () => {
-    expect(defaultSqlitePath()).toBe(join(homedir(), ".hasna", "holdings", "holdings.db"));
+  it("defaultSqlitePath is the effective app home's holdings.db", () => {
+    // Under the isolated HOME with no overrides the effective home is the legacy
+    // ~/.hasna/holdings layout, so the default db path follows it.
+    expect(defaultSqlitePath()).toBe(join(getHoldingsAppHome(), "holdings.db"));
+    expect(defaultSqlitePath()).toBe(join(testHome, ".hasna", "holdings", "holdings.db"));
   });
 
   it("HASNA_HOLDINGS_DB_PATH wins over the bare HOLDINGS_DB_PATH; bare is honored alone; default as fallback", () => {

@@ -8,7 +8,9 @@ trademarks/logos stubs.
 
 > npm package `@hasna/holdings`; bins are **`holdings`**, `holdings-mcp`, `holdings-serve`.
 > All name-derived tokens use the bare token `holdings` (env prefix `HASNA_HOLDINGS_`,
-> data dir `~/.hasna/holdings`).
+> data home resolved through `@hasna/paths` — legacy `~/.hasna/holdings` until the
+> XDG data home is adopted; exact-app overrides `HASNA_HOLDINGS_HOME` / `HOLDINGS_HOME`
+> win unconditionally).
 
 ## Domain
 
@@ -34,7 +36,13 @@ alone never grants access (deny-by-default).
 
 ## Storage
 
-- **sqlite** (default): SQLite at `~/.hasna/holdings/holdings.db` is authoritative.
+- **sqlite** (default): SQLite at `<data home>/holdings.db` is authoritative. The data
+  home is resolved through `@hasna/paths` (XDG/macOS home layout); the legacy
+  `~/.hasna/holdings` default stays effective until the store is physically migrated to
+  the XDG data home or the operator sets `HASNA_DATA_HOME` — an existing local store is
+  never invisible on upgrade. `HASNA_HOLDINGS_HOME` / `HOLDINGS_HOME` override the app
+  home unconditionally; `HASNA_HOLDINGS_DB_PATH` / `HOLDINGS_DB_PATH` override the
+  database path.
 - **postgres**: Postgres via the vendored `@hasna/contracts` storage-kit
   (`sslmode=verify-full`), selected by `HASNA_HOLDINGS_DATABASE_URL` presence.
 

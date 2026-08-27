@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { getHoldingsBackupDir } from "../core/app-home.js";
 
 // Backup-on-migration (§4.4): before applying a shape-changing migration, snapshot
-// the current local DB with mode 0600 into ~/.hasna/holdings/backups (dir 0700), keep N=10.
+// the current local DB with mode 0600 into the effective app home's backups dir
+// (dir 0700), keep N=10.
 
 const RETENTION = 10;
 const FILE_MODE = 0o600;
