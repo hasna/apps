@@ -410,7 +410,7 @@
     },
     "apps/context": {
       "name": "@hasna/context",
-      "version": "0.1.53",
+      "version": "0.1.54",
       "bin": {
         "context": "dist/cli/index.js",
         "context-mcp": "dist/mcp/index.js",
@@ -428,6 +428,7 @@
         "@ai-sdk/togetherai": "2.0.75",
         "@ai-sdk/xai": "3.0.123",
         "@hasna/events": "0.1.6",
+        "@hasna/paths": "0.1.0",
         "@mendable/firecrawl-js": "4.32.2",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "ai": "6.0.257",
@@ -4618,6 +4619,8 @@
     "@hasna/consolidations/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/context/@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
+
+    "@hasna/context/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/context/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 

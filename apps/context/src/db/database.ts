@@ -3,6 +3,7 @@ import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
+import { contextHome, exactContextHome } from "../paths.js";
 
 export interface ContextStatement<ReturnType = any, ParamsType extends unknown[] = unknown[]> {
   all(...params: ParamsType): ReturnType[];
@@ -89,21 +90,16 @@ function getHomeDir(): string {
 }
 
 export function getDataDir(): string {
-  const override = process.env["HASNA_CONTEXT_DATA_DIR"] ?? process.env["CONTEXT_DATA_DIR"];
-  if (override) {
-    mkdirSync(override, { recursive: true });
-    return override;
+  const exact = exactContextHome();
+  if (exact) {
+    mkdirSync(exact, { recursive: true });
+    return exact;
   }
 
-  const newDir = getDefaultDataDir();
+  const newDir = contextHome();
   migrateLegacyDataDir(newDir);
   mkdirSync(newDir, { recursive: true });
   return newDir;
-}
-
-/** Canonical data root: ~/.hasna/context */
-function getDefaultDataDir(): string {
-  return join(getHomeDir(), ".hasna", "context");
 }
 
 function getLegacyDataDirs(): string[] {
@@ -118,12 +114,12 @@ function getLegacyDataDirs(): string[] {
 }
 
 /**
- * One-time migration of context data from a legacy store into the canonical
- * root (~/.hasna/context). Copies only context-owned files (context.db and
- * its WAL sidecars) — never the whole legacy directory, which may hold another
- * app's data. The copy is verified, a receipt is recorded, legacy files are
- * never deleted, and existing canonical data is never overwritten. Idempotent
- * and resumable.
+ * One-time migration of context data from a legacy store into the effective
+ * context home (legacy `~/.hasna/context` until the @hasna/paths (XDG) home is
+ * adopted). Copies only context-owned files (context.db and its WAL sidecars) —
+ * never the whole legacy directory, which may hold another app's data. The copy
+ * is verified, a receipt is recorded, legacy files are never deleted, and
+ * existing canonical data is never overwritten. Idempotent and resumable.
  */
 function migrateLegacyDataDir(newDir: string): void {
   if (existsSync(join(newDir, DEFAULT_DB_FILENAME))) return;
@@ -190,12 +186,17 @@ function resolveDbPath(): string {
 
   // Walk up from cwd looking for a repo-local context store first, then
   // legacy local stores. Home-level legacy stores are excluded so that they
-  // are migrated into the canonical root instead of being selected forever.
+  // are migrated into the effective root instead of being selected forever;
+  // at the home level the canonical store resolves through the effective
+  // context home (@hasna/paths once adopted, legacy ~/.hasna/context until
+  // then).
   const home = getHomeDir();
   let dir = process.cwd();
   for (let i = 0; i < 10; i++) {
     const candidates = [
-      join(dir, ".hasna", "context", DEFAULT_DB_FILENAME),
+      ...(dir === home
+        ? [join(contextHome(), DEFAULT_DB_FILENAME)]
+        : [join(dir, ".hasna", "context", DEFAULT_DB_FILENAME)]),
       ...(dir === home ? [] : [join(dir, ".hasna", "apps", "knowledge", DEFAULT_DB_FILENAME)]),
       ...(dir === home ? [] : [join(dir, ".context", LEGACY_DB_FILENAME)]),
     ];
@@ -207,9 +208,8 @@ function resolveDbPath(): string {
     dir = parent;
   }
 
-  // Default: ~/.hasna/context/context.db
-  const override = process.env["HASNA_CONTEXT_DATA_DIR"] ?? process.env["CONTEXT_DATA_DIR"];
-  return join(override ?? getDefaultDataDir(), DEFAULT_DB_FILENAME);
+  // Default: <effective home>/context.db
+  return join(contextHome(), DEFAULT_DB_FILENAME);
 }
 
 export function getDatabase(): Database {
@@ -218,7 +218,7 @@ export function getDatabase(): Database {
   const path = resolveDbPath();
 
   if (path !== ":memory:") {
-    if (path === join(getDefaultDataDir(), DEFAULT_DB_FILENAME)) {
+    if (path === join(contextHome(), DEFAULT_DB_FILENAME)) {
       getDataDir();
     }
     mkdirSync(dirname(path), { recursive: true });

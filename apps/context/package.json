@@ -1,6 +1,6 @@
 {
   "name": "@hasna/context",
-  "version": "0.1.53",
+  "version": "0.1.54",
   "description": "Self-hosted documentation context server for AI coding agents — refresh, index, and query source docs via MCP + CLI + HTTP",
   "type": "module",
   "main": "dist/index.js",
@@ -70,6 +70,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/events": "0.1.6",
+    "@hasna/paths": "0.1.0",
     "@ai-sdk/anthropic": "3.0.111",
     "@ai-sdk/cohere": "3.0.55",
     "@ai-sdk/deepseek": "2.0.56",
