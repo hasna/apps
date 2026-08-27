@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { registerEventsCommands } from "@hasna/events/commander";
+import { MCPS_DIR } from "../lib/config.js";
 import { Command } from "commander";
 import React from "react";
 import { render } from "ink";
@@ -1995,7 +1996,7 @@ fleetCmd
 program
   .command("export")
   .description("Export all servers and sources to a JSON file")
-  .option("--file <path>", "Output file path", `${process.env.HOME ?? "~"}/.hasna/mcps/export.json`)
+  .option("--file <path>", "Output file path", `${MCPS_DIR}/export.json`)
   .option("--stdout", "Write to stdout instead of a file")
   .action((opts) => {
     const servers = listServers().map(redactServerCredentials);
