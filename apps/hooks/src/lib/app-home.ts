@@ -98,3 +98,23 @@ export function getEffectiveDataRoot(env: NodeJS.ProcessEnv = process.env): stri
   const resolved = getResolverDataRoot(env);
   return adoptResolverDataRoot(resolved, env) ? resolve(resolved) : getLegacyDataRoot(env);
 }
+
+/**
+ * The SQLite store path surfaced by help/status surfaces (e.g. `hooks log`,
+ * registry hook descriptions). The explicit `HASNA_HOOKS_DB_PATH` /
+ * `HOOKS_DB_PATH` override wins; otherwise `hooks.db` under the effective data
+ * root. A status surface must never hardcode the legacy literal — the store can
+ * live at the resolver home once adopted.
+ */
+export function getReportedDbPath(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = getExplicitDbPath(env);
+  if (explicit) return explicit;
+  return join(getEffectiveDataRoot(env), "hooks.db");
+}
+
+/** The explicit DB-path override, when set: `HASNA_HOOKS_DB_PATH`, then `HOOKS_DB_PATH`. */
+function getExplicitDbPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const db = env.HASNA_HOOKS_DB_PATH ?? env.HOOKS_DB_PATH;
+  if (typeof db === "string" && db.trim().length > 0) return db.trim();
+  return undefined;
+}
