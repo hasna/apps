@@ -209,8 +209,14 @@ mementos storage migrate --connection-string \
 ```
 
 The explicit `--connection-string` path is the migration command's
-administrative override; ordinary clients must never receive a DSN. Avoid
-putting a real credential in shell history or logs. The `migrate-pg` command is
+administrative override; ordinary clients must never receive a DSN. The
+migrate command is an operator verb: when no `--connection-string` is given it
+also accepts the env-configured DSN (`HASNA_MEMENTOS_DATABASE_URL`, or the
+storage config file) — the form the ECS one-shot migrate task runs during
+deploys, where the DSN arrives from Secrets Manager exactly as it does for the
+serve task. Every client DATA path (CLI/MCP/SDK reads and writes) still fails
+closed on a DSN outside the serve process. Avoid putting a real credential in
+shell history or logs. The `migrate-pg` command is
 the legacy top-level equivalent. MCP exposes only safe migration dry-run
 diagnostics through `mementos_storage_migrate_dry_run`; `migrate_pg` can perform
 a live run and must be treated as a privileged mutation.

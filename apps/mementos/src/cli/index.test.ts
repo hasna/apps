@@ -220,11 +220,37 @@ describe("CLI", () => {
     };
     expect(parsed.ok).toBe(false);
     expect(parsed.no_network).toBe(true);
-    // The CLI runs as a client, where the server-side DSN gate refuses to
-    // construct an RDS Postgres connection string. Diagnostics must still fail
-    // closed and surface that reason (never contact the network).
+    // `storage migrate` is an operator verb (docs/CUTOVER-RUNBOOK.md §3): with
+    // no DSN configured anywhere, diagnostics fail closed with "not configured"
+    // and never contact the network.
     expect(parsed.issues.length).toBeGreaterThan(0);
-    expect(parsed.issues.join("\n")).toContain("mementos-serve");
+    expect(parsed.issues.join("\n")).toContain("not configured");
+  });
+
+  test("storage migrate --dry-run --json resolves the env-configured DSN outside serve context (deploy one-shot gate)", async () => {
+    // O15-02695: the deploy lane runs `mementos storage migrate` in an ECS
+    // one-shot task that holds the DSN via Secrets Manager (sibling of the
+    // serve task, same cluster). The client guard in getStorageConnectionString
+    // refused the env DSN outside the serve process, so the migrate gate failed
+    // closed and every mementos deploy stopped at the migration step.
+    const { stdout, exitCode } = await runCliWithEnv(
+      { HASNA_MEMENTOS_DATABASE_URL: "postgres://user:secret@db.internal/mementos?sslmode=require" },
+      "storage", "migrate", "--dry-run", "--json"
+    );
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout) as {
+      ok: boolean;
+      configured: boolean;
+      redacted_connection_string: string;
+      issues: string[];
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.configured).toBe(true);
+    expect(parsed.redacted_connection_string).toBe(
+      "postgres://user:***@db.internal/mementos?sslmode=require"
+    );
+    expect(parsed.issues.length).toBe(0);
+    expect(stdout).not.toContain(":secret");
   });
 
   test("storage migrate --dry-run --json redacts connection strings", async () => {

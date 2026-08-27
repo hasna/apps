@@ -223,6 +223,7 @@ export {
   getStorageDatabaseEnvName,
   getStorageDatabaseUrl,
   getStorageConnectionString,
+  getStorageConnectionStringForOperator,
   listSqliteTables,
   type DbAdapter,
   type StorageConfig,

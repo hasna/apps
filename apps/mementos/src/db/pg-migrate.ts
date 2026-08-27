@@ -6,7 +6,7 @@
  */
 import {
   PgAdapterAsync,
-  getStorageConnectionString,
+  getStorageConnectionStringForOperator,
   redactDatabaseUrl,
   validatePostgresConnectionString,
 } from "../storage.js";
@@ -40,7 +40,11 @@ export function getPgMigrationDiagnostics(
 
   if (!resolvedConnectionString) {
     try {
-      resolvedConnectionString = getStorageConnectionString("mementos");
+      // The migrate module is the operator surface: the explicitly-invoked
+      // `storage migrate` command (and its MCP/CLI siblings) resolves the
+      // env/config DSN without the client-context guard. Every client DATA
+      // path still fails closed in getStorageConnectionString (O15-02695).
+      resolvedConnectionString = getStorageConnectionStringForOperator("mementos");
     } catch (error) {
       issues.push(error instanceof Error ? error.message : String(error));
     }
