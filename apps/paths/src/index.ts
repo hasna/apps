@@ -81,6 +81,21 @@ function assertApp(app: string): void {
   }
 }
 
+/**
+ * Fail closed on an unknown path kind. The `PathKind` union only protects
+ * TypeScript callers; a JS caller or runtime misconfiguration can pass any
+ * string, and before this guard `baseDir` silently returned `undefined` for
+ * an unknown kind while `resolvePath` threw a cryptic `Path must be a
+ * string` from `node:path`. Both now fail loudly, naming the bad kind.
+ */
+function assertKind(kind: PathKind): void {
+  if (!(PATH_KINDS as readonly string[]).includes(kind)) {
+    throw new TypeError(
+      `paths: invalid path kind "${kind}" — expected one of ${PATH_KINDS.join(", ")}`,
+    );
+  }
+}
+
 function envOf(options: PathsOptions): Record<string, string | undefined> {
   return options.env ?? process.env;
 }
@@ -100,6 +115,7 @@ function isMacOS(platform: NodeJS.Platform): boolean {
  * appended. Env overrides win on every platform.
  */
 export function baseDir(kind: PathKind, options: PathsOptions): string {
+  assertKind(kind);
   const override = envValue(options, kind);
   if (override) return override;
 
@@ -132,6 +148,7 @@ export function baseDir(kind: PathKind, options: PathsOptions): string {
 
 /** Resolve the directory for one path kind for an app. */
 export function resolvePath(kind: PathKind, options: PathsOptions): string {
+  assertKind(kind);
   assertApp(options.app);
   const appSegment = options.internal === true ? join("internal", options.app) : options.app;
   return join(baseDir(kind, options), appSegment);
