@@ -307,10 +307,17 @@ Programmatic storage helpers are available from `@hasna/context/storage`.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/context/`. Data left at the previous default
-(`~/.hasna/apps/knowledge/`) or the oldest legacy store (`~/.context/`) is
-copied forward once on first database open (context-owned files only, verified,
-never deleted). Override with `CONTEXT_DATA_DIR` or `HASNA_CONTEXT_DATA_DIR`.
+The data home is resolved through the `@hasna/paths` resolver (XDG/macOS home
+layout). The legacy `~/.hasna/context/` stays the effective data home until the
+store has been migrated to the resolver data home (`~/.local/share/hasna/context/`
+on Linux) or the operator sets the data-kind override `HASNA_DATA_HOME` — an
+existing local store never becomes invisible on upgrade. The exact-app overrides
+`CONTEXT_DATA_DIR` / `HASNA_CONTEXT_DATA_DIR` name an explicit data home and
+always win; the store-path overrides `CONTEXT_DB_PATH` / `HASNA_CONTEXT_DB_PATH`
+name an explicit database file. Data left at the previous default
+(`~/.hasna/apps/knowledge/`) or the oldest legacy store (`~/.context/`) is copied
+forward once on first database open (context-owned files only, verified, never
+deleted).
 
 ## License
 
