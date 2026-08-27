@@ -8,12 +8,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { resolveCredential } from "@hasna/contracts/client";
 import { join } from "path";
-import { homedir } from "os";
+import { getEffectiveDataRoot } from "./lib/app-home.js";
 
 export function getHooksDataDir(): string {
-  const explicit = process.env.HASNA_HOOKS_DATA_DIR ?? process.env.HOOKS_DATA_DIR;
-  if (explicit) return explicit;
-  return join(homedir(), ".hasna", "hooks");
+  return getEffectiveDataRoot();
 }
 
 export function getCustomHooksDir(): string {

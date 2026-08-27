@@ -1,5 +1,7 @@
 /**
- * SQLite DB module for hooks — persistent storage at ~/.hasna/hooks/hooks.db
+ * SQLite DB module for hooks — persistent storage at the effective data
+ * root resolved through @hasna/paths (legacy ~/.hasna/hooks until adopted,
+ * then the XDG data home) at hooks.db.
  *
  * Uses bun:sqlite with WAL mode for concurrent reads.
  * Supports HASNA_HOOKS_DATA_DIR / HOOKS_DATA_DIR and HASNA_HOOKS_DB_PATH / HOOKS_DB_PATH env overrides.
@@ -8,7 +10,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, cpSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { getEffectiveDataRoot, getHomeDir } from "../lib/app-home.js";
 import { runMigrations } from "./migrations";
 import { runLegacyImport } from "./legacy-import";
 import { runRetention } from "./retention";
@@ -16,19 +18,16 @@ import { runRetention } from "./retention";
 let instance: Database | null = null;
 
 function resolveDataDir(): string {
-  const explicit = process.env.HASNA_HOOKS_DATA_DIR ?? process.env.HOOKS_DATA_DIR;
-  if (explicit) return explicit;
+  const effective = getEffectiveDataRoot();
+  const oldDir = join(getHomeDir(), ".hooks");
 
-  const newDir = join(homedir(), ".hasna", "hooks");
-  const oldDir = join(homedir(), ".hooks");
-
-  // Auto-migrate: copy old data to new location if needed
-  if (!existsSync(newDir) && existsSync(oldDir)) {
-    mkdirSync(join(homedir(), ".hasna"), { recursive: true });
-    cpSync(oldDir, newDir, { recursive: true });
+  // Auto-migrate: copy old data to the effective root if needed
+  if (!existsSync(effective) && existsSync(oldDir)) {
+    mkdirSync(effective, { recursive: true });
+    cpSync(oldDir, effective, { recursive: true });
   }
 
-  return newDir;
+  return effective;
 }
 
 export function getDbPath(): string {
