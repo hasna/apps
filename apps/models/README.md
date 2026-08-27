@@ -69,7 +69,11 @@ without downloading.
 
 ## Local data
 
-Local state defaults to `~/.hasna/models/`:
+Local state lives at the effective models data home — `~/.hasna/models/` by
+default, resolved through `@hasna/paths` to the XDG data home
+(`~/.local/share/hasna/models`, or the macOS `~/Library/Application
+Support/Hasna/models`) once the store has been migrated there or `HASNA_DATA_HOME`
+is set:
 
 - `models.db` stores catalog entries, remote file metadata, installs, and model
   capabilities.

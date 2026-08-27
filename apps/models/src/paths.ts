@@ -1,9 +1,7 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getModelsHome } from "./app-home.js";
 
-export function getModelsHome(): string {
-  return process.env["HASNA_MODELS_HOME"] || join(homedir(), ".hasna", "models");
-}
+export { getModelsHome };
 
 export function getDbPath(): string {
   return process.env["HASNA_MODELS_DB"] || join(getModelsHome(), "models.db");

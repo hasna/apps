@@ -1,6 +1,6 @@
 {
   "name": "@hasna/models",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "CLI-first local model and dataset lifecycle tool for open-source/open-weight catalogs",
   "type": "module",
   "license": "Apache-2.0",
@@ -63,6 +63,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "chalk": "^5.6.2",
     "commander": "^13.1.0"
   },

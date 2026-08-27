@@ -7,7 +7,7 @@ Status: in progress in this repo.
 - Publishable Bun/TypeScript package.
 - `models` CLI with JSON contracts.
 - Hugging Face auth discovery through env, local config, and `secrets`.
-- SQLite catalog under `~/.hasna/models/models.db`.
+- SQLite catalog under the models data home (`~/.hasna/models/models.db` by default, resolved via `@hasna/paths` to the XDG data home once adopted).
 - Search, info, files, best-model indexing, and selected-file installs.
 - Tiny model download smoke tests.
 
