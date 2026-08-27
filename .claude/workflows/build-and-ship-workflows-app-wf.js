@@ -40,7 +40,7 @@ RECORD WHILE WORKING (required, every workflow agent):
 (4) knowledge: on durable doctrine, file a follow-up task 'KNOWLEDGE: <item>' for the knowledge lane (never silent add).
 (5) skills: on a repeated procedure, file 'SKILL: <name>' follow-up.
 (6) instructions: only when the workflow itself changes rules (then file 'INSTRUCTIONS: <config>').
-Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done.
+Cloud env (fleet-env primary; legacy ~/.hasna/cloud removed 2026-10-01): for f in todos conversations mementos knowledge; do if [ -f "$HOME/.hasna/fleet-env/$f.env" ]; then set -a; . "$HOME/.hasna/fleet-env/$f.env"; set +a; elif [ -f "$HOME/.hasna/cloud/$f.env" ]; then set -a; . "$HOME/.hasna/cloud/$f.env"; set +a; fi; done.
 NEVER print a credential value.
 `
 
@@ -53,7 +53,7 @@ Non-negotiable rules (all agents):
 - Gates before every commit/push: staged secrets scan rc=0 with real bytes; bun tooling/ci/check-secrets.ts --base origin/main rc=0; check-names rc=0.
 ${RECORDING}
 - English. Distinguish measured vs inferred; state what you did not check.
-- NEVER run bash -x / set -x (trace mode) — the shell profile sources ~/.hasna/cloud/*.env and trace echoes credential lines into the transcript.
+- NEVER run bash -x / set -x (trace mode) — the shell profile sources the fleet env files (~/.hasna/fleet-env/*.env; legacy ~/.hasna/cloud/*.env until 2026-10-01) and trace echoes credential lines into the transcript.
 - The while loop IS in v1 (owner amendment 2026-08-25): the graph language supports a while node; this workflow's own loops iterate with declared bounds and exit only on a verified green state.
 - MAX 4 SUB-AGENTS PER STEP (owner 2026-08-25): no phase spawns more than 4 agents; a phase that needs more splits into sub-steps. Current phases use 1-2; never raise the cap.
 - SOL VERDICT (gpt-5.6-sol advisory, 2026-08-25, binding on this workflow's shape): every invocation carries finite wall/agent-call/token/work-item/retry/concurrency budgets (this workflow's loops are bounded: build <=20 cycles, validation <=12, each cycle <=2 agents); EVERY phase returns a terminal receipt (status + evidence — the schemas below enforce it); every census/sweep reads COMPLETE paginated state, never a truncated read (a bounded read is a failure, not a pass); 'no monitors' does not mean 'no observation' — the run record is the observation surface.

@@ -137,6 +137,7 @@ describe("snapshots CLI max-age gate", () => {
 
     const dbPath = join(mkdtempSync(join(tmpdir(), "snapshots-cli-fresh-")), "snapshots.sqlite");
     const store = new SnapshotStore({ path: dbPath });
+    const freshIso = new Date().toISOString(); // a genuinely fresh snapshot; a hardcoded date ages past the 72h max-age window
     try {
       store.saveSnapshot(
         [{
@@ -145,9 +146,9 @@ describe("snapshots CLI max-age gate", () => {
           name: "fresh",
           source: "projects",
           attributes: { path: join(tmpdir(), "fresh-project") },
-          observedAt: "2026-08-24T00:00:00.000Z"
+          observedAt: freshIso
         }],
-        { id: "snap_fresh", createdAt: "2026-08-24T00:00:00.000Z" }
+        { id: "snap_fresh", createdAt: freshIso }
       );
     } finally {
       store.close();

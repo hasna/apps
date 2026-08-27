@@ -105,7 +105,7 @@ const RECORD = `Record while working (RECORDING V2, owner requirement):
 (4) knowledge: on durable doctrine, file a follow-up task 'KNOWLEDGE: <item>' for the knowledge lane (never silent add);
 (5) skills: on a repeated procedure, file 'SKILL: <name>' follow-up;
 (6) instructions: only when the workflow itself changes rules (then file 'INSTRUCTIONS: <config>').
-Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done. NEVER print a credential value.`
+Cloud env (fleet-env primary; legacy ~/.hasna/cloud removed 2026-10-01): for f in todos conversations mementos knowledge; do if [ -f "$HOME/.hasna/fleet-env/$f.env" ]; then set -a; . "$HOME/.hasna/fleet-env/$f.env"; set +a; elif [ -f "$HOME/.hasna/cloud/$f.env" ]; then set -a; . "$HOME/.hasna/cloud/$f.env"; set +a; fi; done. NEVER print a credential value.`
 
 const withRecord = (body) => RECORD + '\n\n' + body
 

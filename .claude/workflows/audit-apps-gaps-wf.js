@@ -68,7 +68,7 @@ RECORD WHILE WORKING (Recording V2 — mandatory for every agent of this workflo
 (4) knowledge: on durable doctrine, file a follow-up task 'KNOWLEDGE: <item>' for the knowledge lane (never a silent add).
 (5) skills: on a repeated procedure, file a 'SKILL: <name>' follow-up.
 (6) instructions: only when the workflow itself changes rules (then file 'INSTRUCTIONS: <config>').
-Cloud env: for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done
+Cloud env (fleet-env primary; legacy ~/.hasna/cloud removed 2026-10-01): for f in todos conversations mementos knowledge; do if [ -f "$HOME/.hasna/fleet-env/$f.env" ]; then set -a; . "$HOME/.hasna/fleet-env/$f.env"; set +a; elif [ -f "$HOME/.hasna/cloud/$f.env" ]; then set -a; . "$HOME/.hasna/cloud/$f.env"; set +a; fi; done
 NEVER print a credential value.`;
 
 const AT = ['Bash', 'Read', 'Grep'];

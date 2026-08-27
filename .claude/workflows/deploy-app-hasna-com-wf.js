@@ -77,7 +77,7 @@ const RECORD = [
   '(4) knowledge: on durable doctrine file "KNOWLEDGE: <item>" follow-up (never a silent add).',
   '(5) skills: on a repeated procedure, file "SKILL: <name>" follow-up.',
   '(6) instructions: only when the workflow itself changes rules — file "INSTRUCTIONS: <config>".',
-  'Cloud env (load once, never print values): for f in todos conversations mementos knowledge; do [ -f "$HOME/.hasna/cloud/$f.env" ] && set -a && . "$HOME/.hasna/cloud/$f.env" && set +a; done',
+  'Cloud env (load once, never print values; fleet-env primary, legacy ~/.hasna/cloud removed 2026-10-01): for f in todos conversations mementos knowledge; do if [ -f "$HOME/.hasna/fleet-env/$f.env" ]; then set -a; . "$HOME/.hasna/fleet-env/$f.env"; set +a; elif [ -f "$HOME/.hasna/cloud/$f.env" ]; then set -a; . "$HOME/.hasna/cloud/$f.env"; set +a; fi; done',
   'NEVER print a credential value.',
 ].join('\n');
 const withRecord = (promptText) => promptText + '\n\n===== ' + RECORD + '\n=====';
