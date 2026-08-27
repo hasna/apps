@@ -1,6 +1,6 @@
 {
   "name": "@hasna/events",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Shared event envelopes, local channels, replay, and delivery transports for Hasna open-source apps",
   "type": "module",
   "main": "./dist/index.js",
@@ -113,6 +113,7 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "commander": "^13.1.0"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
+import { HASNA_EVENTS_DIR_ENV, HASNA_EVENTS_HOME_ENV } from "./app-home.js";
 import type { ChannelConfig, DeliveryResult, EventAppendOptions, EventAppendResult, EventEnvelope, EventPage, EventPageOptions, EventsStatus, EventsStoreRuntime, StoredEventsData } from "./types.js";
-export declare const HASNA_EVENTS_DIR_ENV = "HASNA_EVENTS_DIR";
-export declare const HASNA_EVENTS_HOME_ENV = "HASNA_EVENTS_HOME";
+export { HASNA_EVENTS_DIR_ENV, HASNA_EVENTS_HOME_ENV };
 export declare const LOCAL_JSON_EVENT_CURSOR_PREFIX = "local-json-v1:";
 export declare const DEFAULT_EVENT_PAGE_LIMIT = 100;
 export declare const MAX_EVENT_PAGE_LIMIT = 1000;

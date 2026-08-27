@@ -1,8 +1,8 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getEventsHome, HASNA_EVENTS_DIR_ENV, HASNA_EVENTS_HOME_ENV } from "./app-home.js";
 import type {
   ChannelConfig,
   DeliveryResult,
@@ -16,14 +16,13 @@ import type {
   StoredEventsData,
 } from "./types.js";
 
-export const HASNA_EVENTS_DIR_ENV = "HASNA_EVENTS_DIR";
-export const HASNA_EVENTS_HOME_ENV = "HASNA_EVENTS_HOME";
+export { HASNA_EVENTS_DIR_ENV, HASNA_EVENTS_HOME_ENV };
 export const LOCAL_JSON_EVENT_CURSOR_PREFIX = "local-json-v1:";
 export const DEFAULT_EVENT_PAGE_LIMIT = 100;
 export const MAX_EVENT_PAGE_LIMIT = 1000;
 
 export function getEventsDataDir(override?: string): string {
-  return override || process.env[HASNA_EVENTS_DIR_ENV] || process.env[HASNA_EVENTS_HOME_ENV] || join(homedir(), ".hasna", "events");
+  return override || getEventsHome();
 }
 
 export function getActiveEventsDirEnv(): EventsStatus["env"]["active"] {

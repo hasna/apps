@@ -99,16 +99,121 @@ function channelMatchesEvent(channel, event) {
 // src/storage.ts
 import { chmod, mkdir, readFile, rename, writeFile } from "fs/promises";
 import { Buffer as Buffer2 } from "buffer";
+import { existsSync as existsSync2 } from "fs";
+import { join as join3 } from "path";
+
+// src/app-home.ts
 import { existsSync } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join2, resolve } from "path";
+
+// ../../node_modules/.bun/@hasna+paths@0.1.0/node_modules/@hasna/paths/dist/index.js
 import { homedir } from "os";
 import { join } from "path";
+var KIND_ENV = {
+  config: "HASNA_CONFIG_HOME",
+  data: "HASNA_DATA_HOME",
+  state: "HASNA_STATE_HOME",
+  cache: "HASNA_CACHE_HOME"
+};
+var APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function assertApp(app) {
+  if (typeof app !== "string" || app.length === 0) {
+    throw new TypeError("paths: app must be a non-empty string");
+  }
+  if (!APP_SLUG_RE.test(app)) {
+    throw new TypeError(`paths: invalid app slug "${app}" \u2014 expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`);
+  }
+}
+function envOf(options) {
+  return options.env ?? process.env;
+}
+function envValue(options, kind) {
+  const value = envOf(options)[KIND_ENV[kind]];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function isMacOS(platform) {
+  return platform === "darwin";
+}
+function baseDir(kind, options) {
+  const override = envValue(options, kind);
+  if (override)
+    return override;
+  const home = options.home ?? homedir();
+  const platform = options.platform ?? process.platform;
+  if (isMacOS(platform)) {
+    switch (kind) {
+      case "config":
+      case "data":
+        return join(home, "Library", "Application Support", "Hasna");
+      case "cache":
+        return join(home, "Library", "Caches", "Hasna");
+      case "state":
+        return join(home, "Library", "Logs", "Hasna");
+    }
+  }
+  switch (kind) {
+    case "config":
+      return join(home, ".config", "hasna");
+    case "data":
+      return join(home, ".local", "share", "hasna");
+    case "state":
+      return join(home, ".local", "state", "hasna");
+    case "cache":
+      return join(home, ".cache", "hasna");
+  }
+}
+function resolvePath(kind, options) {
+  assertApp(options.app);
+  const appSegment = options.internal === true ? join("internal", options.app) : options.app;
+  return join(baseDir(kind, options), appSegment);
+}
+function dataDir(options) {
+  return resolvePath("data", options);
+}
+
+// src/app-home.ts
 var HASNA_EVENTS_DIR_ENV = "HASNA_EVENTS_DIR";
 var HASNA_EVENTS_HOME_ENV = "HASNA_EVENTS_HOME";
+var EVENTS_STORE_SENTINEL_FILE = "events.json";
+function effectiveHome() {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir2();
+}
+function legacyHomeDir() {
+  return join2(effectiveHome(), ".hasna", "events");
+}
+function resolverHome() {
+  return dataDir({ app: "events", home: effectiveHome() || undefined });
+}
+function adoptResolverHome(resolved, env = process.env) {
+  const dataOverride = env.HASNA_DATA_HOME;
+  if (typeof dataOverride === "string" && dataOverride.trim().length > 0)
+    return true;
+  return existsSync(join2(resolved, EVENTS_STORE_SENTINEL_FILE));
+}
+function exactEventsHome() {
+  const dir = process.env[HASNA_EVENTS_DIR_ENV];
+  if (dir && dir.trim())
+    return dir.trim();
+  const home = process.env[HASNA_EVENTS_HOME_ENV];
+  if (home && home.trim())
+    return home.trim();
+  return;
+}
+function getEventsHome() {
+  const exact = exactEventsHome();
+  if (exact)
+    return resolve(exact);
+  const resolved = resolverHome();
+  return adoptResolverHome(resolved) ? resolve(resolved) : resolve(legacyHomeDir());
+}
+
+// src/storage.ts
 var LOCAL_JSON_EVENT_CURSOR_PREFIX = "local-json-v1:";
 var DEFAULT_EVENT_PAGE_LIMIT = 100;
 var MAX_EVENT_PAGE_LIMIT = 1000;
 function getEventsDataDir(override) {
-  return override || process.env[HASNA_EVENTS_DIR_ENV] || process.env[HASNA_EVENTS_HOME_ENV] || join(homedir(), ".hasna", "events");
+  return override || getEventsHome();
 }
 function getActiveEventsDirEnv() {
   if (process.env[HASNA_EVENTS_DIR_ENV])
@@ -124,12 +229,12 @@ class JsonEventsStore {
   channelsPath;
   eventsPath;
   deliveriesPath;
-  constructor(dataDir = getEventsDataDir()) {
-    this.dataDir = dataDir;
-    this.runtime = localJsonRuntime(dataDir);
-    this.channelsPath = join(dataDir, "channels.json");
-    this.eventsPath = join(dataDir, "events.json");
-    this.deliveriesPath = join(dataDir, "deliveries.json");
+  constructor(dataDir2 = getEventsDataDir()) {
+    this.dataDir = dataDir2;
+    this.runtime = localJsonRuntime(dataDir2);
+    this.channelsPath = join3(dataDir2, "channels.json");
+    this.eventsPath = join3(dataDir2, "events.json");
+    this.deliveriesPath = join3(dataDir2, "deliveries.json");
   }
   async init() {
     await mkdir(this.dataDir, { recursive: true, mode: 448 });
@@ -246,7 +351,7 @@ class JsonEventsStore {
     };
   }
   async ensureArrayFile(path) {
-    if (!existsSync(path)) {
+    if (!existsSync2(path)) {
       await writeFile(path, `[]
 `, { encoding: "utf-8", mode: 384 });
     }
@@ -276,7 +381,7 @@ class JsonEventsStore {
     });
   }
 }
-function localJsonRuntime(dataDir = getEventsDataDir()) {
+function localJsonRuntime(dataDir2 = getEventsDataDir()) {
   return {
     mode: "local-files",
     name: "json-events-store",
@@ -289,7 +394,7 @@ function localJsonRuntime(dataDir = getEventsDataDir()) {
     durable: true,
     idempotency: "best-effort-local",
     replayCursors: true,
-    description: `Local JSON files in ${dataDir}; no SQLite, Postgres, S3, or AWS runtime is configured by this store.`
+    description: `Local JSON files in ${dataDir2}; no SQLite, Postgres, S3, or AWS runtime is configured by this store.`
   };
 }
 function encodeLocalJsonEventCursor(offset, options = {}) {
@@ -353,8 +458,8 @@ function assertCursorFilter(name, cursorValue, optionValue) {
 function findEventByIdentity(events, identity) {
   return events.find((event) => identity.id !== undefined && event.id === identity.id || identity.dedupeKey !== undefined && event.dedupeKey === identity.dedupeKey);
 }
-async function getEventsStatus(dataDir) {
-  const store = new JsonEventsStore(dataDir);
+async function getEventsStatus(dataDir2) {
+  const store = new JsonEventsStore(dataDir2);
   await store.init();
   const [channels, events, deliveries] = await Promise.all([
     store.listChannels(),
@@ -396,9 +501,9 @@ async function getEventsStatus(dataDir) {
     }
   };
 }
-function statusFile(dataDir, fileName, records) {
-  const path = join(dataDir, fileName);
-  return { path, exists: existsSync(path), records };
+function statusFile(dataDir2, fileName, records) {
+  const path = join3(dataDir2, fileName);
+  return { path, exists: existsSync2(path), records };
 }
 
 // src/signing.ts
@@ -776,7 +881,7 @@ async function pinnedNativeRequest(target, addresses, method, headers, body, sig
       callback(null, entries);
     }
   };
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     const request = isHttps ? nodeHttpsRequest(requestOptions, onResponse) : nodeHttpRequest(requestOptions, onResponse);
     const onAbort = () => {
       const error = new Error("The operation was aborted.");
@@ -803,7 +908,7 @@ async function pinnedNativeRequest(target, addresses, method, headers, body, sig
           else if (Array.isArray(value))
             headersRecord[name] = value.join(", ");
         }
-        resolve(new Response(Buffer.concat(chunks), { status: response.statusCode ?? 200, headers: headersRecord }));
+        resolve2(new Response(Buffer.concat(chunks), { status: response.statusCode ?? 200, headers: headersRecord }));
       });
     }
   });
@@ -900,7 +1005,7 @@ async function dispatchCommand(event, channel) {
     HASNA_EVENT_SCHEMA_VERSION: event.schemaVersion,
     HASNA_EVENT_JSON: eventJson
   };
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     const child = spawn(channel.command.command, channel.command.args ?? [], {
       cwd: channel.command.cwd,
       env,
@@ -918,7 +1023,7 @@ async function dispatchCommand(event, channel) {
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
-      resolve({
+      resolve2({
         attempt: 1,
         status: "failed",
         startedAt,
@@ -931,7 +1036,7 @@ async function dispatchCommand(event, channel) {
     child.on("close", (code, signal) => {
       clearTimeout(timeout);
       const success = code === 0;
-      resolve({
+      resolve2({
         attempt: 1,
         status: success ? "success" : "failed",
         startedAt,
@@ -1809,7 +1914,7 @@ import { createHash, randomUUID as randomUUID3 } from "crypto";
 import {
   chmodSync,
   closeSync,
-  existsSync as existsSync2,
+  existsSync as existsSync3,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -1819,7 +1924,7 @@ import {
   unlinkSync,
   writeFileSync
 } from "fs";
-import { basename, join as join2 } from "path";
+import { basename, join as join4 } from "path";
 var DURABLE_SCHEMA_VERSION = 1;
 var MAX_RETRY_ATTEMPTS = 1000;
 var MAX_RETRY_DELAY_MS = 365 * 24 * 60 * 60 * 1000;
@@ -1962,7 +2067,7 @@ class DurableEventsBroker {
     if (!options.dataDir)
       throw new Error("DurableEventsBroker requires dataDir");
     this.dataDir = options.dataDir;
-    this.databasePath = join2(options.dataDir, options.databaseName ?? "events.sqlite");
+    this.databasePath = join4(options.dataDir, options.databaseName ?? "events.sqlite");
     this.now = options.now ?? (() => new Date);
     this.transportOptions = {
       fetchImpl: options.fetchImpl,
@@ -2106,14 +2211,14 @@ class DurableEventsBroker {
     return summary;
   }
   importSpool(options = {}) {
-    const inboxDir = join2(this.dataDir, "spool", "inbox");
-    if (!existsSync2(inboxDir))
+    const inboxDir = join4(this.dataDir, "spool", "inbox");
+    if (!existsSync3(inboxDir))
       return { scanned: 0, imported: 0, deduped: 0, queued: 0, quarantined: 0 };
     const limit = normalizePositiveInteger(options.limit, 100, "limit");
     const names = readdirSync(inboxDir).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).sort().slice(0, limit);
     const result = { scanned: names.length, imported: 0, deduped: 0, queued: 0, quarantined: 0 };
     for (const name of names) {
-      const path = join2(inboxDir, name);
+      const path = join4(inboxDir, name);
       let event;
       try {
         event = parseSpoolEnvelope(readFileSync(path, "utf8"));
@@ -2453,7 +2558,7 @@ class DurableEventsBroker {
   }
   secureDatabaseFiles() {
     for (const path of [this.databasePath, `${this.databasePath}-wal`, `${this.databasePath}-shm`]) {
-      if (!existsSync2(path))
+      if (!existsSync3(path))
         continue;
       chmodSync(path, 384);
     }
@@ -2584,23 +2689,23 @@ function syncDirectory(path) {
     closeSync(descriptor);
   }
 }
-function quarantineSpoolRecord(dataDir, path, reason) {
-  const spoolDir = join2(dataDir, "spool");
-  const quarantineDir = join2(spoolDir, "quarantine");
+function quarantineSpoolRecord(dataDir2, path, reason) {
+  const spoolDir = join4(dataDir2, "spool");
+  const quarantineDir = join4(spoolDir, "quarantine");
   mkdirSync(quarantineDir, { recursive: true, mode: 448 });
   chmodSync(spoolDir, 448);
   chmodSync(quarantineDir, 448);
   const name = basename(path);
   const base = name.replace(/\.json$/, "");
   const suffix = `${Date.now()}-${randomUUID3().slice(0, 8)}`;
-  const destination = join2(quarantineDir, `${base}.${suffix}.json`);
+  const destination = join4(quarantineDir, `${base}.${suffix}.json`);
   renameSync(path, destination);
   const metadata = {
     quarantinedAt: new Date().toISOString(),
     originalName: name,
     reason
   };
-  writeFileSync(join2(quarantineDir, `${base}.${suffix}.meta.json`), `${JSON.stringify(metadata, null, 2)}
+  writeFileSync(join4(quarantineDir, `${base}.${suffix}.meta.json`), `${JSON.stringify(metadata, null, 2)}
 `, { mode: 384 });
   syncDirectory(quarantineDir);
 }
