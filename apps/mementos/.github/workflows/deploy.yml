@@ -60,6 +60,10 @@ jobs:
       WEB_CONTAINER: mementos
       ECR_REPOSITORY: mementos
       ECR_URL: "${{ secrets.MEMENTOS_PROD_AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/mementos"
+      # Host/Origin allowlist for state-changing requests. Must name the
+      # deployment's own origin or the server refuses every write with 403
+      # "Host is not allowed" (see apps/mementos/docs/CONFIGURATION.md).
+      MEMENTOS_CORS_ORIGIN: "https://mementos.hasna.xyz"
 
     steps:
       - name: Checkout
