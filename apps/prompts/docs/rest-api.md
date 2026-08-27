@@ -12,8 +12,12 @@ Options:
 ```
 
 The default port is `19430`. Port precedence is `--port`, `PORT`,
-`PROMPTS_PORT`, then the default. The API sends JSON and
-`Access-Control-Allow-Origin: *`; `OPTIONS` supports GET, POST, PUT, and DELETE.
+`PROMPTS_PORT`, then the default. The API requires
+`Authorization: Bearer <PROMPTS_API_TOKEN>` on every `/api` route, including
+`OPTIONS` preflight; requests without the bearer get `401` (or `403` with a
+wrong token), and when no token is configured every `/api` request is refused
+with `503`. No CORS headers are emitted, so cross-origin browser requests are
+denied.
 
 ## Prompt Routes
 
@@ -62,6 +66,7 @@ The default port is `19430`. Port precedence is `--port`, `PORT`,
 | Any MCP method at `/mcp` | Stateless Streamable HTTP MCP response. |
 
 Errors are JSON objects with an `error` string. Missing resources generally
-return `404`, invalid required fields return `400`, and uncaught failures return
-`500`. The server does not implement authentication; it is intended for a
-trusted local or separately protected environment.
+return `404`, invalid required fields return `400`, uncaught failures return
+`500`, and unauthenticated or unconfigured API requests return `401`, `403`,
+or `503`. The server implements bearer authentication for the API (above);
+`GET /health` and the Streamable HTTP MCP endpoint at `/mcp` stay unauthenticated.

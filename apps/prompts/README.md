@@ -142,8 +142,12 @@ PORT=9000 prompts-serve
 ```
 
 `PORT` takes precedence over `PROMPTS_PORT`; `--port` takes precedence over
-both. The server permits cross-origin requests, exposes JSON routes below
-`/api`, returns `GET /health`, and mounts Streamable HTTP MCP at `/mcp`.
+both. Every `/api` route requires `Authorization: Bearer <PROMPTS_API_TOKEN>`
+and fails closed when no token is configured. The server does not emit CORS
+headers, so cross-origin browser clients are denied; same-origin clients (via
+a proxy or the dashboard with `VITE_API_TOKEN` set) work. It exposes JSON
+routes below `/api`, returns `GET /health`, and mounts Streamable HTTP MCP at
+`/mcp`.
 
 List and search endpoints return slim prompt records by default. Add the
 `full` query parameter when a supported endpoint should include prompt bodies.
@@ -153,9 +157,10 @@ See the [REST API reference](docs/rest-api.md) for routes and request shapes.
 ## Dashboard
 
 The React dashboard in `dashboard/` connects to the REST API at
-`http://localhost:19430` by default. For development, start `prompts-serve`,
-then run `bun install` and `bun run dev` from `dashboard/`. Set `VITE_API_URL`
-when the REST server uses another origin.
+`http://localhost:19430` by default. For development, start `prompts-serve`
+with `PROMPTS_API_TOKEN` set, then set the same token as `VITE_API_TOKEN` in
+the dashboard environment and run `bun install` and `bun run dev` from
+`dashboard/`. Set `VITE_API_URL` when the REST server uses another origin.
 
 The dashboard supports browsing, searching, creating, editing, deleting,
 rendering, copying, collections, projects, templates, statistics, themes, and

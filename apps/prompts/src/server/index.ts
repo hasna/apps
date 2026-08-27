@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { timingSafeEqual } from "node:crypto"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, promptToSaveResult } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
@@ -44,7 +45,7 @@ const PORT = parsePortArg(ARGS) ?? Number(process.env["PORT"] ?? process.env["PR
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+    headers: { "Content-Type": "application/json" },
   })
 }
 
@@ -64,6 +65,42 @@ async function parseBody<T>(req: Request): Promise<T> {
   return req.json() as Promise<T>
 }
 
+/** Configured API bearer token; both names are accepted, short name wins. */
+function getApiToken(): string | null {
+  const token = process.env["PROMPTS_API_TOKEN"] ?? process.env["HASNA_PROMPTS_API_TOKEN"]
+  return token?.trim() ? token.trim() : null
+}
+
+/** Constant-time string compare for bearer token equality (length mismatch still fails). */
+function safeEq(a: string | undefined, b: string): boolean {
+  if (typeof a !== "string") return false
+  const ba = Buffer.from(a, "utf8")
+  const bb = Buffer.from(b, "utf8")
+  if (ba.length !== bb.length) return false
+  return timingSafeEqual(ba, bb)
+}
+
+/**
+ * Security gate for the prompts API (finding code-prompts-1, P1): every /api/*
+ * route — including OPTIONS preflight — requires `Authorization: Bearer
+ * <token>`. Fails closed: when no token is configured the API refuses every
+ * request instead of serving unauthenticated. The wildcard CORS header is
+ * gone, so browsers cannot read or preflight these routes even from a page a
+ * user visited.
+ */
+function authenticateApiRequest(req: Request, path: string): Response | null {
+  if (!path.startsWith("/api/")) return null
+
+  const expected = getApiToken()
+  if (!expected) {
+    return json({ error: "API authentication is not configured: set PROMPTS_API_TOKEN before using the prompts API" }, 503)
+  }
+
+  const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (safeEq(bearer, expected)) return null
+  return json({ error: "Unauthorized" }, bearer ? 403 : 401)
+}
+
 export default {
   port: PORT,
   async fetch(req: Request): Promise<Response> {
@@ -71,16 +108,14 @@ export default {
     const path = url.pathname
     const method = req.method
 
-    // CORS preflight
+    // Security gate: bearer required on every /api/* route, incl. preflight.
+    const authError = authenticateApiRequest(req, path)
+    if (authError) return authError
+
+    // CORS preflight (authorized only; browsers cannot send Authorization on a
+    // preflight, so cross-origin browser clients are intentionally denied).
     if (method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-        },
-      })
+      return new Response(null, { status: 204 })
     }
 
     try {
