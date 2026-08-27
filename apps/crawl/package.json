@@ -86,6 +86,6 @@
   },
   "optionalDependencies": {
     "playwright": "^1.50.0",
-    "e2b": "^2.14.1"
+    "e2b": "2.40.0"
   }
 }
