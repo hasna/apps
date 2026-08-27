@@ -86,6 +86,21 @@ const CENSUS_SCHEMA = {
     counts: { type: 'object' },
     yielded: { type: 'boolean' },
     hotfixCount: { type: 'integer' },
+    // O15-04231 cycle-2 P1-3: verified receipt for RELEASE CONFIRM MISSING rows
+    // the census filed/reused this pass — {pkgName, gateV, taskId(minLength 1)}.
+    // Queued entries stay queued until their exact package@version receipt lands.
+    confirmFollowupFiling: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['pkgName', 'gateV', 'taskId'],
+        properties: {
+          pkgName: { type: 'string' },
+          gateV: { type: 'string' },
+          taskId: { type: 'string', minLength: 1 },
+        },
+      },
+    },
   },
   required: ['queue', 'current', 'counts'],
 }
@@ -160,12 +175,39 @@ const safeAgent = async (prompt, opts) => {
     return null
   }
 }
+// Fail-closed queue (O15-04231, review cycles 1-2 P1-3): RELEASE CONFIRM MISSING
+// rows a prior pass could NOT file (both confirm attempts AND both follow-up
+// attempts failed). The NEXT pass's census retries the filing BEFORE its
+// registry census — a durable retry row must exist; recording UNFILED and
+// moving on would recreate the original silent-drop state. Entries are retained
+// until the census returns a VERIFIED non-empty taskId receipt for the exact
+// package@version (confirmFollowupFiling); a census that fails, yields, or
+// returns no receipt leaves the entries queued for the following pass.
+let pendingConfirmFollowups = []
 const censusPrompt = (body) => {
+  let prefix = ''
+  if (pendingConfirmFollowups.length) {
+    prefix = "NOTE: a prior pass could NOT file RELEASE CONFIRM MISSING rows for: " + JSON.stringify(pendingConfirmFollowups) + ". RETRY filing those rows FIRST — dedupe (todos list --project 3bbc22e0 --status pending --json AND --status in_progress, redirect to a file, never pipe; reuse an existing row for the exact package@version, otherwise todos add with title 'RELEASE CONFIRM MISSING: <pkg>@<v> — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId + the two gate GO verdicts; no credential values anywhere), then run this census exactly as instructed. RETURN a confirmFollowupFiling receipt for every row you filed or reused: [{pkgName, gateV, taskId}] with taskId the VERIFIED non-empty row id (falsy taskIds are rejected — the row stays queued).\n\n"
+  }
   if (agentFailed) {
     agentFailed = false
-    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+    return prefix + "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
   }
-  return body
+  return prefix + body
+}
+// Receipt reconciliation: drop only the queued entries the census verified with
+// a non-empty taskId; everything else stays for the next pass.
+const reconcileConfirmFollowups = (census) => {
+  const receipts = (census && census.confirmFollowupFiling) || []
+  const verified = new Map()
+  for (const r of receipts) {
+    if (r && r.pkgName && r.gateV && r.taskId) verified.set(r.pkgName + '@' + r.gateV, r.taskId)
+  }
+  if (verified.size) {
+    const before = pendingConfirmFollowups.length
+    pendingConfirmFollowups = pendingConfirmFollowups.filter((q) => !verified.has(q.pkgName + '@' + q.gateV))
+    if (pendingConfirmFollowups.length !== before) log(`CONFIRM-FOLLOWUP-FILED: ${before - pendingConfirmFollowups.length} RELEASE CONFIRM MISSING receipt(s) verified — queue cleared; ${pendingConfirmFollowups.length} still pending`)
+  }
 }
 // --- /safeAgent ---
 
@@ -178,6 +220,10 @@ let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
 census = await safeAgent(censusPrompt(CENSUS), { label: 'census-publish-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
+// O15-04231 cycle-2 P1-3: drop queued CONFIRM MISSING entries ONLY on a
+// verified non-empty taskId receipt; a failed/yielded/receipt-less census
+// leaves them queued for the next pass (fail closed).
+reconcileConfirmFollowups(census)
 if (census && census.yielded) {
   log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
   continue
@@ -225,8 +271,68 @@ for (let i = 0; i < queue.length; i += 4) {
     const publishAllGo = publishGates.filter(Boolean).every(g => g && g.verdict === 'GO')
     if (publishAllGo) {
       r.gate = 'GO'
-      const confirm = await safeAgent(`GATE CONFIRM (publish gate protocol): both live gates returned GO for ${pkgName}@${gateV}. Reply IN-THREAD to the intent post in git-publishing (conversations send --channel git-publishing --reply-to ${r.intentId || 'MISSING'}): [PUBLISH-CONFIRM] ${pkgName}@${gateV} — <live-test evidence line: two-sided verify + live install/smoke + both gates GO>. If the intent id is missing or unresolvable, locate the [PUBLISH INTENT] post for this package in git-publishing and reply to its real message id — never invent an id. Return {confirmId, posted: true}.`, { label: 'confirm-publish-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['confirmId', 'posted'], properties: { confirmId: { type: 'string' }, posted: { type: 'boolean' } } } })
-      r.confirmId = confirm ? confirm.confirmId : null
+      // O15-04231 (sibling I38-01298): a failed [PUBLISH-CONFIRM] agent must NEVER
+      // be dropped silently. Pre-fix, `r.confirmId = confirm ? confirm.confirmId :
+      // null` recorded a gate-verified release whose in-thread confirm was never
+      // posted — no retry, no marker, no follow-up — and the app is CURRENT on the
+      // registry, so no later pass ever revisited the missing confirm (a
+      // release-gate record defect). Now: retry ONCE (the lane's established
+      // transient-failure pattern), with the retry deduped so a first attempt that
+      // actually posted is not duplicated; if both attempts fail, record the
+      // release as confirmed-never (confirmPosted false / confirmFailed true),
+      // log CONFIRM-FAILED, and file a RELEASE CONFIRM MISSING row — the class the
+      // task-drain lane already remediates for RELEASE UNVERIFIED.
+      const CONFIRM_SCHEMA = { type: 'object', additionalProperties: false, required: ['confirmId', 'posted'], properties: { confirmId: { type: 'string' }, posted: { type: 'boolean' } } }
+      const confirmPrompt = `GATE CONFIRM (publish gate protocol): both live gates returned GO for ${pkgName}@${gateV}. Reply IN-THREAD to the intent post in git-publishing (conversations send --channel git-publishing --reply-to ${r.intentId || 'MISSING'}): [PUBLISH-CONFIRM] ${pkgName}@${gateV} — <live-test evidence line: two-sided verify + live install/smoke + both gates GO>. If the intent id is missing or unresolvable, locate the [PUBLISH INTENT] post for this package in git-publishing and reply to its real message id — never invent an id. Return {confirmId, posted: true}.`
+      const confirmLabel = 'confirm-publish-' + (r.app || 'app')
+      let confirm = await safeAgent(confirmPrompt, { label: confirmLabel, phase: 'Release', schema: CONFIRM_SCHEMA })
+      if (!confirm) {
+        // Retry once, deduped: the first attempt may have posted before failing to
+        // return the schema — the retry must return the EXISTING confirm instead of
+        // posting a duplicate [PUBLISH-CONFIRM]. The dedupe read must be COMPLETE
+        // (O15-04231 review cycle 1, P1-1): expand the full intent thread via
+        // `conversations threads expand <intentId> --json` (root + full nested reply
+        // tree) when the intent id is known, paging any has_more/next_cursor to
+        // exhaustion; fall back to a digest search paged to exhaustion when the id
+        // is missing — never a single bounded read.
+        log(`CONFIRM-RETRY (${pkgName}@${gateV}): the [PUBLISH-CONFIRM] agent failed — retrying once, with an in-thread dedupe check`)
+        confirm = await safeAgent(`The prior [PUBLISH-CONFIRM] agent for ${pkgName}@${gateV} failed after possibly posting. FIRST check git-publishing for an existing [PUBLISH-CONFIRM] reply for this package@version in the intent thread: when the intent id is known, run \`conversations threads expand <intentId> --json\` (redirect to a file, never pipe) — it returns the root message plus the FULL nested reply tree; page any has_more/next_cursor to exhaustion so the newest reply cannot be missed. When the intent id is unknown, search with \`conversations digest git-publishing --since 24h --json\` (redirect to a file) PAGED TO EXHAUSTION (loop on has_more/next_cursor), and confirm bodies with \`conversations show <id> --json\`. If a [PUBLISH-CONFIRM] reply for ${pkgName}@${gateV} already exists, return {confirmId: <its message id>, posted: false} WITHOUT posting again. Otherwise post the confirm IN-THREAD now and return {confirmId, posted: true}. The confirm to post: ${confirmPrompt}`, { label: confirmLabel + '-retry', phase: 'Release', schema: CONFIRM_SCHEMA })
+      }
+      if (confirm) {
+        r.confirmId = confirm.confirmId
+        r.confirmPosted = true
+      } else {
+        // NEVER silently drop: the release was published and both gates returned
+        // GO, but the in-thread [PUBLISH-CONFIRM] was never recorded. Mark it
+        // explicitly and file a follow-up row so a later pass retries the confirm.
+        // The follow-up filing FAILS CLOSED (O15-04231 review cycle 1, P1-3): a
+        // null/empty taskId is NOT accepted — the filing is retried once, and if it
+        // still fails the app is queued so the NEXT pass's census retries the row
+        // before its registry census (a durable retry row must exist; recording
+        // UNFILED and moving on would recreate the original silent-drop state).
+        r.confirmPosted = false
+        r.confirmFailed = true
+        const FOLLOWUP_SCHEMA = { type: 'object', additionalProperties: false, required: ['taskId'], properties: { taskId: { type: 'string', minLength: 1 }, reused: { type: 'boolean' } } }
+        const followupPrompt = `RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — the publish lane published and both live gates returned GO, but the [PUBLISH-CONFIRM] agent failed twice and the in-thread confirm was never posted on git-publishing (a release-gate record defect, O15-04231). Check whether a todos row for this exact class already exists (todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress, redirect to a file, never pipe); reuse it if it exists, otherwise todos add in project 3bbc22e0: title 'RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId (${r.intentId || 'MISSING'}) + the two gate GO verdicts; no credential values anywhere in the description. Return {taskId, reused: bool}.`
+        let cf = await safeAgent(followupPrompt, { label: 'confirm-followup-' + (r.app || 'app'), phase: 'Release', schema: FOLLOWUP_SCHEMA })
+        if (!(cf && cf.taskId)) {
+          // Retry once: a throwing agent OR an empty taskId (minLength violation /
+          // falsy) is the same failure class.
+          log(`CONFIRM-FOLLOWUP-RETRY (${pkgName}@${gateV}): follow-up row filing failed — retrying once (deduped)`)
+          cf = await safeAgent(`Retry (deduped against existing rows): ${followupPrompt}`, { label: 'confirm-followup-' + (r.app || 'app') + '-retry', phase: 'Release', schema: FOLLOWUP_SCHEMA })
+        }
+        if (cf && cf.taskId) {
+          r.confirmFollowupTaskId = cf.taskId
+          log(`CONFIRM-FAILED (${pkgName}@${gateV}): both [PUBLISH-CONFIRM] attempts failed — release recorded confirmed-never (confirmPosted false) with follow-up row ${r.confirmFollowupTaskId}`)
+        } else {
+          // FAIL CLOSED: no durable retry row exists. Queue the filing for the
+          // next pass's census (it retries the row BEFORE the registry census) —
+          // never record the release as handled without a verified row id.
+          pendingConfirmFollowups.push({ pkgName, gateV, intentId: r.intentId || null })
+          r.confirmFollowupQueued = true
+          log(`CONFIRM-FAILED (${pkgName}@${gateV}): both [PUBLISH-CONFIRM] attempts AND both follow-up row attempts failed — row filing QUEUED for the next pass census (fail closed, O15-04231)`)
+        }
+      }
     } else {
       // NEVER confirm: file the UNVERIFIED todos row with the gate evidence (a REAL row
       // per the tracking rule — cite only a created/verified short id) and post the NO_GO

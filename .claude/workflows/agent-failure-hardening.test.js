@@ -186,6 +186,277 @@ test('behavioral: deploy-apps survives a PROSE RESULT (non-object under a schema
   expect(prompts[1].includes('Sleep 300 (bash) FIRST'), 'the pass-2 census prompt carries the sleep-300 pause banner').toBe(true)
 })
 
+// O15-04231 — publish-all must NEVER silently drop a failed [PUBLISH-CONFIRM]
+// agent. Pre-fix, `r.confirmId = confirm ? confirm.confirmId : null` recorded a
+// gate-verified release whose in-thread confirm was never posted: no retry, no
+// marker, no follow-up — and the app is CURRENT on the registry, so no later
+// pass ever revisits the missing confirm (a release-gate record defect; sibling
+// of I38-01298). The fix: retry the confirm ONCE (the lane's established
+// transient-failure pattern, deduped so a first attempt that actually posted is
+// not duplicated), and if both attempts fail, record the release as
+// confirmed-never (confirmPosted false / confirmFailed true), log CONFIRM-FAILED,
+// and file a RELEASE CONFIRM MISSING row — the class the task-drain lane already
+// remediates for RELEASE UNVERIFIED.
+//
+// The lane is a CJS-style script (top-level return, top-level await) — load it
+// the way the workflow runtime does (a classic script with globals), not as an
+// ESM module: strip the `export ` keyword and wrap in an async IIFE so the
+// top-level return and await are legal in the vm context.
+const loadPublishAll = (sandbox) => {
+  const src = readFileSync(join(here, 'publish-all-apps-wf.js'), 'utf8').replace(/^export /gm, '')
+  sandbox.__runPromise = null
+  new Script('__runPromise = (async () => {\n' + src + '\n})()').runInNewContext(sandbox)
+  return sandbox.__runPromise
+}
+const PUBLISH_ALL_CENSUS = { queue: [{ name: '@hasna/fixlane-test', repoVersion: '0.1.0', registryLatest: '0.0.9', breaking: false, bins: ['fixlane-test'] }], current: [], pendingPR: [], counts: { ahead: 1, current: 0, pendingPR: 0 }, yielded: false }
+const PUBLISH_ALL_RELEASE = { app: 'fixlane-test', publishedVersion: '0.1.0', reviewVerdict: 'GO', reviewSha: 'abc123', mergedChangesetPr: null, intentId: 'msg-1', liveTest: { state: 'pass', version: '0.1.0', helpRc: 0, smoke: 'ok' }, skipped: false, reason: null }
+
+test('behavioral: publish-all retries a failed [PUBLISH-CONFIRM] once, then records CONFIRM-FAILED and files a follow-up row — never a silent drop (O15-04231)', async () => {
+  const logs = []
+  const prompts = []
+  let calls = 0
+  let confirmCalls = 0
+  const sandbox = {
+    agent: async (prompt) => {
+      calls++
+      prompts.push(String(prompt))
+      const p = String(prompt)
+      if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+      if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+      if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('GATE CONFIRM')) {
+        confirmCalls++
+        throw new Error('agent({schema}): subagent completed without calling StructuredOutput (confirm)')
+      }
+      if (p.includes('RELEASE CONFIRM MISSING')) return { taskId: 'cf-row-1' }
+      return {}
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('CONFIRM-FAILED')) throw new Error('__TEST_CONFIRM_HANDLED__')
+      if (logs.filter((l) => l.includes('AGENT-FAILURE')).length >= 3) throw new Error('__TEST_END__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  // WITHOUT the fix the confirm failure is dropped silently: no retry, no
+  // CONFIRM-FAILED line, no follow-up prompt — the sentinel only fires after the
+  // third AGENT-FAILURE on pass 3, and every assertion below fails.
+  expect(ended && ended.message, 'terminated via the CONFIRM-FAILED sentinel, never a silent pass-through').toBe('__TEST_CONFIRM_HANDLED__')
+  expect(confirmCalls, 'the confirm agent was retried exactly once (original + retry)').toBe(2)
+  expect(prompts.some((p) => p.includes('RELEASE CONFIRM MISSING')), 'a RELEASE CONFIRM MISSING follow-up row was filed').toBe(true)
+  expect(logs.some((l) => l.includes('CONFIRM-RETRY')), 'the retry is logged').toBe(true)
+  expect(logs.some((l) => l.includes('CONFIRM-FAILED') && l.includes('@hasna/fixlane-test')), 'the CONFIRM-FAILED line names the package').toBe(true)
+})
+
+// O15-04231 review cycle 1, P1-1: the retry dedupe must return the EXISTING
+// confirm (posted: false) when the first attempt actually posted before failing
+// the schema return — and a found confirm must NOT trigger the follow-up row.
+test('behavioral: publish-all retry finds an already-posted [PUBLISH-CONFIRM] and posts nothing — no duplicate, no follow-up row (O15-04231 P1-1)', async () => {
+  const logs = []
+  const prompts = []
+  let calls = 0
+  let confirmCalls = 0
+  const sandbox = {
+    agent: async (prompt) => {
+      calls++
+      prompts.push(String(prompt))
+      const p = String(prompt)
+      if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+      if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+      if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('GATE CONFIRM')) {
+        confirmCalls++
+        if (confirmCalls === 1) throw new Error('agent({schema}): confirm agent posted then failed the schema return')
+        return { confirmId: 'c-existing', posted: false } // the dedupe retry found the posted confirm
+      }
+      if (p.includes('RELEASE CONFIRM MISSING')) return { taskId: 'cf-row-1' }
+      return {}
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 1 complete')) throw new Error('__TEST_PASS1_DONE__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  expect(ended && ended.message, 'terminated via the pass-1-complete sentinel').toBe('__TEST_PASS1_DONE__')
+  expect(confirmCalls, 'the confirm agent was retried exactly once (attempt + dedupe retry)').toBe(2)
+  expect(logs.some((l) => l.includes('CONFIRM-RETRY')), 'the retry is logged').toBe(true)
+  expect(prompts.some((p) => p.includes('RELEASE CONFIRM MISSING')), 'NO follow-up row when the dedupe found the existing confirm').toBe(false)
+  expect(logs.some((l) => l.includes('CONFIRM-FAILED')), 'NO CONFIRM-FAILED when the confirm exists').toBe(false)
+})
+
+// O15-04231 review cycles 1-2, P1-3: the follow-up row filing FAILS CLOSED — a
+// throwing follow-up agent or an EMPTY taskId (minLength violation) is a
+// failure, the filing is retried once, and if it still fails the app is queued
+// so the NEXT pass's census retries the row before its registry census. The
+// queue is cleared ONLY on a verified non-empty taskId receipt for the exact
+// package@version (confirmFollowupFiling); a census that fails, yields, or
+// returns no receipt leaves the entries queued for the following pass.
+const PUBLISH_ALL_FAILING_STUBS = {
+  agent: async (prompt) => {
+    const p = String(prompt)
+    if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+    if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+    if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+    if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+    if (p.includes('GATE CONFIRM')) throw new Error('agent({schema}): confirm agent failed')
+    if (p.includes('RELEASE CONFIRM MISSING')) return { taskId: '' } // empty taskId: minLength violation — must NOT be accepted
+    return {}
+  },
+  parallel: (fns) => Promise.all(fns.map((f) => f())),
+  phase: () => {},
+  args: {},
+  __runPromise: null,
+}
+
+test('behavioral: publish-all retains the queued RELEASE CONFIRM MISSING row when the census returns NO receipt — fail closed across passes (O15-04231 P1-3)', async () => {
+  const logs = []
+  const prompts = []
+  const sandbox = {
+    ...PUBLISH_ALL_FAILING_STUBS,
+    agent: async (prompt) => {
+      prompts.push(String(prompt))
+      return PUBLISH_ALL_FAILING_STUBS.agent(prompt)
+    },
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 3 complete')) throw new Error('__TEST_RETAINED__')
+      if (logs.filter((l) => l.includes('AGENT-FAILURE')).length >= 10) throw new Error('__TEST_END__')
+    },
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  expect(ended && ended.message, 'terminated at pass 3 complete').toBe('__TEST_RETAINED__')
+  // The note must appear in BOTH the pass-2 and pass-3 census prompts: no
+  // receipt was returned, so the queue survived pass 2.
+  const notedCensus = prompts.filter((p) => p.includes('RETRY filing those rows') && p.includes('@hasna/fixlane-test'))
+  expect(notedCensus.length, 'the retry note is carried into every subsequent census while unverified').toBeGreaterThanOrEqual(2)
+  expect(logs.some((l) => l.includes('QUEUED for the next pass census')), 'the queueing is logged').toBe(true)
+})
+
+test('behavioral: publish-all clears the queued row only on a VERIFIED census receipt — acknowledged success drops the note (O15-04231 P1-3)', async () => {
+  const logs = []
+  const prompts = []
+  let confirmCalls = 0
+  let followupCalls = 0
+  const sandbox = {
+    agent: async (prompt) => {
+      prompts.push(String(prompt))
+      const p = String(prompt)
+      if (p.includes('ROLE: census')) {
+        // Pass 2+ (the queue exists by then): return a VERIFIED receipt for the
+        // queued entry; pass 1 has nothing queued yet.
+        const queued = prompts.filter((x) => x.includes('RETRY filing those rows')).length
+        const receipt = queued > 0 ? { confirmFollowupFiling: [{ pkgName: '@hasna/fixlane-test', gateV: '0.1.0', taskId: 'cf-row-1' }] } : {}
+        return { ...PUBLISH_ALL_CENSUS, ...receipt }
+      }
+      if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+      if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('GATE CONFIRM')) {
+        confirmCalls++
+        if (confirmCalls <= 2) throw new Error('agent({schema}): confirm agent failed (pass 1 only)')
+        return { confirmId: 'c-ok', posted: true }
+      }
+      if (p.includes('RELEASE CONFIRM MISSING')) {
+        followupCalls++
+        if (followupCalls === 1) return { taskId: '' }
+        throw new Error('agent({schema}): follow-up agent failed on retry')
+      }
+      return {}
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 3 complete')) throw new Error('__TEST_CLEARED__')
+      if (logs.filter((l) => l.includes('AGENT-FAILURE')).length >= 10) throw new Error('__TEST_END__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  expect(ended && ended.message, 'terminated at pass 3 complete').toBe('__TEST_CLEARED__')
+  // Pass 2 census carried the note (the queue existed); after the verified
+  // receipt the queue cleared, so pass 3's census prompt has NO note and the
+  // pass-2 confirm succeeded without re-queueing.
+  const notedCensus = prompts.filter((p) => p.includes('RETRY filing those rows') && p.includes('@hasna/fixlane-test'))
+  expect(notedCensus.length, 'the note appears exactly once (pass 2) — cleared after the receipt').toBe(1)
+  expect(logs.some((l) => l.includes('CONFIRM-FOLLOWUP-FILED')), 'the verified receipt clearing is logged').toBe(true)
+  expect(logs.some((l) => l.includes('QUEUED for the next pass census')), 'the queueing is logged').toBe(true)
+})
+
+test('behavioral: publish-all confirm success path — single confirm call, no retry, no follow-up row (positive control, O15-04231)', async () => {
+  const logs = []
+  const prompts = []
+  let calls = 0
+  let confirmCalls = 0
+  const sandbox = {
+    agent: async (prompt) => {
+      calls++
+      prompts.push(String(prompt))
+      const p = String(prompt)
+      if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+      if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+      if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('GATE CONFIRM')) {
+        confirmCalls++
+        return { confirmId: 'c-1', posted: true }
+      }
+      if (p.includes('RELEASE CONFIRM MISSING')) return { taskId: 'cf-row-1' }
+      return {}
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 1 complete')) throw new Error('__TEST_PASS1_DONE__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  expect(ended && ended.message, 'terminated via the pass-1-complete sentinel').toBe('__TEST_PASS1_DONE__')
+  expect(confirmCalls, 'a successful confirm is called exactly once — no retry').toBe(1)
+  expect(logs.some((l) => l.includes('CONFIRM-RETRY') || l.includes('CONFIRM-FAILED')), 'no retry/failure markers on the success path').toBe(false)
+  expect(prompts.some((p) => p.includes('RELEASE CONFIRM MISSING')), 'no follow-up row on the success path').toBe(false)
+})
+
 test('behavioral: closed-pr-audit completes a full census → record pass without template-eval ReferenceError', async () => {
   // Cycle-1 review (2026-08-26) found an unbound template interpolation in the
   // RECORD prompt — `"WRONG-CLOSE ${klass}: ..."` — evaluated as an argument
