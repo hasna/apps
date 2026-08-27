@@ -12,6 +12,7 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import { Readable } from "stream";
 import { runConnectorOperation } from "@hasna/connectors";
+import { getFilesDataDir } from "./paths.js";
 import type { GoogleDriveExportFormats, GoogleDriveProfileStatus } from "../types/index.js";
 
 export const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -431,7 +432,7 @@ export function migrateGoogleDriveTokenStore(
 
   const home = env.HOME || env.USERPROFILE || homedir();
   const legacyBase = join(home, ".hasna", "connectors");
-  const newBase = join(home, ".hasna", "files", "connectors");
+  const newBase = join(getFilesDataDir(env), "connectors");
   if (!existsSync(legacyBase)) return { ...NO_MIGRATION, dryRun };
 
   const receiptPath = join(newBase, ".googledrive-migrated.receipt.json");
@@ -511,7 +512,7 @@ export function googleDriveConnectorDirs(env: NodeJS.ProcessEnv = process.env): 
   migrateGoogleDriveTokenStore(env);
 
   const home = env.HOME || env.USERPROFILE || homedir();
-  const newBase = join(home, ".hasna", "files", "connectors");
+  const newBase = join(getFilesDataDir(env), "connectors");
   const legacyBase = join(home, ".hasna", "connectors");
   return [
     join(newBase, "googledrive"),
