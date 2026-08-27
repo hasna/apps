@@ -8,7 +8,11 @@
 FROM --platform=linux/arm64 oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# --ignore-scripts: the postinstall (scripts/ensure-data-dir.mjs) provisions a
+# host data dir, which a container does not use; scripts/ is only copied in the
+# build stage, so without this flag the frozen-lockfile install would run the
+# postinstall with the script absent and fail (O15-00667 install-failure class).
+RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM --platform=linux/arm64 oven/bun:1 AS build
 WORKDIR /app
