@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.11.1",
-  "description": "Local model catalog and install manager: searches provider catalogs, records capabilities, and installs models into a user-scoped store.",
+  "description": "Local model catalog and install manager: searches provider catalogs, records capabilities, and installs models into a user-scoped store. Local state lives at the effective models data home (~/.hasna/models by default, resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set).",
   "bins": [
     "models"
   ],
