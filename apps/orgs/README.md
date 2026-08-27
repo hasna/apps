@@ -76,11 +76,16 @@ records. Existing `--json <group> list` calls still return the full JSON array;
 when `--json` is combined with explicit `--limit` or `--cursor`, the CLI returns
 `{ "records": [...], "page": { ... } }` for machine-readable pagination.
 
-Data is stored in `~/.hasna/orgs/orgs.json` by default. Set
-`OPEN_ORGS_STORE` and `OPEN_ORGS_AUDIT` to override the default store and audit
-paths. `orgs status` reports metadata-only evidence when a legacy or alternate
-SQLite `orgs.db` exists beside a missing or empty JSON store; it does not read
-or migrate SQLite contents automatically.
+Data is stored in the effective orgs data root. The legacy default is
+`~/.hasna/orgs/orgs.json`; once the resolver (XDG) data home is adopted
+(`HASNA_DATA_HOME` set, or the store already present at
+`~/.local/share/hasna/orgs/orgs.json`), the store resolves there instead.
+`HASNA_ORGS_HOME` sets an exact data root that wins over both.
+`OPEN_ORGS_STORE` and `OPEN_ORGS_AUDIT` override the store and audit file
+paths on top of the effective root. `orgs status` reports metadata-only
+evidence when a legacy or alternate SQLite `orgs.db` exists beside a missing
+or empty JSON store; it does not read or migrate SQLite contents
+automatically.
 
 ## Model
 
