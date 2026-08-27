@@ -258,6 +258,106 @@ test('behavioral: publish-all retries a failed [PUBLISH-CONFIRM] once, then reco
   expect(logs.some((l) => l.includes('CONFIRM-FAILED') && l.includes('@hasna/fixlane-test')), 'the CONFIRM-FAILED line names the package').toBe(true)
 })
 
+// O15-04231 review cycle 1, P1-1: the retry dedupe must return the EXISTING
+// confirm (posted: false) when the first attempt actually posted before failing
+// the schema return — and a found confirm must NOT trigger the follow-up row.
+test('behavioral: publish-all retry finds an already-posted [PUBLISH-CONFIRM] and posts nothing — no duplicate, no follow-up row (O15-04231 P1-1)', async () => {
+  const logs = []
+  const prompts = []
+  let calls = 0
+  let confirmCalls = 0
+  const sandbox = {
+    agent: async (prompt) => {
+      calls++
+      prompts.push(String(prompt))
+      const p = String(prompt)
+      if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+      if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+      if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('GATE CONFIRM')) {
+        confirmCalls++
+        if (confirmCalls === 1) throw new Error('agent({schema}): confirm agent posted then failed the schema return')
+        return { confirmId: 'c-existing', posted: false } // the dedupe retry found the posted confirm
+      }
+      if (p.includes('RELEASE CONFIRM MISSING')) return { taskId: 'cf-row-1' }
+      return {}
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 1 complete')) throw new Error('__TEST_PASS1_DONE__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  expect(ended && ended.message, 'terminated via the pass-1-complete sentinel').toBe('__TEST_PASS1_DONE__')
+  expect(confirmCalls, 'the confirm agent was retried exactly once (attempt + dedupe retry)').toBe(2)
+  expect(logs.some((l) => l.includes('CONFIRM-RETRY')), 'the retry is logged').toBe(true)
+  expect(prompts.some((p) => p.includes('RELEASE CONFIRM MISSING')), 'NO follow-up row when the dedupe found the existing confirm').toBe(false)
+  expect(logs.some((l) => l.includes('CONFIRM-FAILED')), 'NO CONFIRM-FAILED when the confirm exists').toBe(false)
+})
+
+// O15-04231 review cycle 1, P1-3: the follow-up row filing FAILS CLOSED — a
+// throwing follow-up agent or an EMPTY taskId (minLength violation) is a
+// failure, the filing is retried once, and if it still fails the app is queued
+// so the NEXT pass's census retries the row before its registry census.
+// Sentinel: the pass-2 census prompt (recorded by the stub at the START of
+// pass 2) must carry the queue note; the run is ended at the 'pass 2 complete'
+// log so the prompts have all been recorded. (An agent-stub throw cannot be the
+// sentinel — safeAgent swallows it.)
+test('behavioral: publish-all queues an unfiled RELEASE CONFIRM MISSING row for the next pass census — fail closed, never UNFILED-and-done (O15-04231 P1-3)', async () => {
+  const logs = []
+  const prompts = []
+  let calls = 0
+  let followupCalls = 0
+  const sandbox = {
+    agent: async (prompt) => {
+      calls++
+      prompts.push(String(prompt))
+      const p = String(prompt)
+      if (p.includes('ROLE: census')) return PUBLISH_ALL_CENSUS
+      if (p.includes('ROLE: release lane')) return PUBLISH_ALL_RELEASE
+      if (p.includes('LIVE GATE 1 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('LIVE GATE 2 OF 2')) return { verdict: 'GO', perCommand: [], failures: [] }
+      if (p.includes('GATE CONFIRM')) throw new Error('agent({schema}): confirm agent failed')
+      if (p.includes('RELEASE CONFIRM MISSING')) {
+        followupCalls++
+        if (followupCalls % 2 === 1) return { taskId: '' } // empty taskId: minLength violation — must NOT be accepted
+        throw new Error('agent({schema}): follow-up agent failed on retry')
+      }
+      return {}
+    },
+    parallel: (fns) => Promise.all(fns.map((f) => f())),
+    log: (m) => {
+      const s = String(m)
+      logs.push(s)
+      if (s.includes('pass 2 complete')) throw new Error('__TEST_QUEUED__')
+      if (logs.filter((l) => l.includes('AGENT-FAILURE')).length >= 7) throw new Error('__TEST_END__')
+    },
+    phase: () => {},
+    args: {},
+    __runPromise: null,
+  }
+  const run = loadPublishAll(sandbox)
+  let ended = null
+  await run.catch((e) => {
+    ended = e
+  })
+  // WITHOUT the fail-closed fix the empty taskId would be accepted (UNFILED) and
+  // the queue note would never reach the pass-2 census — the sentinel never fires.
+  expect(ended && ended.message, 'terminated at pass 2 complete after the queue note reached the census').toBe('__TEST_QUEUED__')
+  expect(prompts.some((p) => p.includes('RETRY filing those rows') && p.includes('@hasna/fixlane-test')), 'the pass-2 census carries the queued RELEASE CONFIRM MISSING retry').toBe(true)
+  expect(logs.some((l) => l.includes('QUEUED for the next pass census')), 'the queueing is logged').toBe(true)
+})
+
 test('behavioral: publish-all confirm success path — single confirm call, no retry, no follow-up row (positive control, O15-04231)', async () => {
   const logs = []
   const prompts = []

@@ -41,6 +41,27 @@ test('census excludes gate rows that already carry a terminal verdict marker', (
   expect(src).toMatch(/NO_GO ROUTED/)
 })
 
+// O15-04231 review cycle 1, P1-2: the publish lane files RELEASE CONFIRM MISSING
+// rows (both gates returned GO, [PUBLISH-CONFIRM] agent failed twice) — the
+// task-drain census must select that class (kind 'confirm-missing') and the
+// execution branch must gate-remediate it, or the row is never drained while the
+// app is already current on the registry (only this lane can retry the confirm).
+test('census selects the RELEASE CONFIRM MISSING gate-row class (O15-04231 P1-2)', () => {
+  expect(src).toMatch(/"RELEASE CONFIRM MISSING:"/)
+  expect(src).toMatch(/"confirm-missing"/)
+})
+
+test('execution branches to gate-remediation for RELEASE CONFIRM MISSING rows (O15-04231 P1-2)', () => {
+  // The isGateRow discriminator must match the class (kind OR title).
+  expect(src).toMatch(/row\.kind === 'confirm-missing'/)
+  expect(src).toMatch(/CONFIRM MISSING\/\.test/)
+  // The remediation prompt must cover the class and use a COMPLETE dedupe read
+  // (thread expand paged to exhaustion) before posting the missing confirm.
+  expect(src).toMatch(/RELEASE CONFIRM MISSING/)
+  expect(src).toMatch(/threads expand/)
+  expect(src).toMatch(/full nested reply tree/)
+})
+
 test('execution branches to the gate-remediation protocol for UNVERIFIED rows', () => {
   // The branch must exist and name the protocol.
   expect(src).toMatch(/GATE-REMEDIATION/)

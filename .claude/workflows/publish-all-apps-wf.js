@@ -160,12 +160,23 @@ const safeAgent = async (prompt, opts) => {
     return null
   }
 }
+// Fail-closed queue (O15-04231, review cycle 1 P1-3): RELEASE CONFIRM MISSING
+// rows a prior pass could NOT file (both confirm attempts AND both follow-up
+// attempts failed). The NEXT pass's census retries the filing BEFORE its
+// registry census — a durable retry row must exist; recording UNFILED and
+// moving on would recreate the original silent-drop state.
+let pendingConfirmFollowups = []
 const censusPrompt = (body) => {
+  let prefix = ''
+  if (pendingConfirmFollowups.length) {
+    prefix = "NOTE: a prior pass could NOT file RELEASE CONFIRM MISSING rows for: " + JSON.stringify(pendingConfirmFollowups) + ". RETRY filing those rows FIRST — dedupe (todos list --project 3bbc22e0 --status pending --json AND --status in_progress, redirect to a file, never pipe; reuse an existing row for the exact package@version, otherwise todos add with title 'RELEASE CONFIRM MISSING: <pkg>@<v> — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId + the two gate GO verdicts; no credential values anywhere), then run this census exactly as instructed. The filed task ids must appear in your queue comments.\n\n"
+    pendingConfirmFollowups = []
+  }
   if (agentFailed) {
     agentFailed = false
-    return "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
+    return prefix + "NOTE: a previous pass's agent FAILED (a subagent returned prose instead of StructuredOutput, or another transient error). Sleep 300 (bash) FIRST, then run this census exactly as instructed — the lane is waiting out the transient condition.\n\n" + body
   }
-  return body
+  return prefix + body
 }
 // --- /safeAgent ---
 
@@ -243,9 +254,14 @@ for (let i = 0; i < queue.length; i += 4) {
       if (!confirm) {
         // Retry once, deduped: the first attempt may have posted before failing to
         // return the schema — the retry must return the EXISTING confirm instead of
-        // posting a duplicate [PUBLISH-CONFIRM].
+        // posting a duplicate [PUBLISH-CONFIRM]. The dedupe read must be COMPLETE
+        // (O15-04231 review cycle 1, P1-1): expand the full intent thread via
+        // `conversations threads expand <intentId> --json` (root + full nested reply
+        // tree) when the intent id is known, paging any has_more/next_cursor to
+        // exhaustion; fall back to a digest search paged to exhaustion when the id
+        // is missing — never a single bounded read.
         log(`CONFIRM-RETRY (${pkgName}@${gateV}): the [PUBLISH-CONFIRM] agent failed — retrying once, with an in-thread dedupe check`)
-        confirm = await safeAgent(`The prior [PUBLISH-CONFIRM] agent for ${pkgName}@${gateV} failed after possibly posting. FIRST check git-publishing for an existing [PUBLISH-CONFIRM] reply for this package@version in the intent thread (conversations digest git-publishing --since 24h --json redirected to a file; conversations show <id> --json for bodies): if one exists, return {confirmId: <its message id>, posted: false} WITHOUT posting again. Otherwise post the confirm IN-THREAD now and return {confirmId, posted: true}. The confirm to post: ${confirmPrompt}`, { label: confirmLabel + '-retry', phase: 'Release', schema: CONFIRM_SCHEMA })
+        confirm = await safeAgent(`The prior [PUBLISH-CONFIRM] agent for ${pkgName}@${gateV} failed after possibly posting. FIRST check git-publishing for an existing [PUBLISH-CONFIRM] reply for this package@version in the intent thread: when the intent id is known, run \`conversations threads expand <intentId> --json\` (redirect to a file, never pipe) — it returns the root message plus the FULL nested reply tree; page any has_more/next_cursor to exhaustion so the newest reply cannot be missed. When the intent id is unknown, search with \`conversations digest git-publishing --since 24h --json\` (redirect to a file) PAGED TO EXHAUSTION (loop on has_more/next_cursor), and confirm bodies with \`conversations show <id> --json\`. If a [PUBLISH-CONFIRM] reply for ${pkgName}@${gateV} already exists, return {confirmId: <its message id>, posted: false} WITHOUT posting again. Otherwise post the confirm IN-THREAD now and return {confirmId, posted: true}. The confirm to post: ${confirmPrompt}`, { label: confirmLabel + '-retry', phase: 'Release', schema: CONFIRM_SCHEMA })
       }
       if (confirm) {
         r.confirmId = confirm.confirmId
@@ -254,11 +270,33 @@ for (let i = 0; i < queue.length; i += 4) {
         // NEVER silently drop: the release was published and both gates returned
         // GO, but the in-thread [PUBLISH-CONFIRM] was never recorded. Mark it
         // explicitly and file a follow-up row so a later pass retries the confirm.
+        // The follow-up filing FAILS CLOSED (O15-04231 review cycle 1, P1-3): a
+        // null/empty taskId is NOT accepted — the filing is retried once, and if it
+        // still fails the app is queued so the NEXT pass's census retries the row
+        // before its registry census (a durable retry row must exist; recording
+        // UNFILED and moving on would recreate the original silent-drop state).
         r.confirmPosted = false
         r.confirmFailed = true
-        const cf = await safeAgent(`RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — the publish lane published and both live gates returned GO, but the [PUBLISH-CONFIRM] agent failed twice and the in-thread confirm was never posted on git-publishing (a release-gate record defect, O15-04231). Check whether a todos row for this exact class already exists (todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress, redirect to a file, never pipe); reuse it if it exists, otherwise todos add in project 3bbc22e0: title 'RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId (${r.intentId || 'MISSING'}) + the two gate GO verdicts; no credential values anywhere in the description. Return {taskId, reused: bool}.`, { label: 'confirm-followup-' + (r.app || 'app'), phase: 'Release', schema: { type: 'object', additionalProperties: false, required: ['taskId'], properties: { taskId: { type: 'string' }, reused: { type: 'boolean' } } } })
-        r.confirmFollowupTaskId = cf ? cf.taskId : null
-        log(`CONFIRM-FAILED (${pkgName}@${gateV}): both [PUBLISH-CONFIRM] attempts failed — release recorded confirmed-never (confirmPosted false) with follow-up row ${r.confirmFollowupTaskId || 'UNFILED'}`)
+        const FOLLOWUP_SCHEMA = { type: 'object', additionalProperties: false, required: ['taskId'], properties: { taskId: { type: 'string', minLength: 1 }, reused: { type: 'boolean' } } }
+        const followupPrompt = `RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — the publish lane published and both live gates returned GO, but the [PUBLISH-CONFIRM] agent failed twice and the in-thread confirm was never posted on git-publishing (a release-gate record defect, O15-04231). Check whether a todos row for this exact class already exists (todos list --project 3bbc22e0 --status pending --limit 500 --json AND --status in_progress, redirect to a file, never pipe); reuse it if it exists, otherwise todos add in project 3bbc22e0: title 'RELEASE CONFIRM MISSING: ${pkgName}@${gateV} — [PUBLISH-CONFIRM] never posted', description carrying package + version + intentId (${r.intentId || 'MISSING'}) + the two gate GO verdicts; no credential values anywhere in the description. Return {taskId, reused: bool}.`
+        let cf = await safeAgent(followupPrompt, { label: 'confirm-followup-' + (r.app || 'app'), phase: 'Release', schema: FOLLOWUP_SCHEMA })
+        if (!(cf && cf.taskId)) {
+          // Retry once: a throwing agent OR an empty taskId (minLength violation /
+          // falsy) is the same failure class.
+          log(`CONFIRM-FOLLOWUP-RETRY (${pkgName}@${gateV}): follow-up row filing failed — retrying once (deduped)`)
+          cf = await safeAgent(`Retry (deduped against existing rows): ${followupPrompt}`, { label: 'confirm-followup-' + (r.app || 'app') + '-retry', phase: 'Release', schema: FOLLOWUP_SCHEMA })
+        }
+        if (cf && cf.taskId) {
+          r.confirmFollowupTaskId = cf.taskId
+          log(`CONFIRM-FAILED (${pkgName}@${gateV}): both [PUBLISH-CONFIRM] attempts failed — release recorded confirmed-never (confirmPosted false) with follow-up row ${r.confirmFollowupTaskId}`)
+        } else {
+          // FAIL CLOSED: no durable retry row exists. Queue the filing for the
+          // next pass's census (it retries the row BEFORE the registry census) —
+          // never record the release as handled without a verified row id.
+          pendingConfirmFollowups.push({ pkgName, gateV, intentId: r.intentId || null })
+          r.confirmFollowupQueued = true
+          log(`CONFIRM-FAILED (${pkgName}@${gateV}): both [PUBLISH-CONFIRM] attempts AND both follow-up row attempts failed — row filing QUEUED for the next pass census (fail closed, O15-04231)`)
+        }
       }
     } else {
       // NEVER confirm: file the UNVERIFIED todos row with the gate evidence (a REAL row
