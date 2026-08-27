@@ -25,6 +25,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { getDataRoot } from "../paths.js";
 import { databasePathFor } from "./database-context.js";
 
 export const PROVIDER_SECRET_FIELDS = [
@@ -147,12 +148,15 @@ function configuredKeyringPath(env: NodeJS.ProcessEnv): string | null {
 }
 
 /**
- * The canonical default keyring location: inside the app data root,
- * ~/.hasna/emails/open-emails-provider-credentials.keyring.json.
+ * The canonical default keyring location: inside the app data root, resolved
+ * through @hasna/paths (XDG/macOS home layout). The legacy
+ * ~/.hasna/emails/open-emails-provider-credentials.keyring.json stays the
+ * effective location until the store is migrated to the resolver data home or
+ * the operator sets the data-kind override `HASNA_DATA_HOME`; the exact-app
+ * overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
  */
 export function defaultProviderSecretsKeyringPath(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env["HOME"] || env["USERPROFILE"] || homedir();
-  return join(home, ".hasna", "emails", "open-emails-provider-credentials.keyring.json");
+  return join(getDataRoot(env), "open-emails-provider-credentials.keyring.json");
 }
 
 /**
@@ -236,7 +240,7 @@ export function migrateProviderSecretsKeyring(
  *
  *   1. an explicit env override (EMAILS_PROVIDER_SECRETS_KEY_FILE / _PATH)
  *      wins unchanged — the operator opted in, no migration;
- *   2. the canonical ~/.hasna/emails keyring, if present;
+ *   2. the canonical keyring in the effective data root, if present;
  *   3. a legacy keyring, if one exists — migrated to the canonical root when
  *      `create` is true (copy+verify+receipt; on a failed migration the legacy
  *      path is kept so existing secrets stay accessible and the migration

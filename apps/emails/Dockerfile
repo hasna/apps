@@ -25,6 +25,11 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY --chown=bun:bun src ./src
 
+# The self-hosted runtime keeps its local SQLite store under the container HOME
+# at /runtime/home/bun/.hasna/emails — the legacy data root, which stays the
+# effective data root of @hasna/paths resolution until the store is migrated to
+# the XDG data home or the operator sets HASNA_DATA_HOME. Nothing in the image
+# moves the store; the resolver merely makes the location overridable.
 FROM base AS runtime-files
 RUN mkdir -p /runtime/usr/local/bin /runtime/lib /runtime/lib/apk/db /runtime/usr/lib \
     /runtime/opt/emails/certs /runtime/tmp /runtime/home/bun/.hasna/emails /runtime/etc \

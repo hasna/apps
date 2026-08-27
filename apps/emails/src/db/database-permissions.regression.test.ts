@@ -25,13 +25,23 @@ import {
   resetDatabase,
 } from "./database.js";
 
-type EnvKey = "HOME" | "USERPROFILE" | "HASNA_EMAILS_DB_PATH" | "EMAILS_DB_PATH";
+type EnvKey =
+  | "HOME"
+  | "USERPROFILE"
+  | "HASNA_EMAILS_DB_PATH"
+  | "EMAILS_DB_PATH"
+  | "HASNA_DATA_HOME"
+  | "HASNA_EMAILS_HOME"
+  | "EMAILS_HOME";
 
 const ENV_KEYS: EnvKey[] = [
   "HOME",
   "USERPROFILE",
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
+  "HASNA_DATA_HOME",
+  "HASNA_EMAILS_HOME",
+  "EMAILS_HOME",
 ];
 
 let root = "";
@@ -49,9 +59,15 @@ function runPostinstall(rootPath: string) {
     scripts: { postinstall: string };
   };
   expect(packageJson.scripts.postinstall).toBe("bun ./scripts/ensure-private-data-dir.mjs");
+  // The postinstall resolves the effective data root through @hasna/paths; scrub
+  // the resolver overrides so the legacy default is exercised deterministically.
+  const env = { ...process.env, HOME: rootPath, PATH: join(rootPath, "empty-path") };
+  delete env.HASNA_DATA_HOME;
+  delete env.HASNA_EMAILS_HOME;
+  delete env.EMAILS_HOME;
   return Bun.spawnSync([process.execPath, "./scripts/ensure-private-data-dir.mjs"], {
     cwd: packageRoot,
-    env: { ...process.env, HOME: rootPath, PATH: join(rootPath, "empty-path") },
+    env,
   });
 }
 

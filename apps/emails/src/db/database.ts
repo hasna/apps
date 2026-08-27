@@ -15,8 +15,8 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { getDataRoot, getHomeDir, getLegacyDataRoot } from "../paths.js";
 import { sqlEmailAddress, sqlEmailDomain } from "./email-address-sql.js";
 import { registerDatabasePath } from "./database-context.js";
 import {
@@ -335,20 +335,39 @@ function migrateLegacyDirectory(oldDir: string, newDir: string): void {
 }
 
 export function getDataDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const home = getHomeDir();
+  // The effective data root: an exact-app override (`HASNA_EMAILS_HOME`, then
+  // `EMAILS_HOME`) wins; otherwise the @hasna/paths resolver (XDG) data root
+  // once adopted; otherwise the legacy `~/.hasna/emails` default. `src/paths.ts`
+  // owns the resolution; this function additionally enforces the SQLite
+  // parent-directory ownership/mode rules and creates the root.
+  const effectiveRoot = getDataRoot();
+  const legacyRoot = getLegacyDataRoot();
+
+  // HOME may itself traverse a stable system alias. Canonicalize only HOME;
+  // .hasna and emails stay appended and therefore cannot be symlinked. The
+  // canonicalization is preserved for the legacy root; the resolver root is
+  // already expressed in canonical terms by @hasna/paths.
+  const canonicalHome = canonicalizeFromExistingAncestor(home);
+  const canonicalLegacyRoot = join(canonicalHome, ".hasna", "emails");
+  const newDir = effectiveRoot === legacyRoot ? canonicalLegacyRoot : effectiveRoot;
+  const isLegacyRoot = newDir === canonicalLegacyRoot;
 
   if (process.platform === "win32") {
-    const hasnaDir = join(home, ".hasna");
-    const newDir = join(hasnaDir, "emails");
-    const oldDir = join(home, ".emails");
     // Keep Windows behavior non-breaking; POSIX ownership and mode bits do not
-    // have the same security meaning there.
-    if (existsSync(oldDir) && !existsSync(newDir)) {
-      mkdirSync(newDir, { recursive: true });
-      for (const file of readdirSync(oldDir)) {
-        const oldPath = join(oldDir, file);
-        if (statSync(oldPath).isFile()) {
-          copyFileSync(oldPath, join(newDir, file));
+    // have the same security meaning there. The legacy `.emails` -> legacy
+    // `~/.hasna/emails` migration applies only when the effective root is the
+    // legacy root; a resolver/exact root is a forward-looking location and
+    // does not inherit the pre-`~/.hasna` migration.
+    if (isLegacyRoot) {
+      const oldDir = join(canonicalHome, ".emails");
+      if (existsSync(oldDir) && !existsSync(newDir)) {
+        mkdirSync(newDir, { recursive: true });
+        for (const file of readdirSync(oldDir)) {
+          const oldPath = join(oldDir, file);
+          if (statSync(oldPath).isFile()) {
+            copyFileSync(oldPath, join(newDir, file));
+          }
         }
       }
     }
@@ -356,15 +375,11 @@ export function getDataDir(): string {
     return newDir;
   }
 
-  // HOME may itself traverse a stable system alias. Canonicalize only HOME;
-  // .hasna and emails stay appended and therefore cannot be symlinked.
-  const canonicalHome = canonicalizeFromExistingAncestor(home);
-  const hasnaDir = join(canonicalHome, ".hasna");
-  const newDir = join(hasnaDir, "emails");
+  const hasnaDir = dirname(newDir);
   const oldDir = join(canonicalHome, ".emails");
 
   ensureSharedOwnedDirectory(hasnaDir);
-  const shouldInspectLegacy = lstatIfExists(newDir) === null;
+  const shouldInspectLegacy = isLegacyRoot && lstatIfExists(newDir) === null;
   const oldStats = shouldInspectLegacy ? lstatIfExists(oldDir) : null;
   ensurePrivateOwnedDirectory(newDir);
   if (oldStats) {
@@ -408,7 +423,11 @@ function getDbPath(): string {
 }
 
 /**
- * The local database file used when no path is configured: `~/.hasna/emails/emails.db`.
+ * The local database file used when no path is configured: `<effective data
+ * root>/emails.db` — the legacy `~/.hasna/emails/emails.db` until the store is
+ * migrated to the resolver (XDG) data home or the operator sets
+ * `HASNA_DATA_HOME`; the exact-app overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME`
+ * name an explicit root.
  *
  * Exported so a caller that has to NAME the default — configuration resolution, a
  * `doctor` line, an operator-facing error — reads it from here instead of re-spelling
