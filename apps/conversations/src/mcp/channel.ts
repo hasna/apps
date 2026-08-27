@@ -80,7 +80,9 @@ function sessionFor(server: McpServer): SessionState {
  * Called by agent tools when register_agent or heartbeat fires.
  *
  * This records who the caller is *for this connection only*. It deliberately
- * does NOT write the installation-wide identity file ($HOME/.hasna/conversations/agent-id).
+ * does NOT write the installation-wide identity file (the data home's
+ * `agent-id` — legacy `~/.hasna/conversations/agent-id` until the @hasna/paths
+ * resolver data home is adopted).
  *
  * It used to. That was a fleet-wide footgun: the MCP server runs as one
  * long-lived daemon under a single HOME, shared by every client session on the
