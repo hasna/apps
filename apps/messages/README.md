@@ -39,8 +39,11 @@ reads the other's store.
 The server storage backend is the only runtime switch, selected by
 configuration — never by a mode enum:
 
-- **SQLite** by default (zero-config, `~/.hasna/messages/messages.db`, or
-  `HASNA_MESSAGES_SQLITE_PATH`).
+- **SQLite** by default (zero-config, resolved through the `@hasna/paths`
+  resolver — the XDG data home `~/.local/share/hasna/messages/messages.db`
+  once adopted, otherwise the legacy `~/.hasna/messages/messages.db` — or
+  `HASNA_MESSAGES_SQLITE_PATH`). The exact-app `HASNA_MESSAGES_HOME` override
+  and the data-kind `HASNA_DATA_HOME` override are honored by the resolver.
 - **PostgreSQL** when `HASNA_MESSAGES_DATABASE_URL` is set (the harness
   backend). Schema applied by `scripts/apply-postgres-migrations.mjs`.
 
