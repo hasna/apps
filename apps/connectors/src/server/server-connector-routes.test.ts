@@ -16,6 +16,7 @@ import {
 } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { connectorsHome } from "../lib/paths.js";
 import { startServer } from "./serve.js";
 
 const TEST_ID = `zzztest${process.pid}c`;
@@ -23,11 +24,11 @@ const ORIGINAL_HOME = process.env.HOME;
 const TEST_HOME = mkdtempSync(join(tmpdir(), "connectors-server-"));
 
 function testConfigDir(name: string): string {
-  return join(TEST_HOME, ".hasna", "connectors", name);
+  return join(connectorsHome(), name);
 }
 
 function legacyTestConfigDir(name: string): string {
-  return join(TEST_HOME, ".hasna", "connectors", `connect-${name}`);
+  return join(connectorsHome(), `connect-${name}`);
 }
 
 function cleanupTestConnectors(...names: string[]) {

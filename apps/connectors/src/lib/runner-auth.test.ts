@@ -20,23 +20,23 @@ describe("buildEnvWithCredentials oauth coverage", () => {
 describe("getAuthStatus apikey connectors", () => {
   test("marks bearer connector configured when profile key exists", async () => {
     const { saveApiKey } = await import("../server/auth.js");
-    const { homedir } = await import("os");
     const { join } = await import("path");
     const { rmSync, existsSync, readFileSync, writeFileSync } = await import("fs");
+    const { connectorsHome } = await import("./paths.js");
 
-    const credsFile = join(homedir(), ".hasna", "connectors", "connect-anthropic", "profiles", "default", "config.json");
+    const credsFile = join(connectorsHome(), "connect-anthropic", "profiles", "default", "config.json");
     const hadConfig = existsSync(credsFile);
     const previous = hadConfig ? readFileSync(credsFile, "utf-8") : null;
 
     try {
-      await saveApiKey("anthropic", "sk-profile-key-value");
+      await saveApiKey("anthropic", "profile-key-value");
       const status = getAuthStatus("anthropic");
       expect(status.type).toBe("bearer");
       expect(status.configured).toBe(true);
     } finally {
       if (previous !== null) writeFileSync(credsFile, previous);
       else {
-        const dir = join(homedir(), ".hasna", "connectors", "connect-anthropic");
+        const dir = join(connectorsHome(), "connect-anthropic");
         if (existsSync(dir)) rmSync(dir, { recursive: true });
       }
     }

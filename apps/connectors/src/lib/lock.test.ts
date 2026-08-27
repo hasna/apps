@@ -1,11 +1,11 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { existsSync, unlinkSync, mkdirSync, openSync, closeSync, utimesSync, rmSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { withWriteLock, LockTimeoutError } from "./lock.js";
+import { connectorsHome } from "./paths.js";
 
 const TEST_CONNECTOR = `zzztest-lock-${process.pid}`;
-const TEST_DIR = join(homedir(), ".hasna", "connectors", `connect-${TEST_CONNECTOR}`);
+const TEST_DIR = join(connectorsHome(), `connect-${TEST_CONNECTOR}`);
 const lockFile = join(TEST_DIR, ".write.lock");
 
 afterEach(() => {
@@ -61,7 +61,7 @@ describe("withWriteLock", () => {
 
   test("stale lock (>30s old) is broken and new caller succeeds", async () => {
     // Create a lock file manually then backdate it
-    mkdirSync(join(homedir(), ".hasna", "connectors", `connect-${TEST_CONNECTOR}`), { recursive: true });
+    mkdirSync(join(connectorsHome(), `connect-${TEST_CONNECTOR}`), { recursive: true });
     const fd = openSync(lockFile, "wx");
     closeSync(fd);
     const staleTime = new Date(Date.now() - 35_000);

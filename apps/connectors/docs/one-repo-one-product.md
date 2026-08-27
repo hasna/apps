@@ -7,7 +7,7 @@
 - Connector code lives inside this repository and ships with the main package.
 - Projects enable connectors through `.connectors/manifest.json`.
 - Connector commands run through the shared runtime with internal definitions first and legacy CLI fallback for unmigrated connectors.
-- Auth, profiles, and token storage live under `~/.hasna/connectors/`.
+- Auth, profiles, and token storage live under the connectors data home (resolved through `@hasna/paths`; `~/.hasna/connectors/` until the XDG data home is adopted).
 
 ## What Contributors Should Build Against
 
@@ -20,7 +20,7 @@
 
 - Legacy connector CLIs may still exist while migration is in progress.
 - The runner must preserve legacy CLI fallback until each connector is migrated.
-- Existing `~/.connectors/` and `~/.connect/` data should continue to work through migration into `~/.hasna/connectors/`.
+- Existing `~/.connectors/` and `~/.connect/` data should continue to work through migration into the effective connectors data home.
 
 ## Migration Checklist
 

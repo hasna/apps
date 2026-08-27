@@ -1,7 +1,7 @@
 import { afterEach, describe, mock, test, expect } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { connectorsHome } from "./paths.js";
 import {
   getConnectorCliPath,
   getConnectorOperations,
@@ -181,7 +181,7 @@ describe("Runner", () => {
     });
 
     test("runs github internal runtime for user info", async () => {
-      process.env.GITHUB_TOKEN = "github_test_token";
+      process.env.GITHUB_TOKEN = "fixture-github-value";
       const fetchMock = mock((input: RequestInfo | URL) =>
         Promise.resolve(
           new Response(JSON.stringify({ login: "octocat", id: 1 }), {
@@ -223,7 +223,7 @@ describe("Runner", () => {
 
     test("runs imessage internal runtime for message send", async () => {
       process.env.IMESSAGE_BRIDGE_URL = "https://bridge.example";
-      process.env.IMESSAGE_API_KEY = "bridge-key";
+      process.env.IMESSAGE_API_KEY = "fixture-bridge-value";
       process.env.IMESSAGE_DEVICE_ID = "device-main";
 
       const fetchMock = mock((input: RequestInfo | URL, init?: RequestInit) =>
@@ -358,7 +358,7 @@ describe("Runner", () => {
     });
 
     test("runs internal connector operations and returns parsed data", async () => {
-      process.env.GITHUB_TOKEN = "github_test_token";
+      process.env.GITHUB_TOKEN = "fixture-github-value";
       const fetchMock = mock((input: RequestInfo | URL) =>
         Promise.resolve(
           new Response(JSON.stringify({ login: "octocat", id: 1 }), {
@@ -524,7 +524,7 @@ describe("Runner", () => {
     });
 
     test("injects stored Gmail OAuth credentials into subprocess env", () => {
-      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
+      const configDir = join(connectorsHome(), "connect-gmail");
       const credsFile = join(configDir, "credentials.json");
       const profileDir = join(configDir, "profiles", "default");
       const tokensFile = join(profileDir, "tokens.json");

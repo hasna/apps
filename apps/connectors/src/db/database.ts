@@ -3,8 +3,8 @@ import { SqliteAdapter } from "./sqlite-adapter.js";
 export { SqliteAdapter } from "./sqlite-adapter.js";
 export type Database = SqliteAdapter;
 import { dirname, join } from "path";
-import { homedir } from "os";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
+import { connectorsHome, effectiveHome } from "../lib/paths.js";
 
 function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
   if (!existsSync(sourceDir)) {
@@ -36,12 +36,15 @@ function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
 
 /**
  * Get the connectors home directory.
- * New default: ~/.hasna/connectors/
- * Auto-migrates from historical ~/.connectors/ and ~/.connect/ trees.
+ * Resolved through @hasna/paths (XDG / macOS home layout) with a gated
+ * legacy adoption: `~/.hasna/connectors` stays the effective home until the
+ * store is migrated to the XDG data home or HASNA_DATA_HOME is set. The
+ * exact-app HASNA_CONNECTORS_DIR override wins. Auto-migrates from
+ * historical ~/.connectors/ and ~/.connect/ trees into the effective home.
  */
 export function getConnectorsHome(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const newDir = join(home, ".hasna", "connectors");
+  const newDir = connectorsHome();
+  const home = effectiveHome();
   const legacyDirs = [join(home, ".connectors"), join(home, ".connect")];
 
   mkdirSync(newDir, { recursive: true });
