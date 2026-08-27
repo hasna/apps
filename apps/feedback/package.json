@@ -1,6 +1,6 @@
 {
   "name": "@hasna/feedback",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Reusable feedback collection API, SDK, CLI, and MCP server for Hasna-coded apps",
   "type": "module",
   "main": "dist/index.js",
@@ -51,7 +51,8 @@
     "README.md",
     "SECURITY.md",
     "CONTRIBUTING.md",
-    "hasna.contract.json"
+    "hasna.contract.json",
+    "postinstall.js"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -66,7 +67,7 @@
     "dev:serve": "bun run src/server/cli.ts",
     "prepack": "bun run build && bun run artifact-scan",
     "prepublishOnly": "bun run typecheck && bun test",
-    "postinstall": "mkdir -p $HOME/.hasna/feedback 2>/dev/null || true"
+    "postinstall": "node postinstall.js"
   },
   "keywords": [
     "feedback",
@@ -96,6 +97,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/events": "^0.1.16",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "commander": "^13.1.0",
     "zod": "^3.25.76"
