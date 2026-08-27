@@ -18,6 +18,7 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "prepublishOnly": "bun run build",
     "release": "bun run ./scripts/publish.ts",
     "release:patch": "bun run ./scripts/publish.ts patch",

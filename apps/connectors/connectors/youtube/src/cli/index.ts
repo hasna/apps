@@ -694,7 +694,7 @@ videosCmd
   .option('--list-formats', 'List available formats without downloading')
   .action(async (videoId: string, opts) => {
     try {
-      const { execSync, spawn } = await import('child_process');
+      const { execSync, spawnSync, spawn } = await import('child_process');
 
       // Check if yt-dlp is installed
       try {
@@ -709,8 +709,11 @@ videosCmd
       // List formats mode
       if (opts.listFormats) {
         info(`Available formats for ${videoId}:`);
-        const result = execSync(`yt-dlp -F "${videoUrl}"`, { encoding: 'utf-8' });
-        console.log(result);
+        const result = spawnSync('yt-dlp', ['-F', videoUrl], { encoding: 'utf-8' });
+        if (result.status !== 0) {
+          throw new Error(`yt-dlp -F exited with status ${result.status ?? -1}`);
+        }
+        console.log(result.stdout);
         return;
       }
 
