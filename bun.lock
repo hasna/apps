@@ -495,7 +495,7 @@
     },
     "apps/conversations": {
       "name": "@hasna/conversations",
-      "version": "0.7.12",
+      "version": "0.7.13",
       "bin": {
         "conversations": "bin/index.js",
         "conversations-inbox": "bin/inbox",
