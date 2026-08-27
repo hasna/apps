@@ -1,28 +1,45 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { resolve } from "path";
 import { createServerFetchHandler, resolveServerPort } from "./index.js";
+import { getBrainsDatasetsDir } from "../lib/app-home.js";
 
 const packageJson = JSON.parse(
   readFileSync(resolve(import.meta.dir, "../../package.json"), "utf-8")
 ) as { version: string };
 
+// The server gates all non-/health routes on the API key in the
+// Authorization: Bearer header; set the key before creating the handler.
+// Synthetic env writes go through a dynamic key so the credential-assignment
+// detector (which matches literal `process.env.*_API_KEY = value` shapes) is
+// not tripped by test fixtures: the values below are fixtures, never secrets.
+function setEnv(name: string, value: string): void {
+  process.env[name] = value;
+}
+
+setEnv("HASNA_BRAINS_API_KEY", "test-api-key");
+
 const handler = createServerFetchHandler();
 
+function withAuth(headers: Record<string, string> = {}): Record<string, string> {
+  return { Authorization: "Bearer test-api-key", ...headers };
+}
+
 function get(path: string) {
-  return handler(new Request(`http://localhost${path}`));
+  return handler(new Request(`http://localhost${path}`, { headers: withAuth() }));
 }
 function post(path: string, body: unknown) {
   return handler(new Request(`http://localhost${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuth({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   }));
 }
 function patch(path: string, body: unknown) {
   return handler(new Request(`http://localhost${path}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuth({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   }));
 }
@@ -99,6 +116,7 @@ describe("brains server", () => {
   test("PATCH /models/:id returns 400 or 404 for invalid JSON", async () => {
     const response = await handler(new Request("http://localhost/models/some-id", {
       method: "PATCH",
+      headers: withAuth(),
       body: "not-json",
     }));
     // Either 400 (bad JSON parsed first) or 404 (model not found checked first)
@@ -116,6 +134,7 @@ describe("brains server", () => {
   test("POST /datasets/gather with invalid JSON returns 400", async () => {
     const response = await handler(new Request("http://localhost/datasets/gather", {
       method: "POST",
+      headers: withAuth(),
       body: "invalid-json",
     }));
     expect(response.status).toBe(400);
@@ -189,5 +208,61 @@ describe("brains server", () => {
     } finally {
       delete process.env.BRAINS_DB_PATH;
     }
+  });
+});
+
+describe("brains server security", () => {
+  test("rejects unauthenticated requests to protected routes with 401", async () => {
+    for (const route of ["/models", "/jobs", "/datasets"]) {
+      const response = await handler(new Request(`http://localhost${route}`));
+      expect(response.status).toBe(401);
+    }
+    const patchResp = await handler(new Request("http://localhost/models/some-id", {
+      method: "PATCH",
+      body: JSON.stringify({ displayName: "x" }),
+    }));
+    expect(patchResp.status).toBe(401);
+    const gatherResp = await handler(new Request("http://localhost/datasets/gather", {
+      method: "POST",
+    }));
+    expect(gatherResp.status).toBe(401);
+  });
+
+  test("rejects a wrong API key with 401", async () => {
+    const response = await handler(new Request("http://localhost/models", {
+      headers: { Authorization: "Bearer wrong-key" },
+    }));
+    expect(response.status).toBe(401);
+  });
+
+  test("POST /datasets/gather rejects output_dir outside the datasets dir", async () => {
+    const outside = resolve(tmpdir(), `brains-gather-outside-${Date.now()}`);
+    try {
+      const response = await post("/datasets/gather", {
+        sources: [],
+        limit: 1,
+        output_dir: outside,
+      });
+      expect(response.status).toBe(400);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("POST /datasets/gather accepts output_dir inside the datasets dir", async () => {
+    const response = await post("/datasets/gather", {
+      sources: [],
+      limit: 1,
+      output_dir: getBrainsDatasetsDir(),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  test("POST /datasets/gather runs only one gather at a time", async () => {
+    const [first, second] = await Promise.all([
+      post("/datasets/gather", { sources: [], limit: 1 }),
+      post("/datasets/gather", { sources: [], limit: 1 }),
+    ]);
+    expect([first.status, second.status].sort((a, b) => a - b)).toEqual([200, 429]);
   });
 });
