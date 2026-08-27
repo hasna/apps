@@ -38,7 +38,7 @@ export function getActiveModel(): string {
   return config.activeModel ?? DEFAULT_MODEL;
 }
 
-/** Sets the active fine-tuned model ID in ~/.hasna/conversations/config.json. */
+/** Sets the active fine-tuned model ID in the conversations config file. */
 export function setActiveModel(id: string): void {
   const config = readConfig();
   config.activeModel = id;
