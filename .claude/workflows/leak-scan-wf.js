@@ -38,6 +38,31 @@ const censusPrompt = (body) => {
 }
 // --- /safeAgent ---
 
+// --- phase deadlines (O15-04207) ---
+// The lane must never FREEZE on a lost agent result. Measured 2026-08-27 on
+// wf_ba7258cc-755 (task w3119ijn3): a scan agent completed its final
+// StructuredOutput ("Structured output provided successfully",
+// toolEndsTurn: true) and the runtime journal records the result, but the
+// workflow's await never received it — the pass froze 77 minutes with the
+// runtime holding the run live-but-stopped, until an external kill + manual
+// resume. safeAgent catches thrown errors and prose results but NOT a result
+// the runtime accepts and loses in delivery, so every agent await in the pass
+// loop is raced against a wall-clock deadline: on expiry the pass logs and
+// continues, and the next census re-queues every repo whose cursor was not
+// advanced (the state resume contract already treats a repo without an
+// advanced cursor as unscanned). A lost result degrades to a rescan, never to
+// a dead lane. Deadlines are args-overridable and generous — they bound the
+// pathological case, not the normal pass.
+const DEADLINE = Symbol('phase-deadline')
+const DEADLINE_MS = {
+  census: Math.max(1000, Number(args && args.censusDeadlineMs) || 45 * 60 * 1000), // covers the 30-min idle sleep + re-check + enumeration
+  investigate: Math.max(1000, Number(args && args.investigateDeadlineMs) || 45 * 60 * 1000),
+  scan: Math.max(1000, Number(args && args.scanDeadlineMs) || 25 * 60 * 1000), // 2 repos x 300s budget + fixture gates + tree refresh + slack
+  record: Math.max(1000, Number(args && args.recordDeadlineMs) || 25 * 60 * 1000),
+}
+const withDeadline = (promise, ms) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(DEADLINE), ms))])
+// --- /phase deadlines ---
+
 // Idle window (owner 2026-08-25, args-driven): args.idleMinutes in MINUTES,
 // default 30. The census sleeps IDLE_SLEEP seconds then re-checks once —
 // min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
@@ -194,7 +219,7 @@ let sweepSpec = null
 
 for (pass = 1; pass <= MAX_PASSES; pass++) {
   phase('Census')
-  const census = await safeAgent(censusPrompt(`${RECORDING}
+  const census = await withDeadline(safeAgent(censusPrompt(`${RECORDING}
 Census for the leak-scan lane. PASS ${pass} of the bounded loop (max ${MAX_PASSES}), script sweep counter ${sweep}. PRIORITY YIELD CHECK FIRST: todos list --project ${APPS} --status pending --json (redirect to a file, never pipe) — if any UNOWNED row's title starts with "HOTFIX:", the hotfix-drain lane owns the priority class: sleep 300 (bash), re-check once, return {yielded: true, specPresent: false, spec: null, sweep: ${sweep}, sweepStarted: false, population: [], populationComplete: false, reposTotal: 0, remainingThisSweep: 0, idle: false, queue: []} and do NOT probe GitHub while yielding.
 
 1. READ THE STATE FILE (resume contract): if [ -f ${STATE_FILE} ] then cat it (it holds {spec, cursors, lastSweep}); else state is missing — this is a fresh start: full-scan mode for every repo. specPresent = (state.spec is a complete object). Return the state's spec object as the census field "spec" (null when there is no state or no spec).
@@ -203,8 +228,12 @@ Census for the leak-scan lane. PASS ${pass} of the bounded loop (max ${MAX_PASSE
 4. MODES AND CURSORS: per queued repo, mode = state.cursors has the repo ? 'delta' : 'full'; cursor = state.cursors[repo] or null. IDLE CHECK: for each queued delta repo, compare its cursor to the remote HEAD — git ls-remote https://github.com/<repo>.git HEAD (redirect to a file; note the special case hasna-internal/dsh-TUI uses the same URL shape). If EVERY delta repo's remote HEAD equals its cursor (nothing new) AND lastSweep.complete: the fleet is clean — sleep ${IDLE_SLEEP} (bash — the args-driven idle window, ${IDLE_MINUTES} min default), re-check once, then return the final queue with idle: true.
 5. QUEUE ORDER: population order (org list order, then repo name). Exactly 2 scan agents will each take 2 repos: the first 2 queue entries go to agent A, the next 2 to agent B — the queue length is capped at 4.
 
-Return the census: yielded, specPresent, spec (the state's spec object, or null), sweep (the sweep you are working), sweepStarted, population (all names read), populationComplete, reposTotal, remainingThisSweep, idle, queue (each with repo, mode, cursor). Read-only: never open, close, comment, file, or clone anything in this phase.`), { label: 'leak-census:' + pass, phase: 'Census', schema: CENSUS, model: 'sonnet' })
+Return the census: yielded, specPresent, spec (the state's spec object, or null), sweep (the sweep you are working), sweepStarted, population (all names read), populationComplete, reposTotal, remainingThisSweep, idle, queue (each with repo, mode, cursor). Read-only: never open, close, comment, file, or clone anything in this phase.`), { label: 'leak-census:' + pass, phase: 'Census', schema: CENSUS, model: 'sonnet' }), DEADLINE_MS.census)
 
+  if (census === DEADLINE) {
+    log(`pass ${pass}: census exceeded ${DEADLINE_MS.census}ms — agent result lost or hung; re-checking next pass`)
+    continue
+  }
   if (!census || !Array.isArray(census.queue)) {
     log(`pass ${pass}: census failed or malformed — re-checking next pass`)
     continue
@@ -227,7 +256,7 @@ Return the census: yielded, specPresent, spec (the state's spec object, or null)
 
   if (!census.specPresent) {
     phase('Investigate')
-    const spec = await safeAgent(`${RECORDING}
+    const spec = await withDeadline(safeAgent(`${RECORDING}
 You are the INVESTIGATE phase of the leak-scan lane (pass ${pass}; the operating spec is missing from ${STATE_FILE}). Determine how this lane scans "hasna internal information leaked into PUBLIC repos" — by MEASURING, never by asserting.
 
 CONTEXT (binding rules):
@@ -247,7 +276,11 @@ DELIVER THE SPEC (return the object):
 8. populationEnumeration: the exact enumeration commands from the census.
 9. axesNotCovered: at least one dimension from step 2.
 
-MEASURE FIRST: run the probe verbs on one repo (e.g. a small scratch clone of matematica, or secrets scan workspace on an existing local checkout) and paste the measured lines into tooling. Do not return a spec built from help text alone.`, { label: 'leak-investigate', phase: 'Investigate', schema: SPEC, model: 'opus' })
+MEASURE FIRST: run the probe verbs on one repo (e.g. a small scratch clone of matematica, or secrets scan workspace on an existing local checkout) and paste the measured lines into tooling. Do not return a spec built from help text alone.`, { label: 'leak-investigate', phase: 'Investigate', schema: SPEC, model: 'opus' }), DEADLINE_MS.investigate)
+    if (spec === DEADLINE) {
+      log(`pass ${pass}: investigate exceeded ${DEADLINE_MS.investigate}ms — agent result lost or hung; retrying next pass`)
+      continue
+    }
     if (!spec) {
       log(`pass ${pass}: investigate failed — retrying next pass`)
       continue
@@ -276,7 +309,17 @@ Return {results: [...]} — one entry per assigned repo (empty array when none a
   const thunks = []
   if (queueA.length > 0) thunks.push(() => safeAgent(scanPrompt(queueA, pass), { label: 'leak-scan-a:' + pass, phase: 'Scan', schema: SCAN_RESULT, model: 'sonnet' }))
   if (queueB.length > 0) thunks.push(() => safeAgent(scanPrompt(queueB, pass), { label: 'leak-scan-b:' + pass, phase: 'Scan', schema: SCAN_RESULT, model: 'sonnet' }))
-  const scans = thunks.length > 0 ? await parallel(thunks) : [null]
+  // O15-04207: the scan phase is where the measured lost-result freeze occurred
+  // (wf_ba7258cc-755 pass 22, 2026-08-27) — race the parallel against the
+  // deadline so a lost result can never hang the lane. On expiry the pass
+  // continues WITHOUT a Record phase (nothing was scanned); the next census
+  // re-queues every repo (cursors were not advanced), degrading the loss to a
+  // rescan.
+  const scans = thunks.length > 0 ? await withDeadline(parallel(thunks), DEADLINE_MS.scan) : [null]
+  if (scans === DEADLINE) {
+    log(`pass ${pass}: scan phase exceeded ${DEADLINE_MS.scan}ms — ${thunks.length} scan agent result(s) lost or hung; repos re-queued next pass`)
+    continue
+  }
   const scanA = scans[0] || null
   const scanB = scans[1] || null
   const allResults = [(scanA && scanA.results) || [], (scanB && scanB.results) || []].flat()
@@ -284,7 +327,7 @@ Return {results: [...]} — one entry per assigned repo (empty array when none a
   if (failedRepos.length > 0) log(`pass ${pass}: scan failed for ${failedRepos.join(', ')} — re-queued next pass`)
 
   phase('Record')
-  const record = await safeAgent(`${RECORDING}
+  const record = await withDeadline(safeAgent(`${RECORDING}
 RECORD phase of the leak-scan lane, pass ${pass}, sweep ${sweep}. Census summary: population ${census.population.join(', ')} (${census.reposTotal} total, complete=${census.populationComplete}), queue this pass ${census.queue.map(q => q.repo + ':' + q.mode).join(', ')}, remainingThisSweep ${census.remainingThisSweep}, idle ${census.idle}. Scan results (successful repos only):
 
 ${JSON.stringify(allResults.filter((r) => !r.failed).map((r) => ({ repo: r.repo, mode: r.mode, scannedCommits: r.scannedCommits, scannedFiles: r.scannedFiles, cursor: r.cursor, truncated: r.truncated, findings: r.findings, controls: r.controls })))}
@@ -303,7 +346,12 @@ Run the gate for EVERY finding, one at a time. Never skip, never batch, never as
 3. ONE line to #apps: "leak-scan pass ${pass}: <repo>@<short-sha> <detector> @ <file>:<line> (n findings, m rows, k comments); sweep ${sweep} remaining <n>" — no ids without their meaning; one line even when clean ("leak-scan pass ${pass}: clean — 0 findings across <repos>; sweep ${sweep} remaining <n>").
 4. Save ONE memento under leak-scan-pass-${pass}: the per-pass finding count and any new leak class discovered (one or two sentences; no values).
 
-Return {rowsFiled, commentsPosted, skippedDedup, stateWritten, channelLine}.`, { label: 'leak-record:' + pass, phase: 'Record', schema: RECORD, model: 'sonnet' })
+Return {rowsFiled, commentsPosted, skippedDedup, stateWritten, channelLine}.`, { label: 'leak-record:' + pass, phase: 'Record', schema: RECORD, model: 'sonnet' }), DEADLINE_MS.record)
+
+  if (record === DEADLINE) {
+    log(`pass ${pass}: record phase exceeded ${DEADLINE_MS.record}ms — agent result lost or hung; re-checking next pass`)
+    continue
+  }
 
   const findingsTotal = allResults.reduce((n, r) => n + (r.findings ? r.findings.length : 0), 0)
   if (findingsTotal === 0) {
