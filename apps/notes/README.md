@@ -35,10 +35,9 @@ with `HASNA_NOTES_API_URL` + `HASNA_NOTES_API_KEY` (personalnotes/v1 dialect); a
 API URL without its key fails closed, and without an API URL the client never
 guesses a server.
 
-- Data root: `~/.hasna/notes/` (the pre-rename `~/.hasna/apps/notes/` root is copied forward once on first use)
-- Preferred override: `HASNA_NOTES_ROOT`
-- Legacy override: `HASNA_NOTES_ROOT`
-- Notes: `~/.hasna/notes/notes/<id>.md` (id is a lowercased UUID)
+- Data root: resolved via `@hasna/paths` — `~/.hasna/notes/` by default (the pre-rename `~/.hasna/apps/notes/` root is copied forward once on first use). The XDG data home (`~/.local/share/hasna/notes` on Linux, `~/Library/Application Support/Hasna/notes` on macOS) is adopted only when the operator sets `HASNA_DATA_HOME` or the store has already been physically migrated there — an existing local store never becomes invisible on upgrade.
+- Overrides (highest first): `HASNA_NOTES_HOME`, then `HASNA_NOTES_ROOT`, then `NOTES_HOME`
+- Notes: `<data root>/notes/<id>.md` (id is a lowercased UUID)
 - Writes are **atomic** (temp file in the same dir, then `rename`).
 - A missing/empty directory is created automatically.
 - Files without frontmatter are treated as a body with a title derived from the first line.
@@ -98,8 +97,8 @@ describe the note's own machine. To rewrite a store to v2 in one pass, run
 supported): it is idempotent, backs originals up once to
 `<root>/backup-frontmatter-v1/`, rewrites atomically per file, preserves the
 body byte-for-byte, and logs every dropped v1/unknown key. The user's folder
-list is persisted separately in `~/.hasna/notes/folders.json`; labels can
-also be persisted in `~/.hasna/notes/labels.json` so empty labels survive.
+list is persisted separately in `<data root>/folders.json`; labels can
+also be persisted in `<data root>/labels.json` so empty labels survive.
 
 AI-generated titles are concise and capped to 3-4 words. Title generation is
 heuristic by default and needs no network. Passing `--sidecar <url>` (plus
@@ -162,7 +161,7 @@ notes events status --json
 Archive and Trash are first-class note states. Normal Delete moves a note to
 Trash; deleting a note already in Trash, or calling an explicit purge,
 permanently removes the file. Trash retention defaults to 30 days and is stored in
-`~/.hasna/notes/settings.json`. Notes also carry provenance metadata:
+`<data root>/settings.json`. Notes also carry provenance metadata:
 actor type/name, machine attribution, opened-from/source context, and lifecycle
 timestamps.
 

@@ -9,14 +9,21 @@ import {
   commitNoteCreatedIntent,
 } from './notes-events.mjs';
 import { hasnaEnv } from './notes-env.mjs';
+import { getDataRoot, getExactDataRoot } from '../server/paths.mjs';
 
 export function dataRoot() {
   // Fleet law: app data lives at ~/.hasna/<app>/ — never a nested
-  // ~/.hasna/apps/<app> segment. The pre-rename nested root is migrated
-  // forward once (copy-only) unless an explicit HASNA_NOTES_ROOT is in use.
-  // HOME is read directly; homedir() is only the HOME-unset fallback.
-  const explicit = hasnaEnv('ROOT');
-  const root = explicit || join(process.env.HOME || homedir(), '.hasna', 'notes');
+  // ~/.hasna/apps/<app> segment. Path resolution routes through the
+  // @hasna/paths resolver (XDG / macOS home layout): the resolver data home
+  // (~/.local/share/hasna/notes on Linux) is adopted only when HASNA_DATA_HOME
+  // is set or the store has already been physically migrated there, otherwise
+  // the legacy ~/.hasna/notes root stays effective (an existing store never
+  // becomes invisible on upgrade). An exact-app override
+  // (HASNA_NOTES_HOME / HASNA_NOTES_ROOT / NOTES_HOME) wins unconditionally and
+  // skips the migration. The pre-rename nested root is migrated forward once
+  // (copy-only) unless an explicit override is in use.
+  const explicit = getExactDataRoot();
+  const root = getDataRoot();
   if (!explicit) migrateLegacyRootOnce(root);
   return root;
 }

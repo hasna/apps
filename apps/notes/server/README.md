@@ -6,7 +6,7 @@ speaks — backed by SQLite (PostgreSQL via `HASNA_NOTES_DATABASE_URL`). The
 `notes` client talks to it over HTTP: one protocol.
 
 - **Stack**: [Bun](https://bun.sh) + [Hono](https://hono.dev) + `bun:sqlite`. One runtime dependency.
-- **Storage**: one SQLite file (default `~/.hasna/notes/server.db`). Back it up by copying the file.
+- **Storage**: one SQLite file (default `~/.hasna/notes/server.db`, resolved via `@hasna/paths`). Back it up by copying the file.
 - **Scope**: notes CRUD, device-code auth, export, health. The multi-machine
   sync round-trip endpoint and its `sync_batches` table were removed in 0.2.0.
   No billing, no multi-tenant admin, no email service — those are
@@ -19,7 +19,7 @@ speaks — backed by SQLite (PostgreSQL via `HASNA_NOTES_DATABASE_URL`). The
 bun install
 bun index.mjs --auto-approve
 # → [notes-server] v0.1.0 listening on http://127.0.0.1:8788
-# → [notes-server] database: ~/.hasna/notes/server.db
+# → [notes-server] database: ~/.hasna/notes/server.db  # legacy default until the @hasna/paths XDG data home is adopted
 ```
 
 Point a client at it:
@@ -53,7 +53,7 @@ curl -X POST http://127.0.0.1:8788/api/v1/auth/device/approve \
 |---|---|---|---|
 | `--port <n>` | `HASNA_NOTES_SERVER_PORT`, `PORT` | `8788` | listen port |
 | `--host [addr]` | `HASNA_NOTES_SERVER_HOST` | `127.0.0.1` | bind address; bare `--host` binds `0.0.0.0` |
-| `--db <path>` | `HASNA_NOTES_SERVER_DB` | `~/.hasna/notes/server.db` | SQLite file |
+| `--db <path>` | `HASNA_NOTES_SERVER_DB` | `~/.hasna/notes/server.db` | SQLite file (resolved via `@hasna/paths`; `HASNA_DATA_HOME` or a migrated store adopts the XDG data home) |
 | `--auto-approve` | `HASNA_NOTES_SERVER_AUTO_APPROVE=1` | off | auto-approve loopback device logins |
 | `--dev` | `HASNA_NOTES_SERVER_DEV=1` | off | include `devCode` in OTP responses (tests/dev) |
 | | `HASNA_NOTES_SERVER_URL` | `http://<host>:<port>` | public URL used in `verificationUri` |

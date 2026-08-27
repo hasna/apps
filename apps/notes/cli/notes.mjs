@@ -82,7 +82,7 @@ Usage:
   notes storage migrate --dry-run [--json]
   notes events status [--json]
 
-Data root defaults to ${dataRoot()} and can be overridden with HASNA_NOTES_ROOT.`;
+Data root defaults to ${dataRoot()} and can be overridden with HASNA_NOTES_HOME / HASNA_NOTES_ROOT / NOTES_HOME.`;
 }
 
 function parseArgs(argv) {
