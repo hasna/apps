@@ -121,9 +121,16 @@ MCP exposes the same flow through `storage_status`, `storage_push`,
 
 ## Data Directory
 
-Data is stored in `~/.hasna/crawl/`.
-Legacy `~/.open-crawl` and `~/.crawl` data is copied forward on startup without
-deleting the legacy source or overwriting existing canonical files.
+Data is stored under a data root resolved through the `@hasna/paths` resolver
+(XDG/macOS home layout). The legacy `~/.hasna/crawl/` root stays the effective
+data root until the store is physically migrated to the XDG data home
+(`data.db` present there) or the operator sets the data-kind override
+`HASNA_DATA_HOME` — the XDG data home is `~/.local/share/hasna/crawl` on
+Linux. The exact-app overrides `HASNA_CRAWL_HOME` / `CRAWL_HOME` win
+unconditionally, and the store overrides `HASNA_CRAWL_DB_PATH` /
+`CRAWL_DB_PATH` are layered on top. Legacy `~/.open-crawl` and `~/.crawl` data
+is copied forward into the effective data root on startup without deleting the
+legacy source or overwriting existing canonical files.
 
 ## License
 

@@ -2,16 +2,16 @@ import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { FEEDBACK_TABLE_SQL, runMigrations } from "./migrations";
+import { getDataRoot } from "./paths.js";
 
 let instance: Database | null = null;
 let instancePath: string | null = null;
 
 export function getDataDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "/tmp";
-  const newDir = join(home, ".hasna", "crawl");
-  migrateLegacyDataDir(home, newDir);
-  mkdirSync(newDir, { recursive: true });
-  return newDir;
+  const root = getDataRoot();
+  migrateLegacyDataDir(root);
+  mkdirSync(root, { recursive: true });
+  return root;
 }
 
 function copyMissingRecursive(src: string, dest: string): void {
@@ -32,16 +32,17 @@ function copyMissingRecursive(src: string, dest: string): void {
   }
 }
 
-function migrateLegacyDataDir(home: string, newDir: string): void {
-  // Copy forward any legacy files that are missing from the canonical root —
-  // even when the canonical root already exists — without deleting the legacy
-  // source or overwriting existing canonical files. `.open-crawl` takes
-  // precedence over `.crawl` on name collisions.
+function migrateLegacyDataDir(dest: string): void {
+  // Copy forward any legacy files that are missing from the effective data
+  // root — even when the effective root already exists — without deleting the
+  // legacy source or overwriting existing canonical files. `.open-crawl`
+  // takes precedence over `.crawl` on name collisions.
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "/tmp";
   for (const legacyName of [".open-crawl", ".crawl"]) {
     const legacyDir = join(home, legacyName);
     if (!existsSync(legacyDir)) continue;
     if (!statSync(legacyDir).isDirectory()) continue;
-    copyMissingRecursive(legacyDir, newDir);
+    copyMissingRecursive(legacyDir, dest);
   }
 }
 

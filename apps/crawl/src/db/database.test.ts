@@ -99,6 +99,18 @@ describe("getDataDir", () => {
     expect(dataDir).toBe(join(home, ".hasna", "crawl"));
     expect(existsSync(dataDir)).toBe(true);
   });
+
+  it("adopts the resolver data root when HASNA_DATA_HOME is set", () => {
+    const home = tempHome();
+    const dataHome = join(home, "xdg-data");
+    process.env["HASNA_DATA_HOME"] = dataHome;
+
+    const dataDir = getDataDir();
+
+    expect(dataDir).toBe(join(dataHome, "crawl"));
+    expect(existsSync(dataDir)).toBe(true);
+    delete process.env["HASNA_DATA_HOME"];
+  });
 });
 
 describe("package install", () => {
