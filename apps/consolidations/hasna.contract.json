@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.14.1",
-  "description": "Group financial consolidation CLI + MCP + serve. SQLite at ~/.hasna/consolidations/consolidations.db is the default server data backend; a HASNA_CONSOLIDATIONS_DATABASE_URL selects PostgreSQL via the vendored storage kit. Legacy storage-mode variables are rejected.",
+  "description": "Group financial consolidation CLI + MCP + serve. SQLite at ~/.local/share/hasna/consolidations/consolidations.db (resolved via @hasna/paths) is the default server data backend; a HASNA_CONSOLIDATIONS_DATABASE_URL selects PostgreSQL via the vendored storage kit. Legacy storage-mode variables are rejected.",
   "bins": [
     "consolidations",
     "consolidations-mcp",
@@ -69,7 +69,7 @@
     ],
     "envPrefix": "HASNA_CONSOLIDATIONS_",
     "aliasEnvPrefix": "CONSOLIDATIONS_",
-    "sqlitePath": "~/.hasna/consolidations/consolidations.db",
+    "sqlitePath": "~/.local/share/hasna/consolidations/consolidations.db",
     "pgTestGate": {
       "envVar": "CONSOLIDATIONS_TEST_DATABASE_URL",
       "command": "bun run test:pg"

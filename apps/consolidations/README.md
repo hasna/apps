@@ -55,11 +55,19 @@ bun run dev:cli -- --json statements list --run-id <run-id>
 ## Server data backend
 
 Exactly one technical switch: **`sqlite` (default) | `postgresql`**. SQLite at
-`~/.hasna/consolidations/consolidations.db` is authoritative unless a
+`~/.local/share/hasna/consolidations/consolidations.db` is authoritative unless a
 `HASNA_CONSOLIDATIONS_DATABASE_URL` (or `*_DATABASE_URL_FILE` mount) is set, which
 selects PostgreSQL (via the vendored `@hasna/contracts` storage kit,
 `sslmode=verify-full`). Legacy `HASNA_CONSOLIDATIONS_STORAGE_MODE` variables are
 rejected with migration guidance.
+
+The local store's home is resolved through `@hasna/paths` (XDG / macOS layout,
+honoring `HASNA_*_HOME` overrides). The legacy `~/.hasna/consolidations` default
+stays the effective home until the XDG data home is adopted — the operator sets
+`HASNA_DATA_HOME`, or the store is physically migrated there (`consolidations.db`
+exists at the resolver home) — so an existing local store never becomes
+invisible on upgrade. `HASNA_CONSOLIDATIONS_HOME` / `CONSOLIDATIONS_HOME` are an
+exact-app override that wins unconditionally.
 
 ## Verify
 
