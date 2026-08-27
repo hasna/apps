@@ -19,7 +19,7 @@ enum:
 
 | Backend | Selection | Notes |
 | --- | --- | --- |
-| `sqlite` | Default. Local file at `~/.hasna/loops/loops.db`, or `$LOOPS_DATA_DIR/loops.db` when `LOOPS_DATA_DIR` is set | Zero-configuration on-box default; `loops` and `loops-daemon` use it |
+| `sqlite` | Default. Local file at the effective Loops data home — `~/.hasna/loops/loops.db` by default, resolved through `@hasna/paths` to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set, or `$LOOPS_DATA_DIR/loops.db` when `LOOPS_DATA_DIR` is set | Zero-configuration on-box default; `loops` and `loops-daemon` use it |
 | `postgresql` | `HASNA_LOOPS_DATABASE_URL` on `loops-serve` | The control-plane server's store |
 
 `sqlite` is the default. It must keep working without network access, tokens,

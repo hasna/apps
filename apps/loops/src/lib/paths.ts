@@ -1,22 +1,29 @@
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  effectiveHome,
+  getLoopsDataDir,
+} from "./app-home.js";
 
 /**
- * Home directory honoring a runtime `HOME` override. `os.homedir()` snapshots
- * `HOME` at process start and (under Bun) ignores later reassignment, so tests
- * that set `process.env.HOME` to a temp dir would otherwise resolve the *real*
- * home — which let the daemon-install tests overwrite the live
- * `~/.config/systemd/user/loops-daemon.service` with fixture garbage. In
- * production `HOME` is set at startup, so this resolves identically.
+ * The effective user home, honoring a runtime `HOME` override.
+ * `os.homedir()` snapshots `HOME` at process start and (under Bun) ignores
+ * later reassignment, so tests that set `process.env.HOME` to a temp dir would
+ * otherwise resolve the *real* home — which let the daemon-install tests
+ * overwrite the live `~/.config/systemd/user/loops-daemon.service` with fixture
+ * garbage. In production `HOME` is set at startup, so this resolves
+ * identically. Resolution is delegated to `./app-home.js` (the @hasna/paths
+ * resolver), which keeps the legacy `~/.hasna/loops` default effective until
+ * the store is physically migrated to the XDG data home or the operator sets
+ * `HASNA_DATA_HOME`; the `LOOPS_DATA_DIR` / `HASNA_LOOPS_DATA_DIR` exact-app
+ * overrides win unconditionally.
  */
 function homeDir(): string {
-  const home = process.env.HOME?.trim();
-  return home ? home : homedir();
+  return effectiveHome();
 }
 
 export function dataDir(): string {
-  return process.env.LOOPS_DATA_DIR || join(homeDir(), ".hasna", "loops");
+  return getLoopsDataDir();
 }
 
 export function ensureDataDir(): string {
