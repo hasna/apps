@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import { doctorExitCode, runDoctor, type DoctorAdapter } from "../src/commands/doctor.js";
+import { getDataDir } from "../src/paths.js";
 
 describe("doctor", () => {
   afterEach(() => {
@@ -36,6 +37,33 @@ describe("doctor", () => {
     expect(report.checks.some((check) => check.id === "sudo-noninteractive")).toBe(true);
     expect(report.checks.some((check) => check.id === "ssh-cert-support")).toBe(true);
     expect(report.checks.some((check) => check.id === "github-app-auth")).toBe(true);
+  });
+
+  test("doctor data_dir default is not single-quote-wrapped (P4 wave review P1 regression)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-doctor-quoting-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+    process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] = join(dir, "notifications.json");
+    delete process.env["HASNA_MACHINES_DIR"];
+    manifestInit();
+    manifestAdd({ id: "demo-node-01", platform: "linux", workspacePath: "/home/operator/workspace" });
+    writeFileSync(process.env["HASNA_MACHINES_DB_PATH"]!, "", "utf8");
+    writeFileSync(process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"]!, "{}", "utf8");
+
+    let captured = "";
+    runDoctor("demo-node-01", {
+      commandRunner: (machineId, command) => {
+        captured = command;
+        return { machineId, source: "local", stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    // A `'` immediately after `:-` inside the double-quoted ${...:-...} expansion
+    // becomes a literal character of the expanded value, not quoting — breaking
+    // every derived path ($data_dir/machines.json & co) and its test -e probe.
+    expect(captured).not.toMatch(/\$\{HASNA_MACHINES_DIR:\s*'/);
+    expect(captured).toContain(`data_dir="\${HASNA_MACHINES_DIR:-${getDataDir()}}"`);
   });
 
   test("reports GitHub App references without leaking values", () => {

@@ -61,9 +61,9 @@ function parseKeyValueOutput(stdout: string): Record<string, string> {
 }
 
 function buildDoctorCommand(): string {
-  const defaultDataDir = getDataDir().replace(/'/g, `'\\''`);
+  const defaultDataDir = getDataDir();
   return [
-    `data_dir="\${HASNA_MACHINES_DIR:-'${defaultDataDir}'}"`,
+    `data_dir="\${HASNA_MACHINES_DIR:-${defaultDataDir}}"`,
     'manifest_path="${HASNA_MACHINES_MANIFEST_PATH:-$data_dir/machines.json}"',
     'db_path="${HASNA_MACHINES_DB_PATH:-$data_dir/machines.db}"',
     'notifications_path="${HASNA_MACHINES_NOTIFICATIONS_PATH:-$data_dir/notifications.json}"',
