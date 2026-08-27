@@ -11,8 +11,13 @@ FROM oven/bun:1.3.13 AS builder
 WORKDIR /app
 
 # Install dependencies against the committed lockfile.
+# --ignore-scripts: the postinstall only pre-creates the host ~/.hasna/domains
+# data home, which a container does not use — this image is Postgres-only, no
+# local state, and the runtime (src/lib/app-home.ts) creates the same directory
+# on first use. Running it here would fail the build: postinstall.js is not
+# copied into this layer.
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Build all surfaces (cli, mcp, server, sdk, lib) into dist/.
 COPY tsconfig.json ./
@@ -21,7 +26,10 @@ COPY scripts ./scripts
 RUN bun run build
 
 # Prune to production dependencies for the runtime image.
-RUN rm -rf node_modules && bun install --frozen-lockfile --production
+# --ignore-scripts: same reason as the deps install above — the postinstall
+# would fail here (postinstall.js is not in this layer) and is meaningless in
+# a container that keeps no local state.
+RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-scripts
 
 # -----------------------------------------------------------------------------
 FROM oven/bun:1.3.13-slim AS runtime
