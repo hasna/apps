@@ -21,6 +21,25 @@ export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string
 }
 
 /**
+ * Resolve the PostgreSQL DSN used by the one-shot `migrate` operator verb.
+ *
+ * In the two-role deploy model the MIGRATION role owns the schema (it runs
+ * DDL) while the RUNTIME role (`resolveDatabaseUrl`, used by `/v1` and
+ * `/ready`) is DML-only, so the strict `assertCloudSchemaReady` posture
+ * contract can pass. A dedicated migration DSN is configured via
+ * `HASNA_RECORDINGS_MIGRATE_DATABASE_URL` (or `RECORDINGS_MIGRATE_DATABASE_URL`);
+ * when none is set the migrate falls back to the runtime DSN for
+ * single-role setups.
+ */
+export function resolveMigrationDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return (
+    env.HASNA_RECORDINGS_MIGRATE_DATABASE_URL ||
+    env.RECORDINGS_MIGRATE_DATABASE_URL ||
+    resolveDatabaseUrl(env)
+  );
+}
+
+/**
  * The backend this process will use: `postgresql` when a DSN is present,
  * `sqlite` otherwise.
  */

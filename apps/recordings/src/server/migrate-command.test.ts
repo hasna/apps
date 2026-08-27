@@ -64,3 +64,25 @@ describe("cloud migration command", () => {
     expect(recorded).toEqual([18]);
   });
 });
+
+describe("cloud migration command with a separate runtime posture gate", () => {
+  test("validates the runtime posture after the contract when a validator is supplied", async () => {
+    const calls: string[] = [];
+    await runCloudMigration({
+      pingConnectivity: async () => { calls.push("connect"); },
+      applyMigrations: async () => { calls.push("apply"); },
+      validateContract: async () => { calls.push("validate"); },
+    }, async () => { calls.push("runtime-posture"); });
+    expect(calls).toEqual(["connect", "apply", "validate", "runtime-posture"]);
+  });
+
+  test("skips the runtime posture gate when none is supplied", async () => {
+    const calls: string[] = [];
+    await runCloudMigration({
+      pingConnectivity: async () => { calls.push("connect"); },
+      applyMigrations: async () => { calls.push("apply"); },
+      validateContract: async () => { calls.push("validate"); },
+    });
+    expect(calls).toEqual(["connect", "apply", "validate"]);
+  });
+});

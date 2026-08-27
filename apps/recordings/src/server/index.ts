@@ -49,35 +49,22 @@ Commands:
   migrate         Apply the PostgreSQL schema, then exit. Idempotent.
 
 Environment:
-  HASNA_RECORDINGS_DATABASE_URL     PostgreSQL DSN (present -> postgresql backend, else sqlite)
-  HASNA_RECORDINGS_API_SIGNING_KEY  HMAC signing secret for API-key auth`);
+  HASNA_RECORDINGS_DATABASE_URL            PostgreSQL DSN (present -> postgresql backend, else sqlite)
+  HASNA_RECORDINGS_MIGRATE_DATABASE_URL    Optional MIGRATION-role DSN for migrate (two-role deploy;
+                                           falls back to the runtime DSN when unset)
+  HASNA_RECORDINGS_API_SIGNING_KEY         HMAC signing secret for API-key auth`);
 }
 
 async function runMigrate(): Promise<void> {
-  const {
-    closeCloud,
-    getCloudPg,
-    migrateCloudSchema,
-    pingCloudConnectivity,
-    resolveDatabaseUrl,
-  } = await import("./cloud.js");
-  const { assertCloudSchemaContract } = await import("./cloud-readiness.js");
-  const { runCloudMigration } = await import("./migrate-command.js");
-  if (!resolveDatabaseUrl()) {
+  const { closeCloud, resolveMigrationDatabaseUrl, runRecordedMigration } = await import("./cloud.js");
+  if (!resolveMigrationDatabaseUrl()) {
     console.error(
-      "migrate: no database URL (HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL)",
+      "migrate: no database URL (HASNA_RECORDINGS_MIGRATE_DATABASE_URL / RECORDINGS_MIGRATE_DATABASE_URL / HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL)",
     );
     process.exit(2);
   }
   console.log("migrate: connecting…");
-  await runCloudMigration({
-    pingConnectivity: pingCloudConnectivity,
-    applyMigrations: async () => {
-      console.log("migrate: applying schema (recordings tables + api_keys)…");
-      await migrateCloudSchema();
-    },
-    validateContract: () => assertCloudSchemaContract(getCloudPg()),
-  });
+  await runRecordedMigration();
   console.log("migrate: done");
   await closeCloud();
   process.exit(0);
