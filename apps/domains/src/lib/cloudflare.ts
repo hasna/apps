@@ -442,5 +442,31 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
       }
       return true;
     },
+
+    async deleteDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean> {
+      const zone = await getZone(domain, cfg);
+      if (!zone) throw new Error(`No Cloudflare zone found for ${domain}`);
+      const grouped = new Map<string, ProviderDnsRecord[]>();
+      for (const record of records) {
+        const key = `${record.type}|${record.name}`;
+        const group = grouped.get(key) ?? [];
+        group.push(record);
+        grouped.set(key, group);
+      }
+      for (const group of grouped.values()) {
+        const { type, name } = group[0]!;
+        const existing = await listRecordsByNameType(zone.id, type, name, cfg);
+        for (const record of group) {
+          const match = existing.find((candidate) =>
+            candidate.content === record.value
+            && (candidate.priority ?? undefined) === (record.priority ?? undefined)
+          );
+          if (match?.id) {
+            await deleteRecord(zone.id, match.id, cfg);
+          }
+        }
+      }
+      return true;
+    },
   };
 }

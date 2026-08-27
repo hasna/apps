@@ -343,4 +343,48 @@ describe("createCloudflareProvider domain inventory", () => {
       { type: "A", name: "@", content: "192.0.2.2", ttl: 600, proxied: true },
     ]);
   });
+
+  describe("createCloudflareProvider DNS record deletion", () => {
+    it("deletes only the live records matching the deleted identities (regression PLA23-00589)", async () => {
+      const calls: { method: string; url: string; body?: unknown }[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+        calls.push({ method, url, body });
+
+        if (url.includes("/zones?name=example.com")) {
+          return Response.json({
+            success: true,
+            result: [{ id: "zone-1", name: "example.com", status: "active", name_servers: ["cf1.example"] }],
+            errors: [],
+          });
+        }
+        if (url.includes("/zones/zone-1/dns_records?type=TXT&name=%40")) {
+          return Response.json({
+            success: true,
+            result: [
+              { id: "t-1", type: "TXT", name: "@", content: "old", ttl: 300 },
+              { id: "t-2", type: "TXT", name: "@", content: "keep", ttl: 300 },
+              { id: "t-3", type: "TXT", name: "@", content: "other-old", ttl: 300 },
+            ],
+            errors: [],
+          });
+        }
+        return Response.json({ success: true, result: [], errors: [] });
+      }) as typeof fetch;
+
+      const provider = createCloudflareProvider({ apiToken: "token", accountId: "account" });
+      const ok = await provider.deleteDnsRecords("example.com", [
+        { type: "TXT", name: "@", value: "old", ttl: 300 },
+        { type: "TXT", name: "@", value: "other-old", ttl: 300 },
+      ]);
+
+      expect(ok).toBe(true);
+      expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([
+        "https://api.cloudflare.com/client/v4/zones/zone-1/dns_records/t-1",
+        "https://api.cloudflare.com/client/v4/zones/zone-1/dns_records/t-3",
+      ]);
+    });
+  });
 });

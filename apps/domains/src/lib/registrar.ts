@@ -125,6 +125,14 @@ export interface DnsProvider {
   dnsWriteScope?: DnsWriteScope;
   getDnsRecords(domain: string): Promise<ProviderDnsRecord[]>;
   setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean>;
+  /**
+   * Delete the EXACT live records matching the given records.
+   *
+   * Omission is conservative: `dns apply` refuses a delete plan
+   * (`delete-apply-unsupported`) unless the provider can converge on deletes through
+   * this route, so a non-deletable provider is never written into a partial state.
+   */
+  deleteDnsRecords?(domain: string, records: ProviderDnsRecord[]): Promise<boolean>;
 }
 
 /** A provider that does both — e.g. Route 53 */

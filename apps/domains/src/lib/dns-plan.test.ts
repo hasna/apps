@@ -97,7 +97,7 @@ describe("dns desired-state planning", () => {
     expect(planHasChanges(plan)).toBe(true);
   });
 
-  it("blocks unconfirmed apply and refuses delete plans before provider writes", () => {
+  it("blocks unconfirmed apply and refuses delete plans the provider cannot express", () => {
     const createOnly = createDnsPlan("example.com", [], [
       { type: "A", name: "@", value: "192.0.2.1", ttl: 300 },
     ]);
@@ -109,5 +109,9 @@ describe("dns desired-state planning", () => {
     ], []);
     expect(getDnsApplyBlockReason(deletePlan, { yes: true })).toBe("delete-confirmation-required");
     expect(getDnsApplyBlockReason(deletePlan, { yes: true, allowDelete: true })).toBe("delete-apply-unsupported");
+    // Regression (PLA23-00589): the delete gate is the provider's CAPABILITY (a live
+    // delete route), not the delete plan itself — a provider that can converge on
+    // deletes must not be refused once the user passed --yes --allow-delete.
+    expect(getDnsApplyBlockReason(deletePlan, { yes: true, allowDelete: true }, true)).toBeUndefined();
   });
 });
