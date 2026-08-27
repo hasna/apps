@@ -1,18 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { getDataHome } from './paths';
 
 export const HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'knowledge');
 export const LEGACY_HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'apps', 'knowledge');
-
-/**
- * Home root for path resolution. Env wins over os.homedir() because Bun
- * caches homedir() at first call, so a subprocess or test that overrides HOME
- * must see its override reflected in every resolved data root.
- */
-function homeRoot(): string {
-  return process.env['HOME'] || process.env['USERPROFILE'] || homedir();
-}
 
 /**
  * Stable, unique key for a project-scoped knowledge workspace derived from the
@@ -145,17 +137,21 @@ export function legacyGlobalStorePath(): string {
 }
 
 export function globalKnowledgeHome(): string {
-  return join(homeRoot(), '.hasna', 'knowledge');
+  return getDataHome();
 }
 
 /**
- * The canonical project-scoped knowledge home: ~/.hasna/knowledge/projects/<key>.
- * The fleet law places app data under ~/.hasna/<app>/; project-scoped stores
- * live in a per-project sub-root of the knowledge app's own home rather than
- * inside the checked-out repository.
+ * The canonical project-scoped knowledge home: <knowledge-home>/projects/<key>.
+ * Project-scoped stores live in a per-project sub-root of the knowledge app's
+ * own home (the effective data home resolved through @hasna/paths — legacy
+ * `~/.hasna/knowledge` until the XDG data home is adopted) rather than inside
+ * the checked-out repository. An explicit `home` base (used by tests to inject
+ * an isolated home) keeps the legacy `~/.hasna/knowledge/projects/<key>`
+ * construction; production callers use the resolver-resolved knowledge home.
  */
-export function projectKnowledgeHome(cwd = process.cwd(), home = homeRoot()): string {
-  return join(home, '.hasna', 'knowledge', 'projects', projectKey(cwd));
+export function projectKnowledgeHome(cwd = process.cwd(), home: string | undefined = undefined): string {
+  const knowledgeRoot = home === undefined ? globalKnowledgeHome() : join(home, '.hasna', 'knowledge');
+  return join(knowledgeRoot, 'projects', projectKey(cwd));
 }
 
 /**

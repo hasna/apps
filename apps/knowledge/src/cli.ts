@@ -522,7 +522,7 @@ Global Options:
   --fake                       Use deterministic fake embeddings for local tests
   --no-tailscale               Skip local Tailscale topology probing
   --no-artifact-content        Export sync bundles without embedded artifact bodies
-  --scope local|global|project  Store scope (default: global ~/.hasna/knowledge/)
+  --scope local|global|project  Store scope (default: global — legacy ~/.hasna/knowledge, resolved through @hasna/paths to the XDG data home once adopted)
   --tables <names>             Comma-separated knowledge.db sync tables
   --peer-workspace <path>      Peer repo root or .hasna/knowledge path for local sync or remote override
   --project <id>               Project id/name/slug for project-panel output

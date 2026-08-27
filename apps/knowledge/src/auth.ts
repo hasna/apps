@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
 } from './client-transport';
+import { getDataHome } from './paths';
 
 export interface KnowledgeAuthConfig {
   api_key: string;
@@ -48,7 +48,7 @@ export function normalizeKnowledgeApiOrigin(apiUrl: string): string {
 
 export function knowledgeAuthPath(env: Record<string, string | undefined> = process.env): string {
   if (env.HASNA_KNOWLEDGE_AUTH_PATH) return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join(homedir(), '.hasna', 'knowledge');
+  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? getDataHome(env);
   return join(root, 'auth.json');
 }
 

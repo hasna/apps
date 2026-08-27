@@ -106,12 +106,15 @@ export declare function canonicalExampleKnowledgeStorage(): KnowledgeConfig['sto
 export declare function legacyGlobalStorePath(): string;
 export declare function globalKnowledgeHome(): string;
 /**
- * The canonical project-scoped knowledge home: ~/.hasna/knowledge/projects/<key>.
- * The fleet law places app data under ~/.hasna/<app>/; project-scoped stores
- * live in a per-project sub-root of the knowledge app's own home rather than
- * inside the checked-out repository.
+ * The canonical project-scoped knowledge home: <knowledge-home>/projects/<key>.
+ * Project-scoped stores live in a per-project sub-root of the knowledge app's
+ * own home (the effective data home resolved through @hasna/paths — legacy
+ * `~/.hasna/knowledge` until the XDG data home is adopted) rather than inside
+ * the checked-out repository. An explicit `home` base (used by tests to inject
+ * an isolated home) keeps the legacy `~/.hasna/knowledge/projects/<key>`
+ * construction; production callers use the resolver-resolved knowledge home.
  */
-export declare function projectKnowledgeHome(cwd?: string, home?: string): string;
+export declare function projectKnowledgeHome(cwd?: string, home?: string | undefined): string;
 /**
  * The previous project-scoped knowledge home: <cwd>/.hasna/knowledge. This is
  * the pre-canonical default that a one-time migration moves into

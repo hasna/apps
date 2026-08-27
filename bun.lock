@@ -932,7 +932,7 @@
     },
     "apps/knowledge": {
       "name": "@hasna/knowledge",
-      "version": "0.2.115",
+      "version": "0.2.116",
       "bin": {
         "knowledge": "bin/knowledge.js",
         "knowledge-mcp": "bin/knowledge-mcp.js",
@@ -946,6 +946,7 @@
         "@aws-sdk/credential-providers": "^3.1063.0",
         "@hasna/contracts": "0.14.1",
         "@hasna/events": "0.1.14",
+        "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@types/json-schema": "^7.0.15",
         "ai": "^6.0.197",
@@ -4717,6 +4718,8 @@
     "@hasna/instructions/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/knowledge/@hasna/events": ["@hasna/events@0.1.14", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-UXzEM6/8XUeysIUHspe7U3lottNZ7Ir6zwEJn5wH3MCtTXHuh+Vva+uPCowf6RAVnhxZic3xrfYk5atVBRFyLA=="],
+
+    "@hasna/knowledge/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/knowledge/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
