@@ -1,6 +1,6 @@
 {
   "name": "@hasna/consolidations",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Group financial consolidation: ingest entity GL data, normalize charts of accounts, translate multi-currency, run intercompany eliminations, produce consolidated P&L/BS/CF — CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
@@ -26,7 +26,8 @@
     "openapi.json",
     "docker-compose.yml",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "postinstall.js"
   ],
   "scripts": {
     "build": "bun build src/cli/index.tsx --outdir dist/cli --external zod --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono --external pg && bun build src/mcp/index.ts --outdir dist/mcp --external zod --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --external zod --target bun --external hono --external pg && bun build src/index.ts --outdir dist --external zod --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
@@ -40,7 +41,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8892",
     "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "node -e \"try{const os=require('os'),fs=require('fs'),p=require('path');const b=p.join(os.homedir(),'.hasna','consolidations');for(const d of ['','config','data','exports','backups','logs','tmp']) fs.mkdirSync(p.join(b,d),{recursive:true});}catch(e){}\"",
+    "postinstall": "node postinstall.js",
     "scan-artifact": "bun scripts/scan-artifact.ts",
     "prepack": "bun run build && bun run scan-artifact",
     "test:pg": "bun scripts/pg-test-gate.ts"
@@ -63,6 +64,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "hono": "4.13.3",
     "commander": "^13.1.0",

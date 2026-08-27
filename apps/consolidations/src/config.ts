@@ -1,16 +1,18 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { resolveServerDataBackend, type ServerDataBackend } from "./generated/storage-kit/backend.js";
+import { getDefaultDbPath } from "./core/app-home.js";
 
 /**
  * Canonical Hasna Service Contract v1 storage config for consolidations.
  *
  * A server has exactly one technical switch: `sqlite | postgresql`. SQLite at
- * ~/.hasna/consolidations/consolidations.db is authoritative by default; a
- * configured HASNA_CONSOLIDATIONS_DATABASE_URL (or *_DATABASE_URL_FILE mount)
- * selects PostgreSQL. Legacy storage-mode variables are rejected by the
- * vendored kit with migration guidance and are never interpreted.
+ * the effective consolidations home — the legacy `~/.hasna/consolidations/
+ * consolidations.db` default, resolved through `@hasna/paths`, until the XDG
+ * data home is adopted (store migrated there or `HASNA_DATA_HOME` set) — is
+ * authoritative by default; a configured HASNA_CONSOLIDATIONS_DATABASE_URL (or
+ * *_DATABASE_URL_FILE mount) selects PostgreSQL. Legacy storage-mode variables
+ * are rejected by the vendored kit with migration guidance and are never
+ * interpreted.
  */
 export const APP_NAME = "consolidations";
 export const ENV_TOKEN = "CONSOLIDATIONS";
@@ -95,9 +97,9 @@ export function scrubDatabaseUrl(env: Env = process.env): void {
   for (const key of DB_URL_KEYS) delete env[key];
 }
 
-/** Canonical local SQLite path: ~/.hasna/consolidations/consolidations.db */
+/** Canonical local SQLite path at the root of the effective consolidations home. */
 export function defaultSqlitePath(): string {
-  return join(homedir(), ".hasna", APP_NAME, `${APP_NAME}.db`);
+  return getDefaultDbPath();
 }
 
 /** Resolve the SQLite path, honoring the HASNA_CONSOLIDATIONS_DB_PATH override (tests). */
