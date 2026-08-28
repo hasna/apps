@@ -27,6 +27,7 @@ type WorkflowStep = {
   uses?: string;
   run?: string;
   env?: Record<string, string>;
+  with?: Record<string, string>;
 };
 
 type WorkflowJob = {
@@ -126,5 +127,27 @@ describe("mementos deploy lane contract", () => {
     const script = readFileSync(deployScriptPath, "utf8");
     expect(script).toContain("require_env MEMENTOS_CORS_ORIGIN");
     expect(script).toContain('"MEMENTOS_CORS_ORIGIN"');
+  });
+
+  test("the deploy job authenticates AWS via OIDC before the ECR login and ECS deploy", () => {
+    // Regression (PLA8-00203 review): the ported root lane omitted the
+    // configure-aws-credentials step the deleted nested lane carried, so
+    // "Login to Amazon ECR" ran against an empty default credential chain and
+    // the lane failed before production-deploy.sh ever ran. The OIDC step
+    // must exist, must precede the ECR login, and must assume the mementos
+    // production deploy role.
+    expect(workflow.permissions?.["id-token"]).toBe("write");
+    const deployJob = workflow.jobs?.deploy;
+    expect(deployJob, "the workflow must declare a deploy job").toBeDefined();
+    const steps = deployJob?.steps ?? [];
+    const credIndex = steps.findIndex((step) => step.name === "Configure AWS credentials (GitHub OIDC)");
+    expect(credIndex, "the deploy job must carry a 'Configure AWS credentials (GitHub OIDC)' step").toBeGreaterThanOrEqual(0);
+    const credStep = steps[credIndex];
+    expect(credStep?.uses).toContain("aws-actions/configure-aws-credentials@");
+    const withArgs = credStep?.with ?? {};
+    expect(withArgs["role-to-assume"]).toBe("arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ secrets.MEMENTOS_PROD_GHA_ROLE }}");
+    expect(withArgs["aws-region"]).toBe("${{ env.AWS_REGION }}");
+    const ecrIndex = steps.findIndex((step) => step.name === "Login to Amazon ECR");
+    expect(ecrIndex).toBeGreaterThan(credIndex);
   });
 });

@@ -217,6 +217,18 @@ jobs:
           fi
           printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
 
+      # AWS credentials for the ECR login and the ECS deploy below. The ported
+      # root lane must carry the same OIDC step the deleted nested lane had —
+      # without it, "Login to Amazon ECR" runs against an empty default
+      # credential chain and the lane fails before production-deploy.sh ever
+      # runs (regression guard: deploy-lane-contract.test.ts).
+      - name: Configure AWS credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ secrets.MEMENTOS_PROD_GHA_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-mementos-${{ github.run_id }}
+
       - name: Preflight automated deploy eligibility
         run: bash scripts/production-deploy.sh preflight
 
