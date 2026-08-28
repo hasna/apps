@@ -15,6 +15,9 @@ describe("database path resolution", () => {
   let originalRegistryPostgresUrl: string | undefined
   let originalRegistryS3Bucket: string | undefined
   let originalRegistryAwsRegion: string | undefined
+  let originalDataHome: string | undefined
+  let originalExactHome: string | undefined
+  let originalExactHomeLegacy: string | undefined
   let originalCwd: string
   let tempRoot: string
 
@@ -29,6 +32,9 @@ describe("database path resolution", () => {
     originalRegistryPostgresUrl = process.env["PROMPTS_REGISTRY_POSTGRES_URL"]
     originalRegistryS3Bucket = process.env["PROMPTS_REGISTRY_S3_BUCKET"]
     originalRegistryAwsRegion = process.env["PROMPTS_REGISTRY_AWS_REGION"]
+    originalDataHome = process.env["HASNA_DATA_HOME"]
+    originalExactHome = process.env["HASNA_PROMPTS_HOME"]
+    originalExactHomeLegacy = process.env["PROMPTS_HOME"]
     originalCwd = process.cwd()
     tempRoot = mkdtempSync(join(tmpdir(), "prompts-db-"))
     delete process.env["PROMPTS_DB_PATH"]
@@ -40,6 +46,9 @@ describe("database path resolution", () => {
     delete process.env["PROMPTS_REGISTRY_POSTGRES_URL"]
     delete process.env["PROMPTS_REGISTRY_S3_BUCKET"]
     delete process.env["PROMPTS_REGISTRY_AWS_REGION"]
+    delete process.env["HASNA_DATA_HOME"]
+    delete process.env["HASNA_PROMPTS_HOME"]
+    delete process.env["PROMPTS_HOME"]
   })
 
   afterEach(() => {
@@ -54,6 +63,9 @@ describe("database path resolution", () => {
     restoreEnv("PROMPTS_REGISTRY_POSTGRES_URL", originalRegistryPostgresUrl)
     restoreEnv("PROMPTS_REGISTRY_S3_BUCKET", originalRegistryS3Bucket)
     restoreEnv("PROMPTS_REGISTRY_AWS_REGION", originalRegistryAwsRegion)
+    restoreEnv("HASNA_DATA_HOME", originalDataHome)
+    restoreEnv("HASNA_PROMPTS_HOME", originalExactHome)
+    restoreEnv("PROMPTS_HOME", originalExactHomeLegacy)
     rmSync(tempRoot, { recursive: true, force: true })
   })
 
@@ -176,6 +188,65 @@ describe("database path resolution", () => {
     expect(diagnostics.local.db_path).toBe(join(targetDir, "prompts.db"))
     expect(existsSync(join(targetDir, "prompts.db"))).toBe(false)
     expect(readFileSync(join(legacyDir, "prompts.db"), "utf8")).toBe("legacy-db")
+  })
+
+  test("HASNA_DATA_HOME set adopts the resolver XDG data root", () => {
+    const home = join(tempRoot, "home")
+    process.env["HOME"] = home
+    process.env["HASNA_DATA_HOME"] = "/srv/hasna-data"
+
+    expect(getDbPath()).toBe(join("/srv/hasna-data", "prompts", "prompts.db"))
+  })
+
+  test("store present at the resolver XDG data root adopts it", () => {
+    const home = join(tempRoot, "home")
+    process.env["HOME"] = home
+    const resolved = join(home, ".local", "share", "hasna", "prompts")
+    mkdirSync(resolved, { recursive: true })
+    writeFileSync(join(resolved, "prompts.db"), "migrated-db")
+
+    expect(getDbPath()).toBe(join(resolved, "prompts.db"))
+  })
+
+  test("cache-only override does not adopt the data root", () => {
+    const home = join(tempRoot, "home")
+    process.env["HOME"] = home
+    process.env["HASNA_CACHE_HOME"] = "/srv/hasna-cache"
+
+    // A machine that only redirects cache must not have its data home moved.
+    expect(getDbPath()).toBe(join(home, ".hasna", "prompts", "prompts.db"))
+  })
+
+  test("exact-app HASNA_PROMPTS_HOME override wins over the resolver and legacy roots", () => {
+    const home = join(tempRoot, "home")
+    process.env["HOME"] = home
+    process.env["HASNA_DATA_HOME"] = "/srv/hasna-data"
+    process.env["HASNA_PROMPTS_HOME"] = "/srv/prompts-exact"
+
+    expect(getDbPath()).toBe(join("/srv/prompts-exact", "prompts.db"))
+  })
+
+  test("legacy PROMPTS_HOME exact override is honoured when the primary is blank", () => {
+    const home = join(tempRoot, "home")
+    process.env["HOME"] = home
+    process.env["HASNA_PROMPTS_HOME"] = "   "
+    process.env["PROMPTS_HOME"] = "/srv/prompts-legacy-exact"
+
+    // A whitespace-only primary must not shadow a valid secondary.
+    expect(getDbPath()).toBe(join("/srv/prompts-legacy-exact", "prompts.db"))
+  })
+
+  test("legacy ~/.prompts merge targets the adopted data root", () => {
+    const home = join(tempRoot, "home")
+    const dataHome = join(tempRoot, "data-home")
+    process.env["HOME"] = home
+    process.env["HASNA_DATA_HOME"] = dataHome
+    const adoptedDir = join(dataHome, "prompts")
+    mkdirSync(join(home, ".prompts"), { recursive: true })
+    writeFileSync(join(home, ".prompts", "prompts.db"), "legacy-db")
+
+    expect(getDbPath()).toBe(join(adoptedDir, "prompts.db"))
+    expect(readFileSync(join(adoptedDir, "prompts.db"), "utf8")).toBe("legacy-db")
   })
 })
 
