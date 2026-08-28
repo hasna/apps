@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { defaultDbPath } from "../paths.js";
 import { runMigrations } from "./schema.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
@@ -53,9 +54,10 @@ function getDbPath(): string {
     }
   }
 
-  // 4. Default: ~/.hasna/servers/servers.db
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "servers", "servers.db");
+  // 4. Default: the effective data root resolved through @hasna/paths — the
+  //    legacy ~/.hasna/servers until the XDG data home is adopted (HASNA_DATA_HOME
+  //    set or the store already migrated there), then the resolver data root.
+  return defaultDbPath();
 }
 
 function ensureDir(filePath: string): void {
