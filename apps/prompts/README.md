@@ -142,12 +142,14 @@ PORT=9000 prompts-serve
 ```
 
 `PORT` takes precedence over `PROMPTS_PORT`; `--port` takes precedence over
-both. Every `/api` route requires `Authorization: Bearer <PROMPTS_API_TOKEN>`
-and fails closed when no token is configured. The server does not emit CORS
-headers, so cross-origin browser clients are denied; same-origin clients (via
-a proxy or the dashboard with `VITE_API_TOKEN` set) work. It exposes JSON
-routes below `/api`, returns `GET /health`, and mounts Streamable HTTP MCP at
-`/mcp`.
+both. Every `/api` data request requires `Authorization: Bearer
+<PROMPTS_API_TOKEN>` and fails closed when no token is configured. CORS is
+restricted, never wildcard: `OPTIONS` preflights from a loopback origin (the
+dashboard's Vite dev server) or from an exact origin in
+`PROMPTS_API_CORS_ORIGIN` receive CORS headers without a bearer, while every
+actual data request still requires the token; preflights and data requests
+from any other origin are denied. It exposes JSON routes below `/api`, returns
+`GET /health`, and mounts Streamable HTTP MCP at `/mcp`.
 
 List and search endpoints return slim prompt records by default. Add the
 `full` query parameter when a supported endpoint should include prompt bodies.
