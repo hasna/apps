@@ -215,7 +215,9 @@ in `brief`.
 ## Workspace Store
 
 Projects has one canonical physical workspace store under `HASNA_PROJECTS_HOME`,
-defaulting to `~/.hasna/projects`:
+defaulting to `~/.hasna/projects` (resolved through the `@hasna/paths` resolver
+to the XDG data home `~/.local/share/hasna/projects` once the store has been
+migrated there or `HASNA_DATA_HOME` is set):
 
 - canonical workspace path: `$HASNA_PROJECTS_HOME/workspaces/<workspace_id>/`
 - runtime data path: `$HASNA_PROJECTS_HOME/data/<workspace_id>/`
@@ -503,7 +505,9 @@ Core internal tables:
 - `workspace_locks`: short-lived mutation locks
 - `workspace_migration_map`: one-time legacy project-to-workspace mapping
 
-Global registry DB path: `~/.hasna/projects/projects.db`
+Global registry DB path: `~/.hasna/projects/projects.db` (derived from the
+projects home, so it follows the `@hasna/paths` resolver once the XDG data home
+is adopted)
 
 Per-project app data path: `~/.hasna/projects/data/<workspace_id>/project.db`
 

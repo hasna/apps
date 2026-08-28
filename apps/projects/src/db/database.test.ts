@@ -63,6 +63,8 @@ describe("database", () => {
     closeDatabase();
     delete process.env["HASNA_WORKSPACES_DB_PATH"];
     delete process.env["HASNA_PROJECTS_DB_PATH"];
+    delete process.env["HASNA_PROJECTS_HOME"];
+    delete process.env["HASNA_DATA_HOME"];
   });
 
   describe("getDatabase", () => {
@@ -242,9 +244,22 @@ describe("database", () => {
     });
 
     test("returns default path when no env vars", () => {
+      delete process.env["HASNA_DATA_HOME"];
+      delete process.env["HASNA_PROJECTS_HOME"];
       const path = getDbPath();
-      expect(path).toContain(".hasna");
-      expect(path).toContain("projects.db");
+      expect(path).toBe(join(process.env["HOME"]!, ".hasna", "projects", "projects.db"));
+    });
+
+    test("routes the default DB to the resolver data home when HASNA_DATA_HOME is set", () => {
+      const base = mkdtempSync(join(tmpdir(), "db-xdg-"));
+      try {
+        process.env["HASNA_DATA_HOME"] = base;
+        const path = getDbPath();
+        expect(path).toBe(join(base, "projects", "projects.db"));
+      } finally {
+        delete process.env["HASNA_DATA_HOME"];
+        rmSync(base, { recursive: true, force: true });
+      }
     });
   });
 

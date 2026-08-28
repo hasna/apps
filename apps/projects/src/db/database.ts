@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runMigrations } from "./schema.js";
+import { getProjectsHome } from "../lib/project-store-paths.js";
 
 export const PROJECTS_DB_PATH_ENV = "HASNA_PROJECTS_DB_PATH";
 export const LEGACY_WORKSPACES_DB_PATH_ENV = "HASNA_WORKSPACES_DB_PATH";
@@ -13,8 +14,7 @@ export function getDbPath(): string {
   if (process.env[LEGACY_WORKSPACES_DB_PATH_ENV]) {
     return process.env[LEGACY_WORKSPACES_DB_PATH_ENV];
   }
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "projects", "projects.db");
+  return join(getProjectsHome(), "projects.db");
 }
 
 function ensureDir(filePath: string): void {
