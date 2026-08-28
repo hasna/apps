@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.11.1",
-  "description": "Multi-entity cash/treasury cockpit CLI + MCP + serve. SQLite at ~/.hasna/treasury/treasury.db is the default server data backend; a HASNA_TREASURY_DATABASE_URL selects PostgreSQL via the vendored storage kit. Legacy storage-mode variables are rejected.",
+  "description": "Multi-entity cash/treasury cockpit CLI + MCP + serve. SQLite at ~/.local/share/hasna/treasury/treasury.db (resolved via @hasna/paths; legacy ~/.hasna/treasury default until the XDG home is adopted) is the default server data backend; a HASNA_TREASURY_DATABASE_URL selects PostgreSQL via the vendored storage kit. Legacy storage-mode variables are rejected.",
   "bins": [
     "treasury",
     "treasury-mcp",
@@ -69,7 +69,7 @@
     ],
     "envPrefix": "HASNA_TREASURY_",
     "aliasEnvPrefix": "TREASURY_",
-    "sqlitePath": "~/.hasna/treasury/treasury.db",
+    "sqlitePath": "~/.local/share/hasna/treasury/treasury.db",
     "pgTestGate": {
       "envVar": "TREASURY_TEST_DATABASE_URL",
       "command": "bun run test:pg"
