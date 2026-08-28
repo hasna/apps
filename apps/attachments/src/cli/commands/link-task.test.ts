@@ -106,7 +106,7 @@ describe("linkAttachmentToTask", () => {
     mockFindById.mockImplementation(() => att);
 
     const fakeFetch = makeFetch(200);
-    process.env.TODOS_API_KEY = "remote-key";
+    process.env.TODOS_API_KEY = "k";
     await linkAttachmentToTask("att_abc123", "TASK-001", "http://localhost:3000", fakeFetch);
     delete process.env.TODOS_API_KEY;
 
@@ -114,7 +114,7 @@ describe("linkAttachmentToTask", () => {
     const [url, opts] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
     expect(url).toBe("http://localhost:3000/api/tasks/TASK-001");
     expect(opts.method).toBe("PATCH");
-    expect(new Headers(opts.headers).get("x-api-key")).toBe("remote-key");
+    expect(new Headers(opts.headers).get("x-api-key")).toBe("k");
 
     const body = JSON.parse(opts.body as string);
     expect(body.metadata._attachments).toHaveLength(1);
