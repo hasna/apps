@@ -125,8 +125,12 @@ Purpose
   committed to source control.
 
 Storage
-  Vault database:   ~/.hasna/secrets/vault.db
-  Key material:     ~/.hasna/secrets/vault.key or vault.key.enc
+  Vault database:   <data home>/vault.db — the effective secrets data home,
+                    resolved through @hasna/paths (XDG/macOS home layout, e.g.
+                    ~/.local/share/hasna/secrets). The legacy ~/.hasna/secrets
+                    default stays effective until the store is migrated there
+                    or HASNA_DATA_HOME is set.
+  Key material:     <data home>/vault.key or vault.key.enc
   Env-file bridge:  ~/.secrets/{division}/{service}/{env}.env
 
 Key format

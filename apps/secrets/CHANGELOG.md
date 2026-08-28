@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.13
+
+### Patch Changes
+
+- Local vault path reads/writes now resolve through the `@hasna/paths` resolver (XDG/macOS home layout) with gated legacy adoption: `~/.hasna/secrets` stays the effective data home until the store is migrated to `~/.local/share/hasna/secrets` or `HASNA_DATA_HOME` is set (XDG home migration, hotfixes plan 0f49f56a, task P3.3). The `~/.secrets` env-file bridge is unchanged. Pins `@hasna/paths@0.1.0`.
+
 ## 0.3.10
 
 ### Patch Changes
