@@ -18,6 +18,7 @@ import type {
 } from "../../types/index.js";
 import { addRoute } from "../router.js";
 import { json, errorResponse, readJson, getSearchParams, checkWriteOriginOrHost } from "../helpers.js";
+import { isAuthenticated } from "../auth.js";
 import { getDatabase } from "../../db/database.js";
 import { validateMemoryEnums, formatEnumViolation } from "../../lib/enum-validation.js";
 import { MemoryNotFoundError, VersionConflictError, DuplicateMemoryError, MemoryConflictError } from "../../types/index.js";
@@ -147,9 +148,11 @@ addRoute("POST", "/api/memories", async (req) => {
 // GET /api/memories/:id — get single memory.
 // The handler calls touchMemory() (a recency write), so it is gated like a
 // state-changing request: GET is a CORS simple request and a hostile
-// cross-origin page must not be able to trigger the write.
+// cross-origin page must not be able to trigger the write. Requests that
+// carry a VERIFIED API key and no Origin header (CLI/MCP/SDK clients) are not
+// CSRF and skip the ambient-credential gate (O15-04420).
 addRoute("GET", "/api/memories/:id", (req, _url, params) => {
-  const gate = checkWriteOriginOrHost(req);
+  const gate = isAuthenticated(req) ? null : checkWriteOriginOrHost(req);
   if (gate) return gate;
   const memory = getMemory(params["id"]!);
   if (!memory) {

@@ -57,10 +57,15 @@ function hostOf(entry: string): string {
  * This is the non-OPTIONS sibling of the preflight gate: a hostile page can
  * forge a POST/PATCH/DELETE with any Origin it likes, so those methods must
  * be allowlisted on every request, not only at preflight time.
+ *
+ * `authenticated` marks a request whose API key was already verified (see
+ * auth.ts `checkApiKey`): such a request is not CSRF, so the ambient-credential
+ * gate is skipped for it when it carries no Origin header (the CLI/MCP/SDK
+ * client shape). See `checkWriteOriginOrHost`.
  */
-export function checkOriginOrHost(req: Request, method: string): Response | null {
+export function checkOriginOrHost(req: Request, method: string, authenticated = false): Response | null {
   if (!isStateChangingMethod(method)) return null;
-  return checkWriteOriginOrHost(req);
+  return checkWriteOriginOrHost(req, authenticated);
 }
 
 /**
@@ -71,8 +76,20 @@ export function checkOriginOrHost(req: Request, method: string): Response | null
  * trigger one with no preflight — so a GET route whose handler writes state
  * (a touch/recency update, a cache write, an LLM call) must be gated exactly
  * like a state-changing method, even though its HTTP method is not one.
+ *
+ * `authenticated` exempts requests that carry a VERIFIED explicit API key and
+ * no Origin header. The allowlist is an ambient-credential (CSRF) defense: a
+ * hostile page cannot attach the Authorization header without CORS preflight
+ * (which is separately allowlisted) and cannot read the key, so a keyed
+ * request with no Origin is not CSRF and must be served regardless of
+ * MEMENTOS_CORS_ORIGIN — a deployment that omits the env var (or a client
+ * reaching the server through a Host the allowlist does not name) must not
+ * take down every CLI/MCP/SDK client with 403 'Host is not allowed'.
+ * Browser-context requests — any request WITH an Origin header — keep the
+ * full Origin allowlist even when keyed, as defense in depth.
  */
-export function checkWriteOriginOrHost(req: Request): Response | null {
+export function checkWriteOriginOrHost(req: Request, authenticated = false): Response | null {
+  if (authenticated && req.headers.get("origin") === null) return null;
   const allowlist = getAllowedOrigins();
   const allowedHosts = allowlist.map(hostOf);
 

@@ -22,7 +22,7 @@ import { getMemoryStats } from "../db/analytics.js";
 markServerContext();
 import { matchRoute } from "./router.js";
 import { CORS_HEADERS, getCorsHeaders, getAllowedOrigins, checkOriginOrHost, json, errorResponse, resolveDashboardDir, serveStaticFile, describeConstraintViolation } from "./helpers.js";
-import { checkApiKey } from "./auth.js";
+import { checkApiKey, isAuthenticated } from "./auth.js";
 
 function pkgVersion(): string {
   const req = createRequire(import.meta.url);
@@ -170,12 +170,13 @@ export function startServer(port: number): void {
         return new Response(null, { status: 204, headers: getCorsHeaders(req) });
       }
 
-      // Host/Origin allowlist — the non-OPTIONS sibling of the preflight gate.
-      // A hostile page can forge a state-changing request with any Origin, so
-      // POST/PATCH/PUT/DELETE are refused unless the request's Origin (or Host
-      // for non-browser clients) is on the configured allowlist.
-      const originGate = checkOriginOrHost(req, req.method);
-      if (originGate) return originGate;
+      // ----------------------------------------------------------------------
+      // Versioned API. `/v1/*` is the canonical prefix; `/api/*` is kept as a
+      // backward-compatible alias. Both share one handler set and one auth gate.
+      // ----------------------------------------------------------------------
+      const isV1 = pathname === "/v1" || pathname.startsWith("/v1/");
+      const routePath = isV1 ? `/api${pathname.slice(3)}` : pathname;
+      const isApi = routePath.startsWith("/api/");
 
       // ----------------------------------------------------------------------
       // Unauthenticated operational probes: {status, version, backend}
@@ -223,24 +224,42 @@ export function startServer(port: number): void {
         }
       }
 
-      // ----------------------------------------------------------------------
-      // Versioned API. `/v1/*` is the canonical prefix; `/api/*` is kept as a
-      // backward-compatible alias. Both share one handler set and one auth gate.
-      // ----------------------------------------------------------------------
-      const isV1 = pathname === "/v1" || pathname.startsWith("/v1/");
-      const routePath = isV1 ? `/api${pathname.slice(3)}` : pathname;
-      const isApi = routePath.startsWith("/api/");
-
       // OpenAPI document (unauthenticated) — the serve contract the SDK targets.
       if (pathname === "/openapi.json" || pathname === "/v1/openapi.json" || pathname === "/api/openapi.json") {
         const { buildOpenApiDocument } = await import("./openapi.js");
         return json(buildOpenApiDocument(pkgVersion()));
       }
 
-      // Auth gate for all API routes.
+      // API auth runs BEFORE the Host/Origin allowlist so that requests
+      // carrying a VERIFIED explicit API key (CLI / MCP / SDK clients, which
+      // send no Origin header) are not refused by the ambient-credential CSRF
+      // gate: a hostile page cannot attach an Authorization header without
+      // CORS preflight (separately allowlisted) and cannot read the key, so a
+      // keyed request is not CSRF and must be served regardless of
+      // MEMENTOS_CORS_ORIGIN. Unauthenticated requests still hit the allowlist
+      // and fail closed; browser-context requests (with an Origin header) keep
+      // the full Origin allowlist even when keyed, as defense in depth.
       if (isApi) {
         const authError = await checkApiKey(req, req.method, routePath);
-        if (authError) return authError;
+        if (authError) {
+          // Both auth and the allowlist gate failed: prefer the gate's 403
+          // (CSRF semantics) over the auth error, matching the historical
+          // check order.
+          const originGate = checkOriginOrHost(req, req.method);
+          if (originGate) return originGate;
+          return authError;
+        }
+        // Auth allowed the request — but pass-through (no key configured /
+        // opt-in) is not authentication. The ambient-credential gate still
+        // applies unless a VERIFIED key was presented and no Origin header
+        // rides on the request (CLI/MCP/SDK client shape).
+        const originGate = checkOriginOrHost(req, req.method, isAuthenticated(req));
+        if (originGate) return originGate;
+      } else {
+        // Non-API surfaces (dashboard static files) keep the pre-auth
+        // Host/Origin allowlist for state-changing methods.
+        const originGate = checkOriginOrHost(req, req.method);
+        if (originGate) return originGate;
       }
 
       // Profile info
