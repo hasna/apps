@@ -11,7 +11,7 @@ export function checkSkillAuth(): void {
     console.error('');
     console.error('To use hosted execution, set your SKILLS_API_KEY:');
     console.error('');
-    console.error('  export SKILLS_API_KEY=your-api-key-here');
+    console.error('  Set the SKILLS_API_KEY environment variable to your API key');
     console.error('');
     console.error('You can also use the root `skills auth login` command.');
     process.exit(1);
@@ -19,7 +19,7 @@ export function checkSkillAuth(): void {
 
   if (!skillsApiKey.startsWith('sk-skill-')) {
     console.error('Error: Invalid SKILLS_API_KEY format');
-    console.error('Expected format: sk-skill-xxxxxxxxxxxx');
+    console.error('Expected format: the "sk-skill-" prefix followed by the token');
     process.exit(1);
   }
 }
