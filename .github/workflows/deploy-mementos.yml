@@ -1,0 +1,255 @@
+name: deploy-mementos
+
+# Ported from apps/mementos/.github/workflows/deploy.yml (PLA8-00203): GitHub
+# Actions only discovers workflows at the repo ROOT .github/workflows/, so the
+# member-nested copy was a silent dead lane. The nested lane's fixes (env
+# injection of MEMENTOS_CORS_ORIGIN, hasna/apps #1359) could therefore never
+# reach the live service: the mementos-prod task definition ran without the
+# CORS origin and every cloud write was refused with 403 "Host is not allowed".
+# This root-level workflow is the discoverable home of the mementos deploy
+# lane. The nested file is deleted so it cannot be mistaken for a live lane.
+#
+# TRIGGERING — deployment never races the repository gates. A push to main does
+# NOT start this lane directly; the `ci` workflow does, and only after it has
+# already concluded successfully for that exact commit. `workflow_run` carries
+# `head_sha`, so the deployed source is bound to the commit CI actually
+# verified rather than to whatever main happens to point at when the deploy
+# starts. `workflow_run` does not accept a `paths:` filter, so the
+# member-scoping that `paths: [apps/mementos/**]` used to provide is enforced
+# in the gate job below against DEPLOY_PATH_SCOPE — a push touching another
+# member resolves proceed=false and the deploy job is skipped, never run and
+# failed.
+#
+# The manual route is retained and is deliberately narrower than the automatic
+# one: workflow_dispatch must be invoked on the main branch ref and always
+# resolves to the exact current origin/main tip. A historical SHA cannot be
+# deployed by hand, and a hand dispatch during or after red CI is refused: the
+# gate asks the Actions API for a COMPLETED SUCCESSFUL ci PUSH run on main
+# whose head_sha equals the freshly resolved tip.
+#
+# The deploy itself is the package-owned production-deploy.sh contract:
+# preflight (one ACTIVE stable service running mementos-deploy), candidate
+# digest resolution, task-definition registration with MEMENTOS_CORS_ORIGIN
+# injected, strict ECS readback, health verification, and rollback to the
+# recorded pre-deploy revision when public readiness rejects a stable rollout.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "${{ secrets.MEMENTOS_PROD_AWS_ACCOUNT_ID }}"
+  CLUSTER: oss-fleet-prod
+  SERVICE: mementos-prod
+  WEB_FAMILY: mementos-prod
+  WEB_CONTAINER: mementos
+  ECR_REPOSITORY: mementos
+  ECR_URL: "${{ secrets.MEMENTOS_PROD_AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/mementos"
+  # Host/Origin allowlist for state-changing requests. Must name the
+  # deployment's own origin or the server refuses every write with 403
+  # "Host is not allowed" (see apps/mementos/docs/CONFIGURATION.md). The live
+  # service refused all writes until this reached the task definition.
+  MEMENTOS_CORS_ORIGIN: "https://mementos.hasna.xyz"
+  # The workflow whose successful conclusion is the ONLY automatic entry point
+  # into this lane. Must equal the `name:` of .github/workflows/ci.yml and the
+  # single entry of on.workflow_run.workflows; the deploy gate cross-checks all
+  # three so renaming ci.yml cannot silently detach the binding.
+  REQUIRED_CI_WORKFLOW: ci
+  # The ci workflow's file, used to address it exactly on the Actions API when
+  # the manual route has to prove a ci success itself. Selecting by file path is
+  # unambiguous where a name lookup is not; the run's own `name` and `path` are
+  # then both re-checked against this pin and REQUIRED_CI_WORKFLOW.
+  CI_WORKFLOW_FILE: ci.yml
+  # Member scoping for this lane. Used as a real git pathspec by the gate job
+  # because workflow_run cannot carry a paths: filter.
+  DEPLOY_PATH_SCOPE: "apps/mementos/**"
+
+jobs:
+  gate:
+    name: gate (successful ci for the exact main commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The gate reads git history and the repository's own Actions run history,
+    # and nothing else. It must never hold the OIDC token that the deploy job
+    # needs, so it narrows the workflow permissions: `actions: read` is what
+    # lets it ask whether ci actually passed for a commit, and `id-token` is
+    # deliberately absent so this job can never assume an AWS role.
+    permissions:
+      contents: read
+      actions: read
+    # A failed, cancelled, non-push or non-main ci run must not open this lane.
+    # Expressed as a job condition so an unrelated ci outcome SKIPS the lane
+    # instead of reporting a red deployment for a deployment that never began.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+    outputs:
+      proceed: ${{ steps.resolve.outputs.proceed }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Resolve the deployable commit
+        id: resolve
+        shell: bash
+        env:
+          # The workflow's own short-lived repository token, scoped by the job
+          # permissions above to contents+actions read. No PAT, no secret.
+          GH_TOKEN: ${{ github.token }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          main_tip="$(git rev-parse refs/remotes/origin/main)"
+          proceed=false
+          source_sha=""
+
+          case "${GITHUB_EVENT_NAME}" in
+            workflow_run)
+              [[ "${RUN_NAME}" == "${REQUIRED_CI_WORKFLOW}" ]] || { echo "upstream workflow is ${RUN_NAME}, not ${REQUIRED_CI_WORKFLOW}" >&2; exit 1; }
+              [[ "${RUN_CONCLUSION}" == "success" ]] || { echo "upstream ci concluded ${RUN_CONCLUSION}, not success" >&2; exit 1; }
+              [[ "${RUN_EVENT}" == "push" ]] || { echo "upstream ci ran for ${RUN_EVENT}, not push" >&2; exit 1; }
+              [[ "${RUN_BRANCH}" == "main" ]] || { echo "upstream ci ran on ${RUN_BRANCH}, not main" >&2; exit 1; }
+              [[ "${RUN_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "upstream ci head sha is not a full commit id" >&2; exit 1; }
+              source_sha="${RUN_HEAD_SHA}"
+              git merge-base --is-ancestor "${source_sha}^{commit}" refs/remotes/origin/main || { echo "ci commit ${source_sha} is no longer contained in origin/main" >&2; exit 1; }
+              superseded="$(git rev-list -n 1 "${source_sha}..refs/remotes/origin/main" -- "${DEPLOY_PATH_SCOPE}")"
+              parent="$(git rev-parse --verify --quiet "${source_sha}^1" || true)"
+              if [[ -n "${superseded}" ]]; then
+                echo "superseded: origin/main already carries a newer commit touching ${DEPLOY_PATH_SCOPE}; that commit's own ci run owns the deployment"
+              elif [[ -z "${parent}" ]]; then
+                proceed=true
+              elif [[ -n "$(git diff --name-only "${parent}" "${source_sha}" -- "${DEPLOY_PATH_SCOPE}")" ]]; then
+                proceed=true
+              else
+                echo "no change under ${DEPLOY_PATH_SCOPE} in ${source_sha}; this lane has nothing to deploy"
+              fi
+              ;;
+            workflow_dispatch)
+              [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
+              source_sha="${main_tip}"
+              # A manual dispatch must not become a route around the repository
+              # gates. The workflow_run arm above inherits a head_sha that ci
+              # itself verified; workflow_dispatch inherits nothing, so the same
+              # binding is PROVED here against the Actions API: the exact tip we
+              # are about to deploy must already own a COMPLETED, SUCCESSFUL ci
+              # PUSH run on main.
+              #
+              # Fails closed on every path: a missing token, an HTTP or 404
+              # failure (set -e), a body jq cannot reduce to a number, and a zero
+              # count all exit non-zero. Nothing here can resolve proceed=true by
+              # default.
+              [[ -n "${GH_TOKEN:-}" ]] || { echo "manual deploy cannot verify ${REQUIRED_CI_WORKFLOW} without a repository token" >&2; exit 1; }
+              gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?branch=main&event=push&status=completed&head_sha=${source_sha}&per_page=100" > "${RUNNER_TEMP}/ci-runs.json"
+              ci_success_count="$(jq --arg sha "${source_sha}" --arg name "${REQUIRED_CI_WORKFLOW}" --arg path ".github/workflows/${CI_WORKFLOW_FILE}" '[.workflow_runs[]? | select(.name == $name and .path == $path and .head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success")] | length' "${RUNNER_TEMP}/ci-runs.json")"
+              [[ "${ci_success_count}" =~ ^[0-9]+$ ]] || { echo "the ${REQUIRED_CI_WORKFLOW} run query for ${source_sha} returned a body with no readable count" >&2; exit 1; }
+              [[ "${ci_success_count}" -ge 1 ]] || { echo "manual deploy refused: no completed successful ${REQUIRED_CI_WORKFLOW} push run on main for the exact origin/main tip ${source_sha}" >&2; exit 1; }
+              echo "manual deploy: ${ci_success_count} completed successful ${REQUIRED_CI_WORKFLOW} push run(s) bind ${source_sha}"
+              proceed=true
+              ;;
+            *)
+              echo "unsupported trigger ${GITHUB_EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "gate did not resolve a full source commit" >&2; exit 1; }
+          {
+            printf 'source_sha=%s\n' "${source_sha}"
+            printf 'proceed=%s\n' "${proceed}"
+          } >> "${GITHUB_OUTPUT}"
+
+  deploy:
+    name: build + migrate + verify + deploy
+    needs: gate
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
+    runs-on: ubuntu-24.04-arm # native arm64 runner — image built without QEMU
+    environment: production
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        shell: bash
+        # The monorepo checkout lands at the repo root; this job's Dockerfile,
+        # package.json, bun.lock and .dockerignore all live under apps/mementos.
+        # The docker build context below is `.` and MUST resolve to apps/mementos.
+        working-directory: apps/mementos
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.gate.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source is the gated ci-passed main commit
+        env:
+          GATED_SHA: ${{ needs.gate.outputs.source_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${GATED_SHA}"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          main_tip="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "${GATED_SHA}^{commit}" refs/remotes/origin/main
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
+            [[ "${GATED_SHA}" == "${main_tip}" ]] || { echo "manual deploy must target the exact current origin/main commit ${main_tip}, received ${GATED_SHA}" >&2; exit 1; }
+          fi
+          printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Preflight automated deploy eligibility
+        run: bash scripts/production-deploy.sh preflight
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+        with:
+          mask-password: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push native arm64 image
+        run: |
+          set -euo pipefail
+          IMAGE="${ECR_URL}:${GITHUB_SHA}"
+          docker buildx build \
+            --platform linux/arm64 \
+            --provenance=false \
+            --cache-from "type=gha" \
+            --cache-to "type=gha,mode=max" \
+            --tag "${IMAGE}" \
+            --push \
+            .
+
+      - name: Deploy service (new revision) and wait for stable
+        id: deploy
+        env:
+          CANDIDATE_SHA: ${{ needs.gate.outputs.source_sha }}
+        run: bash scripts/production-deploy.sh deploy
+
+      - name: Verify health and migration readiness endpoints
+        env:
+          APP_BASE_URL: ${{ vars.MEMENTOS_PROD_APP_BASE_URL }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.deploy.outputs.previous_task_definition }}
+          DEPLOYED_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+        run: bash scripts/production-deploy.sh verify
