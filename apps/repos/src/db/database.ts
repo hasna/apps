@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { getDataRoot } from "../lib/paths.js";
 import { sanitizeRemoteIdentity } from "../lib/remote-identity.js";
 import { resolvePullRequestOrigin } from "../lib/pr-identity.js";
 
@@ -40,7 +41,7 @@ export function getDbPath(): string {
   if (nearest) return nearest;
 
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const newPath = join(home, ".hasna", "repos", "repos.db");
+  const newPath = join(getDataRoot(), "repos.db");
   const legacyPath = join(home, ".git-local", "repos.db");
 
   if (existsSync(legacyPath) && !existsSync(newPath)) {
@@ -113,7 +114,7 @@ function getExplicitNonDefaultDbPath(customPath?: string): string {
 
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
   const defaults = [
-    normalizeDbPath(join(home, ".hasna", "repos", "repos.db")),
+    normalizeDbPath(join(getDataRoot(), "repos.db")),
     normalizeDbPath(join(home, ".git-local", "repos.db")),
   ];
   if (defaults.includes(path)) {

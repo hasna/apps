@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
+import { getDataRoot } from "./paths.js";
 import { canonicalPath } from "./path-identity.js";
 
 export interface FilterAlias {
@@ -49,16 +50,25 @@ const DEFAULT_CONFIG: ReposConfig = {
 
 let cachedConfig: ReposConfig | null = null;
 
-export function getReposHomeDir(homeDir = homedir()): string {
-  return resolve(homeDir, ".hasna", "repos");
+/**
+ * The effective repos data root, resolved through @hasna/paths: an exact-app
+ * override (`HASNA_REPOS_HOME`) wins; otherwise the resolver (XDG) data home
+ * (`~/.local/share/hasna/repos` on Linux) is used once adopted (`HASNA_DATA_HOME`
+ * set, or `repos.db` already migrated there); otherwise the legacy
+ * `~/.hasna/repos` default. File-level overrides (`HASNA_REPOS_CONFIG_PATH`,
+ * `HASNA_REPOS_HOOK_QUEUE_PATH`, `HASNA_REPOS_DB_PATH`) are layered on top of
+ * this root by their own modules.
+ */
+export function getReposHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return getDataRoot(env);
 }
 
-export function getConfigPath(homeDir = homedir()): string {
-  return process.env["HASNA_REPOS_CONFIG_PATH"] || resolve(getReposHomeDir(homeDir), "config.json");
+export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  return process.env["HASNA_REPOS_CONFIG_PATH"] || resolve(getReposHomeDir(env), "config.json");
 }
 
-export function getHookQueuePath(homeDir = homedir()): string {
-  return process.env["HASNA_REPOS_HOOK_QUEUE_PATH"] || resolve(getReposHomeDir(homeDir), "hook-events.tsv");
+export function getHookQueuePath(env: NodeJS.ProcessEnv = process.env): string {
+  return process.env["HASNA_REPOS_HOOK_QUEUE_PATH"] || resolve(getReposHomeDir(env), "hook-events.tsv");
 }
 
 /**
