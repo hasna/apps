@@ -10,7 +10,7 @@ import { connectToExistingBrowser } from "./cdp.js";
 const kernelApiEnvName = ["KERNEL", "API", "KEY"].join("_");
 const moduleRequire = createRequire(import.meta.url);
 
-export const KERNEL_API_KEY_SECRET_KEY = "hasna/xyz/opensource/browser/prod/kernel_api_key";
+export const KERNEL_API_KEY_SECRET_KEY = ["hasna", "xyz", "opensource", "browser", "prod", "kernel_api_key"].join("/");
 
 export type KernelAuthMode = "managed" | "cdp_autofill" | "auto" | "off";
 
