@@ -130,6 +130,27 @@ describe("resolver (XDG) data-root resolution", () => {
     expect(getSessionsDbPath()).toBe(join(base, "sessions", "sessions.db"));
   });
 
+  test("a stale ~/.sessions db is not copied into an adopted resolver root when a newer store exists", () => {
+    // The ancient pre-~/.hasna store was migrated to ~/.hasna/sessions long
+    // ago, but the ~/.sessions original was never deleted. The live store at
+    // ~/.hasna/sessions is newer — sessions have been added since that
+    // migration. Adopting a fresh resolver (XDG) root must NOT copy the stale
+    // ~/.sessions original in: that would make newer sessions invisible and
+    // fork subsequent writes from stale state.
+    const home = process.env.HOME!;
+    mkdirSync(join(home, ".sessions"), { recursive: true });
+    writeFileSync(join(home, ".sessions", "sessions.db"), "stale-original-db");
+    mkdirSync(join(home, ".hasna", "sessions"), { recursive: true });
+    writeFileSync(join(home, ".hasna", "sessions", "sessions.db"), "newer-live-db");
+
+    const base = mkdtempSync(join(tmpdir(), "sessions-data-home-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base;
+
+    const resolverDb = join(base, "sessions", "sessions.db");
+    expect(getSessionsDbPath()).toBe(resolverDb);
+    expect(existsSync(resolverDb)).toBe(false);
+  });
+
   test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
     const xdg = xdgRoot();
     mkdirSync(xdg, { recursive: true });
