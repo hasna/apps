@@ -1189,6 +1189,50 @@ describe("adoptWorktrees", () => {
     const listed = listWorktrees({ now: new Date() });
     expect(listed.entries.find((entry) => entry.path === dupDir)?.lease_id).toBe(owned.lease.lease_id);
     expect(listed.entries.find((entry) => entry.path === owned.path)?.lease_id).toBeNull();
+  // Release-review P1 (cycle 1): re-claiming a released lease row must hand it
+  // to the ADOPTING machine, not leave the released row's machine_id, task/run
+  // ownership and claimed_at intact. The stale row read as foreign and stale in
+  // `repos worktree list` (machine-mismatch + stale), leaving the re-claimed
+  // worktree eligible for takeover or cleanup.
+  test("--apply re-claim hands the lease to the adopting machine with a fresh claim time", () => {
+    const { repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "adopt-reclaim" });
+    const released = releaseWorktree({ leaseId: created.lease.lease_id, keep: true });
+    expect(released.lease.status).toBe("released");
+
+    const adoptingMachine = "machine-B-for-adopt";
+    const result = adoptWorktrees({ path: created.path, apply: true, machineId: adoptingMachine });
+    expect(result.applied).toBe(true);
+    expect(result.adopted).toHaveLength(1);
+
+    const rows = getDb()
+      .query(
+        "SELECT lease_id, machine_id, task_id, run_id, status, claimed_at, released_at FROM worktree_leases WHERE worktree_path = ?",
+      )
+      .all(created.path) as {
+      lease_id: string;
+      machine_id: string;
+      task_id: string;
+      run_id: string;
+      status: string;
+      claimed_at: string;
+      released_at: string | null;
+    }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.machine_id).toBe(adoptingMachine);
+    expect(rows[0]!.task_id).toBe("adopt-reclaim"); // adopt re-keys ownership to the worktree name
+    expect(rows[0]!.run_id).toBe("");
+    expect(rows[0]!.status).toBe("claimed");
+    expect(rows[0]!.released_at).toBeNull();
+    expect(rows[0]!.claimed_at).not.toBe(created.lease.claimed_at);
+
+    // The adopting machine's view must not flag the re-claimed lease as
+    // foreign or stale.
+    const listed = listWorktrees({ machineId: adoptingMachine, now: new Date() });
+    const entry = listed.entries.find((row) => row.path === created.path);
+    expect(entry?.lease_id).toBe(created.lease.lease_id);
+    expect(entry?.issues).not.toContain("machine-mismatch");
+    expect(entry?.issues).not.toContain("stale");
   });
 });
 
