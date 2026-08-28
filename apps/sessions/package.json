@@ -1,6 +1,6 @@
 {
   "name": "@hasna/sessions",
-  "version": "0.12.21",
+  "version": "0.12.22",
   "description": "Search and sync AI coding sessions (Claude, Codex, Codewith, plus legacy Gemini CLI logs) — unified SQLite index with full-text search",
   "type": "module",
   "engines": {
@@ -85,6 +85,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1007.0",
     "@hasna/contracts": "0.14.1",
     "@hasna/events": "^0.1.16",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "commander": "^13.0.0",
     "openai": "^6.32.0",

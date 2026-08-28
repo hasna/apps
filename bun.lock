@@ -1470,7 +1470,7 @@
     },
     "apps/sessions": {
       "name": "@hasna/sessions",
-      "version": "0.12.21",
+      "version": "0.12.22",
       "bin": {
         "sessions": "dist/cli/index.js",
         "sessions-mcp": "dist/mcp/index.js",
@@ -1482,6 +1482,7 @@
         "@aws-sdk/s3-request-presigner": "^3.1007.0",
         "@hasna/contracts": "0.14.1",
         "@hasna/events": "^0.1.16",
+        "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "commander": "^13.0.0",
         "openai": "^6.32.0",
@@ -4857,6 +4858,8 @@
     "@hasna/servers/react": ["react@19.2.8", "", {}, "sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw=="],
 
     "@hasna/servers/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/sessions/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/sessions/openai": ["openai@6.49.0", "", { "peerDependencies": { "@aws-sdk/credential-provider-node": ">=3.972.0 <4", "@smithy/hash-node": ">=4.3.0 <5", "@smithy/signature-v4": ">=5.4.0 <6", "ws": "^8.18.0", "zod": "^3.25 || ^4.0" }, "optionalPeers": ["@aws-sdk/credential-provider-node", "@smithy/hash-node", "@smithy/signature-v4", "ws", "zod"] }, "sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg=="],
 
