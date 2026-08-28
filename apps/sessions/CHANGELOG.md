@@ -1,5 +1,11 @@
 # @hasna/sessions
 
+## 0.12.22
+
+### Patch Changes
+
+- Switch the sessions data root through the `@hasna/paths` resolver (XDG/macOS home layout): the legacy `~/.hasna/sessions` data root stays the effective default until the resolver data home is adopted (operator sets `HASNA_DATA_HOME` or the store is already physically migrated there), so an existing local store never becomes invisible on upgrade. `getSessionsDir()` / `getSessionsDbPath()` and the handoff `handoffs` dir all resolve from the effective root; the `HASNA_SESSIONS_DIR`, `HASNA_SESSIONS_DB_PATH` and `SESSIONS_DB_PATH` overrides keep their precedence, and the `~/.sessions` legacy migration lands in the effective root. Dependency pinned exactly to `@hasna/paths@0.1.0` (hotfixes plan 0f49f56a, task P3.3).
+
 ## 0.12.21
 
 ### Patch Changes

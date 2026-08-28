@@ -7,7 +7,8 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
+import { dataDir } from "@hasna/paths";
 
 /** Encode a filesystem path to a Claude Code project directory name. */
 export function encodePath(fsPath: string): string {
@@ -42,23 +43,99 @@ export function getCodexSessionsDir(): string {
     : join(homedir(), ".codex", "sessions");
 }
 
+/** The sessions app slug used by the @hasna/paths resolver. */
+export const APP = "sessions" as const;
+
+/**
+ * The sessions data-root resolution — the legacy `~/.hasna/sessions` default,
+ * resolved through the @hasna/paths resolver (XDG / macOS home layout).
+ *
+ * The legacy `~/.hasna/sessions` default stays the effective data root until
+ * the XDG data home is adopted — the operator sets `HASNA_DATA_HOME` (the
+ * data-kind override — a deliberate opt-in to the XDG layout), or the store
+ * has already been physically migrated there (`sessions.db` exists at the
+ * resolver root) — so an existing local store never becomes invisible on
+ * upgrade. The pre-existing `HASNA_SESSIONS_DIR` /
+ * `HASNA_SESSIONS_DB_PATH` / `SESSIONS_DB_PATH` overrides keep their
+ * precedence above this default.
+ *
+ * Everything accepts an explicit env object (default `process.env`) so the
+ * resolver is deterministic in tests and honors the same `$HOME`-first home
+ * resolution the package has always used.
+ */
+
+/** The effective user home, mirroring the pre-existing resolution (`HOME` || `USERPROFILE` || os.homedir()). */
+export function getHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env["HOME"] || env["USERPROFILE"] || homedir();
+}
+
+/** Pre-XDG legacy sessions data root: ~/.hasna/sessions. */
+export function getLegacySessionsDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getHomeDir(env), ".hasna", APP);
+}
+
+/**
+ * The @hasna/paths-resolved sessions data root (XDG / macOS home layout):
+ * `~/.local/share/hasna/sessions` on Linux, `~/Library/Application
+ * Support/Hasna/sessions` on macOS. The home override mirrors the pre-existing
+ * `$HOME`-first resolution, and the env object is passed through so
+ * `HASNA_DATA_HOME` in the caller's env is honored.
+ */
+export function getResolverSessionsDir(env: NodeJS.ProcessEnv = process.env): string {
+  const home = env["HOME"] || env["USERPROFILE"];
+  return dataDir({ app: APP, home, env });
+}
+
+/**
+ * Whether the resolver (XDG) data root should be adopted as the sessions data
+ * root. The resolver root is adopted only when the operator has set
+ * `HASNA_DATA_HOME` (a deliberate opt-in to the XDG layout) or the store has
+ * already been physically migrated there (`sessions.db` exists). A machine
+ * that only redirects another kind (e.g. cache to tmpfs) must NOT have its
+ * data home moved, and a live store at the legacy home must never become
+ * invisible on upgrade.
+ */
+export function adoptResolverDataRoot(
+  resolved: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const dataOverride = env.HASNA_DATA_HOME;
+  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
+  return existsSync(join(resolved, "sessions.db"));
+}
+
+/**
+ * The effective sessions data root: the resolver (XDG) data root once adopted
+ * (`HASNA_DATA_HOME` set, or the store already migrated there); otherwise the
+ * legacy `~/.hasna/sessions` default — an existing store never becomes
+ * invisible on upgrade. The pre-existing `HASNA_SESSIONS_DIR` /
+ * `HASNA_SESSIONS_DB_PATH` / `SESSIONS_DB_PATH` overrides sit above this
+ * default in `getSessionsDir()` / `getSessionsDbPath()`.
+ */
+export function getEffectiveSessionsDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.HASNA_SESSIONS_DIR) return env.HASNA_SESSIONS_DIR;
+  const resolved = getResolverSessionsDir(env);
+  return adoptResolverDataRoot(resolved, env)
+    ? resolve(resolved)
+    : resolve(getLegacySessionsDir(env));
+}
+
 /** Get the sessions base directory, with auto-migration from legacy path. */
-export function getSessionsDir(): string {
-  if (process.env.HASNA_SESSIONS_DIR) {
-    const dir = process.env.HASNA_SESSIONS_DIR;
+export function getSessionsDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.HASNA_SESSIONS_DIR) {
+    const dir = env.HASNA_SESSIONS_DIR;
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     return dir;
   }
 
-  const home = getHomeDir();
-  const newDir = join(home, ".hasna", "sessions");
+  const effective = getEffectiveSessionsDir(env);
 
-  if (!existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
+  if (!existsSync(effective)) {
+    mkdirSync(effective, { recursive: true });
   }
-  migrateLegacySessionsDb(home);
+  migrateLegacySessionsDb(effective, env);
 
-  return newDir;
+  return effective;
 }
 
 function ensureExplicitDbPath(dbPath: string): string {
@@ -69,38 +146,33 @@ function ensureExplicitDbPath(dbPath: string): string {
 }
 
 /** Get the sessions database path. */
-export function getSessionsDbPath(): string {
-  if (process.env.HASNA_SESSIONS_DB_PATH) return ensureExplicitDbPath(process.env.HASNA_SESSIONS_DB_PATH);
-  if (process.env.SESSIONS_DB_PATH) return ensureExplicitDbPath(process.env.SESSIONS_DB_PATH);
+export function getSessionsDbPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.HASNA_SESSIONS_DB_PATH) return ensureExplicitDbPath(env.HASNA_SESSIONS_DB_PATH);
+  if (env.SESSIONS_DB_PATH) return ensureExplicitDbPath(env.SESSIONS_DB_PATH);
 
-  if (process.env.HASNA_SESSIONS_DIR) {
-    const dir = getSessionsDir();
+  if (env.HASNA_SESSIONS_DIR) {
+    const dir = getSessionsDir(env);
     return join(dir, "sessions.db");
   }
 
-  const home = getHomeDir();
-  const newDbPath = join(home, ".hasna", "sessions", "sessions.db");
+  const effective = getEffectiveSessionsDir(env);
+  const newDbPath = join(effective, "sessions.db");
 
-  migrateLegacySessionsDb(home);
+  migrateLegacySessionsDb(effective, env);
 
   return newDbPath;
 }
 
-function migrateLegacySessionsDb(home: string): void {
-  const newDir = join(home, ".hasna", "sessions");
-  const newDbPath = join(newDir, "sessions.db");
-  const legacyDbPath = join(home, ".sessions", "sessions.db");
+function migrateLegacySessionsDb(effectiveDir: string, env: NodeJS.ProcessEnv): void {
+  const newDbPath = join(effectiveDir, "sessions.db");
+  const legacyDbPath = join(getHomeDir(env), ".sessions", "sessions.db");
 
-  if (!existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
+  if (!existsSync(effectiveDir)) {
+    mkdirSync(effectiveDir, { recursive: true });
   }
   if (!existsSync(newDbPath) && existsSync(legacyDbPath)) {
     copyFileSync(legacyDbPath, newDbPath);
   }
-}
-
-function getHomeDir(): string {
-  return process.env.HOME || process.env.USERPROFILE || homedir();
 }
 
 /**

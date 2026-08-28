@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir, hostname, userInfo } from "node:os";
-import { encodePath } from "./paths.js";
+import { encodePath, getEffectiveSessionsDir } from "./paths.js";
 
 export type HandoffStatus = "created" | "dry_run";
 export type HandoffTarget = "codewith" | string;
@@ -692,8 +692,10 @@ function getHandoffsDir(env: NodeJS.ProcessEnv): string {
 
 function getSessionsDirFromEnv(env: NodeJS.ProcessEnv): string {
   if (env.HASNA_SESSIONS_DIR) return expandPath(env.HASNA_SESSIONS_DIR, env);
-  const home = env.HOME || env.USERPROFILE || homedir();
-  return join(home, ".hasna", "sessions");
+  // Route through the same resolver-gated effective root as getSessionsDir():
+  // the legacy ~/.hasna/sessions until the XDG data home is adopted
+  // (HASNA_DATA_HOME set or the store already migrated there).
+  return getEffectiveSessionsDir(env);
 }
 
 function getClaudeProjectsDirFromEnv(env: NodeJS.ProcessEnv): string {
