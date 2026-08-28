@@ -102,6 +102,14 @@ const censusPrompt = (body) => {
 // deploys nothing new or an empty deployable set ends the loop. The coordinator
 // re-launches this workflow for standing continuity; the run never loops past
 // its hard bound.
+// CORRECTED 2026-08-28 O15-04437: the empty-deployable and yielded branches
+// previously `continue`d, so an idle run churned all MAX_PASSES (each pass
+// re-running the survey, which sleeps IDLE_SLEEP and re-checks once) and never
+// reached a terminal state — wf_e88eb9c2-1b7 ran 77+ min with no terminal
+// result and the lane read as dead. The survey already slept + re-checked once
+// before returning empty/yielded, so those branches now END the run (break)
+// with status deploy-survey-only and the coordinator re-launches for standing
+// continuity.
 const allDeployed = []
 const allFailed = []
 let survey = null
@@ -123,13 +131,18 @@ THE DEPLOY SURFACE (measured 2026-08-24): services run as ECS Fargate in the oss
    - routing: https://<name>.hasna.xyz/health answers 200 (curl, one probe; a product app uses its own domain).
 3. Classify: DEPLOYABLE = ECS surface exists AND the ECS-deployed image version (from the current task def image tag or the route /version) is BEHIND origin/main's src version (or the src version differs from what the ECS service runs); BLOCKED = any role missing or unverifiable, with the exact missing role named. Do NOT deploy anything.
 Return {deployable: [{name, packageName, version, ecsService, taskDef, route, arch}], blocked: [{name, missingRole, reason}]} — arch is the measured docker platform (linux/amd64 | linux/arm64), NEVER omitted.`), { label: 'survey-deploy', phase: 'Survey', schema: SURVEY })
-if (!survey || !Array.isArray(survey.deployable) || survey.deployable.length === 0) {
-  log(`pass ${pass}: no deployable services (or malformed survey) — the survey waited ${IDLE_SLEEP}s and re-checked; re-checking next pass`)
-  continue
-}
 if (survey && survey.yielded) {
-  log(`pass ${pass}: YIELDED to hotfix-drain (${survey.hotfixCount || 0} HOTFIX: row(s)) — waited inside the survey, re-checking next pass`)
-  continue
+  log(`pass ${pass}: YIELDED to hotfix-drain (${survey.hotfixCount || 0} HOTFIX: row(s)) — waited inside the survey and re-checked; ending this run (status deploy-survey-only); the coordinator re-launches for standing continuity`)
+  break
+}
+// Agent failure class (O15-00732): safeAgent returned null (a subagent threw or
+// returned prose). Keep the in-run backoff — the next pass's census sleeps 300s
+// first via the censusPrompt banner — bounded by MAX_PASSES. NOT the same class
+// as an empty survey: a failed agent did not already wait the idle window.
+if (!survey) continue
+if (!Array.isArray(survey.deployable) || survey.deployable.length === 0) {
+  log(`pass ${pass}: no deployable services (or malformed survey) — the survey waited ${IDLE_SLEEP}s and re-checked; ending this run (status deploy-survey-only); the coordinator re-launches for standing continuity`)
+  break
 }
 log(`pass ${pass} survey: ${survey.deployable.length} deployable, ${Array.isArray(survey.blocked) ? survey.blocked.length : 0} blocked`)
 

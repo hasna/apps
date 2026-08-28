@@ -164,9 +164,7 @@ test('behavioral: deploy-apps survives a PROSE RESULT (non-object under a schema
     },
     parallel: (fns) => Promise.all(fns.map((f) => f())),
     log: (m) => {
-      const s = String(m)
-      logs.push(s)
-      if (logs.filter((l) => l.includes('no deployable services')).length >= 3) throw new Error('__TEST_END__')
+      logs.push(String(m))
     },
     phase: () => {},
     args: {},
@@ -179,9 +177,13 @@ test('behavioral: deploy-apps survives a PROSE RESULT (non-object under a schema
   })
   // WITHOUT the prose guard, pass 1 binds the string and crashes with
   // "undefined is not an object (evaluating 'survey.deployable.length')".
-  // WITH it, the string is treated as the failure class and the loop continues.
-  expect(ended && ended.message, 'loop terminated only via the test sentinel, never the TypeError').toBe('__TEST_END__')
-  expect(calls, 'run reached pass 3+ after the prose result').toBeGreaterThanOrEqual(3)
+  // WITH it, the string is treated as the failure class (AGENT-PROSE logged,
+  // next census prompt carries the sleep-300 banner) and the loop continues.
+  // AMENDED 2026-08-28 O15-04437: the pass-2 empty survey now ENDS the run
+  // (the survey already waited + re-checked per its prompt) — the run must
+  // terminate cleanly after exactly 2 surveys, never churn idle passes.
+  expect(ended, 'run terminates cleanly after the empty pass-2 survey — no TypeError, no idle-churn loop').toBeNull()
+  expect(calls, 'exactly three agent calls: failed survey (continue + banner), empty survey (ends the loop), record phase — never a churned pass 3+').toBe(3)
   expect(logs.some((l) => l.includes('AGENT-PROSE')), 'the prose result is logged as the failure class').toBe(true)
   expect(prompts[1].includes('Sleep 300 (bash) FIRST'), 'the pass-2 census prompt carries the sleep-300 pause banner').toBe(true)
 })
