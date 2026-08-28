@@ -1,6 +1,6 @@
 {
   "name": "@hasna/treasury",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Multi-entity cash/treasury cockpit: consolidated balances, FX exposure, per-entity & group runway, sweep/intercompany-funding recommendations, short-horizon cash forecast. CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
@@ -25,6 +25,7 @@
     "hasna.contract.json",
     "openapi.json",
     "docker-compose.yml",
+    "postinstall.js",
     "LICENSE",
     "README.md"
   ],
@@ -40,7 +41,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8890",
     "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "node -e \"try{const os=require('os'),fs=require('fs'),p=require('path');const b=p.join(os.homedir(),'.hasna','treasury');for(const d of ['','config','data','exports','backups','logs','tmp']) fs.mkdirSync(p.join(b,d),{recursive:true});}catch(e){}\"",
+    "postinstall": "node postinstall.js",
     "scan-artifact": "bun scripts/scan-artifact.ts",
     "prepack": "bun run build && bun run scan-artifact",
     "test:pg": "bun scripts/pg-test-gate.ts"
@@ -63,6 +64,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "hono": "4.13.3",
     "commander": "^13.1.0",

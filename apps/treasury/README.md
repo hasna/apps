@@ -23,7 +23,7 @@ sweep / intercompany-funding recommendations.
 
 The server data backend is the only technical switch:
 
-- **SQLite** at `~/.hasna/treasury/treasury.db` is authoritative by default.
+- **SQLite** at the effective treasury data home — `~/.local/share/hasna/treasury/treasury.db` once the XDG home is adopted (resolved via `@hasna/paths`), the legacy `~/.hasna/treasury/treasury.db` default until then — is authoritative by default.
 - **PostgreSQL** — set `HASNA_TREASURY_DATABASE_URL` (or a
   `*_DATABASE_URL_FILE` mount, as docker-compose injects it) to select the
   PostgreSQL backend via the vendored storage-kit with `sslmode=verify-full`.

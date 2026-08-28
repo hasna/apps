@@ -1,16 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { assertNoLegacyStorageMode } from "./generated/storage-kit/backend.js";
+import { getTreasuryAppHome } from "./core/app-home.js";
 
 /**
  * Canonical Hasna Service Contract v1 storage config for treasury.
  *
  * The server data backend is the ONLY technical switch: a configured
  * `HASNA_TREASURY_DATABASE_URL` (or the `*_DATABASE_URL_FILE` mount) selects
- * the PostgreSQL backend; otherwise SQLite at ~/.hasna/treasury/treasury.db is
- * authoritative. Removed legacy storage-mode variables are rejected by the
- * kit's `assertNoLegacyStorageMode` — never interpreted, never mapped.
+ * the PostgreSQL backend; otherwise SQLite at the effective treasury data home
+ * (resolved via @hasna/paths — `~/.local/share/hasna/treasury/treasury.db`
+ * once the XDG home is adopted; the legacy `~/.hasna/treasury/treasury.db`
+ * default until then) is authoritative. Removed legacy storage-mode variables
+ * are rejected by the kit's `assertNoLegacyStorageMode` — never interpreted,
+ * never mapped.
  */
 export const APP_NAME = "treasury";
 export const ENV_TOKEN = "TREASURY";
@@ -65,12 +68,17 @@ export function scrubDatabaseUrl(env: Env = process.env): void {
   for (const key of DB_URL_KEYS) delete env[key];
 }
 
-/** Canonical local SQLite path: ~/.hasna/treasury/treasury.db */
-export function defaultSqlitePath(): string {
-  return join(homedir(), ".hasna", APP_NAME, `${APP_NAME}.db`);
+/**
+ * Canonical local SQLite path: at the root of the effective treasury data home
+ * — `~/.local/share/hasna/treasury/treasury.db` once the XDG home is adopted
+ * (via @hasna/paths), the legacy `~/.hasna/treasury/treasury.db` default until
+ * then. An existing local store never becomes invisible on upgrade.
+ */
+export function defaultSqlitePath(env: Env = process.env): string {
+  return join(getTreasuryAppHome(env), `${APP_NAME}.db`);
 }
 
 /** Resolve the SQLite path, honoring the HASNA_TREASURY_DB_PATH override (used by tests). */
 export function resolveDbPath(env: Env = process.env): string {
-  return firstEnv(env, DB_PATH_KEYS) ?? defaultSqlitePath();
+  return firstEnv(env, DB_PATH_KEYS) ?? defaultSqlitePath(env);
 }
