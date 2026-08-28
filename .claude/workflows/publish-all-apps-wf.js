@@ -14,6 +14,14 @@ const TASK = '248f6ed8-d849-48ce-912c-1e7c5d8e69f0'
 const CHANNEL = 'board'
 const ACCOUNTS = ['account006', 'account025', 'account026', 'account030']
 
+// Pass bound (fleet ground truth 2026-08-26, added 2026-08-28 O15-04464): the
+// meta documents "(hard bound MAX_PASSES)" but the drain loop header was
+// `for (pass = 1; ; pass++)` — UNBOUNDED, so an idle run churned forever and
+// even the O15-00732 failure-class backoff could loop indefinitely. The run is
+// BOUNDED per run; standing continuity comes from the COORDINATOR re-launching
+// this workflow, never an unbounded in-script loop. args.maxPasses overrides.
+const MAX_PASSES = Math.min(500, Math.max(1, Number(args && args.maxPasses) || 30))
+
 const CONST = `
 You are a lane of the publish-all workflow (owner-authorized 2026-08-18, task ${TASK}). Mission: every app in the hasna/apps monorepo (${MONOREPO}) must be shipped to the hasna npm org as it gets updated. Max WIP: 4 lanes, ONE app per lane. Every release has a LIVE TEST step: install the published version and smoke the CLI. Final text = machine-readable JSON.
 
@@ -214,10 +222,21 @@ const reconcileConfirmFollowups = (census) => {
 // DRAIN-TO-ZERO LOOP (owner design 2026-08-25): re-census each pass; while the
 // publish queue is non-empty the pass restarts inside the same run. A pass that
 // publishes nothing new (all current/skipped) or an empty queue ends the loop.
+// CORRECTED 2026-08-28 O15-04464: the empty-queue and yielded branches
+// previously `continue`d, so an idle run churned forever (the loop header was
+// even UNBOUNDED — `for (pass = 1; ; pass++)` — and each pass re-ran the
+// census, which sleeps ~5 min and re-checks once) and never reached a terminal
+// state — the same hung-run class that froze the deploy-apps lane
+// (wf_e88eb9c2-1b7, O15-04437). The census already slept + re-checked once
+// before returning empty/yielded, so those branches now END the run (break),
+// and the loop is hard-bounded by MAX_PASSES; the coordinator re-launches for
+// standing continuity. The O15-00732 agent-failure backoff (safeAgent returned
+// null) keeps its in-run continue — a failed agent did not already wait the
+// idle window — bounded by MAX_PASSES.
 const allLanes = []
 let census = null
 let pass = 0
-for (pass = 1; ; pass++) {
+for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Census')
 census = await safeAgent(censusPrompt(CENSUS), { label: 'census-publish-' + pass, phase: 'Census', schema: CENSUS_SCHEMA, model: 'opus' })
 // O15-04231 cycle-2 P1-3: drop queued CONFIRM MISSING entries ONLY on a
@@ -225,14 +244,19 @@ census = await safeAgent(censusPrompt(CENSUS), { label: 'census-publish-' + pass
 // leaves them queued for the next pass (fail closed).
 reconcileConfirmFollowups(census)
 if (census && census.yielded) {
-  log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
-  continue
+  log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census and re-checked; ending this run; the coordinator re-launches for standing continuity`)
+  break
 }
+// Agent failure class (O15-00732): safeAgent returned null (a subagent threw or
+// returned prose). Keep the in-run backoff — the next pass's census sleeps 300s
+// first via the censusPrompt banner — bounded by MAX_PASSES. NOT the same class
+// as an empty queue: a failed agent did not already wait the idle window.
+if (!census) continue
 const queue = (census && census.queue) || []
 log(`pass ${pass} census: ${census ? JSON.stringify(census.counts) : 'FAILED'} — queue ${queue.length}`)
 if (!queue.length) {
-  log(`pass ${pass}: publish queue empty — the census waited ~5 min and re-checked; re-checking next pass`)
-  continue
+  log(`pass ${pass}: publish queue empty — the census waited ~5 min and re-checked; ending this run; the coordinator re-launches for standing continuity`)
+  break
 }
 
 phase('Release')
@@ -351,6 +375,20 @@ const publishedThisPass = lanes.filter(l => l && l.publishedVersion).length
 const gateGoThisPass = lanes.filter(l => l && l.gate === 'GO').length
 log(`pass ${pass} complete — ${publishedThisPass} published, ${gateGoThisPass} gate-verified (both gates GO), queue had ${queue.length}; next pass re-censuses`)
 }
+if (pass > MAX_PASSES) log(`MAX_PASSES reached (${MAX_PASSES}) — bounded run ends; the coordinator re-launches this workflow for standing continuity`)
+// O15-04464 review remediation (cycle 1): the empty-queue/yielded break paths
+// and the MAX_PASSES bound can END the run while the O15-04231 fail-closed
+// confirm-followup queue is still non-empty. The queue is IN-SCRIPT state — it
+// does not survive the run boundary, and the published app is already CURRENT
+// on the registry, so no later run's census would ever revisit it: dropping it
+// silently would recreate the exact silent-drop state O15-04231 exists to
+// prevent. Never drop it silently: log it and carry it on the run result so the
+// coordinator's terminal record names every un-filed RELEASE CONFIRM MISSING
+// entry (the durable-row filing itself is retried by the task-drain lane once a
+// row exists; the residual — no durable row is filed here — is recorded).
+if (pendingConfirmFollowups.length) {
+  log(`CONFIRM-QUEUE-PENDING-AT-RUN-END: ${JSON.stringify(pendingConfirmFollowups)} — run ended (break or MAX_PASSES) with RELEASE CONFIRM MISSING filings still queued; the in-script queue does not survive the run boundary, so these are recorded on the run result, never silently dropped (O15-04464 review remediation)`)
+}
 
 phase('Report')
 const report = await safeAgent(
@@ -365,4 +403,4 @@ const harvest = await safeAgent(HARVEST.replace('{REPORT}', JSON.stringify(repor
   label: 'harvest-publish', phase: 'Harvest', schema: HARVEST_SCHEMA, model: 'opus',
 })
 
-return { passes: pass, census, lanes: allLanes, report, harvest }
+return { passes: pass, census, lanes: allLanes, confirmFollowups: pendingConfirmFollowups, report, harvest }
