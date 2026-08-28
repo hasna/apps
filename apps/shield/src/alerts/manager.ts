@@ -1,6 +1,5 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
-import { homedir } from "os";
 import type { AlertChannel, AlertConfig, AlertPayload, AlertResult } from "./types.js";
 import type { Advisory } from "../types/index.js";
 import { Severity, SEVERITY_ORDER } from "../types/index.js";
@@ -9,18 +8,17 @@ import { DiscordChannel } from "./channels/discord.js";
 import { WebhookChannel } from "./channels/webhook.js";
 import { TwitterChannel } from "./channels/twitter.js";
 import { EmailChannel } from "./channels/email.js";
+import { getDataRoot, getHomeDir } from "../lib/paths.js";
 
 // --- Config loading ---
 
-function homeDir(): string {
-  return process.env.HOME || process.env.USERPROFILE || homedir();
-}
-
 function getGlobalAlertConfigPath(): string {
-  const home = homeDir();
-  const path = join(home, ".hasna", "security", "alerts.json");
-  const legacyShieldPath = join(home, ".hasna", "shield", "alerts.json");
-  const legacySecurityPath = join(home, ".security", "alerts.json");
+  // The global alert config lives at the effective data root's alerts.json
+  // (see src/lib/paths.ts), with one-time migration of the legacy
+  // `~/.hasna/shield/alerts.json` / `~/.security/alerts.json` files.
+  const path = join(getDataRoot(), "alerts.json");
+  const legacyShieldPath = join(getHomeDir(), ".hasna", "shield", "alerts.json");
+  const legacySecurityPath = join(getHomeDir(), ".security", "alerts.json");
   if (!existsSync(path)) {
     const legacyPath = existsSync(legacyShieldPath)
       ? legacyShieldPath

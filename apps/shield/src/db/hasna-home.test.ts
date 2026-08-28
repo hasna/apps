@@ -16,12 +16,16 @@ describe("hasna home database", () => {
     const originalHome = process.env.HOME;
     const originalUserProfile = process.env.USERPROFILE;
     const originalSecurityDb = process.env.SECURITY_DB;
+    const originalDataHome = process.env.HASNA_DATA_HOME;
+    const originalExactHome = process.env.HASNA_SHIELD_HOME;
     const home = mkdtempSync(join(tmpdir(), "security-home-"));
     const workDir = join(home, "work");
     try {
       process.env.HOME = home;
       delete process.env.USERPROFILE;
       delete process.env.SECURITY_DB;
+      delete process.env.HASNA_DATA_HOME;
+      delete process.env.HASNA_SHIELD_HOME;
       mkdirSync(workDir, { recursive: true });
       const legacyDir = join(home, ".hasna", "shield");
       mkdirSync(legacyDir, { recursive: true });
@@ -40,7 +44,55 @@ describe("hasna home database", () => {
       else process.env.USERPROFILE = originalUserProfile;
       if (originalSecurityDb === undefined) delete process.env.SECURITY_DB;
       else process.env.SECURITY_DB = originalSecurityDb;
+      if (originalDataHome === undefined) delete process.env.HASNA_DATA_HOME;
+      else process.env.HASNA_DATA_HOME = originalDataHome;
+      if (originalExactHome === undefined) delete process.env.HASNA_SHIELD_HOME;
+      else process.env.HASNA_SHIELD_HOME = originalExactHome;
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("adopts the resolver data home when HASNA_DATA_HOME is set", () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const originalSecurityDb = process.env.SECURITY_DB;
+    const originalDataHome = process.env.HASNA_DATA_HOME;
+    const originalExactHome = process.env.HASNA_SHIELD_HOME;
+    const root = mkdtempSync(join(tmpdir(), "security-xdg-home-"));
+    const home = join(root, "home");
+    const dataHome = join(root, "xdg");
+    const workDir = join(root, "work");
+    try {
+      process.env.HOME = home;
+      delete process.env.USERPROFILE;
+      delete process.env.SECURITY_DB;
+      process.env.HASNA_DATA_HOME = dataHome;
+      delete process.env.HASNA_SHIELD_HOME;
+      mkdirSync(workDir, { recursive: true });
+      process.chdir(workDir);
+
+      closeDb();
+      const db = getDb();
+      expect((db.prepare("SELECT 1 AS value").get() as { value?: number }).value).toBe(1);
+      closeDb();
+
+      // The resolver app slug (`security`) is appended beneath HASNA_DATA_HOME.
+      const adopted = join(dataHome, "security", "shield.db");
+      expect(existsSync(adopted)).toBe(true);
+      expect(existsSync(join(home, ".hasna", "security", "shield.db"))).toBe(false);
+    } finally {
+      closeDb();
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = originalUserProfile;
+      if (originalSecurityDb === undefined) delete process.env.SECURITY_DB;
+      else process.env.SECURITY_DB = originalSecurityDb;
+      if (originalDataHome === undefined) delete process.env.HASNA_DATA_HOME;
+      else process.env.HASNA_DATA_HOME = originalDataHome;
+      if (originalExactHome === undefined) delete process.env.HASNA_SHIELD_HOME;
+      else process.env.HASNA_SHIELD_HOME = originalExactHome;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -100,7 +152,7 @@ describe("hasna home database", () => {
       // The retired mode variables are deliberately not read: the store is
       // always local SQLite, so setting them changes nothing.
       const db = getDb();
-      expect(db.prepare("SELECT 1 AS value").get()?.value).toBe(1);
+      expect((db.prepare("SELECT 1 AS value").get() as { value?: number }).value).toBe(1);
     } finally {
       closeDb();
       if (originalSecurityDb === undefined) delete process.env.SECURITY_DB;

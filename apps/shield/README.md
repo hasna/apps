@@ -164,7 +164,10 @@ installs. New installs should use `@hasna/shield`.
 
 ## Data
 
-Stored in `~/.hasna/security/` (override with `SECURITY_DB` env var).
+Stored under the effective shield data root — legacy `~/.hasna/security/`
+until the resolver (XDG) data home is adopted, then `~/.local/share/hasna/
+security/` on Linux (see the Storage section for precedence; `SECURITY_DB`
+and `HASNA_SHIELD_HOME` override it).
 
 ## Secret Exposure Workflow
 
@@ -235,8 +238,16 @@ metadata plus a rule-specific fixture path for any narrow fixture allowlist.
 
 ## Storage
 
-Shield stores local state in `~/.hasna/security/` by default. Set
-`SECURITY_DB=/path/to/shield.db` to use a specific SQLite database file.
+Shield stores local state under the effective shield data root. The root
+resolves through the `@hasna/paths` resolver (XDG/macOS home layout): the
+legacy default is `~/.hasna/security`; once the resolver (XDG) data home is
+adopted (`HASNA_DATA_HOME` set, or the store already migrated to
+`~/.local/share/hasna/security/shield.db`), the SQLite store, the global alert
+config and the global CLI config resolve there instead. `HASNA_SHIELD_HOME`
+sets an exact data root that wins over both. Set
+`SECURITY_DB=/path/to/shield.db` to pin a specific SQLite database file; that
+per-file override wins on top of the effective root. Nothing moves on disk
+until the store is physically migrated.
 
 The retired `HASNA_SHIELD_STORAGE_MODE` / `HASNA_SECURITY_STORAGE_MODE`
 variables are no longer read; the store is always local SQLite.

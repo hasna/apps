@@ -14,7 +14,7 @@
     "release:check": "bun run check:secrets"
   },
   "dependencies": {
-    "@hasna/shield": "0.1.29"
+    "@hasna/shield": "0.1.30"
   },
   "files": [
     "bin",

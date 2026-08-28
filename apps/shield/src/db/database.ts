@@ -1,15 +1,11 @@
 import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
-import { homedir } from "os";
 import { scrubLegacyCredentialRows } from "./legacy-credential-scrub.js";
+import { getDataRoot, getHomeDir } from "../lib/paths.js";
 
 let _db: Database | null = null;
 const DATABASE_INIT_ERROR = "Unable to initialize Shield database safely";
-
-function homeDir(): string {
-  return process.env.HOME || process.env.USERPROFILE || homedir();
-}
 
 // The retired HASNA_SHIELD_STORAGE_MODE / HASNA_SECURITY_STORAGE_MODE
 // variables are deliberately NOT read: storage is local SQLite, selected by
@@ -22,10 +18,13 @@ function getDbPath(): string {
   const projectShield = join(process.cwd(), ".shield", "shield.db");
   if (existsSync(dirname(projectShield))) return projectShield;
 
-  const home = homeDir();
-  const dbPath = join(home, ".hasna", "security", "shield.db");
-  const legacyShieldPath = join(home, ".hasna", "shield", "shield.db");
-  const legacySecurityPath = join(home, ".security", "security.db");
+  // Global store: the effective data root's shield.db (with one-time legacy
+  // consolidation from ~/.hasna/shield and ~/.security). The data root
+  // resolves through the @hasna/paths resolver with gated legacy adoption —
+  // see src/lib/paths.ts.
+  const dbPath = join(getDataRoot(), "shield.db");
+  const legacyShieldPath = join(getHomeDir(), ".hasna", "shield", "shield.db");
+  const legacySecurityPath = join(getHomeDir(), ".security", "security.db");
   if (!existsSync(dbPath)) {
     const legacyPath = existsSync(legacyShieldPath)
       ? legacyShieldPath

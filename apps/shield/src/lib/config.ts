@@ -1,21 +1,18 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { join, dirname, basename } from "path";
-import { homedir } from "os";
+import { join } from "path";
 import { type ConfigFile, DEFAULT_CONFIG } from "../types/index.js";
+import { getDataRoot, getHomeDir } from "./paths.js";
 
 const CONFIG_DIR_NAME = ".security";
 const CONFIG_FILE_NAME = "config.json";
 const PROJECT_GITIGNORE_ENTRIES = ["*.db", "*.db-journal", "*.db-wal", "*.db-shm", "cache/"];
 
-function homeDir(): string {
-  return process.env.HOME || process.env.USERPROFILE || homedir();
-}
-
 export function getGlobalConfigDir(): string {
-  const home = homeDir();
-  const dir = join(home, ".hasna", "security");
+  // Global config lives at the effective data root (see src/lib/paths.ts),
+  // with one-time migration of the legacy `~/.security/config.json` into it.
+  const dir = getDataRoot();
   const path = join(dir, CONFIG_FILE_NAME);
-  const legacyPath = join(home, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
+  const legacyPath = join(getHomeDir(), CONFIG_DIR_NAME, CONFIG_FILE_NAME);
   if (!existsSync(path) && existsSync(legacyPath)) {
     mkdirSync(dir, { recursive: true });
     copyFileSync(legacyPath, path);

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/shield",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
   "main": "dist/index.js",
@@ -46,10 +46,11 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist dashboard/dist sdk/dist",
-    "postinstall": "mkdir -p $HOME/.hasna/security 2>/dev/null || true"
+    "postinstall": "node postinstall.mjs"
   },
   "dependencies": {
     "@hasna/events": "^0.1.6",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.4.1",
@@ -76,6 +77,7 @@
     "dashboard/dist",
     "README.md",
     "hasna.contract.json",
+    "postinstall.mjs",
     "LICENSE"
   ],
   "publishConfig": {
