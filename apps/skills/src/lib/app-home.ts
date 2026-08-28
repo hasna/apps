@@ -57,9 +57,19 @@ export function legacyDataRoot(): string {
  * Support/Hasna/skills` on macOS. The home override mirrors the pre-existing
  * `$HOME`-first resolution so the resolver follows the same home the legacy
  * path does.
+ *
+ * `env` is forwarded to the resolver: an injected env (e.g. `{}` for a
+ * staged home mirror) suppresses the process-level `HASNA_*_HOME` overrides,
+ * which describe THIS machine's live store and must not relocate a mirror.
+ * `@hasna/paths` applies env overrides before the injected home, so without
+ * this the resolver would ignore the mirror home whenever `HASNA_DATA_HOME`
+ * is set.
  */
-export function resolverDataRoot(home: string = effectiveHome()): string {
-  return dataDir({ app: "skills", home });
+export function resolverDataRoot(
+  home: string = effectiveHome(),
+  env?: Record<string, string | undefined>,
+): string {
+  return dataDir({ app: "skills", home, env });
 }
 
 /**
@@ -134,8 +144,34 @@ export function getDataRoot(): string {
  * The skills app data root for an explicit home root, mirroring getDataRoot()
  * with the home injected. Used by the sync-home snapshot mapping to enumerate
  * the skills corpus under a staged home mirror (`homesRoot`) or the real home.
+ *
+ * Process-level overrides (`HASNA_SKILLS_DIR` / `HASNA_SKILLS_HOME` /
+ * `SKILLS_HOME`, and the data-kind `HASNA_DATA_HOME`) describe THIS machine's
+ * live store. They apply only when the requested home IS the process's own
+ * effective home; a staged mirror (a different home, e.g. an rsync'd
+ * remote-station `homesRoot`) must resolve its own layout — the mirror's XDG
+ * data root once the mirror itself carries a migrated store there, else the
+ * mirror's legacy `~/.hasna/skills` — never the local process's live data
+ * root. Snapshotting a staged home with the local `HASNA_DATA_HOME` set would
+ * otherwise read live local data instead of the supplied mirror.
  */
 export function skillsDataRootForHome(home: string): string {
-  const resolved = resolverDataRoot(home);
-  return adoptResolverDataRoot(resolved) ? resolve(resolved) : resolve(join(home, ".hasna", "skills"));
+  const isOwnHome =
+    resolve(home) === resolve(effectiveHome()) || resolve(home) === resolve(homedir());
+  if (isOwnHome) {
+    const exact = exactDataRoot();
+    if (exact) return exact;
+    const resolved = resolverDataRoot(home);
+    return adoptResolverDataRoot(resolved) ? resolve(resolved) : resolve(join(home, ".hasna", "skills"));
+  }
+  // A staged home mirror (e.g. an rsync'd remote-station `homesRoot`):
+  // process-level overrides describe THIS machine's live store and must not
+  // leak into the mirror's resolution. Resolve with a scrubbed env so the
+  // mirror's own layout decides: its XDG data root once the mirror itself
+  // carries a migrated store there (`server.db` / `config.json`), else the
+  // mirror's legacy `~/.hasna/skills`. Snapshotting a staged home with the
+  // local `HASNA_DATA_HOME` / `HASNA_SKILLS_DIR` set would otherwise read
+  // live local data instead of the supplied mirror.
+  const resolved = resolverDataRoot(home, {});
+  return adoptResolverDataRoot(resolved, {}) ? resolve(resolved) : resolve(join(home, ".hasna", "skills"));
 }

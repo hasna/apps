@@ -176,4 +176,48 @@ describe("skills app-home resolution — legacy default must never become invisi
       rmSync(xdg, { recursive: true, force: true });
     }
   });
+
+  it("skillsDataRootForHome applies the exact-app override for the process's own home", () => {
+    // P1 regression: with HASNA_SKILLS_DIR set, sync-home snapshotting of the
+    // live home must resolve the operator-selected corpus, not the legacy
+    // ~/.hasna/skills store (portable-snapshot-filter.homePathFor).
+    const base = mkdtempSync(join(tmpdir(), "skills-home-"));
+    try {
+      process.env[DATA_DIR_ENV] = join(base, "exact-root");
+      expect(skillsDataRootForHome(testHome)).toBe(join(base, "exact-root"));
+    } finally {
+      delete process.env[DATA_DIR_ENV];
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("skillsDataRootForHome never leaks process overrides into a staged home mirror", () => {
+    // P1 regression: a staged homesRoot is a different machine's home tree;
+    // the local HASNA_DATA_HOME must not redirect the snapshot to live local
+    // data. The mirror resolves its own layout instead.
+    const stagedHome = join(tmpdir(), `skills-staged-${Date.now()}`);
+    mkdirSync(join(stagedHome, ".hasna", "skills"), { recursive: true });
+    const liveData = join(tmpdir(), `skills-live-${Date.now()}`);
+    try {
+      process.env["HASNA_DATA_HOME"] = liveData;
+      // The mirror has no migrated store -> its own legacy path, never the
+      // live data root.
+      expect(skillsDataRootForHome(stagedHome)).toBe(join(stagedHome, ".hasna", "skills"));
+      // Once the mirror itself carries a migrated store at its XDG root, that
+      // root wins — still not the live data root.
+      const stagedXdg = join(stagedHome, ".local", "share", "hasna", "skills");
+      mkdirSync(stagedXdg, { recursive: true });
+      writeFileSync(join(stagedXdg, "server.db"), "");
+      expect(skillsDataRootForHome(stagedHome)).toBe(stagedXdg);
+      // The exact-app override is also process-local: a staged home must not
+      // be redirected to it either.
+      process.env[DATA_DIR_ENV] = join(liveData, "exact-root");
+      expect(skillsDataRootForHome(stagedHome)).toBe(stagedXdg);
+    } finally {
+      delete process.env["HASNA_DATA_HOME"];
+      delete process.env[DATA_DIR_ENV];
+      rmSync(stagedHome, { recursive: true, force: true });
+      rmSync(liveData, { recursive: true, force: true });
+    }
+  });
 });
