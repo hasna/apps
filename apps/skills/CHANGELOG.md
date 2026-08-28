@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.72
+
+### Patch Changes
+
+- Switch @hasna/skills local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout, hotfixes plan 0f49f56a task P3.3). The legacy `~/.hasna/skills` data root stays the effective data root until the store has actually been migrated to the XDG data home (`server.db` or `config.json` present there) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing live store never becomes invisible on upgrade. The exact-app overrides `HASNA_SKILLS_DIR`, `HASNA_SKILLS_HOME` / `SKILLS_HOME` win unconditionally. Nothing moves on disk in this phase.
+
 ## 0.1.71
 
 ### Patch Changes

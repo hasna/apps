@@ -21,6 +21,7 @@ import { homedir } from "node:os";
 import { join, sep } from "node:path";
 
 import type { SyncAgent } from "./agent-sync.js";
+import { skillsDataRootForHome } from "./app-home.js";
 
 /** A snapshot source: one directory of installed skills. */
 export interface SyncHomeDefinition {
@@ -153,7 +154,11 @@ export function homePathFor(
 ): string {
   const home = homesRoot ?? homedir();
   if (definition.subClass === "skills" || definition.subClass === "custom") {
-    return join(home, ".hasna", "skills", definition.name);
+    // The skills corpus homes live under the skills app data root, resolved
+    // through @hasna/paths with the same gated legacy adoption the runtime uses
+    // (app-home.skillsDataRootForHome): the XDG data home once the store has
+    // migrated there, else the legacy ~/.hasna/skills.
+    return join(skillsDataRootForHome(home), definition.name);
   }
   if (definition.agent === "opencode") {
     return join(home, ".config", "opencode", "skills");
