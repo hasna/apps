@@ -97,7 +97,7 @@ describe("Cursor fixed global authority detection", () => {
     // template re-render that expanded variables) kept its stale marker hash
     // forever. Every re-apply then propagated the invalid stamp, the observer
     // reported marker-integrity-mismatch, and the cursor project render stayed
-    // blocked with no repair path (H-00154, station01 hasna-global.mdc).
+    // blocked with no repair path (H-00154, station hasna-global.mdc).
     const payload = [
       "---",
       "alwaysApply: true",
@@ -107,7 +107,7 @@ describe("Cursor fixed global authority detection", () => {
     ].join("\n");
     const stamped = stampCursorGlobalAuthorityMarker(payload);
 
-    // Simulate an out-of-band edit AFTER stamping: same shape as the station01
+    // Simulate an out-of-band edit AFTER stamping: same shape as the station
     // file, whose {{WORKSPACE_ROOT}} placeholders were expanded after the
     // 0.4.34 stamping. The marker line survives verbatim; the payload changes.
     const tampered = stamped.replace(
@@ -154,7 +154,7 @@ describe("Cursor fixed global authority detection", () => {
     ].join("\n");
     const stamped = stampCursorGlobalAuthorityMarker(payload);
     // Insert a payload change after the marker line, leaving the marker in
-    // place — the station01 shape (rendered content grew after stamping).
+    // place — the station shape (rendered content grew after stamping).
     const stale = stamped.replace(
       "\n# Managed global rule",
       "\n# Managed global rule (expanded after stamping)",
