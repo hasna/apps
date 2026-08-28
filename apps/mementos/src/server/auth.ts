@@ -108,6 +108,13 @@ export function getApiKeyVerifier(): ApiKeyVerifier | null {
     app: APP,
     signingSecret: secret,
     keyStatus: _store ? _store.keyStatus : undefined,
+    // Without a revocation store there is nothing to revoke against — the
+    // contracts verifier refuses to be constructed without a key-status hook
+    // (or this explicit declaration), which would 500 EVERY request on a
+    // signing-secret server with no DB. The declaration applies only when no
+    // store exists; with a store, `keyStatus` above carries the real
+    // revocation check and this flag is irrelevant.
+    allowUnregisteredKeys: _store ? undefined : true,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.warn(
