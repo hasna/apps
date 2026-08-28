@@ -16,6 +16,10 @@ import {
   type ProjectContextWriteCoordination,
 } from "./project-context.js";
 import {
+  getSessionRenderSnapshotDir,
+  sessionRenderSnapshotWorkspaceRoot,
+} from "./session-render-state.js";
+import {
   SESSION_RENDER_MANAGED_MARKER,
   SESSION_RENDER_SCHEMA,
   type SessionRenderFile,
@@ -427,16 +431,29 @@ export function restoreSessionRenderSnapshot(
   const snapshot = readSessionRenderSnapshot(snapshotPath);
   const targetHome = assertSafeTargetHome(snapshot.targetHome);
   const resolvedSnapshotPath = resolve(snapshotPath);
-  const snapshotRelativePath = relative(targetHome, resolvedSnapshotPath);
-  if (
-    snapshotRelativePath === ""
-    || snapshotRelativePath === ".."
-    || snapshotRelativePath.startsWith("../")
-    || isAbsolute(snapshotRelativePath)
-  ) {
-    throw new SessionApplyError("Session snapshot must be stored inside its target home.");
+  const snapshotDir = getSessionRenderSnapshotDir(targetHome);
+  const snapshotDirRelative = relative(snapshotDir, resolvedSnapshotPath);
+  const insideSnapshotDir =
+    snapshotDirRelative !== ".."
+    && !snapshotDirRelative.startsWith("../")
+    && !isAbsolute(snapshotDirRelative);
+  if (!insideSnapshotDir) {
+    // A snapshot may also be passed from an explicit in-home location (legacy
+    // fixtures, manual restore); keep the old containment for that case. The
+    // adopted session-render state dir is a single global location that can
+    // legitimately sit outside a nested project-root target home, so it is
+    // exempt from the target-home containment above.
+    const snapshotRelativePath = relative(targetHome, resolvedSnapshotPath);
+    if (
+      snapshotRelativePath === ""
+      || snapshotRelativePath === ".."
+      || snapshotRelativePath.startsWith("../")
+      || isAbsolute(snapshotRelativePath)
+    ) {
+      throw new SessionApplyError("Session snapshot must be stored inside its session-render snapshot location.");
+    }
   }
-  assertNoSymlinkSegments(targetHome, resolvedSnapshotPath);
+  assertNoSymlinkSegments(sessionRenderSnapshotWorkspaceRoot(targetHome), resolvedSnapshotPath);
   const guard = observeProjectContextSessionGuard({
     tool: snapshot.tool,
     target_home: targetHome,
@@ -1331,10 +1348,8 @@ function writeSessionSnapshot(
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const snapshotPath = resolve(
-    targetHome,
-    ".hasna",
-    "session-render-snapshots",
+  const snapshotPath = join(
+    getSessionRenderSnapshotDir(targetHome),
     `${timestamp}-${randomUUID()}.json`,
   );
   const afterFiles: SessionRenderSnapshot["afterFiles"] = results.map((result) => {
@@ -1365,7 +1380,7 @@ function writeSessionSnapshot(
   writeProjectContextCoordinatedFile({
     path: snapshotPath,
     content: `${JSON.stringify(snapshot, null, 2)}\n`,
-    workspace_root: targetHome,
+    workspace_root: sessionRenderSnapshotWorkspaceRoot(targetHome),
     default_mode: 0o600,
     expected_hash: null,
     max_observed_bytes: null,
