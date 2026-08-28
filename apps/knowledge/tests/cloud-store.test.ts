@@ -127,8 +127,8 @@ describe('knowledge HTTP store resolver', () => {
         requests.push(new URL(request.url));
         // The deployed knowledge server (0.2.114) serves search at
         // /v1/notes/search: { items: [{ item, rank }], total,
-        // query_capability } — the pre-unified contract measured live at
-        // knowledge.hasna.xyz on 2026-08-26.
+        // query_capability } — the pre-unified contract measured live on
+        // 2026-08-26.
         return Response.json({
           items: [{ item: OLD_SERVER_ITEM, rank: 0.875 }],
           total: 7,
