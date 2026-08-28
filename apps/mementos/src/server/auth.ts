@@ -34,6 +34,24 @@ let _verifier: ApiKeyVerifier | null | undefined; // undefined = uninitialized, 
 let _store: ApiKeyStore | null = null;
 let _schemaReady: Promise<void> | null = null;
 
+/**
+ * Requests whose API key was verified by {@link checkApiKey}. Marked so the
+ * Origin/Host allowlist (an ambient-credential CSRF defense) can exempt them:
+ * a request carrying a verified explicit API key and no Origin header is not
+ * CSRF — see helpers.ts `checkWriteOriginOrHost`. Keyed on the Request object
+ * so concurrent requests never share auth state.
+ */
+const AUTHENTICATED = new WeakMap<Request, boolean>();
+
+function markAuthenticated(req: Request): void {
+  AUTHENTICATED.set(req, true);
+}
+
+/** True when {@link checkApiKey} verified an explicit API key on this request. */
+export function isAuthenticated(req: Request): boolean {
+  return AUTHENTICATED.get(req) ?? false;
+}
+
 function signingSecret(): string | undefined {
   return (
     process.env["API_KEY_SIGNING_SECRET"]?.trim() ||
@@ -90,6 +108,13 @@ export function getApiKeyVerifier(): ApiKeyVerifier | null {
     app: APP,
     signingSecret: secret,
     keyStatus: _store ? _store.keyStatus : undefined,
+    // Without a revocation store there is nothing to revoke against — the
+    // contracts verifier refuses to be constructed without a key-status hook
+    // (or this explicit declaration), which would 500 EVERY request on a
+    // signing-secret server with no DB. The declaration applies only when no
+    // store exists; with a store, `keyStatus` above carries the real
+    // revocation check and this flag is irrelevant.
+    allowUnregisteredKeys: _store ? undefined : true,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.warn(
@@ -123,12 +148,18 @@ export async function checkApiKey(
       );
     }
     // Fall back to the legacy static bearer check (reads, or opted-in writes).
-    return authenticateRequest(req);
+    const authError = authenticateRequest(req);
+    if (authError) return authError;
+    // A static bearer key was configured AND matched — an explicit credential,
+    // so the request is not CSRF (see isAuthenticated / checkWriteOriginOrHost).
+    if (process.env["MEMENTOS_API_KEY"]) markAuthenticated(req);
+    return null;
   }
   if (_schemaReady) await _schemaReady;
   const decision = await verifier.authenticate(req.headers, { method, path, requiredScopes });
-  if (decision.ok) return null;
-  return json({ error: decision.message, reason: decision.reason }, decision.status);
+  if (!decision.ok) return json({ error: decision.message, reason: decision.reason }, decision.status);
+  markAuthenticated(req);
+  return null;
 }
 
 /** True when contracts API-key auth is active (a signing secret is configured). */

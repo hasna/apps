@@ -8,6 +8,7 @@ import {
 import type { Memory, MemoryCategory, CreateMemoryInput } from "../../types/index.js";
 import { addRoute } from "../router.js";
 import { json, readJson, errorResponse, getSearchParams, checkWriteOriginOrHost } from "../helpers.js";
+import { isAuthenticated } from "../auth.js";
 
 // GET /api/health — simple health
 addRoute("GET", "/api/health", () => {
@@ -150,8 +151,10 @@ addRoute("POST", "/api/maintenance/cleanup", () => {
 // The handler calls touchMemory() on every returned memory (a recency write),
 // so it is gated like a state-changing request: GET is a CORS simple request
 // and a hostile cross-origin page must not be able to trigger the writes.
+// Requests that carry a VERIFIED API key and no Origin header (CLI/MCP/SDK
+// clients) are not CSRF and skip the ambient-credential gate (O15-04420).
 addRoute("GET", "/api/inject", (req, url) => {
-  const gate = checkWriteOriginOrHost(req);
+  const gate = isAuthenticated(req) ? null : checkWriteOriginOrHost(req);
   if (gate) return gate;
   const q = getSearchParams(url);
   const maxTokens = q["max_tokens"] ? parseInt(q["max_tokens"], 10) : 500;
