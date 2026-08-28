@@ -6,6 +6,20 @@ sentinel, the wrapper, and the battery are tracked here so the guard ships
 through the normal PR → review → publish → install chain instead of living
 only at the machine-local install dir `~/.hasna/test-guard`.
 
+## Guard home resolution (XDG home migration, task P3.3)
+
+The guard home (slots/, queue/, config, guard.log, sentinel.log, the pinned/
+store and the wrapper source copy) defaults to the legacy
+`~/.hasna/test-guard` and is resolved through the `@hasna/paths` resolver
+(`paths --app test-guard --kind state`) when the resolver is available **and**
+the resolved XDG state home is adopted — either the operator set the
+state-kind override `HASNA_STATE_HOME`, or the resolved home already holds
+guard state (slots/, guard.log or sentinel.log). Until the migration phase
+moves the live state there, an existing legacy install stays the effective
+home and never becomes invisible on upgrade. The exact-app overrides
+(`HASNA_TEST_GUARD_DIR` for the wrapper, `SENTINEL_GUARD_DIR` for the
+sentinel) win unconditionally.
+
 ## Why this exists
 
 2026-07-30: ten concurrent cron/loop-spawned `bun test` suites drove loadavg

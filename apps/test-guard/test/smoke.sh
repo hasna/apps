@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test for @hasna/test-guard: runs battery section 16 (ac4558ab —
 # sentinel canary-failure classification: rc=78 engaged-degraded, rc=124
-# engaged/unverified, wrapper-missing NOT ENGAGED) against the REPO copies of
+# engaged/unverified, wrapper-missing NOT ENGAGED) plus sections 17, 18 and 19
+# (resolver guard-home adoption, task P3.3) against the REPO copies of
 # sentinel.sh and bun-wrapper.sh.
 #
 # Section 16 is deliberately hermetic: it drives the sentinel with fake
@@ -11,6 +12,9 @@
 #
 # The full battery (battery.sh) is the regression sweep for a station with the
 # guard installed; run it separately after any wrapper/sentinel change.
+# Section 19 (resolver guard-home adoption) is hermetic like section 16 — it
+# stubs the resolver CLI and drives each script's resolve_guard_dir() as a
+# standalone probe, so it runs on any host.
 #
 # Runner compatibility (hasna/apps#630 remediation, cycle 1): the s16
 # classification assertions drive the sentinel's FUNCTIONAL PROBE, and the

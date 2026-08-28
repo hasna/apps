@@ -102,14 +102,39 @@ BUN_PATH="${1:-/home/hasna/.bun/bin/bun}"
 # SENTINEL_GUARD_DIR): the rearm regression (battery section 17) exercises a
 # temp-dir COPY of the bin layout and must never touch the live bun-real.
 REAL="${SENTINEL_REAL_BUN:-/home/hasna/.bun/bin/bun-real}"
-WRAPPER_SOURCE="${2:-/home/hasna/.hasna/test-guard/bun-wrapper.sh}"
 # SENTINEL_GUARD_DIR is a TEST-ONLY override for exercising the queue-health
 # alert path against a controlled queue (live waiters reap any alertable
 # ticket planted in the real queue within seconds, making the control racy).
 # Deliberately NOT HASNA_TEST_GUARD_DIR: the sentinel sets that for its canary
 # probe, and honoring it here would let a stray env redirect the production
-# health check — a false-pass vector.
-GUARD_DIR="${SENTINEL_GUARD_DIR:-/home/hasna/.hasna/test-guard}"
+# health check — a false-pass vector. The DEFAULT guard home is now resolved
+# through @hasna/paths (XDG home migration, task P3.3) by resolve_guard_dir
+# below; the exact-app override still wins first.
+# The version read above deliberately avoids bun (this script guards bun), but
+# the guard-home default MAY consult the resolver CLI — itself a bun binary —
+# when it is present; a missing or unrunnable resolver falls back to the legacy
+# home so the sentinel can still detect a clobbered bun.
+resolve_guard_dir() {
+  local resolved="" legacy
+  legacy="${HOME:-/home/hasna}/.hasna/test-guard"
+  if command -v paths >/dev/null 2>&1; then
+    resolved=$(timeout 5 paths --app test-guard --kind state 2>/dev/null)
+    [ -n "$resolved" ] || resolved=""
+  fi
+  # Adopt the resolver home only when the operator pointed the state kind
+  # there (HASNA_STATE_HOME) or the resolved home already holds guard state —
+  # an existing legacy install never becomes invisible on upgrade.
+  if [ -n "$resolved" ] && { [ -n "${HASNA_STATE_HOME:-}" ] \
+      || [ -d "$resolved/slots" ] || [ -f "$resolved/guard.log" ] || [ -f "$resolved/sentinel.log" ]; }; then
+    printf '%s\n' "$resolved"
+  else
+    printf '%s\n' "$legacy"
+  fi
+}
+GUARD_DIR="${SENTINEL_GUARD_DIR:-$(resolve_guard_dir)}"
+# The sentinel restores the wrapper from the package source copy kept in the
+# guard home (the live install dir); WRAPPER_SOURCE follows the resolved home.
+WRAPPER_SOURCE="${2:-$GUARD_DIR/bun-wrapper.sh}"
 # SENTINEL_PROBE_TIMEOUT is a TEST-ONLY override for the canary probe's
 # timeout budget (default 120s) — lets the rc=124 classification be exercised
 # without waiting out a real budget (battery section 16). Like
