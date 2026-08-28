@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.25
+
+### Patch Changes
+
+- Switch the default SQLite database path through the `@hasna/paths` resolver (XDG/macOS home layout): the legacy `~/.hasna/servers` data root stays the effective default until the resolver data home is adopted (operator sets `HASNA_DATA_HOME` or the store is already physically migrated there), so an existing local store never becomes invisible on upgrade. The `SERVERS_DB_PATH` store override and the per-project `.servers/servers.db` discovery keep their precedence. Dependency pinned exactly to `@hasna/paths@0.1.0` (hotfixes plan 0f49f56a, task P3.3).
+
 ## 0.1.24
 
 ### Patch Changes
