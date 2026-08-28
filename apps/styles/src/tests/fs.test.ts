@@ -27,6 +27,11 @@ beforeEach(() => {
   mkdirSync(testHome, { recursive: true });
   process.env["HOME"] = testHome;
   delete process.env["USERPROFILE"];
+  // Hermetic: the @hasna/paths resolver and exact-app overrides must not
+  // inherit ambient values.
+  delete process.env["HASNA_DATA_HOME"];
+  delete process.env["HASNA_STYLES_HOME"];
+  delete process.env["STYLES_HOME"];
 });
 
 afterEach(() => {
@@ -34,6 +39,9 @@ afterEach(() => {
   else process.env["HOME"] = originalHome;
   if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
   else process.env["USERPROFILE"] = originalUserProfile;
+  delete process.env["HASNA_DATA_HOME"];
+  delete process.env["HASNA_STYLES_HOME"];
+  delete process.env["STYLES_HOME"];
   rmSync(testHome, { recursive: true, force: true });
 });
 

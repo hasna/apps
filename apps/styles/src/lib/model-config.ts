@@ -1,5 +1,6 @@
 // Model config for styles.
-// Stores the active fine-tuned model ID in ~/.hasna/styles/config.json.
+// Stores the active fine-tuned model ID in the resolver-resolved config path
+// (getModelConfigPath: the effective styles data home's config.json).
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname } from "path";
@@ -41,7 +42,7 @@ export function getActiveModel(): string {
 }
 
 /**
- * Set the active fine-tuned model ID in ~/.hasna/styles/config.json.
+ * Set the active fine-tuned model ID in the effective styles config file.
  */
 export function setActiveModel(id: string): void {
   const config = readConfig();
