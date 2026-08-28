@@ -1,5 +1,7 @@
 // Model configuration for @hasna/todos
-// Reads/writes ~/.hasna/todos/config.json to store the active fine-tuned model ID
+// Reads/writes config.json in the effective todos data home (getTodosGlobalDir:
+// the @hasna/paths XDG data home once adopted, otherwise ~/.hasna/todos) to
+// store the active fine-tuned model ID.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -48,7 +50,8 @@ export function getActiveModel(): string {
 }
 
 /**
- * Sets the active fine-tuned model ID in ~/.hasna/todos/config.json.
+ * Sets the active fine-tuned model ID in the effective todos data home's
+ * config.json.
  */
 export function setActiveModel(modelId: string): void {
   const config = readConfig();

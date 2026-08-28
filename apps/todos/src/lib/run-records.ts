@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Database } from "bun:sqlite";
-import { getHomeDir } from "./sync-utils.js";
+import { getTodosGlobalDir } from "./sync-utils.js";
 import { getDatabase, now, uuid } from "../db/database.js";
 import { redactText } from "./secret-redaction.js";
 
@@ -373,5 +373,5 @@ export function formatRunRecordMarkdown(record: RunRecord): string {
 export function getDefaultReplayDir(): string {
   const local = join(process.cwd(), ".todos", "replays");
   if (existsSync(join(process.cwd(), ".todos"))) return local;
-  return join(getHomeDir(), ".hasna", "todos", "replays");
+  return join(getTodosGlobalDir(), "replays");
 }

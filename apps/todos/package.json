@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.15.50",
+  "version": "0.15.51",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -59,6 +59,7 @@
   "files": [
     "dist",
     "dashboard/dist",
+    "postinstall.js",
     "LICENSE",
     "README.md"
   ],
@@ -85,7 +86,7 @@
     "test:attested-container-compatibility-vector": "bun test scripts/attested-container-compatibility-vector.test.ts",
     "issue:release-review": "bun run scripts/issue-npm-release-agent-review.ts",
     "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
-    "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
+    "postinstall": "node postinstall.js"
   },
   "keywords": [
     "todos",
@@ -121,6 +122,7 @@
   "dependencies": {
     "@hasna/contracts": "0.14.1",
     "@hasna/events": "^0.1.11",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

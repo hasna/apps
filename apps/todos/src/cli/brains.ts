@@ -50,7 +50,7 @@ export function makeBrainsCommand(): Command {
     .description("Gather training data from tasks and write to JSONL")
     .option("--limit <n>", "Maximum number of examples to gather", parseInt)
     .option("--since <date>", "Only include tasks created since this date (ISO 8601)")
-    .option("--output <dir>", "Output directory (default: ~/.hasna/todos/training/)")
+    .option("--output <dir>", "Output directory (default: the todos data home training/ directory)")
     .option("--json", "Output result summary as JSON")
     .action(
       async (opts: {

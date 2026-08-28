@@ -1252,8 +1252,8 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         const row = db.query("SELECT COUNT(*) as count FROM tasks").get() as { count: number };
         const { statSync } = await import("node:fs");
         const { join } = await import("node:path");
-        const { getHomeDir } = await import("../../lib/sync-utils.js");
-        const dbPath = process.env["HASNA_TODOS_DB_PATH"] || process.env["TODOS_DB_PATH"] || join(getHomeDir(), ".hasna", "todos", "todos.db");
+        const { getTodosGlobalDir } = await import("../../lib/sync-utils.js");
+        const dbPath = process.env["HASNA_TODOS_DB_PATH"] || process.env["TODOS_DB_PATH"] || join(getTodosGlobalDir(), "todos.db");
         let size = "unknown";
         try { size = `${(statSync(dbPath).size / 1024 / 1024).toFixed(1)} MB`; } catch {}
         checks.push({ name: "Database", ok: true, message: `${row.count} tasks · ${size} · ${chalk.dim(dbPath)}` });

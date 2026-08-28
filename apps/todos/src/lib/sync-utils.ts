@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SyncConflict } from "./sync-types.js";
+import { getTodosDir } from "./paths.js";
 
 export const TODO_SYNC_FINGERPRINT_KEY = "todos_sync_fingerprint";
 
@@ -25,8 +26,15 @@ export function getHomeDir(): string {
 
 export const HOME = getHomeDir();
 
+/**
+ * The effective (global) todos data dir, resolved through @hasna/paths
+ * (XDG / macOS home layout): the resolver data home once adopted, otherwise
+ * the legacy `~/.hasna/todos` default. File-level store overrides
+ * (`HASNA_TODOS_DB_PATH` / `TODOS_DB_PATH`) are layered on top by the store
+ * layers and always win regardless.
+ */
 export function getTodosGlobalDir(): string {
-  return join(getHomeDir(), ".hasna", "todos");
+  return getTodosDir();
 }
 
 export function ensureDir(dir: string): void {

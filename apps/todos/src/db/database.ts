@@ -5,7 +5,7 @@ import { runMigrations, backfillTaskTags } from "./schema.js";
 import { backfillMachineId } from "./machines.js";
 import { ensureAgentIdentitySchema } from "./identity-mapping.js";
 import { IdentityAliasAmbiguousError, TaskReferenceAmbiguousError } from "../types/index.js";
-import { getHomeDir } from "../lib/sync-utils.js";
+import { getTodosGlobalDir } from "../lib/sync-utils.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
 
@@ -40,7 +40,7 @@ function findGitRoot(startDir: string): string | null {
 }
 
 function getGlobalDbPath(): string {
-  return join(getHomeDir(), ".hasna", "todos", "todos.db");
+  return join(getTodosGlobalDir(), "todos.db");
 }
 
 function hasExplicitProjectArg(args: readonly string[] = process.argv.slice(2)): boolean {
