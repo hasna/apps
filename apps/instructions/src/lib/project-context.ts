@@ -27,6 +27,10 @@ import {
   SESSION_RENDER_SCHEMA,
   SESSION_RENDER_SNAPSHOT_RELATIVE_DIR,
 } from "./session-render-contract.js";
+import {
+  getSessionRenderSnapshotDir,
+  sessionRenderSnapshotWorkspaceRoot,
+} from "./session-render-state.js";
 
 export const PROJECT_CONTEXT_SCHEMA = "hasna.projects.project_context_bundle.v1" as const;
 export const PROJECT_CONTEXT_SCHEMA_V2 = "hasna.projects.project_context_bundle.v2" as const;
@@ -1962,8 +1966,9 @@ function writeProjectContextRollbackSnapshot(
       sha256: nextHash,
     };
   });
-  const snapshotDir = resolve(plan.workspace_root, ...SESSION_RENDER_SNAPSHOT_RELATIVE_DIR.split("/"));
-  ensureSafeDirectory(snapshotDir, plan.workspace_root, 0o700);
+  const snapshotWorkspaceRoot = sessionRenderSnapshotWorkspaceRoot(plan.workspace_root);
+  const snapshotDir = getSessionRenderSnapshotDir(plan.workspace_root);
+  ensureSafeDirectory(snapshotDir, snapshotWorkspaceRoot, 0o700);
   const timestamp = now.toISOString().replace(/[:.]/g, "-");
   const snapshotPath = resolve(snapshotDir, `${timestamp}-${randomUUID()}.json`);
   const snapshot = {
@@ -1981,7 +1986,7 @@ function writeProjectContextRollbackSnapshot(
   atomicWriteFile(
     snapshotPath,
     `${JSON.stringify(snapshot, null, 2)}\n`,
-    plan.workspace_root,
+    snapshotWorkspaceRoot,
     0o600,
     null,
   );

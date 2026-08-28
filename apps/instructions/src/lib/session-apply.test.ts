@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applySessionRender, checkSessionRenderDrift, restoreSessionRenderSnapshot } from "./session-apply";
 import { planSessionRender, sourcesFromIdentityExport, type SessionInstructionSource, type SessionRenderTool } from "./session-render";
@@ -1068,4 +1068,44 @@ describe("session apply writer", () => {
       expect(applied.files.filter((file) => file.action === "delete")).toHaveLength(0);
     });
   });
+
+describe("session-render snapshot state-dir adoption (P5 migration lane)", () => {
+  const prevStateHome = process.env.HASNA_STATE_HOME;
+  afterEach(() => {
+    if (prevStateHome === undefined) delete process.env.HASNA_STATE_HOME;
+    else process.env.HASNA_STATE_HOME = prevStateHome;
+  });
+
+  test("a render into a NESTED target home still writes its snapshot when the state dir is adopted", () => {
+    const stateRoot = join(tmpRoot, "state-home");
+    const stateDir = join(stateRoot, "instructions");
+    mkdirSync(stateDir, { recursive: true });
+    // Migrated store marker: a snapshot file in the resolver state dir.
+    writeFileSync(join(stateDir, "20260828T000000Z-seed.json"), "{}");
+    process.env.HASNA_STATE_HOME = stateRoot;
+
+    // targetHome nested under a different tree, so the global state dir is
+    // OUTSIDE the target home — the old containment would have thrown
+    // PROJECT_CONTEXT_PATH_ESCAPE on the snapshot write.
+    const targetHome = join(tmpRoot, "nested", "project");
+    mkdirSync(targetHome, { recursive: true });
+    const applied = applySessionRender(planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome,
+      sources: [globalIdentity],
+      allowEmptySources: true,
+      generatedAt: "2026-08-01T00:00:00.000Z",
+    }));
+
+    expect(applied.applied).toBe(true);
+    expect(applied.conflicts).toHaveLength(0);
+    // A dated pre-render snapshot landed under the adopted state dir.
+    const snapshots = readdirSync(stateDir).filter((name) => name.endsWith(".json"));
+    expect(snapshots.length).toBeGreaterThan(1);
+    // And the legacy per-target-home dir was NOT recreated under the nested home.
+    expect(existsSync(join(targetHome, ".hasna", "session-render-snapshots"))).toBe(false);
+  });
+});
+
 });
