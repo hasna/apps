@@ -9,8 +9,8 @@
  * instruction-only prose, and this file asserted "zero executable skills". That
  * curation has been reversed. The 66 archived executable skills that require NO
  * credential (verified: no `process.env.<KEY>` read, no documented key, no
- * provider SDK) are restored alongside the 21 instruction skills, so the catalog
- * is 87 skills: 21 instruction + 66 executable.
+ * provider SDK) are restored alongside the 20 instruction skills, so the catalog
+ * is 86 skills: 20 instruction + 66 executable.
  *
  * The executable half reintroduces a real risk, and the invariants here exist to
  * pin it down:
@@ -148,10 +148,10 @@ describe("every catalog entry is runnable without a vendor service (R2)", () => 
   // Anti-vacuity for the whole file. Every assertion below iterates one of these
   // sets; an empty catalog would turn all of them green while proving nothing.
   test("the catalog is non-empty and every entry is classified", () => {
-    // OSS catalog: 21 instruction-kind prose skills + 66 restored credential-free
-    // executable skills = 87.
-    expect(skillDirs.length).toBe(87);
-    expect(instructionSkills.length).toBe(21);
+    // OSS catalog: 20 instruction-kind prose skills + 66 restored credential-free
+    // executable skills = 86.
+    expect(skillDirs.length).toBe(86);
+    expect(instructionSkills.length).toBe(20);
     expect(executableSkills.length).toBe(66);
     expect(instructionSkills.length + executableSkills.length).toBe(skillDirs.length);
   });
