@@ -228,7 +228,7 @@ ${CONNECTOR_NAME} config set-api-key <api_key>
 Or use environment variables:
 
 \`\`\`bash
-export TELNYX_API_KEY=your-telnyx-api-key
+export TELNYX_API_KEY=<key>
 \`\`\`
 
 ## More Information
