@@ -419,6 +419,54 @@ else
   echo "SKIP s18 read-only queue — no bun binary to copy"
 fi
 
+# 19 resolver guard-home adoption (XDG home migration, task P3.3): the guard
+# home default must route through @hasna/paths when the resolver is available
+# and the resolved home is adopted, and fall back to the legacy
+# ~/.hasna/test-guard home otherwise — an existing guard install never becomes
+# invisible on upgrade. Hermetic: the resolver CLI is stubbed (a fake `paths`
+# binary on PATH echoing $S19_RESOLVED), and each script's resolve_guard_dir()
+# is extracted into a standalone probe exactly like section 12's
+# limit_to_number probe. No bun, no fleet install, no live guard dir.
+W19="$W/s19"; S19BIN="$W19/bin"; mkdir -p "$S19BIN"
+S19_RESOLVED="$W19/resolved-home"
+cat > "$S19BIN/paths" <<'EOF'
+#!/usr/bin/env bash
+# Fake @hasna/paths CLI for the section-19 hermetic probe: answers the
+# test-guard state-kind home from S19_RESOLVED. Never touches the real
+# resolver and never runs bun.
+if [ "$1" = "--app" ] && [ "$2" = "test-guard" ] && [ "$3" = "--kind" ] && [ "$4" = "state" ]; then
+  printf '%s\n' "${S19_RESOLVED:-}"
+  exit 0
+fi
+exit 2
+EOF
+chmod +x "$S19BIN/paths"
+s19_probe() {
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    sed -n '/^resolve_guard_dir()/,/^}/p' "$1"
+    printf '%s\n' 'resolve_guard_dir'
+  } > "$2"
+  chmod +x "$2"
+}
+s19_probe "$SEN" "$W19/sentinel-resolve.sh"
+s19_probe "$WRAPPER_SOURCE" "$W19/wrapper-resolve.sh"
+S19HOME="$W19/home"
+mkdir -p "$S19_RESOLVED/slots"
+ck "s19 adopted resolved home (sentinel)" "$(S19_RESOLVED="$S19_RESOLVED" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/sentinel-resolve.sh" 2>/dev/null)" "$S19_RESOLVED"
+ck "s19 adopted resolved home (wrapper)" "$(S19_RESOLVED="$S19_RESOLVED" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/wrapper-resolve.sh" 2>/dev/null)" "$S19_RESOLVED"
+rm -rf "$S19_RESOLVED"
+ck "s19 not-adopted resolved home -> legacy (sentinel)" "$(S19_RESOLVED="$S19_RESOLVED" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/sentinel-resolve.sh" 2>/dev/null)" "$S19HOME/.hasna/test-guard"
+ck "s19 not-adopted resolved home -> legacy (wrapper)" "$(S19_RESOLVED="$S19_RESOLVED" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/wrapper-resolve.sh" 2>/dev/null)" "$S19HOME/.hasna/test-guard"
+mkdir -p "$S19_RESOLVED"   # exists but empty — no guard state, not adopted
+ck "s19 empty resolved home NOT adopted (sentinel)" "$(S19_RESOLVED="$S19_RESOLVED" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/sentinel-resolve.sh" 2>/dev/null)" "$S19HOME/.hasna/test-guard"
+ck "s19 empty resolved home NOT adopted (wrapper)" "$(S19_RESOLVED="$S19_RESOLVED" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/wrapper-resolve.sh" 2>/dev/null)" "$S19HOME/.hasna/test-guard"
+ck "s19 HASNA_STATE_HOME adopts resolved home (sentinel)" "$(S19_RESOLVED="$S19_RESOLVED" HASNA_STATE_HOME="$S19HOME/state-root" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/sentinel-resolve.sh" 2>/dev/null)" "$S19_RESOLVED"
+ck "s19 HASNA_STATE_HOME adopts resolved home (wrapper)" "$(S19_RESOLVED="$S19_RESOLVED" HASNA_STATE_HOME="$S19HOME/state-root" PATH="$S19BIN:$PATH" HOME="$S19HOME" "$W19/wrapper-resolve.sh" 2>/dev/null)" "$S19_RESOLVED"
+rm -rf "$S19_RESOLVED"
+ck "s19 no-resolver falls back to legacy (sentinel)" "$(PATH="/usr/bin:/bin" HOME="$S19HOME" "$W19/sentinel-resolve.sh" 2>/dev/null)" "$S19HOME/.hasna/test-guard"
+ck "s19 no-resolver falls back to legacy (wrapper)" "$(PATH="/usr/bin:/bin" HOME="$S19HOME" "$W19/wrapper-resolve.sh" 2>/dev/null)" "$S19HOME/.hasna/test-guard"
+
 echo "=== battery: $pass PASS, $failn FAIL"
 rm -rf "$W"
 exit "$failn"

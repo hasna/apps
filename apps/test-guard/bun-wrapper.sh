@@ -60,8 +60,30 @@ esac
 
 # Override is for isolated testing of the guard itself; it is logged. The
 # guard is a control against accidental saturation, not an adversary boundary
-# (HASNA_TEST_GUARD_BYPASS already exists and is likewise logged).
-GUARD_DIR="${HASNA_TEST_GUARD_DIR:-/home/hasna/.hasna/test-guard}"
+# (HASNA_TEST_GUARD_BYPASS already exists and is likewise logged). The
+# DEFAULT guard home is resolved through @hasna/paths (XDG home migration,
+# task P3.3) by resolve_guard_dir below; the exact-app override wins first.
+# The resolver CLI is itself a bun binary and only runs on the guarded
+# `bun test` path; a missing or unrunnable resolver falls back to the legacy
+# home so the wrapper never depends on the machinery it guards.
+resolve_guard_dir() {
+  local resolved="" legacy
+  legacy="${HOME:-/home/hasna}/.hasna/test-guard"
+  if command -v paths >/dev/null 2>&1; then
+    resolved=$(timeout 5 paths --app test-guard --kind state 2>/dev/null)
+    [ -n "$resolved" ] || resolved=""
+  fi
+  # Adopt the resolver home only when the operator pointed the state kind
+  # there (HASNA_STATE_HOME) or the resolved home already holds guard state —
+  # an existing legacy install never becomes invisible on upgrade.
+  if [ -n "$resolved" ] && { [ -n "${HASNA_STATE_HOME:-}" ] \
+      || [ -d "$resolved/slots" ] || [ -f "$resolved/guard.log" ] || [ -f "$resolved/sentinel.log" ]; }; then
+    printf '%s\n' "$resolved"
+  else
+    printf '%s\n' "$legacy"
+  fi
+}
+GUARD_DIR="${HASNA_TEST_GUARD_DIR:-$(resolve_guard_dir)}"
 MAX_SLOTS=4
 MAX_WAIT_SECS=1800
 # shellcheck disable=SC1091

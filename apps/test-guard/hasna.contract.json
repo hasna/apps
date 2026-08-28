@@ -5,7 +5,7 @@
   "class": "library",
   "contractVersion": "v1",
   "kitVersion": "0.11.1",
-  "description": "Machine-wide bun test concurrency and memory guard (SC-00062): the flock-semaphore wrapper, the sentinel that watches it, and the regression battery. Shell scripts shipped with the `test-guard` CLI bin; the package provisions no remote infrastructure and exposes no HTTP, MCP, or importable Node SDK surface.",
+  "description": "Machine-wide bun test concurrency and memory guard (SC-00062): the flock-semaphore wrapper, the sentinel that watches it, and the regression battery. Shell scripts shipped with the `test-guard` CLI bin; the guard-home reads/writes resolve through the @hasna/paths resolver with a legacy ~/.hasna/test-guard fallback. The package provisions no remote infrastructure and exposes no HTTP, MCP, or importable Node SDK surface.",
   "hosting": [
     "user-hosted"
   ],
