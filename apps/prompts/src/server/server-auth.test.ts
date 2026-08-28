@@ -158,6 +158,33 @@ describe("prompts-serve API authentication (code-prompts-1)", () => {
     expect(authed.status).toBe(201)
   })
 
+  test("authenticated data responses from an allowed origin carry Access-Control-Allow-Origin", async () => {
+    setTokenEnv()
+    const read = await server.fetch(
+      api("/api/prompts", { headers: { Origin: "http://localhost:5173", Authorization: `Bearer ${TEST_BEARER}` } }),
+    )
+    expect(read.status).toBe(200)
+    expect(read.headers.get("access-control-allow-origin")).toBe("http://localhost:5173")
+    const write = await server.fetch(
+      api("/api/prompts", {
+        method: "POST",
+        headers: { Origin: "http://localhost:5173", Authorization: `Bearer ${TEST_BEARER}` },
+        body: createPayload(uniqueTitle()),
+      }),
+    )
+    expect(write.status).toBe(201)
+    expect(write.headers.get("access-control-allow-origin")).toBe("http://localhost:5173")
+  })
+
+  test("data responses from a non-allowed origin carry no CORS headers", async () => {
+    setTokenEnv()
+    const res = await server.fetch(
+      api("/api/prompts", { headers: { Origin: "https://evil.example", Authorization: `Bearer ${TEST_BEARER}` } }),
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get("access-control-allow-origin")).toBeNull()
+  })
+
   test("never emits Access-Control-Allow-Origin: *", async () => {
     setTokenEnv()
     const res = await server.fetch(

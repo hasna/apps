@@ -136,17 +136,15 @@ function authenticateApiRequest(req: Request, path: string): Response | null {
   return json({ error: "Unauthorized" }, bearer ? 403 : 401)
 }
 
-export default {
-  port: PORT,
-  async fetch(req: Request): Promise<Response> {
-    const url = new URL(req.url)
-    const path = url.pathname
-    const method = req.method
+async function handleFetch(req: Request): Promise<Response> {
+  const url = new URL(req.url)
+  const path = url.pathname
+  const method = req.method
 
-    // Security gate: bearer required on every /api/* route (with the
-    // preflight carve-out above). Fails closed.
-    const authError = authenticateApiRequest(req, path)
-    if (authError) return authError
+  // Security gate: bearer required on every /api/* route (with the
+  // preflight carve-out above). Fails closed.
+  const authError = authenticateApiRequest(req, path)
+  if (authError) return authError
 
     // CORS preflight for an allowed browser origin (loopback dashboard or
     // explicit PROMPTS_API_CORS_ORIGIN). Restricted CORS headers only — never
@@ -385,6 +383,31 @@ export default {
     } catch (e) {
       return serverError(e)
     }
+}
+
+/**
+ * CORS wrapper: browsers require `Access-Control-Allow-Origin` on the data
+ * response as well as on the preflight. Every /api/* response to a request
+ * from an allowed origin (loopback, or an exact origin in
+ * PROMPTS_API_CORS_ORIGIN) carries the header echoing that origin; responses
+ * to non-allowed origins never do, and `Access-Control-Allow-Origin: *` is
+ * never emitted.
+ */
+function withAllowedOriginCors(req: Request, res: Response): Response {
+  const origin = req.headers.get("origin")
+  if (origin && isAllowedApiOrigin(origin) && !res.headers.has("access-control-allow-origin")) {
+    const headers = new Headers(res.headers)
+    headers.set("access-control-allow-origin", origin)
+    headers.set("vary", "Origin")
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
+  }
+  return res
+}
+
+export default {
+  port: PORT,
+  async fetch(req: Request): Promise<Response> {
+    return withAllowedOriginCors(req, await handleFetch(req))
   },
 }
 
