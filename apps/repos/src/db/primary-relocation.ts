@@ -18,6 +18,7 @@ import type { Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getDb, openNonMigratingDb } from "./database.js";
 import { resolveTrustedAccountHome } from "../lib/account-home.js";
+import { getDataRootForHome } from "../lib/paths.js";
 import { sanitizeGitRemoteUrl } from "../lib/remote-identity.js";
 import type { Repo } from "../types/index.js";
 
@@ -314,7 +315,7 @@ function sanitizeCheckoutRemoteUrl(remote: string): string {
 
 function canonicalRoot(): string {
   return normalizeAbsolutePath(
-    canonicalRootForTests || join(trustedAccountHome(), ".hasna", "repos", "worktrees"),
+    canonicalRootForTests || join(getDataRootForHome(trustedAccountHome()), "worktrees"),
     "canonical worktree root",
   );
 }
