@@ -8,9 +8,9 @@ const securityManifest = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 ) as { version: string; dependencies: Record<string, string> };
 
-describe("Shield 0.1.29 compatibility release", () => {
+describe("Shield 0.1.30 compatibility release", () => {
   test("keeps the compatibility dependency pinned to the Shield release", () => {
-    expect(shieldManifest.version).toBe("0.1.29");
+    expect(shieldManifest.version).toBe("0.1.30");
     expect(securityManifest.dependencies["@hasna/shield"]).toBe(
       shieldManifest.version,
     );

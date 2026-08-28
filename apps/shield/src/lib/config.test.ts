@@ -63,8 +63,12 @@ describe("config", () => {
     test("migrates legacy global config into ~/.hasna/security", () => {
       const originalHome = process.env.HOME;
       const originalUserProfile = process.env.USERPROFILE;
+      const originalDataHome = process.env.HASNA_DATA_HOME;
+      const originalExactHome = process.env.HASNA_SHIELD_HOME;
       process.env.HOME = tempDir;
       delete process.env.USERPROFILE;
+      delete process.env.HASNA_DATA_HOME;
+      delete process.env.HASNA_SHIELD_HOME;
       const legacyDir = join(tempDir, ".security");
       mkdirSync(legacyDir, { recursive: true });
       writeFileSync(
@@ -84,6 +88,10 @@ describe("config", () => {
         else process.env.HOME = originalHome;
         if (originalUserProfile === undefined) delete process.env.USERPROFILE;
         else process.env.USERPROFILE = originalUserProfile;
+        if (originalDataHome === undefined) delete process.env.HASNA_DATA_HOME;
+        else process.env.HASNA_DATA_HOME = originalDataHome;
+        if (originalExactHome === undefined) delete process.env.HASNA_SHIELD_HOME;
+        else process.env.HASNA_SHIELD_HOME = originalExactHome;
       }
     });
   });

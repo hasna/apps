@@ -1,0 +1,5 @@
+---
+"@hasna/shield": patch
+---
+
+Switch @hasna/shield local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/security` data root (with the new `HASNA_SHIELD_HOME` exact-app override, and the existing `SECURITY_DB` per-file db-path override layered on top) stays the effective data root until the store has been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing live store never becomes invisible on upgrade. The store folder is named `security`, not `shield` — `~/.hasna/security` has been shield's data root since its own `~/.hasna/shield` -> `~/.hasna/security` consolidation — so the resolver app slug is `security` and the XDG data home is `~/.local/share/hasna/security`. The install-time postinstall provisions the same effective data root instead of hardcoding `$HOME/.hasna/security`. Dependency pinned exactly to `@hasna/paths@0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
