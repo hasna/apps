@@ -166,11 +166,19 @@ export function getSessionsDbPath(env: NodeJS.ProcessEnv = process.env): string 
 function migrateLegacySessionsDb(effectiveDir: string, env: NodeJS.ProcessEnv): void {
   const newDbPath = join(effectiveDir, "sessions.db");
   const legacyDbPath = join(getHomeDir(env), ".sessions", "sessions.db");
+  const legacyDefaultDbPath = join(getLegacySessionsDir(env), "sessions.db");
 
   if (!existsSync(effectiveDir)) {
     mkdirSync(effectiveDir, { recursive: true });
   }
-  if (!existsSync(newDbPath) && existsSync(legacyDbPath)) {
+  // The `~/.sessions` root predates `~/.hasna/sessions`: its db was copied to
+  // the legacy default root once, and the original was never deleted. When the
+  // legacy default root already holds a store, the `~/.sessions` file is a
+  // stale already-migrated original — copying it into a fresh adopted
+  // (resolver) root would fork the store from stale state and make sessions
+  // recorded since the earlier migration invisible. Only migrate `~/.sessions`
+  // when no newer store exists anywhere.
+  if (!existsSync(newDbPath) && !existsSync(legacyDefaultDbPath) && existsSync(legacyDbPath)) {
     copyFileSync(legacyDbPath, newDbPath);
   }
 }
