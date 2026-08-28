@@ -39,7 +39,7 @@ mock.module("openai", () => ({
 }));
 
 // Set a fake API key so getClient() doesn't throw
-process.env.OPENAI_API_KEY = "sk-test-fake-key";
+process.env.OPENAI_API_KEY = "test-key-placeholder";
 
 const { uploadTrainingFile, createFineTuneJob, getFineTuneStatus, listFineTunedModels, cancelFineTuneJob, OpenAIProvider } =
   await import("./openai.js");
