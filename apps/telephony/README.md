@@ -86,9 +86,14 @@ dispatch rows are written.
 ## Data Directory
 
 Telephony owns its local SQLite store directly. By default data is stored in
-`~/.hasna/telephony/`; set `HASNA_TELEPHONY_DB_PATH` or `TELEPHONY_DB_PATH` to
-use a specific database file, or set `TELEPHONY_DB_SCOPE=project` to use
-`.telephony/telephony.db` under the nearest git root.
+the effective telephony data home — the legacy `~/.hasna/telephony/` until the
+store is migrated to the `@hasna/paths`-resolved XDG data home
+(`~/.local/share/hasna/telephony` on Linux, `~/Library/Application
+Support/Hasna/telephony` on macOS), which is adopted once
+`HASNA_DATA_HOME` is set or `telephony.db` exists there. Set
+`HASNA_TELEPHONY_DB_PATH` or `TELEPHONY_DB_PATH` to use a specific database
+file, or set `TELEPHONY_DB_SCOPE=project` to use `.telephony/telephony.db`
+under the nearest git root.
 
 Realtime voice streaming requires a public webhook URL for Twilio Media Streams.
 External PostgreSQL deployments may reuse the exported `PG_MIGRATIONS` schema

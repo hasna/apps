@@ -1,10 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { homedir } from "node:os";
+import { getDataRoot } from "../paths.js";
 
-const AUDIO_DIR = join(homedir(), ".hasna", "telephony", "audio");
+let AUDIO_DIR: string | null = null;
 
 export function getAudioDir(): string {
+  if (AUDIO_DIR === null) {
+    // The audio dir lives under the effective telephony data root (resolved
+    // via @hasna/paths once the XDG data home is adopted; legacy
+    // ~/.hasna/telephony/audio otherwise).
+    AUDIO_DIR = join(getDataRoot(), "audio");
+  }
   mkdirSync(AUDIO_DIR, { recursive: true });
   return AUDIO_DIR;
 }

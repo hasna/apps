@@ -10,6 +10,7 @@ const originalUserProfile = process.env.USERPROFILE;
 const originalHasnaDbPath = process.env.HASNA_TELEPHONY_DB_PATH;
 const originalTelephonyDbPath = process.env.TELEPHONY_DB_PATH;
 const originalScope = process.env.TELEPHONY_DB_SCOPE;
+const originalDataHome = process.env.HASNA_DATA_HOME;
 const originalCwd = process.cwd();
 
 let tempRoot: string | undefined;
@@ -27,6 +28,8 @@ afterEach(() => {
   else process.env.TELEPHONY_DB_PATH = originalTelephonyDbPath;
   if (originalScope === undefined) delete process.env.TELEPHONY_DB_SCOPE;
   else process.env.TELEPHONY_DB_SCOPE = originalScope;
+  if (originalDataHome === undefined) delete process.env.HASNA_DATA_HOME;
+  else process.env.HASNA_DATA_HOME = originalDataHome;
   process.chdir(originalCwd);
 
   if (tempRoot) {
@@ -52,12 +55,32 @@ describe("getDbPath", () => {
     delete process.env.HASNA_TELEPHONY_DB_PATH;
     delete process.env.TELEPHONY_DB_PATH;
     delete process.env.TELEPHONY_DB_SCOPE;
+    delete process.env.HASNA_DATA_HOME;
     process.chdir(cwd);
 
     expect(getDbPath()).toBe(join(newDir, "telephony.db"));
     expect(readFileSync(join(newDir, "telephony.db"), "utf8")).toBe("legacy-db");
     expect(readFileSync(join(newDir, "config.json"), "utf8")).toContain("voice");
     expect(existsSync(join(legacyDir, "telephony.db"))).toBe(true);
+  });
+
+  it("adopts the @hasna/paths (XDG) data root once HASNA_DATA_HOME is set", () => {
+    tempRoot = mkdtempSync(join(tmpdir(), "telephony-db-test-"));
+    const home = join(tempRoot, "home");
+    const cwd = join(tempRoot, "cwd");
+    const dataHome = join(tempRoot, "data-home");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+
+    process.env.HOME = home;
+    delete process.env.USERPROFILE;
+    delete process.env.HASNA_TELEPHONY_DB_PATH;
+    delete process.env.TELEPHONY_DB_PATH;
+    delete process.env.TELEPHONY_DB_SCOPE;
+    process.env.HASNA_DATA_HOME = dataHome;
+    process.chdir(cwd);
+
+    expect(getDbPath()).toBe(join(dataHome, "telephony", "telephony.db"));
   });
 });
 
