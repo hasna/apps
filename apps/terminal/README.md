@@ -139,7 +139,12 @@ The app gets there through several cheap layers:
 ## Data Directory
 
 Terminal stores local profiles, command output manifests, session records, and
-cache data under `~/.hasna/terminal/`.
+cache data under the `@hasna/paths`-resolved data home — the legacy
+`~/.hasna/terminal/` until adopted, then the XDG data home
+`~/.local/share/hasna/terminal/` (macOS: `~/Library/Application
+Support/Hasna/terminal/`). The resolver honors the data-kind override
+`HASNA_DATA_HOME` and the exact-app overrides `HASNA_TERMINAL_DIR` /
+`TERMINAL_DIR`.
 
 The MCP server exposes terminal-native tools only. It does not register shared
 cloud helper tools; any future remote sync should be implemented as

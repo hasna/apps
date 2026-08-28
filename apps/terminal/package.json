@@ -1,6 +1,6 @@
 {
   "name": "@hasna/terminal",
-  "version": "4.3.19",
+  "version": "4.3.20",
   "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
   "type": "module",
   "files": [
@@ -23,13 +23,13 @@
     "no-cloud:source": "bun test src/no-cloud-contract.test.ts",
     "no-cloud:pack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
     "prepack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
-    "prepublishOnly": "bun test && bun run build && bun scripts/no-cloud-artifact-scan.mjs",
-    "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
+    "prepublishOnly": "bun test && bun run build && bun scripts/no-cloud-artifact-scan.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@hasna/events": "^0.1.6",
     "@hasna/mementos": "^0.10.0",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@typescript/vfs": "^1.6.4",
     "commander": "^13.1.0",

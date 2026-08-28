@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.3.20] - 2026-08-28
+### Changed
+- Switch local path reads/writes through the @hasna/paths resolver (XDG/macOS
+  home layout). The legacy `~/.hasna/terminal` data home (with the
+  `HASNA_TERMINAL_DIR` / `TERMINAL_DIR` exact-app overrides) stays the
+  effective data home until the store has been migrated to the XDG data home
+  or the operator sets `HASNA_DATA_HOME` — an existing local store never
+  becomes invisible on upgrade. The `~/.terminal` forward-migration is
+  preserved; the install-time `postinstall` that hardcoded
+  `$HOME/.hasna/terminal/...` is removed (the data home and its subdirectories
+  are created lazily). Dependency pinned exactly to `@hasna/paths@0.1.0`.
+
 ## [4.3.19] - 2026-08-18
 ### Changed
 - Republication past the registry-protected 4.3.18 slot (4.3.18 was published

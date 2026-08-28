@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { join } from "path";
 import { type Permissions, DEFAULT_PERMISSIONS } from "./history.js";
+import { getTerminalDir } from "./paths.js";
 
 interface Props {
   onDone: (perms: Permissions) => void;
@@ -20,6 +22,15 @@ export default function Onboarding({ onDone }: Props) {
   const [step, setStep] = useState<Step>("welcome");
   const [cursor, setCursor] = useState(0);
   const [perms, setPerms] = useState<Permissions>({ ...DEFAULT_PERMISSIONS });
+
+  // Show the effective config path (resolved through @hasna/paths), tildified
+  // under $HOME so the hint stays readable wherever the data home points.
+  const configPath = (() => {
+    const dir = getTerminalDir();
+    const home = process.env.HOME;
+    const display = home && dir.startsWith(home) ? `~${dir.slice(home.length)}` : dir;
+    return join(display, "config.json");
+  })();
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") process.exit(0);
@@ -76,7 +87,7 @@ export default function Onboarding({ onDone }: Props) {
         })}
       </Box>
       <Box marginTop={1}><Text dimColor>space toggle  ·  enter confirm</Text></Box>
-      <Text dimColor>edit later: ~/.hasna/terminal/config.json</Text>
+      <Text dimColor>edit later: {configPath}</Text>
     </Box>
   );
 }
