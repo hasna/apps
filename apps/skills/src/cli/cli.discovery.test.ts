@@ -254,7 +254,7 @@ describe("CLI discovery", () => {
 
     test("lists full-registry categories with --all", async () => {
       const { stdout } = await runCli(["list", "--category", "Development Tools", "--all"]);
-      // 5 instruction + 24 restored credential-free executable skills.
+      // 6 instruction + 23 restored credential-free executable skills.
       expect(stdout).toContain("Development Tools (29)");
       expect(stdout).toContain("repo-onboarding-report");
     });

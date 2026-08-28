@@ -449,7 +449,7 @@ version: 0.3.0
       const result = JSON.parse(response.result.content[0].text);
       const skills = result.skills;
       expect(Array.isArray(skills)).toBe(true);
-      // 5 instruction + 24 restored credential-free executable skills.
+      // 6 instruction + 23 restored credential-free executable skills.
       expect(skills.length).toBe(29);
       expect(result.total).toBe(29);
       for (const s of skills) {
