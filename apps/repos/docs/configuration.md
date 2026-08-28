@@ -2,8 +2,9 @@
 
 ## Configuration file
 
-The default configuration file is `~/.hasna/repos/config.json`. Override it
-with `HASNA_REPOS_CONFIG_PATH`.
+The default configuration file is `~/.hasna/repos/config.json` (the legacy
+data root; see [Data home](#data-home) below for the resolver-resolved
+effective root). Override it with `HASNA_REPOS_CONFIG_PATH`.
 
 All keys are optional. The effective defaults are:
 
@@ -71,7 +72,8 @@ and FTS5 indexes. Selection precedence is:
 2. The compatibility alias `REPOS_DB_PATH`.
 3. The nearest `.repos/repos.db` found while walking from the current directory
    toward the filesystem root.
-4. `~/.hasna/repos/repos.db`.
+4. `<effective data root>/repos.db` — `~/.hasna/repos/repos.db` by default,
+   or the resolver (XDG) data home once adopted (see [Data home](#data-home)).
 5. Legacy `~/.git-local/repos.db`, but only when that file exists and the new
    home-level database does not.
 
@@ -114,7 +116,8 @@ hostname.
 Bootstrap discovers repositories under the configured roots, installs a marked
 block in each usable checkout’s `post-commit` hook without replacing existing
 hook content, and indexes repository metadata. The queue defaults to
-`~/.hasna/repos/hook-events.tsv`; override it with
+`<effective data root>/hook-events.tsv` (legacy
+`~/.hasna/repos/hook-events.tsv`); override it with
 `HASNA_REPOS_HOOK_QUEUE_PATH`.
 
 `repos watch`, `repos-mcp`, and `repos-serve` start the auto-index worker. It
@@ -138,5 +141,21 @@ bootstrap can be disabled separately with `HASNA_REPOS_AUTO_BOOTSTRAP=0`.
 | `HASNA_EVENTS_DIR` | Store for `repos events` and `repos webhooks` |
 | `HASNA_EVENTS_HOME` | Compatibility fallback for the events store |
 
-The default GitHub catalog cache is `~/.hasna/repos/github-catalog.json`. The
-default events store is `~/.hasna/events`.
+The default GitHub catalog cache is `<effective data root>/github-catalog.json`
+(legacy `~/.hasna/repos/github-catalog.json`). The default events store is
+`~/.hasna/events`.
+
+## Data home
+
+The repos data root resolves through the `@hasna/paths` resolver (XDG/macOS
+home layout). The legacy default is `~/.hasna/repos`; once the resolver (XDG)
+data home is adopted (`HASNA_DATA_HOME` set, or the store already migrated to
+`~/.local/share/hasna/repos/repos.db`), the configuration file, the SQLite
+index, the GitHub catalog cache and the hook queue resolve there instead.
+`HASNA_REPOS_HOME` sets an exact data root that wins over both. File-level
+overrides (`HASNA_REPOS_CONFIG_PATH`, `HASNA_REPOS_DB_PATH` / `REPOS_DB_PATH`,
+`HASNA_REPOS_HOOK_QUEUE_PATH`, `HASNA_REPOS_GITHUB_CACHE_PATH`) still win on
+top of the effective root. Nothing moves on disk until the store is physically
+migrated. The worktree and clones roots (`~/.hasna/repos/worktrees`,
+`~/.hasna/repos/clones`) stay code-derived from the OS account home for
+containment.

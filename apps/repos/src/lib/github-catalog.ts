@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { listAllRepos } from "../db/repos.js";
 import type { Repo } from "../types/index.js";
+import { getDataRootForHome } from "./paths.js";
 import { sanitizeRemoteIdentity } from "./remote-identity.js";
 
 export const GITHUB_REPO_CATALOG_SCHEMA_VERSION = "repos.github-catalog.v1" as const;
@@ -205,7 +206,7 @@ const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_LIMIT = 100;
 
 export function getDefaultGithubCatalogCachePath(homeDir = homedir()): string {
-  return process.env["HASNA_REPOS_GITHUB_CACHE_PATH"] || join(homeDir, ".hasna", "repos", "github-catalog.json");
+  return process.env["HASNA_REPOS_GITHUB_CACHE_PATH"] || join(getDataRootForHome(homeDir), "github-catalog.json");
 }
 
 export function loadGithubRepoCatalog(cachePath = getDefaultGithubCatalogCachePath()): GithubRepoCatalogCache | null {

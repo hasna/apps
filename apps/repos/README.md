@@ -680,11 +680,24 @@ MCP_STDIO=1 repos-mcp         # stdio via env
 ## Data Storage
 
 The local index is SQLite with WAL mode and FTS5. Explicit database environment
-variables win; otherwise the CLI uses the nearest `.repos/repos.db`, then
-`~/.hasna/repos/repos.db`, with a legacy fallback when appropriate. An optional
+variables win; otherwise the CLI uses the nearest `.repos/repos.db`, then the
+effective repos data root, with a legacy fallback when appropriate. An optional
 Postgres mirror synchronizes repository catalog and automation state only. See
 [Configuration and storage](docs/configuration.md) for exact precedence and
 environment variables.
+
+### Data home
+
+The repos data root resolves through the `@hasna/paths` resolver (XDG/macOS
+home layout). The legacy default is `~/.hasna/repos`; once the resolver (XDG)
+data home is adopted (`HASNA_DATA_HOME` set, or the store already migrated to
+`~/.local/share/hasna/repos/repos.db`), config, the SQLite index, the GitHub
+catalog cache and the hook queue resolve there instead. `HASNA_REPOS_HOME`
+sets an exact data root that wins over both. File-level overrides
+(`HASNA_REPOS_CONFIG_PATH`, `HASNA_REPOS_DB_PATH` / `REPOS_DB_PATH`,
+`HASNA_REPOS_HOOK_QUEUE_PATH`, `HASNA_REPOS_GITHUB_CACHE_PATH`) still win on
+top of the effective root. Nothing moves on disk until the store is physically
+migrated.
 
 ## License
 

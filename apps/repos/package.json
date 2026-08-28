@@ -1,6 +1,6 @@
 {
   "name": "@hasna/repos",
-  "version": "0.1.54",
+  "version": "0.1.55",
   "description": "Local repo intelligence platform for AI agents — track all repos, search commits, PRs, branches across your machine. CLI + MCP + Web dashboard.",
   "type": "module",
   "workspaces": [
@@ -24,6 +24,7 @@
     "dist",
     "dashboard/dist",
     "docs",
+    "postinstall.js",
     "LICENSE",
     "README.md"
   ],
@@ -37,7 +38,7 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run typecheck && bun test && bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/repos 2>/dev/null || true",
+    "postinstall": "node postinstall.js",
     "prepack": "bun run build"
   },
   "keywords": [
@@ -75,6 +76,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/events": "^0.1.6",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "cli-progress": "^3.12.0",
