@@ -1,5 +1,11 @@
 # @hasna/tickets
 
+## 0.1.24
+
+### Patch Changes
+
+- Switch @hasna/tickets local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/tickets` default (with the `HASNA_TICKETS_HOME` / `TICKETS_HOME` exact-app overrides) stays the effective home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME`. The pre-`.hasna` legacy `.tickets` store still copy-forwards into the effective root; the install-time postinstall now provisions that same effective root. The dependency is pinned exactly to `@hasna/paths@0.1.0`.
+
 ## 0.1.23
 
 ### Patch Changes

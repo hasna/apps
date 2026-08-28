@@ -5,7 +5,7 @@ import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { gatherTrainingData } from "../lib/gatherer.ts";
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "../lib/model-config.ts";
-import { getTicketsDir } from "../lib/paths";
+import { getTrainingDir } from "../lib/paths";
 
 export function registerBrainsCommand(program: Command): void {
   const brainsCmd = program
@@ -16,9 +16,9 @@ export function registerBrainsCommand(program: Command): void {
 
   brainsCmd
     .command("gather")
-    .description("Gather training data from tickets and write to ~/.hasna/tickets/training/")
+    .description("Gather training data from tickets and write to the tickets data home training/ directory")
     .option("--limit <n>", "Maximum number of training examples", "500")
-    .option("--output <path>", "Output file path (default: ~/.hasna/tickets/training/training-<timestamp>.jsonl)")
+    .option("--output <path>", "Output file path (default: the tickets data home training/training-<timestamp>.jsonl)")
     .action(async (opts: { limit?: string; output?: string }) => {
       const limit = opts.limit ? parseInt(opts.limit, 10) : 500;
       console.log(`Gathering up to ${limit} training examples from tickets...`);
@@ -33,7 +33,7 @@ export function registerBrainsCommand(program: Command): void {
         }
 
         // Determine output path
-        const defaultDir = join(getTicketsDir(), "training");
+        const defaultDir = getTrainingDir();
         await mkdir(defaultDir, { recursive: true });
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
         const outputPath = opts.output ?? join(defaultDir, `training-${timestamp}.jsonl`);
@@ -58,7 +58,7 @@ export function registerBrainsCommand(program: Command): void {
     .description("Start a fine-tuning job using gathered training data")
     .option("--base-model <model>", "Base model to fine-tune", "gpt-4o-mini")
     .option("--name <name>", "Name for the fine-tuned model", "tickets-assistant")
-    .option("--dataset <path>", "Path to JSONL training file (default: latest in ~/.hasna/tickets/training/)")
+    .option("--dataset <path>", "Path to JSONL training file (default: latest in the tickets data home training/ directory)")
     .action(async (opts: { baseModel?: string; name?: string; dataset?: string }) => {
       const baseModel = opts.baseModel ?? "gpt-4o-mini";
       const name = opts.name ?? "tickets-assistant";
@@ -71,7 +71,7 @@ export function registerBrainsCommand(program: Command): void {
       let datasetPath = opts.dataset;
       if (!datasetPath) {
         const { readdirSync } = await import("fs");
-        const trainingDir = join(getTicketsDir(), "training");
+        const trainingDir = getTrainingDir();
         try {
           const files = readdirSync(trainingDir)
             .filter((f) => f.endsWith(".jsonl"))
