@@ -1,6 +1,7 @@
 import { SqliteAdapter as Database } from "./sqlite-adapter.js";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { getDataRoot, getHomeDir } from "../paths.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -82,9 +83,8 @@ export function getDbPath(): string {
     }
   }
 
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const newDir = join(home, ".hasna", "telephony");
-  const legacyDir = join(home, ".telephony");
+  const newDir = getDataRoot();
+  const legacyDir = join(getHomeDir(), ".telephony");
   const newPath = join(newDir, "telephony.db");
 
   if (!existsSync(newPath) && existsSync(legacyDir)) {

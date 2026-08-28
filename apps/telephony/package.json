@@ -1,6 +1,6 @@
 {
   "name": "@hasna/telephony",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Telephony platform for AI agents — SMS, WhatsApp, voice calls, TTS/STT, real-time streaming",
   "type": "module",
   "main": "dist/index.js",
@@ -41,7 +41,7 @@
     "serve": "bun src/server/cloud-entry.ts",
     "prepack": "bun run scan-artifact",
     "prepublishOnly": "bun run typecheck && bun test && bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/telephony $HOME/.hasna/telephony/audio 2>/dev/null || true"
+    "postinstall": "node postinstall.mjs"
   },
   "keywords": [
     "telephony",
@@ -79,6 +79,7 @@
   "dependencies": {
     "@hasna/contracts": "0.10.6",
     "@hasna/events": "^0.1.6",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "commander": "^13.1.0",
     "pg": "^8.13.1",

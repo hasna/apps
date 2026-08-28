@@ -7,8 +7,10 @@ import { getAudioDir, saveAudio } from "./audio.js";
 // Regression coverage for the `tts --out` ENOENT crash: a relative out path with
 // nested segments (or an absolute path) used to fail because the parent dir was
 // never created. saveAudio must mkdir the parent and honor absolute paths.
-// NOTE: the audio dir is derived from homedir() at module load, so these assert
-// on returned paths + existence and clean up whatever they create.
+// NOTE: the audio dir is derived from the effective telephony data root
+// (src/paths.ts — @hasna/paths once adopted, legacy ~/.hasna/telephony/audio
+// otherwise) on first use, so these assert on returned paths + existence and
+// clean up whatever they create.
 
 const created: string[] = [];
 
