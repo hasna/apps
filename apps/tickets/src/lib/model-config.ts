@@ -1,5 +1,6 @@
 // Model config for @hasna/tickets
-// Reads/writes the active fine-tuned model ID from ~/.hasna/tickets/config.json
+// Reads/writes the active fine-tuned model ID from the resolver-resolved config
+// path (getTicketsDir(): the effective tickets data home's config.json).
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
@@ -39,7 +40,7 @@ export function getActiveModel(): string {
   return loadConfig().activeModel ?? DEFAULT_MODEL;
 }
 
-/** Persists the active fine-tuned model ID to ~/.hasna/tickets/config.json. */
+/** Persists the active fine-tuned model ID to the effective tickets config file. */
 export function setActiveModel(id: string): void {
   const config = loadConfig();
   config.activeModel = id;

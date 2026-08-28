@@ -14,6 +14,7 @@ import { createWebhook, listWebhooks, deleteWebhook } from "../db/webhooks.ts";
 import { searchTickets } from "../db/search.ts";
 import type { TicketType, Resolution, Priority, TicketStatus, RelationType, WebhookEvent } from "../types/index.ts";
 import { getPackageVersion } from "../lib/package-info";
+import { getTicketsDbPath } from "../lib/paths";
 
 const pkg = { version: getPackageVersion() };
 
@@ -55,7 +56,7 @@ program
     const wsName = name ?? "default";
     const db = getDatabase();
     // Create default workspace record if tables allow it
-    out({ message: `Workspace "${wsName}" initialized`, db_path: process.env["HASNA_TICKETS_DB_PATH"] ?? process.env["TICKETS_DB_PATH"] ?? "~/.hasna/tickets/tickets.db" }, json);
+    out({ message: `Workspace "${wsName}" initialized`, db_path: process.env["HASNA_TICKETS_DB_PATH"] ?? process.env["TICKETS_DB_PATH"] ?? getTicketsDbPath() }, json);
   });
 
 // ── project ───────────────────────────────────────────────────────────────────
