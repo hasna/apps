@@ -1277,8 +1277,8 @@ network call of its own. A deployment binds delivery through:
 Event shapes (one JSON object per line):
 
 ```json
-{"evt":"loops_runner_control_plane_unreachable","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","lastFailureAt":"…","openedAt":"…","consecutiveCount":3,"failureClass":"connectivity","lastSuccessAt":null}
-{"evt":"loops_runner_control_plane_recovered","episodeId":"ep_…","runnerId":"station02","firstFailureAt":"…","openedAt":"…","recoveredAt":"…","consecutiveCount":822,"failureClass":"connectivity","outageMs":58080000}
+{"evt":"loops_runner_control_plane_unreachable","episodeId":"ep_…","runnerId":"runner-1","firstFailureAt":"…","lastFailureAt":"…","openedAt":"…","consecutiveCount":3,"failureClass":"connectivity","lastSuccessAt":null}
+{"evt":"loops_runner_control_plane_recovered","episodeId":"ep_…","runnerId":"runner-1","firstFailureAt":"…","openedAt":"…","recoveredAt":"…","consecutiveCount":822,"failureClass":"connectivity","outageMs":58080000}
 ```
 
 The same lines go to the runner's stderr journal, so `journalctl` shows the
