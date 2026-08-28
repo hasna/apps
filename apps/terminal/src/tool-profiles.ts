@@ -1,5 +1,5 @@
 // Tool profiles — config-driven AI enhancement for specific command categories
-// Profiles are loaded from ~/.hasna/terminal/profiles/ (user-customizable)
+// Profiles are loaded from profiles/ under the effective data home (getTerminalDir()) (user-customizable)
 // Each profile tells the AI how to handle a specific tool's output
 
 import { existsSync, readFileSync, readdirSync } from "fs";
@@ -91,7 +91,7 @@ const BUILTIN_PROFILES: ToolProfile[] = [
   },
 ];
 
-/** Load user profiles from ~/.hasna/terminal/profiles/ */
+/** Load user profiles from profiles/ under the effective data home (getTerminalDir()) */
 function loadUserProfiles(): ToolProfile[] {
   if (!existsSync(PROFILES_DIR)) return [];
 

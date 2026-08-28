@@ -1,4 +1,4 @@
-// Recipes storage — global (~/.hasna/terminal/recipes.json) + per-project (.terminal/recipes.json)
+// Recipes storage — global (recipes.json under the effective data home, getTerminalDir()) + per-project (.terminal/recipes.json)
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";

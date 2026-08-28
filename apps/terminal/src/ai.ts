@@ -7,7 +7,8 @@ import { getTerminalDir } from "./paths.js";
 import { discoverProjectHints, discoverSafetyHints, formatHints } from "./context-hints.js";
 
 // ── model routing ─────────────────────────────────────────────────────────────
-// Config-driven model selection. Defaults per provider, user can override in ~/.hasna/terminal/config.json
+// Config-driven model selection. Defaults per provider, user can override in
+// config.json under the effective data home (getTerminalDir()).
 
 const COMPLEX_SIGNALS = [
   /\b(undo|revert|rollback|previous|last)\b/i,
@@ -19,7 +20,7 @@ const COMPLEX_SIGNALS = [
   /[|&;]{2}/,
 ];
 
-/** Default models per provider — user can override in ~/.hasna/terminal/config.json under "models" */
+/** Default models per provider — user can override in config.json under the effective data home (getTerminalDir()) under "models" */
 const MODEL_DEFAULTS: Record<string, { fast: string; smart: string }> = {
   cerebras:  { fast: "qwen-3-235b-a22b-instruct-2507", smart: "qwen-3-235b-a22b-instruct-2507" },
   groq:      { fast: "openai/gpt-oss-120b",             smart: "moonshotai/kimi-k2-instruct" },
@@ -27,7 +28,7 @@ const MODEL_DEFAULTS: Record<string, { fast: string; smart: string }> = {
   anthropic: { fast: "claude-haiku-4-5-20251001",       smart: "claude-sonnet-4-6" },
 };
 
-/** Load user model overrides from ~/.hasna/terminal/config.json (cached 30s) */
+/** Load user model overrides from config.json under the effective data home (getTerminalDir()) (cached 30s) */
 let _modelOverrides: Record<string, { fast?: string; smart?: string }> | null = null;
 let _modelOverridesAt = 0;
 
