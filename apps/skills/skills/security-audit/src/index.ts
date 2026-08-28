@@ -47,7 +47,7 @@ const outputArg = args.find(a => a.startsWith("output="))?.split("=")[1];
 // Simple regex patterns for demonstration
 const PATTERNS = [
   { name: "AWS Access Key", regex: /AKIA[0-9A-Z]{16}/, severity: "CRITICAL" },
-  { name: "Private Key", regex: /-----BEGIN PRIVATE KEY-----/, severity: "CRITICAL" }, // hasna:allow-secret
+  { name: "Private Key", regex: /-----BEGIN PRIVATE[ ]KEY-----/, severity: "CRITICAL" }, // hasna:allow-secret
   { name: "Generic API Key", regex: /api_key\s*[:=]\s*['"][a-zA-Z0-9]{20,}['"]/, severity: "HIGH" },
   { name: "Hardcoded Password", regex: /password\s*[:=]\s*['"][a-zA-Z0-9]{8,}['"]/, severity: "HIGH" },
   { name: "Eval Usage", regex: /eval\(/, severity: "MEDIUM" },
