@@ -9,16 +9,54 @@ function pkgVersion(): string {
   return JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version as string;
 }
 
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 describe("workflows service (slice 1 scaffold)", () => {
   test("packageVersion() equals the package.json version", () => {
     expect(packageVersion()).toBe(pkgVersion());
   });
 
-  test("default config resolves port 8790 and the canonical data dir", () => {
-    const cfg = resolveWorkflowsConfig();
-    expect(cfg.port).toBe(8790);
-    expect(cfg.host).toBe("127.0.0.1");
-    expect(cfg.dataDir.endsWith(".hasna/workflows")).toBe(true);
+  test("default config resolves port 8790 and the legacy data dir until the resolver home is adopted", () => {
+    const before = {
+      dataDir: process.env.HASNA_WORKFLOWS_DATA_DIR,
+      dataDirAlias: process.env.WORKFLOWS_DATA_DIR,
+      dataKind: process.env.HASNA_DATA_HOME,
+    };
+    try {
+      delete process.env.HASNA_WORKFLOWS_DATA_DIR;
+      delete process.env.WORKFLOWS_DATA_DIR;
+      delete process.env.HASNA_DATA_HOME;
+      const cfg = resolveWorkflowsConfig();
+      expect(cfg.port).toBe(8790);
+      expect(cfg.host).toBe("127.0.0.1");
+      expect(cfg.dataDir.endsWith(".hasna/workflows")).toBe(true);
+    } finally {
+      restoreEnv("HASNA_WORKFLOWS_DATA_DIR", before.dataDir);
+      restoreEnv("WORKFLOWS_DATA_DIR", before.dataDirAlias);
+      restoreEnv("HASNA_DATA_HOME", before.dataKind);
+    }
+  });
+
+  test("config resolves the resolver data dir once HASNA_DATA_HOME opts in to the XDG layout", () => {
+    const before = {
+      dataDir: process.env.HASNA_WORKFLOWS_DATA_DIR,
+      dataDirAlias: process.env.WORKFLOWS_DATA_DIR,
+      dataKind: process.env.HASNA_DATA_HOME,
+    };
+    try {
+      delete process.env.HASNA_WORKFLOWS_DATA_DIR;
+      delete process.env.WORKFLOWS_DATA_DIR;
+      process.env.HASNA_DATA_HOME = "/srv/xdg-data";
+      const cfg = resolveWorkflowsConfig();
+      expect(cfg.dataDir).toBe("/srv/xdg-data/workflows");
+    } finally {
+      restoreEnv("HASNA_WORKFLOWS_DATA_DIR", before.dataDir);
+      restoreEnv("WORKFLOWS_DATA_DIR", before.dataDirAlias);
+      restoreEnv("HASNA_DATA_HOME", before.dataKind);
+    }
   });
 
   test("config env overrides win over defaults (HASNA_WORKFLOWS_ prefix)", () => {

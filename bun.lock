@@ -1967,7 +1967,7 @@
     },
     "apps/workflows": {
       "name": "@hasna/workflows",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "workflows": "dist/cli/index.js",
         "workflows-mcp": "dist/mcp/index.js",
@@ -1976,6 +1976,7 @@
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.234",
         "@cursor/sdk": "^1.0.28",
+        "@hasna/paths": "0.1.0",
         "@openai/codex-sdk": "0.147.0",
         "commander": "^13.1.0",
       },
@@ -4985,6 +4986,8 @@
     "@hasna/treasury/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/ui/@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
+
+    "@hasna/workflows/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/workflows/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 

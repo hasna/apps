@@ -1,5 +1,11 @@
 # @hasna/workflows
 
+## 0.1.3
+
+### Patch Changes
+
+- Switch local path reads/writes through the `@hasna/paths` resolver (XDG/macOS home layout). The legacy `~/.hasna/workflows` default (with the `HASNA_WORKFLOWS_DATA_DIR` / `WORKFLOWS_DATA_DIR` overrides) stays the effective data home until the store is migrated to the XDG data home (`workflows.db` exists there) or `HASNA_DATA_HOME` is set. Dependency pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+
 ## 0.1.2
 
 ### Patch Changes

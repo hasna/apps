@@ -7,9 +7,9 @@
  * slices extend this class with the graph language, three-table store,
  * session WAL, daemon, and lane adapters.
  */
-import { join } from "node:path";
 import packageJson from "../package.json";
 import { runGraphToCompletion } from "./daemon.js";
+import { getEffectiveDataDir } from "./paths.js";
 import { openStore } from "./store.js";
 import { SessionWAL } from "./wal.js";
 import { findRunByIdempotencyKey } from "./session.js";
@@ -40,14 +40,13 @@ function envInt(names: string[], fallback: number): number {
 
 /** Resolve the service configuration from env + explicit overrides. */
 export function resolveWorkflowsConfig(overrides: Partial<WorkflowsConfig> = {}): WorkflowsConfig {
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? ".";
   return {
     port: overrides.port ?? envInt(["HASNA_WORKFLOWS_PORT", "WORKFLOWS_PORT"], DEFAULT_PORT),
     host: overrides.host ?? envString(["HASNA_WORKFLOWS_HOST", "WORKFLOWS_HOST"]) ?? DEFAULT_HOST,
     dataDir:
       overrides.dataDir ??
       envString(["HASNA_WORKFLOWS_DATA_DIR", "WORKFLOWS_DATA_DIR"]) ??
-      join(home, ".hasna", "workflows"),
+      getEffectiveDataDir(),
     apiUrl: overrides.apiUrl ?? envString(["WORKFLOWS_API_URL"]),
     apiKey: overrides.apiKey ?? envString(["WORKFLOWS_API_KEY"]),
   };

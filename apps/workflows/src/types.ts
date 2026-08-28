@@ -13,7 +13,9 @@ export interface WorkflowsConfig {
   port: number;
   /** Bind host for workflows-serve. Default 127.0.0.1. */
   host: string;
-  /** Data directory (store slice lands the db here). Default ~/.hasna/workflows. */
+  /** Data directory (store slice lands the db here). Default ~/.hasna/workflows,
+   * resolved through @hasna/paths once the XDG data home is adopted
+   * (HASNA_DATA_HOME set or the store migrated there). */
   dataDir: string;
   /** Optional client API URL (WORKFLOWS_API_URL) — consumed by later slices. */
   apiUrl?: string;
