@@ -1,5 +1,11 @@
 # @hasna/releases
 
+## 0.1.5
+
+### Patch Changes
+
+- Switch local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/releases` data dir (with the `HASNA_RELEASES_HOME` / `RELEASES_HOME` exact-app overrides and the long-documented `RELEASES_DATA_DIR` fallback) stays the effective home until the store has actually been migrated to the XDG data home or the operator sets `HASNA_DATA_HOME`. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+
 ## 0.1.4
 
 ### Patch Changes
