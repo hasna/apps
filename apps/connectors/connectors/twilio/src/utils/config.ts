@@ -267,7 +267,7 @@ Or use environment variables:
 
 \`\`\`bash
 export TWILIO_ACCOUNT_SID=ACxxxxxxxx
-export TWILIO_AUTH_TOKEN=your-auth-token
+export TWILIO_AUTH_TOKEN=<your-auth-token>
 \`\`\`
 
 ## More Information
