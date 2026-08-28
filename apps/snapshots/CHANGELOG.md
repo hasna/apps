@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- Switch local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/snapshots` data home (with the `HASNA_SNAPSHOTS_DIR` exact-app override layered on top of the existing `HASNA_SNAPSHOTS_DB_PATH` store override) stays the effective data home until the store has been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. Install-time provisioning of the exports/logs/plans subdirectories resolves the same effective data home. Dependency pinned exactly to `@hasna/paths@0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+
 ## 0.2.0
 
 ### Minor Changes
