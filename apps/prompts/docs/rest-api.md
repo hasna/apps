@@ -13,11 +13,19 @@ Options:
 
 The default port is `19430`. Port precedence is `--port`, `PORT`,
 `PROMPTS_PORT`, then the default. The API requires
-`Authorization: Bearer <PROMPTS_API_TOKEN>` on every `/api` route, including
-`OPTIONS` preflight; requests without the bearer get `401` (or `403` with a
-wrong token), and when no token is configured every `/api` request is refused
-with `503`. No CORS headers are emitted, so cross-origin browser requests are
-denied.
+`Authorization: Bearer <PROMPTS_API_TOKEN>` on every `/api` data request;
+requests without the bearer get `401` (or `403` with a wrong token), and when
+no token is configured every `/api` request is refused with `503`.
+
+Browser CORS is restricted, never wildcard: an `OPTIONS` preflight from a
+loopback origin (`http://localhost:*`, `http://127.0.0.1:*` — the bundled
+React dashboard's Vite dev server) or from an exact origin listed in
+`PROMPTS_API_CORS_ORIGIN` (comma-separated) receives CORS headers
+(`Access-Control-Allow-Origin` echoing the origin, `Authorization` allowed)
+without a bearer — preflights carry no data, and browsers cannot attach
+`Authorization` to them. Every actual data request still requires the bearer
+token, and preflights from any other origin get the same `401`/`403`/`503`
+treatment as unauthenticated data requests.
 
 ## Prompt Routes
 

@@ -82,14 +82,49 @@ function safeEq(a: string | undefined, b: string): boolean {
 
 /**
  * Security gate for the prompts API (finding code-prompts-1, P1): every /api/*
- * route — including OPTIONS preflight — requires `Authorization: Bearer
- * <token>`. Fails closed: when no token is configured the API refuses every
- * request instead of serving unauthenticated. The wildcard CORS header is
- * gone, so browsers cannot read or preflight these routes even from a page a
- * user visited.
+ * route requires `Authorization: Bearer <token>`. Fails closed: when no token
+ * is configured the API refuses every request instead of serving
+ * unauthenticated. No wildcard CORS is ever emitted.
+ *
+ * Browser preflights (OPTIONS) carry no data and browsers cannot attach
+ * Authorization to them, so the documented dashboard workflow (a Vite dev
+ * server on a loopback origin) would be dead without a carve-out: an OPTIONS
+ * preflight from an allowed origin (loopback, or an exact origin listed in
+ * PROMPTS_API_CORS_ORIGIN) receives CORS headers WITHOUT a bearer token, while
+ * every actual data request still requires the token. Preflights from any
+ * other origin, and all non-OPTIONS requests, fall through to the bearer gate
+ * and fail closed (401/403/503, no CORS headers).
  */
+function isAllowedApiOrigin(origin: string | null): boolean {
+  if (!origin) return false
+  const explicit = process.env["PROMPTS_API_CORS_ORIGIN"]
+  if (explicit && explicit.split(",").map((s) => s.trim()).filter(Boolean).includes(origin)) return true
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+}
+
+function corsPreflightResponse(origin: string): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Headers": "Authorization, Content-Type",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Max-Age": "86400",
+      Vary: "Origin",
+    },
+  })
+}
+
 function authenticateApiRequest(req: Request, path: string): Response | null {
   if (!path.startsWith("/api/")) return null
+
+  // OPTIONS preflight from an allowed origin needs no bearer (it carries no
+  // data); every other /api/* request — including preflights from origins that
+  // are not allowed — still requires the bearer token.
+  if (req.method === "OPTIONS") {
+    const origin = req.headers.get("origin")
+    if (origin && isAllowedApiOrigin(origin)) return null
+  }
 
   const expected = getApiToken()
   if (!expected) {
@@ -108,13 +143,17 @@ export default {
     const path = url.pathname
     const method = req.method
 
-    // Security gate: bearer required on every /api/* route, incl. preflight.
+    // Security gate: bearer required on every /api/* route (with the
+    // preflight carve-out above). Fails closed.
     const authError = authenticateApiRequest(req, path)
     if (authError) return authError
 
-    // CORS preflight (authorized only; browsers cannot send Authorization on a
-    // preflight, so cross-origin browser clients are intentionally denied).
+    // CORS preflight for an allowed browser origin (loopback dashboard or
+    // explicit PROMPTS_API_CORS_ORIGIN). Restricted CORS headers only — never
+    // `Access-Control-Allow-Origin: *`.
     if (method === "OPTIONS") {
+      const origin = req.headers.get("origin")
+      if (origin && isAllowedApiOrigin(origin)) return corsPreflightResponse(origin)
       return new Response(null, { status: 204 })
     }
 
