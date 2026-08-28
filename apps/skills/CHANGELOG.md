@@ -4,7 +4,9 @@
 
 ### Patch Changes
 
+- The skills server serves `GET /version` for the deploy gate (O15-03836).
 - Switch @hasna/skills local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout, hotfixes plan 0f49f56a task P3.3). The legacy `~/.hasna/skills` data root stays the effective data root until the store has actually been migrated to the XDG data home (`server.db` or `config.json` present there) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing live store never becomes invisible on upgrade. The exact-app overrides `HASNA_SKILLS_DIR`, `HASNA_SKILLS_HOME` / `SKILLS_HOME` win unconditionally. Nothing moves on disk in this phase.
+- Fix sync-home snapshot resolution (release-review P1s): `skills sync --station` now honors the exact-app override (`HASNA_SKILLS_DIR` / aliases) for the live home, and a staged `homesRoot` mirror resolves its own layout — process-level `HASNA_DATA_HOME` / `HASNA_SKILLS_DIR` never leak into a mirror's resolution, so a staged or remote-station snapshot reads the supplied mirror, not live local data.
 
 ## 0.1.71
 
