@@ -102,7 +102,7 @@ console.log(svc.health());
 |---|---|---|
 | `HASNA_WORKFLOWS_PORT` / `WORKFLOWS_PORT` | serve port | 8790 |
 | `HASNA_WORKFLOWS_HOST` / `WORKFLOWS_HOST` | serve bind host | 127.0.0.1 |
-| `HASNA_WORKFLOWS_DATA_DIR` / `WORKFLOWS_DATA_DIR` | data directory | `~/.hasna/workflows` |
+| `HASNA_WORKFLOWS_DATA_DIR` / `WORKFLOWS_DATA_DIR` | data directory | `~/.hasna/workflows` (the @hasna/paths XDG data home `~/.local/share/hasna/workflows` is adopted once `HASNA_DATA_HOME` is set or the store is migrated there) |
 
 The server data backend is sqlite (default) or postgresql when
 `HASNA_WORKFLOWS_DATABASE_URL` is set.
