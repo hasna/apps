@@ -99,7 +99,7 @@ describe("canonical corpus root — migrated owner layout", () => {
     // Registry + list: 86 official catalog entries + the migrated-corpus skill.
     const registry = loadRegistry();
     expect(registry.find((s) => s.name === "migrated-only-skill")).toBeDefined();
-    expect(registry.length).toBe(88);
+    expect(registry.length).toBe(87);
 
     // Search.
     const hits = searchSkills("migrated-only-skill");

@@ -115,10 +115,10 @@ describe("MCP Server management and resources", () => {
       expect(response.result).toBeDefined();
       const result = JSON.parse(response.result.content[0].text);
       expect(result.category).toBe("Development Tools");
-      // 6 instruction + 24 restored credential-free executable skills.
-      expect(result.count).toBe(30);
+      // 5 instruction + 24 restored credential-free executable skills.
+      expect(result.count).toBe(29);
       expect(Array.isArray(result.results)).toBe(true);
-      expect(result.results.length).toBe(30);
+      expect(result.results.length).toBe(29);
     } finally {
       await client.close();
     }

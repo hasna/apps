@@ -31,7 +31,7 @@ describe("CLI tool primitives", () => {
     const data = JSON.parse(stdout);
     expect(data.valid).toBe(true);
     expect(data.mappedSkillCount).toBe(data.skillCount);
-    // OSS catalog: 21 instruction + 66 executable = 87 shipped skills.
-    expect(data.skillCount).toBe(87);
+    // OSS catalog: 20 instruction + 66 executable = 86 shipped skills.
+    expect(data.skillCount).toBe(86);
   });
 });
