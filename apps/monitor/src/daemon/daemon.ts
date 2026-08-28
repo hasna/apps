@@ -103,8 +103,15 @@ export class Daemon {
     this.reconciler.safetySweep(this.clock.now());
     if (before !== "RECOVERING") {
       this.lifecycle.restoreAfterRecovery();
-      if (before === "RUNNING" || before === "PAUSED" || before === "STOPPING" || before === "DRAINING") {
-        // Restore the exact prior state.
+      if (
+        before === "RUNNING" ||
+        before === "PAUSED" ||
+        before === "STOPPING" ||
+        before === "STOPPED" ||
+        before === "DRAINING"
+      ) {
+        // Restore the exact prior state (a cleanly stopped daemon comes back
+        // STOPPED — leaving it RECOVERING would wedge restart).
         const st = this.lifecycle.current();
         if (st) {
           upsertDaemonState(this.db, this.clock, {
