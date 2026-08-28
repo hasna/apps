@@ -143,6 +143,15 @@ const censusPrompt = (body) => {
 // todos, this lane yields (waits) — the hotfix-drain lane owns the priority
 // class. Standing continuity between runs comes from the coordinator
 // re-launching this workflow; the run never loops past its hard bound.
+// CORRECTED 2026-08-28 O15-04464: the empty-census and yielded branches
+// previously `continue`d, so an idle run churned all MAX_PASSES (each pass
+// re-running the census, which sleeps IDLE_SLEEP and re-checks once) and never
+// reached a terminal state — the same hung-run class that froze the deploy-apps
+// lane (wf_e88eb9c2-1b7, O15-04437). The census already slept + re-checked once
+// before returning empty/yielded, so those branches now END the run (break) and
+// the coordinator re-launches for standing continuity. The O15-00732
+// agent-failure backoff (safeAgent returned null) keeps its in-run continue —
+// a failed agent did not already wait the idle window — bounded by MAX_PASSES.
 const allRebase = []
 const allReviews = []
 const allMerges = []
@@ -152,16 +161,21 @@ for (pass = 1; pass <= MAX_PASSES; pass++) {
 phase('Census')
 census = await safeAgent(censusPrompt(CENSUS), { label: `pr-drain-census-${pass}`, phase: 'Census', schema: CENSUS_SCHEMA })
 if (census && census.yielded) {
-  log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census, re-checking next pass`)
-  continue
+  log(`pass ${pass}: YIELDED to hotfix-drain (${census.hotfixCount || 0} HOTFIX: row(s)) — waited inside the census and re-checked; ending this run; the coordinator re-launches for standing continuity`)
+  break
 }
+// Agent failure class (O15-00732): safeAgent returned null (a subagent threw or
+// returned prose). Keep the in-run backoff — the next pass's census sleeps 300s
+// first via the censusPrompt banner — bounded by MAX_PASSES. NOT the same class
+// as an empty census: a failed agent did not already wait the idle window.
+if (!census) continue
 const ready = (census && census.mergeReady) || []
 const rebase = (census && census.needsRebase) || []
 const review = (census && census.needsReview) || []
 log(`pass ${pass} census: mergeReady ${ready.length}, rebase ${rebase.length}, review ${review.length}`)
 if (!ready.length && !rebase.length && !review.length) {
-  log(`pass ${pass}: census empty — the census waited ${IDLE_SLEEP}s and re-checked; re-checking next pass`)
-  continue
+  log(`pass ${pass}: census empty — the census waited ${IDLE_SLEEP}s and re-checked; ending this run; the coordinator re-launches for standing continuity`)
+  break
 }
 
 phase('Rebase')
