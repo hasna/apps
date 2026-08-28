@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.51
+
+### Patch Changes
+
+- Switch @hasna/todos local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/todos` default stays the effective data home until the store has actually been migrated to the XDG data home (`todos.db` or `config.json` exists there) or the operator sets the data-kind override `HASNA_DATA_HOME`. The global database, config, training, replays, sandbox profiles, cloud-task-id cache, and the install-time postinstall provisioning all resolve through the same effective root. The dependency is pinned exactly to `@hasna/paths@0.1.0`.
+
 ## 0.15.50
 
 ### Patch Changes

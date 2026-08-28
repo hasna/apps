@@ -14,6 +14,7 @@ import {
   type EnumVocabularySpec,
 } from "../lib/enum-vocabulary.js";
 import { getPackageVersion } from "../lib/package-version.js";
+import { getTodosGlobalDir } from "../lib/sync-utils.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import type { Project, Task, TaskPriority, TaskStatus } from "../types/index.js";
 
@@ -212,8 +213,11 @@ interface CloudTaskIdCacheFile {
 }
 
 function cloudTaskIdCachePath(): string | null {
+  // No env $HOME means no cache, preserving the pre-resolver behavior: a
+  // daemon without a home must not scatter cache files into the cwd.
   const home = process.env["HOME"] || process.env["USERPROFILE"];
-  return home ? join(home, ".hasna", "todos", "cloud-task-id-cache.json") : null;
+  if (!home) return null;
+  return join(getTodosGlobalDir(), "cloud-task-id-cache.json");
 }
 
 function readCloudTaskIdCache(): CloudTaskIdCacheFile {

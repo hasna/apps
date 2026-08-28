@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { getHomeDir } from "./sync-utils.js";
+import { getTodosGlobalDir } from "./sync-utils.js";
 
 export const SANDBOX_PROFILE_VERSION = "todos.sandbox-profile.v1";
 
@@ -41,7 +41,7 @@ function getProfilesPath(): string {
   const local = join(localDir, "sandbox-profiles.json");
   if (existsSync(localDir)) return local;
   if (existsSync(local)) return local;
-  return join(getHomeDir(), ".hasna", "todos", "sandbox-profiles.json");
+  return join(getTodosGlobalDir(), "sandbox-profiles.json");
 }
 
 let cached: SandboxProfile[] | null = null;
