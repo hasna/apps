@@ -4,7 +4,10 @@
 // that reads or writes vault DATA goes through `Store`. There are exactly two
 // implementations:
 //
-//   • LocalStore — the on-box encrypted SQLite vault (~/.hasna/secrets/vault.db).
+//   • LocalStore — the on-box encrypted SQLite vault (resolved through
+//     @hasna/paths dataDir({app:"secrets"}) with gated legacy adoption —
+//     ~/.hasna/secrets/vault.db until the store is migrated to the XDG data
+//     home; see src/data-dir.ts).
 //   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
 //     key. Delegates to the vendored @hasna/contracts storage client.
 //

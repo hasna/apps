@@ -8,6 +8,7 @@ import {
   type ExposureScanResult,
 } from "./scanner.js";
 import { redactTextForPersistence } from "./redaction.js";
+import { effectiveOperatorDataDir } from "./data-dir.js";
 
 export {
   REDACTED_SECRET_VALUE,
@@ -112,7 +113,7 @@ export interface SupplyChainWatchOptions {
 const DEFAULT_PERMISSION_ROOTS = [
   join(homedir(), ".ssh"),
   join(homedir(), ".secrets"),
-  join(homedir(), ".hasna", "secrets"),
+  effectiveOperatorDataDir(),
   join(homedir(), ".codewith"),
 ];
 

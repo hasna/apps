@@ -726,16 +726,25 @@ MCP exposes the same flow through `storage_status`, `storage_push`,
 
 ## Data Directory
 
-Data is stored in `~/.hasna/secrets/`.
+The secrets data home resolves through the `@hasna/paths` resolver (XDG/macOS
+home layout). The legacy default is `~/.hasna/secrets`; once the resolver (XDG)
+data home is adopted (`HASNA_DATA_HOME` set, or the vault already migrated to
+`~/.local/share/hasna/secrets` on Linux / `~/Library/Application Support/Hasna/secrets`
+on macOS), the vault database, key material and the AWS sync state resolve
+there instead. Nothing moves on disk until the store is physically migrated.
+The `~/.secrets` env-file bridge (import-env/export-env) is a separate legacy
+credential store and is unchanged. File-level overrides (`HASNA_SECRETS_DB_PATH`,
+`HASNA_SECRETS_KEY_DIR`, `HASNA_SECRETS_AWS_SYNC_STATE`) still win on top of
+the effective root.
 
 ```bash
 secrets path
 secrets key
 ```
 
-The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
-`~/.hasna/secrets/vault.key` for local-key mode or
-`~/.hasna/secrets/vault.key.enc` for KMS envelope-encryption mode.
+The vault database lives at `<data home>/vault.db`. Key material lives in
+`<data home>/vault.key` for local-key mode or `<data home>/vault.key.enc` for
+KMS envelope-encryption mode.
 
 ## Safety Notes
 

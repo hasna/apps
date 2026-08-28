@@ -13,7 +13,6 @@ import { parseKnownFiles, type Profile } from "@smithy/core/config";
 import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { dirname, join } from "path";
-import { homedir } from "os";
 import { ensureOperatorDataDir } from "./data-dir.js";
 import { getStore } from "./store/index.js";
 import {
@@ -169,7 +168,7 @@ function getAwsSyncStatePath(): string {
     return override;
   }
   if (isTestVaultRedirectContext()) return join(testVaultDir(), "aws-sync-state.json");
-  return join(homedir(), ".hasna", "secrets", "aws-sync-state.json");
+  return join(ensureOperatorDataDir(), "aws-sync-state.json");
 }
 
 function emptyAwsSyncState(): AwsSyncState {

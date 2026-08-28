@@ -40,8 +40,9 @@
 // ~61 HASNA_* variables, so a test believed to be running credential-free is not.
 // That is why the guard lives in-process rather than in a wrapper script.
 
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { effectiveOperatorDataDir } from "./data-dir.js";
 
 /** Thrown when a test process tries to reach a real vault. Never carries a value. */
 export class SecretsTestIsolationError extends Error {
@@ -177,9 +178,14 @@ export const guardedFetch = (input: string, init?: RequestInit): Promise<Respons
   return fetch(input, init);
 };
 
-/** The on-box vault a real operator uses. Never touched from a test process. */
+/**
+ * The on-box vault a real operator uses. Never touched from a test process.
+ * Routes through `data-dir.ts` so the guard follows the SAME effective data
+ * dir the operator's reads/writes use (the `@hasna/paths` XDG data home once
+ * adopted, otherwise the legacy `~/.hasna/secrets` default).
+ */
 export function operatorVaultDir(): string {
-  return join(homedir(), ".hasna", "secrets");
+  return effectiveOperatorDataDir();
 }
 
 /** Per-process throwaway vault directory used when a test configures nothing. */
