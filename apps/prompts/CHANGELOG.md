@@ -1,5 +1,11 @@
 # @hasna/prompts
 
+## 0.3.38
+
+### Patch Changes
+
+- Switch @hasna/prompts local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The primary SQLite store, the dispatch run-records directory, and the `prompts runbook lint` default prompt directory now resolve from the effective data root: an exact-app override (`HASNA_PROMPTS_HOME`, then `PROMPTS_HOME`) wins unconditionally; otherwise the resolver data home (`~/.local/share/hasna/prompts` on Linux, `~/Library/Application Support/Hasna/prompts` on macOS) is adopted only when the operator sets `HASNA_DATA_HOME` or the store has already been physically migrated there — the legacy `~/.hasna/prompts` root stays effective until then, so an existing live store never becomes invisible on upgrade. The legacy `~/.prompts/` merge and the install-time postinstall now target the same effective root. `@hasna/paths` is pinned exactly to `0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+
 ## 0.3.37
 
 ### Patch Changes

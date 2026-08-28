@@ -1,6 +1,6 @@
 {
   "name": "@hasna/prompts",
-  "version": "0.3.37",
+  "version": "0.3.38",
   "description": "Reusable prompt library for AI agents — CLI + MCP server + REST API + web dashboard",
   "type": "module",
   "main": "dist/index.js",
@@ -24,7 +24,8 @@
     "dist",
     "dashboard/dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "postinstall.mjs"
   ],
   "scripts": {
     "clean": "rm -rf dist dashboard/dist",
@@ -46,7 +47,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "mkdir -p $HOME/.hasna/prompts 2>/dev/null || true"
+    "postinstall": "node postinstall.mjs"
   },
   "keywords": [
     "prompts",
@@ -81,6 +82,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/events": "^0.1.11",
+    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

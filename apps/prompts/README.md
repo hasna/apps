@@ -169,10 +169,19 @@ bulk selection.
 ## Storage
 
 The authoritative store is local SQLite. Data is stored in
-`~/.hasna/prompts/prompts.db` by default. A legacy `~/.prompts/` directory is
-migrated during normal database startup when the destination allows it.
+`~/.hasna/prompts/prompts.db` by default — the legacy data root. The store
+path resolves through the `@hasna/paths` resolver (XDG/macOS home layout):
+the resolver data home (`~/.local/share/hasna/prompts` on Linux,
+`~/Library/Application Support/Hasna/prompts` on macOS) is adopted when
+`HASNA_DATA_HOME` is set or the store has already been physically migrated
+there; otherwise the legacy `~/.hasna/prompts` root stays effective. The
+exact-app overrides `HASNA_PROMPTS_HOME` / `PROMPTS_HOME` win unconditionally.
+A legacy `~/.prompts/` directory is migrated into the effective data root
+during normal database startup when the destination allows it.
 
 - `HASNA_PROMPTS_DB_PATH` or `PROMPTS_DB_PATH` selects a custom database.
+- `HASNA_PROMPTS_HOME` or `PROMPTS_HOME` pins the exact data root (overrides
+  both the legacy default and the resolver root).
 - `PROMPTS_DB_SCOPE=project` selects `.prompts/prompts.db` at the nearest Git
   root.
 - `HASNA_PROMPTS_STORAGE_MODE` or `PROMPTS_STORAGE_MODE` accepts `local`,

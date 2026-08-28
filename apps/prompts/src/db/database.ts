@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite"
 import { join } from "path"
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs"
+import { effectiveHome, getDataRoot } from "../lib/paths.js"
 
 let _db: Database | null = null
 
@@ -147,10 +148,11 @@ export function getDbPath(options: DbPathOptions = {}): string {
     }
   }
 
-  // Global: ~/.hasna/prompts/prompts.db (with backward compat from ~/.prompts/)
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~"
-  const newDir = join(home, ".hasna", "prompts")
-  const oldDir = join(home, ".prompts")
+  // Global: the effective data root's prompts.db (with backward compat from
+  // ~/.prompts/). The data root resolves through the @hasna/paths resolver
+  // with gated legacy adoption — see src/lib/paths.ts.
+  const newDir = getDataRoot()
+  const oldDir = join(effectiveHome(), ".prompts")
 
   // Auto-migrate from old location without overwriting newer target files.
   if (migrateLegacy && existsSync(oldDir)) {

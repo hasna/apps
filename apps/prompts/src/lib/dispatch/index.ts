@@ -20,6 +20,7 @@
 import { createHash } from "crypto"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, dirname } from "path"
+import { runsDir } from "../paths.js"
 import { requirePrompt, usePrompt } from "../../db/prompts.js"
 import { renderTemplate } from "../template.js"
 import {
@@ -71,7 +72,10 @@ export interface DispatchOptions {
 export function defaultRunsDir(): string {
   return (
     process.env["HASNA_PROMPTS_DISPATCH_RUNS_DIR"] ??
-    join(process.env["HOME"] ?? process.env["USERPROFILE"] ?? "~", ".hasna", "prompts", "runs")
+    // The dispatch run records live under the effective data root's `runs`
+    // subdir, resolved through the @hasna/paths resolver (gated legacy
+    // adoption — see src/lib/paths.ts).
+    runsDir()
   )
 }
 

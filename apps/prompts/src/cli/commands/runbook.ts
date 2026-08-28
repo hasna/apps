@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { Command } from "commander"
 import chalk from "chalk"
 import { analyzeRunbookPrompts, parseRunbookDetections, type RunbookPromptFile } from "../../lib/runbook-lint.js"
+import { runbookPromptDir } from "../../lib/paths.js"
 import { handleError, isJson } from "../utils.js"
 
 function readPromptDirectory(directory: string): RunbookPromptFile[] {
@@ -33,7 +33,7 @@ export function registerRunbookCommands(program: Command): void {
   const lint = runbook
     .command("lint")
     .description("Report duplicated boilerplate, command inventories, and output schemas")
-    .option("--dir <path>", "Prompt directory", join(homedir(), ".hasna", "loops", "prompts"))
+    .option("--dir <path>", "Prompt directory", runbookPromptDir())
     .option("--detect <kinds>", "Comma-separated: boilerplate,commands,outputs", "boilerplate,commands,outputs")
     .option("--json", "Output the stable JSON report")
     .option("--fail-on-findings", "Exit 1 when findings are reported")
