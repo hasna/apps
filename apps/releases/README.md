@@ -33,7 +33,7 @@ releases reconcile
 releases reconcile @hasna/todos @hasna/events
 ```
 
-All commands print JSON. Data lives in `~/.hasna/releases` (override with `RELEASES_DATA_DIR`).
+All commands print JSON. Data lives in the effective data dir, resolved through the `@hasna/paths` resolver (XDG/macOS home layout): the legacy `~/.hasna/releases` stays the effective home until the store is migrated to the XDG data home or `HASNA_DATA_HOME` is set; the exact-app overrides `HASNA_RELEASES_HOME`, `RELEASES_HOME`, and the long-documented `RELEASES_DATA_DIR` win unconditionally.
 
 ## Selective Changesets candidates
 
@@ -222,14 +222,14 @@ Recording a release creates four follow-up tasks via the `todos` CLI:
 4. Refresh docs / regenerate the landing page
 
 If the `todos` CLI is unavailable (or a create fails), the tasks are appended to
-`~/.hasna/releases/outbox.jsonl` so nothing is lost; drain the outbox later with any todos-capable
+`<data-dir>/outbox.jsonl` (the effective data dir) so nothing is lost; drain the outbox later with any todos-capable
 agent.
 
 ## Events
 
 `releases record` emits a `release.published` event (typed distribution event catalog, payload
 mirrors `hasna.release.v1`) through the `@hasna/events` envelope into the local events store at
-`~/.hasna/releases/events`.
+`<data-dir>/events`.
 
 ## MCP server
 

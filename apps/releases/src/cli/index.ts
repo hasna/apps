@@ -44,7 +44,7 @@ program
   .name("releases")
   .description("Release ledger, publish receipts, downstream fan-out, and npm reconciliation for Hasna-coded apps")
   .version(VERSION)
-  .option("--data-dir <path>", "Data directory (default ~/.hasna/releases, env RELEASES_DATA_DIR)");
+  .option("--data-dir <path>", "Data directory (default: legacy ~/.hasna/releases until the XDG data home is adopted; overrides HASNA_RELEASES_HOME / RELEASES_HOME / RELEASES_DATA_DIR)");
 
 program
   .command("changesets-candidate")
