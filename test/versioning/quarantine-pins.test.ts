@@ -129,3 +129,41 @@ describe("third-party quarantine pins", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+const FORBIDDEN_NODE_TYPES = ["26.3.0"];
+
+describe("third-party quarantine pins — @types/node (dep-contracts-1)", () => {
+  test("the range matcher discriminates (prove-it-can-fail arms)", () => {
+    // Positive arms: caret ranges that must fire on the window release.
+    expect(satisfiesRange("^26.0.0", "26.3.0")).toBe(true);
+    expect(satisfiesRange("^26.1.2", "26.3.0")).toBe(true);
+    // Negative arms: the fixed shape must stay silent.
+    expect(satisfiesRange("26.2.0", "26.3.0")).toBe(false);
+    expect(satisfiesRange("26.2.0", "26.2.0")).toBe(true);
+    // Boundary arms: an older-major caret does not cross into 26.x, and
+    // tilde stops at the next minor.
+    expect(satisfiesRange("^25.6.0", "26.3.0")).toBe(false);
+    expect(satisfiesRange("~26.1.2", "26.2.0")).toBe(false);
+  });
+
+  test("no app @types/node range admits quarantine-window releases (dep-contracts-1)", () => {
+    const appsRoot = join(REPOSITORY_ROOT, "apps");
+    const offenders: string[] = [];
+    for (const manifestPath of collectPackageManifests(appsRoot)) {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      for (const section of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const) {
+        const deps = manifest[section];
+        if (!deps || typeof deps !== "object" || Array.isArray(deps)) continue;
+        const range = (deps as Record<string, unknown>)["@types/node"];
+        if (typeof range !== "string") continue;
+        for (const version of FORBIDDEN_NODE_TYPES) {
+          if (satisfiesRange(range, version)) {
+            offenders.push(`${relative(REPOSITORY_ROOT, manifestPath)} ${section}[@types/node] = "${range}" admits @types/node@${version} (quarantine window)`);
+          }
+        }
+      }
+    }
+    if (offenders.length > 0) console.error(`[FAIL versioning] ${offenders.length} @types/node pin(s) admit quarantine-window releases:\n  - ${offenders.join("\n  - ")}`);
+    expect(offenders).toEqual([]);
+  });
+});
