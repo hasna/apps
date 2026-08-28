@@ -4,7 +4,7 @@
 // src/server/index.ts
 var PORT = parseInt(process.env.PORT || "3000");
 var HOST = process.env.HOST || "0.0.0.0";
-var API_KEY = process.env.CONNECTOR_API_KEY || "";
+var API_KEY = process.env.CONNECTOR_API_KEY;
 if (!API_KEY) {
   console.error("WARNING: CONNECTOR_API_KEY not set - server will reject all authenticated requests");
 }

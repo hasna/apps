@@ -7,7 +7,7 @@
 
 const PORT = parseInt(process.env.PORT || '3000');
 const HOST = process.env.HOST || '0.0.0.0';
-const API_KEY = process.env.CONNECTOR_API_KEY || '';
+const API_KEY = process.env.CONNECTOR_API_KEY;
 
 if (!API_KEY) {
   console.error('WARNING: CONNECTOR_API_KEY not set - server will reject all authenticated requests');
