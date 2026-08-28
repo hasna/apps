@@ -41,7 +41,13 @@ bun install
 bun run build
 ```
 
-The package stores data in `$HOME/.hasna/snapshots/snapshots.sqlite` by default. Override with:
+The package stores data in `snapshots.sqlite` by default. The data home is
+resolved through the `@hasna/paths` resolver — the XDG data home
+`~/.local/share/hasna/snapshots` once adopted, otherwise the legacy
+`~/.hasna/snapshots` (an existing local store never becomes invisible on
+upgrade). The exact-app `HASNA_SNAPSHOTS_DIR` override and the data-kind
+`HASNA_DATA_HOME` override are honored by the resolver. Override the store
+path with:
 
 ```sh
 HASNA_SNAPSHOTS_DIR=/path/to/data

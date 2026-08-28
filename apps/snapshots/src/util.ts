@@ -1,20 +1,28 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { getDataRoot, getDbPath } from "./paths.js";
 import type { JsonObject, JsonValue } from "./types.js";
 
 export function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * The effective data home, resolved through `@hasna/paths` (XDG / macOS home
+ * layout) with a gated legacy adoption: an exact-app `HASNA_SNAPSHOTS_DIR`
+ * override wins; otherwise the resolver data home once adopted (`HASNA_DATA_HOME`
+ * set, or `snapshots.sqlite` already migrated there); otherwise the legacy
+ * `~/.hasna/snapshots` default. See src/paths.ts.
+ */
 export function defaultDataDir(): string {
-  return process.env.HASNA_SNAPSHOTS_DIR ?? join(homedir(), ".hasna", "snapshots");
+  return getDataRoot();
 }
 
+/** The default sqlite store path: `HASNA_SNAPSHOTS_DB_PATH` wins; otherwise `snapshots.sqlite` under the effective data home. */
 export function defaultDbPath(): string {
-  return process.env.HASNA_SNAPSHOTS_DB_PATH ?? join(defaultDataDir(), "snapshots.sqlite");
+  return getDbPath();
 }
 
 export function ensureParentDir(path: string): void {
