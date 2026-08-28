@@ -21,6 +21,7 @@
     "src",
     "scripts",
     "dashboard/dist",
+    "postinstall.mjs",
     "hasna.contract.json",
     "LICENSE",
     "README.md"
