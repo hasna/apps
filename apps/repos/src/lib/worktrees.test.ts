@@ -236,6 +236,48 @@ describe("computeClonePath", () => {
   });
 });
 
+describe("the root follows the resolver data root (P5.1)", () => {
+  const RESOLVER_ENV_KEYS = ["HASNA_REPOS_HOME", "HASNA_DATA_HOME"] as const;
+
+  afterEach(() => {
+    setWorktreeRootForTests(null);
+    setClonesRootForTests(null);
+  });
+
+  function runWithEnv(overrides: Record<string, string>, fn: () => void): void {
+    const saved: Partial<Record<string, string | undefined>> = {};
+    for (const key of Object.keys(overrides)) saved[key] = process.env[key];
+    try {
+      for (const [key, value] of Object.entries(overrides)) process.env[key] = value;
+      fn();
+    } finally {
+      for (const key of Object.keys(overrides)) {
+        const value = saved[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+
+  test("HASNA_REPOS_HOME redirects the worktree root and the clones root", () => {
+    const exact = join(tmpdir(), "repos-exact-override");
+    runWithEnv({ HASNA_REPOS_HOME: exact }, () => {
+      expect(worktreeRootDir()).toBe(join(exact, "worktrees"));
+      expect(clonesRootDir()).toBe(join(exact, "clones"));
+      expect(computeWorktreePath("repos", "a321ba13")).toBe(join(exact, "worktrees", "repos", "a321ba13"));
+      expect(computeClonePath("hasna", "apps")).toBe(join(exact, "clones", "hasna", "apps"));
+    });
+  });
+
+  test("HASNA_DATA_HOME adopts the resolver (XDG) data root for the worktree root", () => {
+    const xdg = join(tmpdir(), "repos-xdg-data-home");
+    runWithEnv({ HASNA_DATA_HOME: xdg }, () => {
+      expect(worktreeRootDir()).toBe(join(xdg, "repos", "worktrees"));
+      expect(clonesRootDir()).toBe(join(xdg, "repos", "clones"));
+    });
+  });
+});
+
 describe("addWorktree", () => {
   test("resolves an exact numeric registry ID to the same repository as its exact path", () => {
     const { clonePath, repoId } = seed();

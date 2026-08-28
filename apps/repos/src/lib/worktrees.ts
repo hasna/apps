@@ -75,6 +75,7 @@ import {
 } from "../db/repos.js";
 import type { Repo } from "../types/index.js";
 import { resolveTrustedAccountHome } from "./account-home.js";
+import { getDataRootForHome } from "./paths.js";
 import { classifyCheckout, describeCheckoutRemedy } from "./checkout-health.js";
 import { getSourceMachineId } from "./machine-id.js";
 import { sanitizeRemoteIdentity } from "./remote-identity.js";
@@ -259,11 +260,14 @@ export function setWorktreeRootForTests(root: string | null): void {
 /**
  * The canonical worktree root.
  *
- * Derived from the operating system account database rather than `$HOME`: a
- * root that moves with an environment variable is a containment check any
- * caller can step around by exporting one value before invoking the CLI.
+ * Follows the resolver data root (`getDataRootForHome`), so the worktrees live
+ * under the same root as the store itself: `HASNA_REPOS_HOME`, an adopted
+ * `HASNA_DATA_HOME`, or a physically migrated store all move the worktrees with
+ * the data (P5.1, task 7b8fc186). The account-database base is retained for
+ * the default legacy case, so a forged `$HOME` alone still cannot move the
+ * root — only the documented resolver overrides can.
  */
-export function worktreeRootDir(): string {
+export function worktreeRootDir(env: NodeJS.ProcessEnv = process.env): string {
   if (rootForTests) return resolve(rootForTests);
   const home = resolveTrustedAccountHome();
   if (!home) {
@@ -272,7 +276,7 @@ export function worktreeRootDir(): string {
       "the account home could not be resolved from the operating system account database",
     );
   }
-  return join(home, ".hasna", "repos", "worktrees");
+  return join(getDataRootForHome(home, env), "worktrees");
 }
 
 function realpathOrSelf(path: string): string {
@@ -372,14 +376,14 @@ export function setClonesRootForTests(root: string | null): void {
 /**
  * The canonical clones root.
  *
- * Same derivation discipline as `worktreeRootDir()`: the operating system
- * account database, never `$HOME` and never an environment variable. A root
- * that moves with caller-controlled state is a containment check any caller
- * can step around by exporting one value before invoking the CLI, so the
- * destination of every acquisition verb is computed from this root and is
- * never an argument.
+ * Same derivation discipline as `worktreeRootDir()`: follows the resolver data
+ * root so acquisitions land beside the store wherever it lives. The
+ * account-database base is retained for the default legacy case; only the
+ * documented resolver overrides (`HASNA_REPOS_HOME`, an adopted
+ * `HASNA_DATA_HOME`, or a migrated store) move the root, so the destination of
+ * every acquisition verb is computed from the root and is never an argument.
  */
-export function clonesRootDir(): string {
+export function clonesRootDir(env: NodeJS.ProcessEnv = process.env): string {
   if (clonesRootForTests) return resolve(clonesRootForTests);
   const home = resolveTrustedAccountHome();
   if (!home) {
@@ -388,7 +392,7 @@ export function clonesRootDir(): string {
       "the account home could not be resolved from the operating system account database",
     );
   }
-  return join(home, ".hasna", "repos", "clones");
+  return join(getDataRootForHome(home, env), "clones");
 }
 
 /**
