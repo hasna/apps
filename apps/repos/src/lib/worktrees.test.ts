@@ -384,6 +384,31 @@ describe("addWorktree", () => {
     expect(readFileSync(join(first.path, "WORK-IN-PROGRESS.txt"), "utf8")).toBe("half-finished\n");
   });
 
+  // Release-review P1 (cycle 2): the reuse fast path must fully re-claim a
+  // lease released with --keep — status, machine, task/run ownership and claim
+  // time — or listWorktrees still reads the reused worktree as
+  // released/foreign/stale and leaves it eligible for takeover or cleanup.
+  test("re-adding a task whose lease was released with --keep re-claims the lease", () => {
+    const { repoName } = seed();
+    const first = addWorktree({ repo: repoName, task: "reuse-reclaim" });
+    const released = releaseWorktree({ leaseId: first.lease.lease_id, keep: true });
+    expect(released.lease.status).toBe("released");
+    expect(existsSync(first.path)).toBe(true);
+
+    const claimingMachine = "machine-B-for-reuse";
+    const second = addWorktree({ repo: repoName, task: "reuse-reclaim", machineId: claimingMachine });
+    expect(second.reused).toBe(true);
+    expect(second.lease.status).toBe("claimed");
+    expect(second.lease.machine_id).toBe(claimingMachine);
+    expect(second.lease.claimed_at).not.toBe(first.lease.claimed_at);
+    expect(second.lease.released_at).toBeNull();
+
+    const listed = listWorktrees({ machineId: claimingMachine, now: new Date() });
+    const entry = listed.entries.find((row) => row.path === first.path);
+    expect(entry?.issues).not.toContain("machine-mismatch");
+    expect(entry?.issues).not.toContain("stale");
+  });
+
   test("refuses to reuse a worktree claimed on a different base", () => {
     // THE REGRESSION THIS PINS. `existing` is resolved as
     // `leaseByClaim(...) ?? leaseByPath(db, target)` — leaseByClaim's WHERE
@@ -1189,6 +1214,8 @@ describe("adoptWorktrees", () => {
     const listed = listWorktrees({ now: new Date() });
     expect(listed.entries.find((entry) => entry.path === dupDir)?.lease_id).toBe(owned.lease.lease_id);
     expect(listed.entries.find((entry) => entry.path === owned.path)?.lease_id).toBeNull();
+  });
+
   // Release-review P1 (cycle 1): re-claiming a released lease row must hand it
   // to the ADOPTING machine, not leave the released row's machine_id, task/run
   // ownership and claimed_at intact. The stale row read as foreign and stale in

@@ -177,4 +177,20 @@ describe("getDataRootForHome — explicit-home variant keeps the same gating", (
     process.env.HASNA_REPOS_HOME = override;
     expect(getDataRootForHome(otherHome)).toBe(override);
   });
+
+  // Release-review P1 (cycle 2): the legacy-store guard must compare against
+  // the SAME home the resolver root was computed from. With env.HOME pointing
+  // elsewhere (no legacy store there) and a live store under the explicit
+  // home, the guard previously looked at env.HOME's legacy root and adopted —
+  // hiding the explicit-home store.
+  test("explicit-home variant never hides a live store under the given home", () => {
+    isolateHome();
+    const otherHome = mkdtempSync(join(tmpdir(), "repos-other-home3-")); cleanups.push(otherHome);
+    const legacy = join(otherHome, ".hasna", "repos");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "repos.db"), "live-explicit-home-store");
+    const base = mkdtempSync(join(tmpdir(), "repos-data-home-explicit-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base; // would adopt under env.HOME semantics
+    expect(getDataRootForHome(otherHome)).toBe(legacy);
+  });
 });
