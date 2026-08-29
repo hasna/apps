@@ -263,8 +263,20 @@ async function route(
   }
 
   // ── results ──
-  if (resource === "results" && id && method === "GET") {
-    return notNull(await store.getResult(db, id), "result");
+  if (resource === "results") {
+    if (!id) {
+      // Collection create: the runner's ApiStore.createResult POSTs /v1/results
+      // to record each scenario result. The route was missing since the /v1
+      // surface landed (2289f8b36) — only GET /v1/results/:id existed — so
+      // hosted-store sandbox runs 404'd on result recording (OPE21-00033).
+      if (method === "POST") return json(await store.createResult(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getResult(db, id), "result");
+      // Runner's ApiStore.updateResult PUTs the progress/final state per scenario.
+      if (method === "PUT" || method === "PATCH") {
+        return notNull(await store.updateResult(db, id, (await readJson(req)) as never), "result");
+      }
+    }
   }
 
   // ── personas ──

@@ -743,6 +743,83 @@ export async function getResult(db: TypedQueryClient, id: string): Promise<Resul
   return row ? resultRow(row) : null;
 }
 
+export interface CreateResultBody {
+  runId: string;
+  scenarioId: string;
+  model: string;
+  stepsTotal?: number;
+  personaId?: string | null;
+  personaName?: string | null;
+}
+
+/**
+ * Create a result row (status 'skipped', zeroed counters — the runner updates
+ * it via updateResult as the scenario progresses). This is the missing write
+ * half of the hosted results contract: the client's ApiStore.createResult has
+ * POSTed /v1/results since 2026-07-08 (9b62324f5) but the server never routed
+ * it, so sandboxed hosted-store runs 404'd on result recording (OPE21-00033).
+ */
+export async function createResult(db: TypedQueryClient, body: CreateResultBody): Promise<Result> {
+  if (!body?.runId) throw new ValidationError("runId is required");
+  if (!body?.scenarioId) throw new ValidationError("scenarioId is required");
+  const id = uuid();
+  const row = await db.get(
+    `INSERT INTO results (id, run_id, scenario_id, status, reasoning, error, steps_completed, steps_total, duration_ms, model, tokens_used, cost_cents, metadata, created_at, persona_id, persona_name)
+     VALUES ($1,$2,$3,'skipped',NULL,NULL,0,$4,0,$5,0,0,'{}',$6,$7,$8) RETURNING *`,
+    [
+      id,
+      body.runId,
+      body.scenarioId,
+      body.stepsTotal ?? 0,
+      body.model ?? "unknown",
+      nowIso(),
+      body.personaId ?? null,
+      body.personaName ?? null,
+    ],
+  );
+  return resultRow(row);
+}
+
+/**
+ * Allowed update fields for a result row: camelCase client body key -> DB
+ * column name, with a per-column coercion (mirrors updateRun's shape, plus the
+ * pg-only failure_analysis/har_path columns resultRow already reads).
+ */
+const RESULT_UPDATE_COLUMNS: Record<string, { column: string; coerce: (v: unknown) => unknown }> = {
+  status: { column: "status", coerce: (v) => v },
+  reasoning: { column: "reasoning", coerce: (v) => v },
+  error: { column: "error", coerce: (v) => v },
+  stepsCompleted: { column: "steps_completed", coerce: (v) => asNum(v) },
+  durationMs: { column: "duration_ms", coerce: (v) => asNum(v) },
+  tokensUsed: { column: "tokens_used", coerce: (v) => asNum(v) },
+  costCents: { column: "cost_cents", coerce: (v) => asNum(v) },
+  metadata: { column: "metadata", coerce: (v) => (typeof v === "string" ? v : j(v)) },
+  failureAnalysis: { column: "failure_analysis", coerce: (v) => (typeof v === "string" ? v : v === null ? null : j(v)) },
+  harPath: { column: "har_path", coerce: (v) => (v === null ? null : String(v)) },
+};
+
+export async function updateResult(
+  db: TypedQueryClient,
+  id: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  body: Record<string, any>,
+): Promise<Result | null> {
+  const existing = await getResult(db, id);
+  if (!existing) return null;
+
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  for (const [key, spec] of Object.entries(RESULT_UPDATE_COLUMNS)) {
+    if (body[key] === undefined) continue;
+    params.push(spec.coerce(body[key]));
+    sets.push(`${spec.column} = $${params.length}`);
+  }
+  if (sets.length === 0) return existing;
+
+  const row = await db.get(`UPDATE results SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+  return row ? resultRow(row) : null;
+}
+
 export interface ScenarioResultStats {
   lastStatus: string | null;
   lastRunAt: string | null;
