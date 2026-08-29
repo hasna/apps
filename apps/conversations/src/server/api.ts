@@ -2853,13 +2853,13 @@ async function handleV1(
 
       // Atomic event capture in the SAME PG transaction as the message insert
       // (webhook-delivery contract). Hosted emission originates on the server.
+      const messageCreatedAt = inserted.created_at instanceof Date
+        ? inserted.created_at.toISOString()
+        : normalizeExactIsoTimestamp(String(inserted.created_at), "stored message created_at");
       const envelope = buildConversationEventEnvelope({
         id: `conversations:message:${messageUuid}:created`,
         type: MESSAGE_CREATED_TYPE,
-        // PG returns timestamptz as a JS Date, and String(date) yields the JS
-        // toString format which PG cannot parse back into a timestamptz (BUG
-        // 041b4e3a). Normalize to ISO8601 UTC for both Date and string input.
-        time: new Date(inserted.created_at as Date | string).toISOString(),
+        time: messageCreatedAt,
         subject: channelName ?? toAgent ?? undefined,
         data: {
           id: inserted.id,
@@ -2873,7 +2873,7 @@ async function handleV1(
           blocking: inserted.blocking,
           reply_to: inserted.reply_to,
           reply_to_uuid: replyParent?.uuid ?? null,
-          created_at: inserted.created_at,
+          created_at: messageCreatedAt,
           content_preview: String(content ?? "").slice(0, CONTENT_PREVIEW_CHARS),
         },
         appEvent: { kind: "message.created" },
