@@ -41,6 +41,14 @@
  *   ws-entry spec differs from the manifest is the wave class (files
  *   @hasna/contracts 0.14.0-vs-0.14.1) and fires like the lane does.
  *
+ *   Regular dependencies get NO devDep-style tolerance: a dependency ABSENT
+ *   from the ws entry fires even when the packages map resolves it. Measured
+ *   O15-04628 (2026-08-29): apps/secrets declared @hasna/paths@0.1.0 in the
+ *   manifest but its standalone bun.lock — the Docker deploy shape — had no
+ *   entry and no resolution, so the lane's frozen install failed with
+ *   "lockfile had changes" while the root lockfile (RULE 1) stayed green.
+ *   The self-test carries a regular-dep-absent control for this class.
+ *
  * RULE 3 — REGISTRY @hasna/* EDGES BEHIND THE PUBLISHED VERSION (see the
  *   implementation comment). A dependency edge — including a hoisted top-level
  *   entry, judged by the declaring workspace member manifests — resolving a
@@ -727,6 +735,24 @@ function selfTest(): void {
     }
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaLock, null, 2));
 
+    // Regular-dependency control (O15-04628 secrets class, measured
+    // 2026-08-29): a regular dependency ABSENT from the ws entry must fire
+    // even when the packages map resolves it — RULE 2 gives dependencies no
+    // devDep-style tolerance, and apps/secrets @hasna/paths@0.1.0 was absent
+    // from the standalone lockfile entirely, so the deploy lane's frozen
+    // install failed while the gate's devDep branch stayed silent. Without
+    // this control, a future "tolerance" added to compareEntry could quietly
+    // reopen the class.
+    const absentDepLock = JSON.parse(JSON.stringify(alphaLock));
+    delete absentDepLock.workspaces[""].dependencies["@hasna/beta"];
+    absentDepLock.packages = { "@hasna/beta": ["@hasna/beta@0.9.0", "", {}, "sha-beta"] };
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(absentDepLock, null, 2));
+    const absentDepHits = runCheck(dir, offlineProbe).problems;
+    if (!absentDepHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("@hasna/beta"))) {
+      throw new Error(`regular-dep-absent control failed — ws-entry-absent regular dependency not reported: ${absentDepHits.join("; ")}`);
+    }
+    fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaLock, null, 2));
+
     // A member in the exception registry with a stale app lockfile must NOT
     // fire (the root entry must be present — RULE 1 legitimately requires it).
     fs.mkdirSync(path.join(dir, "apps", "economy"), { recursive: true });
@@ -882,7 +908,7 @@ function selfTest(): void {
     }
 
     console.log(
-      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required; exception respected",
+      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required + regular-dep-absent fired; exception respected",
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
