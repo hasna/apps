@@ -31,14 +31,16 @@ agency release         # bump, build, commit, push, publish @hasna/* repos
 
 ## Reconstruction provenance
 
-This package's source was lost upstream (the published tarball shipped only
+This package's source was lost upstream (the historical tarball shipped only
 `package.json` + a bundled `dist/index.js`, and the repository was deleted).
-The source in `src/` is reconstructed from the published `@hasna/agency@0.3.1`
-bundle (2026-08-20, row 91a7b09d), split into real modules. Parity notes:
+The source in `src/` is reconstructed from the historical 0.3.1 artifact
+(2026-08-20, row 91a7b09d), which was published under the legacy unscoped
+name `hasna-agency` — a name that is no longer on the npm registry. This
+package is the first publication under `@hasna/agency`. Parity notes:
 
-- The CLI verb surface is identical to 0.3.1: `status, doctor, init, update,
-  sync, mcp, backup, db, connect, playground, logs, search, export, import,
-  new, release`.
+- The CLI verb surface is the documented 16-verb set: `status, doctor, init,
+  update, sync, mcp, backup, db, connect, playground, logs, search, export,
+  import, new, release`, asserted by the in-tree behavioral parity suite.
 - `src/db/database.ts` and `src/db/pg-migrations.ts` are reimplemented from
   the scaffold-template strings embedded in the bundle (the tarball shipped
   no db module; the runtime CLI never imported one).

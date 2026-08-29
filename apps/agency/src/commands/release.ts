@@ -72,8 +72,34 @@ function bumpPatch(version: string): string {
   return `${major}.${minor}.${patch + 1}`;
 }
 
-function releaseRepo(info: RepoInfo): ReleaseResult {
+function releaseRepo(info: RepoInfo, reviewedSha: string | undefined): ReleaseResult {
   const newVersion = bumpPatch(info.currentVersion);
+
+  // Gate 0 — a release must be bound to a reviewed SHA. The operator passes
+  // --reviewed-sha <sha>; it must equal the current HEAD, so the published
+  // candidate can never be content the review did not see (release-review P1:
+  // `agency release` cannot preserve a SHA-bound reviewed candidate). The only
+  // post-review mutation allowed is the mechanical version bump itself, and
+  // Gate 1 restricts the delta to package.json.
+  if (!reviewedSha) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: "refusing to release: --reviewed-sha <sha> is required (must equal the current HEAD of the reviewed candidate)",
+    };
+  }
+  const head = execSafe(`cd "${info.dir}" && git rev-parse HEAD 2>&1`, 10_000);
+  if (head === null || head.trim() !== reviewedSha) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: `refusing to release: HEAD (${head ? head.trim().slice(0, 12) : "unknown"}) does not match --reviewed-sha ${reviewedSha.slice(0, 12)} — the release must be bound to the reviewed commit`,
+    };
+  }
 
   // Gate 1 — refuse a dirty worktree. The release command only ever stages its
   // own version bump (package.json); anything else present must be reviewed and
@@ -129,14 +155,13 @@ function releaseRepo(info: RepoInfo): ReleaseResult {
     return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "build failed — nothing was committed or published" };
   }
 
-  // Gate 4 — stage ONLY the bumped package.json; never `git add -A`.
+  // Gate 4 — stage ONLY the bumped package.json; never `git add -A`. The bump
+  // is committed locally but NOT pushed: landing happens via a PR, so no
+  // post-review mutation reaches a remote without review (release-review P1:
+  // no direct push).
   const commitResult = execSafe(`cd "${info.dir}" && git add package.json && git commit -m "chore: release v${newVersion}" 2>&1`, 15000);
   if (commitResult === null) {
     return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "git commit failed" };
-  }
-  const pushResult = execSafe(`cd "${info.dir}" && git push 2>&1`, 30000);
-  if (pushResult === null) {
-    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "git push failed" };
   }
 
   // Gate 5 — publish through a temp npmrc holding only the ${NODE_AUTH_TOKEN}
@@ -161,9 +186,10 @@ function releaseRepo(info: RepoInfo): ReleaseResult {
 export function registerReleaseCommand(program: Command): void {
   program
     .command("release [repo]")
-    .description("Bump patch version, build, commit, push, and publish @hasna/* repos")
+    .description("Bump patch version, build, commit, publish a SHA-bound reviewed @hasna/* repo")
     .option("--dry-run", "Show what would be published without doing it")
     .option("--check", "Just show repos with unpushed changes")
+    .option("--reviewed-sha <sha>", "Exact reviewed commit SHA the release must be bound to (required for real publishes)")
     .option("-d, --dir <path>", "Base directory containing open-* repos", process.cwd())
     .action((repo: string | undefined, opts) => {
       const baseDir = resolve(opts.dir);
@@ -235,7 +261,7 @@ export function registerReleaseCommand(program: Command): void {
       const results: ReleaseResult[] = [];
       for (const info of releasable) {
         process.stdout.write(chalk.dim(`  ${info.name} ${info.currentVersion} → ${bumpPatch(info.currentVersion)} ... `));
-        const result = releaseRepo(info);
+        const result = releaseRepo(info, opts.reviewedSha as string | undefined);
         results.push(result);
         if (result.status === "published") {
           console.log(chalk.green("published"));
@@ -260,5 +286,10 @@ export function registerReleaseCommand(program: Command): void {
       const published = results.filter((r) => r.status === "published").length;
       const failed = results.filter((r) => r.status === "failed").length;
       console.log(chalk.dim(`\n  ${published} published, ${failed} failed, ${results.length - published - failed} skipped.`));
+      if (failed > 0) {
+        // Release failures must exit nonzero (release-review P1: release
+        // failures exit successfully).
+        process.exitCode = 1;
+      }
     });
 }

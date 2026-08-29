@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
-import { HASNA_HOME, dirExists, execSafe, formatBytes, listTarball } from "../utils.js";
+import { HASNA_HOME, copyStagedWithRollback, dirExists, execSafe, formatBytes, listTarball, spawnSafe } from "../utils.js";
 
 const BACKUP_DIR = join(HASNA_HOME, "backups");
 
@@ -37,7 +37,9 @@ export function registerBackupCommand(program: Command): void {
       console.log(chalk.bold(`hasna backup create\n`));
       console.log(chalk.dim(`  Source: ${HASNA_HOME}`));
       console.log(chalk.dim(`  Output: ${outputPath}\n`));
-      const result = execSafe(`tar -czf "${outputPath}" -C "${HASNA_HOME}" --exclude="backups" . 2>&1`, 120000);
+      // argv-based: outputPath is operator-supplied and must never travel
+      // through a shell (release-review P1: shell injection via user paths).
+      const result = spawnSafe("tar", ["-czf", outputPath, "-C", HASNA_HOME, "--exclude=backups", "."], 120000);
       if (result !== null && existsSync(outputPath)) {
         const size = statSync(outputPath).size;
         console.log(chalk.green(`  Backup created: ${outputPath} (${formatBytes(size)})`));
@@ -78,16 +80,17 @@ export function registerBackupCommand(program: Command): void {
         return;
       }
       // Staged restore: extract into a verified staging directory first, then
-      // copy over ~/.hasna. If extraction fails, live data is untouched; if the
-      // copy fails, the staged copy is left at a reported path for manual
-      // recovery instead of leaving HASNA_HOME partially overwritten.
+      // copy over ~/.hasna with a pre-copy snapshot and rollback. A failed
+      // extraction leaves live data untouched; a failed copy is rolled back to
+      // the pre-copy state (and only if the rollback itself fails is the
+      // snapshot preserved at a reported path for manual recovery).
       const staging = execSafe(`mktemp -d /tmp/hasna-restore.XXXXXX`, 5000);
       if (staging === null) {
         console.error(chalk.red("  Restore failed: could not create staging directory."));
         process.exit(1);
       }
       try {
-        const extractResult = execSafe(`tar -xzf "${filePath}" -C "${staging}" 2>&1`, 120000);
+        const extractResult = spawnSafe("tar", ["-xzf", filePath, "-C", staging], 120000);
         if (extractResult === null) {
           console.error(chalk.red("  Restore failed: archive extraction into staging failed."));
           console.error(chalk.red(`  Live data untouched. Staging: ${staging}`));
@@ -96,13 +99,23 @@ export function registerBackupCommand(program: Command): void {
         if (!dirExists(HASNA_HOME)) {
           mkdirSync(HASNA_HOME, { recursive: true });
         }
-        const copyResult = execSafe(`cp -a "${staging}/." "${HASNA_HOME}/" 2>&1`, 120000);
-        if (copyResult === null) {
+        const outcome = copyStagedWithRollback(staging, HASNA_HOME);
+        if (outcome.ok) {
+          console.log(chalk.green("  Restore complete."));
+        } else if (outcome.rolledBack) {
           console.error(chalk.red("  Restore failed: copying staged content into ~/.hasna failed."));
-          console.error(chalk.red(`  Live data may be partially restored. Staged copy preserved at: ${staging}`));
+          console.error(chalk.red("  Live data was rolled back to the pre-copy state."));
+          process.exit(1);
+        } else {
+          console.error(chalk.red("  Restore failed: copying staged content into ~/.hasna failed."));
+          if (outcome.snapshot) {
+            console.error(chalk.red(`  Rollback could not complete. Pre-copy snapshot preserved at: ${outcome.snapshot}`));
+          } else {
+            console.error(chalk.red("  No pre-copy snapshot could be taken; live data may be partially restored."));
+          }
+          console.error(chalk.red(`  Staged copy preserved at: ${staging}`));
           process.exit(1);
         }
-        console.log(chalk.green("  Restore complete."));
       } finally {
         const cleanup = execSafe(`rm -rf "${staging}" 2>&1`, 5000);
         if (cleanup === null) {

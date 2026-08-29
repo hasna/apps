@@ -3,7 +3,18 @@ import chalk from "chalk";
 import { readdirSync, statSync } from "fs";
 import { join } from "path";
 import { dbPackages, type PackageEntry } from "../registry.js";
-import { dataPath, dirExists, fileExists, execSafe, formatBytes, pad } from "../utils.js";
+import { dataPath, dirExists, fileExists, execSafe, formatBytes, pad, spawnSafe } from "../utils.js";
+
+/**
+ * Strict SQL identifier validation: only letters, digits and underscore,
+ * never starting with a digit. Table names discovered from sqlite_master
+ * (disk data) must pass before being interpolated into SQL, so a crafted
+ * local database cannot inject statements (release-review P1: read-only
+ * database commands execute shell-controlled disk identifiers).
+ */
+function isSafeIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
 
 interface DbFile {
   pkg: string;
@@ -52,7 +63,7 @@ export function registerDbCommand(program: Command): void {
         if (files.length === 0) continue;
         for (const f of files) {
           totalFiles++;
-          const result = execSafe(`sqlite3 "${f.path}" "PRAGMA integrity_check;" 2>&1`, 10_000);
+          const result = spawnSafe("sqlite3", [f.path, "PRAGMA integrity_check;"], 10_000);
           if (result && result.includes("ok")) {
             validFiles++;
             console.log(`  ${chalk.green("[OK]")} ${pad(f.pkg, 16)} ${f.file} ${chalk.dim(`(${formatBytes(f.size)})`)}`);
@@ -90,11 +101,11 @@ export function registerDbCommand(program: Command): void {
         if (files.length === 0) continue;
         for (const f of files) {
           totalSize += f.size;
-          const tablesRaw = execSafe(`sqlite3 "${f.path}" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';" 2>/dev/null`);
-          const tables = tablesRaw ? tablesRaw.split("\n").filter(Boolean) : [];
+          const tablesRaw = spawnSafe("sqlite3", [f.path, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"]);
+          const tables = tablesRaw ? tablesRaw.split("\n").filter(Boolean).filter(isSafeIdentifier) : [];
           let rowCount = 0;
           for (const table of tables) {
-            const countRaw = execSafe(`sqlite3 "${f.path}" "SELECT COUNT(*) FROM "${table}";" 2>/dev/null`);
+            const countRaw = spawnSafe("sqlite3", [f.path, `SELECT COUNT(*) FROM "${table}";`]);
             if (countRaw) {
               rowCount += parseInt(countRaw, 10) || 0;
             }
@@ -118,7 +129,7 @@ export function registerDbCommand(program: Command): void {
         const files = findDbFiles(pkg);
         for (const f of files) {
           const sizeBefore = f.size;
-          const result = execSafe(`sqlite3 "${f.path}" "VACUUM;" 2>&1`, 30000);
+          const result = spawnSafe("sqlite3", [f.path, "VACUUM;"], 30000);
           if (result !== null) {
             const sizeAfter = statSync(f.path).size;
             const saved = sizeBefore - sizeAfter;

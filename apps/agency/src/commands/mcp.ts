@@ -18,13 +18,21 @@ async function checkMcp(pkg: { name: string; bins: { mcp?: string } }): Promise<
     return { name: pkg.name, binary, installed: false, starts: false, error: "not on PATH" };
   }
   const result = await spawnWithTimeout(binary, ["--help"], 3000);
-  const starts = result.code === 0 || result.code === null;
+  // Only a clean exit-0 counts as started. A timeout or a spawn error
+  // (code === null) is a FAILURE, never a healthy start — the old
+  // `code === 0 || code === null` classification reported hung or crashed
+  // binaries as healthy.
+  const starts = result.code === 0;
   return {
     name: pkg.name,
     binary,
     installed: true,
     starts,
-    error: !starts ? result.stderr.split("\n")[0] || `exit ${result.code}` : undefined,
+    error: !starts
+      ? result.timedOut
+        ? "timeout (no response within 3s)"
+        : result.stderr.split("\n")[0] || `exit ${result.code ?? "spawn error"}`
+      : undefined,
   };
 }
 

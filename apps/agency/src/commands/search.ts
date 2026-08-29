@@ -3,7 +3,19 @@ import chalk from "chalk";
 import { existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { dbPackages } from "../registry.js";
-import { dataPath, dirExists, execSafe, pad } from "../utils.js";
+import { dataPath, dirExists, execSafe, pad, spawnSafe } from "../utils.js";
+
+/**
+ * Strict SQL identifier validation: only letters, digits and underscore,
+ * never starting with a digit. Table/column names from sqlite_master or the
+ * static SERVICE_TABLES allowlist must pass before being interpolated into
+ * SQL, so a malicious database cannot inject statements.
+ */
+function isSafeIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
+
+const MAX_SEARCH_LIMIT = 100;
 
 const SERVICE_TABLES: Record<string, Array<{ table: string; columns: string[] }>> = {
   todos: [{ table: "tasks", columns: ["title", "description"] }],
@@ -57,12 +69,16 @@ function findDbFiles(serviceDir: string): string[] {
 }
 
 function tableExists(dbPath: string, tableName: string): boolean {
-  const result = execSafe(`sqlite3 "${dbPath}" "SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}';" 2>/dev/null`);
+  if (!isSafeIdentifier(tableName)) return false;
+  // dbPath/tableName travel as argv — a malicious database (or db path)
+  // cannot carry shell substitution.
+  const result = spawnSafe("sqlite3", [dbPath, `SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}';`]);
   return result !== null && result.trim() === tableName;
 }
 
 function getExistingColumns(dbPath: string, tableName: string, wantedColumns: string[]): string[] {
-  const result = execSafe(`sqlite3 "${dbPath}" "PRAGMA table_info(${tableName});" 2>/dev/null`);
+  if (!isSafeIdentifier(tableName)) return [];
+  const result = spawnSafe("sqlite3", [dbPath, `PRAGMA table_info(${tableName});`]);
   if (!result) return [];
   const existingCols = result
     .split("\n")
@@ -90,8 +106,11 @@ function searchTable(dbPath: string, serviceName: string, tableName: string, col
   const results: SearchResult[] = [];
   const escapedQuery = query.replace(/'/g, "''");
   for (const col of existingCols) {
+    if (!isSafeIdentifier(col) || !isSafeIdentifier(tableName)) continue;
     const sql = `SELECT rowid, substr(${col}, 1, 200) FROM "${tableName}" WHERE "${col}" LIKE '%${escapedQuery}%' LIMIT ${limit};`;
-    const raw = execSafe(`sqlite3 "${dbPath}" "${sql}" 2>/dev/null`);
+    // The query travels as an argv entry, never through a shell — shell
+    // substitution in a search string cannot execute.
+    const raw = spawnSafe("sqlite3", [dbPath, sql]);
     if (!raw) continue;
     for (const line of raw.split("\n").filter(Boolean)) {
       const sepIdx = line.indexOf("|");
@@ -148,7 +167,7 @@ export function registerSearchCommand(program: Command): void {
     .option("-s, --service <name>", "Search only a specific service")
     .option("--json", "Output as JSON")
     .action((query: string, opts) => {
-      const limit = parseInt(opts.limit, 10) || 5;
+      const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 5, 1), MAX_SEARCH_LIMIT);
       let packages = dbPackages();
       if (opts.service) {
         packages = packages.filter((p) => p.name === opts.service);
@@ -175,11 +194,11 @@ export function registerSearchCommand(program: Command): void {
               serviceResults.push(...results);
             }
           } else {
-            const tablesRaw = execSafe(`sqlite3 "${dbFile}" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%';" 2>/dev/null`);
+            const tablesRaw = spawnSafe("sqlite3", [dbFile, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%';"]);
             if (!tablesRaw) continue;
-            const tables = tablesRaw.split("\n").filter(Boolean);
+            const tables = tablesRaw.split("\n").filter(Boolean).filter(isSafeIdentifier);
             for (const table of tables) {
-              const colsRaw = execSafe(`sqlite3 "${dbFile}" "PRAGMA table_info(${table});" 2>/dev/null`);
+              const colsRaw = spawnSafe("sqlite3", [dbFile, `PRAGMA table_info(${table});`]);
               if (!colsRaw) continue;
               const textCols = colsRaw
                 .split("\n")

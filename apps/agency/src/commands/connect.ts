@@ -1,9 +1,19 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { REGISTRY, mcpPackages } from "../registry.js";
+
+/**
+ * Fail-closed config read: a config file that exists but cannot be read or
+ * parsed is a hard error — it must NEVER be silently treated as empty and then
+ * overwritten (which would destroy the operator's existing configuration).
+ */
+function failClosed(message: string): never {
+  console.error(chalk.red(message));
+  process.exit(1);
+}
 
 const TOOL_CONFIGS: Record<string, { label: string; candidates: Array<{ path: string; format: string; mode: string }> }> = {
   claude: {
@@ -78,12 +88,20 @@ function buildMcpEntries(serviceNames: string[], mode: string): Record<string, {
 
 function readJson(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
+  let raw: string;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8"));
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return {};
-    return parsed as Record<string, unknown>;
+    raw = readFileSync(path, "utf-8");
   } catch {
-    return {};
+    failClosed(`Cannot read existing config ${path}; refusing to modify it.`);
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      failClosed(`Config ${path} is not a JSON object; refusing to overwrite it.`);
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err) {
+    failClosed(`Cannot parse existing config ${path} (${(err as Error).message}); refusing to overwrite it.`);
   }
 }
 
@@ -92,13 +110,24 @@ function readText(path: string): string {
   try {
     return readFileSync(path, "utf-8");
   } catch {
-    return "";
+    failClosed(`Cannot read existing config ${path}; refusing to modify it.`);
   }
 }
 
+/**
+ * Atomic write with a preimage backup: the original file is preserved as
+ * `<path>.bak` before the replacement lands via temp-file rename, so a crash
+ * mid-write can never truncate the operator's config and the pre-write state
+ * is always recoverable.
+ */
 function writeText(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, "utf-8");
+  if (existsSync(path)) {
+    copyFileSync(path, `${path}.bak`);
+  }
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, content, "utf-8");
+  renameSync(tmp, path);
 }
 
 function writeJson(path: string, data: object): void {

@@ -1,8 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { mkdirSync, writeFileSync, existsSync, unlinkSync } from "fs";
+import { mkdirSync, writeFileSync, existsSync } from "fs";
 import { join, resolve } from "path";
-import { execSafe, spawnWithTimeout } from "../utils.js";
+import { execSafe, spawnSafe, spawnWithTimeout } from "../utils.js";
 
 /** Per-effect opt-in flags for `agency new`. Every external effect (public
  * GitHub repo creation, RDS provisioning, npm publish) requires its explicit
@@ -13,20 +13,13 @@ interface ScaffoldOptions {
   publish: boolean;
 }
 
-/** True only when a vault-backed publish token is present in the environment
- * (NODE_AUTH_TOKEN, per the hasna/apps publish law). Ambient ~/.npmrc
- * credentials are never used by this scaffolder. */
-function publishTokenAvailable(): boolean {
-  return typeof process.env.NODE_AUTH_TOKEN === "string" && process.env.NODE_AUTH_TOKEN.length > 0;
-}
-
 /**
  * Scaffold templates. Reconstructed from the published @hasna/agency@0.3.1
  * bundle (2026-08-20). The legacy `open-<name>` directory naming is preserved
- * for parity; external effects (public GitHub repo creation, RDS provisioning,
- * npm publish) are gated behind explicit per-effect flags (--create-repo,
- * --provision-db, --publish) and publish additionally requires a vault-backed
- * NODE_AUTH_TOKEN. Nothing external happens implicitly.
+ * for parity; external effects (public GitHub repo creation, RDS provisioning)
+ * are gated behind explicit per-effect flags (--create-repo, --provision-db).
+ * npm publish from a scaffold is REFUSED (release-review P1): publication
+ * goes through the reviewed hasna/apps pipeline only.
  */
 
 function packageJson(name: string, kind: "service" | "library"): string {
@@ -51,7 +44,7 @@ function packageJson(name: string, kind: "service" | "library"): string {
         license: "Apache-2.0",
         publishConfig: { registry: "https://registry.npmjs.org", access: "public" },
         dependencies: {},
-        devDependencies: { "@types/bun": "latest", typescript: "^5" },
+        devDependencies: { "@types/bun": "1.3.14", typescript: "^5" },
       },
       null,
       2,
@@ -98,7 +91,7 @@ function packageJson(name: string, kind: "service" | "library"): string {
         chalk: "^5",
         zod: "^3",
       },
-      devDependencies: { "@types/bun": "latest", typescript: "^5" },
+      devDependencies: { "@types/bun": "1.3.14", typescript: "^5" },
     },
     null,
     2,
@@ -804,7 +797,7 @@ dist/
   execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
   if (opts.createRepo) {
     console.log(chalk.dim("  Creating GitHub repo..."));
-    const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
+    const ghResult = spawnSafe("gh", ["repo", "create", `hasna/${name}`, "--public", "--source", ".", "--push", "--description", `TODO: describe ${name}`], 30000);
     if (ghResult !== null) {
       console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
     } else {
@@ -840,34 +833,14 @@ dist/
     console.log(chalk.dim("  Skipping RDS database provisioning (pass --provision-db to enable)."));
   }
   if (opts.publish) {
-    if (!publishTokenAvailable()) {
-      console.log(chalk.yellow("  Skipping npm publish: NODE_AUTH_TOKEN is not set — publish manually with a vault-backed token (secrets exec ... --as NODE_AUTH_TOKEN -- npm publish --userconfig <tmp npmrc>)."));
-    } else {
-      console.log(chalk.dim("  Publishing to npm..."));
-      const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
-      if (buildResult !== null) {
-        const npmrcPath = join(dir, ".agency-scaffold-npmrc");
-        try {
-          writeFileSync(npmrcPath, "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n", { mode: 0o600 });
-          const publishResult = execSafe(`cd "${dir}" && npm publish --userconfig "${npmrcPath}" --access public 2>&1`, 30000);
-          if (publishResult !== null) {
-            console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
-          } else {
-            console.log(chalk.yellow("  npm publish failed — publish manually."));
-          }
-        } finally {
-          try {
-            unlinkSync(npmrcPath);
-          } catch {
-            /* best-effort cleanup */
-          }
-        }
-      } else {
-        console.log(chalk.yellow("  Build failed — publish manually."));
-      }
-    }
+    // Scaffold publication was removed (release-review P1: `agency new`
+    // bypasses repository and release gates). Publishing happens only through
+    // the reviewed hasna/apps pipeline — changeset PR, adversarial review,
+    // publish intent, registry verification.
+    console.error(chalk.red("  Refusing to publish from a scaffold: publication requires the reviewed hasna/apps pipeline (changeset PR -> adversarial review -> publish intent -> npm)."));
+    process.exitCode = 1;
   } else {
-    console.log(chalk.dim("  Skipping npm publish (pass --publish to build and publish)."));
+    console.log(chalk.dim("  Skipping npm publish."));
   }
   if (!skipTasks) {
     createSetupTasks(name, dir);
@@ -925,7 +898,7 @@ dist/
   execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
   if (opts.createRepo) {
     console.log(chalk.dim("  Creating GitHub repo..."));
-    const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
+    const ghResult = spawnSafe("gh", ["repo", "create", `hasna/${name}`, "--public", "--source", ".", "--push", "--description", `TODO: describe ${name}`], 30000);
     if (ghResult !== null) {
       console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
     } else {
@@ -935,34 +908,14 @@ dist/
     console.log(chalk.dim("  Skipping GitHub repo creation (pass --create-repo to create hasna/" + name + " on GitHub)."));
   }
   if (opts.publish) {
-    if (!publishTokenAvailable()) {
-      console.log(chalk.yellow("  Skipping npm publish: NODE_AUTH_TOKEN is not set — publish manually with a vault-backed token (secrets exec ... --as NODE_AUTH_TOKEN -- npm publish --userconfig <tmp npmrc>)."));
-    } else {
-      console.log(chalk.dim("  Publishing to npm..."));
-      const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
-      if (buildResult !== null) {
-        const npmrcPath = join(dir, ".agency-scaffold-npmrc");
-        try {
-          writeFileSync(npmrcPath, "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n", { mode: 0o600 });
-          const publishResult = execSafe(`cd "${dir}" && npm publish --userconfig "${npmrcPath}" --access public 2>&1`, 30000);
-          if (publishResult !== null) {
-            console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
-          } else {
-            console.log(chalk.yellow("  npm publish failed — publish manually."));
-          }
-        } finally {
-          try {
-            unlinkSync(npmrcPath);
-          } catch {
-            /* best-effort cleanup */
-          }
-        }
-      } else {
-        console.log(chalk.yellow("  Build failed — publish manually."));
-      }
-    }
+    // Scaffold publication was removed (release-review P1: `agency new`
+    // bypasses repository and release gates). Publishing happens only through
+    // the reviewed hasna/apps pipeline — changeset PR, adversarial review,
+    // publish intent, registry verification.
+    console.error(chalk.red("  Refusing to publish from a scaffold: publication requires the reviewed hasna/apps pipeline (changeset PR -> adversarial review -> publish intent -> npm)."));
+    process.exitCode = 1;
   } else {
-    console.log(chalk.dim("  Skipping npm publish (pass --publish to build and publish)."));
+    console.log(chalk.dim("  Skipping npm publish."));
   }
   if (!skipTasks) {
     createSetupTasks(name, dir);
@@ -984,7 +937,7 @@ export function registerNewCommand(program: Command): void {
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
     .option("--create-repo", "Create a public GitHub repository (gh repo create --public --push) for the scaffold")
     .option("--provision-db", "Provision an RDS database for the service")
-    .option("--publish", "Build and publish the package to npm (requires NODE_AUTH_TOKEN)")
+    .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
     .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
       await scaffoldService(name, baseDir, !!opts.skipTasks, {
@@ -1000,7 +953,7 @@ export function registerNewCommand(program: Command): void {
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
     .option("--create-repo", "Create a public GitHub repository (gh repo create --public --push) for the scaffold")
-    .option("--publish", "Build and publish the package to npm (requires NODE_AUTH_TOKEN)")
+    .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
     .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
       await scaffoldLibrary(name, baseDir, !!opts.skipTasks, {

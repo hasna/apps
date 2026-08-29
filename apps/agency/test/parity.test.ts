@@ -47,7 +47,7 @@ describe("package manifest", () => {
   });
 });
 
-describe("CLI verb surface (parity with 0.3.1)", () => {
+describe("CLI verb surface (documented 16-verb surface)", () => {
   test("--help lists exactly the 16 verbs", () => {
     const res = runCli(["--help"]);
     expect(res.code).toBe(0);
@@ -126,9 +126,9 @@ describe("status verb (read-only)", () => {
       // (1 occurrence, byte-verified by review). On a machine with no global
       // @hasna installs, stdout is therefore NOT JSON and a blind JSON.parse
       // throws `SyntaxError: JSON Parse error: Unexpected identifier "No"`.
-      // Two-state parity assertion: the exact 0.3.1-faithful message when no
-      // installs exist; the array shape when installs exist. Any other
-      // output fails loudly (JSON.parse throws) — no silent skip.
+      // Two-state assertion: the exact empty-install message when no installs
+      // exist; the array shape when installs exist. Any other output fails
+      // loudly (JSON.parse throws) — no silent skip.
       const trimmed = res.stdout.trim();
       if (trimmed === "No @hasna/* packages installed globally.") {
         return;
