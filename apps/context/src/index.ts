@@ -1,5 +1,8 @@
 // Public API
 export * from "./types/index.js";
+// Typed HTTP client generated from the context-serve OpenAPI document
+// (hasna.contract.json package-sdk generatedFrom /openapi.json).
+export { ContextClient } from "./sdk/generated-client.js";
 export * from "./db/database.js";
 export {
   CONTEXT_STORAGE_ENV,

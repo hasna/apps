@@ -1,7 +1,7 @@
 {
   "name": "@hasna/context",
   "version": "0.1.54",
-  "description": "Self-hosted documentation context server for AI coding agents — refresh, index, and query source docs via MCP + CLI + HTTP",
+  "description": "Self-hosted documentation context server for AI coding agents \u2014 refresh, index, and query source docs via MCP + CLI + HTTP",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -36,7 +36,8 @@
     "contracts:check": "bunx @hasna/contracts@0.11.1 repo-conformance .",
     "scan-artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/context-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan context-artifact-scan.tgz; rc=$?; rm -f \"$PWD/context-artifact-scan.tgz\"; exit $rc",
     "prepack": "bun run build && bun run scan-artifact",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "openapi:generate": "bun scripts/openapi-generate.ts"
   },
   "keywords": [
     "context",
