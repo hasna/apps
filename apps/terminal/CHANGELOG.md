@@ -1,5 +1,11 @@
 # Changelog
 
+## [4.3.21] - 2026-08-29
+### Changed
+- Republication past the registry-protected 4.3.20 slot (4.3.20 was published
+  2026-08-28 and the package fully unpublished 2026-08-28, so its npm slot is
+  permanently burned). 4.3.21 carries the identical 4.3.20 changeset.
+
 ## [4.3.20] - 2026-08-28
 ### Changed
 - Switch local path reads/writes through the @hasna/paths resolver (XDG/macOS
