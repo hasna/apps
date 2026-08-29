@@ -343,7 +343,7 @@ describe("a half-parsed value is rejected rather than silently truncated", () =>
 });
 
 describe("the legacy deprecation tells the truth about the disk", () => {
-  test("it says to write the key to disk, and never to unset the variable", () => {
+  test("it directs to the sanctioned vault route, and never to unset the variable", () => {
     const home = makeHome();
     const messages: string[] = [];
 
@@ -353,7 +353,8 @@ describe("the legacy deprecation tells the truth about the disk", () => {
       { onDeprecation: (message) => messages.push(message) },
     );
 
-    expect(messages[0]).toContain("Put the current key in");
+    expect(messages[0]).toContain("HASNA_ACCOUNTS_API_KEY_REF");
+    expect(messages[0]).not.toContain("fleet-env");
     expect(messages[0]).not.toMatch(/unset/i);
   });
 

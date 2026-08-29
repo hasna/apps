@@ -874,11 +874,11 @@ export function resolveCredential(
       const noticeKey = `${name}:${winner.src.path}`;
       if (!notified.has(noticeKey)) {
         notified.add(noticeKey);
-        const target = diskSourceList[0]?.path ?? "<none>";
         const message =
           `[${name}] DEPRECATED: the API key came from ${winner.src.path} — a legacy credential location. ` +
-          `The primary location is ${target} (~/.hasna/fleet-env/<app>.env). The legacy 'cloud' tiers are ` +
-          `removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}. Migrate the key to the primary location.`;
+          `The legacy 'cloud' tiers are removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}. Provision the key in ` +
+          `the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` +
+          `${credentialOverrideEnvKey(name)}.`;
         sink(message);
       }
       finalWarning = [warning, `Legacy credential source: ${winner.src.path}. Removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}.`]
@@ -906,7 +906,8 @@ export function resolveCredential(
     // a disk credential is waiting to be picked up.
     const where =
       diskPaths.length > 0
-        ? `Put the current key in ${diskPaths[0]} — it is re-read on every call, so rotations take effect immediately.`
+        ? `Provision the key in the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` +
+          `${credentialOverrideEnvKey(name)} in the process environment.`
         : `This environment has no HOME, so no credential file could be consulted at all; the disk tier is ` +
           `unavailable here and this process will keep using the environment snapshot.`;
     const message =
