@@ -196,6 +196,36 @@ function pathIsWithinPrefix(projectPath: string, prefix: string): boolean {
   return normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}${sep}`);
 }
 
+/**
+ * Returns the rows whose path is the requested path under a different letter
+ * case — the project-side mirror of findCaseVariantRows (agent names, task
+ * 1170f87b). Path-casing drift (/home/hasna/workspace vs /home/hasna/Workspace
+ * vs /Users/hasna/Workspace) is the measured root cause of duplicate project
+ * rows (todos 1dcb9e66): 132 of 182 duplicate-name groups span machines with
+ * differing paths in exactly this shape. `resolve()` has already normalised
+ * `.`/`..` and trailing slashes at the call sites, so case is the remaining
+ * drift dimension this guard closes.
+ * An EXACT path match is the ordinary restart path and returns [].
+ */
+export function findCaseVariantProjectPaths<T extends { id: string; path: string }>(
+  projects: readonly T[],
+  requestedPath: string,
+): T[] {
+  const raw = requestedPath.trim();
+  if (!raw) return [];
+  const folded = raw.toLowerCase();
+  if (projects.some((project) => project.path === raw)) return [];
+  return projects.filter((project) => project.path.toLowerCase() === folded);
+}
+
+function describePathCollisions<T extends { id: string; path: string; name?: string | null }>(
+  variants: readonly T[],
+): string {
+  return variants
+    .map((v) => `${v.name ?? v.id} (${v.id}) at ${v.path}`)
+    .join("; ");
+}
+
 function resolveTaskListFilter(input: string | undefined, projectId?: string): string | undefined {
   if (!input) return undefined;
   const db = getDatabase();
@@ -1069,6 +1099,21 @@ export function registerProjectCommands(program: Command) {
           handleError(new Error("projects --update requires --name, --path, or --description"));
         }
         const current = cloud ? await cloudResolveProject(cloud, opts.update) : resolveExplicitProject(opts.update);
+        if (patch.path !== undefined) {
+          // Path-casing drift mints duplicate project rows (todos 1dcb9e66):
+          // refuse to move a project onto another row's path under a different
+          // letter case, so --update cannot CREATE the collision --add now refuses.
+          const allProjects = cloud ? await cloudListProjects(cloud) : listProjects();
+          const variants = findCaseVariantProjectPaths(
+            allProjects.filter((project) => project.id !== current.id),
+            patch.path,
+          );
+          if (variants.length > 0) {
+            handleError(new Error(
+              `Refusing to update ${current.name} path to ${patch.path}: it is a letter-case variant of an existing project (${describePathCollisions(variants)}). Path-casing drift is how duplicate project rows are minted; use the existing project's exact path instead.`,
+            ));
+          }
+        }
         const project = cloud
           ? await cloudUpdateProject(cloud, current.id, patch)
           : updateProject(current.id, patch);
@@ -1124,8 +1169,9 @@ export function registerProjectCommands(program: Command) {
           const parent = cloud ? await cloudResolveProject(cloud, opts.parent) : resolveExplicitProject(opts.parent);
           parentId = parent.id;
         }
+        const allProjects = cloud ? await cloudListProjects(cloud) : listProjects();
         const existing = cloud
-          ? (await cloudListProjects(cloud)).find((project) => project.path === projectPath)
+          ? allProjects.find((project) => project.path === projectPath)
           : getProjectByPath(projectPath);
         let project;
         if (existing) {
@@ -1141,6 +1187,18 @@ export function registerProjectCommands(program: Command) {
             if (!cloud) project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
           }
         } else {
+          // Path-casing drift minted the duplicate platform-nopen rows (todos
+          // 1dcb9e66): /home/hasna/workspace vs /home/hasna/Workspace vs
+          // /Users/hasna/Workspace all registered as distinct projects because
+          // the lookup above matched exact strings only. Refuse to mint a row
+          // whose path is an existing row's path under a different letter case,
+          // and name the collision so registration converges on one project.
+          const variants = findCaseVariantProjectPaths(allProjects, projectPath);
+          if (variants.length > 0) {
+            handleError(new Error(
+              `Refusing to register ${projectPath}: this path is a letter-case variant of an existing project (${describePathCollisions(variants)}). Path-casing drift is how duplicate project rows are minted; use \`todos projects --update <id> --path <path>\` to correct the existing row's path instead.`,
+            ));
+          }
           const input = { name, path: projectPath, description: opts.description, task_list_id: opts.taskListId, parent_id: parentId };
           project = cloud ? await cloudCreateProject(cloud, input) : createProject(input);
         }
