@@ -78,6 +78,20 @@
     }
   },
   "metadata": {
+    "service": {
+      "port": 3456,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/v1/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "migrationCommand": [
+        "bun",
+        "dist/server/index.js",
+        "migrate"
+      ]
+    },
     "serve": {
       "healthEndpoints": [
         "/health",
