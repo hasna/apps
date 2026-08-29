@@ -7,9 +7,15 @@
 FROM --platform=linux/arm64 oven/bun:1-alpine AS build
 WORKDIR /app
 
-# Install dependencies first (better layer caching).
+# Install dependencies first (better layer caching). The package postinstall
+# (node postinstall.mjs) only pre-creates the host ~/.hasna/telephony data
+# home — pointless here (PURE REMOTE, no local state) and it would fail the
+# build anyway: postinstall.mjs is not copied into this layer yet ('Module not
+# found /app/postinstall.mjs', measured on deploy pass 16, 2026-08-28). Skip
+# lifecycle scripts, like the domains Dockerfile (O15-04208); the runtime
+# recreates the same directories on first use.
 COPY package.json bun.lock* ./
-RUN bun install
+RUN bun install --ignore-scripts
 
 # Build the CLI, MCP, serve bins + dist (also regenerates the OpenAPI SDK).
 COPY . .
