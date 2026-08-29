@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
 import { execSafe, pad } from "../utils.js";
 
@@ -58,6 +58,11 @@ function getRepoInfo(dir: string): RepoInfo | null {
   }
 }
 
+/** True only when a vault-backed publish token is present in the environment. */
+export function publishTokenAvailable(): boolean {
+  return typeof process.env.NODE_AUTH_TOKEN === "string" && process.env.NODE_AUTH_TOKEN.length > 0;
+}
+
 function bumpPatch(version: string): string {
   const parts = version.split(".");
   if (parts.length !== 3) return `${version}.1`;
@@ -69,16 +74,63 @@ function bumpPatch(version: string): string {
 
 function releaseRepo(info: RepoInfo): ReleaseResult {
   const newVersion = bumpPatch(info.currentVersion);
+
+  // Gate 1 — refuse a dirty worktree. The release command only ever stages its
+  // own version bump (package.json); anything else present must be reviewed and
+  // landed separately, or it would be shipped unreviewed under this release.
+  const porcelain = execSafe(`cd "${info.dir}" && git status --porcelain 2>&1`, 10_000);
+  if (porcelain !== null && porcelain.trim().length > 0) {
+    const other = porcelain
+      .split("\n")
+      .map((l) => l.slice(3))
+      .filter((f) => f !== "package.json");
+    if (other.length > 0) {
+      return {
+        name: info.name,
+        oldVersion: info.currentVersion,
+        newVersion,
+        status: "failed",
+        error: `refusing to release: uncommitted changes outside package.json: ${other.slice(0, 5).join(", ")}`,
+      };
+    }
+  }
+
+  // Gate 2 — publishing requires a vault-backed token in the environment
+  // (NODE_AUTH_TOKEN, per the hasna/apps publish law) paired with a temp npmrc
+  // holding only the placeholder. Ambient ~/.npmrc credentials are refused.
+  // Checked BEFORE any mutation: no version bump, commit, or push without a
+  // publish token present.
+  if (!publishTokenAvailable()) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: "refusing to release: NODE_AUTH_TOKEN is not set — publish with a vault-backed token (secrets exec ... --as NODE_AUTH_TOKEN -- npm publish --userconfig <tmp npmrc>)",
+    };
+  }
+
+  const pkgPath = join(info.dir, "package.json");
+  const originalPkg = readFileSync(pkgPath, "utf8");
   try {
-    const pkgPath = join(info.dir, "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    const pkg = JSON.parse(originalPkg);
     pkg.version = newVersion;
     writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
   } catch (e) {
     return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: `Failed to bump version: ${e}` };
   }
-  execSafe(`cd "${info.dir}" && bun run build 2>&1`, 60000);
-  const commitResult = execSafe(`cd "${info.dir}" && git add -A && git commit -m "chore: release v${newVersion}" 2>&1`, 15000);
+
+  // Gate 3 — a failed build must abort before anything is committed or pushed.
+  // Publishable code must be exactly the reviewed, committed source. The
+  // version bump is reverted so a failed release leaves the repo untouched.
+  const buildResult = execSafe(`cd "${info.dir}" && bun run build 2>&1`, 60000);
+  if (buildResult === null) {
+    writeFileSync(pkgPath, originalPkg);
+    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "build failed — nothing was committed or published" };
+  }
+
+  // Gate 4 — stage ONLY the bumped package.json; never `git add -A`.
+  const commitResult = execSafe(`cd "${info.dir}" && git add package.json && git commit -m "chore: release v${newVersion}" 2>&1`, 15000);
   if (commitResult === null) {
     return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "git commit failed" };
   }
@@ -86,9 +138,22 @@ function releaseRepo(info: RepoInfo): ReleaseResult {
   if (pushResult === null) {
     return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "git push failed" };
   }
-  const publishResult = execSafe(`cd "${info.dir}" && npm publish --access public 2>&1`, 30000);
-  if (publishResult === null) {
-    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "npm publish failed" };
+
+  // Gate 5 — publish through a temp npmrc holding only the ${NODE_AUTH_TOKEN}
+  // placeholder (the vault token is present, verified in Gate 2).
+  const npmrcPath = join(info.dir, ".agency-release-npmrc");
+  try {
+    writeFileSync(npmrcPath, "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n", { mode: 0o600 });
+    const publishResult = execSafe(`cd "${info.dir}" && npm publish --userconfig "${npmrcPath}" --access public 2>&1`, 30000);
+    if (publishResult === null) {
+      return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "npm publish failed" };
+    }
+  } finally {
+    try {
+      unlinkSync(npmrcPath);
+    } catch {
+      /* temp npmrc cleanup is best-effort */
+    }
   }
   return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "published" };
 }

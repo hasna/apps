@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
-import { HASNA_HOME, dirExists, execSafe, formatBytes } from "../utils.js";
+import { HASNA_HOME, dirExists, execSafe, formatBytes, listTarball } from "../utils.js";
 
 const BACKUP_DIR = join(HASNA_HOME, "backups");
 
@@ -60,26 +60,54 @@ export function registerBackupCommand(program: Command): void {
       console.log(chalk.bold(`hasna backup restore\n`));
       console.log(chalk.dim(`  Source: ${filePath}`));
       console.log(chalk.dim(`  Target: ${HASNA_HOME}\n`));
+      // Validate the archive BEFORE anything else: a truncated/corrupt tarball
+      // must fail here, never after live data has been touched. The old
+      // `tar -tzf ... | head -30` pipeline masked validation failures.
+      const listing = listTarball(filePath, 30);
+      if (listing === null) {
+        console.error(chalk.red(`  Invalid or unreadable backup archive: ${filePath}`));
+        console.error(chalk.red("  Refusing to restore from an unverified archive."));
+        process.exit(1);
+      }
       if (opts.dryRun) {
-        const listing = execSafe(`tar -tzf "${filePath}" 2>&1 | head -30`);
         console.log(chalk.dim("  Files (first 30):"));
-        if (listing) {
-          for (const line of listing.split("\n")) {
-            console.log(chalk.dim(`    ${line}`));
-          }
+        for (const line of listing.split("\n").filter(Boolean)) {
+          console.log(chalk.dim(`    ${line}`));
         }
         console.log(chalk.yellow(`\n  Dry run — no changes made.`));
         return;
       }
-      if (!dirExists(HASNA_HOME)) {
-        mkdirSync(HASNA_HOME, { recursive: true });
-      }
-      const result = execSafe(`tar -xzf "${filePath}" -C "${HASNA_HOME}" 2>&1`, 120000);
-      if (result !== null) {
-        console.log(chalk.green("  Restore complete."));
-      } else {
-        console.error(chalk.red("  Restore failed."));
+      // Staged restore: extract into a verified staging directory first, then
+      // copy over ~/.hasna. If extraction fails, live data is untouched; if the
+      // copy fails, the staged copy is left at a reported path for manual
+      // recovery instead of leaving HASNA_HOME partially overwritten.
+      const staging = execSafe(`mktemp -d /tmp/hasna-restore.XXXXXX`, 5000);
+      if (staging === null) {
+        console.error(chalk.red("  Restore failed: could not create staging directory."));
         process.exit(1);
+      }
+      try {
+        const extractResult = execSafe(`tar -xzf "${filePath}" -C "${staging}" 2>&1`, 120000);
+        if (extractResult === null) {
+          console.error(chalk.red("  Restore failed: archive extraction into staging failed."));
+          console.error(chalk.red(`  Live data untouched. Staging: ${staging}`));
+          process.exit(1);
+        }
+        if (!dirExists(HASNA_HOME)) {
+          mkdirSync(HASNA_HOME, { recursive: true });
+        }
+        const copyResult = execSafe(`cp -a "${staging}/." "${HASNA_HOME}/" 2>&1`, 120000);
+        if (copyResult === null) {
+          console.error(chalk.red("  Restore failed: copying staged content into ~/.hasna failed."));
+          console.error(chalk.red(`  Live data may be partially restored. Staged copy preserved at: ${staging}`));
+          process.exit(1);
+        }
+        console.log(chalk.green("  Restore complete."));
+      } finally {
+        const cleanup = execSafe(`rm -rf "${staging}" 2>&1`, 5000);
+        if (cleanup === null) {
+          console.error(chalk.yellow(`  Warning: could not remove staging dir: ${staging}`));
+        }
       }
     });
 

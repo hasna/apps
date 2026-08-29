@@ -1,15 +1,32 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { mkdirSync, writeFileSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, existsSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
-import { execSafe } from "../utils.js";
+import { execSafe, spawnWithTimeout } from "../utils.js";
+
+/** Per-effect opt-in flags for `agency new`. Every external effect (public
+ * GitHub repo creation, RDS provisioning, npm publish) requires its explicit
+ * flag; none happens implicitly. */
+interface ScaffoldOptions {
+  createRepo: boolean;
+  provisionDb: boolean;
+  publish: boolean;
+}
+
+/** True only when a vault-backed publish token is present in the environment
+ * (NODE_AUTH_TOKEN, per the hasna/apps publish law). Ambient ~/.npmrc
+ * credentials are never used by this scaffolder. */
+function publishTokenAvailable(): boolean {
+  return typeof process.env.NODE_AUTH_TOKEN === "string" && process.env.NODE_AUTH_TOKEN.length > 0;
+}
 
 /**
- * Scaffold templates. Reconstructed verbatim from the published
- * @hasna/agency@0.3.1 bundle (2026-08-20). The legacy `open-<name>` directory
- * naming and the create-gh-repo/publish steps are ORIGINAL behaviour and are
- * preserved for parity; the monorepo-era placement rules do not apply to this
- * legacy scaffolder's output.
+ * Scaffold templates. Reconstructed from the published @hasna/agency@0.3.1
+ * bundle (2026-08-20). The legacy `open-<name>` directory naming is preserved
+ * for parity; external effects (public GitHub repo creation, RDS provisioning,
+ * npm publish) are gated behind explicit per-effect flags (--create-repo,
+ * --provision-db, --publish) and publish additionally requires a vault-backed
+ * NODE_AUTH_TOKEN. Nothing external happens implicitly.
  */
 
 function packageJson(name: string, kind: "service" | "library"): string {
@@ -741,7 +758,7 @@ function createSetupTasks(name: string, dir: string): void {
   }
 }
 
-function scaffoldService(name: string, baseDir: string, skipTasks: boolean): void {
+async function scaffoldService(name: string, baseDir: string, skipTasks: boolean, opts: ScaffoldOptions): Promise<void> {
   const dir = join(baseDir, `open-${name}`);
   console.log(chalk.bold(`\nagency new service ${name}\n`));
   if (existsSync(dir)) {
@@ -785,39 +802,72 @@ dist/
   }
   console.log(chalk.dim("  Initializing git..."));
   execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
-  console.log(chalk.dim("  Creating GitHub repo..."));
-  const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
-  if (ghResult !== null) {
-    console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
-  } else {
-    console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
-  }
-  console.log(chalk.dim("  Creating RDS database..."));
-  const pgHost = process.env["CLOUD_PG_HOST"] || process.env["HASNA_RDS_HOST"];
-  const pgUser = process.env["CLOUD_PG_USER"] || process.env["HASNA_RDS_USER"] || "hasna_admin";
-  const pgPassword = process.env["CLOUD_PG_PASSWORD"] || process.env["HASNA_RDS_PASSWORD"] || "";
-  const dbName = name.replace(/-/g, "_");
-  if (pgHost && pgPassword) {
-    const createDbResult = execSafe(`PGPASSWORD="${pgPassword}" psql -h "${pgHost}" -U "${pgUser}" -d postgres -c "CREATE DATABASE ${dbName};" 2>&1`, 15000);
-    if (createDbResult !== null && !createDbResult.includes("ERROR")) {
-      console.log(chalk.green(`  RDS database created: ${dbName}`));
+  if (opts.createRepo) {
+    console.log(chalk.dim("  Creating GitHub repo..."));
+    const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
+    if (ghResult !== null) {
+      console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
     } else {
-      console.log(chalk.yellow(`  RDS database creation skipped (may already exist or failed).`));
+      console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
     }
   } else {
-    console.log(chalk.yellow("  RDS not configured — skipping database creation."));
+    console.log(chalk.dim("  Skipping GitHub repo creation (pass --create-repo to create hasna/" + name + " on GitHub)."));
   }
-  console.log(chalk.dim("  Publishing to npm..."));
-  const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
-  if (buildResult !== null) {
-    const publishResult = execSafe(`cd "${dir}" && npm publish --access public 2>&1`, 30000);
-    if (publishResult !== null) {
-      console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
+  if (opts.provisionDb) {
+    console.log(chalk.dim("  Creating RDS database..."));
+    const pgHost = process.env["CLOUD_PG_HOST"] || process.env["HASNA_RDS_HOST"];
+    const pgUser = process.env["CLOUD_PG_USER"] || process.env["HASNA_RDS_USER"] || "hasna_admin";
+    const pgPassword = process.env["CLOUD_PG_PASSWORD"] || process.env["HASNA_RDS_PASSWORD"] || "";
+    const dbName = name.replace(/-/g, "_");
+    if (pgHost && pgPassword) {
+      // Credentials via child env, connection fields via argv — never a shell
+      // command string (no process-argument secret exposure).
+      const createDbResult = await spawnWithTimeout(
+        "psql",
+        ["-h", pgHost, "-U", pgUser, "-d", "postgres", "-c", `CREATE DATABASE ${dbName};`],
+        15000,
+        { PGPASSWORD: pgPassword },
+      );
+      if (createDbResult.code === 0 && !createDbResult.stderr.includes("ERROR")) {
+        console.log(chalk.green(`  RDS database created: ${dbName}`));
+      } else {
+        console.log(chalk.yellow(`  RDS database creation skipped (may already exist or failed).`));
+      }
     } else {
-      console.log(chalk.yellow("  npm publish failed — publish manually."));
+      console.log(chalk.yellow("  RDS not configured — skipping database creation."));
     }
   } else {
-    console.log(chalk.yellow("  Build failed — publish manually."));
+    console.log(chalk.dim("  Skipping RDS database provisioning (pass --provision-db to enable)."));
+  }
+  if (opts.publish) {
+    if (!publishTokenAvailable()) {
+      console.log(chalk.yellow("  Skipping npm publish: NODE_AUTH_TOKEN is not set — publish manually with a vault-backed token (secrets exec ... --as NODE_AUTH_TOKEN -- npm publish --userconfig <tmp npmrc>)."));
+    } else {
+      console.log(chalk.dim("  Publishing to npm..."));
+      const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
+      if (buildResult !== null) {
+        const npmrcPath = join(dir, ".agency-scaffold-npmrc");
+        try {
+          writeFileSync(npmrcPath, "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n", { mode: 0o600 });
+          const publishResult = execSafe(`cd "${dir}" && npm publish --userconfig "${npmrcPath}" --access public 2>&1`, 30000);
+          if (publishResult !== null) {
+            console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
+          } else {
+            console.log(chalk.yellow("  npm publish failed — publish manually."));
+          }
+        } finally {
+          try {
+            unlinkSync(npmrcPath);
+          } catch {
+            /* best-effort cleanup */
+          }
+        }
+      } else {
+        console.log(chalk.yellow("  Build failed — publish manually."));
+      }
+    }
+  } else {
+    console.log(chalk.dim("  Skipping npm publish (pass --publish to build and publish)."));
   }
   if (!skipTasks) {
     createSetupTasks(name, dir);
@@ -832,7 +882,7 @@ dist/
   console.log(chalk.dim(`  Server:    ${name}-serve`));
 }
 
-function scaffoldLibrary(name: string, baseDir: string, skipTasks: boolean): void {
+async function scaffoldLibrary(name: string, baseDir: string, skipTasks: boolean, opts: ScaffoldOptions): Promise<void> {
   const dir = join(baseDir, `open-${name}`);
   console.log(chalk.bold(`\nagency new library ${name}\n`));
   if (existsSync(dir)) {
@@ -873,24 +923,46 @@ dist/
   }
   console.log(chalk.dim("  Initializing git..."));
   execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
-  console.log(chalk.dim("  Creating GitHub repo..."));
-  const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
-  if (ghResult !== null) {
-    console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
-  } else {
-    console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
-  }
-  console.log(chalk.dim("  Publishing to npm..."));
-  const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
-  if (buildResult !== null) {
-    const publishResult = execSafe(`cd "${dir}" && npm publish --access public 2>&1`, 30000);
-    if (publishResult !== null) {
-      console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
+  if (opts.createRepo) {
+    console.log(chalk.dim("  Creating GitHub repo..."));
+    const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
+    if (ghResult !== null) {
+      console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
     } else {
-      console.log(chalk.yellow("  npm publish failed — publish manually."));
+      console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
     }
   } else {
-    console.log(chalk.yellow("  Build failed — publish manually."));
+    console.log(chalk.dim("  Skipping GitHub repo creation (pass --create-repo to create hasna/" + name + " on GitHub)."));
+  }
+  if (opts.publish) {
+    if (!publishTokenAvailable()) {
+      console.log(chalk.yellow("  Skipping npm publish: NODE_AUTH_TOKEN is not set — publish manually with a vault-backed token (secrets exec ... --as NODE_AUTH_TOKEN -- npm publish --userconfig <tmp npmrc>)."));
+    } else {
+      console.log(chalk.dim("  Publishing to npm..."));
+      const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
+      if (buildResult !== null) {
+        const npmrcPath = join(dir, ".agency-scaffold-npmrc");
+        try {
+          writeFileSync(npmrcPath, "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n", { mode: 0o600 });
+          const publishResult = execSafe(`cd "${dir}" && npm publish --userconfig "${npmrcPath}" --access public 2>&1`, 30000);
+          if (publishResult !== null) {
+            console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
+          } else {
+            console.log(chalk.yellow("  npm publish failed — publish manually."));
+          }
+        } finally {
+          try {
+            unlinkSync(npmrcPath);
+          } catch {
+            /* best-effort cleanup */
+          }
+        }
+      } else {
+        console.log(chalk.yellow("  Build failed — publish manually."));
+      }
+    }
+  } else {
+    console.log(chalk.dim("  Skipping npm publish (pass --publish to build and publish)."));
   }
   if (!skipTasks) {
     createSetupTasks(name, dir);
@@ -910,9 +982,16 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new service with CLI, MCP server, HTTP server, and database")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
-    .action((name: string, opts) => {
+    .option("--create-repo", "Create a public GitHub repository (gh repo create --public --push) for the scaffold")
+    .option("--provision-db", "Provision an RDS database for the service")
+    .option("--publish", "Build and publish the package to npm (requires NODE_AUTH_TOKEN)")
+    .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
-      scaffoldService(name, baseDir, !!opts.skipTasks);
+      await scaffoldService(name, baseDir, !!opts.skipTasks, {
+        createRepo: !!opts.createRepo,
+        provisionDb: !!opts.provisionDb,
+        publish: !!opts.publish,
+      });
     });
 
   newCmd
@@ -920,8 +999,14 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new library package (no DB, MCP, CLI, or server)")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
-    .action((name: string, opts) => {
+    .option("--create-repo", "Create a public GitHub repository (gh repo create --public --push) for the scaffold")
+    .option("--publish", "Build and publish the package to npm (requires NODE_AUTH_TOKEN)")
+    .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
-      scaffoldLibrary(name, baseDir, !!opts.skipTasks);
+      await scaffoldLibrary(name, baseDir, !!opts.skipTasks, {
+        createRepo: !!opts.createRepo,
+        provisionDb: false,
+        publish: !!opts.publish,
+      });
     });
 }

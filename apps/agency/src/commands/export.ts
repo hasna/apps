@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "fs"
 import { join, resolve, basename } from "path";
 import { homedir } from "os";
 import { dbPackages, findPackage } from "../registry.js";
-import { HASNA_HOME, dataPath, dirExists, execSafe, formatBytes } from "../utils.js";
+import { HASNA_HOME, dataPath, dirExists, execSafe, formatBytes, listTarball } from "../utils.js";
 
 function generateExportName(format: string): string {
   const now = new Date();
@@ -97,14 +97,19 @@ export function registerExportCommand(program: Command): void {
       console.log(chalk.bold(`agency import\n`));
       console.log(chalk.dim(`  Source: ${filePath}`));
       console.log(chalk.dim(`  Target: ${HASNA_HOME}\n`));
-      const listing = execSafe(`tar -tzf "${filePath}" 2>&1 | head -40`);
-      if (listing) {
-        console.log(chalk.dim("  Contents (first 40 entries):"));
-        for (const line of listing.split("\n").filter(Boolean)) {
-          console.log(chalk.dim(`    ${line}`));
-        }
-        console.log();
+      // Validate the archive before listing or extracting: a corrupt tarball
+      // must fail here, never after live data has been touched.
+      const listing = listTarball(filePath, 40);
+      if (listing === null) {
+        console.error(chalk.red(`  Invalid or unreadable archive: ${filePath}`));
+        console.error(chalk.red("  Refusing to import from an unverified archive."));
+        process.exit(1);
       }
+      console.log(chalk.dim("  Contents (first 40 entries):"));
+      for (const line of listing.split("\n").filter(Boolean)) {
+        console.log(chalk.dim(`    ${line}`));
+      }
+      console.log();
       try {
         const size = statSync(filePath).size;
         console.log(chalk.dim(`  Archive size: ${formatBytes(size)}`));
@@ -122,15 +127,35 @@ export function registerExportCommand(program: Command): void {
         console.error(chalk.red("  Aborting. Use --force to proceed."));
         process.exit(1);
       }
-      if (!dirExists(HASNA_HOME)) {
-        mkdirSync(HASNA_HOME, { recursive: true });
-      }
-      const result = execSafe(`tar -xzf "${filePath}" -C "${HASNA_HOME}" 2>&1`, 120000);
-      if (result !== null) {
-        console.log(chalk.green(`\n  Import complete.`));
-      } else {
-        console.error(chalk.red(`\n  Import failed.`));
+      // Staged import: extract into a verified staging directory first, then
+      // copy over ~/.hasna. A failed extraction leaves live data untouched.
+      const staging = execSafe(`mktemp -d /tmp/hasna-import.XXXXXX`, 5000);
+      if (staging === null) {
+        console.error(chalk.red("  Import failed: could not create staging directory."));
         process.exit(1);
+      }
+      try {
+        const extractResult = execSafe(`tar -xzf "${filePath}" -C "${staging}" 2>&1`, 120000);
+        if (extractResult === null) {
+          console.error(chalk.red("  Import failed: archive extraction into staging failed."));
+          console.error(chalk.red(`  Live data untouched. Staging: ${staging}`));
+          process.exit(1);
+        }
+        if (!dirExists(HASNA_HOME)) {
+          mkdirSync(HASNA_HOME, { recursive: true });
+        }
+        const copyResult = execSafe(`cp -a "${staging}/." "${HASNA_HOME}/" 2>&1`, 120000);
+        if (copyResult === null) {
+          console.error(chalk.red("  Import failed: copying staged content into ~/.hasna failed."));
+          console.error(chalk.red(`  Live data may be partially imported. Staged copy preserved at: ${staging}`));
+          process.exit(1);
+        }
+        console.log(chalk.green(`\n  Import complete.`));
+      } finally {
+        const cleanup = execSafe(`rm -rf "${staging}" 2>&1`, 5000);
+        if (cleanup === null) {
+          console.error(chalk.yellow(`  Warning: could not remove staging dir: ${staging}`));
+        }
       }
     });
 }

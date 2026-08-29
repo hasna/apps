@@ -66,6 +66,46 @@ export function execSafe(cmd: string, timeoutMs = 10_000): string | null {
   }
 }
 
+/**
+ * execSafe variant that passes an explicit environment to the child process.
+ * Use for commands that need secrets (e.g. PGPASSWORD): the value lives in the
+ * child environment only and never appears in the command string / process
+ * argument list. `env` is merged over the ambient process environment.
+ */
+export function execSafeEnv(cmd: string, timeoutMs = 10_000, env: Record<string, string> = {}): string | null {
+  try {
+    return execSync(cmd, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...env },
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verifies that `filePath` is a readable tar archive. Returns the full `tar -tzf`
+ * listing on success, or null when the archive is unreadable/corrupt. Callers
+ * MUST treat null as a hard failure — never display a truncated listing built
+ * from a pipe (`tar | head`) as "validated", because that masks extraction
+ * failures before live data is touched.
+ */
+export function verifyTarball(filePath: string, timeoutMs = 60_000): string | null {
+  return execSafe(`tar -tzf "${filePath}" 2>&1`, timeoutMs);
+}
+
+/**
+ * Validates the tarball (rc-checked, no pipe masking) and returns up to `limit`
+ * listing lines for display. Returns null when the archive is invalid.
+ */
+export function listTarball(filePath: string, limit: number, timeoutMs = 60_000): string | null {
+  const listing = verifyTarball(filePath, timeoutMs);
+  if (listing === null) return null;
+  return listing.split("\n").slice(0, limit).join("\n");
+}
+
 export function getInstalledVersion(npmName: string): string | null {
   const result = execSafe(`npm ls -g ${npmName} --depth=0 --json 2>/dev/null`);
   if (!result) return null;
@@ -87,12 +127,16 @@ export function spawnWithTimeout(
   cmd: string,
   args: string[],
   timeoutMs: number,
+  env: Record<string, string> = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve2) => {
     let stdout = "";
     let stderr = "";
     let killed = false;
-    const opts = { stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"] };
+    const opts = {
+      stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...env },
+    };
     const child = spawn(cmd, args, opts);
     const timer = setTimeout(() => {
       killed = true;

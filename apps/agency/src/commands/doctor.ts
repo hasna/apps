@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { REGISTRY } from "../registry.js";
-import { HASNA_HOME, dataPath, dirExists, execSafe, getInstalledVersion, getLatestVersion, binaryExists } from "../utils.js";
+import { HASNA_HOME, dataPath, dirExists, execSafe, getInstalledVersion, getLatestVersion, binaryExists, spawnWithTimeout } from "../utils.js";
 
 interface Check {
   label: string;
@@ -77,16 +77,22 @@ async function runChecks(verbose: boolean): Promise<Check[]> {
 
   const rdsHost = process.env.HASNA_RDS_HOST || process.env.CLOUD_PG_HOST;
   if (rdsHost) {
-    const pgResult = execSafe(
-      `PGPASSWORD="${process.env.HASNA_RDS_PASSWORD || process.env.CLOUD_PG_PASSWORD || ""}" psql -h ${rdsHost} -U ${
-        process.env.HASNA_RDS_USER || process.env.CLOUD_PG_USER || "hasna_admin"
-      } -d postgres -c "SELECT 1;" 2>&1`,
+    // Credentials and connection fields go to the child via argv + env, never
+    // interpolated into a shell command string (no process-argument exposure,
+    // no shell interpretation of connection fields).
+    const rdsUser = process.env.HASNA_RDS_USER || process.env.CLOUD_PG_USER || "hasna_admin";
+    const rdsPassword = process.env.HASNA_RDS_PASSWORD || process.env.CLOUD_PG_PASSWORD || "";
+    const pgResult = await spawnWithTimeout(
+      "psql",
+      ["-h", rdsHost, "-U", rdsUser, "-d", "postgres", "-c", "SELECT 1;"],
       5000,
+      { PGPASSWORD: rdsPassword },
     );
+    const connected = pgResult.code === 0 && pgResult.stdout.includes("1");
     checks.push({
       label: "RDS connection",
-      status: pgResult && pgResult.includes("1") ? "pass" : "fail",
-      detail: pgResult && pgResult.includes("1") ? `Connected to ${rdsHost}` : `Failed to connect to ${rdsHost}`,
+      status: connected ? "pass" : "fail",
+      detail: connected ? `Connected to ${rdsHost}` : `Failed to connect to ${rdsHost}`,
     });
   } else {
     checks.push({
