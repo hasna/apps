@@ -8,7 +8,7 @@ export class ContextClient {
   private readonly token?: string;
 
   constructor(options: { baseUrl?: string; token?: string } = {}) {
-    this.baseUrl = (options.baseUrl ?? "http://127.0.0.1:8080").replace(/\/$/, "");
+    this.baseUrl = (options.baseUrl ?? "http://127.0.0.1:19431").replace(/\/$/, "");
     this.token = options.token;
   }
 

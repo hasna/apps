@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
+import { fileURLToPath } from "url";
 import { copyContextDatabase, getDataDir, getDatabase, getDbPath, resetDatabase } from "./database.js";
 
 const oldEnv = new Map<string, string | undefined>();
@@ -191,15 +192,22 @@ describe("database path resolution", () => {
     expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 
-  it("concurrent first-use migrations converge on one verified canonical snapshot", () => {
+  it("two concurrent first-use migrations (separate processes) converge on one verified canonical snapshot", async () => {
     const root = isolateHome();
     const legacyDir = join(root, "home", ".hasna", "context");
     mkdirSync(legacyDir, { recursive: true });
     const source = join(legacyDir, "context.db");
     // A WAL-mode source with the writer still open and an uncheckpointed
     // committed row: both migration attempts must snapshot the committed
-    // state, and the loser of the placement race must never touch the
-    // winner's placed snapshot.
+    // state. This is the production concurrency shape — a CLI and
+    // context-serve upgrading at the same moment. The two migrations run as
+    // truly concurrent OS processes against the same legacy source and the
+    // same canonical target; the pre-fix delete-then-recreate interleaving
+    // could leave an empty canonical database, and this test's assertions
+    // (committed row present, integrity ok, no stray temps) are exactly what
+    // that race used to break. (The sibling "never deletes or replaces a
+    // snapshot another migration already placed" test is the deterministic
+    // discriminator for the fix; this one exercises the real race.)
     const writer = new Database(source);
     writer.exec("PRAGMA journal_mode = WAL");
     writer.exec("CREATE TABLE legacy_probe (value TEXT)");
@@ -209,21 +217,32 @@ describe("database path resolution", () => {
     mkdirSync(canonicalDir, { recursive: true });
     const target = join(canonicalDir, "context.db");
 
-    // The loser arrives second; the canonical path must still hold a
-    // verified snapshot of the same legacy source.
-    expect(copyContextDatabase(source, target)).toBe(true);
-    expect(copyContextDatabase(source, target)).toBe(true);
+    const dbUrl = fileURLToPath(new URL("./database.js", import.meta.url));
+    const runner = [
+      "const { copyContextDatabase } = await import(" + JSON.stringify(dbUrl) + ");",
+      "process.exit(copyContextDatabase(" + JSON.stringify(source) + ", " + JSON.stringify(target) + ") ? 0 : 1);",
+    ].join("\n");
 
-    const probe = new Database(target);
-    try {
-      expect(probe.query("SELECT value FROM legacy_probe WHERE value = 'wal-committed-row'").get()).toEqual({ value: "wal-committed-row" });
-      const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
-      expect(integrity.integrity_check).toBe("ok");
-    } finally {
-      probe.close();
+    // Three rounds of two simultaneous migration processes: enough concurrency
+    // to exercise the interleaving repeatedly while staying fast.
+    for (let round = 0; round < 3; round++) {
+      const p1 = Bun.spawn([process.execPath, "-e", runner]);
+      const p2 = Bun.spawn([process.execPath, "-e", runner]);
+      const [e1, e2] = await Promise.all([p1.exited, p2.exited]);
+      expect(e1).toBe(0);
+      expect(e2).toBe(0);
+
+      const probe = new Database(target);
+      try {
+        expect(probe.query("SELECT value FROM legacy_probe WHERE value = 'wal-committed-row'").get()).toEqual({ value: "wal-committed-row" });
+        const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
+        expect(integrity.integrity_check).toBe("ok");
+      } finally {
+        probe.close();
+      }
+      expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
     }
     writer.close();
-    expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 
   it("migration is idempotent and does not rewrite the receipt or the data", () => {

@@ -11,11 +11,19 @@
  * Run `bun run openapi:generate` (scripts/openapi-generate.ts) after any
  * change to the route table; src/sdk/generated-client.test.ts fails when the
  * committed generated client is stale.
+ *
+ * The client's default base URL is derived from the server's own defaults
+ * (DEFAULT_HOST / DEFAULT_PORT in src/server/index.ts), so a default
+ * `new ContextClient()` reaches a default `context-serve` instance.
  */
+
+import { DEFAULT_HOST, DEFAULT_PORT } from "../server/index.js";
 
 interface OpenApiDoc {
   paths: Record<string, Record<string, { operationId: string; summary: string }>>;
 }
+
+const DEFAULT_BASE_URL = `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
 
 const HEADER = `// DO NOT EDIT — generated from the context-serve OpenAPI document.
 // Regenerate with: bun run openapi:generate
@@ -35,7 +43,7 @@ export function generateClientSource(doc: OpenApiDoc): string {
     "  private readonly token?: string;",
     "",
     "  constructor(options: { baseUrl?: string; token?: string } = {}) {",
-    "    this.baseUrl = (options.baseUrl ?? \"http://127.0.0.1:8080\").replace(/\\/$/, \"\");",
+    `    this.baseUrl = (options.baseUrl ?? ${JSON.stringify(DEFAULT_BASE_URL)}).replace(/\\/$/, "");`,
     "    this.token = options.token;",
     "  }",
     "",

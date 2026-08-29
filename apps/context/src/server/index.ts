@@ -44,8 +44,8 @@ import {
   removeWebhookEndpoint,
 } from "../db/webhooks.js";
 
-const DEFAULT_PORT = 19431;
-const DEFAULT_HOST = "127.0.0.1";
+export const DEFAULT_PORT = 19431;
+export const DEFAULT_HOST = "127.0.0.1";
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
