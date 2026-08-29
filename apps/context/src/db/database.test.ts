@@ -112,6 +112,46 @@ describe("database path resolution", () => {
     expect(receipt).toMatchObject({ from: legacyDir, to: xdgHome });
   });
 
+  it("snapshots a live WAL-mode legacy store atomically, including uncheckpointed rows", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+
+    // A WAL-mode source with the writer still open: the committed row lives
+    // in the uncheckpointed WAL, not in the main database file. The migration
+    // must snapshot the committed state atomically (VACUUM INTO) — a naive
+    // copy of the main file plus sidecars could miss this row entirely.
+    const source = join(legacyDir, "context.db");
+    const writer = new Database(source);
+    writer.exec("PRAGMA journal_mode = WAL");
+    writer.exec("CREATE TABLE IF NOT EXISTS legacy_probe (value TEXT)");
+    writer.query("INSERT INTO legacy_probe (value) VALUES ('wal-committed-row')").run();
+
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+
+    const dataDir = getDataDir();
+    const xdgHome = join(xdgRoot, "context");
+
+    expect(dataDir).toBe(xdgHome);
+    expect(existsSync(join(xdgHome, "context.db"))).toBe(true);
+    // The snapshot is a single self-contained file: no sidecar copies.
+    expect(existsSync(join(xdgHome, "context.db-wal"))).toBe(false);
+    expect(existsSync(join(xdgHome, "context.db-shm"))).toBe(false);
+    const probe = new Database(join(xdgHome, "context.db"));
+    try {
+      const row = probe.query("SELECT value FROM legacy_probe WHERE value = 'wal-committed-row'").get();
+      expect(row).toEqual({ value: "wal-committed-row" });
+      const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
+      expect(integrity.integrity_check).toBe("ok");
+    } finally {
+      probe.close();
+    }
+    // Original legacy store preserved with its WAL.
+    writer.close();
+    expect(existsSync(source)).toBe(true);
+  });
+
   it("migration is idempotent and does not rewrite the receipt or the data", () => {
     const root = isolateHome();
     const legacyDir = join(root, "home", ".hasna", "apps", "knowledge");

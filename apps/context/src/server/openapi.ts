@@ -46,13 +46,25 @@ const ENDPOINTS: Endpoint[] = [
   { method: "get", path: "/api/live/cycle", operationId: "getLiveCycle", summary: "Dry-run a live refresh cycle" },
   { method: "post", path: "/api/live/cycle", operationId: "postLiveCycle", summary: "Run a live refresh cycle" },
 
+  { method: "post", path: "/api/context/build", operationId: "buildDocsContext", summary: "Build a documentation context payload" },
+
   { method: "get", path: "/api/publish/readiness", operationId: "getPublishReadiness", summary: "Publish readiness report" },
   { method: "get", path: "/api/verify/readiness", operationId: "verifyReadiness", summary: "Run the readiness verifier (read-only)" },
   { method: "post", path: "/api/verify/readiness", operationId: "verifyReadinessPost", summary: "Run the readiness verifier with options" },
+  { method: "get", path: "/api/verify", operationId: "verifyReadinessShort", summary: "Alias for GET /api/verify/readiness" },
+  { method: "post", path: "/api/verify", operationId: "verifyReadinessShortPost", summary: "Alias for POST /api/verify/readiness" },
   { method: "get", path: "/api/sources/readiness", operationId: "getSourceReadiness", summary: "Documentation-source readiness report" },
   { method: "get", path: "/api/sources", operationId: "listSources", summary: "List documentation sources" },
   { method: "get", path: "/api/seeds", operationId: "listSeeds", summary: "Select seed libraries" },
   { method: "post", path: "/api/seeds", operationId: "bootstrapSeeds", summary: "Bootstrap seed sources" },
+
+  { method: "get", path: "/api/webhooks", operationId: "listWebhooks", summary: "List webhook endpoints" },
+  { method: "post", path: "/api/webhooks", operationId: "createWebhook", summary: "Register a webhook endpoint" },
+  { method: "delete", path: "/api/webhooks/{id}", operationId: "deleteWebhook", summary: "Remove a webhook endpoint" },
+  { method: "get", path: "/api/webhooks/deliveries", operationId: "listWebhookDeliveries", summary: "List webhook deliveries" },
+  { method: "post", path: "/api/webhooks/test", operationId: "testWebhook", summary: "Emit a test webhook event" },
+
+  { method: "post", path: "/mcp", operationId: "mcpJsonRpc", summary: "MCP JSON-RPC over HTTP" },
 ];
 
 const pkg = require("../../package.json") as { version: string };

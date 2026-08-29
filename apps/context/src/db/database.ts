@@ -1,6 +1,6 @@
 import { Database as BunDatabase } from "bun:sqlite";
 import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { contextHome, exactContextHome } from "../paths.js";
@@ -142,17 +142,27 @@ function migrateLegacyDataDir(newDir: string): void {
 
 function copyContextDatabase(source: string, target: string): boolean {
   mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(source, target);
-  for (const suffix of ["-wal", "-shm"]) {
-    const sidecar = `${source}${suffix}`;
-    if (existsSync(sidecar)) {
-      try { copyFileSync(sidecar, `${target}${suffix}`); } catch { /* best-effort */ }
-    }
-  }
   try {
-    // Verify the copy is a valid, self-consistent database. The probe opens
-    // the copy read-write so SQLite may recover a copied WAL if needed; the
-    // copy is ours, never user data.
+    // A live SQLite database must be snapshotted atomically. Copying the
+    // main file and the -wal/-shm sidecars as separate files can lose
+    // committed rows: if a checkpoint runs between the copies, the main-file
+    // copy predates it while the copied WAL has already been truncated — the
+    // result still passes PRAGMA integrity_check while omitting data.
+    // VACUUM INTO produces a single-file, transactionally consistent snapshot
+    // of the source (including any uncheckpointed WAL content) without ever
+    // opening the source for writing. A stale target from a previously
+    // interrupted attempt is removed first: migrateLegacyDataDir already
+    // guards against an existing canonical database, so a target here can
+    // only be our own leftover.
+    const src = new BunDatabase(source, { readonly: true });
+    try {
+      if (existsSync(target)) rmSync(target, { force: true });
+      src.query("VACUUM INTO ?").run(target);
+    } finally {
+      src.close();
+    }
+
+    // Verify the snapshot is a valid, self-consistent database.
     const probe = new BunDatabase(target);
     try {
       const row = probe.query("PRAGMA integrity_check").get() as { integrity_check: string } | null;
@@ -165,7 +175,6 @@ function copyContextDatabase(source: string, target: string): boolean {
     // Our own copy failed verification: remove it and leave the legacy store
     // untouched for a later attempt.
     rmSync(target, { force: true });
-    for (const suffix of ["-wal", "-shm"]) rmSync(`${target}${suffix}`, { force: true });
     return false;
   }
 }
