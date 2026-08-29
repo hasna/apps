@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "@hasna/treasury API",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "description": "Multi-entity cash/treasury cockpit — consolidated balances, FX exposure, runway, forecast, and advisory sweep recommendations."
   },
   "paths": {

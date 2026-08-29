@@ -1,6 +1,6 @@
 {
   "name": "@hasna/treasury",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Multi-entity cash/treasury cockpit: consolidated balances, FX exposure, per-entity & group runway, sweep/intercompany-funding recommendations, short-horizon cash forecast. CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
