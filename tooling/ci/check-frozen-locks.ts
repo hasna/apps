@@ -53,7 +53,10 @@
  *   cadence. Probe classification (the fleet registry-truth pattern): 200
  *   (public) and 404 (private or never published) are evidence; a 404 means
  *   there is NO public published max to compare against, so the check is NOT
- *   APPLICABLE for that package and stays silent. Only genuine registry
+ *   APPLICABLE for that package and stays silent. A 200 with an EMPTY
+ *   packument (yanked package — no `latest` dist-tag) is the same evidence
+ *   class: the registry answered, there is no published max to compare
+ *   against, NOT APPLICABLE, silent (O15-04943). Only genuine registry
  *   unreachability (non-200/404 after one retry) is a REFUSAL — the runner
  *   exits 2 and never prints the clean line when a probe was skipped
  *   (H8-00510: the pre-fix probe collapsed 404 into unreachable, so private
@@ -195,6 +198,15 @@ const UNRESOLVABLE_PINS = new Set<string>([
  * failing the gate. The pre-fix probe (`npm view <pkg> version`) collapsed
  * 404 and unreachable into one null, so every private @hasna/* package on
  * the unauthenticated runner refused the gate for 43h+ (H8-00510).
+ *
+ * The YANKED shape is the same doctrine applied to the other evidence status:
+ * a 200 response whose packument carries no parseable `latest` dist-tag (the
+ * package exists on npm but every version is unpublished) is EVIDENCE the
+ * registry answered — there is no public published max to compare against, so
+ * it classifies as NOT-PUBLISHED and stays silent. The pre-fix probe
+ * classified it as UNREACHABLE, so one yanked @hasna/* package anywhere in
+ * the lockfile refused the gate with exit 2 on a reachable registry
+ * (O15-04943).
  */
 type ProbeResult =
   | { status: "published"; version: string }
@@ -279,6 +291,31 @@ function satisfiesRange(range: string, version: string): boolean {
 }
 
 /**
+ * Classify one probe response into the fleet ProbeResult vocabulary. 200
+ * (public) and 404 (private or never published) are EVIDENCE; anything else
+ * is not evidence — the caller retries once, then UNREACHABLE.
+ *
+ * A 200 whose packument carries no parseable `latest` dist-tag is the YANKED
+ * shape: the registry answered (the package exists or existed, but every
+ * version is unpublished), so there is NO public published max to compare
+ * against — the check is NOT APPLICABLE for that package, exactly like a 404.
+ * The pre-fix probe classified this shape as UNREACHABLE, so a single yanked
+ * @hasna/* package anywhere in the lockfile refused the gate with exit 2 on a
+ * fully reachable registry (O15-04943 — the H8-00510 fix left incomplete:
+ * H8-00510 taught the probe that 404 is evidence, not unreachability; the
+ * 200-empty packument is the same doctrine applied to the other evidence
+ * status).
+ */
+function classifyProbeResponse(status: number, doc: unknown): ProbeResult {
+  if (status === 200) {
+    const latest = (doc as { "dist-tags"?: Record<string, string> })?.["dist-tags"]?.latest;
+    return latest && parseVersion(latest) ? { status: "published", version: latest } : { status: "not-published" };
+  }
+  if (status === 404) return { status: "not-published" };
+  return { status: "unreachable" };
+}
+
+/**
  * Resolve the max published version of a package by probing the registry
  * directly (abbreviated packument endpoint, the same shape npm installs
  * resolve against). Two attempts: the first can hit a rate-limit or a
@@ -294,13 +331,9 @@ async function defaultPublishedProbe(pkg: string): Promise<ProbeResult> {
         headers: { accept: "application/vnd.npm.install-v1+json" },
         signal: AbortSignal.timeout(10000),
       });
-      if (res.status === 200) {
-        const doc = (await res.json()) as { "dist-tags"?: Record<string, string> };
-        const latest = doc["dist-tags"]?.latest;
-        return latest && parseVersion(latest) ? { status: "published", version: latest } : { status: "unreachable" };
-      }
-      if (res.status === 404) return { status: "not-published" };
-      // 429/403/5xx — not evidence; retry once below.
+      const result = classifyProbeResponse(res.status, res.status === 200 ? await res.json() : undefined);
+      if (result.status !== "unreachable") return result;
+      // 429/403/5xx or a connection error — not evidence; retry once below.
     } catch {
       // connection error — retry once below.
     }
@@ -986,6 +1019,44 @@ async function selfTest(): Promise<void> {
       throw new Error(
         `RULE 5 404 regression control failed — not-published member surfaced as a refusal: ${r5NotFound.skipped} skipped, ${r5NotFound.failedProbes} failed probes`,
       );
+    }
+
+    // Regression O15-04943 — the YANKED shape: a 200 response with an EMPTY
+    // packument (no `dist-tags` — the package exists on npm but every version
+    // was unpublished). The registry ANSWERED, so this is EVIDENCE: there is
+    // no public published max to compare against, the check is NOT APPLICABLE
+    // and must stay silent — exactly like a 404. The pre-fix probe classified
+    // this shape as UNREACHABLE, so one yanked @hasna/* package anywhere in
+    // the lockfile refused the gate (exit 2) on a reachable registry — the
+    // H8-00510 fix left incomplete.
+    const yanked = classifyProbeResponse(200, { "dist-tags": {}, versions: {} });
+    if (yanked.status === "unreachable") {
+      throw new Error(`yanked-packument regression control failed — 200-empty packument classified as UNREACHABLE (O15-04943)`);
+    }
+    if (yanked.status !== "not-published") {
+      throw new Error(`yanked-packument control failed — expected not-published, got ${yanked.status}`);
+    }
+    // Same class: a 200 whose `latest` is not a parseable simple semver (e.g.
+    // a malformed tag value). Evidence, not unreachability — the gate fails
+    // open and can only flag skew it can prove. (Note: prerelease suffixes
+    // like "0.0.0-rc.1" DO parse — parseVersion strips them — so they are
+    // `published` with the base version, which is existing behaviour.)
+    const unparseable = classifyProbeResponse(200, { "dist-tags": { latest: "1.2" } });
+    if (unparseable.status !== "not-published") {
+      throw new Error(`unparseable-latest control failed — expected not-published, got ${unparseable.status}`);
+    }
+    // Positive controls — the classifications that must never move:
+    const publishedCtl = classifyProbeResponse(200, { "dist-tags": { latest: "1.2.3" } });
+    if (publishedCtl.status !== "published" || publishedCtl.version !== "1.2.3") {
+      throw new Error(`published-200 control failed — got ${JSON.stringify(publishedCtl)}`);
+    }
+    const notFoundCtl = classifyProbeResponse(404, undefined);
+    if (notFoundCtl.status !== "not-published") {
+      throw new Error(`404 control failed — got ${JSON.stringify(notFoundCtl)}`);
+    }
+    const fivexxCtl = classifyProbeResponse(503, undefined);
+    if (fivexxCtl.status !== "unreachable") {
+      throw new Error(`5xx control failed — got ${JSON.stringify(fivexxCtl)}`);
     }
 
     console.log(
