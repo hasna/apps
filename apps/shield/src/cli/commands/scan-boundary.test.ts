@@ -52,10 +52,10 @@ describe("CLI scan source and error boundaries", () => {
 
   test("completed JSON scan metadata matches the persisted findings", () => {
     const scheme = "postgres" + "://";
-    const credentials = "user" + ":" + "pass";
+    const credentials = "app" + ":" + "Th3R3alPassw0rd!";
     writeFileSync(
       join(repoDir, "database.ts"),
-      `const databaseUrl = "${scheme}${credentials}@localhost:5432/example";\n`,
+      `const databaseUrl = "${scheme}${credentials}@db.prod.internal:5432/example";\n`,
     );
 
     const result = spawnSync(
