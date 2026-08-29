@@ -23,6 +23,14 @@ export interface LLMProvider {
 
   /** Check if the provider is available (has API key, etc.) */
   isAvailable(): boolean;
+
+  /**
+   * Model ids the configured key can access, per the provider's own model
+   * list. Returns [] when the list cannot be discovered (offline, or a
+   * provider without a model-list endpoint) — callers must then fall back to
+   * their static defaults.
+   */
+  listModels(): Promise<string[]>;
 }
 
 export interface ProviderConfig {
@@ -36,3 +44,20 @@ export interface ProviderConfig {
 export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
   provider: "auto",
 };
+
+/**
+ * Pick the first preferred model the configured key can actually access.
+ * When the accessible list is unknown/empty, or no preferred model is in it,
+ * fall back to the static default rather than inventing a model.
+ */
+export function selectAccessibleModel(
+  preferred: string[],
+  accessible: string[],
+  fallback: string,
+): string {
+  if (accessible.length === 0) return fallback;
+  for (const model of preferred) {
+    if (accessible.includes(model)) return model;
+  }
+  return fallback;
+}

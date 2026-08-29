@@ -51,10 +51,8 @@ export function registerBatchTools(server: McpServer, h: ToolHelpers): void {
             const result = cachedRead(filePath, {});
             if (op.summarize && result.content.length > 500) {
               const provider = getOutputProvider();
-              const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
               const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
               const summary = await provider.complete(`File: ${filePath}\n\n${content}`, {
-                model: outputModel,
                 system: `Describe what this source file does in 2-4 lines. Include: main class/module name, key methods/functions, what it exports, and its purpose. Be specific.`,
                 maxTokens: 300, temperature: 0.2,
               });
@@ -93,10 +91,8 @@ export function registerBatchTools(server: McpServer, h: ToolHelpers): void {
             const result = cachedRead(filePath, {});
             if (result.content && !result.content.startsWith("Error:")) {
               const provider = getOutputProvider();
-              const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
               const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
               const summary = await provider.complete(`File: ${filePath}\n\n${content}`, {
-                model: outputModel,
                 system: `Extract all symbols. Return ONLY a JSON array. Each: {"name":"x","kind":"function|class|method|interface|type","line":N,"signature":"brief"}. For class methods use "Class.method". Exclude imports.`,
                 maxTokens: 2000, temperature: 0,
               });

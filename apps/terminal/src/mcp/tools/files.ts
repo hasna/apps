@@ -35,7 +35,6 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
 
       if (summarize && result.content.length > 500) {
         const provider = getOutputProvider();
-        const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
         const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
         const focusInstruction = focus
           ? `Focus specifically on: ${focus}. Describe only aspects related to "${focus}".`
@@ -43,7 +42,6 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
         const summary = await provider.complete(
           `File: ${path}\n\n${content}`,
           {
-            model: outputModel,
             system: `${focusInstruction} Be specific — name the actual functions and what they do. Never just say "N lines of code."`,
             maxTokens: 300,
             temperature: 0.2,
@@ -103,10 +101,8 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
 
         if (summarize && result.content.length > 500) {
           const provider = getOutputProvider();
-          const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
           const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
           const summary = await provider.complete(`File: ${filePath}\n\n${content}`, {
-            model: outputModel,
             system: `Describe what this source file does in 2-4 lines. Include: main class/module name, key methods/functions, what it exports, and its purpose. Be specific.`,
             maxTokens: 300, temperature: 0.2,
           });
@@ -153,12 +149,10 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
       let symbols: any[] = [];
       try {
         const provider = getOutputProvider();
-        const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
         const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
         const summary = await provider.complete(
           `File: ${filePath}\n\n${content}`,
           {
-            model: outputModel,
             system: `Extract all symbols from this source file. Return ONLY a JSON array, no explanation.
 
 Each symbol: {"name": "symbolName", "kind": "function|class|method|interface|type|variable|export", "line": lineNumber, "signature": "brief signature"}
@@ -216,7 +210,6 @@ Line numbers must be accurate (count from 1).`,
 
       const allSymbols: Record<string, any[]> = {};
       const provider = getOutputProvider();
-      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
 
       for (const file of files) {
         const result = cachedRead(file, {});
@@ -224,7 +217,6 @@ Line numbers must be accurate (count from 1).`,
         try {
           const content = result.content.length > 6000 ? result.content.slice(0, 6000) : result.content;
           const summary = await provider.complete(`File: ${file}\n\n${content}`, {
-            model: outputModel,
             system: `Extract all symbols. Return ONLY a JSON array. Each: {"name":"x","kind":"function|class|method|interface|type","line":N,"signature":"brief"}. For class methods use "Class.method". Exclude imports.`,
             maxTokens: 1500, temperature: 0,
           });
@@ -268,11 +260,9 @@ Line numbers must be accurate (count from 1).`,
 
       // AI extracts the specific symbol — works for ANY language
       const provider = getOutputProvider();
-      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
       const summary = await provider.complete(
         `File: ${filePath}\nSymbol to extract: ${name}\n\n${result.content.slice(0, 8000)}`,
         {
-          model: outputModel,
           system: `Extract the complete code block for the symbol "${name}" from this file. Return ONLY a JSON object:
 {"name": "${name}", "code": "the complete code block", "startLine": N, "endLine": N}
 
@@ -359,9 +349,7 @@ Match by function name, class name, method name (including ClassName.method), in
       }
 
       const provider = getOutputProvider();
-      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
       const review = await provider.complete(`Review this code:\n\n${content}`, {
-        model: outputModel,
         system: `You are a senior code reviewer. Review concisely:
 - Bugs or logic errors
 - Security issues (injection, auth, secrets)

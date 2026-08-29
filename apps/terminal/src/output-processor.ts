@@ -220,10 +220,10 @@ export async function processOutput(
     const profileBlock = formatProfileHints(command);
     const profileHints = profileBlock ? `\n\n${profileBlock}` : "";
 
-    // Use output-optimized provider (Groq llama-8b: fastest + best compression)
-    // Falls back to main provider if Groq unavailable
+    // Use output-optimized provider (Groq: fastest + best compression; model
+    // resolved against the key's accessible list — no hardcoded model that can
+    // 404, O15-04797). Falls back to main provider if Groq unavailable.
     const provider = getOutputProvider();
-    const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
     const verbosityHint = verbosity === "minimal" ? "\nBe ULTRA concise — 1-2 lines max. Status + key number only."
       : verbosity === "detailed" ? "\nBe thorough — include all relevant details, up to 15 lines."
       : ""; // normal = default 8 lines from SUMMARIZE_PROMPT
@@ -231,7 +231,6 @@ export async function processOutput(
     const summary = await provider.complete(
       `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}${hintsBlock}${profileHints}`,
       {
-        model: outputModel,
         system: SUMMARIZE_PROMPT + verbosityHint,
         maxTokens: maxTok,
         temperature: 0.2,

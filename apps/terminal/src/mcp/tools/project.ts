@@ -288,11 +288,9 @@ export function registerProjectTools(server: McpServer, h: ToolHelpers): void {
 
       // AI recommends the best tool for the goal
       const provider = getOutputProvider();
-      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
       const recommendation = await provider.complete(
         `Agent wants to: ${goal}\n\nAvailable tools: execute, execute_smart, run, commit, bulk_commit, smart_commit, diff, install, search_content, search_files, symbols, read_symbol, read_file, read_files, symbols_dir, review, lookup, edit, repo_state, boot, watch, store_secret, list_secrets, project_note, help`,
         {
-          model: outputModel,
           system: `Recommend the best terminal MCP tool for this goal. Return JSON: {"tool": "name", "example": {params}, "why": "one line"}. If multiple tools work, list top 2.`,
           maxTokens: 200, temperature: 0,
         }

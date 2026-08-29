@@ -1,6 +1,8 @@
 import type { Permissions } from "./history.js";
 import { cacheGet, cacheSet } from "./cache.js";
 import { getProvider } from "./providers/index.js";
+import type { LLMProvider } from "./providers/base.js";
+import { selectAccessibleModel } from "./providers/base.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { getTerminalDir } from "./paths.js";
@@ -28,6 +30,33 @@ const MODEL_DEFAULTS: Record<string, { fast: string; smart: string }> = {
   anthropic: { fast: "claude-haiku-4-5-20251001",       smart: "claude-sonnet-4-6" },
 };
 
+/**
+ * Per-provider model preference order, in priority sequence. The chosen model
+ * is the first preference the configured key can actually access (per its own
+ * GET /models list); the static MODEL_DEFAULTS above remain the fallback when
+ * the list cannot be discovered. This prevents hardcoding models a key cannot
+ * reach — Cerebras 404 (qwen-3-235b), Groq 404 (kimi-k2), xAI stop-param 400
+ * (grok-code-fast-1 / grok-4-fast-non-reasoning) — see O15-04797.
+ */
+const MODEL_PREFERENCES: Record<string, { fast: string[]; smart: string[] }> = {
+  cerebras: {
+    fast:  ["gpt-oss-120b", "gemma-4-31b", "qwen-3-235b-a22b-instruct-2507"],
+    smart: ["gpt-oss-120b", "gemma-4-31b", "qwen-3-235b-a22b-instruct-2507"],
+  },
+  groq: {
+    fast:  ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b", "moonshotai/kimi-k2-instruct"],
+    smart: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b", "moonshotai/kimi-k2-instruct"],
+  },
+  xai: {
+    fast:  ["grok-4.20-0309-non-reasoning", "grok-4.6", "grok-4.5", "grok-code-fast-1"],
+    smart: ["grok-4.20-0309-non-reasoning", "grok-4.6", "grok-4.5", "grok-4-fast-non-reasoning"],
+  },
+  anthropic: {
+    fast:  ["claude-haiku-4-5-20251001"],
+    smart: ["claude-sonnet-4-6"],
+  },
+};
+
 /** Load user model overrides from config.json under the effective data home (getTerminalDir()) (cached 30s) */
 let _modelOverrides: Record<string, { fast?: string; smart?: string }> | null = null;
 let _modelOverridesAt = 0;
@@ -49,16 +78,32 @@ function loadModelOverrides(): Record<string, { fast?: string; smart?: string }>
   return _modelOverrides;
 }
 
-/** Model routing per provider — config-driven with defaults */
-function pickModel(nl: string): { fast: string; smart: string; pick: "fast" | "smart" } {
+/** Model routing per provider — config-driven defaults, intersected with the key's accessible model list */
+export async function pickModel(
+  nl: string,
+  provider: LLMProvider = getProvider(),
+): Promise<{ fast: string; smart: string; pick: "fast" | "smart" }> {
   const isComplex = COMPLEX_SIGNALS.some((r) => r.test(nl)) || nl.split(" ").length > 10;
-  const provider = getProvider();
   const defaults = MODEL_DEFAULTS[provider.name] ?? MODEL_DEFAULTS.cerebras;
+  const preferences = MODEL_PREFERENCES[provider.name] ?? {
+    fast: [defaults.fast],
+    smart: [defaults.smart],
+  };
   const overrides = loadModelOverrides()[provider.name] ?? {};
 
+  let accessible: string[] = [];
+  try {
+    accessible = await provider.listModels();
+  } catch {
+    // Discovery failure is not fatal — fall back to the static defaults below.
+  }
+
+  const resolve = (slot: "fast" | "smart"): string =>
+    overrides[slot] ?? selectAccessibleModel(preferences[slot], accessible, defaults[slot]);
+
   return {
-    fast: overrides.fast ?? defaults.fast,
-    smart: overrides.smart ?? defaults.smart,
+    fast: resolve("fast"),
+    smart: resolve("smart"),
     pick: isComplex ? "smart" : "fast",
   };
 }
@@ -266,7 +311,7 @@ export async function translateToCommand(
   }
 
   const provider = getProvider();
-  const routing = pickModel(nl);
+  const routing = await pickModel(nl);
   const model = routing.pick === "smart" ? routing.smart : routing.fast;
   const system = buildSystemPrompt(perms, sessionEntries, nl);
 
@@ -323,7 +368,7 @@ export function prefetchNext(
 
 export async function explainCommand(command: string): Promise<string> {
   const provider = getProvider();
-  const routing = pickModel("explain"); // simple = fast model
+  const routing = await pickModel("explain"); // simple = fast model
   return provider.complete(command, {
     model: routing.fast,
     maxTokens: 128,
@@ -342,7 +387,7 @@ export async function fixCommand(
   _sessionEntries: SessionEntry[]
 ): Promise<string> {
   const provider = getProvider();
-  const routing = pickModel(originalNl);
+  const routing = await pickModel(originalNl);
 
   // Lightweight fix prompt — no full project context, just rules + restrictions
   const restrictions: string[] = [];

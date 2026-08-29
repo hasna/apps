@@ -13,6 +13,11 @@ export class AnthropicProvider implements LLMProvider {
     return !!process.env.ANTHROPIC_API_KEY;
   }
 
+  /** Anthropic has no public per-key model-list endpoint — unknown means no filtering. */
+  async listModels(): Promise<string[]> {
+    return [];
+  }
+
   async complete(prompt: string, options: ProviderOptions): Promise<string> {
     const message = await this.client.messages.create({
       model: options.model ?? "claude-haiku-4-5-20251001",
