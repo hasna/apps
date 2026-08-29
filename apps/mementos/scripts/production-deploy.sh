@@ -140,8 +140,16 @@ preflight_service() {
   command_json="$(jq -c --arg container "$WEB_CONTAINER" \
     '[.taskDefinition.containerDefinitions[]? | select(.name == $container) | (.command // [])][0] // []' \
     "$LIVE_TASK_DEFINITION_JSON")"
-  if [[ "$command_count" != "1" || "$command_json" != '["mementos-deploy"]' ]]; then
-    fail "automated deploy prerequisite unmet: stable ${LIVE_TASK_DEFINITION} does not run mementos-deploy (command=${command_json}); refusing before image build, task-definition registration, or service update"
+  # The deploy lane owns two command states. ["mementos-deploy"] marks task
+  # definitions this lane registered (every revision carries the marker).
+  # ["mementos-serve"] is the pre-lane legacy baseline (nested-lane/Terraform
+  # era, and the image's default CMD) — accepting it is what makes the very
+  # first deploy bootstrappable: the gate must not demand the marker state
+  # only the deploy itself can create (O15-05020). Any other command means the
+  # service is not this lane's web surface, and the deploy refuses.
+  if [[ "$command_count" != "1" ]] \
+    || { [[ "$command_json" != '["mementos-deploy"]' ]] && [[ "$command_json" != '["mementos-serve"]' ]]; }; then
+    fail "automated deploy prerequisite unmet: stable ${LIVE_TASK_DEFINITION} does not run a deploy-lane-managed command (command=${command_json}); refusing before image build, task-definition registration, or service update"
   fi
 }
 

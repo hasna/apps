@@ -304,8 +304,11 @@ afterEach(() => {
 });
 
 describe("production deploy orchestration", () => {
-  test("an unmet manual prerequisite stops before ECR lookup or any ECS mutation", async () => {
-    const result = await runDeploy(["mementos-serve"]);
+  test("a foreign live command stops before ECR lookup or any ECS mutation", async () => {
+    // The preflight command gate refuses any stable baseline the deploy lane
+    // does not own. A container that runs mementos-mcp (or any other command)
+    // is not the deploy-lane web service and must never be clobbered.
+    const result = await runDeploy(["mementos-mcp"]);
     const trace = readFileSync(result.trace, "utf8");
 
     expect(result.exitCode).toBe(1);
@@ -313,6 +316,29 @@ describe("production deploy orchestration", () => {
     expect(trace).not.toContain("ecr describe-images");
     expect(trace).not.toContain("ecs register-task-definition");
     expect(trace).not.toContain("ecs update-service");
+  });
+
+  test("a legacy mementos-serve baseline bootstraps the lane into deploy-lane ownership", async () => {
+    // Regression (O15-05020): preflight demanded the live stable task
+    // definition run EXACTLY ["mementos-deploy"] — the marker this lane
+    // itself registers on every new revision. The pre-lane baseline (deployed
+    // by the nested-lane/Terraform era) runs ["mementos-serve"], so the very
+    // first deploy could never pass preflight: the gate demanded the state
+    // only the deploy could create. A serve baseline is the one-time
+    // bootstrappable predecessor — the deploy accepts it, registers the new
+    // revision with the ["mementos-deploy"] marker, and transitions the
+    // service into deploy-lane ownership.
+    const result = await runDeploy(["mementos-serve"]);
+    const trace = readFileSync(result.trace, "utf8");
+    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("automated deploy prerequisite unmet");
+    expect(trace).toContain("ecr describe-images");
+    expect(trace).toContain("ecs register-task-definition");
+    expect(trace).toContain("ecs update-service");
+    expect(trace).toContain("ecs wait services-stable");
+    expect(payload.containerDefinitions[0].command).toEqual(["mementos-deploy"]);
   });
 
   test("a satisfied prerequisite preserves registration, rollout, and digest readback", async () => {
