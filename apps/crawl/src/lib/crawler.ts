@@ -296,8 +296,12 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
   const maxConcurrent = options.maxConcurrent ?? config.maxConcurrent;
   const respectRobots = options.respectRobots ?? true;
 
-  // Create the crawl record (starts as 'pending', we immediately set to 'running')
-  const crawl = createCrawl({ ...input, depth: maxDepth, maxPages });
+  // Create the crawl record (starts as 'pending', we immediately set to 'running').
+  // When the caller already created the record (async API route), run under THAT id
+  // so the id handed to the caller is the id that performs the work.
+  const crawl = input.crawlId
+    ? (getCrawl(input.crawlId) ?? createCrawl({ ...input, depth: maxDepth, maxPages }))
+    : createCrawl({ ...input, depth: maxDepth, maxPages });
   updateCrawl(crawl.id, { status: "running" });
   fireWebhook("crawl.started", { crawlId: crawl.id, url: input.url }).catch(() => {});
 
@@ -410,19 +414,25 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
 
 export async function batchCrawl(
   urls: string[],
-  options?: CrawlOptions
+  options?: CrawlOptions,
+  precreatedCrawlId?: string
 ): Promise<Crawl> {
   if (urls.length === 0) {
     throw new Error("batchCrawl requires at least one URL.");
   }
 
   const firstUrl = urls[0]!;
-  const crawl = createCrawl({
-    url: firstUrl,
-    depth: 0,
-    maxPages: urls.length,
-    options,
-  });
+  // When the caller already created the record (async API route), run under THAT id
+  // so the id handed to the caller is the id that performs the work.
+  const crawl = precreatedCrawlId
+    ? (getCrawl(precreatedCrawlId) ??
+      createCrawl({ url: firstUrl, depth: 0, maxPages: urls.length, options }))
+    : createCrawl({
+        url: firstUrl,
+        depth: 0,
+        maxPages: urls.length,
+        options,
+      });
   updateCrawl(crawl.id, { status: "running" });
 
   let pageCount = 0;

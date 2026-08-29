@@ -3,6 +3,7 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "child_process";
+import { openInBrowser } from "../lib/open-browser.js";
 import { createWriteStream } from "fs";
 import { getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats } from "../db/crawls.js";
 import { getPage, listPages, searchPages, getPageVersions } from "../db/pages.js";
@@ -1083,8 +1084,12 @@ program
         process.stderr.write(chalk.red(`Page not found: ${pageId}\n`));
         process.exit(1);
       }
-      const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      execSync(`${cmd} "${page.url}"`);
+      // page.url is crawler-controlled (it comes from crawled pages) — it must
+      // never be interpolated into a shell command string (release-review P1).
+      const result = openInBrowser(page.url);
+      if (!result.ok) {
+        throw new Error(`failed to open ${page.url}: ${result.error}`);
+      }
       process.stderr.write(chalk.green(`✓ Opened ${page.url}\n`));
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));

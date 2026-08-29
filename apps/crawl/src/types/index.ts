@@ -58,6 +58,8 @@ export interface CreateCrawlInput {
   depth?: number;
   maxPages?: number;
   options?: CrawlOptions;
+  /** Pre-created crawl record id (async API routes) — the work runs under this id. */
+  crawlId?: string;
 }
 
 // ─── Page Types ──────────────────────────────────────────────────────────────
