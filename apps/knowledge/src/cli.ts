@@ -951,8 +951,25 @@ function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeIte
   return { sorted, sort, direction: flags.desc ? 'desc' : 'asc' };
 }
 
+/**
+ * True when the invocation only reads metadata — version, completions, or help —
+ * and never touches storage or transport resolution. The retired-storage-selector
+ * ratchet must not make the CLI unreadable for an operator with a stale
+ * provisioning fragment in the environment: a retired selector is rejected the
+ * moment a command would actually select a store, but --version, --completions
+ * and help/--help can safely run regardless.
+ */
+function isMetadataOnlyInvocation(argv: string[]): boolean {
+  if (argv.includes('--version') || argv.includes('-v')) return true;
+  if (argv.includes('--completions')) return true;
+  if (argv.includes('--help') || argv.includes('-h')) return true;
+  return argv[0] === 'help';
+}
+
 async function run(argv: string[]): Promise<void> {
-  assertNoRetiredKnowledgeStorageSelector(process.env);
+  if (!isMetadataOnlyInvocation(argv)) {
+    assertNoRetiredKnowledgeStorageSelector(process.env);
+  }
   if (await runEventsCommand(argv)) return;
 
   const { positional, flags } = parseArgs(argv);
