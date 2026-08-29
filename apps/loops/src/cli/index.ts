@@ -849,6 +849,7 @@ addGoalOptions(
         .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--safety-reason <reason>", "auditable reason for advisory restrictions or relaxed sandbox access")
         .option("--manual-break-glass", "confirm explicit operator break-glass approval for a relaxed sandbox")
+        .option("--automated", "declare this as a scheduled/durable automated lane (e.g. a deploy chain) so relaxed access does not require manual break-glass")
         .option("--config-isolation <mode>", "safe or none", "safe")
         .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
@@ -880,6 +881,7 @@ addGoalOptions(
     permissionMode: permissionModeFromOpts(opts, provider),
     sandbox: sandboxFromOpts(opts, provider),
     manualBreakGlass: Boolean(opts.manualBreakGlass) || undefined,
+    automated: Boolean(opts.automated) || undefined,
     allowlist: allowlistFromOpts(opts),
     account: accountFromOpts(opts),
     preflight: runtimePreflightFromOpts(opts),

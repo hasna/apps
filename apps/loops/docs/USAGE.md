@@ -399,9 +399,12 @@ Tool/command restrictions remain advisory metadata: current provider adapters
 do not claim native enforcement.
 
 Codewith/Codex `danger-full-access`, Cursor `sandbox=disabled`, and provider
-bypass modes (Claude, Cursor, AI Copilot, and OpenCode) require both a non-empty
-`--safety-reason` and explicit `--manual-break-glass`. A reason alone never
-substitutes for operator break-glass approval.
+bypass modes (Claude, Cursor, AI Copilot, and OpenCode) require a non-empty
+`--safety-reason` and either explicit `--manual-break-glass` or `--automated`.
+`--automated` declares a scheduled/durable lane (for example a deploy chain)
+whose relaxed access is staffed autonomously; `--manual-break-glass` remains
+the path for human-initiated break-glass approval. A safety reason is always
+required.
 
 For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
 

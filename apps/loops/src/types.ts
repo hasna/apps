@@ -213,6 +213,14 @@ export interface AgentTargetBase {
   sandbox?: AgentSandbox;
   /** Explicit operator acknowledgement required with a non-empty safetyReason for relaxed sandbox or provider bypass modes. */
   manualBreakGlass?: boolean;
+  /**
+   * Declare a target as a scheduled/durable automated lane (for example a loop
+   * that staffs a deploy chain). An automated lane may use relaxed sandbox or
+   * provider bypass modes with a documented safetyReason without being forced
+   * to declare manualBreakGlass, which is reserved for human-initiated
+   * break-glass emergencies.
+   */
+  automated?: boolean;
   allowlist?: AgentAllowlistSpec;
   worktree?: AgentWorktreeSpec;
   routing?: AgentRoutingSpec;
