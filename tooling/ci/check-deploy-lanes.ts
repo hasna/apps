@@ -67,7 +67,6 @@ import { parseYaml, asMap, asArray, asText } from "./yaml.ts";
  */
 const UNPORTED_NESTED_DEPLOY_LANES = new Set([
   "attachments",
-  "mementos",
   "sessions",
 ]);
 
@@ -77,7 +76,7 @@ const UNPORTED_NESTED_DEPLOY_LANES = new Set([
  * discoverable root workflow MUST exist here. A member enters this list in the
  * same change that rewires its trust.
  */
-const PORTED_DEPLOY_LANES = new Set(["projects", "skills"]);
+const PORTED_DEPLOY_LANES = new Set(["mementos", "projects", "skills"]);
 
 function memberDirs(root: string): string[] {
   const apps = path.join(root, "apps");
