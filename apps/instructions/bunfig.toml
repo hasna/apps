@@ -1,0 +1,20 @@
+# Bun configuration for @hasna/instructions.
+#
+# The preload pins the state-kind selector HASNA_STATE_HOME to a fresh temp dir
+# for every `bun test` process, before any test file is imported. Without it, a
+# bare `bun test` (or `bun test <file>`) on a machine whose instructions state
+# store has been migrated to the resolver XDG dir (~/.local/state/hasna/
+# instructions) runs with the real HOME and adoption fires
+# (session-render-state.ts adoptResolverSnapshotDir), so snapshot-writing tests
+# (project-context, live-codewith, account999, profile-1, bound-probe,
+# managed-input-positive fixtures) write synthetic snapshots into the LIVE store
+# and pass green. Measured 2026-08-28: 96 fixture files; re-measured 2026-08-29
+# on O15-04648: 4 files from a single test file.
+#
+# The package test script (package.json) also pins the variable; the preload
+# makes the un-pinned path hermetic too. Removing the preload turns a working
+# suite into one that pollutes the real store, which is the defect this file
+# exists to prevent.
+
+[test]
+preload = ["./src/test-support/preload-state-home.ts"]
