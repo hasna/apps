@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { getDataDir, getDatabase, getDbPath, resetDatabase } from "./database.js";
+import { fileURLToPath } from "url";
+import { copyContextDatabase, getDataDir, getDatabase, getDbPath, resetDatabase } from "./database.js";
 
 const oldEnv = new Map<string, string | undefined>();
 const ENV_NAMES = [
   "HOME",
   "USERPROFILE",
+  "HASNA_DATA_HOME",
   "CONTEXT_DB_PATH",
   "HASNA_CONTEXT_DB_PATH",
   "CONTEXT_DATA_DIR",
@@ -88,6 +90,161 @@ describe("database path resolution", () => {
     expect(existsSync(join(dataDir, "migration-receipt.json"))).toBe(true);
   });
 
+  it("migrates the pre-XDG ~/.hasna/context store when HASNA_DATA_HOME adopts the XDG home", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    makeContextDb(join(legacyDir, "context.db"));
+
+    // The operator deliberately opts into the XDG data home. The legacy
+    // ~/.hasna/context store must travel into the effective home — otherwise
+    // the upgrade opens an empty database and existing data is invisible.
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+
+    const dataDir = getDataDir();
+    const xdgHome = join(xdgRoot, "context");
+
+    expect(dataDir).toBe(xdgHome);
+    expect(existsSync(join(xdgHome, "context.db"))).toBe(true);
+    // Original legacy store preserved, never deleted.
+    expect(existsSync(join(legacyDir, "context.db"))).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(xdgHome, "migration-receipt.json"), "utf8")) as { from: string; to: string };
+    expect(receipt).toMatchObject({ from: legacyDir, to: xdgHome });
+  });
+
+  it("snapshots a live WAL-mode legacy store atomically, including uncheckpointed rows", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+
+    // A WAL-mode source with the writer still open: the committed row lives
+    // in the uncheckpointed WAL, not in the main database file. The migration
+    // must snapshot the committed state atomically (VACUUM INTO) — a naive
+    // copy of the main file plus sidecars could miss this row entirely.
+    const source = join(legacyDir, "context.db");
+    const writer = new Database(source);
+    writer.exec("PRAGMA journal_mode = WAL");
+    writer.exec("CREATE TABLE IF NOT EXISTS legacy_probe (value TEXT)");
+    writer.query("INSERT INTO legacy_probe (value) VALUES ('wal-committed-row')").run();
+
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+
+    const dataDir = getDataDir();
+    const xdgHome = join(xdgRoot, "context");
+
+    expect(dataDir).toBe(xdgHome);
+    expect(existsSync(join(xdgHome, "context.db"))).toBe(true);
+    // The snapshot is a single self-contained file: no sidecar copies.
+    expect(existsSync(join(xdgHome, "context.db-wal"))).toBe(false);
+    expect(existsSync(join(xdgHome, "context.db-shm"))).toBe(false);
+    const probe = new Database(join(xdgHome, "context.db"));
+    try {
+      const row = probe.query("SELECT value FROM legacy_probe WHERE value = 'wal-committed-row'").get();
+      expect(row).toEqual({ value: "wal-committed-row" });
+      const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
+      expect(integrity.integrity_check).toBe("ok");
+    } finally {
+      probe.close();
+    }
+    // Original legacy store preserved with its WAL.
+    writer.close();
+    expect(existsSync(source)).toBe(true);
+  });
+
+  it("never deletes or replaces a snapshot another migration already placed (concurrent first-use race)", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    const source = join(legacyDir, "context.db");
+    makeContextDb(source);
+
+    // Process B already placed its verified snapshot at the canonical path
+    // while process A was still snapshotting (a CLI and the -serve process
+    // upgrading at the same moment). A's migration must not unlink or
+    // overwrite B's placed snapshot — the old remove-a-stale-target-first
+    // logic could delete a live snapshot, after which the verification open
+    // created an empty database that passed integrity_check and became
+    // canonical, leaving committed legacy rows invisible (release-review P1).
+    const canonicalDir = join(root, "home", ".hasna", "context-canonical");
+    mkdirSync(canonicalDir, { recursive: true });
+    const target = join(canonicalDir, "context.db");
+    const bSnapshot = new Database(target);
+    bSnapshot.exec("CREATE TABLE legacy_probe (value TEXT)");
+    bSnapshot.query("INSERT INTO legacy_probe (value) VALUES ('b-snapshot-won')").run();
+    bSnapshot.close();
+
+    expect(copyContextDatabase(source, target)).toBe(true);
+
+    // B's verified snapshot is untouched: its distinguishing row survives
+    // and integrity still holds. (Same legacy source, same committed rows —
+    // the discriminator proves no replacement happened.)
+    const probe = new Database(target);
+    try {
+      expect(probe.query("SELECT value FROM legacy_probe WHERE value = 'b-snapshot-won'").get()).toEqual({ value: "b-snapshot-won" });
+      const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
+      expect(integrity.integrity_check).toBe("ok");
+    } finally {
+      probe.close();
+    }
+    // No stray snapshot temp is left behind by the losing attempt.
+    expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("two concurrent first-use migrations (separate processes) converge on one verified canonical snapshot", async () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    const source = join(legacyDir, "context.db");
+    // A WAL-mode source with the writer still open and an uncheckpointed
+    // committed row: both migration attempts must snapshot the committed
+    // state. This is the production concurrency shape — a CLI and
+    // context-serve upgrading at the same moment. The two migrations run as
+    // truly concurrent OS processes against the same legacy source and the
+    // same canonical target; the pre-fix delete-then-recreate interleaving
+    // could leave an empty canonical database, and this test's assertions
+    // (committed row present, integrity ok, no stray temps) are exactly what
+    // that race used to break. (The sibling "never deletes or replaces a
+    // snapshot another migration already placed" test is the deterministic
+    // discriminator for the fix; this one exercises the real race.)
+    const writer = new Database(source);
+    writer.exec("PRAGMA journal_mode = WAL");
+    writer.exec("CREATE TABLE legacy_probe (value TEXT)");
+    writer.query("INSERT INTO legacy_probe (value) VALUES ('wal-committed-row')").run();
+
+    const canonicalDir = join(root, "home", ".hasna", "context-canonical");
+    mkdirSync(canonicalDir, { recursive: true });
+    const target = join(canonicalDir, "context.db");
+
+    const dbUrl = fileURLToPath(new URL("./database.js", import.meta.url));
+    const runner = [
+      "const { copyContextDatabase } = await import(" + JSON.stringify(dbUrl) + ");",
+      "process.exit(copyContextDatabase(" + JSON.stringify(source) + ", " + JSON.stringify(target) + ") ? 0 : 1);",
+    ].join("\n");
+
+    // Three rounds of two simultaneous migration processes: enough concurrency
+    // to exercise the interleaving repeatedly while staying fast.
+    for (let round = 0; round < 3; round++) {
+      const p1 = Bun.spawn([process.execPath, "-e", runner]);
+      const p2 = Bun.spawn([process.execPath, "-e", runner]);
+      const [e1, e2] = await Promise.all([p1.exited, p2.exited]);
+      expect(e1).toBe(0);
+      expect(e2).toBe(0);
+
+      const probe = new Database(target);
+      try {
+        expect(probe.query("SELECT value FROM legacy_probe WHERE value = 'wal-committed-row'").get()).toEqual({ value: "wal-committed-row" });
+        const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
+        expect(integrity.integrity_check).toBe("ok");
+      } finally {
+        probe.close();
+      }
+      expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    }
+    writer.close();
+  });
+
   it("migration is idempotent and does not rewrite the receipt or the data", () => {
     const root = isolateHome();
     const legacyDir = join(root, "home", ".hasna", "apps", "knowledge");
@@ -149,13 +306,19 @@ describe("database path resolution", () => {
   });
 
   it("default never contains a literal ~ or undefined prefix when HOME is unset", () => {
-    isolateHome();
+    const root = isolateHome();
+    // Pin the data-kind override so the fallback home cannot leak real
+    // machine state into the assertion: on a machine with an existing store
+    // at the XDG data home the resolver is legitimately adopted and the
+    // legacy ".hasna/context" shape no longer appears. The property under
+    // test is the path hygiene, not the legacy-vs-XDG selection.
+    process.env.HASNA_DATA_HOME = join(root, "xdg-data");
     delete process.env.HOME;
     delete process.env.USERPROFILE;
     const path = getDbPath();
     expect(path.startsWith("~")).toBe(false);
     expect(path.startsWith("undefined")).toBe(false);
-    expect(path).toContain(".hasna/context");
+    expect(path).toBe(join(root, "xdg-data", "context", "context.db"));
   });
 });
 

@@ -18,6 +18,10 @@
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
     }
   },
   "files": [
@@ -27,7 +31,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts src/storage.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist && sed -i.bak 's|#!/usr/bin/env node|#!/usr/bin/env bun|' dist/cli/index.js dist/mcp/index.js dist/server/index.js && rm -f dist/cli/index.js.bak dist/mcp/index.js.bak dist/server/index.js.bak",
+    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts src/storage.ts --outdir dist --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc --emitDeclarationOnly --outDir dist && sed -i.bak 's|#!/usr/bin/env node|#!/usr/bin/env bun|' dist/cli/index.js dist/mcp/index.js dist/server/index.js && rm -f dist/cli/index.js.bak dist/mcp/index.js.bak dist/server/index.js.bak",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
@@ -36,7 +40,8 @@
     "contracts:check": "bunx @hasna/contracts@0.11.1 repo-conformance .",
     "scan-artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/context-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan context-artifact-scan.tgz; rc=$?; rm -f \"$PWD/context-artifact-scan.tgz\"; exit $rc",
     "prepack": "bun run build && bun run scan-artifact",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "openapi:generate": "bun scripts/openapi-generate.ts"
   },
   "keywords": [
     "context",

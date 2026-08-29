@@ -1,7 +1,8 @@
 import { Database as BunDatabase } from "bun:sqlite";
 import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { existsSync, linkSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
+import { randomBytes } from "crypto";
+import { basename, dirname, join } from "path";
 import { homedir } from "os";
 import { contextHome, exactContextHome } from "../paths.js";
 
@@ -105,6 +106,12 @@ export function getDataDir(): string {
 function getLegacyDataDirs(): string[] {
   const home = getHomeDir();
   return [
+    // The pre-XDG context home itself (~/.hasna/context). When the
+    // @hasna/paths (XDG) data home is adopted (HASNA_DATA_HOME set, or the
+    // store already migrated), an existing store here must be copied into
+    // the effective home — otherwise an upgrade would open an empty
+    // database and make existing data invisible.
+    join(home, ".hasna", "context"),
     // The wrong default used by previous versions: context data sat inside
     // the knowledge app's legacy directory (~/.hasna/apps/knowledge).
     join(home, ".hasna", "apps", "knowledge"),
@@ -134,32 +141,61 @@ function migrateLegacyDataDir(newDir: string): void {
   }
 }
 
-function copyContextDatabase(source: string, target: string): boolean {
+export function copyContextDatabase(source: string, target: string): boolean {
   mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(source, target);
-  for (const suffix of ["-wal", "-shm"]) {
-    const sidecar = `${source}${suffix}`;
-    if (existsSync(sidecar)) {
-      try { copyFileSync(sidecar, `${target}${suffix}`); } catch { /* best-effort */ }
-    }
-  }
+  // Every migration attempt snapshots to its own unique temp file, and only
+  // a verified snapshot is ever placed at the canonical path. A concurrent
+  // first-use migration (a CLI and the -serve process upgrading at the same
+  // moment, say) therefore never sees — and can never delete — another
+  // process's in-flight snapshot. The old remove-a-stale-target-first logic
+  // could unlink a live snapshot, after which the verification open CREATED
+  // an empty database that passed integrity_check and became canonical,
+  // leaving committed legacy rows invisible forever (release-review P1).
+  const temp = join(
+    dirname(target),
+    `.${basename(target)}.migration-${process.pid}-${randomBytes(4).toString("hex")}.tmp`,
+  );
   try {
-    // Verify the copy is a valid, self-consistent database. The probe opens
-    // the copy read-write so SQLite may recover a copied WAL if needed; the
-    // copy is ours, never user data.
-    const probe = new BunDatabase(target);
+    // A live SQLite database must be snapshotted atomically. Copying the
+    // main file and the -wal/-shm sidecars as separate files can lose
+    // committed rows: if a checkpoint runs between the copies, the main-file
+    // copy predates it while the copied WAL has already been truncated — the
+    // result still passes PRAGMA integrity_check while omitting data.
+    // VACUUM INTO produces a single-file, transactionally consistent snapshot
+    // of the source (including any uncheckpointed WAL content) without ever
+    // opening the source for writing. The unique temp path cannot pre-exist.
+    const src = new BunDatabase(source, { readonly: true });
+    try {
+      src.query("VACUUM INTO ?").run(temp);
+    } finally {
+      src.close();
+    }
+
+    // Verify the snapshot is a valid, self-consistent database BEFORE it can
+    // become canonical: an empty or torn file must never be placed.
+    const probe = new BunDatabase(temp);
     try {
       const row = probe.query("PRAGMA integrity_check").get() as { integrity_check: string } | null;
       if (row === null || row.integrity_check !== "ok") throw new Error("integrity check failed");
     } finally {
       probe.close();
     }
+
+    // Atomic no-overwrite placement: link() fails with EEXIST when a
+    // concurrent migration already placed a verified snapshot of the same
+    // legacy source — either way the canonical path holds a verified
+    // snapshot, so our own temp is simply discarded.
+    try {
+      linkSync(temp, target);
+    } catch (err) {
+      if (!existsSync(target)) throw err;
+    }
+    rmSync(temp, { force: true });
     return true;
   } catch {
-    // Our own copy failed verification: remove it and leave the legacy store
-    // untouched for a later attempt.
-    rmSync(target, { force: true });
-    for (const suffix of ["-wal", "-shm"]) rmSync(`${target}${suffix}`, { force: true });
+    // Our own snapshot failed: remove only our own temp file and leave the
+    // legacy store untouched for a later attempt.
+    rmSync(temp, { force: true });
     return false;
   }
 }
