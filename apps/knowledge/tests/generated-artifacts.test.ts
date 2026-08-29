@@ -240,6 +240,30 @@ describe('generated artifact verification', () => {
     expect(pins[0]).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
+  // Regression test for O15-04947. The Dockerfile builds the image from an oven/bun base, and
+  // the build script's check-bun-version.mjs guard refuses to build under any bun other than
+  // the pinned one — so a floating base-image tag (oven/bun:1-alpine) silently drifts past the
+  // pin and the knowledge deploy fails at image build time with the guard's refusal. The base
+  // image must pin the exact bun the byte gate expects; a floating `1`/`1.3`/`latest` tag is
+  // the defect this test exists to block.
+  test('every Dockerfile base image pins the exact bun version the byte gate expects', () => {
+    const dockerfile = readFileSync(join(repoRoot, 'Dockerfile'), 'utf8');
+    const pinned = extractPinnedBunVersion(
+      readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8'),
+    );
+    const fromImages = [...dockerfile.matchAll(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)\s+AS\s+(\S+)\s*$/gim)].map((match) => match[1]);
+    // Positive control: an empty match list would make every assertion below vacuous.
+    expect(fromImages.length).toBeGreaterThan(0);
+    for (const image of fromImages) {
+      const match = image.match(/^oven\/bun:(\d+\.\d+\.\d+)(-[a-z0-9.]+)?(@sha256:[0-9a-f]+)?$/);
+      expect(match, `base image ${image} must be an oven/bun tag pinning an exact patch version`).not.toBeNull();
+      expect(
+        match![1],
+        `base image ${image} must pin bun ${pinned} (the version the byte gate and check-bun-version.mjs expect), not a floating tag`,
+      ).toBe(pinned);
+    }
+  });
+
   test('the cross-platform matrix does not cancel Windows when another OS fails', () => {
     const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8').replace(
       /\r\n/g,
