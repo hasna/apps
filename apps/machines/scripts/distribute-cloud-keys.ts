@@ -38,6 +38,29 @@
  *   4. operates only on responders (ssh reachability probe); apple01 (DEAD) and
  *      apple07 (OFFLINE) are skipped by default.
  *
+ * LIVE PRE-DISTRIBUTION VERIFICATION (added O15-04800)
+ * ----------------------------------------------------
+ * Before any key is pushed, every RESOLVED key is verified against the app's
+ * LIVE service (fail-closed). The verifier fetches the app's public
+ * `/openapi.json`, derives the first authenticated `/v1/*` GET route, then
+ * probes it twice:
+ *   - WITHOUT a key: the route must answer 401/403 (auth is enforced), and
+ *   - WITH the candidate key: the route must NOT answer 401/403 (the key is
+ *     accepted; 404/2xx both prove the key passed auth).
+ * A key the live service refuses — revoked, expired, unknown, insufficient
+ * scope, or an unverifiable service (5xx / network / no openapi) — is NEVER
+ * distributed: that app is dropped from the run with a loud [REJECT] line.
+ *
+ * WHY: measured incident 2026-07-30/08-29 (O15-04800) — the telephony fleet
+ * key was revoked after a leak (env|grep, incident 607515) and rotated to a
+ * new kid, but station01's ~/.hasna/fleet-env/telephony.env still held the
+ * REVOKED key, so every /v1 business route answered 401 "API key has been
+ * revoked." and the telephony live-gate business route + client use were
+ * blocked. The distributor had no verification step, so a revoked key in ANY
+ * source (AWS SM or a stale local vault capture) would have been pushed to
+ * fleet machines silently. The gate makes that impossible: a revoked key now
+ * fails the probe and the distribution run refuses to write it anywhere.
+ *
  * REVERSIBILITY
  * -------------
  * Every overwrite is backed up to `<app>.env.bak-<UTC-timestamp>` on the target.
@@ -262,6 +285,158 @@ async function resolveKey(spec: AppSpec): Promise<KeyResolution> {
   return { app: spec.app, resolved: true, key: value, masked: mask(value) };
 }
 
+// --- Live pre-distribution verification (fail-closed; O15-04800) -------------
+
+export type { AppSpec };
+
+export interface LiveVerifyResult {
+  app: string;
+  ok: boolean;
+  status: number | null;
+  /** machine-readable refusal reason (null when verified) */
+  reason: "auth_refused" | "probe_not_authenticated" | "service_unhealthy" | "network" | "openapi_unavailable" | null;
+  /** human-readable detail, e.g. the server's 401 body message; never a key value */
+  detail: string | null;
+}
+
+export interface VerifyKeyLiveDeps {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/** Pick the first authenticated `/v1/*` GET route from an OpenAPI document. */
+export function deriveProbePath(openapi: { paths?: Record<string, { get?: unknown }> }): string | null {
+  const paths = openapi?.paths ?? {};
+  for (const path of Object.keys(paths)) {
+    if (path.startsWith("/v1/") && paths[path]?.get) return path;
+  }
+  return null;
+}
+
+/**
+ * Verify a resolved key against the app's LIVE service before distribution.
+ * Two probes on the derived authenticated route:
+ *   1. WITHOUT a key — must answer 401/403 (proves the route is behind auth);
+ *   2. WITH the key   — must NOT answer 401/403 (proves the key is accepted).
+ * Anything else (network, 5xx, no openapi, route not auth-enforced) is a
+ * refusal: an unverifiable key is never distributed.
+ */
+export async function verifyKeyLive(
+  spec: AppSpec,
+  key: string,
+  deps: VerifyKeyLiveDeps = {},
+): Promise<LiveVerifyResult> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const timeoutMs = deps.timeoutMs ?? 12_000;
+  const fail = (
+    reason: LiveVerifyResult["reason"],
+    detail: string | null,
+    status: number | null = null,
+  ): LiveVerifyResult => ({ app: spec.app, ok: false, status, reason, detail });
+
+  const get = async (url: string, withKey: boolean): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetchImpl(url, {
+        method: "GET",
+        headers: withKey ? { Authorization: `Bearer ${key}` } : {},
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let openapi: Response;
+  try {
+    openapi = await get(`${spec.apiUrl}/openapi.json`, false);
+  } catch {
+    return fail("network", "openapi fetch failed (DNS/TLS/connect)", null);
+  }
+  if (openapi.status !== 200) {
+    return fail("openapi_unavailable", `openapi.json answered HTTP ${openapi.status}`, openapi.status);
+  }
+  let doc: { paths?: Record<string, { get?: unknown }> };
+  try {
+    doc = (await openapi.json()) as { paths?: Record<string, { get?: unknown }> };
+  } catch {
+    return fail("openapi_unavailable", "openapi.json was not valid JSON", openapi.status);
+  }
+  const probePath = deriveProbePath(doc);
+  if (!probePath) {
+    return fail("openapi_unavailable", "no authenticated /v1/* GET route in openapi.json", openapi.status);
+  }
+
+  // Probe 1: no key — the route must enforce auth (401/403).
+  let noKey: Response;
+  try {
+    noKey = await get(`${spec.apiUrl}${probePath}`, false);
+  } catch {
+    return fail("network", "no-key probe failed (DNS/TLS/connect)", null);
+  }
+  if (noKey.status >= 500) {
+    return fail("service_unhealthy", `service answered HTTP ${noKey.status} during verification`, noKey.status);
+  }
+  if (!(noKey.status === 401 || noKey.status === 403)) {
+    return fail(
+      "probe_not_authenticated",
+      `${probePath} answered HTTP ${noKey.status} WITHOUT a key — not auth-enforced; cannot discriminate a revoked key`,
+      noKey.status,
+    );
+  }
+
+  // Probe 2: with the candidate key — must NOT be refused.
+  let withKey: Response;
+  try {
+    withKey = await get(`${spec.apiUrl}${probePath}`, true);
+  } catch {
+    return fail("network", "with-key probe failed (DNS/TLS/connect)", null);
+  }
+  if (withKey.status === 401 || withKey.status === 403) {
+    let detail = `HTTP ${withKey.status}`;
+    try {
+      const body = (await withKey.json()) as { message?: string };
+      if (typeof body?.message === "string") detail = body.message;
+    } catch {
+      /* keep the status-only detail */
+    }
+    return fail("auth_refused", `live service refused the key: ${detail}`, withKey.status);
+  }
+  if (withKey.status >= 500) {
+    return fail("service_unhealthy", `service answered HTTP ${withKey.status} during verification`, withKey.status);
+  }
+  // 2xx and 4xx-non-auth (e.g. 404 on an unknown entity) both prove the key
+  // passed authentication.
+  return { app: spec.app, ok: true, status: withKey.status, reason: null, detail: null };
+}
+
+/**
+ * Verify every resolved key against its live service and DROP every app whose
+ * key is refused. Fail-closed: a refused app is never pushed to any target.
+ */
+export async function verifyResolvedKeys(
+  specs: AppSpec[],
+  keys: Map<string, string>,
+  verify: (spec: AppSpec, key: string) => Promise<LiveVerifyResult>,
+): Promise<{ keys: Map<string, string>; verified: LiveVerifyResult[]; rejected: LiveVerifyResult[] }> {
+  const kept = new Map<string, string>();
+  const verified: LiveVerifyResult[] = [];
+  const rejected: LiveVerifyResult[] = [];
+  for (const spec of specs) {
+    const key = keys.get(spec.app);
+    if (!key) continue; // unresolved keys are handled by the resolution step
+    const result = await verify(spec, key);
+    if (result.ok) {
+      kept.set(spec.app, key);
+      verified.push(result);
+    } else {
+      rejected.push(result);
+    }
+  }
+  return { keys: kept, verified, rejected };
+}
+
 // --- Target reachability -----------------------------------------------------
 
 async function isReachable(host: string, probeTimeoutS: number): Promise<boolean> {
@@ -475,6 +650,29 @@ async function main() {
   }
   const missing = resolutions.filter((r) => !r.resolved).map((r) => r.app);
 
+  // 1.5 Verify every resolved key against its app's LIVE service (fail-closed,
+  // O15-04800). A key the live service refuses — revoked, expired, unknown,
+  // insufficient scope, or an unverifiable service — is dropped from the run:
+  // it must NEVER be pushed to a fleet target.
+  log(`\n## 1.5 Verifying resolved keys against live services (fail-closed)`);
+  const { keys: verifiedKeys, verified: verifiedResults, rejected: rejectedKeys } = await verifyResolvedKeys(
+    specs,
+    keys,
+    (s, k) => verifyKeyLive(s, k),
+  );
+  for (const spec of specs) {
+    if (rejectedKeys.some((r) => r.app === spec.app)) {
+      const r = rejectedKeys.find((rr) => rr.app === spec.app)!;
+      log(`  [REJECT] ${spec.app.padEnd(14)} NOT distributed: ${r.reason}${r.detail ? ` (${r.detail})` : ""}`);
+    } else if (verifiedResults.some((v) => v.app === spec.app)) {
+      const v = verifiedResults.find((vv) => vv.app === spec.app)!;
+      log(`  [ok  ] ${spec.app.padEnd(14)} live-accepted (HTTP ${v.status ?? "?"})`);
+    }
+  }
+  if (rejectedKeys.length) {
+    log(`  # ${rejectedKeys.length} app(s) dropped — resolve the refusal in the API-key store or AWS SM, then re-run.`);
+  }
+
   // 2. Probe reachability.
   log(`\n## 2. Probing target reachability over tailscale ssh`);
   const reachable: string[] = [];
@@ -496,11 +694,11 @@ async function main() {
   // 3. Push (unless dry-run).
   const pushResults: PushResult[] = [];
   if (dryRun) {
-    log(`\n## 3. DRY RUN — no env files written. Would push ${keys.size} app(s) to ${reachable.length} target(s).`);
+    log(`\n## 3. DRY RUN — no env files written. Would push ${verifiedKeys.size} app(s) to ${reachable.length} target(s).`);
   } else {
     log(`\n## 3. Pushing env files to reachable targets (backup-before-overwrite, 0600, atomic)`);
     for (const host of reachable) {
-      const r = await pushToTarget(host, specs, keys, sshTimeoutS);
+      const r = await pushToTarget(host, specs, verifiedKeys, sshTimeoutS);
       pushResults.push(r);
       if (r.ok) log(`  [ok ] ${host.padEnd(12)} wrote ${r.wrote.length} env file(s)`);
       else log(`  [ERR] ${host.padEnd(12)} ${r.error ?? "partial"} (wrote ${r.wrote.length})`);
@@ -512,6 +710,8 @@ async function main() {
     mode: dryRun ? "dry-run" : "apply",
     appsRequested: specs.map((s) => s.app),
     keysResolved: [...keys.keys()],
+    keysVerified: verifiedResults.map((v) => v.app),
+    keysRejected: rejectedKeys.map((r) => ({ app: r.app, reason: r.reason, status: r.status, detail: r.detail })),
     keysMissing: missing,
     reachableTargets: reachable,
     unreachableTargets: unreachable,
@@ -523,8 +723,12 @@ async function main() {
     console.log(JSON.stringify(summary, null, 2));
   } else {
     log(`\n## Summary`);
-    log(`  keys resolved: ${keys.size}/${specs.length}`);
+    log(`  keys resolved: ${keys.size}/${specs.length}   live-verified: ${verifiedKeys.size}   rejected: ${rejectedKeys.length}`);
     if (missing.length) log(`  keys MISSING (reconcile in AWS SM): ${missing.join(", ")}`);
+    if (rejectedKeys.length) {
+      log(`  keys REJECTED by the live service (NOT distributed — reconcile, then re-run):`);
+      for (const r of rejectedKeys) log(`    - ${r.app}: ${r.reason}${r.detail ? ` (${r.detail})` : ""}`);
+    }
     log(`  reachable targets: ${reachable.length}/${targets.length}`);
     if (!dryRun) {
       const okCount = pushResults.filter((p) => p.ok).length;
@@ -535,7 +739,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(`distribute-cloud-keys FAILED: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(`distribute-cloud-keys FAILED: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
+}
