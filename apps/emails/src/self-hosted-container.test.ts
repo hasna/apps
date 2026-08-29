@@ -97,6 +97,10 @@ describe("self-hosted container TLS contract", () => {
   // longer served, before a deploy can block on it. A fetch failure fails the
   // test deliberately: an unresolvable index is exactly the condition that
   // broke deploys.
+  // Two ~500KB gzipped APKINDEX fetches can exceed bun:test's default 5s
+  // budget on a cold CI network — the same explicit-budget precedent as the
+  // fake-Docker subprocess test below. The budget must stay generous: this
+  // test is the gate that catches a stale pin in CI instead of at deploy.
   test("pins OpenSSL revisions the alpine v3.22 repos still serve on both supported arches", async () => {
     const pinned = new Map<string, string>();
     for (const match of baseStage.matchAll(/'libcrypto3=([0-9][^']*)'/g)) {
@@ -134,7 +138,7 @@ describe("self-hosted container TLS contract", () => {
         ).toBeTrue();
       }
     }
-  });
+  }, 60_000);
 
   test("publishes scanner inventory for exactly the OS libraries copied into scratch", () => {
     expect(runtimeFilesStage).not.toContain(
