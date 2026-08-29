@@ -1072,6 +1072,124 @@ describe("adoptWorktrees", () => {
       created.lease.lease_id,
     );
   });
+
+  // PLA8-00242 — `adopt --apply` on a duplicate checkout: a second working
+  // directory for the SAME checkout (same git common dir — the skills-namespace
+  // copy found by the stale sweep) collides on the lease key
+  // (repo_id, machine_id, task_id, run_id, base_ref). Moving the lease onto the
+  // duplicate would not settle anything: the stale-sweep adopt loop would find
+  // the original path no-lease on the next pass and move the lease back — a
+  // flip-flop that rewrites a live claimed lease every pass and never
+  // terminates. Adopt must refuse with a distinct DUPLICATE_CHECKOUT error
+  // naming the leased canonical path; the sweep records the violation and
+  // never adopts the duplicate, so the state terminates with the original
+  // lease untouched.
+  test("--apply refuses a true duplicate checkout with DUPLICATE_CHECKOUT and leaves the lease untouched", () => {
+    const { root, clonePath, repoName } = seed();
+    const owned = addWorktree({ repo: repoName, task: "dup-checkout" });
+
+    // The duplicate: the same repo and the same task/dir name, but a second
+    // working directory under a different namespace path (the layout violation
+    // the stale sweep measured). Same clone -> same git common dir.
+    const dupDir = join(root, "other-namespace", "dup-checkout");
+    mkdirSync(dirname(dupDir), { recursive: true });
+    git(clonePath, ["worktree", "add", "-b", "dup-copy-branch", dupDir]);
+
+    const leaseBefore = getDb()
+      .query("SELECT * FROM worktree_leases WHERE lease_id = ?")
+      .get(owned.lease.lease_id) as Record<string, unknown>;
+
+    const attempt = (): WorktreeError | null => {
+      try {
+        adoptWorktrees({ path: dupDir, apply: true });
+        return null;
+      } catch (error) {
+        return error as WorktreeError;
+      }
+    };
+    const first = attempt();
+    expect(first).toBeInstanceOf(WorktreeError);
+    expect((first as WorktreeError).code).toBe("DUPLICATE_CHECKOUT");
+    // The error names the leased canonical path and the duplicate it refused.
+    expect((first as WorktreeError).message).toContain(owned.path);
+    expect((first as WorktreeError).message).toContain(dupDir);
+    expect((first as WorktreeError).details.path).toBe(dupDir);
+    expect((first as WorktreeError).details.lease_id).toBe(owned.lease.lease_id);
+
+    // The live claimed lease is untouched: same row, same path, same claim
+    // fields, same cleanup intent.
+    const leaseAfter = getDb()
+      .query("SELECT * FROM worktree_leases WHERE lease_id = ?")
+      .get(owned.lease.lease_id) as Record<string, unknown>;
+    expect(leaseAfter.worktree_path).toBe(owned.path);
+    expect(leaseAfter.status).toBe("claimed");
+    expect(leaseAfter.claimed_at).toBe(leaseBefore.claimed_at);
+    expect(leaseAfter.verified_at).toBe(leaseBefore.verified_at);
+    expect(leaseAfter.cleanup_policy).toBe(leaseBefore.cleanup_policy);
+    expect(leaseAfter.owner_metadata).toBe(leaseBefore.owner_metadata);
+    expect(leaseAfter.git_common_dir).toBe(leaseBefore.git_common_dir);
+
+    // No lease row was created at the duplicate path.
+    expect(
+      getDb().query("SELECT lease_id FROM worktree_leases WHERE worktree_path = ?").get(dupDir),
+    ).toBeNull();
+
+    // Termination: a second sweep pass refuses identically, the lease never
+    // moves and the original path never becomes no-lease — no flip-flop.
+    const second = attempt();
+    expect(second).toBeInstanceOf(WorktreeError);
+    expect((second as WorktreeError).code).toBe("DUPLICATE_CHECKOUT");
+    const listed = listWorktrees({ now: new Date() });
+    expect(listed.entries.find((entry) => entry.path === owned.path)?.lease_id).toBe(owned.lease.lease_id);
+    expect(listed.entries.find((entry) => entry.path === owned.path)?.issues).not.toContain("no-lease");
+    expect(listed.entries.find((entry) => entry.path === dupDir)?.lease_id).toBeNull();
+  });
+
+  // PLA8-00242 — the DISTINCT-checkout class: the claim-key collision row
+  // belongs to a different checkout (different git common dir) of the same
+  // logical worktree. That is the case the reconciliation may settle by moving
+  // the lease onto the operator's explicitly adopted path: one lease row per
+  // logical worktree, never two rows and never a leaked constraint.
+  test("--apply reconciles a distinct-checkout collision by moving the lease", () => {
+    const { root, clonePath, repoName } = seed();
+    const owned = addWorktree({ repo: repoName, task: "dup-checkout" });
+
+    // A second, genuinely separate checkout of the same repo (same indexed
+    // remote identity -> same repo_id in the lease claim key) with its own git
+    // common dir.
+    const clone2 = join(dirname(clonePath), "clone-2");
+    git(dirname(clone2), ["clone", join(dirname(clonePath), "origin.git"), clone2]);
+    getDb()
+      .prepare(
+        "INSERT INTO repos (path, name, org, remote_url, default_branch, updated_at) VALUES (?, ?, 'hasna', ?, 'main', ?)",
+      )
+      .run(clone2, "open-fixture-2", `github.com/hasna/${repoName}`, "2026-07-01 00:00:00");
+
+    const dupDir = join(root, "other-namespace", "dup-checkout");
+    mkdirSync(dirname(dupDir), { recursive: true });
+    git(clone2, ["worktree", "add", "-b", "dup-copy-branch", dupDir]);
+
+    const result = adoptWorktrees({ path: dupDir, apply: true });
+    expect(result.applied).toBe(true);
+    expect(result.adopted).toHaveLength(1);
+    expect(result.adopted[0]!.lease_id).toBe(owned.lease.lease_id);
+
+    // One lease row for the logical worktree, moved onto the adopted path and
+    // still claimed.
+    const rows = getDb()
+      .query("SELECT lease_id, worktree_path, status FROM worktree_leases WHERE worktree_path IN (?, ?)")
+      .all(owned.path, dupDir) as { lease_id: string; worktree_path: string; status: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.lease_id).toBe(owned.lease.lease_id);
+    expect(rows[0]!.worktree_path).toBe(dupDir);
+    expect(rows[0]!.status).toBe("claimed");
+
+    // `repos worktree list` sees the lease on the adopted path and none on the
+    // original path.
+    const listed = listWorktrees({ now: new Date() });
+    expect(listed.entries.find((entry) => entry.path === dupDir)?.lease_id).toBe(owned.lease.lease_id);
+    expect(listed.entries.find((entry) => entry.path === owned.path)?.lease_id).toBeNull();
+  });
 });
 
 describe("releaseWorktree", () => {

@@ -123,6 +123,7 @@ export type WorktreeErrorCode =
   | "WORKTREE_UNLANDED"
   | "WORKTREE_DEAD_GITDIR"
   | "WORKTREE_BASE_MISMATCH"
+  | "DUPLICATE_CHECKOUT"
   | "TRUSTED_HOME_UNAVAILABLE"
   | "LAYOUT_INVARIANT_VIOLATED"
   | "GIT_FAILED";
@@ -2247,8 +2248,92 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
         released_at: null,
         last_error: null,
       };
-      upsertLease(db, lease);
-      record.lease_id = lease.lease_id;
+
+      // PLA8-00242 — duplicate-checkout reconciliation. A lease may already
+      // exist for the same logical worktree — same repo, machine, task, run
+      // and base — on a DIFFERENT path. Inserting would hit
+      // UNIQUE(repo_id, machine_id, task_id, run_id, base_ref) and surface
+      // as a raw sqlite error, leaving the stale-sweep adopt loop unable to
+      // settle the duplicate. Two collision classes must be told apart:
+      //
+      // 1. TRUE DUPLICATE CHECKOUT — the collision lease shares this adopted
+      //    path's git common dir: a second working directory for the SAME
+      //    checkout, registered under another namespace. Moving the lease
+      //    there would not settle anything: the stale-sweep adopt loop would
+      //    find the old path no-lease on the next pass and move the lease
+      //    back — a flip-flop that rewrites a live claimed lease every pass
+      //    and never terminates. Refuse with a distinct DUPLICATE_CHECKOUT
+      //    error naming the leased canonical path; the sweep records the
+      //    violation and never adopts the duplicate, so the state terminates
+      //    with the original lease untouched.
+      //
+      // 2. DISTINCT CHECKOUT — the collision lease belongs to a different
+      //    checkout (different git common dir) of the same logical worktree.
+      //    The owning reconciliation moves the existing lease onto the path
+      //    being adopted (the operator's explicit choice): one lease row per
+      //    logical worktree, never two rows and never a leaked constraint. A
+      //    released row at the adopted path is dropped first so the move
+      //    cannot collide on the worktree_path UNIQUE constraint.
+      const claimedElsewhere = leaseByClaim(db, {
+        repoId: lease.repo_id,
+        machineId: lease.machine_id,
+        taskId: lease.task_id,
+        runId: lease.run_id,
+        baseRef: lease.base_ref,
+      });
+      if (claimedElsewhere && claimedElsewhere.worktree_path !== path) {
+        const sameCheckout =
+          claimedElsewhere.git_common_dir !== null &&
+          realpathOrSelf(claimedElsewhere.git_common_dir) === commonDir;
+        if (sameCheckout) {
+          fail(
+            "DUPLICATE_CHECKOUT",
+            `adopt refused: ${path} is a duplicate checkout of the leased worktree at ${claimedElsewhere.worktree_path} (same git common dir) — the lease stays at the canonical path; remove or unregister the duplicate instead`,
+            {
+              path,
+              lease_id: claimedElsewhere.lease_id,
+              hint: `the duplicate working directory at ${path} must be removed (repos worktree remove <repo>/<name>) or unregistered before this path can carry a lease`,
+            },
+          );
+        }
+        // A released row at the adopted path would block the move on the
+        // worktree_path UNIQUE constraint; released rows are dead weight
+        // (list counts only status != 'released'), so drop it first.
+        if (existing && existing.status === "released") {
+          db.query("DELETE FROM worktree_leases WHERE lease_id = ?").run(existing.lease_id);
+        }
+        db.query(
+          `UPDATE worktree_leases SET
+             repo_path = ?, repo_catalog_id = ?, machine_id = ?, worktree_path = ?,
+             branch = ?, base_ref = ?, base_sha = ?, mode = ?, owner_metadata = ?,
+             cleanup_policy = ?, status = ?, git_common_dir = ?, updated_at = ?,
+             claimed_at = ?, verified_at = ?, released_at = ?, last_error = ?
+           WHERE lease_id = ?`,
+        ).run(
+          lease.repo_path,
+          lease.repo_catalog_id,
+          lease.machine_id,
+          lease.worktree_path,
+          lease.branch,
+          lease.base_ref,
+          lease.base_sha,
+          lease.mode,
+          lease.owner_metadata,
+          lease.cleanup_policy,
+          lease.status,
+          lease.git_common_dir,
+          lease.updated_at,
+          lease.claimed_at,
+          lease.verified_at,
+          lease.released_at,
+          lease.last_error,
+          claimedElsewhere.lease_id,
+        );
+        record.lease_id = claimedElsewhere.lease_id;
+      } else {
+        upsertLease(db, lease);
+        record.lease_id = lease.lease_id;
+      }
     }
     adopted.push(record);
   }
