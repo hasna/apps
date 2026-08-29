@@ -341,6 +341,24 @@ describe("production deploy orchestration", () => {
     expect(payload.containerDefinitions[0].command).toEqual(["mementos-deploy"]);
   });
 
+  test("a null-command live baseline (no command override) bootstraps the lane", async () => {
+    // Regression (O15-05020, review cycle 1): the LIVE task definition
+    // carries no command at all (measured 2026-08-29: mementos-prod:29
+    // command=null). A null/absent command runs the image's default CMD
+    // (["mementos-serve"]), and preflight reads it as []. The first deploy
+    // must accept that exact shape, not only the literal
+    // ["mementos-serve"] form.
+    const result = await runDeploy([]);
+    const trace = readFileSync(result.trace, "utf8");
+    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("automated deploy prerequisite unmet");
+    expect(trace).toContain("ecs register-task-definition");
+    expect(trace).toContain("ecs update-service");
+    expect(payload.containerDefinitions[0].command).toEqual(["mementos-deploy"]);
+  });
+
   test("a satisfied prerequisite preserves registration, rollout, and digest readback", async () => {
     const result = await runDeploy(["mementos-deploy"]);
     const trace = readFileSync(result.trace, "utf8");

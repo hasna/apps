@@ -140,15 +140,20 @@ preflight_service() {
   command_json="$(jq -c --arg container "$WEB_CONTAINER" \
     '[.taskDefinition.containerDefinitions[]? | select(.name == $container) | (.command // [])][0] // []' \
     "$LIVE_TASK_DEFINITION_JSON")"
-  # The deploy lane owns two command states. ["mementos-deploy"] marks task
-  # definitions this lane registered (every revision carries the marker).
-  # ["mementos-serve"] is the pre-lane legacy baseline (nested-lane/Terraform
-  # era, and the image's default CMD) — accepting it is what makes the very
-  # first deploy bootstrappable: the gate must not demand the marker state
-  # only the deploy itself can create (O15-05020). Any other command means the
-  # service is not this lane's web surface, and the deploy refuses.
+  # The deploy lane owns the command states below. ["mementos-deploy"] marks
+  # task definitions this lane registered (every revision carries the marker).
+  # ["mementos-serve"] and [] are the pre-lane legacy baselines (nested-lane/
+  # Terraform era): the live task definition carries NO command override
+  # (measured: mementos-prod:29 command=null), and a null/absent command runs
+  # the image's default CMD, which is ["mementos-serve"]. Accepting those is
+  # what makes the very first deploy bootstrappable: the gate must not demand
+  # the marker state only the deploy itself can create (O15-05020). Any other
+  # command means the service is not this lane's web surface, and the deploy
+  # refuses.
   if [[ "$command_count" != "1" ]] \
-    || { [[ "$command_json" != '["mementos-deploy"]' ]] && [[ "$command_json" != '["mementos-serve"]' ]]; }; then
+    || { [[ "$command_json" != '["mementos-deploy"]' ]] \
+      && [[ "$command_json" != '["mementos-serve"]' ]] \
+      && [[ "$command_json" != '[]' ]]; }; then
     fail "automated deploy prerequisite unmet: stable ${LIVE_TASK_DEFINITION} does not run a deploy-lane-managed command (command=${command_json}); refusing before image build, task-definition registration, or service update"
   fi
 }
