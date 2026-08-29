@@ -7,6 +7,7 @@ describe("banking CLI scaffold", () => {
   });
 
   test("version exits successfully without help output", async () => {
+    const pkg = (await Bun.file(new URL("../package.json", import.meta.url)).json()) as { version: string };
     const originalLog = console.log;
     let output = "";
     console.log = (...args: unknown[]) => {
@@ -19,7 +20,9 @@ describe("banking CLI scaffold", () => {
       console.log = originalLog;
     }
 
-    expect(output).toBe("0.0.90.0.9");
+    // Regression O15-03913: --version must report the package.json version,
+    // never a stale hardcoded constant (was "0.0.9" while package.json was 0.0.10).
+    expect(output).toBe(`${pkg.version}${pkg.version}`);
     expect(output).not.toContain("Usage:");
   });
 

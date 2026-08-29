@@ -12,8 +12,7 @@ import {
   type PaymentRail,
   type ProviderId,
 } from "../index.ts";
-
-const VERSION = "0.0.9";
+import { VERSION } from "../version.ts";
 
 export type McpToolStatus = "implemented" | "provider_backed_pending" | "admin_gated";
 

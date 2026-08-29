@@ -17,8 +17,7 @@ import {
   type ProviderEnvironment,
   type ProviderId,
 } from "../index.ts";
-
-const VERSION = "0.0.9";
+import { VERSION } from "../version.ts";
 
 interface ParsedArgs {
   readonly positionals: readonly string[];
