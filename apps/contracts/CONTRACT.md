@@ -121,7 +121,8 @@ Rules:
   `$HOME/.hasna/cloud/<name>.env` or from a config `-cloud.env` alias reports
   `deprecated: true`, names its granular tier (`legacy-cloud` / `config-legacy`)
   in `apiKeyTier`, emits a once-per-source deprecation notice naming the
-  primary `~/.hasna/fleet-env/<name>.env` target and the removal deadline, and
+  removal deadline and the sanctioned replacement route (the
+  `HASNA_<NAME>_API_KEY_REF` secrets-vault pointer or the override key), and
   carries the deadline in its `warning`. `resolveClientTransport()`'s
   `transportSource` / `apiKeySource` / `apiKeyTier` fields let a doctor see
   exactly which source supplied the key, always value-free.

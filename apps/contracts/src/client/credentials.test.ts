@@ -316,11 +316,14 @@ describe("the fleet-env migration: primary order and the NOISY legacy-cloud fall
     expect(resolved!.apiKey).toBe("legacy-key");
     expect(resolved!.tier).toBe("legacy-cloud");
     expect(resolved!.deprecated).toBe(true);
-    // The notice names the source, the primary target, and the deadline.
+    // The notice names the source and the deadline, and directs to the
+    // sanctioned route (the secrets-vault REF pointer) — never the
+    // unsanctioned ~/.hasna/fleet-env home.
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain(join(home, ".hasna", "cloud", "accounts.env"));
-    expect(messages[0]).toContain(join(home, ".hasna", "fleet-env", "accounts.env"));
     expect(messages[0]).toContain("2026-10-01");
+    expect(messages[0]).toContain("HASNA_ACCOUNTS_API_KEY_REF");
+    expect(messages[0]).not.toContain("fleet-env");
     // The resolution's warning also names the deadline, never the key.
     expect(resolved!.warning).toContain("2026-10-01");
     expect(resolved!.warning).not.toContain("legacy-key");
@@ -445,7 +448,7 @@ describe("tier 4 — the legacy process env is a fallback, not a default", () =>
     expect(resolved!.deprecated).toBe(true);
   });
 
-  test("the deprecation names the env key AND the disk path that replaces it", () => {
+  test("the deprecation names the env key AND the sanctioned route that replaces it", () => {
     const home = makeHome();
     const messages: string[] = [];
     resolveCredential(
@@ -456,7 +459,8 @@ describe("tier 4 — the legacy process env is a fallback, not a default", () =>
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("HASNA_ACCOUNTS_API_KEY");
-    expect(messages[0]).toContain(join(home, ".hasna", "fleet-env", "accounts.env"));
+    expect(messages[0]).toContain("HASNA_ACCOUNTS_API_KEY_REF");
+    expect(messages[0]).not.toContain("fleet-env");
     expect(messages[0]).not.toContain(STALE_ENV_KEY);
   });
 
