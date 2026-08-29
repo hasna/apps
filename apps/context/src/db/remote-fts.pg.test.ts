@@ -23,6 +23,9 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PgAdapterAsync, buildPrefixTsQuery } from "./remote-storage.js";
 import {
   resolveLibraryBySlugOnBackend,
@@ -30,6 +33,10 @@ import {
   semanticSearchOnBackend,
 } from "./backend-search.js";
 import { runStorageMigrations } from "./storage-sync.js";
+import { handleRequest } from "../server/index.js";
+import { buildServer } from "../mcp/index.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 const PG_URL = process.env["HASNA_CONTEXT_TEST_DATABASE_URL"] ?? process.env["CONTEXT_TEST_PG_URL"];
 
@@ -353,6 +360,105 @@ describe.skipIf(!PG_URL)("postgres full-text search parity", () => {
     } finally {
       if (prevUrl === undefined) delete process.env["HASNA_CONTEXT_DATABASE_URL"];
       else process.env["HASNA_CONTEXT_DATABASE_URL"] = prevUrl;
+    }
+  });
+
+  test("HTTP call site: GET /api/search?library= resolves a REMOTE-ONLY library through the selected backend", async () => {
+    // Release-review P1 guard (final): the server route (server/index.ts
+    // /api/search) must resolve the library through the SELECTED backend and
+    // dispatch the FTS query against that same backend. Reverting the route
+    // to local-SQLite-first resolution must fail this test — a library that
+    // exists only on the hosted backend would raise LIBRARY_NOT_FOUND before
+    // the hosted query could run.
+    const prevUrl = process.env["HASNA_CONTEXT_DATABASE_URL"];
+    const prevToken = process.env["CONTEXT_HTTP_TOKEN"];
+    const prevHasnaToken = process.env["HASNA_CONTEXT_HTTP_TOKEN"];
+    const prevAuth = process.env["CONTEXT_REQUIRE_HTTP_AUTH"];
+    process.env["HASNA_CONTEXT_DATABASE_URL"] = PG_URL!;
+    delete process.env["CONTEXT_HTTP_TOKEN"];
+    delete process.env["HASNA_CONTEXT_HTTP_TOKEN"];
+    delete process.env["CONTEXT_REQUIRE_HTTP_AUTH"];
+    try {
+      const libId = await insertLibrary({ name: "HTTP Remote Only", slug: "http-remote-only-lib" });
+      await insertChunk({
+        libraryId: libId,
+        url: "https://example.com/http-remote-only",
+        title: "HTTP Remote Only",
+        content: "http-remote-only-content",
+      });
+
+      const res = await handleRequest(
+        new Request("http://context.test/api/search?q=http-remote-only&library=http-remote-only-lib&mode=fts"),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { results?: Array<{ url?: string; content?: string }> };
+      expect(body.results).toHaveLength(1);
+      expect(body.results![0]!.url).toBe("https://example.com/http-remote-only");
+      expect(body.results![0]!.content).toContain("http-remote-only-content");
+    } finally {
+      if (prevUrl === undefined) delete process.env["HASNA_CONTEXT_DATABASE_URL"];
+      else process.env["HASNA_CONTEXT_DATABASE_URL"] = prevUrl;
+      if (prevToken === undefined) delete process.env["CONTEXT_HTTP_TOKEN"];
+      else process.env["CONTEXT_HTTP_TOKEN"] = prevToken;
+      if (prevHasnaToken === undefined) delete process.env["HASNA_CONTEXT_HTTP_TOKEN"];
+      else process.env["HASNA_CONTEXT_HTTP_TOKEN"] = prevHasnaToken;
+      if (prevAuth === undefined) delete process.env["CONTEXT_REQUIRE_HTTP_AUTH"];
+      else process.env["CONTEXT_REQUIRE_HTTP_AUTH"] = prevAuth;
+    }
+  });
+
+  test("MCP call site: query-docs resolves a REMOTE-ONLY library through the selected backend", async () => {
+    // Release-review P1 guard (final): the MCP query-docs tool
+    // (mcp/library-tools.ts) must resolve the reference through the SELECTED
+    // backend (including /context/<slug> parsing) and dispatch the FTS query
+    // against that same backend. Reverting the tool to local-SQLite-first
+    // resolution must fail this test.
+    const prevUrl = process.env["HASNA_CONTEXT_DATABASE_URL"];
+    const prevDataDir = process.env["HASNA_CONTEXT_DATA_DIR"];
+    const prevEmbed = process.env["CONTEXT_EMBEDDING_PROVIDER"];
+    process.env["HASNA_CONTEXT_DATABASE_URL"] = PG_URL!;
+    // The handler's getLinks() touches the LOCAL links store; point the local
+    // data home at a temp dir so this suite never writes the machine's store.
+    process.env["HASNA_CONTEXT_DATA_DIR"] = mkdtempSync(join(tmpdir(), "context-fts-mcp-"));
+    delete process.env["CONTEXT_EMBEDDING_PROVIDER"];
+    try {
+      const libId = await insertLibrary({ name: "MCP Remote Only", slug: "mcp-remote-only-lib", version: "2.4.1" });
+      await insertChunk({
+        libraryId: libId,
+        url: "https://example.com/mcp-remote-only",
+        title: "MCP Remote Only",
+        content: "mcp-remote-only-content",
+      });
+      // The handler short-circuits on chunk_count === 0, so reflect the
+      // inserted chunk in the count the way the sync upsert would.
+      await remote.run("UPDATE libraries SET chunk_count = 1 WHERE id = $1", libId);
+
+      const server = buildServer();
+      const client = new Client({ name: "release-review-test-client", version: "0.0.0" });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      // Connect both ends in parallel: Client.connect() awaits the initialize
+      // response, which the server can only produce once it is connected too.
+      await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+      try {
+        const result = await client.callTool({
+          name: "query-docs",
+          arguments: { context7CompatibleLibraryID: "/context/mcp-remote-only-lib", topic: "mcp-remote-only" },
+        });
+        const content = result.content ?? [];
+        const text = content.map((c) => ("text" in c ? String(c.text) : "")).join("\n");
+        expect(text).toContain("MCP Remote Only");
+        expect(text).toContain("https://example.com/mcp-remote-only");
+        expect(text).toContain("mcp-remote-only-content");
+      } finally {
+        await client.close();
+      }
+    } finally {
+      if (prevUrl === undefined) delete process.env["HASNA_CONTEXT_DATABASE_URL"];
+      else process.env["HASNA_CONTEXT_DATABASE_URL"] = prevUrl;
+      if (prevDataDir === undefined) delete process.env["HASNA_CONTEXT_DATA_DIR"];
+      else process.env["HASNA_CONTEXT_DATA_DIR"] = prevDataDir;
+      if (prevEmbed === undefined) delete process.env["CONTEXT_EMBEDDING_PROVIDER"];
+      else process.env["CONTEXT_EMBEDDING_PROVIDER"] = prevEmbed;
     }
   });
 });
