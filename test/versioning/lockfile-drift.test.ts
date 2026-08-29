@@ -270,14 +270,15 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     }
   });
 
-  test("the members without an own lockfile are the finding's 8", () => {
+  test("the members without an own lockfile are the finding's 7", () => {
+    // telephony gained a hermetic bun.lock in #1432 (O15-04773); the expected
+    // list tracks main's committed lockfile state.
     expect(noOwnLockMembers(root)).toEqual([
       "agency",
       "connectors",
       "consolidations",
       "paths",
       "statusline",
-      "telephony",
       "test-guard",
       "testers",
     ]);
