@@ -1072,6 +1072,48 @@ describe("adoptWorktrees", () => {
       created.lease.lease_id,
     );
   });
+
+  // PLA8-00242 — `adopt --apply` on a duplicate checkout: a second working
+  // directory for the same logical worktree (same repo, machine, task name,
+  // run and base — the skills-namespace copy found by the stale sweep) used to
+  // die with a raw sqlite error — UNIQUE constraint failed:
+  // worktree_leases.repo_id, worktree_leases.machine_id,
+  // worktree_leases.task_id, worktree_leases.run_id, worktree_leases.base_ref.
+  // The owning reconciliation moves the existing lease onto the adopted path:
+  // one lease per logical worktree, never two rows and never a leaked
+  // constraint.
+  test("--apply reconciles a duplicate checkout colliding on the lease key", () => {
+    const { root, clonePath, repoName } = seed();
+    const owned = addWorktree({ repo: repoName, task: "dup-checkout" });
+
+    // The duplicate: the same repo and the same task/dir name, but a second
+    // working directory under a different namespace path (the layout violation
+    // the stale sweep measured).
+    const dupDir = join(root, "other-namespace", "dup-checkout");
+    mkdirSync(dirname(dupDir), { recursive: true });
+    git(clonePath, ["worktree", "add", "-b", "dup-copy-branch", dupDir]);
+
+    const result = adoptWorktrees({ path: dupDir, apply: true });
+    expect(result.applied).toBe(true);
+    expect(result.adopted).toHaveLength(1);
+    expect(result.adopted[0]!.lease_id).toBe(owned.lease.lease_id);
+
+    // One lease row for the logical worktree, moved onto the adopted path and
+    // still claimed.
+    const rows = getDb()
+      .query("SELECT lease_id, worktree_path, status FROM worktree_leases WHERE worktree_path IN (?, ?)")
+      .all(owned.path, dupDir) as { lease_id: string; worktree_path: string; status: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.lease_id).toBe(owned.lease.lease_id);
+    expect(rows[0]!.worktree_path).toBe(dupDir);
+    expect(rows[0]!.status).toBe("claimed");
+
+    // `repos worktree list` sees the lease on the adopted path and none on the
+    // original path.
+    const listed = listWorktrees({ now: new Date() });
+    expect(listed.entries.find((entry) => entry.path === dupDir)?.lease_id).toBe(owned.lease.lease_id);
+    expect(listed.entries.find((entry) => entry.path === owned.path)?.lease_id).toBeNull();
+  });
 });
 
 describe("releaseWorktree", () => {
