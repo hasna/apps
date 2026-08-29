@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 
@@ -18,7 +18,11 @@ import { describe, expect, test } from "bun:test";
 // apps/mementos/scripts/ -> repository root
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const rootWorkflowPath = new URL("../../../.github/workflows/deploy-mementos.yml", import.meta.url);
-const nestedWorkflowPath = new URL("../../.github/workflows/deploy.yml", import.meta.url);
+// One level up from scripts/ is apps/mementos/.github/workflows/deploy.yml.
+// (Review finding: a "../../" form resolves to apps/.github/workflows/ and
+// makes this assertion vacuous — the dead nested lane would pass it.)
+const nestedWorkflowPath = new URL("../.github/workflows/deploy.yml", import.meta.url);
+const nestedWorkflowsDir = new URL("../.github/workflows/", import.meta.url);
 const deployScriptPath = new URL("../scripts/production-deploy.sh", import.meta.url);
 
 type WorkflowStep = {
@@ -89,11 +93,23 @@ describe("mementos deploy lane contract", () => {
   test("the deploy lane is discoverable by GitHub Actions (repository root, never nested)", () => {
     // GitHub Actions only executes workflows under <repo>/.github/workflows/.
     // The nested file this regression replaces was dead code that read as a
-    // live lane ("deploy auto-runs on merge") while never running.
+    // live lane ("deploy auto-runs on merge") while never running. Assert the
+    // whole member workflows directory carries no deploy*.yml, so a re-added
+    // nested lane under any name fails this test — not only the exact file
+    // that was deleted.
     expect(
       existsSync(nestedWorkflowPath),
       "the dead nested apps/mementos/.github/workflows/deploy.yml must be removed so it cannot be mistaken for a live lane",
     ).toBe(false);
+    if (existsSync(nestedWorkflowsDir)) {
+      const nestedDeployLanes = readdirSync(nestedWorkflowsDir).filter(
+        (f) => f.startsWith("deploy") && f.endsWith(".yml"),
+      );
+      expect(
+        nestedDeployLanes,
+        "no deploy workflow may live under apps/mementos/.github/workflows/ — GitHub Actions never executes it",
+      ).toEqual([]);
+    }
   });
 
   test("is triggered by a successful ci run on main (member-standard gate) and by manual dispatch", () => {
