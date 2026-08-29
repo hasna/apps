@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import packageJson from "../package.json";
 
 const root = join(import.meta.dir, "..");
@@ -43,7 +44,7 @@ describe("server image build context", () => {
     expect(dockerfile).not.toContain("# syntax=docker/dockerfile:");
     expect(dockerfile).toContain('test "$(bun --version)" = "1.3.14"');
     expect(dockerfile).toContain("apk info -vv | grep -q '^musl-1.2.5-r12 - '");
-    expect(dockerfile).toContain("ARG OPENSSL_VERSION=3.5.7-r0");
+    expect(dockerfile).toContain("ARG OPENSSL_VERSION=3.5.8-r0");
     expect(dockerfile).toContain('"libcrypto3=${OPENSSL_VERSION}"');
     expect(dockerfile).toContain('"libssl3=${OPENSSL_VERSION}"');
     expect(dockerfile).toContain('^libcrypto3-${OPENSSL_VERSION} - ');
@@ -54,6 +55,56 @@ describe("server image build context", () => {
     expect(dockerfile).not.toContain("dpkg-query");
     expect(dockerfile).not.toMatch(/^FROM(?:\s+--platform=\S+)?\s+oven\/bun:(?:1|latest)(?:\s|$)/m);
   });
+
+  // Regression guard for O15-04975 (2026-08-29): the exact apk pins in the
+  // base stage became unsatisfiable when the alpine v3.22 main repo dropped
+  // libcrypto3/libssl3 3.5.7-r0 in favour of 3.5.8-r0, blocking every todos
+  // deploy at `docker build` (apk exit 4). The static assertions above only
+  // check that the pins EXIST in the Dockerfile — they cannot see a pin going
+  // stale. This check resolves the live v3.22 index for both supported arches
+  // (linux/arm64, the platform the buildspec builds, and linux/amd64, the
+  // oss-fleet-prod ECS platform) and fails in CI the moment a pinned revision
+  // is no longer served, before a deploy can block on it. A fetch failure
+  // fails the test deliberately: an unresolvable index is exactly the
+  // condition that broke deploys. Same precedent as the emails base-stage
+  // satisfiability test landed in hasna/apps#1450.
+  test("pins OpenSSL revisions the alpine v3.22 repos still serve on both supported arches", async () => {
+    const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
+    const opensslVersion = dockerfile.match(/ARG OPENSSL_VERSION=([0-9][^ \r\n]*)/)?.[1];
+    expect(opensslVersion, "Dockerfile must declare an exact OPENSSL_VERSION ARG").toBeTruthy();
+
+    const baseStage = dockerfile.split("FROM ${BUN_IMAGE} AS base")[1]!;
+    expect(baseStage).toContain('"libcrypto3=${OPENSSL_VERSION}"');
+    expect(baseStage).toContain('"libssl3=${OPENSSL_VERSION}"');
+
+    for (const pkg of ["libcrypto3", "libssl3"] as const) {
+      for (const arch of ["aarch64", "x86_64"] as const) {
+        const url = `https://dl-cdn.alpinelinux.org/alpine/v3.22/main/${arch}/APKINDEX.tar.gz`;
+        const response = await fetch(url);
+        expect(
+          response.ok,
+          `could not resolve ${url} (HTTP ${response.status}) — the pinned ${pkg} cannot be verified satisfiable`,
+        ).toBeTrue();
+        const indexText = gunzipSync(
+          new Uint8Array(await response.arrayBuffer()),
+        ).toString("utf8");
+        const servedVersions = new Set<string>();
+        for (const block of indexText.split(/\n\n+/)) {
+          let name: string | null = null;
+          let version: string | null = null;
+          for (const line of block.split("\n")) {
+            if (line.startsWith("P:")) name = line.slice(2);
+            else if (line.startsWith("V:")) version = line.slice(2);
+          }
+          if (name === pkg && version) servedVersions.add(version);
+        }
+        expect(
+          servedVersions.has(opensslVersion!),
+          `${pkg}=${opensslVersion} is not served by alpine v3.22/${arch} (served: ${[...servedVersions].join(", ")}) — apk add will be unsatisfiable and deploys will block`,
+        ).toBeTrue();
+      }
+    }
+  }, 60_000);
 
   test("preserves bash-backed runtime behavior without adding absent host tools", () => {
     const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
@@ -113,8 +164,8 @@ describe("server image build context", () => {
     expect(buildspec).toContain("test -x /lib/ld-musl-aarch64.so.1");
     expect(buildspec).toContain("test ! -e /lib64/ld-linux-aarch64.so.1");
     expect(buildspec).toContain("openssl rand -hex 24");
-    expect(buildspec).toContain("^libcrypto3-3.5.7-r0 - ");
-    expect(buildspec).toContain("^libssl3-3.5.7-r0 - ");
+    expect(buildspec).toContain("^libcrypto3-3.5.8-r0 - ");
+    expect(buildspec).toContain("^libssl3-3.5.8-r0 - ");
     expect(buildspec).toContain("! command -v openssl");
     expect(buildspec).toContain("apk info -vv");
     expect(buildspec).toContain("container-sbom.cdx.json");

@@ -63,7 +63,7 @@ phases:
       - test "$(docker image inspect "${IMAGE}" --format '{{.Architecture}}')" = arm64
       - test "$(docker run --rm --entrypoint bun "${IMAGE}" --version)" = 1.3.14
       - test "$(docker run --rm --entrypoint bun "${IMAGE}" dist/server/index.js --version)" = "${TODOS_PACKAGE_VERSION}"
-      - docker run --rm --entrypoint sh "${IMAGE}" -ec 'apk info -e musl; apk info -vv | grep -q "^libcrypto3-3.5.7-r0 - "; apk info -vv | grep -q "^libssl3-3.5.7-r0 - "; test -x /lib/ld-musl-aarch64.so.1; test ! -e /lib/ld-linux-aarch64.so.1; test ! -e /lib64/ld-linux-aarch64.so.1; apk info -e bash; ! apk info -e glibc; ! apk info -e perl; ! apk info -e sqlite-libs; ! apk info -e openssl; ! command -v openssl; ! command -v git; ! command -v tmux'
+      - docker run --rm --entrypoint sh "${IMAGE}" -ec 'apk info -e musl; apk info -vv | grep -q "^libcrypto3-3.5.8-r0 - "; apk info -vv | grep -q "^libssl3-3.5.8-r0 - "; test -x /lib/ld-musl-aarch64.so.1; test ! -e /lib/ld-linux-aarch64.so.1; test ! -e /lib64/ld-linux-aarch64.so.1; apk info -e bash; ! apk info -e glibc; ! apk info -e perl; ! apk info -e sqlite-libs; ! apk info -e openssl; ! command -v openssl; ! command -v git; ! command -v tmux'
       - docker run --rm --entrypoint sh "${IMAGE}" -ec 'test -f /app/bin/contracts-cli.js; test ! -e /app/node_modules; test ! -e /app/package.json; test ! -e /app/bun.lock; ! find /app -type f \( -name package.json -o -name bun.lock -o -name bun.lockb \) -print -quit | grep -q .'
       - docker run --rm --entrypoint sh "${IMAGE}" -c 'apk info -vv | sort' > container-apk-inventory.txt
       - docker image inspect "${IMAGE}" > container-oci-inspect.json
