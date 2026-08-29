@@ -133,6 +133,17 @@ describe("@hasna/paths resolver adoption — legacy default must never become in
     }
   });
 
+  test("empty HASNA_TREASURY_HOME falls through to TREASURY_HOME (matches postinstall semantics)", () => {
+    const env = fakeHomeEnv({ HASNA_TREASURY_HOME: "", TREASURY_HOME: "/tmp/treasury-alias-empty-primary" });
+    try {
+      expect(exactTreasuryHome(env)).toBe("/tmp/treasury-alias-empty-primary");
+      expect(getTreasuryAppHome(env)).toBe("/tmp/treasury-alias-empty-primary");
+      expect(resolveDbPath(env)).toBe(join("/tmp/treasury-alias-empty-primary", "treasury.db"));
+    } finally {
+      rmHome(env);
+    }
+  });
+
   test("HASNA_DATA_HOME data-kind override adopts the resolver home", () => {
     const env = fakeHomeEnv({ HASNA_DATA_HOME: "/tmp/data-home" });
     try {

@@ -66,9 +66,16 @@ export function adoptResolverTreasuryHome(
   return existsSync(join(resolved, `${APP}.db`));
 }
 
-/** The exact-app override root, when set: `HASNA_TREASURY_HOME` / `TREASURY_HOME`. Wins unconditionally. */
+/**
+ * The exact-app override root, when set: `HASNA_TREASURY_HOME` / `TREASURY_HOME`.
+ * Wins unconditionally when non-empty. An EMPTY primary override is treated as
+ * unset and falls through to the legacy alias — the same semantics the
+ * install-time postinstall uses, so the runtime and postinstall always resolve
+ * the same effective home (an empty string must never shadow the alias and
+ * then silently drop to the default).
+ */
 export function exactTreasuryHome(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const override = env["HASNA_TREASURY_HOME"] ?? env["TREASURY_HOME"];
+  const override = env["HASNA_TREASURY_HOME"] || env["TREASURY_HOME"];
   return override && override.trim() ? override.trim() : undefined;
 }
 
