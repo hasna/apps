@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- Republish after the 0.1.4 registry unpublish (2026-08-28): 0.1.4 is blocked by npm's 72-hour window, so the reviewed content ships as 0.1.5. Content identical to the reviewed 0.1.4 candidate (paths-resolver home migration, exact-home override precedence aligned with postinstall, consumed changeset dropped).
+- Republish after the 0.1.4 registry unpublish (2026-08-28T09:29:05Z): npm permanently refuses to republish a previously published version, so the reviewed content ships as 0.1.5 (first publish after npm's 24-hour full-unpublish cooldown). Content identical to the reviewed 0.1.4 candidate (paths-resolver home migration, exact-home override precedence aligned with postinstall, consumed changeset dropped).
 
 ## 0.1.4
 
