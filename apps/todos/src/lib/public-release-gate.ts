@@ -380,7 +380,7 @@ export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGa
   for (const required of ["dist", "dashboard/dist", "LICENSE", "README.md"]) {
     addIf(failures, !files.includes(required), "package-files", `files must include ${required}`);
   }
-  const allowedFiles = ["dist", "dashboard/dist", "LICENSE", "README.md"];
+  const allowedFiles = ["dist", "dashboard/dist", "postinstall.js", "LICENSE", "README.md"];
   for (const file of files) {
     addIf(failures, !allowedFiles.includes(file), "package-files-extra", `files must not include unbuilt or unreviewed path ${file}`);
   }
