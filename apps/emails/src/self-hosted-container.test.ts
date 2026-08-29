@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { gunzipSync } from "node:zlib";
 
 const dockerfile = readFileSync(resolve(import.meta.dir, "../Dockerfile"), "utf8");
 const runtimeSmoke = readFileSync(
@@ -74,15 +75,65 @@ describe("self-hosted container TLS contract", () => {
 
   test("applies and verifies exact reproducible OpenSSL security revisions in the shared base", () => {
     expect(baseStage).toContain("apk add --no-cache --upgrade");
-    expect(baseStage).toContain("'libcrypto3=3.5.7-r0'");
-    expect(baseStage).toContain("'libssl3=3.5.7-r0'");
-    expect(baseStage).toContain("apk info --installed 'libcrypto3=3.5.7-r0'");
-    expect(baseStage).toContain("apk info --installed 'libssl3=3.5.7-r0'");
+    expect(baseStage).toContain("'libcrypto3=3.5.8-r0'");
+    expect(baseStage).toContain("'libssl3=3.5.8-r0'");
+    expect(baseStage).toContain("apk info --installed 'libcrypto3=3.5.8-r0'");
+    expect(baseStage).toContain("apk info --installed 'libssl3=3.5.8-r0'");
     expect(baseStage).not.toContain("apk info --exists");
     expect(baseStage).not.toContain("libcrypto3>=");
     expect(baseStage).not.toContain("libssl3>=");
     expect(baseStage).not.toMatch(/\bapk upgrade\b/);
     expect(baseStage).not.toContain("rm -rf /var/cache/apk");
+  });
+
+  // Regression guard for O15-04946 (2026-08-29): the exact apk pins in the
+  // base stage became unsatisfiable when the alpine v3.22 main repo dropped
+  // libcrypto3/libssl3 3.5.7-r0 in favour of 3.5.8-r0, blocking every emails
+  // deploy at `docker build` (apk exit 4, "breaks: world[...]"). The static
+  // assertions above only check that the pins EXIST in the Dockerfile — they
+  // cannot see a pin going stale. This check resolves the live v3.22 index for
+  // both supported arches (linux/arm64 and linux/amd64, the two platforms the
+  // runtime smoke builds) and fails in CI the moment a pinned revision is no
+  // longer served, before a deploy can block on it. A fetch failure fails the
+  // test deliberately: an unresolvable index is exactly the condition that
+  // broke deploys.
+  test("pins OpenSSL revisions the alpine v3.22 repos still serve on both supported arches", async () => {
+    const pinned = new Map<string, string>();
+    for (const match of baseStage.matchAll(/'libcrypto3=([0-9][^']*)'/g)) {
+      pinned.set("libcrypto3", match[1]);
+    }
+    for (const match of baseStage.matchAll(/'libssl3=([0-9][^']*)'/g)) {
+      pinned.set("libssl3", match[1]);
+    }
+    expect([...pinned.keys()].sort()).toEqual(["libcrypto3", "libssl3"]);
+
+    for (const [pkg, version] of pinned) {
+      for (const arch of ["aarch64", "x86_64"] as const) {
+        const url = `https://dl-cdn.alpinelinux.org/alpine/v3.22/main/${arch}/APKINDEX.tar.gz`;
+        const response = await fetch(url);
+        expect(
+          response.ok,
+          `could not resolve ${url} (HTTP ${response.status}) — the pinned ${pkg} cannot be verified satisfiable`,
+        ).toBeTrue();
+        const indexText = gunzipSync(
+          new Uint8Array(await response.arrayBuffer()),
+        ).toString("utf8");
+        const servedVersions = new Set<string>();
+        for (const block of indexText.split(/\n\n+/)) {
+          let name: string | null = null;
+          let version: string | null = null;
+          for (const line of block.split("\n")) {
+            if (line.startsWith("P:")) name = line.slice(2);
+            else if (line.startsWith("V:")) version = line.slice(2);
+          }
+          if (name === pkg && version) servedVersions.add(version);
+        }
+        expect(
+          servedVersions.has(version),
+          `${pkg}=${version} is not served by alpine v3.22/${arch} (served: ${[...servedVersions].join(", ")}) — apk add will be unsatisfiable and deploys will block`,
+        ).toBeTrue();
+      }
+    }
   });
 
   test("publishes scanner inventory for exactly the OS libraries copied into scratch", () => {

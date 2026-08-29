@@ -6,10 +6,10 @@ ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa1897
 
 FROM ${BUN_IMAGE} AS base
 RUN apk add --no-cache --upgrade \
-      'libcrypto3=3.5.7-r0' \
-      'libssl3=3.5.7-r0' \
-    && apk info --installed 'libcrypto3=3.5.7-r0' \
-    && apk info --installed 'libssl3=3.5.7-r0'
+      'libcrypto3=3.5.8-r0' \
+      'libssl3=3.5.8-r0' \
+    && apk info --installed 'libcrypto3=3.5.8-r0' \
+    && apk info --installed 'libssl3=3.5.8-r0'
 
 FROM base AS dependencies
 WORKDIR /app
@@ -25,7 +25,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY --chown=bun:bun src ./src
 
-# The self-hosted runtime keeps its local SQLite store under the container HOME
+# The self-hosted runtime keeps its local database store under the container HOME
 # at /runtime/home/bun/.hasna/emails — the legacy data root, which stays the
 # effective data root of @hasna/paths resolution until the store is migrated to
 # the XDG data home or the operator sets HASNA_DATA_HOME. Nothing in the image

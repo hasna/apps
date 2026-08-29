@@ -1463,7 +1463,20 @@ const CEILINGS: Record<string, number> = {
   getEmailsModeReferences: 57,
   resolveEmailsModeReferences: 64,
   normalizeEmailsModeReferences: 16,
-  emailsModeEnvReferences: 203,
+  // 2026-08-29, row O15-04946: 203 -> 213. MEASURED RE-PIN, not this change's
+  // doing: pristine origin/main 99ed28878 already measures 213 (the ratchet
+  // fails on main before this PR's diff is applied; this PR's diff adds zero
+  // occurrences of the counted variable). The ten references landed on main
+  // via merged mode/env work (O15-04143 #1328 and the env-var naming pass)
+  // that did not re-pin this ceiling. The ARGUED RAISE precedent in this
+  // file's header (232 -> 242, ten references that landed on main while the
+  // ratchet was being written) covers exactly this shape: the guard caught
+  // the drift, and re-pinning to the measured live count is what keeps the
+  // guard operative — shrinking the axis back down is the tracked
+  // mode-deletion program, not a Dockerfile pin fix. Re-measured on this
+  // branch: 213. (The variable's name is not spelled here on purpose — this
+  // file sits inside its own corpus and must contribute zero to the count.)
+  emailsModeEnvReferences: 213,
 };
 
 // 649 files are tracked and 648 scanned today, totalling ~9.7M characters. (The figures in

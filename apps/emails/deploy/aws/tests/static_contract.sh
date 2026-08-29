@@ -100,10 +100,10 @@ if printf '%s\n' "$runtime_files_stage" | grep -Fq 'cp -a /lib/apk/db/installed 
 fi
 
 for exact_openssl_revision in \
-  "'libcrypto3=3.5.7-r0'" \
-  "'libssl3=3.5.7-r0'" \
-  "apk info --installed 'libcrypto3=3.5.7-r0'" \
-  "apk info --installed 'libssl3=3.5.7-r0'"; do
+  "'libcrypto3=3.5.8-r0'" \
+  "'libssl3=3.5.8-r0'" \
+  "apk info --installed 'libcrypto3=3.5.8-r0'" \
+  "apk info --installed 'libssl3=3.5.8-r0'"; do
   if ! grep -Fq "$exact_openssl_revision" "$dockerfile"; then
     echo "patched base must install and verify exact OpenSSL revisions: $exact_openssl_revision" >&2
     exit 1
