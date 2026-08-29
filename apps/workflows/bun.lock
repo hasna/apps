@@ -12,7 +12,7 @@
         "commander": "^13.1.0",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "latest",
         "@types/pg": "^8.15.6",
         "pg": "^8.16.3",
@@ -100,8 +100,7 @@
     "@cursor/sdk-win32-x64": ["@cursor/sdk-win32-x64@1.0.28", "", { "os": "win32", "cpu": "x64", "bin": { "rg": "bin/rg.exe" } }, "sha512-+9G30RcR+cDkQxiyFBfrNWSBkZJc19G9L7+bTl9PdiBI7FPCu1vCCdP4BBvntdCkFS9LwEX3iJyWJqEreFjNQg=="],
 
     "@fastify/busboy": ["@fastify/busboy@2.1.1", "", {}, "sha512-vBZP4NlzfOlerQTnba4aqZoMhE/a9HY7HRqoOPaETQcSQuWEIyZMHGfVu6w9wGtGK5fED5qRs2DteVCjOH60sA=="],
-
-    "@hasna/contracts": ["@hasna/contracts@0.14.1", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-aAh6st+k74Lk70rhkXTYyx4JILQHJFfAR88fgunc5tm3cF8jK772pqrFIL/cwp6b0++JzapTWFI87qsNn0dakA=="],
+    "@hasna/contracts": ["@hasna/contracts@0.14.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-JqSpwofTbqQGzFyaQvwpr+rhIVwBQTriW3BWdsOgpgD+BfSSBLr4R6OHQImjzQlilwsHo0U6doA7y8GuicfJ9w=="],
 
     "@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 

@@ -18,7 +18,7 @@
         "zod": "^3.24.4",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/better-sqlite3": "^7.6.13",
         "@types/bun": "^1.2.12",
         "@types/express": "^5.0.2",
@@ -66,8 +66,7 @@
     "@aws-sdk/xml-builder": ["@aws-sdk/xml-builder@3.972.38", "", { "dependencies": { "@smithy/types": "^4.16.1", "tslib": "^2.6.2" } }, "sha512-grf7mzfVxBS5AlsuTvBN7uDpzqohFww9fRPCO+EBSUdvtsYMcPSKdz54h/7XiscqNcUM1Ae1MF7JLHmiYYuzbQ=="],
 
     "@aws/lambda-invoke-store": ["@aws/lambda-invoke-store@0.3.0", "", {}, "sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ=="],
-
-    "@hasna/contracts": ["@hasna/contracts@0.14.1", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-aAh6st+k74Lk70rhkXTYyx4JILQHJFfAR88fgunc5tm3cF8jK772pqrFIL/cwp6b0++JzapTWFI87qsNn0dakA=="],
+    "@hasna/contracts": ["@hasna/contracts@0.14.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-JqSpwofTbqQGzFyaQvwpr+rhIVwBQTriW3BWdsOgpgD+BfSSBLr4R6OHQImjzQlilwsHo0U6doA7y8GuicfJ9w=="],
 
     "@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
 

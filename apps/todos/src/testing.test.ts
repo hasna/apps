@@ -107,7 +107,7 @@ describe("scrub coverage against the resolver", () => {
     // Negative control (hasna/apps#719 review P1): disk delivery of a fixture
     // key must happen only under a DELIBERATELY supplied HOME. A caller that
     // does not override HOME inherits the machine home through process.env and
-    // must never receive a write to ~/.hasna/cloud/todos.env — doing so would
+    // must never receive a write to ~/.hasna/fleet-env/todos.env — doing so would
     // replace the machine's configured credential with the fixture value.
     const machineFile = join(
       process.env.HOME ?? "/nonexistent",
@@ -145,7 +145,7 @@ describe("scrub coverage against the resolver", () => {
         HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
         HASNA_TODOS_API_KEY: fixtureKey,
       });
-      const written = readFileSync(join(home, ".hasna", "cloud", "todos.env"), "utf8");
+      const written = readFileSync(join(home, ".hasna", "fleet-env", "todos.env"), "utf8");
       expect(written).toContain(`HASNA_TODOS_API_KEY=${fixtureKey}`);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -158,7 +158,7 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
   // caller-side check (testing.ts, `if (overrides.HOME && ...)`) protects exactly
   // one route into a function that is EXPORTED, so a consumer writing
   // `deliverTodosApiKeyViaDisk(localTodosTestEnv({ ... }))` re-arms the incident
-  // that destroyed ~/.hasna/cloud/todos.env on station01 on 2026-08-21.
+  // that destroyed ~/.hasna/fleet-env/todos.env on station01 on 2026-08-21.
   //
   // These tests are hermetic BY CONSTRUCTION and that is deliberate: they never
   // nominate the operator's actual home as the refusal subject. `process.env.HOME`
@@ -174,7 +174,7 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
   function snapshotRealCredential(): { size: number; sha256: string } | null {
     const home = process.env.HOME;
     if (!home) return null;
-    const file = join(home, ".hasna", "cloud", "todos.env");
+    const file = join(home, ".hasna", "fleet-env", "todos.env");
     if (!existsSync(file)) return null;
     const bytes = readFileSync(file);
     // sha256, never the content: a failure message must not print a credential.
@@ -212,7 +212,7 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
 
       // A throw alone proves nothing about the filesystem: assert the write did
       // not happen before the throw.
-      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(existsSync(join(pretendHome, ".hasna", "fleet-env", "todos.env"))).toBe(false);
       expect(snapshotRealCredential()).toEqual(realBefore);
     } finally {
       rmSync(pretendHome, { recursive: true, force: true });
@@ -231,7 +231,7 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
           }),
         ).toThrow(/TODOS_FIXTURE_HOME_IS_MACHINE_HOME/);
       });
-      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(existsSync(join(pretendHome, ".hasna", "fleet-env", "todos.env"))).toBe(false);
       expect(snapshotRealCredential()).toEqual(realBefore);
     } finally {
       rmSync(pretendHome, { recursive: true, force: true });
@@ -250,7 +250,7 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
           deliverTodosApiKeyViaDisk({ HOME: `${pretendHome}/`, HASNA_TODOS_API_KEY: SENTINEL }),
         ).toThrow(/TODOS_FIXTURE_HOME_IS_MACHINE_HOME/);
       });
-      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(existsSync(join(pretendHome, ".hasna", "fleet-env", "todos.env"))).toBe(false);
       expect(snapshotRealCredential()).toEqual(realBefore);
     } finally {
       rmSync(pretendHome, { recursive: true, force: true });
@@ -269,7 +269,7 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
           deliverTodosApiKeyViaDisk({ HOME: link, HASNA_TODOS_API_KEY: SENTINEL }),
         ).toThrow(/TODOS_FIXTURE_HOME_IS_MACHINE_HOME/);
       });
-      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(existsSync(join(pretendHome, ".hasna", "fleet-env", "todos.env"))).toBe(false);
       expect(snapshotRealCredential()).toEqual(realBefore);
     } finally {
       rmSync(linkRoot, { recursive: true, force: true });
@@ -294,10 +294,10 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
         expect(returned.HASNA_TODOS_API_KEY).toBe(SENTINEL);
       });
 
-      const written = readFileSync(join(fixtureHome, ".hasna", "cloud", "todos.env"), "utf8");
+      const written = readFileSync(join(fixtureHome, ".hasna", "fleet-env", "todos.env"), "utf8");
       expect(written).toBe(`HASNA_TODOS_API_KEY=${SENTINEL}\n`);
       // and nowhere else
-      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(existsSync(join(pretendHome, ".hasna", "fleet-env", "todos.env"))).toBe(false);
       expect(snapshotRealCredential()).toEqual(realBefore);
     } finally {
       rmSync(fixtureHome, { recursive: true, force: true });
@@ -309,12 +309,12 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
     const pretendHome = scratch("pretend-machine-home");
     const fixtureHome = scratch("fixture-home-existing");
     try {
-      mkdirSync(join(fixtureHome, ".hasna", "cloud"), { recursive: true });
+      mkdirSync(join(fixtureHome, ".hasna", "fleet-env"), { recursive: true });
       withPretendMachineHome(pretendHome, () => {
         deliverTodosApiKeyViaDisk({ HOME: fixtureHome, HASNA_TODOS_API_KEY: "first-sentinel" });
         deliverTodosApiKeyViaDisk({ HOME: fixtureHome, HASNA_TODOS_API_KEY: SENTINEL });
       });
-      const written = readFileSync(join(fixtureHome, ".hasna", "cloud", "todos.env"), "utf8");
+      const written = readFileSync(join(fixtureHome, ".hasna", "fleet-env", "todos.env"), "utf8");
       expect(written).toBe(`HASNA_TODOS_API_KEY=${SENTINEL}\n`);
     } finally {
       rmSync(fixtureHome, { recursive: true, force: true });
@@ -332,7 +332,7 @@ describe("deliverTodosApiKeyViaDisk refuses the real machine home", () => {
         expect(() => deliverTodosApiKeyViaDisk({ HASNA_TODOS_API_KEY: SENTINEL })).not.toThrow();
         expect(() => deliverTodosApiKeyViaDisk({ HOME: pretendHome })).not.toThrow();
       });
-      expect(existsSync(join(pretendHome, ".hasna", "cloud", "todos.env"))).toBe(false);
+      expect(existsSync(join(pretendHome, ".hasna", "fleet-env", "todos.env"))).toBe(false);
     } finally {
       rmSync(pretendHome, { recursive: true, force: true });
     }

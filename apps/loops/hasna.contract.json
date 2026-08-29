@@ -4,7 +4,7 @@
   "name": "loops",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
+  "kitVersion": "0.14.2",
   "description": "Persistent loop and workflow runner for deterministic commands and headless AI coding agents. CLI + MCP + HTTP API (loops-serve) + generated SDK. The only technical switch is the server data backend: sqlite (zero-config on-box default) or postgresql, selected by HASNA_LOOPS_DATABASE_URL. Clients use a local SQLite file or the server HTTP API. Local state lives at the effective Loops data home (~/.hasna/loops by default, resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set).",
   "hosting": [
     "user-hosted"

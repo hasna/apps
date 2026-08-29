@@ -3,7 +3,7 @@
   "name": "workflows",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
+  "kitVersion": "0.14.2",
   "description": "Universal graph workflow app: graph language (start/step/decision/while/end), three-table run store, session WAL, claims/leases daemon, four lane adapters (claude, codex, cursor, grok), and a full CLI on four surfaces (CLI, MCP, serve, SDK). Local state lives at the effective workflows data home (~/.hasna/workflows by default, resolved via @hasna/paths; the XDG data home is adopted once the store is migrated there or HASNA_DATA_HOME is set).",
   "bins": [
     "workflows",
