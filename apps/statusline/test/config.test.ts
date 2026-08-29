@@ -22,6 +22,10 @@ describe("config", () => {
     expect(cfg.separator).toBe(" · ");
   });
 
+  test("cache-rate is default-on", () => {
+    expect(defaultConfig().segments).toContain("cache-rate");
+  });
+
   test("save then load round-trips", () => {
     const cfg = loadConfig();
     cfg.segments = ["machine", "cost"];
