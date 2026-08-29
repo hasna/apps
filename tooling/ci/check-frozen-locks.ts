@@ -53,14 +53,19 @@
  *   cadence. Probe classification (the fleet registry-truth pattern): 200
  *   (public) and 404 (private or never published) are evidence; a 404 means
  *   there is NO public published max to compare against, so the check is NOT
- *   APPLICABLE for that package and stays silent. A 200 with an EMPTY
- *   packument (yanked package — no `latest` dist-tag) is the same evidence
- *   class: the registry answered, there is no published max to compare
- *   against, NOT APPLICABLE, silent (O15-04943). Only genuine registry
- *   unreachability (non-200/404 after one retry) is a REFUSAL — the runner
- *   exits 2 and never prints the clean line when a probe was skipped
- *   (H8-00510: the pre-fix probe collapsed 404 into unreachable, so private
- *   packages refused the gate on every unauthenticated runner run).
+ *   APPLICABLE for that package and stays silent. A 200 whose abbreviated
+ *   packument carries NO versions is the same NOT-APPLICABLE class — the
+ *   fully-unpublished/yanked state, measured 2026-08-29 on @hasna/context:
+ *   the registry answers HTTP 200 with {"name":"@hasna/context","modified":...}
+ *   (all 54 versions including 0.1.54 removed; `npm view` reports E404
+ *   "Unpublished on ..."; O15-04943), and the pre-fix probe classified that
+ *   200 as unreachable, refusing the gate on every run from the unpublication
+ *   forward. Only genuine registry unreachability (non-200/404 after one
+ *   retry, or a 200 whose doc is unusable: versions present but no parseable
+ *   latest) is a REFUSAL — the runner exits 2 and never prints the clean
+ *   line when a probe was skipped (H8-00510: the pre-fix probe collapsed 404
+ *   into unreachable, so private packages refused the gate on every
+ *   unauthenticated runner run).
  *
  * EXCEPTIONS — deliberate and attributable. Each names a manifest pin to a
  * version that is NOT on the npm registry; the owning release lane must publish
@@ -190,23 +195,20 @@ const UNRESOLVABLE_PINS = new Set<string>([
  * npm published-max probe result, injectable so the self-test stays offline.
  *
  * Three states, classified the fleet way (hasna-internal/harnesses
- * publish-scope.yml registry-truth job): 200 (public) and 404 (private or
- * never published) are EVIDENCE; anything else — 429/403/5xx or a connection
- * error after one retry — is UNKNOWN and refuses the gate. A 404 is a VALID
- * answer meaning "no public published max to compare against": the check is
- * NOT APPLICABLE for that package, so RULE 3/5 skip it silently instead of
- * failing the gate. The pre-fix probe (`npm view <pkg> version`) collapsed
- * 404 and unreachable into one null, so every private @hasna/* package on
- * the unauthenticated runner refused the gate for 43h+ (H8-00510).
- *
- * The YANKED shape is the same doctrine applied to the other evidence status:
- * a 200 response whose packument carries no parseable `latest` dist-tag (the
- * package exists on npm but every version is unpublished) is EVIDENCE the
- * registry answered — there is no public published max to compare against, so
- * it classifies as NOT-PUBLISHED and stays silent. The pre-fix probe
- * classified it as UNREACHABLE, so one yanked @hasna/* package anywhere in
- * the lockfile refused the gate with exit 2 on a reachable registry
- * (O15-04943).
+ * publish-scope.yml registry-truth job): 200 with a parseable latest (public)
+ * and 404 (private or never published) are EVIDENCE; a 200 whose packument
+ * has NO versions is ALSO evidence of not-published (the fully-unpublished
+ * /yanked state, measured @hasna/context 2026-08-29 — the registry answered
+ * authoritatively that no published version exists; O15-04943). Anything
+ * else — 429/403/5xx, a connection error after one retry, or a 200 whose doc
+ * is unusable (versions present but no parseable latest, or a doc that is
+ * not this package's packument) — is UNKNOWN and refuses the gate. A
+ * not-published result is a VALID answer meaning "no public published max to
+ * compare against": the check is NOT APPLICABLE for that package, so RULE 3/5
+ * skip it silently instead of failing the gate. The pre-fix probe (`npm view
+ * <pkg> version`) collapsed 404 and unreachable into one null, so every
+ * private @hasna/* package on the unauthenticated runner refused the gate for
+ * 43h+ (H8-00510).
  */
 type ProbeResult =
   | { status: "published"; version: string }
@@ -291,27 +293,42 @@ function satisfiesRange(range: string, version: string): boolean {
 }
 
 /**
- * Classify one probe response into the fleet ProbeResult vocabulary. 200
- * (public) and 404 (private or never published) are EVIDENCE; anything else
- * is not evidence — the caller retries once, then UNREACHABLE.
+ * Classify one registry response into a ProbeResult. Pure and injectable so
+ * the self-test exercises the real classification path offline, two-sided.
  *
- * A 200 whose packument carries no parseable `latest` dist-tag is the YANKED
- * shape: the registry answered (the package exists or existed, but every
- * version is unpublished), so there is NO public published max to compare
- * against — the check is NOT APPLICABLE for that package, exactly like a 404.
- * The pre-fix probe classified this shape as UNREACHABLE, so a single yanked
- * @hasna/* package anywhere in the lockfile refused the gate with exit 2 on a
- * fully reachable registry (O15-04943 — the H8-00510 fix left incomplete:
- * H8-00510 taught the probe that 404 is evidence, not unreachability; the
- * 200-empty packument is the same doctrine applied to the other evidence
- * status).
+ * Evidence:
+ *   - 200 with a parseable `dist-tags.latest`  -> published
+ *   - 404                                     -> not-published (no public max)
+ *   - 200 whose packument has NO versions and
+ *     names the probed package                 -> not-published — the fully-
+ *       unpublished/yanked state, measured @hasna/context 2026-08-29: HTTP
+ *       200, body {"name":"@hasna/context","modified":...}, `npm view` E404
+ *       "Unpublished on ..." (O15-04943). The registry answered
+ *       authoritatively that no published version exists, so there is no
+ *       public max to compare — the same NOT-APPLICABLE class as 404
+ *       (H8-00510), NOT a refusal.
+ *
+ * Refusal (fail-closed — never a silent pass):
+ *   - 200 with versions present but no parseable latest (ambiguous state)
+ *   - 200 whose doc is not this package's packument (truncated/foreign body)
+ *   - any other status, malformed body, or connection error after one retry
  */
-function classifyProbeResponse(status: number, doc: unknown): ProbeResult {
-  if (status === 200) {
-    const latest = (doc as { "dist-tags"?: Record<string, string> })?.["dist-tags"]?.latest;
-    return latest && parseVersion(latest) ? { status: "published", version: latest } : { status: "not-published" };
-  }
+function classifyPackument(pkg: string, status: number, doc: any): ProbeResult {
   if (status === 404) return { status: "not-published" };
+  if (status !== 200) return { status: "unreachable" };
+  const latest = doc?.["dist-tags"]?.latest;
+  if (typeof latest === "string" && parseVersion(latest)) {
+    return { status: "published", version: latest };
+  }
+  const versions = doc?.versions;
+  const versionCount = versions && typeof versions === "object" ? Object.keys(versions).length : 0;
+  if (versionCount === 0 && doc?.name === pkg) {
+    // The registry served a real packument for this package with no published
+    // versions: the fully-unpublished state. No public max to compare against
+    // — NOT-APPLICABLE, exactly like 404. A doc whose name does not match the
+    // probed package is NOT evidence about it — keep the refusal.
+    return { status: "not-published" };
+  }
   return { status: "unreachable" };
 }
 
@@ -320,22 +337,28 @@ function classifyProbeResponse(status: number, doc: unknown): ProbeResult {
  * directly (abbreviated packument endpoint, the same shape npm installs
  * resolve against). Two attempts: the first can hit a rate-limit or a
  * transient network blip; a retry converts a one-off into evidence before
- * classifying UNKNOWN. 200/404 are evidence; anything else after the retry
- * is UNREACHABLE (a refusal, never a silent pass).
+ * classifying UNKNOWN. 200/404 are evidence (a 200 with no published
+ * versions classifies as not-published, never unreachable); anything else
+ * after the retry is UNREACHABLE (a refusal, never a silent pass). The
+ * fetch implementation is injectable so the self-test can script status
+ * sequences without network.
  */
-async function defaultPublishedProbe(pkg: string): Promise<ProbeResult> {
+async function defaultPublishedProbe(pkg: string, fetchImpl: typeof fetch = fetch): Promise<ProbeResult> {
   const url = `https://registry.npmjs.org/${pkg.replace("/", "%2F")}`;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(url, {
+      const res = await fetchImpl(url, {
         headers: { accept: "application/vnd.npm.install-v1+json" },
         signal: AbortSignal.timeout(10000),
       });
-      const result = classifyProbeResponse(res.status, res.status === 200 ? await res.json() : undefined);
-      if (result.status !== "unreachable") return result;
-      // 429/403/5xx or a connection error — not evidence; retry once below.
+      if (res.status === 404) return { status: "not-published" };
+      if (res.status === 200) {
+        const doc = (await res.json()) as any; // throws on a non-JSON body — retried below, as before
+        return classifyPackument(pkg, res.status, doc);
+      }
+      // 429/403/5xx — not evidence; retry once below.
     } catch {
-      // connection error — retry once below.
+      // connection error, abort, or unparseable body — retry once below.
     }
   }
   return { status: "unreachable" };
@@ -1021,46 +1044,71 @@ async function selfTest(): Promise<void> {
       );
     }
 
-    // Regression O15-04943 — the YANKED shape: a 200 response with an EMPTY
-    // packument (no `dist-tags` — the package exists on npm but every version
-    // was unpublished). The registry ANSWERED, so this is EVIDENCE: there is
-    // no public published max to compare against, the check is NOT APPLICABLE
-    // and must stay silent — exactly like a 404. The pre-fix probe classified
-    // this shape as UNREACHABLE, so one yanked @hasna/* package anywhere in
-    // the lockfile refused the gate (exit 2) on a reachable registry — the
-    // H8-00510 fix left incomplete.
-    const yanked = classifyProbeResponse(200, { "dist-tags": {}, versions: {} });
-    if (yanked.status === "unreachable") {
-      throw new Error(`yanked-packument regression control failed — 200-empty packument classified as UNREACHABLE (O15-04943)`);
+    // Probe classification controls — the REAL defaultPublishedProbe path
+    // with a scripted fetch, two-sided so the probe is known to discriminate.
+    // Regression (measured 2026-08-29, @hasna/context; O15-04943): the
+    // package was fully unpublished from npm — HTTP 200 with an EMPTY
+    // abbreviated packument ({"name":"@hasna/context","modified":...}, no
+    // versions, no dist-tags; `npm view` E404 "Unpublished on ...") — and the
+    // pre-fix probe classified that 200 as unreachable, refusing the gate on
+    // every CI run from the unpublication forward. It is the same
+    // NOT-APPLICABLE class as 404: the registry answered authoritatively that
+    // no published version exists.
+    const scriptedFetch = (script: Array<{ status: number; body?: any; throw?: boolean }>) => {
+      let calls = 0;
+      const impl = (async () => {
+        const step = script[Math.min(calls, script.length - 1)];
+        calls++;
+        if (step.throw) throw new Error("scripted fetch failure");
+        return { status: step.status, json: async () => step.body } as unknown as Response;
+      }) as typeof fetch;
+      return { impl, calls: () => calls };
+    };
+    const assertProbe = async (name: string, script: Array<{ status: number; body?: any; throw?: boolean }>, expected: ProbeResult): Promise<number> => {
+      const { impl, calls } = scriptedFetch(script);
+      const got = await defaultPublishedProbe("@hasna/x", impl);
+      const same = got.status === expected.status && (expected.status !== "published" || got.version === expected.version);
+      if (!same) {
+        throw new Error(`probe control failed — ${name}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(got)} (${calls()} fetch call(s))`);
+      }
+      return calls();
+    };
+    // Known 200 with a parseable latest is evidence (published).
+    if ((await assertProbe("200+latest -> published", [{ status: 200, body: { name: "@hasna/x", "dist-tags": { latest: "1.2.3" }, versions: { "1.2.3": {} } } }], { status: "published", version: "1.2.3" })) !== 1) {
+      throw new Error("probe control failed — published classification made more than one fetch");
     }
-    if (yanked.status !== "not-published") {
-      throw new Error(`yanked-packument control failed — expected not-published, got ${yanked.status}`);
+    // Known 404 is evidence (not-published), one fetch.
+    if ((await assertProbe("404 -> not-published", [{ status: 404 }], { status: "not-published" })) !== 1) {
+      throw new Error("probe control failed — 404 classification made more than one fetch");
     }
-    // Same class: a 200 whose `latest` is not a parseable simple semver (e.g.
-    // a malformed tag value). Evidence, not unreachability — the gate fails
-    // open and can only flag skew it can prove. (Note: prerelease suffixes
-    // like "0.0.0-rc.1" DO parse — parseVersion strips them — so they are
-    // `published` with the base version, which is existing behaviour.)
-    const unparseable = classifyProbeResponse(200, { "dist-tags": { latest: "1.2" } });
-    if (unparseable.status !== "not-published") {
-      throw new Error(`unparseable-latest control failed — expected not-published, got ${unparseable.status}`);
+    // 200 with an EMPTY packument naming the package is evidence
+    // (not-published) — the @hasna/context regression shape, one fetch.
+    if ((await assertProbe("200+empty packument -> not-published", [{ status: 200, body: { name: "@hasna/x", modified: "2026-08-29T13:33:36.827Z" } }], { status: "not-published" })) !== 1) {
+      throw new Error("probe control failed — empty-packument classification made more than one fetch");
     }
-    // Positive controls — the classifications that must never move:
-    const publishedCtl = classifyProbeResponse(200, { "dist-tags": { latest: "1.2.3" } });
-    if (publishedCtl.status !== "published" || publishedCtl.version !== "1.2.3") {
-      throw new Error(`published-200 control failed — got ${JSON.stringify(publishedCtl)}`);
+    // A 200 whose doc does NOT name the probed package is not evidence about
+    // it (truncated or foreign body) — still a refusal, never a silent pass.
+    await assertProbe("200+foreign doc -> unreachable", [{ status: 200, body: { name: "some-other-pkg", modified: "..." } }], { status: "unreachable" });
+    // A transient 429 recovers: the retry converts it into evidence.
+    if ((await assertProbe("transient 429 -> published", [{ status: 429 }, { status: 200, body: { name: "@hasna/x", "dist-tags": { latest: "1.2.3" }, versions: { "1.2.3": {} } } }], { status: "published", version: "1.2.3" })) !== 2) {
+      throw new Error("probe control failed — transient 429 did not retry exactly once");
     }
-    const notFoundCtl = classifyProbeResponse(404, undefined);
-    if (notFoundCtl.status !== "not-published") {
-      throw new Error(`404 control failed — got ${JSON.stringify(notFoundCtl)}`);
+    // Persistent 429 stays a refusal (the fail-closed property: a gate that
+    // could not run has cleared nothing).
+    if ((await assertProbe("persistent 429 -> unreachable", [{ status: 429 }, { status: 429 }], { status: "unreachable" })) !== 2) {
+      throw new Error("probe control failed — persistent 429 did not retry exactly once");
     }
-    const fivexxCtl = classifyProbeResponse(503, undefined);
-    if (fivexxCtl.status !== "unreachable") {
-      throw new Error(`5xx control failed — got ${JSON.stringify(fivexxCtl)}`);
+    // Persistent connection error stays a refusal.
+    if ((await assertProbe("persistent connection error -> unreachable", [{ throw: true }, { throw: true }], { status: "unreachable" })) !== 2) {
+      throw new Error("probe control failed — persistent connection error did not retry exactly once");
     }
+    // Gate-level composition: the existing 404 regression controls above
+    // (r3NotFound, r5NotFound) already prove a not-published probe stays
+    // silent at the runCheck level — the empty-packument class now reaches
+    // that same proven path.
 
     console.log(
-      "self-test PASS — positive controls clean; negative controls 1-6 + skip + 404 regression (edge and member) + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required; exception respected",
+      "self-test PASS — positive controls clean; negative controls 1-6 + skip + 404 regression (edge and member) + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required; probe classification two-sided (200+latest, 404, empty-packument not-published, foreign-doc refusal, transient 429 recovery, persistent 429/error refusal); exception respected",
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
