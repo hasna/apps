@@ -3,11 +3,10 @@ import { z } from "zod";
 import {
   searchLibraries,
   getLibraryBySlug,
-  resolveLibraryReference,
   listLibraries,
   createLibrary,
 } from "../db/libraries.js";
-import { searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
+import { resolveLibraryOnBackend, searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
 import { listApiEndpoints } from "../db/api-endpoints.js";
 import {
   refreshDocumentationSource,
@@ -227,7 +226,9 @@ Provide a specific topic or query to get the most relevant chunks.`,
           .replace(/^\//, "")
           .trim();
 
-        const library = resolveLibraryReference(slug, { version });
+        // Resolve through the SELECTED backend so a remote-only library
+        // (hosted Postgres only) can still be queried (release-review P1).
+        const library = await resolveLibraryOnBackend(slug, { version });
 
         if (library.chunk_count === 0) {
           const links = getLinks(library.id);

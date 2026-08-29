@@ -10,8 +10,12 @@
  */
 import { getStorageMode, getStoragePg, runStorageMigrations } from "./storage-sync.js";
 import { searchChunks } from "./chunks.js";
-import { searchLibraries } from "./libraries.js";
-import type { Library, SearchResult } from "../types/index.js";
+import {
+  getLibraryBySlug as getLocalLibraryBySlug,
+  resolveLibraryReference as resolveLocalLibraryReference,
+  searchLibraries,
+} from "./libraries.js";
+import { LibraryNotFoundError, type Library, type SearchResult } from "../types/index.js";
 
 export function usesHostedBackend(): boolean {
   return getStorageMode() !== "local";
@@ -76,4 +80,40 @@ export async function searchLibrariesOnBackend(
   } finally {
     await remote.close();
   }
+}
+
+/**
+ * Resolve a library by slug through the SELECTED backend, mirroring
+ * getLibraryBySlug on the local store. Hosted library-scoped search surfaces
+ * must not resolve against local SQLite first: a library that exists only on
+ * the hosted backend would fail with LIBRARY_NOT_FOUND before the hosted FTS
+ * query could run (release-review P1).
+ */
+export async function resolveLibraryBySlugOnBackend(slug: string): Promise<Library> {
+  if (!usesHostedBackend()) return getLocalLibraryBySlug(slug);
+  await ensureHostedSearchReady();
+  const remote = await getStoragePg();
+  try {
+    return await remote.getLibraryBySlug(slug);
+  } finally {
+    await remote.close();
+  }
+}
+
+/**
+ * Backend-aware version of resolveLibraryReference for MCP query-docs: when
+ * the hosted backend is active, resolve the slug on the remote store so a
+ * remote-only library can be searched (release-review P1).
+ */
+export async function resolveLibraryOnBackend(
+  reference: string,
+  options: { version?: string | null } = {},
+): Promise<Library> {
+  if (!usesHostedBackend()) return resolveLocalLibraryReference(reference, options);
+  const slug = reference.replace(/^\/context\//, "").replace(/^\//, "").trim();
+  const library = await resolveLibraryBySlugOnBackend(slug);
+  if (options.version && library.version !== options.version) {
+    throw new LibraryNotFoundError(`${reference} version ${options.version}`);
+  }
+  return library;
 }

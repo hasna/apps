@@ -8,7 +8,7 @@ import {
   getLibraryBySlug,
   deleteLibrary,
 } from "../db/libraries.js";
-import { searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
+import { resolveLibraryBySlugOnBackend, searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
@@ -118,8 +118,15 @@ function getCorsOrigin(): string {
 }
 
 function getHttpToken(): string | null {
-  const token = process.env["CONTEXT_HTTP_TOKEN"] ?? process.env["HASNA_CONTEXT_HTTP_TOKEN"];
-  return token?.trim() ? token.trim() : null;
+  // Select the first NON-EMPTY trimmed token. `??` would keep a set-but-empty
+  // CONTEXT_HTTP_TOKEN and mask a valid HASNA_CONTEXT_HTTP_TOKEN, disabling
+  // authentication entirely while the operator believes it is configured
+  // (release-review P1).
+  for (const name of ["CONTEXT_HTTP_TOKEN", "HASNA_CONTEXT_HTTP_TOKEN"]) {
+    const token = process.env[name]?.trim();
+    if (token) return token;
+  }
+  return null;
 }
 
 function isHttpAuthRequired(): boolean {
@@ -402,7 +409,10 @@ export async function handleRequest(req: Request): Promise<Response> {
 
       let libraryId: string | undefined;
       if (librarySlug) {
-        const lib = getLibraryBySlug(librarySlug);
+        // Resolve through the SELECTED backend: a remote-only library (present
+        // on the hosted Postgres backend, absent from local SQLite) must still
+        // be searchable by slug (release-review P1).
+        const lib = await resolveLibraryBySlugOnBackend(librarySlug);
         libraryId = lib.id;
       }
 

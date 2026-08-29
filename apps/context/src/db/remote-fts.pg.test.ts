@@ -228,4 +228,22 @@ describe.skipIf(!PG_URL)("postgres full-text search parity", () => {
     const results = await remote.searchLibraries("the");
     expect(results.map((l) => l.id)).toContain(lib);
   });
+
+  test("getLibraryBySlug resolves a remote-only library by slug (hosted search resolution)", async () => {
+    // A library that exists ONLY on the hosted backend (never synced to the
+    // local SQLite store). Hosted library-scoped search surfaces resolve the
+    // library through the SELECTED backend, so this must resolve remotely and
+    // let hosted FTS run — previously it failed with LIBRARY_NOT_FOUND before
+    // the hosted query could run (release-review P1).
+    const lib = await insertLibrary({ name: "Remote Only", slug: "remote-only-lib" });
+
+    const resolved = await remote.getLibraryBySlug("remote-only-lib");
+    expect(resolved.id).toBe(lib);
+    expect(resolved.slug).toBe("remote-only-lib");
+    expect(resolved.name).toBe("Remote Only");
+  });
+
+  test("getLibraryBySlug throws LIBRARY_NOT_FOUND for an unknown slug", async () => {
+    await expect(remote.getLibraryBySlug("no-such-library")).rejects.toThrow(/Library not found/);
+  });
 });

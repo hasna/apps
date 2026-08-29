@@ -130,14 +130,27 @@ function getLegacyDataDirs(): string[] {
  */
 function migrateLegacyDataDir(newDir: string): void {
   if (existsSync(join(newDir, DEFAULT_DB_FILENAME))) return;
+  let foundLegacySource = false;
   for (const oldDir of getLegacyDataDirs()) {
     if (!existsSync(oldDir) || !statSync(oldDir).isDirectory()) continue;
     const source = join(oldDir, DEFAULT_DB_FILENAME);
     if (!existsSync(source)) continue;
+    foundLegacySource = true;
     if (copyContextDatabase(source, join(newDir, DEFAULT_DB_FILENAME))) {
       writeMigrationReceipt(oldDir, newDir);
       return;
     }
+  }
+  if (foundLegacySource) {
+    // A legacy store exists but every snapshot/integrity/placement attempt
+    // failed. Abort BEFORE the caller can create the canonical database:
+    // an empty canonical DB would suppress every future migration attempt
+    // (the early return above) and leave the committed legacy rows
+    // invisible forever (release-review P1).
+    throw new Error(
+      "failed to migrate legacy context store: snapshot/integrity/placement error; " +
+        "the canonical database was NOT created so the migration will retry on next start",
+    );
   }
 }
 

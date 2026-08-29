@@ -192,6 +192,30 @@ describe("database path resolution", () => {
     expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 
+  it("aborts instead of creating an empty canonical database when a legacy migration fails", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    // A legacy source that cannot be snapshotted: a directory named
+    // context.db makes the VACUUM INTO open fail deterministically.
+    const source = join(legacyDir, "context.db");
+    mkdirSync(source, { recursive: true });
+
+    // Adopt the XDG data home so the legacy ~/.hasna/context store must be
+    // migrated into a DIFFERENT canonical root (otherwise the legacy dir IS
+    // the canonical home and no migration runs).
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+
+    // The migration must FAIL LOUDLY (throw) and NOT create the canonical
+    // database: an empty canonical DB would suppress every future migration
+    // attempt (migrateLegacyDataDir early-returns when the canonical file
+    // exists) and leave the legacy rows invisible forever (release-review P1).
+    expect(() => getDataDir()).toThrow(/failed to migrate legacy context store/);
+    const canonical = join(xdgRoot, "context", "context.db");
+    expect(existsSync(canonical)).toBe(false);
+  });
+
   it("two concurrent first-use migrations (separate processes) converge on one verified canonical snapshot", async () => {
     const root = isolateHome();
     const legacyDir = join(root, "home", ".hasna", "context");

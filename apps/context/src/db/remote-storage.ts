@@ -1,6 +1,6 @@
 import pg from "pg";
 import type { Pool, PoolConfig } from "pg";
-import type { Library, SearchResult } from "../types/index.js";
+import { LibraryNotFoundError, type Library, type SearchResult } from "../types/index.js";
 
 const DISABLED_SSL_MODE = "disable";
 
@@ -240,5 +240,23 @@ export class PgAdapterAsync {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  /**
+   * Resolve a library by slug on the hosted backend. Library-scoped hosted
+   * search surfaces (HTTP /api/search?library= and the MCP query-docs tool)
+   * must resolve the library through the SELECTED backend: a library that
+   * exists only on the hosted backend (created or synced remotely, never
+   * present in the local SQLite store) used to fail with LIBRARY_NOT_FOUND
+   * before the hosted FTS query could run (release-review P1).
+   */
+  async getLibraryBySlug(slug: string): Promise<Library> {
+    const rows = (await this.all(
+      "SELECT * FROM libraries WHERE slug = $1 LIMIT 1",
+      slug,
+    )) as Record<string, unknown>[];
+    const row = rows[0];
+    if (!row) throw new LibraryNotFoundError(slug);
+    return rowToLibrary(row);
   }
 }
