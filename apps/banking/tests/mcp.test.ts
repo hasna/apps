@@ -17,6 +17,24 @@ describe("banking-mcp scaffold", () => {
     expect(runMcp(["--help"])).toBe(0);
   });
 
+  test("--version reports the package.json version, never a stale constant", async () => {
+    const pkg = (await Bun.file(new URL("../package.json", import.meta.url)).json()) as { version: string };
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(runMcp(["--version"])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    // Regression O15-03913: banking-mcp --version must match package.json,
+    // not the stale hardcoded 0.0.9.
+    expect(output).toBe(pkg.version);
+  });
+
   test("tool descriptors distinguish implemented and pending tools", () => {
     expect(listMcpToolDescriptors().find((tool) => tool.name === "banking_providers_list")?.status).toBe("implemented");
     expect(listMcpToolDescriptors().find((tool) => tool.name === "banking_accounts_list")?.status).toBe("provider_backed_pending");
