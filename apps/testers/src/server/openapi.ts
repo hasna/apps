@@ -131,6 +131,18 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           properties: { url: { type: "string" }, model: { type: "string" }, projectId: { type: "string" } },
           required: ["url"],
         },
+        CreateResult: {
+          type: "object",
+          properties: {
+            runId: { type: "string" },
+            scenarioId: { type: "string" },
+            model: { type: "string" },
+            stepsTotal: { type: "integer" },
+            personaId: { type: "string" },
+            personaName: { type: "string" },
+          },
+          required: ["runId", "scenarioId"],
+        },
         Result: {
           type: "object",
           additionalProperties: true,
@@ -296,8 +308,12 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       "/v1/runs/{id}/results": {
         get: { operationId: "listRunResults", summary: "List results for a run", parameters: [idParam], responses: listOf("Result") },
       },
+      "/v1/results": {
+        post: { operationId: "createResult", summary: "Create result record", requestBody: jsonBody("CreateResult"), responses: okJson("Result") },
+      },
       "/v1/results/{id}": {
         get: { operationId: "getResult", summary: "Get result", parameters: [idParam], responses: okJson("Result") },
+        put: { operationId: "updateResult", summary: "Update result", parameters: [idParam], requestBody: jsonBody("CreateResult"), responses: okJson("Result") },
       },
       "/v1/personas": {
         get: {

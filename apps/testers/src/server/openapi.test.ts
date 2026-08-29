@@ -29,6 +29,14 @@ describe("openapi document", () => {
     // personas pagination params declared (regression e920ef6a)
     expect(doc.paths["/v1/personas"].get.parameters.some((p: any) => p.name === "limit")).toBe(true);
     expect(doc.paths["/v1/personas"].get.parameters.some((p: any) => p.name === "offset")).toBe(true);
+    // results write surface declared (regression OPE21-00033): the client's
+    // ApiStore.createResult/updateResult POST /v1/results and PUT /v1/results/:id;
+    // the server never routed them, so hosted-store runs 404'd on recording.
+    expect(doc.paths["/v1/results"].post.operationId).toBe("createResult");
+    expect(doc.paths["/v1/results/{id}"].put.operationId).toBe("updateResult");
+    expect(doc.paths["/v1/results/{id}"].get.operationId).toBe("getResult");
+    expect(doc.components.schemas.CreateResult.required).toContain("runId");
+    expect(doc.components.schemas.CreateResult.required).toContain("scenarioId");
   });
 
   it("marks probes public and /v1 secured by apiKey", () => {
