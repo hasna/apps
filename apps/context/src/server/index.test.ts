@@ -81,6 +81,9 @@ describe("HTTP source refresh API", () => {
 
     const health = await handleRequest(new Request("http://context.test/api/health"));
     expect(health.status).toBe(200);
+    // The legacy liveness surface is public by contract, but it must not
+    // leak the database path on the unauthenticated response.
+    expect(await health.json()).toEqual({ status: "ok" });
 
     const unauthorized = await handleRequest(new Request("http://context.test/api/libraries"));
     expect(unauthorized.status).toBe(401);

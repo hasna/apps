@@ -95,9 +95,9 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       version: pkg.version,
       description:
         "Self-hosted documentation context server for AI coding agents. " +
-        "Endpoints under /api/* require HTTP auth when CONTEXT_HTTP_TOKEN or " +
-        "CONTEXT_REQUIRE_HTTP_AUTH is set; /health, /ready, /version and " +
-        "/openapi.json are public by contract.",
+        "Data routes under /api/* require HTTP auth when CONTEXT_HTTP_TOKEN or " +
+        "CONTEXT_REQUIRE_HTTP_AUTH is set; /api/health (legacy liveness), " +
+        "/health, /ready, /version and /openapi.json are public by contract.",
     },
     paths,
   };

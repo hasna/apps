@@ -195,9 +195,9 @@ export async function handleRequest(req: Request): Promise<Response> {
       return handleMcpRequest(req, buildServer);
     }
 
-    // GET /api/health
+    // GET /api/health — public legacy liveness surface (no data, no paths)
     if (method === "GET" && path === "/api/health") {
-      return json({ status: "ok", db: getDbPath() });
+      return json({ status: "ok" });
     }
 
     // GET /api/libraries
