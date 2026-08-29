@@ -106,12 +106,10 @@ export function registerGitTools(server: McpServer, h: ToolHelpers): void {
 
       // 2. AI groups changes into logical commits
       const provider = getOutputProvider();
-      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
 
       const grouping = await provider.complete(
         `Changed files:\n${changedFiles}\n\nDiff stats:\n${diffStat.stdout}\n${untrackedDiff.stdout}${hint ? `\n\nContext: ${hint}` : ""}`,
         {
-          model: outputModel,
           system: `You are a git commit assistant. Group these changed files into logical commits. Return ONLY a JSON array:
 
 [{"message": "conventional commit message", "files": ["file1.ts", "file2.ts"]}]

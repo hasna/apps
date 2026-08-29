@@ -115,6 +115,10 @@ class FallbackProvider implements LLMProvider {
     return this.primary.isAvailable();
   }
 
+  async listModels(): Promise<string[]> {
+    return this.primary.listModels();
+  }
+
   async complete(prompt: string, options: ProviderOptions): Promise<string> {
     try {
       return await this.primary.complete(prompt, options);

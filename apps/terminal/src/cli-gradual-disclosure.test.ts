@@ -72,3 +72,26 @@ describe("CLI gradual disclosure", () => {
     expect(result.stdout.length).toBeLessThan(6000);
   });
 });
+
+describe("events command group routing (O15-04797 regression)", () => {
+  test("channels command group is advertised and functional", () => {
+    const help = runCli(["channels", "--help"]);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("channels");
+    expect(help.stdout).not.toContain("Unknown command group");
+  });
+
+  test("legacy webhooks alias routes to the channels group instead of failing", () => {
+    const help = runCli(["webhooks", "--help"]);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("channels");
+    expect(help.stdout).not.toContain("Unknown command group");
+  });
+
+  test("top-level --help advertises channels, not the removed webhooks group", () => {
+    const help = runCli(["--help"]);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("channels");
+    expect(help.stdout).not.toContain("webhooks");
+  });
+});

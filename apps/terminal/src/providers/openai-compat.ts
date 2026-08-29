@@ -2,6 +2,7 @@
 // Eliminates ~200 lines of duplicated streaming SSE parsing
 
 import type { LLMProvider, ProviderOptions, StreamCallbacks } from "./base.js";
+import { selectAccessibleModel } from "./base.js";
 
 export abstract class OpenAICompatibleProvider implements LLMProvider {
   abstract readonly name: string;
@@ -9,12 +10,62 @@ export abstract class OpenAICompatibleProvider implements LLMProvider {
   protected abstract readonly defaultModel: string;
   protected abstract readonly apiKeyEnvVar: string;
 
+  /**
+   * Preferred models in order of priority. The default model is resolved
+   * against the configured key's own model list (GET /models), so a key
+   * that cannot access a hardcoded model gets the first accessible
+   * preference instead of a 404 (O15-04797).
+   */
+  protected readonly preferredModels: string[] = [];
+
+  /**
+   * Whether this provider's models accept the OpenAI `stop` parameter.
+   * xAI's grok fast/reasoning models reject it with 400, so the xAI provider
+   * disables it (O15-04797).
+   */
+  protected readonly supportsStop: boolean = true;
+
   protected get apiKey(): string {
     return process.env[this.apiKeyEnvVar] ?? "";
   }
 
   isAvailable(): boolean {
     return !!process.env[this.apiKeyEnvVar];
+  }
+
+  private _models: string[] | null = null;
+  private _modelsAt = 0;
+
+  /** Model ids the configured key can access (cached 5 min); [] on failure. */
+  async listModels(): Promise<string[]> {
+    const now = Date.now();
+    if (this._models && now - this._modelsAt < 300_000) return this._models;
+    this._models = [];
+    this._modelsAt = now;
+    try {
+      const res = await fetch(`${this.baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+      });
+      if (!res.ok) return this._models;
+      const json = (await res.json()) as { data?: { id?: string }[] };
+      this._models = (json.data ?? [])
+        .map((m) => m.id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+    } catch {
+      // Offline / network error — leave the list empty; callers fall back to static defaults.
+    }
+    return this._models;
+  }
+
+  private _defaultModelResolved: string | null = null;
+
+  /** Resolve the default model against the key's accessible model list (cached per instance). */
+  protected async resolveDefaultModel(): Promise<string> {
+    if (this._defaultModelResolved) return this._defaultModelResolved;
+    const accessible = await this.listModels();
+    const preferred = this.preferredModels.length > 0 ? this.preferredModels : [this.defaultModel];
+    this._defaultModelResolved = selectAccessibleModel(preferred, accessible, this.defaultModel);
+    return this._defaultModelResolved;
   }
 
   async complete(prompt: string, options: ProviderOptions): Promise<string> {
@@ -25,10 +76,10 @@ export abstract class OpenAICompatibleProvider implements LLMProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: options.model ?? this.defaultModel,
+        model: options.model ?? await this.resolveDefaultModel(),
         max_tokens: options.maxTokens ?? 256,
         temperature: options.temperature ?? 0,
-        ...(options.stop ? { stop: options.stop } : {}),
+        ...(options.stop && this.supportsStop ? { stop: options.stop } : {}),
         messages: [
           { role: "system", content: options.system },
           { role: "user", content: prompt },
@@ -53,11 +104,11 @@ export abstract class OpenAICompatibleProvider implements LLMProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: options.model ?? this.defaultModel,
+        model: options.model ?? await this.resolveDefaultModel(),
         max_tokens: options.maxTokens ?? 256,
         temperature: options.temperature ?? 0,
         stream: true,
-        ...(options.stop ? { stop: options.stop } : {}),
+        ...(options.stop && this.supportsStop ? { stop: options.stop } : {}),
         messages: [
           { role: "system", content: options.system },
           { role: "user", content: prompt },

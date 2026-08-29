@@ -15,24 +15,16 @@ import {
 
 const args = process.argv.slice(2);
 
-if (args[0] === "events" || args[0] === "webhooks") {
-  await runEventsCli(args, { source: "terminal", programName: "terminal" });
+// `events`, `channels` and the legacy `webhooks` alias all delegate to the
+// @hasna/events CLI. The events CLI renamed its webhook-subscription group to
+// `channels` (webhooks is gone there — "Unknown command group: webhooks");
+// keep `webhooks` working here as an alias for callers of the old name, and
+// advertise `channels` (O15-04797).
+if (args[0] === "events" || args[0] === "channels" || args[0] === "webhooks") {
+  const eventArgs = args[0] === "webhooks" ? ["channels", ...args.slice(1)] : args;
+  await runEventsCli(eventArgs, { source: "terminal", programName: "terminal" });
   process.exit(0);
 }
-
-async function runSharedEventCli(args: string[]): Promise<boolean> {
-  if (args[0] !== "events" && args[0] !== "webhooks") return false;
-  const [{ Command }, { registerEventsCommands }] = await Promise.all([
-    import("commander"),
-    import("@hasna/events/commander"),
-  ]);
-  const program = new Command().name("terminal");
-  registerEventsCommands(program, { source: "terminal" });
-  await program.parseAsync(["node", "terminal", ...args]);
-  return true;
-}
-
-if (await runSharedEventCli(args)) process.exit(0);
 
 // ── Help / Version ───────────────────────────────────────────────────────────
 
@@ -70,7 +62,7 @@ SUBCOMMANDS:
   discover [--days=N] [--json]  Scan Claude sessions, show token savings potential
   snapshot [--json|--verbose]  Compact terminal state; --json returns full data
   events                       Emit, list, and replay Hasna events
-  webhooks                     Manage Hasna event webhook subscriptions
+  channels                     Manage Hasna event channel (webhook) subscriptions
   --help                       Show this help
   --version                    Show version
 
