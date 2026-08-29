@@ -32,10 +32,17 @@ esac
 export HASNA_MEMENTOS_API_SIGNING_KEY="${HASNA_MEMENTOS_API_SIGNING_KEY:-${API_KEY_SIGNING_SECRET}}"
 
 # Map published bin names to their dist entrypoints.
+# mementos-deploy is the deploy-lane marker command: the deploy workflow
+# (deploy-mementos.yml) registers every managed task definition with
+# command=["mementos-deploy"], and preflight verifies the stable baseline by
+# that marker. It runs the web server exactly like mementos-serve — without
+# this mapping the deployed task would fall through to the fallback branch and
+# exec a binary named mementos-deploy that does not exist (O15-05020).
 cmd="${1:-mementos-serve}"
 [ "$#" -gt 0 ] && shift || true
 case "$cmd" in
   mementos-serve) set -- bun /app/dist/server/index.js "$@" ;;
+  mementos-deploy) set -- bun /app/dist/server/index.js "$@" ;;
   mementos-mcp)   set -- bun /app/dist/mcp/index.js "$@" ;;
   mementos)       set -- bun /app/dist/cli/index.js "$@" ;;
   bun|/*)         set -- "$cmd" "$@" ;;

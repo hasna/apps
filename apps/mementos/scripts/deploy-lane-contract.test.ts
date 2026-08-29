@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 // ---------------------------------------------------------------------------
 // Deploy-lane contract for the mementos production service.
@@ -180,4 +182,84 @@ describe("mementos deploy lane contract", () => {
     expect(needs).toContain("gate");
     expect(deployJob?.if).toContain("needs.gate.outputs.proceed == 'true'");
   });
+});
+
+// ---------------------------------------------------------------------------
+// Image entrypoint command mapping (O15-05020).
+//
+// Regression: the deploy lane registers `command: ["mementos-deploy"]` on
+// every task definition it manages, but docker-entrypoint.sh had no
+// mementos-deploy case — the fallback branch executed a binary named
+// mementos-deploy that does not exist in the image, so the deployed task
+// crash-looped (or, with preflight strictness, the lane could never reach a
+// stable deploy-managed baseline). The entrypoint must map the deploy-lane
+// marker to the web server exactly like mementos-serve.
+// ---------------------------------------------------------------------------
+const entrypointPath = fileURLToPath(new URL("../docker-entrypoint.sh", import.meta.url));
+const entrypointDirs: string[] = [];
+
+function fakeBunDir(): string {
+  const dir = mkdtempSync(resolve(tmpdir(), "mementos-entrypoint-"));
+  entrypointDirs.push(dir);
+  writeFileSync(
+    resolve(dir, "bun"),
+    `#!/bin/sh
+printf 'FAKE-BUN %s\\n' "$*"
+`,
+  );
+  chmodSync(resolve(dir, "bun"), 0o755);
+  return dir;
+}
+
+async function runEntrypoint(cmd: string, args: string[] = []) {
+  const proc = Bun.spawn(["bash", entrypointPath, cmd, ...args], {
+    env: {
+      PATH: `${fakeBunDir()}:${process.env.PATH ?? ""}`,
+      HOME: tmpdir(),
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+describe("mementos image entrypoint command mapping", () => {
+  test("mementos-deploy runs the web server, identical to mementos-serve", async () => {
+    // Regression (O15-05020): the image must be able to run the exact command
+    // the deploy lane registers. Both names must resolve to the server bundle.
+    const deploy = await runEntrypoint("mementos-deploy");
+    const serve = await runEntrypoint("mementos-serve");
+
+    expect(deploy.exitCode).toBe(0);
+    expect(deploy.stdout.trim()).toBe("FAKE-BUN /app/dist/server/index.js");
+    expect(deploy.stdout.trim()).toBe(serve.stdout.trim());
+    expect(deploy.stderr).toBe("");
+  });
+
+  test("mementos-deploy forwards extra arguments to the server bundle", async () => {
+    const result = await runEntrypoint("mementos-deploy", ["--port", "8080"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("FAKE-BUN /app/dist/server/index.js --port 8080");
+  });
+
+  test("an unmapped command fails closed instead of silently running something else", async () => {
+    // Negative control: a command the entrypoint does not own must not be
+    // laundered into the server; it fails with command-not-found.
+    const result = await runEntrypoint("mementos-bogus");
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("FAKE-BUN /app/dist/server/index.js");
+  });
+});
+
+afterEach(() => {
+  while (entrypointDirs.length > 0) {
+    rmSync(entrypointDirs.pop()!, { recursive: true, force: true });
+  }
 });
