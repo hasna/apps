@@ -13,6 +13,13 @@ export const meta = {
 const MONOREPO = '/home/hasna/.hasna/repos/clones/hasna/apps'
 const TASK = 'cf390843-a2b3-460a-8fca-edf62c0d4434'
 
+// Idle window (owner 2026-08-25, args-driven): args.idleMinutes in MINUTES,
+// default 30. The census sleeps IDLE_SLEEP seconds then re-checks once —
+// min(idleMinutes, 300) bounds the in-agent wait; the existing 300s is the floor
+// (the standing idle wait, also the safeAgent failure-banner sleep).
+const IDLE_MINUTES = Math.min(((args && args.idleMinutes) || 30), 300)
+const IDLE_SLEEP = Math.min(Math.max(300, IDLE_MINUTES * 60), 1800)
+
 const CONST = `
 You are a lane of the ship-latest workflow (Fable-verdict A, 2026-08-19, task ${TASK}). Mission: merged hasna/apps code SHIPS continuously — version waves follow merges within a bounded interval, publish-all (the ONLY publisher) then publishes and installs live on all reachable stations. This workflow NEVER calls npm publish. Final text = machine-readable JSON.
 
@@ -26,7 +33,7 @@ Non-negotiable rules (all agents):
 `
 
 const CENSUS = CONST + `
-ROLE: census lane. Per the CONST: ONE cheap read — git fetch origin main; VERIFY FETCH_HEAD is current: 'git rev-parse FETCH_HEAD' MUST equal 'gh api repos/hasna/apps/commits/heads/main --jq .sha' (a stale FETCH_HEAD produced a wrong census on 2026-08-21 — 831512fe vs current 2e3ab3877); if they differ, fetch again, then enumerate pending .changeset files at FETCH_HEAD (${MONOREPO}/.changeset/*.md via git ls-tree) and count packages whose repo version is AHEAD of the npm registry (bounded: npm view for the apps with pending changesets only, never a full registry sweep). ALSO check for an open version PR (label ship-latest). Decide: (a) no pending changesets AND nothing ahead -> NO-OP: return {noop: true} with the counts — no further phases run, no tokens burned; (b) pending changesets or ahead packages -> {noop: false} with the exact lists. Record the verified FETCH_HEAD sha in evidence.
+ROLE: census lane. Per the CONST: ONE cheap read — git fetch origin main; VERIFY FETCH_HEAD is current: 'git rev-parse FETCH_HEAD' MUST equal 'gh api repos/hasna/apps/commits/heads/main --jq .sha' (a stale FETCH_HEAD produced a wrong census on 2026-08-21 — 831512fe vs current 2e3ab3877); if they differ, fetch again, then enumerate pending .changeset files at FETCH_HEAD (${MONOREPO}/.changeset/*.md via git ls-tree) and count packages whose repo version is AHEAD of the npm registry (bounded: npm view for the apps with pending changesets only, never a full registry sweep). ALSO check for an open version PR (label ship-latest). Decide: (a) no pending changesets AND nothing ahead -> NO-OP: sleep ${IDLE_SLEEP} (bash — the args-driven idle window, ${IDLE_MINUTES} min default), re-run the census steps once, and return the RE-CHECK result — the lane waits the idle window between passes while idle. NEVER return {noop: true} without the sleep+re-check having run; (b) pending changesets or ahead packages -> {noop: false} with the exact lists. Record the verified FETCH_HEAD sha in evidence.
 Return (JSON): { noop: bool, pendingChangesets: [string], aheadPackages: [{name, repoVersion, registryVersion}], waveInFlight: bool, wavePr: number|null, evidence: string }
 `
 
@@ -170,10 +177,11 @@ const censusPrompt = (body) => {
 // --- /safeAgent ---
 
 // INFINITE SESSION-SCOPED LOOP (owner 2026-08-25): census -> wave (if owed) ->
-// 2-agent live gates (if a wave merged) -> handoff -> sleep ~30 min inside the
-// census when nothing pending -> re-census, forever. Stop = owner stops the run
-// or the session ends. The census agent sleeps 1800 (bash) and re-checks once
-// when it is a NO-OP, so the run stays alive at ~1 agent per idle window.
+// 2-agent live gates (if a wave merged) -> handoff -> sleep the idle window
+// inside the census when nothing pending -> re-census, forever. Stop = owner
+// stops the run or the session ends. The census agent sleeps IDLE_SLEEP (bash)
+// and re-checks once when it is a NO-OP, so the run stays alive at ~1 agent per
+// idle window (the same idle-wait primitive the sibling lanes use).
 let pass = 0
 for (pass = 1; ; pass++) {
 phase('Census')
@@ -253,6 +261,6 @@ if (gates && !gates.bothGo) {
 }
 
 if (census && census.noop && !(merge && merge.merged)) {
-  log(`pass ${pass}: nothing pending and nothing merged — the census waited ~30 min and re-checked; re-checking next pass`)
+  log(`pass ${pass}: nothing pending and nothing merged — the census waited ${IDLE_SLEEP}s and re-checked; re-checking next pass`)
 }
 }
