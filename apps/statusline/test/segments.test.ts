@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { hostname } from "node:os";
 import { contextUsage } from "../src/context-window";
 import { gitProjectName, lastCommitEpoch, trackedLineCount } from "../src/git";
+import { renderLine } from "../src/render";
 import { getSegment, segments } from "../src/segments";
 import { sessionFastMode } from "../src/settings";
 import { parseClaudeInput } from "../src/providers/claude";
@@ -411,6 +412,72 @@ describe("context segments", () => {
   test("null when transcript missing", async () => {
     const c = ctx({ transcript_path: "/tmp/does-not-exist-xyz.jsonl" });
     expect(await getSegment("context-used")!.render(c)).toBeNull();
+  });
+});
+
+describe("cache-rate", () => {
+  test("default enabled", () => {
+    expect(getSegment("cache-rate")!.defaultEnabled).toBe(true);
+  });
+
+  test("renders the share served from cache", async () => {
+    // shared TRANSCRIPT fixture: read 95000 of 100000 input-side → 95%
+    expect(await getSegment("cache-rate")!.render(ctx())).toBe("95% cached");
+  });
+
+  test("renders zero when nothing was cached yet (divisor nonzero)", async () => {
+    const path = join(tmpdir(), `statusline-zero-cache-${Date.now()}.jsonl`);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        type: "assistant",
+        message: { usage: { input_tokens: 5000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      }) + "\n",
+    );
+    expect(await getSegment("cache-rate")!.render(ctx({ transcript_path: path }))).toBe("0% cached");
+  });
+
+  test("null on an all-zero usage block (divisor 0)", async () => {
+    const path = join(tmpdir(), `statusline-zero-usage-${Date.now()}.jsonl`);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        type: "assistant",
+        message: { usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      }) + "\n",
+    );
+    expect(await getSegment("cache-rate")!.render(ctx({ transcript_path: path }))).toBeNull();
+  });
+
+  test("null when the transcript has no usage block", async () => {
+    const path = join(tmpdir(), `statusline-cache-no-usage-${Date.now()}.jsonl`);
+    writeFileSync(path, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+    expect(await getSegment("cache-rate")!.render(ctx({ transcript_path: path }))).toBeNull();
+  });
+
+  test("null when transcript_path is missing", async () => {
+    expect(await getSegment("cache-rate")!.render(ctx({ transcript_path: undefined }))).toBeNull();
+  });
+
+  test("null for an unreadable transcript", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "statusline-cache-locked-"));
+    const path = join(dir, "locked.jsonl");
+    writeFileSync(path, '{"type":"assistant","message":{"usage":{"input_tokens":1}}}\n');
+    chmodSync(path, 0o000);
+    try {
+      expect(await getSegment("cache-rate")!.render(ctx({ transcript_path: path }))).toBeNull();
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
+
+  test("renderLine joins machine and cache-rate", async () => {
+    const line = await renderLine(ctx(), {
+      separator: " · ",
+      segments: ["machine", "cache-rate"],
+      colors: false,
+    });
+    expect(line).toBe(`${hostname().split(".")[0]} · 95% cached`);
   });
 });
 

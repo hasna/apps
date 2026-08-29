@@ -21,6 +21,7 @@ export function defaultConfig(): StatuslineConfig {
       "loc",
       "model-context",
       "context-remaining",
+      "cache-rate",
       "cost",
     ],
   };

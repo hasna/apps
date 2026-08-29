@@ -5,7 +5,7 @@ on and off — machine name, project + branch, model, context remaining, session
 and more — rendered as one or more rows in your agent's status bar.
 
 ```
-apple03 · statusline (main) · 12h · 1.2k · fable 5 [1m] · 90% left · $0.04
+apple03 · statusline (main) · 12h · 1.2k · fable 5 [1m] · 90% left · 95% cached · $0.04
 ```
 
 Built with [Bun](https://bun.sh) + TypeScript. The CLI renderer is dependency-light; the optional MCP server uses the Model Context Protocol SDK. Apache-2.0.
@@ -22,7 +22,7 @@ That's it — Claude Code picks it up on the next status refresh (no restart nee
 ## Segments
 
 `statusline list` shows a compact, enabled-first summary of your segments (use
-`statusline list --all` for every row). The table below is the full catalog — all 26
+`statusline list --all` for every row). The table below is the full catalog — all 27
 segment ids from `src/segments/index.ts`.
 
 `renderLine` walks your configured segment order, renders each one, and **drops**
@@ -51,6 +51,7 @@ anything that returns `null` or throws. A failed segment never breaks the host U
 | `context-used` | off | Percentage of context window used | session transcript JSONL (`contextUsage`) | transcript missing/unreadable | `10%` |
 | `context-remaining` | on | Percentage of context window remaining | transcript via `contextUsage` | transcript missing/unreadable | `90% left` |
 | `used-tokens` | off | Total tokens in the context window | transcript usage block (input + output) | transcript missing/unreadable | `102k tok` |
+| `cache-rate` | on | Percentage of input tokens served from cache | transcript usage block (`cache_read_input_tokens` / total input-side); Codex rollout / OpenCode DB for those providers | transcript missing/unreadable or zero input-side tokens | `87% cached` |
 | `cost` | on | Session cost in USD | `StatusContext.cost.totalCostUsd` | cost is zero or missing | `$1,234.50` |
 | `duration` | off | Session wall-clock duration | `StatusContext.cost.totalDurationMs` | duration is zero or missing | `1h30m` |
 | `lines-changed` | off | Lines added/removed this session | `cost.totalLinesAdded/Removed` | both zero | `+142/-18` |
@@ -61,14 +62,23 @@ anything that returns `null` or throws. A failed segment never breaks the host U
 
 ### Context segments and transcripts
 
-Segments that report context usage (`context-used`, `context-remaining`, `used-tokens`)
-read the session transcript path from the provider payload. `contextUsage` scans the
-JSONL for the last assistant entry with a `usage` block and sums
-`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. Window size is
-**1,000,000** when the model id contains `[1m]`, otherwise **200,000**.
+Segments that report context usage (`context-used`, `context-remaining`, `used-tokens`,
+`cache-rate`) read the session transcript path from the provider payload.
+`contextUsage` scans the JSONL for the last assistant entry with a `usage` block and
+sums `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. Window
+size is **1,000,000** when the model id contains `[1m]`, otherwise **200,000**.
+
+`cache-rate` is `cache_read_input_tokens / (input_tokens + cache_creation_input_tokens
++ cache_read_input_tokens)` from the same last usage block, rendered as a rounded
+percentage (`87% cached`). It renders `0% cached` during the pre-warm phase of a
+session (a nonzero divisor with no cache hits yet) — the same render-zero-not-drop
+convention as `five-hour-limit` — and is omitted only when the transcript is
+missing/unreadable or the divisor is zero. For Codex and OpenCode it reads those
+providers' own usage channels instead (see Providers below).
 
 With the test fixture transcript (100k input-side tokens on a 1m window), expect
-`context-used` → `10%`, `context-remaining` → `90% left`, `used-tokens` → `102k tok`.
+`context-used` → `10%`, `context-remaining` → `90% left`, `used-tokens` → `102k tok`,
+`cache-rate` → `95% cached`.
 
 ### Which account am I? (`auth-profile`)
 
@@ -121,7 +131,7 @@ statusline colors off      # or set "colors": false in the config
 enabled segments first, capped rows, and hints for the detail paths:
 
 ```
-Segments: 7 enabled / 26 total (showing 12 of 26)
+Segments: 8 enabled / 27 total (showing 12 of 27)
 state  default  id
 on     yes      machine
 on     yes      project
@@ -129,6 +139,7 @@ on     yes      commit-age
 on     yes      loc
 on     yes      model-context
 on     yes      context-remaining
+on     yes      cache-rate
 on     yes      cost
 off    no       project-name
 off    no       git-branch
@@ -181,7 +192,7 @@ Config lives at `~/.config/statusline/config.json` (override with `$STATUSLINE_C
 {
   "separator": " · ",
   "colors": true,
-  "segments": ["machine", "project", "commit-age", "loc", "model-context", "context-remaining", "cost"]
+  "segments": ["machine", "project", "commit-age", "loc", "model-context", "context-remaining", "cache-rate", "cost"]
 }
 ```
 
@@ -233,7 +244,9 @@ saveConfig(next);
 Useful exports include `parseClaudeInput`, `renderLine`, `renderStatusline`, `segments`,
 `getSegment`, `listSegments`, `defaultConfig`, `loadConfig`, `saveConfig`, `configPath`,
 `previewStatusline`, `enableSegments`, `disableSegments`, `orderSegments`,
-`setSeparator`, `setColors`, `installClaude`, and the account, context, format, and Git helpers.
+`setSeparator`, `setColors`, `installClaude`, the cache-rate channel
+(`cacheRate`, `codexCacheRate`, `latestCodexSessionPath`, `opencodeCacheRate`), and the
+account, context, format, and Git helpers.
 
 ## MCP
 
@@ -306,30 +319,63 @@ on every status refresh — **no restart needed**.
 
 Every field is optional — partial or empty payloads still produce a usable context.
 
-### Codewith (not implemented)
+### Codex CLI (implemented, env-selected)
 
-`statusline install` only accepts `claude` today. Running
-`statusline install codewith` errors with *unsupported target* (`src/cli.ts`).
+Codex ships its own built-in segment picker and has no external `statusLine` command
+hook, so there is no `statusline install codex` — the renderer is invoked standalone
+with the provider selected by the environment:
 
-The renderer is provider-agnostic: a future `parseCodewithInput` would map Codewith's
-status payload into `StatusContext` (`src/providers/types.ts`) and reuse the same
-segment registry. No install wiring exists yet (tracked in STA-00003).
+```bash
+STATUSLINE_PROVIDER=codex statusline render
+```
 
-### Cursor (not implemented)
+`cache-rate` then reads the newest Codex session rollout
+(`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, newest file mtime): the LAST
+`event_msg` line whose `payload.type` is `token_count`, whose
+`payload.info.total_token_usage` holds **cumulative session totals**
+(`input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, …). The rate is
+`cached_input_tokens / (input_tokens + cached_input_tokens + cache_write_input_tokens)`,
+clamped to `[0, 1]`. Exposed on the SDK as `latestCodexSessionPath()` /
+`codexCacheRate(path?)`. Caveat: the semantics of Codex's `input_tokens` relative to
+`cached_input_tokens` (uncached-only vs total) are inferred from measured samples —
+the clamp and the fixture tests lock the adapter to the documented shape.
 
-Same gap as Codewith — no `statusline install cursor` subcommand and no Cursor-specific
-parser. A future adapter would implement `parseCursorInput` → `StatusContext` and hook
-into Cursor's status bar the same way Claude does (tracked in STA-00004).
+### OpenCode (implemented, env-selected)
+
+OpenCode has no statusline/footer hook in its config as of v1.3.x, so the same
+env-selector applies:
+
+```bash
+STATUSLINE_PROVIDER=opencode statusline render
+```
+
+`cache-rate` reads `~/.local/share/opencode/opencode.db` (SQLite) with a read-only
+`Bun.sqlite` query — zero new dependencies, and a WAL lock mid-write degrades to
+omitting the segment, never a crash. It takes the newest session row's
+`tokens_cache_read / (tokens_input + tokens_cache_read + tokens_cache_write)` from the
+`session` table, falling back to `session_v2` when `session` has no populated row (both
+schemas carry the columns). SDK surface: `opencodeCacheRate({ dbPath?, sessionId? })`.
+
+### Cursor (not implemented — no verifiable source)
+
+No `statusline install cursor` and no adapter. Unlike Codex and OpenCode, Cursor has
+**no local per-turn token-usage record to read**: `~/.cursor/chats/*/store.db` holds
+only `blobs`/`meta` tables, and `~/.cursor/ai-tracking/ai-code-tracking.db` carries no
+per-turn usage. Token usage is only visible in Cursor's own UI/API, so per the honesty
+rule no adapter is fabricated. If Cursor later persists usage locally, an adapter slots
+in behind the same `cacheRate(ctx)` dispatch.
 
 ### Other agents
 
 | Agent | Status |
 |-------|--------|
-| OpenCode | ⏳ no statusline/footer hook in its config as of v1.3.x — the renderer is provider-agnostic (`src/providers/`), so an adapter slots in the moment one exists |
-| Codex CLI | Codex ships its own built-in segment picker; no external command hook |
+| Codex CLI | ✅ `STATUSLINE_PROVIDER=codex` — `cache-rate` from the newest session rollout |
+| OpenCode | ✅ `STATUSLINE_PROVIDER=opencode` — `cache-rate` from the sessions DB |
+| Cursor | ❌ no local per-turn token usage exists — no adapter (see above) |
+| Codewith | ⏳ no statusline/footer hook; a future `parseCodewithInput` would map its payload into `StatusContext` and reuse the registry (tracked in STA-00003) |
 
-Adding a provider means one small parser: agent payload → `StatusContext`
-(`src/providers/types.ts`). PRs welcome.
+Adding a provider means one small adapter: agent payload/source → `StatusContext`
+(`src/providers/types.ts`) or a `cacheRate(ctx)` data channel. PRs welcome.
 
 ## Development
 

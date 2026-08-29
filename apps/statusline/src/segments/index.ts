@@ -2,7 +2,7 @@ import { hostname } from "node:os";
 import type { Segment, SegmentColor, StatusContext } from "../providers/types.js";
 import { compactAge, compactDuration, compactNum, money } from "../format.js";
 import { gitBranch, gitProjectName, lastCommitEpoch, trackedLineCount } from "../git.js";
-import { contextUsage } from "../context-window.js";
+import { contextUsage, cacheRate } from "../context-window.js";
 import { sessionAccount, sessionAccountEmail, sessionUsage } from "../accounts.js";
 import { sessionFastMode } from "../settings.js";
 
@@ -247,6 +247,15 @@ export const segments: Segment[] = [
       const u = contextUsage(ctx);
       if (!u) return null;
       return `${compactNum(u.used + u.output)} tok`;
+    },
+  },
+  {
+    id: "cache-rate",
+    description: "Percentage of input tokens served from cache (omitted when unknown)",
+    defaultEnabled: true,
+    render(ctx) {
+      const r = cacheRate(ctx);
+      return r === null ? null : `${Math.round(r * 100)}% cached`;
     },
   },
   {

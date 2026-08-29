@@ -1,5 +1,6 @@
 import { defaultConfig, loadConfig, saveConfig, configPath, type StatuslineConfig } from "./config.js";
 import { parseClaudeInput } from "./providers/claude.js";
+import type { StatusContext } from "./providers/types.js";
 import { renderLine } from "./render.js";
 import { getSegment, segments } from "./segments/index.js";
 import pkg from "../package.json";
@@ -12,10 +13,12 @@ export {
   type SessionAccount,
 } from "./accounts.js";
 export { defaultConfig, loadConfig, saveConfig, configPath, type StatuslineConfig } from "./config.js";
-export { contextUsage, type ContextUsage } from "./context-window.js";
+export { cacheRate, contextUsage, lastUsageBlock, type ContextUsage, type UsageBlock } from "./context-window.js";
 export { compactAge, compactDuration, compactNum, money } from "./format.js";
 export { gitBranch, gitProjectName, gitRoot, lastCommitEpoch, trackedLineCount } from "./git.js";
 export { claudeSettingsPath, installClaude } from "./install.js";
+export { codexCacheRate, latestCodexSessionPath, type TotalTokenUsage } from "./providers/codex.js";
+export { opencodeCacheRate, type OpenCodeCacheRateOptions } from "./providers/opencode.js";
 export { parseClaudeInput } from "./providers/claude.js";
 export type { Segment, SegmentColor, StatusContext } from "./providers/types.js";
 export { renderLine } from "./render.js";
@@ -98,6 +101,17 @@ export async function renderStatusline(
   input: Record<string, unknown> = {},
   config: StatuslineConfig = loadConfig(),
 ): Promise<string> {
+  const provider = process.env.STATUSLINE_PROVIDER;
+  if (provider === "codex" || provider === "opencode") {
+    // Codex and OpenCode have no stdin statusLine payload; the env var is
+    // the provider selector and the renderer runs standalone (e.g. behind a
+    // wrapper). The claude stdin path is unchanged.
+    const ctx: StatusContext = {
+      provider,
+      cwd: typeof input.cwd === "string" ? input.cwd : process.cwd(),
+    };
+    return renderLine(ctx, config);
+  }
   return renderLine(parseClaudeInput(input as Record<string, any>), config);
 }
 

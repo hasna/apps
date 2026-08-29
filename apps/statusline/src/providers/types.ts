@@ -1,5 +1,5 @@
 export interface StatusContext {
-  provider: "claude";
+  provider: "claude" | "codex" | "opencode";
   cwd: string;
   projectDir?: string;
   model?: { id?: string; displayName?: string };

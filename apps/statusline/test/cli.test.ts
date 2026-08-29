@@ -300,7 +300,7 @@ describe("cli list", () => {
   });
 
   test("search alias forwards list flags", () => {
-    const out = runCli(["search", "token", "--json"]);
+    const out = runCli(["search", "used-tokens", "--json"]);
     expect(out.exitCode).toBe(0);
     const parsed = JSON.parse(out.stdout);
     expect(parsed.matching).toBe(1);
