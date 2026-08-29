@@ -3,7 +3,7 @@
   "name": "holdings",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
+  "kitVersion": "0.14.2",
   "description": "IP portfolio system-of-record CLI + MCP + serve. SQLite at <data home>/holdings.db is authoritative when no DATABASE_URL is configured; with one, reads/writes go directly to the operator-owned Postgres. The data home resolves via @hasna/paths: the legacy ~/.hasna/holdings default (storage.sqlitePath) stays effective until the store is adopted — HASNA_DATA_HOME set, or holdings.db already present at the resolver home — and HASNA_HOLDINGS_HOME/HOLDINGS_HOME override the app home unconditionally; HASNA_HOLDINGS_DB_PATH/HOLDINGS_DB_PATH override the database path.",
   "bins": [
     "holdings",

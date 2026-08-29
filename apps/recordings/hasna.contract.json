@@ -3,8 +3,8 @@
   "name": "recordings",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
-  "description": "Speech-to-text recording store for AI coding agents. CLI + MCP + HTTP API (recordings-serve) + generated SDK. The server's data backend is selected by the environment: a HASNA_RECORDINGS_DATABASE_URL selects postgresql, anything else serves from sqlite; on postgresql the serve process reads/writes that database directly with API-key auth via @hasna/contracts. The client has exactly two stores \u2014 on-box sqlite, or the server's /v1 HTTP API selected by the presence of both HASNA_RECORDINGS_API_URL and HASNA_RECORDINGS_API_KEY \u2014 and never opens Postgres.",
+  "kitVersion": "0.14.2",
+  "description": "Speech-to-text recording store for AI coding agents. CLI + MCP + HTTP API (recordings-serve) + generated SDK. The server's data backend is selected by the environment: a HASNA_RECORDINGS_DATABASE_URL selects postgresql, anything else serves from sqlite; on postgresql the serve process reads/writes that database directly with API-key auth via @hasna/contracts. The client has exactly two stores — on-box sqlite, or the server's /v1 HTTP API selected by the presence of both HASNA_RECORDINGS_API_URL and HASNA_RECORDINGS_API_KEY — and never opens Postgres.",
   "bins": [
     "recordings",
     "recordings-mcp",

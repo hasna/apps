@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-export const CONTRACTS_KIT_VERSION = "0.14.1";
+export const CONTRACTS_KIT_VERSION = "0.14.2";
 
 function run(command: string[], cwd: string): string {
   const result = Bun.spawnSync(command, { cwd, stdout: "pipe", stderr: "pipe" });

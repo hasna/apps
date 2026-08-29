@@ -30,7 +30,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "^1.2.4",
         "@types/node": "26.2.0",
         "@types/pg": "^8.11.0",
@@ -256,7 +256,7 @@
         "calendar-serve": "dist/server/bin.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.7",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -381,7 +381,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.11.10",
         "@types/react": "^18.3.18",
@@ -432,7 +432,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",
@@ -491,7 +491,7 @@
         "conversations-hook": "bin/hook.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.16",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.26.0",
@@ -557,7 +557,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "^1.2.4",
         "bun-types": "1.3.9",
         "typescript": "^5.7.3",
@@ -610,7 +610,7 @@
         "@aws-sdk/client-route-53": "^3.1067.0",
         "@aws-sdk/client-route-53-domains": "^3.1067.0",
         "@aws-sdk/credential-provider-ini": "3.972.53",
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chalk": "^5.4.1",
@@ -814,7 +814,7 @@
         "zod": "^3.25.76",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/mcp-harness": "^0.1.0",
         "@smithy/types": "^4.16.1",
         "@types/mime-types": "^2.1.4",
@@ -859,7 +859,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.11.10",
         "@types/react": "^18.3.18",
@@ -875,7 +875,7 @@
         "hooks-serve": "bin/serve.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.16",
         "@hasna/paths": "0.1.0",
         "@hasna/secrets": "0.3.10",
@@ -892,7 +892,7 @@
         "zod": "3.25.76",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "latest",
         "@types/pg": "^8.15.6",
         "@types/react": "^18.2.0",
@@ -911,7 +911,7 @@
         "configs-mcp": "dist/mcp/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.16",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
@@ -945,7 +945,7 @@
         "@ai-sdk/openai": "^3.0.68",
         "@aws-sdk/client-s3": "^3.1063.0",
         "@aws-sdk/credential-providers": "^3.1063.0",
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "0.1.14",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
@@ -1006,7 +1006,7 @@
       },
       "dependencies": {
         "@aws-sdk/client-secrets-manager": "^3.1083.0",
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.16",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
@@ -1036,7 +1036,7 @@
         "machines-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.7",
         "@hasna/mcp-harness": "^0.1.0",
         "@hasna/paths": "0.1.0",
@@ -1128,7 +1128,7 @@
         "messages-serve": "bin/serve.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.26.0",
         "commander": "^12.1.0",
@@ -1249,7 +1249,7 @@
         "paths": "dist/cli/index.js",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "^1.2.4",
         "@types/node": "26.2.0",
         "bun-types": "1.3.14",
@@ -1265,7 +1265,7 @@
         "projects-serve": "dist/serve/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/conversations": "0.7.8",
         "@hasna/events": "0.1.3",
         "@hasna/mementos": "0.14.85",
@@ -1303,7 +1303,7 @@
         "prompts-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.11",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
@@ -1314,7 +1314,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "^1.2.4",
         "@types/react": "^18.3.18",
         "bun-types": "1.3.14",
@@ -1330,7 +1330,7 @@
         "recordings-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "0.1.11",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -1482,7 +1482,7 @@
         "@aws-sdk/client-s3": "^3.1007.0",
         "@aws-sdk/lib-storage": "3.1007.0",
         "@aws-sdk/s3-request-presigner": "^3.1007.0",
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.16",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.27.1",
@@ -1555,7 +1555,7 @@
         "zod": "^3.24.4",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/better-sqlite3": "^7.6.13",
         "@types/bun": "^1.2.12",
         "@types/express": "^5.0.2",
@@ -1903,7 +1903,7 @@
         "todos-serve": "dist/server/index.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@hasna/events": "^0.1.11",
         "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
@@ -1982,7 +1982,7 @@
         "commander": "^13.1.0",
       },
       "devDependencies": {
-        "@hasna/contracts": "0.14.1",
+        "@hasna/contracts": "0.14.2",
         "@types/bun": "latest",
         "@types/pg": "^8.15.6",
         "pg": "^8.16.3",

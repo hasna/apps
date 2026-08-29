@@ -125,13 +125,14 @@ function machineHomeCandidates(): string[] {
 }
 
 /**
- * Deliver an explicitly supplied API key through the modern DISK tier
- * (`$HOME/.hasna/cloud/todos.env`) instead of the legacy env tier, and return
- * the env unchanged. The contracts client demoted the env vars to a deprecated
- * fallback and prints a DEPRECATED notice to stderr whenever the key arrives
- * from there; a CLI subprocess test that asserts empty (or exact) stderr then
- * fails even though authentication succeeded. Disk is re-read per call and is
- * the path the deprecation notice itself recommends.
+ * Deliver an explicitly supplied API key through the primary DISK tier
+ * (`$HOME/.hasna/fleet-env/todos.env`) instead of the legacy cloud tier, and
+ * return the env unchanged. The contracts client treats `~/.hasna/cloud` as a
+ * NOISY deprecated fallback and prints a DEPRECATED notice to stderr whenever
+ * the key arrives from there; a CLI subprocess test that asserts empty (or
+ * exact) stderr then fails even though authentication succeeded. fleet-env is
+ * the primary tier (re-read per call) and is the path the deprecation notice
+ * itself recommends.
  *
  * ## This function writes a real file, so it guards itself
  *
@@ -149,8 +150,8 @@ function machineHomeCandidates(): string[] {
  *
  * Comparison is by EXACT canonical equality with the machine home, never
  * "somewhere underneath it": the artefact at risk is precisely
- * `$HOME/.hasna/cloud/todos.env`, and an under-home rule would reject fixtures
- * that legitimately create a scratch root inside the home tree.
+ * `$HOME/.hasna/fleet-env/todos.env`, and an under-home rule would reject
+ * fixtures that legitimately create a scratch root inside the home tree.
  *
  * A missing HOME or a missing key stays a silent no-op — nothing is written, so
  * nothing is at risk. Only the machine-home case is loud, because there the
@@ -165,14 +166,14 @@ export function deliverTodosApiKeyViaDisk(env: TodosTestEnv): TodosTestEnv {
   const target = canonicalisePath(home);
   if (machineHomeCandidates().includes(target)) {
     throw new Error(
-      `TODOS_FIXTURE_HOME_IS_MACHINE_HOME: refusing to write ${join(target, ".hasna", "cloud", "todos.env")} — ` +
+      `TODOS_FIXTURE_HOME_IS_MACHINE_HOME: refusing to write ${join(target, ".hasna", "fleet-env", "todos.env")} — ` +
         "HOME resolves to this machine's real home directory, so this write would replace the machine's " +
         "configured todos credential with a fixture value. Pass a throwaway home, e.g. " +
         'HOME: mkdtempSync(join(tmpdir(), "todos-fixture-")).',
     );
   }
 
-  const dir = join(home, ".hasna", "cloud");
+  const dir = join(home, ".hasna", "fleet-env");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "todos.env"), `HASNA_TODOS_API_KEY=${apiKey}\n`);
   return env;

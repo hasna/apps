@@ -4,7 +4,7 @@
   "name": "access",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.14.1",
+  "kitVersion": "0.14.2",
   "description": "Non-human-identity governance CLI + MCP + serve: inventory of every agent/service identity, its credentials and MCP tool scopes, owner mapping, JIT elevation, access reviews and one-click revocation, plus the cohort MCP bearer-token issuer. SQLite at ~/.hasna/access/access.db by default (resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set, and HASNA_ACCESS_HOME / ACCESS_HOME win unconditionally); operator-owned PostgreSQL when HASNA_ACCESS_DATABASE_URL is set.",
   "bins": [
     "access",

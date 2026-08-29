@@ -31,7 +31,7 @@ afterEach(() => {
 
 describe("generated storage kit backend and TLS helpers", () => {
   it("exports its version and the two server data backends", () => {
-    expect(KIT_VERSION).toBe("0.14.1");
+    expect(KIT_VERSION).toBe("0.14.2");
     expect(SERVER_DATA_BACKENDS).toEqual(["sqlite", "postgresql"]);
   });
 
