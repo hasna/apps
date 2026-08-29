@@ -1,7 +1,7 @@
 {
   "name": "@hasna/terminal",
-  "version": "4.3.20",
-  "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
+  "version": "4.3.21",
+  "description": "Smart terminal wrapper for AI agents and humans \u2014 structured output, token compression, MCP server, natural language",
   "type": "module",
   "files": [
     "dist/**",
