@@ -8,6 +8,24 @@ import { MigrationLedger, type PoolQueryClient } from "../../generated/storage-k
 import { getCloudClient } from "./client.js";
 import { loadMigrations } from "./migrations.js";
 
+/**
+ * Applied-ledger rows acknowledged as non-reproducible history, per the
+ * vendored kit's `MigrationRunnerOptions.acknowledgedLegacyIds` contract: an
+ * id that a build of the pre-monorepo sessions cloud wrote to the prod
+ * `schema_migrations` ledger, whose SQL no current source can reproduce, so
+ * it passes the downgrade guard as history, is never checksum-compared, and
+ * is never re-applied or re-inserted.
+ *
+ * Measured 2026-08-29 by a read-only census of the prod ledger (ECS
+ * inspection task on the oss-fleet-prod cluster): exactly ONE legacy row,
+ * `0004_tenancy`, applied 2026-07-13 by the pre-monorepo sessions cloud. The
+ * current build's 0004 is `0004_codewith_session_source` — a DIFFERENT
+ * migration (codewith source CHECK widening), applied 2026-08-28 with a
+ * ledger checksum that matches the current file byte-for-byte, so there is no
+ * checksum drift anywhere; only this legacy id is unknown to the build.
+ */
+export const ACKNOWLEDGED_LEGACY_MIGRATION_IDS = ["0004_tenancy"] as const;
+
 export interface MigrateOptions {
   dryRun?: boolean;
   client?: PoolQueryClient;
@@ -24,7 +42,9 @@ export interface MigrateReport {
 export async function runCloudMigrations(options: MigrateOptions = {}): Promise<MigrateReport> {
   const client = options.client ?? getCloudClient();
   const migrations = loadMigrations();
-  const ledger = new MigrationLedger(client, migrations);
+  const ledger = new MigrationLedger(client, migrations, {
+    acknowledgedLegacyIds: ACKNOWLEDGED_LEGACY_MIGRATION_IDS,
+  });
   const before = await ledger.migrate({ dryRun: true });
   const pendingBefore = before.plan
     .filter((p) => p.state === "pending")
