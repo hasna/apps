@@ -15,7 +15,7 @@ import { VERSION } from "../version.js";
 
 const DEFAULT_PORT = parseInt(process.env.PORT ?? "19700", 10);
 
-const DASHBOARD_HTML = `<!DOCTYPE html>
+export const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -76,6 +76,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     </div>
   </main>
   <script>
+    // All stored fields (page titles, urls, snippets) are crawler-controlled —
+    // escape every interpolation rendered into innerHTML (release-review P1).
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
     async function load() {
       const [crawls] = await Promise.all([fetch('/v1/crawls').then(r => r.json())]);
       const completed = crawls.filter(c => c.status === 'completed').length;
@@ -89,8 +99,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       \`;
       document.getElementById('crawls-body').innerHTML = crawls.slice(0, 50).map(c => \`
         <tr>
-          <td><a href="/v1/crawls/\${c.id}">\${c.url}</a></td>
-          <td><span class="badge \${c.status}">\${c.status}</span></td>
+          <td><a href="/v1/crawls/\${c.id}">\${escapeHtml(c.url)}</a></td>
+          <td><span class="badge \${escapeHtml(c.status)}">\${escapeHtml(c.status)}</span></td>
           <td>\${c.pagesCrawled ?? 0}</td>
           <td>\${c.depth}</td>
           <td>\${new Date(c.createdAt).toLocaleString()}</td>
@@ -105,9 +115,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const data = await fetch(\`/v1/search?q=\${encodeURIComponent(q)}&limit=10\`).then(r => r.json());
       document.getElementById('results').innerHTML = data.map(r => \`
         <div class="result">
-          <a href="/v1/pages/\${r.page.id}">\${r.page.title || r.page.url}</a>
-          <p>\${r.page.url}</p>
-          <p>\${r.snippet}</p>
+          <a href="/v1/pages/\${r.page.id}">\${escapeHtml(r.page.title || r.page.url)}</a>
+          <p>\${escapeHtml(r.page.url)}</p>
+          <p>\${escapeHtml(r.snippet)}</p>
         </div>
       \`).join('') || '<p style="color:#666;padding:8px">No results.</p>';
     }
@@ -314,10 +324,11 @@ export async function handleCrawlRequest(req: Request, port = DEFAULT_PORT): Pro
         const { startCrawl } = await import("../lib/crawler.js");
 
         if (body.async) {
-          // Create the crawl record first synchronously
+          // Create the crawl record first synchronously; the background worker
+          // must run under THIS id so the id we return is the id that works.
           const crawl = createCrawl({ url: body.url, depth: body.depth, maxPages: body.maxPages });
           // Fire crawl in background — don't await
-          startCrawl({ url: body.url, depth: body.depth, maxPages: body.maxPages }).catch(() => {});
+          startCrawl({ url: body.url, depth: body.depth, maxPages: body.maxPages, crawlId: crawl.id }).catch(() => {});
           return json(crawl, 202); // 202 Accepted
         } else {
           const crawl = await startCrawl({ url: body.url, depth: body.depth, maxPages: body.maxPages });
@@ -405,9 +416,10 @@ export async function handleCrawlRequest(req: Request, port = DEFAULT_PORT): Pro
 
         const { batchCrawl } = await import("../lib/crawler.js");
 
-        // Always async — fire and return job ID
+        // Always async — fire and return job ID; the background worker must run
+        // under THIS id so the id we return is the id that works.
         const crawl = createCrawl({ url: body.urls[0] as string, maxPages: body.urls.length });
-        batchCrawl(body.urls, body.options as Parameters<typeof batchCrawl>[1]).catch(() => {});
+        batchCrawl(body.urls, body.options as Parameters<typeof batchCrawl>[1], crawl.id).catch(() => {});
 
         return json({ jobId: crawl.id, urlCount: body.urls.length, status: "queued" }, 202);
       } catch (err) {
