@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { getDataDir, getDatabase, getDbPath, resetDatabase } from "./database.js";
+import { copyContextDatabase, getDataDir, getDatabase, getDbPath, resetDatabase } from "./database.js";
 
 const oldEnv = new Map<string, string | undefined>();
 const ENV_NAMES = [
@@ -150,6 +150,80 @@ describe("database path resolution", () => {
     // Original legacy store preserved with its WAL.
     writer.close();
     expect(existsSync(source)).toBe(true);
+  });
+
+  it("never deletes or replaces a snapshot another migration already placed (concurrent first-use race)", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    const source = join(legacyDir, "context.db");
+    makeContextDb(source);
+
+    // Process B already placed its verified snapshot at the canonical path
+    // while process A was still snapshotting (a CLI and the -serve process
+    // upgrading at the same moment). A's migration must not unlink or
+    // overwrite B's placed snapshot — the old remove-a-stale-target-first
+    // logic could delete a live snapshot, after which the verification open
+    // created an empty database that passed integrity_check and became
+    // canonical, leaving committed legacy rows invisible (release-review P1).
+    const canonicalDir = join(root, "home", ".hasna", "context-canonical");
+    mkdirSync(canonicalDir, { recursive: true });
+    const target = join(canonicalDir, "context.db");
+    const bSnapshot = new Database(target);
+    bSnapshot.exec("CREATE TABLE legacy_probe (value TEXT)");
+    bSnapshot.query("INSERT INTO legacy_probe (value) VALUES ('b-snapshot-won')").run();
+    bSnapshot.close();
+
+    expect(copyContextDatabase(source, target)).toBe(true);
+
+    // B's verified snapshot is untouched: its distinguishing row survives
+    // and integrity still holds. (Same legacy source, same committed rows —
+    // the discriminator proves no replacement happened.)
+    const probe = new Database(target);
+    try {
+      expect(probe.query("SELECT value FROM legacy_probe WHERE value = 'b-snapshot-won'").get()).toEqual({ value: "b-snapshot-won" });
+      const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
+      expect(integrity.integrity_check).toBe("ok");
+    } finally {
+      probe.close();
+    }
+    // No stray snapshot temp is left behind by the losing attempt.
+    expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("concurrent first-use migrations converge on one verified canonical snapshot", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    const source = join(legacyDir, "context.db");
+    // A WAL-mode source with the writer still open and an uncheckpointed
+    // committed row: both migration attempts must snapshot the committed
+    // state, and the loser of the placement race must never touch the
+    // winner's placed snapshot.
+    const writer = new Database(source);
+    writer.exec("PRAGMA journal_mode = WAL");
+    writer.exec("CREATE TABLE legacy_probe (value TEXT)");
+    writer.query("INSERT INTO legacy_probe (value) VALUES ('wal-committed-row')").run();
+
+    const canonicalDir = join(root, "home", ".hasna", "context-canonical");
+    mkdirSync(canonicalDir, { recursive: true });
+    const target = join(canonicalDir, "context.db");
+
+    // The loser arrives second; the canonical path must still hold a
+    // verified snapshot of the same legacy source.
+    expect(copyContextDatabase(source, target)).toBe(true);
+    expect(copyContextDatabase(source, target)).toBe(true);
+
+    const probe = new Database(target);
+    try {
+      expect(probe.query("SELECT value FROM legacy_probe WHERE value = 'wal-committed-row'").get()).toEqual({ value: "wal-committed-row" });
+      const integrity = probe.query("PRAGMA integrity_check").get() as { integrity_check: string };
+      expect(integrity.integrity_check).toBe("ok");
+    } finally {
+      probe.close();
+    }
+    writer.close();
+    expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 
   it("migration is idempotent and does not rewrite the receipt or the data", () => {
