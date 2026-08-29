@@ -8,7 +8,7 @@ import {
   getLibraryBySlug,
   deleteLibrary,
 } from "../db/libraries.js";
-import { resolveLibraryBySlugOnBackend, searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
+import { resolveLibraryBySlugOnBackend, searchChunksOnBackend, searchLibrariesOnBackend, semanticSearchOnBackend } from "../db/backend-search.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
@@ -17,7 +17,6 @@ import {
   embedText,
   embeddingCoverage,
   getEmbeddingConfig,
-  semanticSearch,
 } from "../db/embeddings.js";
 import { listDocuments } from "../db/documents.js";
 import { getRefreshPlan } from "../db/update-tasks.js";
@@ -422,7 +421,10 @@ export async function handleRequest(req: Request): Promise<Response> {
           return json({ error: "Set CONTEXT_EMBEDDING_PROVIDER=openai|voyage to enable semantic search" }, 400);
         }
         const queryEmbedding = await embedText(q, config);
-        const results = semanticSearch(queryEmbedding, libraryId, limit);
+        // Dispatch through the SELECTED backend: a library resolved on the
+        // hosted backend must be searched against the same backend, never
+        // against local SQLite (release-review P1).
+        const results = await semanticSearchOnBackend(queryEmbedding, libraryId, limit);
         return json({ results, query: q, mode: "semantic", model: config.model });
       }
 

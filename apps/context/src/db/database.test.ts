@@ -77,6 +77,46 @@ describe("database path resolution", () => {
     expect(receipt).toMatchObject({ from: legacyDir, to: canonical });
   });
 
+  it("fails closed on the highest-priority legacy store instead of falling back to an older one", () => {
+    // Multi-source regression (release-review P1): with the XDG data home
+    // adopted, the highest-priority legacy store (~/.hasna/context) holds a
+    // CORRUPT database while the older ~/.hasna/apps/knowledge store holds a
+    // VALID one. The migration must abort — the canonical database must NOT
+    // be created from the older store, because its existence would suppress
+    // every future migration attempt and hide the newer store's committed
+    // data forever.
+    const root = isolateHome();
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+    const newerLegacy = join(root, "home", ".hasna", "context");
+    const olderLegacy = join(root, "home", ".hasna", "apps", "knowledge");
+    mkdirSync(newerLegacy, { recursive: true });
+    mkdirSync(olderLegacy, { recursive: true });
+    writeFileSync(join(newerLegacy, "context.db"), "not-a-sqlite-database");
+    makeContextDb(join(olderLegacy, "context.db"));
+
+    expect(() => getDataDir()).toThrow(/failed to migrate legacy context store/);
+    // The canonical database was NOT created — the migration retries later.
+    expect(existsSync(join(xdgRoot, "context", "context.db"))).toBe(false);
+  });
+
+  it("migrates the highest-priority legacy store when both newer and older stores exist", () => {
+    const root = isolateHome();
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+    const newerLegacy = join(root, "home", ".hasna", "context");
+    const olderLegacy = join(root, "home", ".hasna", "apps", "knowledge");
+    mkdirSync(newerLegacy, { recursive: true });
+    mkdirSync(olderLegacy, { recursive: true });
+    makeContextDb(join(newerLegacy, "context.db"));
+    makeContextDb(join(olderLegacy, "context.db"));
+
+    const dataDir = getDataDir();
+    expect(dataDir).toBe(join(xdgRoot, "context"));
+    const receipt = JSON.parse(readFileSync(join(dataDir, "migration-receipt.json"), "utf8")) as { from: string };
+    expect(receipt.from).toBe(newerLegacy);
+  });
+
   it("migrates the older ~/.context legacy store when the wrong default has no context data", () => {
     const root = isolateHome();
     const legacyDir = join(root, "home", ".context");
