@@ -4318,7 +4318,7 @@ var package_default = {
   },
   devDependencies: {
     "@electric-sql/pglite": "^0.5.4",
-    "@types/bun": "^1.3.14",
+    "@types/bun": "1.3.14",
     "@types/pg": "^8.15.6",
     typescript: "5.9.3"
   }

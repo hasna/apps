@@ -29,11 +29,16 @@
  * (3.33.2, published 2026-08-15T17:24:51.591Z) and @smithy/core is checked
  * by this gate now.
  *
+ * dep-connectors-1 (measured 2026-08-27): @types/bun 'latest' and every ^1.x
+ * caret range across the member manifests resolve to 1.4.0 (published
+ * 2026-08-20T19:46:32.487Z), inside the window; the pinned remedy is the
+ * monorepo override version 1.3.14, exact — checked by this gate now.
+ *
  * SCOPE: this check scans every publishable member's direct declaration of
- * @types/react-dom and @smithy/core and fires when the specifier admits ANY
- * version published within the last 604800 seconds (measured at run time).
- * Members declaring 18.x @types/react-dom ranges stay silent — no 18.x
- * version is younger than the window.
+ * @types/react-dom, @smithy/core and @types/bun and fires when the specifier
+ * admits ANY version published within the last 604800 seconds (measured at
+ * run time). Members declaring 18.x @types/react-dom ranges stay silent — no
+ * 18.x version is younger than the window.
  *
  * NETWORK: the check reads the public registry (npm view <dep> time /
  * version). A network failure produces an explicit [SKIP quarantine-admission]
@@ -46,7 +51,7 @@ import * as path from "node:path";
 import { APPS_DIR, publishableMembers } from "./census";
 
 export const QUARANTINE_WINDOW_SECONDS = 604800; // fleet minimumReleaseAge, 7 days
-export const DEPENDENCIES = ["@types/react-dom", "@smithy/core"] as const;
+export const DEPENDENCIES = ["@types/react-dom", "@smithy/core", "@types/bun"] as const;
 export type CheckedDependency = (typeof DEPENDENCIES)[number];
 const NETWORK_FAILURE = /EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ETIMEDOUT|ERR_SOCKET_TIMEOUT|ENOTFOUND/i;
 
@@ -272,9 +277,28 @@ describe("standard-adherence: quarantine admission (7-day minimumReleaseAge wind
     expect(result).toBeNull();
   });
 
+  test("self-test: @types/bun latest admitting the window-fresh 1.4.0 fires (dep-connectors-1)", () => {
+    const nowMs = Date.parse("2026-08-26T12:00:00Z");
+    const result = findQuarantineAdmissions(
+      "3scribe",
+      "@types/bun",
+      "latest",
+      ["1.3.14", "1.4.0"],
+      { "1.3.14": "2026-05-28T17:39:04.235Z", "1.4.0": "2026-08-20T19:46:32.487Z" },
+      nowMs,
+    );
+    expect(result).toEqual({
+      member: "3scribe",
+      dependency: "@types/bun",
+      spec: "latest",
+      freshVersions: ["1.4.0"],
+    });
+  });
+
   test("self-test: declaredSpec reads first matching section and ignores absent dep", () => {
     expect(declaredSpec({ devDependencies: { "@types/react-dom": "^19.0.0" } }, "@types/react-dom")).toBe("^19.0.0");
     expect(declaredSpec({ dependencies: { "@types/react-dom": "19.2.4" } }, "@types/react-dom")).toBe("19.2.4");
+    expect(declaredSpec({ dependencies: { "@types/bun": "1.3.14" } }, "@types/bun")).toBe("1.3.14");
     expect(declaredSpec({ dependencies: { react: "^19.0.0" } }, "@types/react-dom")).toBeNull();
     expect(declaredSpec({ dependencies: { "@smithy/core": "^3.25.1" } }, "@smithy/core")).toBe("^3.25.1");
   });
