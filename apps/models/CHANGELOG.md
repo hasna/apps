@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.10
+
+### Changed
+
+- Republish of the 0.0.9 content (paths-resolver switch; see the 0.0.9 entry below): the 0.0.9 version cannot be re-published because npmjs retains the version record of the previously published 0.0.9 (published 2026-08-27, since removed from the registry) and rejects it within the unpublish window. Identical content, new version number.
+
 ## Unreleased
 
 ### Changed
