@@ -1,6 +1,6 @@
 {
   "name": "@hasna/models",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "CLI-first local model and dataset lifecycle tool for open-source/open-weight catalogs",
   "type": "module",
   "license": "Apache-2.0",
