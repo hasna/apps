@@ -105,6 +105,12 @@ export function getDataDir(): string {
 function getLegacyDataDirs(): string[] {
   const home = getHomeDir();
   return [
+    // The pre-XDG context home itself (~/.hasna/context). When the
+    // @hasna/paths (XDG) data home is adopted (HASNA_DATA_HOME set, or the
+    // store already migrated), an existing store here must be copied into
+    // the effective home — otherwise an upgrade would open an empty
+    // database and make existing data invisible.
+    join(home, ".hasna", "context"),
     // The wrong default used by previous versions: context data sat inside
     // the knowledge app's legacy directory (~/.hasna/apps/knowledge).
     join(home, ".hasna", "apps", "knowledge"),

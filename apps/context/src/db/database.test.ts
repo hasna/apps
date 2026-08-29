@@ -9,6 +9,7 @@ const oldEnv = new Map<string, string | undefined>();
 const ENV_NAMES = [
   "HOME",
   "USERPROFILE",
+  "HASNA_DATA_HOME",
   "CONTEXT_DB_PATH",
   "HASNA_CONTEXT_DB_PATH",
   "CONTEXT_DATA_DIR",
@@ -88,6 +89,29 @@ describe("database path resolution", () => {
     expect(existsSync(join(dataDir, "migration-receipt.json"))).toBe(true);
   });
 
+  it("migrates the pre-XDG ~/.hasna/context store when HASNA_DATA_HOME adopts the XDG home", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    makeContextDb(join(legacyDir, "context.db"));
+
+    // The operator deliberately opts into the XDG data home. The legacy
+    // ~/.hasna/context store must travel into the effective home — otherwise
+    // the upgrade opens an empty database and existing data is invisible.
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+
+    const dataDir = getDataDir();
+    const xdgHome = join(xdgRoot, "context");
+
+    expect(dataDir).toBe(xdgHome);
+    expect(existsSync(join(xdgHome, "context.db"))).toBe(true);
+    // Original legacy store preserved, never deleted.
+    expect(existsSync(join(legacyDir, "context.db"))).toBe(true);
+    const receipt = JSON.parse(readFileSync(join(xdgHome, "migration-receipt.json"), "utf8")) as { from: string; to: string };
+    expect(receipt).toMatchObject({ from: legacyDir, to: xdgHome });
+  });
+
   it("migration is idempotent and does not rewrite the receipt or the data", () => {
     const root = isolateHome();
     const legacyDir = join(root, "home", ".hasna", "apps", "knowledge");
@@ -149,13 +173,19 @@ describe("database path resolution", () => {
   });
 
   it("default never contains a literal ~ or undefined prefix when HOME is unset", () => {
-    isolateHome();
+    const root = isolateHome();
+    // Pin the data-kind override so the fallback home cannot leak real
+    // machine state into the assertion: on a machine with an existing store
+    // at the XDG data home the resolver is legitimately adopted and the
+    // legacy ".hasna/context" shape no longer appears. The property under
+    // test is the path hygiene, not the legacy-vs-XDG selection.
+    process.env.HASNA_DATA_HOME = join(root, "xdg-data");
     delete process.env.HOME;
     delete process.env.USERPROFILE;
     const path = getDbPath();
     expect(path.startsWith("~")).toBe(false);
     expect(path.startsWith("undefined")).toBe(false);
-    expect(path).toContain(".hasna/context");
+    expect(path).toBe(join(root, "xdg-data", "context", "context.db"));
   });
 });
 
