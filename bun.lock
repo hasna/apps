@@ -391,7 +391,7 @@
     },
     "apps/context": {
       "name": "@hasna/context",
-      "version": "0.1.54",
+      "version": "0.1.55",
       "bin": {
         "context": "dist/cli/index.js",
         "context-mcp": "dist/mcp/index.js",
