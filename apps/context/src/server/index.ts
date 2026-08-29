@@ -9,6 +9,7 @@ import {
   deleteLibrary,
 } from "../db/libraries.js";
 import { searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
+import { buildOpenApiDocument } from "./openapi.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
 import { listApiEndpoints } from "../db/api-endpoints.js";
@@ -133,7 +134,9 @@ function boolEnv(name: string): boolean {
 function authenticateRequest(req: Request, path: string): Response | null {
   // The standard serve endpoints are public by contract: /api/health for the
   // legacy surface, and /health, /ready, /version for the fleet serve shape.
-  if (path === "/api/health" || path === "/health" || path === "/ready" || path === "/version") {
+  // /openapi.json is public so SDK consumers can fetch the API contract
+  // without credentials (it describes the surface, never the data).
+  if (path === "/api/health" || path === "/health" || path === "/ready" || path === "/version" || path === "/openapi.json") {
     return null;
   }
   if (!isHttpAuthRequired()) return null;
@@ -180,6 +183,13 @@ export async function handleRequest(req: Request): Promise<Response> {
     }
     if (method === "GET" && path === "/version") {
       return json({ version: pkg.version });
+    }
+
+    // GET /openapi.json — the OpenAPI 3.1 contract for this HTTP surface,
+    // public by design (it describes the surface, never the data). Declared
+    // in hasna.contract.json as openApiPath/generatedFrom for the SDK.
+    if (method === "GET" && path === "/openapi.json") {
+      return json(buildOpenApiDocument());
     }
     if (path === "/mcp") {
       return handleMcpRequest(req, buildServer);

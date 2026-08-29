@@ -21,6 +21,7 @@
       "status": "supported",
       "bin": "context-serve",
       "authMode": "custom",
+      "openApiPath": "/openapi.json",
       "health": { "method": "GET", "path": "/health", "public": true },
       "readiness": { "method": "GET", "path": "/ready", "public": true },
       "version": { "method": "GET", "path": "/version", "public": true }
@@ -30,7 +31,8 @@
       "kind": "sdk",
       "status": "supported",
       "authMode": "none",
-      "exportSubpath": "."
+      "exportSubpath": ".",
+      "generatedFrom": "/openapi.json"
     },
     {
       "name": "mcp",

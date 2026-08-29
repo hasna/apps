@@ -173,8 +173,10 @@ export class PgAdapterAsync {
         title: r.title,
         score: r.score,
       }));
-    } catch {
-      return [];
+    } catch (error) {
+      // Propagate: a hosted-backend failure must never masquerade as an
+      // empty result set (HTTP 200 with no matches while data exists).
+      throw error;
     }
   }
 
@@ -197,8 +199,10 @@ export class PgAdapterAsync {
         tsquery,
         limit,
       );
-    } catch {
-      return [];
+    } catch (error) {
+      // Propagate: a hosted-backend failure must never masquerade as an
+      // empty result set (HTTP 200 with no matches while data exists).
+      throw error;
     }
     if (rows.length > 0) {
       return (rows as Record<string, unknown>[]).map(rowToLibrary);
@@ -227,8 +231,10 @@ export class PgAdapterAsync {
         limit,
       )) as Record<string, unknown>[];
       return fallbackRows.map(rowToLibrary);
-    } catch {
-      return [];
+    } catch (error) {
+      // Propagate: a hosted-backend failure must never masquerade as an
+      // empty result set (HTTP 200 with no matches while data exists).
+      throw error;
     }
   }
 

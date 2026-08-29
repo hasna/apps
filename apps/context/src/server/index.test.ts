@@ -364,16 +364,16 @@ describe("HTTP search backend dispatch", () => {
   it("serves /api/search from the hosted backend when a Postgres URL is configured", async () => {
     seedChunk("Dispatch Docs Remote Search");
     // Unreachable on purpose: port 1 refuses instantly. The remote search path
-    // is attempted and returns no results — the local FTS index must NOT be
-    // consulted, because the local-only gate this port removes would otherwise
-    // serve stale local data from a hosted deployment.
+    // is attempted and must NOT fall back to the local FTS index — the
+    // local-only gate this port removes would otherwise serve stale local
+    // data from a hosted deployment. A hosted-backend failure must surface
+    // as HTTP 500 (it can no longer masquerade as an empty result set).
     process.env["HASNA_CONTEXT_DATABASE_URL"] = "postgres://127.0.0.1:1/context-unreachable";
 
     const res = await handleRequest(new Request("http://context.test/api/search?q=usestate"));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { mode: string; results: unknown[] };
-    expect(body.mode).toBe("fts");
-    expect(body.results).toEqual([]);
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: string };
+    expect(body.error.length).toBeGreaterThan(0);
   });
 
   it("serves /api/libraries?q= from the hosted backend when a Postgres URL is configured", async () => {
@@ -381,9 +381,9 @@ describe("HTTP search backend dispatch", () => {
     process.env["HASNA_CONTEXT_DATABASE_URL"] = "postgres://127.0.0.1:1/context-unreachable";
 
     const res = await handleRequest(new Request("http://context.test/api/libraries?q=dispatch"));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { libraries: unknown[] };
-    expect(body.libraries).toEqual([]);
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: string };
+    expect(body.error.length).toBeGreaterThan(0);
   });
 });
 
