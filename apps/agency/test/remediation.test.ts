@@ -240,6 +240,51 @@ describe("P1-2: tarball validation is rc-checked, never pipe-masked", () => {
   });
 });
 
+describe("P1-2: copy failure rolls back via pre-copy snapshot (isolated HOME)", () => {
+  function makeHome(): { home: string; hasna: string } {
+    const home = mkdtempSync(join(tmpdir(), "agency-home-"));
+    const hasna = join(home, ".hasna");
+    mkdirSync(hasna);
+    writeFileSync(join(hasna, "live.txt"), "live-data");
+    return { home, hasna };
+  }
+
+  function makeTarball(entries: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), "agency-tar-src-"));
+    for (const [name, content] of Object.entries(entries)) {
+      writeFileSync(join(dir, name), content);
+    }
+    const out = join(tmpdir(), `agency-import-${Date.now()}-${Math.floor(Math.random() * 1e6)}.tgz`);
+    const res = execSafe(`tar -czf "${out}" -C "${dir}" .`);
+    expect(res).not.toBeNull();
+    return out;
+  }
+
+  test("import happy path copies staged content into ~/.hasna", () => {
+    const { home, hasna } = makeHome();
+    const tar = makeTarball({ "new.txt": "new-data" });
+    const res = runCli(["import", tar, "--force"], { HOME: home }, home);
+    expect(res.code).toBe(0);
+    expect(readFileSync(join(hasna, "new.txt"), "utf8")).toBe("new-data");
+    expect(readFileSync(join(hasna, "live.txt"), "utf8")).toBe("live-data");
+  });
+
+  test("import copy failure rolls ~/.hasna back to the pre-copy snapshot", () => {
+    const { home, hasna } = makeHome();
+    // Live state has a DIRECTORY named `conflict`; the tarball has a FILE with
+    // the same name — `cp -a` fails deterministically on the type clash.
+    mkdirSync(join(hasna, "conflict"));
+    const tar = makeTarball({ conflict: "file-where-dir-was" });
+    const res = runCli(["import", tar, "--force"], { HOME: home }, home);
+    expect(res.code).toBe(1);
+    expect(res.stdout + res.stderr).toContain("rolled back");
+    // Rolled back: conflict is a directory again, live.txt intact.
+    const st = execSafe(`stat -c %F "${join(hasna, "conflict")}"`);
+    expect(st).toContain("directory");
+    expect(readFileSync(join(hasna, "live.txt"), "utf8")).toBe("live-data");
+  });
+});
+
 describe("P1-4: new service/library external effects require explicit opt-in", () => {
   test("new service --help exposes the per-effect flags", () => {
     const res = runCli(["new", "service", "--help"]);
