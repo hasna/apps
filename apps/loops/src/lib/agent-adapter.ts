@@ -268,6 +268,9 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
   if (target.manualBreakGlass !== undefined && typeof target.manualBreakGlass !== "boolean") {
     throw new ValidationError(`${label}.manualBreakGlass must be a boolean`);
   }
+  if (target.automated !== undefined && typeof target.automated !== "boolean") {
+    throw new ValidationError(`${label}.automated must be a boolean`);
+  }
   if (target.allowlist?.enforcement !== undefined && target.allowlist.enforcement !== "metadata_only") {
     throw new ValidationError(`${label}.allowlist.enforcement must be metadata_only`);
   }
@@ -284,8 +287,10 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
     effectiveSandbox === "danger-full-access" ||
     (provider === "cursor" && effectiveSandbox === "disabled");
   const relaxedOption = providerBypass ? "permissionMode=bypass" : `sandbox=${effectiveSandbox}`;
-  if (relaxed && target.manualBreakGlass !== true) {
-    throw new ValidationError(`${label}.manualBreakGlass=true is required when ${relaxedOption}`);
+  if (relaxed && target.manualBreakGlass !== true && target.automated !== true) {
+    throw new ValidationError(
+      `${label}.manualBreakGlass=true is required when ${relaxedOption} (or set automated=true for a scheduled durable lane)`,
+    );
   }
   if (relaxed && !safetyReason) {
     throw new ValidationError(`${label}.allowlist.safetyReason is required when ${relaxedOption}`);

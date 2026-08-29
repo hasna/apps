@@ -1492,6 +1492,45 @@ describe("provider adapter contracts", () => {
     }
   });
 
+  test("arms an automated durable lane with provider bypass and a documented safety reason, without manual break-glass", () => {
+    // A scheduled durable lane (e.g. the alumia deploy chain) runs autonomously
+    // with bypass permissions and a recorded safety reason. It is NOT a human
+    // break-glass emergency, so arming it must not require manualBreakGlass.
+    const providers: AgentTarget["provider"][] = ["claude", "cursor", "codewith", "codex", "aicopilot", "opencode"];
+    for (const provider of providers) {
+      const required = { provider, model: provider === "opencode" ? "openrouter/test/model" : undefined, permissionMode: "bypass" as const };
+      const target = baseTarget({
+        ...required,
+        automated: true,
+        allowlist: { enforcement: "metadata_only", safetyReason: "scheduled durable deploy lane" },
+      });
+      expect(() => providerAdapter(provider).validate(target)).not.toThrow();
+      expect(() => providerAdapter(provider).buildInvocation(target)).not.toThrow();
+    }
+  });
+
+  test("still requires a documented safety reason for an automated durable lane with provider bypass", () => {
+    expect(() => providerAdapter("claude").validate(baseTarget({
+      provider: "claude",
+      permissionMode: "bypass",
+      automated: true,
+    }))).toThrow("allowlist.safetyReason");
+    expect(() => providerAdapter("codewith").validate(baseTarget({
+      provider: "codewith",
+      permissionMode: "bypass",
+      automated: true,
+    }))).toThrow("allowlist.safetyReason");
+  });
+
+  test("rejects a non-boolean automated declaration", () => {
+    expect(() => providerAdapter("claude").validate(baseTarget({
+      provider: "claude",
+      permissionMode: "bypass",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      automated: "yes" as any,
+    }))).toThrow("automated must be a boolean");
+  });
+
   test("spawnCapture enforces explicit timeouts without blocking", async () => {
     const started = Date.now();
     const result = await spawnCapture("bash", ["-c", "sleep 5"], { timeoutMs: 100 });

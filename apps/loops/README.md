@@ -317,9 +317,11 @@ Agent steps inside workflows that carry an audit contract additionally receive
 one server-derived `agent_session_contract` event per step and workflow run.
 
 Codewith/Codex `danger-full-access`, Cursor `sandbox=disabled`, and provider
-bypass modes (Claude, Cursor, AI Copilot, and OpenCode) require both a non-empty
-safety reason and `--manual-break-glass`. A reason cannot replace explicit
-operator approval.
+bypass modes (Claude, Cursor, AI Copilot, and OpenCode) require a non-empty
+safety reason and either `--manual-break-glass` or `--automated`. A scheduled
+durable lane (for example a deploy chain) is declared with `--automated` plus a
+safety reason; `--manual-break-glass` remains the path for human-initiated
+emergency access. A safety reason is always required.
 
 For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
 

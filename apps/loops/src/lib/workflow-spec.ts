@@ -176,10 +176,11 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
     const env = optionalStringRecord(value.env, `${label}.env`);
     const allowlist = normalizeAllowlist(value.allowlist, `${label}.allowlist`);
     const manualBreakGlass = optionalBoolean(value.manualBreakGlass, `${label}.manualBreakGlass`);
+    const automated = optionalBoolean(value.automated, `${label}.automated`);
     // Provider-specific option rules live in the shared provider adapters so the
     // creation-time and execution-time error strings cannot drift apart.
     providerAdapter(value.provider as AgentTarget["provider"]).validate(
-      { ...value, extraArgs, allowlist, manualBreakGlass, ...promptFields } as unknown as AgentTarget,
+      { ...value, extraArgs, allowlist, manualBreakGlass, automated, ...promptFields } as unknown as AgentTarget,
       label,
     );
     if (value.worktree !== undefined) {
@@ -205,11 +206,12 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    const target: Record<string, unknown> = { ...value, extraArgs, env, allowlist, manualBreakGlass };
+    const target: Record<string, unknown> = { ...value, extraArgs, env, allowlist, manualBreakGlass, automated };
     if (!extraArgs) delete target.extraArgs;
     if (!env) delete target.env;
     if (!allowlist) delete target.allowlist;
     if (manualBreakGlass === undefined) delete target.manualBreakGlass;
+    if (automated === undefined) delete target.automated;
     delete target.promptFile;
     delete target.promptSource;
     return { ...target, ...promptFields } as unknown as ExecutableTarget;
