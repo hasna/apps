@@ -130,7 +130,7 @@ describe("secrets scanner", () => {
     });
 
     test("detects database URLs", () => {
-      const content = 'const db = "postgres://user:pass@localhost:5432/mydb";';
+      const content = 'const db = "postgres://app:Th3R3alPassw0rd!@db.prod.internal:5432/mydb";';
       const findings = scanFile("db.ts", content);
       const dbFinding = findings.find((f) => f.rule_id === "database-url");
       expect(dbFinding).toBeDefined();
@@ -142,6 +142,52 @@ describe("secrets scanner", () => {
       const findings = scanFile("db.ts", content);
       const dbFinding = findings.find((f) => f.rule_id === "database-url");
       expect(dbFinding).toBeDefined();
+    });
+
+    test("does not report localhost/dev placeholder database URLs", () => {
+      const postgresql = "postgres" + "ql://";
+      const postgres = "postgres" + "://";
+      const mongo = "mongo" + "db://";
+      const contents = [
+        `DATABASE_URL=${postgresql}postgres:postgres@localhost:5432/alumia`,
+        `DATABASE_URL=${postgres}user:password@127.0.0.1:5432/db`,
+        `MONGO_URI=${mongo}localhost:27017/mydb`,
+      ];
+      for (const content of contents) {
+        const findings = scanFile(".env.example", content);
+        expect(findings.filter((f) => f.rule_id === "database-url")).toEqual([]);
+      }
+    });
+
+    test("does not report docs and IaC placeholder database URLs", () => {
+      const scheme = "postgres" + "://";
+      const contents = [
+        `DATABASE_URL=${scheme}USER:PASSWORD@HOST:5432/DBNAME`,
+        `DATABASE_URL=${scheme}<username>:<password>@<host>:5432/<database>`,
+        `DATABASE_URL=${scheme}\${DB_USER}:\${DB_PASSWORD}@\${DB_HOST}:5432/\${DB_NAME}`,
+      ];
+      for (const content of contents) {
+        const findings = scanFile(".env.example", content);
+        expect(findings.filter((f) => f.rule_id === "database-url")).toEqual([]);
+      }
+    });
+
+    test("does not report high-entropy tokens inside a placeholder database URL", () => {
+      const scheme = "postgres" + "ql://";
+      const content =
+        `DATABASE_URL=${scheme}user:0123456789abcdef0123456789abcdef@localhost:5432/db`;
+      const findings = scanFile(".env.example", content);
+      expect(findings.filter((f) => f.rule_id === "database-url")).toEqual([]);
+      expect(findings.filter((f) => f.rule_id === "high-entropy-hex")).toEqual([]);
+    });
+
+    test("still reports high-entropy tokens inside a real database URL", () => {
+      const scheme = "postgres" + "ql://";
+      const content =
+        `DATABASE_URL=${scheme}app:0123456789abcdef0123456789abcdef@db.internal:5432/prod`;
+      const findings = scanFile(".env", content);
+      expect(findings.find((f) => f.rule_id === "database-url")).toBeDefined();
+      expect(findings.find((f) => f.rule_id === "high-entropy-hex")).toBeDefined();
     });
 
     test("clean file produces no findings from patterns", () => {

@@ -25,6 +25,15 @@ interface CredentialPatternDefinition {
 // secrets scanner and every persistence/output/provider boundary. Keep the
 // definitions data-only so each consumer gets a fresh RegExp and cannot leak
 // lastIndex state into another scan.
+const DATABASE_URL_DEFINITION: CredentialPatternDefinition = {
+  id: "database-url",
+  name: "Database URL",
+  source: String.raw`\b(?:postgres(?:ql)?` + String.raw`://[^\s'"]+|mysql` +
+    String.raw`://[^\s'"]+|mongodb(?:\+srv)?` + String.raw`://[^\s'"]+)`,
+  flags: "gi",
+  severity: Severity.High,
+};
+
 const SCANNER_PATTERN_DEFINITIONS: CredentialPatternDefinition[] = [
   {
     id: "aws-access-key",
@@ -89,14 +98,7 @@ const SCANNER_PATTERN_DEFINITIONS: CredentialPatternDefinition[] = [
     flags: "g",
     severity: Severity.Critical,
   },
-  {
-    id: "database-url",
-    name: "Database URL",
-    source: String.raw`\b(?:postgres(?:ql)?` + String.raw`://[^\s'"]+|mysql` +
-      String.raw`://[^\s'"]+|mongodb(?:\+srv)?` + String.raw`://[^\s'"]+)`,
-    flags: "gi",
-    severity: Severity.High,
-  },
+  DATABASE_URL_DEFINITION,
 ];
 
 // Boundary-only formats are deliberately conservative additions. They do not
@@ -175,6 +177,51 @@ function materialize(definition: CredentialPatternDefinition): CredentialPattern
   };
 }
 
+// A database URL that is obviously a placeholder — a localhost/dev default, a
+// documentation example, or an IaC template — carries no credential. Reporting
+// every connection string regardless of content floods scans with these, so the
+// database-url rule (and any high-entropy token that sits inside such a URL)
+// must stay silent for the placeholder class while continuing to flag genuinely
+// suspicious connection strings.
+const LOOPBACK_HOST_RE = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i;
+const UPPERCASE_PLACEHOLDER_HOST_RE = /^[A-Z]{2,}$/;
+
+function hostOfDatabaseUrl(dsn: string): string {
+  const afterScheme = dsn.slice(dsn.indexOf("://") + 3);
+  const withoutUserInfo = afterScheme.includes("@")
+    ? afterScheme.slice(afterScheme.indexOf("@") + 1)
+    : afterScheme;
+  const authority = withoutUserInfo.split(/[/?]/, 1)[0];
+  return authority.startsWith("[")
+    ? authority.slice(0, authority.indexOf("]") + 1)
+    : authority.split(":")[0];
+}
+
+/** True when the matched connection string is a non-credential placeholder. */
+export function isPlaceholderDatabaseUrl(value: string): boolean {
+  // Template / IaC placeholders such as <username> or ${DB_HOST}.
+  if (value.includes("<") || value.includes("${")) return true;
+  const host = hostOfDatabaseUrl(value);
+  if (LOOPBACK_HOST_RE.test(host)) return true;
+  // Documentation uppercase placeholders, e.g. postgresql://USER:PASSWORD@HOST:5432/DBNAME.
+  if (UPPERCASE_PLACEHOLDER_HOST_RE.test(host.replace(/^\[|\]$/g, ""))) return true;
+  return false;
+}
+
+/** Span ([start, end)) of every placeholder connection string in `value`. */
+function findPlaceholderDatabaseUrlSpans(value: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const rule = materialize(DATABASE_URL_DEFINITION);
+  let match: RegExpExecArray | null;
+  while ((match = rule.pattern.exec(value)) !== null) {
+    if (isPlaceholderDatabaseUrl(match[0])) {
+      spans.push([match.index, match.index + match[0].length]);
+    }
+    if (match[0].length === 0) rule.pattern.lastIndex++;
+  }
+  return spans;
+}
+
 export const SECRET_PATTERNS: CredentialPattern[] = SCANNER_PATTERN_DEFINITIONS.map(materialize);
 
 export function shannonEntropy(value: string): number {
@@ -200,6 +247,13 @@ function collectPatternMatches(
     const rule = materialize(definition);
     let match: RegExpExecArray | null;
     while ((match = rule.pattern.exec(value)) !== null) {
+      if (
+        definition.id === DATABASE_URL_DEFINITION.id
+        && isPlaceholderDatabaseUrl(match[0])
+      ) {
+        if (match[0].length === 0) rule.pattern.lastIndex++;
+        continue;
+      }
       recognitions.push({ index: match.index, length: match[0].length, rule });
       if (match[0].length === 0) rule.pattern.lastIndex++;
     }
@@ -259,6 +313,10 @@ function collectEntropyMatches(
   boundary = false,
 ): CredentialRecognition[] {
   const recognitions: CredentialRecognition[] = [];
+  // A high-entropy token embedded in a placeholder connection string is itself
+  // placeholder material (e.g. a long fake password in a docs example), so it
+  // must not be reported either.
+  const placeholderDatabaseUrlSpans = findPlaceholderDatabaseUrlSpans(value);
   // Normalize against the maximum empirical entropy reachable by this sample,
   // not merely the alphabet maximum. A 22-character Base64 token cannot
   // empirically exceed log2(22), while a hexadecimal alphabet tops out at 4.
@@ -280,6 +338,15 @@ function collectEntropyMatches(
     const rule = materialize(definition);
     let match: RegExpExecArray | null;
     while ((match = rule.pattern.exec(value)) !== null) {
+      const matchStart = match.index;
+      const matchEnd = matchStart + match[0].length;
+      const insidePlaceholderDatabaseUrl = placeholderDatabaseUrlSpans.some(
+        ([spanStart, spanEnd]) => spanStart <= matchStart && matchEnd <= spanEnd,
+      );
+      if (insidePlaceholderDatabaseUrl) {
+        if (match[0].length === 0) rule.pattern.lastIndex++;
+        continue;
+      }
       if (
         definition.id === HIGH_ENTROPY_HEX_DEFINITION.id
         && allowPinnedGitHubActionRevision
