@@ -1,7 +1,7 @@
 {
   "name": "@hasna/context",
   "version": "0.1.54",
-  "description": "Self-hosted documentation context server for AI coding agents \u2014 refresh, index, and query source docs via MCP + CLI + HTTP",
+  "description": "Self-hosted documentation context server for AI coding agents — refresh, index, and query source docs via MCP + CLI + HTTP",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,6 +18,10 @@
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
     }
   },
   "files": [
@@ -27,7 +31,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts src/storage.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist && sed -i.bak 's|#!/usr/bin/env node|#!/usr/bin/env bun|' dist/cli/index.js dist/mcp/index.js dist/server/index.js && rm -f dist/cli/index.js.bak dist/mcp/index.js.bak dist/server/index.js.bak",
+    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts src/storage.ts --outdir dist --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc --emitDeclarationOnly --outDir dist && sed -i.bak 's|#!/usr/bin/env node|#!/usr/bin/env bun|' dist/cli/index.js dist/mcp/index.js dist/server/index.js && rm -f dist/cli/index.js.bak dist/mcp/index.js.bak dist/server/index.js.bak",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",

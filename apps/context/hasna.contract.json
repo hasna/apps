@@ -31,7 +31,7 @@
       "kind": "sdk",
       "status": "supported",
       "authMode": "none",
-      "exportSubpath": ".",
+      "exportSubpath": "./sdk",
       "generatedFrom": "/openapi.json"
     },
     {
