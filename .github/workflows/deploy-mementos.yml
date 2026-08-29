@@ -188,6 +188,15 @@ jobs:
     runs-on: ubuntu-24.04-arm # native arm64 runner — image built without QEMU
     environment: production
     timeout-minutes: 45
+    # Job-level permissions override the workflow block for THIS job. The gha
+    # cache backend used by docker buildx (type=gha) writes through the Actions
+    # cache API, which needs actions: write on the job token; id-token: write
+    # is carried here so the OIDC role assumption below still works. The gate
+    # job keeps its deliberately minimal contents+actions read scope.
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
 
     defaults:
       run:
