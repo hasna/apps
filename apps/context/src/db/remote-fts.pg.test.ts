@@ -75,6 +75,7 @@ describe.skipIf(!PG_URL)("postgres full-text search parity", () => {
     slug: string;
     description?: string;
     npm_package?: string;
+    version?: string;
   }): Promise<string> {
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -82,13 +83,14 @@ describe.skipIf(!PG_URL)("postgres full-text search parity", () => {
       `INSERT INTO libraries
          (id, name, slug, description, npm_package, github_repo, docs_url, version,
           chunk_count, document_count, last_crawled_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, NULL, NULL, NULL, 0, 0, NULL, $6, $6)
+       VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6, 0, 0, NULL, $7, $7)
        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
       id,
       input.name,
       input.slug,
       input.description ?? null,
       input.npm_package ?? null,
+      input.version ?? null,
       now,
     );
     return id;
@@ -227,5 +229,70 @@ describe.skipIf(!PG_URL)("postgres full-text search parity", () => {
     // ...and that searchLibraries still finds the library through the fallback.
     const results = await remote.searchLibraries("the");
     expect(results.map((l) => l.id)).toContain(lib);
+  });
+
+  test("getLibraryBySlug resolves a remote-only library by slug (hosted search resolution)", async () => {
+    // A library that exists ONLY on the hosted backend (never synced to the
+    // local SQLite store). Hosted library-scoped search surfaces resolve the
+    // library through the SELECTED backend, so this must resolve remotely and
+    // let hosted FTS run — previously it failed with LIBRARY_NOT_FOUND before
+    // the hosted query could run (release-review P1).
+    const lib = await insertLibrary({ name: "Remote Only", slug: "remote-only-lib" });
+
+    const resolved = await remote.getLibraryBySlug("remote-only-lib");
+    expect(resolved.id).toBe(lib);
+    expect(resolved.slug).toBe("remote-only-lib");
+    expect(resolved.name).toBe("Remote Only");
+  });
+
+  test("getLibraryBySlug throws LIBRARY_NOT_FOUND for an unknown slug", async () => {
+    await expect(remote.getLibraryBySlug("no-such-library")).rejects.toThrow(/Library not found/);
+  });
+
+  test("listLibraries returns the full remote library set for reference resolution", async () => {
+    // Remote-side coverage for release-review P1: the hosted query-docs path
+    // resolves references against this listing (candidate + version-prefix
+    // matching), so the remote adapter must expose the complete set.
+    await insertLibrary({ name: "React 18", slug: "react-18", version: "18.2.0" });
+    await insertLibrary({ name: "React 19", slug: "react-19", version: "19.0.0" });
+
+    const all = await remote.listLibraries();
+    expect(all.map((l) => l.slug)).toEqual(expect.arrayContaining(["react-18", "react-19"]));
+    expect(all.find((l) => l.slug === "react-18")?.version).toBe("18.2.0");
+  });
+
+  test("semanticSearch ranks remote chunk embeddings by cosine similarity", async () => {
+    // Remote-side coverage for release-review P1: hosted semantic search
+    // used to run against local SQLite after resolving a remote-only library,
+    // returning HTTP 200 with empty results while remote embeddings existed.
+    const libId = await insertLibrary({ name: "Embedded", slug: "embedded-lib" });
+    const { chunkId } = await insertChunk({
+      libraryId: libId,
+      url: "https://example.com/embed",
+      title: "Embedded",
+      content: "vector content",
+    });
+    // Migration 10 chunk_embeddings row, exactly as the sync upsert writes it
+    // (BYTEA float32 little-endian embedding).
+    const embedding = new Float32Array([1, 0, 0]);
+    await remote.run(
+      `INSERT INTO chunk_embeddings (chunk_id, embedding, dimensions)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (chunk_id) DO UPDATE SET embedding = EXCLUDED.embedding, dimensions = EXCLUDED.dimensions`,
+      chunkId,
+      Buffer.from(embedding.buffer),
+      embedding.length,
+    );
+
+    const query = new Float32Array([1, 0, 0]);
+    const results = await remote.semanticSearch(query, libId, 5);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.chunk_id).toBe(chunkId);
+    expect(results[0]?.score).toBeGreaterThan(0.99);
+
+    // Library-scoped filter: a different library's chunks are excluded.
+    const otherLib = await insertLibrary({ name: "Other", slug: "other-lib" });
+    const scoped = await remote.semanticSearch(query, otherLib, 5);
+    expect(scoped).toHaveLength(0);
   });
 });

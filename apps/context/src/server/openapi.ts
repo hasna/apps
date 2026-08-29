@@ -69,6 +69,14 @@ const ENDPOINTS: Endpoint[] = [
 
 const pkg = require("../../package.json") as { version: string };
 
+/**
+ * Security requirement for protected operations: Bearer OR x-context-token.
+ * OpenAPI security is OR across array entries, AND within an entry, so two
+ * single-scheme entries express "either scheme satisfies".
+ */
+const PROTECTED_SECURITY = [{ bearerAuth: [] }, { xContextToken: [] }];
+const PUBLIC_SECURITY: never[] = [];
+
 /** Build the OpenAPI 3.1 document for the context HTTP surface. */
 export function buildOpenApiDocument(): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -77,6 +85,13 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     pathItem[endpoint.method] = {
       operationId: endpoint.operationId,
       summary: endpoint.summary,
+      // The `public` marker is load-bearing: protected /api/* and /mcp
+      // operations REQUIRE one of the declared security schemes, so the
+      // machine-readable contract cannot be read as unauthenticated
+      // (release-review P1). Enforcement is conditional on configuration
+      // (see info.description): when no token is configured the server
+      // serves openly, but the contract states the secured contract.
+      security: endpoint.public ? PUBLIC_SECURITY : PROTECTED_SECURITY,
       responses: {
         "200": { description: "OK" },
         "400": { description: "Bad request" },
@@ -95,9 +110,26 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       version: pkg.version,
       description:
         "Self-hosted documentation context server for AI coding agents. " +
-        "Data routes under /api/* require HTTP auth when CONTEXT_HTTP_TOKEN or " +
+        "Data routes under /api/* and /mcp require HTTP auth when CONTEXT_HTTP_TOKEN or " +
         "CONTEXT_REQUIRE_HTTP_AUTH is set; /api/health (legacy liveness), " +
-        "/health, /ready, /version and /openapi.json are public by contract.",
+        "/health, /ready, /version and /openapi.json are public by contract. " +
+        "Protected operations accept either `Authorization: Bearer <token>` " +
+        "or the `x-context-token` header (see components.securitySchemes).",
+    },
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          description: "Bearer token matching CONTEXT_HTTP_TOKEN / HASNA_CONTEXT_HTTP_TOKEN.",
+        },
+        xContextToken: {
+          type: "apiKey",
+          in: "header",
+          name: "x-context-token",
+          description: "Token matching CONTEXT_HTTP_TOKEN / HASNA_CONTEXT_HTTP_TOKEN.",
+        },
+      },
     },
     paths,
   };

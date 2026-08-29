@@ -48,4 +48,31 @@ describe("context OpenAPI surface", () => {
       delete process.env.CONTEXT_REQUIRE_HTTP_AUTH;
     }
   });
+
+  test("declares security schemes and marks protected operations (contract honesty)", () => {
+    // ROOT CAUSE guarded here: protected /api/* and /mcp operations had no
+    // OpenAPI security requirements or securitySchemes and the `public`
+    // marker was unused — the machine-readable contract described
+    // authenticated routes as unauthenticated (release-review P1).
+    const doc = buildOpenApiDocument() as {
+      components: {
+        securitySchemes: Record<string, unknown>;
+      };
+      paths: Record<string, Record<string, { security?: unknown[] }>>;
+    };
+
+    expect(doc.components.securitySchemes.bearerAuth).toBeDefined();
+    expect(doc.components.securitySchemes.xContextToken).toBeDefined();
+
+    // Public endpoints carry an EMPTY security array (explicitly public).
+    expect(doc.paths["/health"]!.get.security).toEqual([]);
+    expect(doc.paths["/api/health"]!.get.security).toEqual([]);
+    expect(doc.paths["/version"]!.get.security).toEqual([]);
+
+    // Protected endpoints REQUIRE one of the declared schemes.
+    const searchSecurity = doc.paths["/api/search"]!.get.security;
+    expect(searchSecurity).toEqual([{ bearerAuth: [] }, { xContextToken: [] }]);
+    expect(doc.paths["/api/libraries"]!.get.security).toEqual([{ bearerAuth: [] }, { xContextToken: [] }]);
+    expect(doc.paths["/mcp"]!.post.security).toEqual([{ bearerAuth: [] }, { xContextToken: [] }]);
+  });
 });

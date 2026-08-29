@@ -77,6 +77,46 @@ describe("database path resolution", () => {
     expect(receipt).toMatchObject({ from: legacyDir, to: canonical });
   });
 
+  it("fails closed on the highest-priority legacy store instead of falling back to an older one", () => {
+    // Multi-source regression (release-review P1): with the XDG data home
+    // adopted, the highest-priority legacy store (~/.hasna/context) holds a
+    // CORRUPT database while the older ~/.hasna/apps/knowledge store holds a
+    // VALID one. The migration must abort — the canonical database must NOT
+    // be created from the older store, because its existence would suppress
+    // every future migration attempt and hide the newer store's committed
+    // data forever.
+    const root = isolateHome();
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+    const newerLegacy = join(root, "home", ".hasna", "context");
+    const olderLegacy = join(root, "home", ".hasna", "apps", "knowledge");
+    mkdirSync(newerLegacy, { recursive: true });
+    mkdirSync(olderLegacy, { recursive: true });
+    writeFileSync(join(newerLegacy, "context.db"), "not-a-sqlite-database");
+    makeContextDb(join(olderLegacy, "context.db"));
+
+    expect(() => getDataDir()).toThrow(/failed to migrate legacy context store/);
+    // The canonical database was NOT created — the migration retries later.
+    expect(existsSync(join(xdgRoot, "context", "context.db"))).toBe(false);
+  });
+
+  it("migrates the highest-priority legacy store when both newer and older stores exist", () => {
+    const root = isolateHome();
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+    const newerLegacy = join(root, "home", ".hasna", "context");
+    const olderLegacy = join(root, "home", ".hasna", "apps", "knowledge");
+    mkdirSync(newerLegacy, { recursive: true });
+    mkdirSync(olderLegacy, { recursive: true });
+    makeContextDb(join(newerLegacy, "context.db"));
+    makeContextDb(join(olderLegacy, "context.db"));
+
+    const dataDir = getDataDir();
+    expect(dataDir).toBe(join(xdgRoot, "context"));
+    const receipt = JSON.parse(readFileSync(join(dataDir, "migration-receipt.json"), "utf8")) as { from: string };
+    expect(receipt.from).toBe(newerLegacy);
+  });
+
   it("migrates the older ~/.context legacy store when the wrong default has no context data", () => {
     const root = isolateHome();
     const legacyDir = join(root, "home", ".context");
@@ -190,6 +230,30 @@ describe("database path resolution", () => {
     }
     // No stray snapshot temp is left behind by the losing attempt.
     expect(readdirSync(canonicalDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("aborts instead of creating an empty canonical database when a legacy migration fails", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "context");
+    mkdirSync(legacyDir, { recursive: true });
+    // A legacy source that cannot be snapshotted: a directory named
+    // context.db makes the VACUUM INTO open fail deterministically.
+    const source = join(legacyDir, "context.db");
+    mkdirSync(source, { recursive: true });
+
+    // Adopt the XDG data home so the legacy ~/.hasna/context store must be
+    // migrated into a DIFFERENT canonical root (otherwise the legacy dir IS
+    // the canonical home and no migration runs).
+    const xdgRoot = join(root, "xdg-data");
+    process.env.HASNA_DATA_HOME = xdgRoot;
+
+    // The migration must FAIL LOUDLY (throw) and NOT create the canonical
+    // database: an empty canonical DB would suppress every future migration
+    // attempt (migrateLegacyDataDir early-returns when the canonical file
+    // exists) and leave the legacy rows invisible forever (release-review P1).
+    expect(() => getDataDir()).toThrow(/failed to migrate legacy context store/);
+    const canonical = join(xdgRoot, "context", "context.db");
+    expect(existsSync(canonical)).toBe(false);
   });
 
   it("two concurrent first-use migrations (separate processes) converge on one verified canonical snapshot", async () => {

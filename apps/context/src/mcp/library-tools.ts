@@ -3,11 +3,10 @@ import { z } from "zod";
 import {
   searchLibraries,
   getLibraryBySlug,
-  resolveLibraryReference,
   listLibraries,
   createLibrary,
 } from "../db/libraries.js";
-import { searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
+import { resolveLibraryOnBackend, searchChunksOnBackend, searchLibrariesOnBackend, semanticSearchOnBackend } from "../db/backend-search.js";
 import { listApiEndpoints } from "../db/api-endpoints.js";
 import {
   refreshDocumentationSource,
@@ -27,7 +26,6 @@ import {
   embeddingCoverage,
   getEmbeddingConfig,
   embedText,
-  semanticSearch,
 } from "../db/embeddings.js";
 import { bootstrapSeedSources, type SeedBootstrapReport } from "../seeds/bootstrap.js";
 import type { SeedLibraryGroup } from "../seeds/libraries.js";
@@ -227,7 +225,9 @@ Provide a specific topic or query to get the most relevant chunks.`,
           .replace(/^\//, "")
           .trim();
 
-        const library = resolveLibraryReference(slug, { version });
+        // Resolve through the SELECTED backend so a remote-only library
+        // (hosted Postgres only) can still be queried (release-review P1).
+        const library = await resolveLibraryOnBackend(slug, { version });
 
         if (library.chunk_count === 0) {
           const links = getLinks(library.id);
@@ -254,7 +254,10 @@ Provide a specific topic or query to get the most relevant chunks.`,
         if (embConfig) {
           try {
             const queryVec = await embedText(query, embConfig);
-            const semantic = semanticSearch(queryVec, library.id, maxChunks);
+            // Dispatch through the SELECTED backend so a library resolved on
+            // the hosted backend is searched against the same backend, never
+            // against local SQLite (release-review P1).
+            const semantic = await semanticSearchOnBackend(queryVec, library.id, maxChunks);
             // Merge with FTS results for hybrid ranking
             const fts = await searchChunksOnBackend(query, library.id, maxChunks);
             const seen = new Set<string>();

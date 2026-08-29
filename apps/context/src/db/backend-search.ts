@@ -10,8 +10,14 @@
  */
 import { getStorageMode, getStoragePg, runStorageMigrations } from "./storage-sync.js";
 import { searchChunks } from "./chunks.js";
-import { searchLibraries } from "./libraries.js";
-import type { Library, SearchResult } from "../types/index.js";
+import { semanticSearch } from "./embeddings.js";
+import {
+  getLibraryBySlug as getLocalLibraryBySlug,
+  resolveLibraryReference as resolveLocalLibraryReference,
+  resolveLibraryReferenceAgainst,
+  searchLibraries,
+} from "./libraries.js";
+import { type Library, type SearchResult } from "../types/index.js";
 
 export function usesHostedBackend(): boolean {
   return getStorageMode() !== "local";
@@ -73,6 +79,73 @@ export async function searchLibrariesOnBackend(
   const remote = await getStoragePg();
   try {
     return await remote.searchLibraries(query, limit);
+  } finally {
+    await remote.close();
+  }
+}
+
+/**
+ * Resolve a library by slug through the SELECTED backend, mirroring
+ * getLibraryBySlug on the local store. Hosted library-scoped search surfaces
+ * must not resolve against local SQLite first: a library that exists only on
+ * the hosted backend would fail with LIBRARY_NOT_FOUND before the hosted FTS
+ * query could run (release-review P1).
+ */
+export async function resolveLibraryBySlugOnBackend(slug: string): Promise<Library> {
+  if (!usesHostedBackend()) return getLocalLibraryBySlug(slug);
+  await ensureHostedSearchReady();
+  const remote = await getStoragePg();
+  try {
+    return await remote.getLibraryBySlug(slug);
+  } finally {
+    await remote.close();
+  }
+}
+
+/**
+ * Backend-aware version of resolveLibraryReference for MCP query-docs: when
+ * the hosted backend is active, resolve the reference against the remote
+ * store so a remote-only library can be searched, preserving the LOCAL
+ * reference semantics — `/context/<slug>@<version>` parsing, candidate
+ * matching across slug/name/npm/github identities, and version-prefix
+ * matching (`18` matches a stored `18.2.0`) (release-review P1: the hosted
+ * path used to query the literal slug including the `@version` suffix and
+ * rejected prefix requests).
+ */
+export async function resolveLibraryOnBackend(
+  reference: string,
+  options: { version?: string | null } = {},
+): Promise<Library> {
+  if (!usesHostedBackend()) return resolveLocalLibraryReference(reference, options);
+  await ensureHostedSearchReady();
+  const remote = await getStoragePg();
+  try {
+    const libraries = await remote.listLibraries();
+    return resolveLibraryReferenceAgainst(libraries, reference, options);
+  } finally {
+    await remote.close();
+  }
+}
+
+/**
+ * Backend-aware semantic search: dispatch to the hosted backend's chunk
+ * embeddings when the hosted backend is active, otherwise to the local
+ * SQLite store. A library resolved on the hosted backend (including a
+ * remote-only library) must be searched against the SAME backend —
+ * resolving remotely and then running semantic search against local SQLite
+ * returned HTTP 200 with empty results while remote embeddings existed
+ * (release-review P1).
+ */
+export async function semanticSearchOnBackend(
+  queryEmbedding: Float32Array,
+  libraryId?: string,
+  limit = 10,
+): Promise<SearchResult[]> {
+  if (!usesHostedBackend()) return semanticSearch(queryEmbedding, libraryId, limit);
+  await ensureHostedSearchReady();
+  const remote = await getStoragePg();
+  try {
+    return await remote.semanticSearch(queryEmbedding, libraryId, limit);
   } finally {
     await remote.close();
   }

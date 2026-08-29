@@ -138,6 +138,16 @@ function migrateLegacyDataDir(newDir: string): void {
       writeMigrationReceipt(oldDir, newDir);
       return;
     }
+    // FAIL CLOSED on the highest-priority existing legacy store: falling
+    // back to an older store would silently make the canonical database
+    // hold stale rows while the newer store's committed data stays hidden
+    // forever (the canonical DB's existence suppresses every future
+    // migration attempt). Abort BEFORE the caller can create the canonical
+    // database so the migration retries on next start (release-review P1).
+    throw new Error(
+      `failed to migrate legacy context store at ${oldDir}: snapshot/integrity/placement error; ` +
+        "the canonical database was NOT created so the migration will retry on next start",
+    );
   }
 }
 

@@ -5,6 +5,7 @@ import {
   getLibraryById,
   getLibraryBySlug,
   resolveLibraryReference,
+  resolveLibraryReferenceAgainst,
   listLibraries,
   searchLibraries,
   deleteLibrary,
@@ -162,6 +163,47 @@ describe("searchLibraries", () => {
     expect(resolveLibraryReference("react", { version: "18" }).slug).toBe("react-18");
     expect(resolveLibraryReference("/context/react-19@19").slug).toBe("react-19");
     expect(() => resolveLibraryReference("react-19", { version: "18" })).toThrow("not found");
+  });
+});
+
+describe("resolveLibraryReferenceAgainst", () => {
+  // The pure reference resolver shared by the local store and the hosted
+  // backend. Regression coverage for release-review P1: the hosted
+  // query-docs path used to query the literal reference string, so
+  // `/context/react-19@19` failed to resolve (the slug "react-19@19" does
+  // not exist) and a requested prefix version "18" rejected a stored
+  // "18.2.0".
+  const libs = () => [
+    createLibrary({
+      name: "React",
+      slug: "react-18",
+      version: "18.2.0",
+      docs_url: "https://react.dev/v18",
+    }),
+    createLibrary({
+      name: "React",
+      slug: "react-19",
+      version: "19.0.0",
+      docs_url: "https://react.dev/v19",
+    }),
+  ];
+
+  it("parses /context/<slug>@<version> references instead of querying the literal string", () => {
+    libs();
+    expect(resolveLibraryReferenceAgainst(listLibraries(), "/context/react-19@19").slug).toBe("react-19");
+    expect(resolveLibraryReferenceAgainst(listLibraries(), "react-19", { version: "19" }).slug).toBe("react-19");
+  });
+
+  it("matches version prefixes: requested 18 resolves a stored 18.2.0", () => {
+    libs();
+    expect(resolveLibraryReferenceAgainst(listLibraries(), "react-18", { version: "18" }).version).toBe("18.2.0");
+    expect(resolveLibraryReferenceAgainst(listLibraries(), "react", { version: "18" }).slug).toBe("react-18");
+  });
+
+  it("throws LibraryNotFoundError for a version the library does not satisfy", () => {
+    libs();
+    expect(() => resolveLibraryReferenceAgainst(listLibraries(), "react-19", { version: "18" })).toThrow(/version 18/);
+    expect(() => resolveLibraryReferenceAgainst(listLibraries(), "no-such-library")).toThrow("not found");
   });
 });
 

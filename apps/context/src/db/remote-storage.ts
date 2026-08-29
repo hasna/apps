@@ -1,6 +1,7 @@
 import pg from "pg";
 import type { Pool, PoolConfig } from "pg";
-import type { Library, SearchResult } from "../types/index.js";
+import { cosineSimilarity } from "./embeddings.js";
+import { LibraryNotFoundError, type Library, type SearchResult } from "../types/index.js";
 
 const DISABLED_SSL_MODE = "disable";
 
@@ -240,5 +241,94 @@ export class PgAdapterAsync {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  /**
+   * Full library listing on the hosted backend, mirroring the local
+   * listLibraries (db/libraries.ts). Used by backend-aware reference
+   * resolution so the hosted query-docs path can apply candidate matching
+   * (slug/name/npm/github identities) and version-prefix semantics instead of
+   * querying the literal reference string (release-review P1).
+   */
+  async listLibraries(): Promise<Library[]> {
+    const rows = (await this.all(
+      "SELECT * FROM libraries ORDER BY name ASC",
+    )) as Record<string, unknown>[];
+    return rows.map(rowToLibrary);
+  }
+
+  /**
+   * Semantic search over the hosted backend's chunk embeddings, equivalent to
+   * the local semanticSearch (db/embeddings.ts): every embedded chunk with a
+   * positive cosine similarity to the query embedding is ranked and the top
+   * `limit` rows returned. A library-scoped query filters by the remote
+   * library id — including remote-only libraries, which local SQLite cannot
+   * see at all (release-review P1: hosted semantic search used to resolve
+   * the library remotely and then run semanticSearch against local SQLite,
+   * returning HTTP 200 with empty results).
+   */
+  async semanticSearch(
+    queryEmbedding: Float32Array,
+    libraryId?: string,
+    limit = 10,
+  ): Promise<SearchResult[]> {
+    const rows = (await this.all(
+      `SELECT ce.chunk_id, c.library_id, c.document_id, c.content,
+              d.url, d.title, ce.embedding, ce.dimensions
+       FROM chunk_embeddings ce
+       JOIN chunks c ON c.id = ce.chunk_id
+       JOIN documents d ON d.id = c.document_id
+       WHERE ($1::text IS NULL OR c.library_id = $1)`,
+      libraryId ?? null,
+    )) as unknown as Array<{
+      chunk_id: string;
+      library_id: string;
+      document_id: string;
+      content: string;
+      url: string | null;
+      title: string | null;
+      embedding: Buffer;
+      dimensions: number;
+    }>;
+
+    const scored = rows.flatMap((row) => {
+      if (row.dimensions !== queryEmbedding.length) return [];
+      const vec = new Float32Array(
+        row.embedding.buffer,
+        row.embedding.byteOffset,
+        row.dimensions,
+      );
+      const score = cosineSimilarity(queryEmbedding, vec);
+      if (score <= 0) return [];
+      return [{
+        chunk_id: row.chunk_id,
+        library_id: row.library_id,
+        document_id: row.document_id,
+        content: row.content,
+        url: row.url,
+        title: row.title,
+        score,
+      }];
+    });
+
+    return scored.sort((a, b) => b.score - a.score).slice(0, limit);
+  }
+
+  /**
+   * Resolve a library by slug on the hosted backend. Library-scoped hosted
+   * search surfaces (HTTP /api/search?library= and the MCP query-docs tool)
+   * must resolve the library through the SELECTED backend: a library that
+   * exists only on the hosted backend (created or synced remotely, never
+   * present in the local SQLite store) used to fail with LIBRARY_NOT_FOUND
+   * before the hosted FTS query could run (release-review P1).
+   */
+  async getLibraryBySlug(slug: string): Promise<Library> {
+    const rows = (await this.all(
+      "SELECT * FROM libraries WHERE slug = $1 LIMIT 1",
+      slug,
+    )) as Record<string, unknown>[];
+    const row = rows[0];
+    if (!row) throw new LibraryNotFoundError(slug);
+    return rowToLibrary(row);
   }
 }

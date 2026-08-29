@@ -89,34 +89,50 @@ export function getLibraryBySlug(slug: string, db?: Database): Library {
   return rowToLibrary(row);
 }
 
+/**
+ * Pure reference-resolution over an in-memory library set, shared by the
+ * local store (SQLite) and the hosted backend (PostgreSQL) so both surfaces
+ * honour the same semantics: `/context/<slug>@<version>` parsing, exact-slug
+ * lookup, candidate matching across slug/name/npm/github identities, and
+ * version-prefix matching (`18` matches a stored `18.2.0`) (release-review
+ * P1: the hosted query-docs path used to query the literal slug including
+ * the `@version` suffix and rejected prefix requests).
+ */
+export function resolveLibraryReferenceAgainst(
+  libraries: Library[],
+  reference: string,
+  options: { version?: string | null } = {},
+): Library {
+  const parsed = parseLibraryReference(reference);
+  const requestedVersion = normalizeVersion(options.version ?? parsed.version);
+  const slug = parsed.slug;
+
+  const exact = libraries.find((library) => library.slug === slug);
+  if (exact) {
+    if (!requestedVersion || versionMatches(exact.version, requestedVersion)) return exact;
+  }
+
+  if (requestedVersion) {
+    const candidates = libraries.filter((library) =>
+      libraryMatchesReference(library, slug) && versionMatches(library.version, requestedVersion)
+    );
+    if (candidates.length > 0) return bestVersionCandidate(candidates, slug, requestedVersion);
+  }
+
+  if (exact) {
+    throw new LibraryNotFoundError(`${reference} version ${requestedVersion}`);
+  }
+
+  throw new LibraryNotFoundError(reference);
+}
+
 export function resolveLibraryReference(
   reference: string,
   options: { version?: string | null } = {},
   db?: Database
 ): Library {
   const database = db ?? getDatabase();
-  const parsed = parseLibraryReference(reference);
-  const requestedVersion = normalizeVersion(options.version ?? parsed.version);
-  const slug = parsed.slug;
-
-  const exactRow = database.get("SELECT * FROM libraries WHERE slug = ?", slug) as Record<string, unknown> | null;
-  if (exactRow) {
-    const exact = rowToLibrary(exactRow);
-    if (!requestedVersion || versionMatches(exact.version, requestedVersion)) return exact;
-  }
-
-  if (requestedVersion) {
-    const candidates = listLibraries(database).filter((library) =>
-      libraryMatchesReference(library, slug) && versionMatches(library.version, requestedVersion)
-    );
-    if (candidates.length > 0) return bestVersionCandidate(candidates, slug, requestedVersion);
-  }
-
-  if (exactRow) {
-    throw new LibraryNotFoundError(`${reference} version ${requestedVersion}`);
-  }
-
-  throw new LibraryNotFoundError(reference);
+  return resolveLibraryReferenceAgainst(listLibraries(database), reference, options);
 }
 
 export function listLibraries(db?: Database): Library[] {

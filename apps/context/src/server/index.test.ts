@@ -99,6 +99,23 @@ describe("HTTP source refresh API", () => {
     expect(authorized.status).toBe(200);
   });
 
+  it("an empty CONTEXT_HTTP_TOKEN must not mask a valid HASNA_CONTEXT_HTTP_TOKEN", async () => {
+    // A set-but-empty legacy alias previously disabled authentication even
+    // though the exact-app alias carried a valid token: `??` kept the empty
+    // string and getHttpToken() returned null, so /api/libraries answered
+    // HTTP 200 without credentials (release-review P1).
+    process.env["CONTEXT_HTTP_TOKEN"] = "";
+    process.env["HASNA_CONTEXT_HTTP_TOKEN"] = "alias-token";
+
+    const unauthorized = await handleRequest(new Request("http://context.test/api/libraries"));
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await handleRequest(new Request("http://context.test/api/libraries", {
+      headers: { authorization: "Bearer alias-token" },
+    }));
+    expect(authorized.status).toBe(200);
+  });
+
   it("refuses non-local HTTP binds unless a token is configured", () => {
     expect(() => startServer(0, "0.0.0.0")).toThrow("CONTEXT_HTTP_TOKEN");
 
