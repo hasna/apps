@@ -12,6 +12,5 @@ dist/
 .telephony/
 dashboard/dist/
 dashboard/node_modules/
-/bun.lock
 pnpm-lock.yaml
 pnpm-workspace.yaml
