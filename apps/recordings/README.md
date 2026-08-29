@@ -473,6 +473,40 @@ Env: `HASNA_RECORDINGS_DATABASE_URL` (PostgreSQL DSN — selects the
 `postgresql` backend) and `HASNA_RECORDINGS_API_SIGNING_KEY` (HMAC signing
 secret for API-key auth).
 
+### Production two-role deploy contract
+
+The ECS deploy uses TWO database roles and TWO DSNs (the `migrate` one-shot
+resolves `HASNA_RECORDINGS_MIGRATE_DATABASE_URL` /
+`RECORDINGS_MIGRATE_DATABASE_URL`, falling back to the runtime DSN):
+
+- **Migration / owner role** (e.g. `recordings_owner`) — runs the one-shot
+  `migrate` task and OWNS the schema. The task definition's
+  `HASNA_RECORDINGS_MIGRATE_DATABASE_URL` secret must point at this role's
+  DSN; the ECS execution role needs `secretsmanager:GetSecretValue` on that
+  secret.
+- **Runtime role** (e.g. `recordings_app`) — the `DATABASE_URL` the serve
+  process reads. It must be STRICTLY DML-only; `recordings-serve` `/ready`
+  (and the migrate verb, when a dedicated migration DSN is configured)
+  enforce the least-privilege posture contract: no table/sequence ownership,
+  no `CREATE` on any schema, no `TEMPORARY` on the database, and exactly
+  these grants on the `public` schema:
+
+  | table | grants |
+  | --- | --- |
+  | `recordings` | SELECT, INSERT, DELETE |
+  | `recording_tags` | SELECT, INSERT |
+  | `agents` | SELECT, INSERT, UPDATE |
+  | `projects` | SELECT, INSERT, UPDATE |
+  | `feedback` | INSERT |
+  | `api_keys` | SELECT |
+  | `recording_idempotency` | SELECT, INSERT |
+
+  plus `USAGE` on schema `public`. A runtime role that owns tables (for
+  example because the migrate task ran DDL with the runtime DSN) makes
+  `/ready` return `503 {"error":"dependency unavailable"}` — the database is
+  healthy; the role posture is not. Remediate by re-owning the tables and
+  sequences to the owner role and granting the DML set above.
+
 ## SDK
 
 The typed `/v1` client is generated from the serve OpenAPI document
