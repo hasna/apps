@@ -2,8 +2,17 @@
 # =============================================================================
 # @hasna/knowledge — knowledge-serve HTTP API image.
 # ARM64 / Bun. The service reads/writes PostgreSQL and stores artifacts in S3.
+#
+# The base images are pinned to the EXACT bun patch the byte-reproducibility
+# guard expects (bun-version: in .github/workflows/ci.yml, enforced by
+# scripts/check-bun-version.mjs, which `bun run build` runs first). A floating
+# tag (oven/bun:1-alpine) drifts past the pin — bun patch releases emit
+# different bundle bytes for the same source — and the guard then refuses to
+# build, blocking the knowledge deploy at image build time (O15-04947). Keep
+# this pin in lockstep with the ci.yml bun-version pin and the committed
+# bin/ + dist/ bundles.
 # =============================================================================
-FROM --platform=linux/arm64 oven/bun:1-alpine AS build
+FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS build
 WORKDIR /app
 
 # Install dependencies first (better layer caching). The repo does not commit a
@@ -16,7 +25,8 @@ COPY . .
 RUN bun run build
 
 # ---- runtime -----------------------------------------------------------------
-FROM --platform=linux/arm64 oven/bun:1-alpine AS runtime
+# Same exact-patch pin as the build stage — see the header note (O15-04947).
+FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS runtime
 WORKDIR /app
 # Amazon RDS global CA bundle so TLS verification to the shared cloud Postgres
 # succeeds (the storage kit resolves sslmode=require with server-certificate
