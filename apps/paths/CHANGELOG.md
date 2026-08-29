@@ -1,5 +1,11 @@
 # @hasna/paths
 
+## 0.2.2
+
+### Patch Changes
+
+- 94e6de9d4: Fail closed on an unknown path kind. `baseDir` previously returned `undefined` and `resolvePath` threw a cryptic `The "paths[0]" property must be of type string` from `node:path` when a JS caller or runtime misconfiguration passed a value outside `config | data | state | cache`. Both now throw a clear `TypeError` naming the invalid kind. The `PathKind` union still protects TypeScript callers; this closes the silent-undefined failure class at the resolver boundary (published as 0.2.2 from the ship lane without the bump reaching main; landed here to reconcile src with npm — H8-00510).
+
 ## 0.2.1
 
 ### Patch Changes

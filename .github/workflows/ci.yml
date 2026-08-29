@@ -402,6 +402,12 @@ jobs:
           # it is not a prepare:ordered member — build its dist explicitly so
           # the guard's npm pack --dry-run scans the real payload.
           bun run --filter @hasna/todos build
+          # @hasna/paths is likewise not a prepare:ordered member, but apps/projects
+          # pins it exactly ("0.2.2") and the workspace now satisfies that pin, so
+          # projects' pack build resolves @hasna/paths through the workspace member —
+          # which ships no committed dist (H8-00510). Build it explicitly so the
+          # guard's projects pack can resolve the import it is about to pack.
+          bun run --filter @hasna/paths build
 
       # The guard dry-runs `npm pack --json` per member and parses the real
       # entry list; prepack scripts interleave stdout with the JSON document,

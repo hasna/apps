@@ -50,8 +50,14 @@
  *   behind 0.1.16, T-00100). The comparison is npm-backed, deliberately: an
  *   offline comparison against the workspace version would fire on every
  *   version wave from manifest bump to publish and deadlock the release
- *   cadence. npm unavailability is a REFUSAL — the runner exits 2 and never
- *   prints the clean line when any probe was skipped.
+ *   cadence. Probe classification (the fleet registry-truth pattern): 200
+ *   (public) and 404 (private or never published) are evidence; a 404 means
+ *   there is NO public published max to compare against, so the check is NOT
+ *   APPLICABLE for that package and stays silent. Only genuine registry
+ *   unreachability (non-200/404 after one retry) is a REFUSAL — the runner
+ *   exits 2 and never prints the clean line when a probe was skipped
+ *   (H8-00510: the pre-fix probe collapsed 404 into unreachable, so private
+ *   packages refused the gate on every unauthenticated runner run).
  *
  * EXCEPTIONS — deliberate and attributable. Each names a manifest pin to a
  * version that is NOT on the npm registry; the owning release lane must publish
@@ -143,10 +149,14 @@
  *   comparison against the workspace would fire on every wave from bump to
  *   publish and deadlock the release cadence — the same reason RULE 3 is
  *   npm-backed. Only manifest < published fires; the wave direction
- *   (manifest > published) stays silent. npm unreachability is a REFUSAL
+ *   (manifest > published) stays silent. Probe classification matches RULE 3
+ *   (the fleet registry-truth pattern): a member whose package 404s on the
+ *   public registry (private scope or never published) has no public latest
+ *   to lag — the check is NOT APPLICABLE and stays silent, it does NOT refuse
+ *   the gate (H8-00510: context/crawl/agency 404'd on the runner and the
+ *   gate refused for 43h+). Genuine registry unreachability is a REFUSAL
  *   exactly as RULE 3: a skipped probe increments `skipped` and the runner
- *   exits 2. A member that has never been published (no `latest` to compare)
- *   surfaces the same way — publish it first, or the gate cannot run.
+ *   exits 2.
  *
  * Not covered, stated so the boundary is visible:
  *   - Resolution-level drift that leaves the recorded workspace entry intact
@@ -164,7 +174,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
 
 /** Apps skipped by RULE 2 — see the EXCEPTIONS block in the header for each. */
 const UNRESOLVABLE_PINS = new Set<string>([
@@ -174,8 +183,25 @@ const UNRESOLVABLE_PINS = new Set<string>([
   "testers",
 ]);
 
-/** npm published-max probe, injectable so the self-test stays offline. */
-type PublishedProbe = (pkg: string) => string | null;
+/**
+ * npm published-max probe result, injectable so the self-test stays offline.
+ *
+ * Three states, classified the fleet way (hasna-internal/harnesses
+ * publish-scope.yml registry-truth job): 200 (public) and 404 (private or
+ * never published) are EVIDENCE; anything else — 429/403/5xx or a connection
+ * error after one retry — is UNKNOWN and refuses the gate. A 404 is a VALID
+ * answer meaning "no public published max to compare against": the check is
+ * NOT APPLICABLE for that package, so RULE 3/5 skip it silently instead of
+ * failing the gate. The pre-fix probe (`npm view <pkg> version`) collapsed
+ * 404 and unreachable into one null, so every private @hasna/* package on
+ * the unauthenticated runner refused the gate for 43h+ (H8-00510).
+ */
+type ProbeResult =
+  | { status: "published"; version: string }
+  | { status: "not-published" }
+  | { status: "unreachable" };
+
+type PublishedProbe = (pkg: string) => Promise<ProbeResult>;
 
 /** Load a bun.lock v1 document (JSON with trailing commas tolerated). */
 function parseLockfile(file: string): any {
@@ -252,18 +278,34 @@ function satisfiesRange(range: string, version: string): boolean {
   return false;
 }
 
-/** Resolve the max published version of a package; null when npm is unreachable. */
-function defaultPublishedProbe(pkg: string): string | null {
-  try {
-    const out = execSync(`npm view ${pkg} version`, {
-      encoding: "utf8",
-      timeout: 15000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return parseVersion(out) ? out : null;
-  } catch {
-    return null;
+/**
+ * Resolve the max published version of a package by probing the registry
+ * directly (abbreviated packument endpoint, the same shape npm installs
+ * resolve against). Two attempts: the first can hit a rate-limit or a
+ * transient network blip; a retry converts a one-off into evidence before
+ * classifying UNKNOWN. 200/404 are evidence; anything else after the retry
+ * is UNREACHABLE (a refusal, never a silent pass).
+ */
+async function defaultPublishedProbe(pkg: string): Promise<ProbeResult> {
+  const url = `https://registry.npmjs.org/${pkg.replace("/", "%2F")}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, {
+        headers: { accept: "application/vnd.npm.install-v1+json" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.status === 200) {
+        const doc = (await res.json()) as { "dist-tags"?: Record<string, string> };
+        const latest = doc["dist-tags"]?.latest;
+        return latest && parseVersion(latest) ? { status: "published", version: latest } : { status: "unreachable" };
+      }
+      if (res.status === 404) return { status: "not-published" };
+      // 429/403/5xx — not evidence; retry once below.
+    } catch {
+      // connection error — retry once below.
+    }
   }
+  return { status: "unreachable" };
 }
 
 /**
@@ -305,7 +347,7 @@ interface RegistryCheckResult {
   failedProbes: number;
 }
 
-function checkRegistryEdges(root: string, published: PublishedProbe = defaultPublishedProbe): RegistryCheckResult {
+async function checkRegistryEdges(root: string, published: PublishedProbe = defaultPublishedProbe): Promise<RegistryCheckResult> {
   const lock = path.join(root, "bun.lock");
   const empty: RegistryCheckResult = { problems: [], skipped: 0, failedProbes: 0 };
   if (!fs.existsSync(lock)) return empty;
@@ -314,24 +356,25 @@ function checkRegistryEdges(root: string, published: PublishedProbe = defaultPub
   let skipped = 0;
   let failedProbes = 0;
   const entries = doc.packages ?? {};
-  const probeCache = new Map<string, string | null>();
-  const probe = (pkg: string): string | null => {
+  const probeCache = new Map<string, ProbeResult>();
+  const probe = async (pkg: string): Promise<ProbeResult> => {
     if (!probeCache.has(pkg)) {
-      const result = published(pkg);
+      const result = await published(pkg);
       probeCache.set(pkg, result);
-      if (result === null) failedProbes++;
+      if (result.status === "unreachable") failedProbes++;
     }
     return probeCache.get(pkg)!;
   };
   const skipNotified = new Set<string>();
 
   // One consideration per (label, dep-spec, resolved-spec, declared-range).
-  const consider = (label: string, depSpec: string, resolvedSpec: string, declared: string | undefined): void => {
+  const consider = async (label: string, depSpec: string, resolvedSpec: string, declared: string | undefined): Promise<void> => {
     if (typeof declared !== "string") return;
     const rm = /^@hasna\/[^/@]+@(\d+\.\d+\.\d+)$/.exec(resolvedSpec);
     if (!rm) return; // workspace: resolution — the workspace entry's own domain
-    const maxPublished = probe(depSpec);
-    if (maxPublished === null) {
+    const maxPublished = await probe(depSpec);
+    if (maxPublished.status === "not-published") return; // 404 — no public max to compare: check not applicable, silent
+    if (maxPublished.status === "unreachable") {
       skipped++;
       if (!skipNotified.has(depSpec)) {
         skipNotified.add(depSpec);
@@ -339,12 +382,12 @@ function checkRegistryEdges(root: string, published: PublishedProbe = defaultPub
       }
       return;
     }
-    if (!satisfiesRange(declared, maxPublished)) return; // deliberate pin or unknown shape — not provable skew
+    if (!satisfiesRange(declared, maxPublished.version)) return; // deliberate pin or unknown shape — not provable skew
     const resolvedV = parseVersion(rm[1])!;
-    const maxV = parseVersion(maxPublished)!;
+    const maxV = parseVersion(maxPublished.version)!;
     if (versionCmp(resolvedV, maxV) < 0) {
       problems.push(
-        `${label}: resolves ${resolvedSpec} — behind published ${depSpec}@${maxPublished} while declared "${declared}" admits it`,
+        `${label}: resolves ${resolvedSpec} — behind published ${depSpec}@${maxPublished.version} while declared "${declared}" admits it`,
       );
     }
   };
@@ -364,7 +407,7 @@ function checkRegistryEdges(root: string, published: PublishedProbe = defaultPub
       continue;
     }
     const declared = consumer[2].dependencies?.[depSpec] ?? consumer[2].optionalDependencies?.[depSpec];
-    consider(`root bun.lock ${key}`, depSpec, String(tuple[0]), declared);
+    await consider(`root bun.lock ${key}`, depSpec, String(tuple[0]), declared);
   }
 
   // (b) Hoisted top-level entries: bun dedupes consumer edges away when the
@@ -393,7 +436,7 @@ function checkRegistryEdges(root: string, published: PublishedProbe = defaultPub
     const decls = memberDeclared.get(key);
     if (!decls) continue;
     for (const decl of decls) {
-      consider(`root bun.lock ${key} (hoisted via ${decl.member})`, key, String(tuple[0]), decl.range);
+      await consider(`root bun.lock ${key} (hoisted via ${decl.member})`, key, String(tuple[0]), decl.range);
     }
   }
 
@@ -553,9 +596,10 @@ function checkDockerfileLockfiles(root: string): string[] {
  * RULE 5 — member manifest version behind the published latest. See the
  * header for the class and the wave-direction boundary.
  */
-function checkMemberVersions(root: string, published: PublishedProbe): { problems: string[]; skipped: number } {
+async function checkMemberVersions(root: string, published: PublishedProbe): Promise<{ problems: string[]; skipped: number; failedProbes: number }> {
   const problems: string[] = [];
   let skipped = 0;
+  let failedProbes = 0;
   for (const member of memberDirs(root)) {
     const manifest = manifestOf(root, member);
     const name = manifest?.name;
@@ -563,12 +607,15 @@ function checkMemberVersions(root: string, published: PublishedProbe): { problem
     if (typeof name !== "string" || !name.startsWith("@hasna/")) continue;
     const mv = typeof version === "string" ? parseVersion(version) : null;
     if (!mv) continue; // no comparable manifest version
-    const latest = published(name);
-    if (latest === null) {
+    const probed = await published(name);
+    if (probed.status === "not-published") continue; // 404 — no public latest to lag: check not applicable, silent
+    if (probed.status === "unreachable") {
       skipped++;
+      failedProbes++;
       console.error(`check-frozen-locks: npm unreachable — skipped published-version check for ${name}`);
       continue;
     }
+    const latest = probed.version;
     const lv = parseVersion(latest);
     if (!lv) continue;
     if (versionCmp(mv, lv) < 0) {
@@ -577,12 +624,12 @@ function checkMemberVersions(root: string, published: PublishedProbe): { problem
       );
     }
   }
-  return { problems, skipped };
+  return { problems, skipped, failedProbes };
 }
 
-export function runCheck(root: string, published: PublishedProbe = defaultPublishedProbe): RegistryCheckResult {
-  const registry = checkRegistryEdges(root, published);
-  const memberVersions = checkMemberVersions(root, published);
+export async function runCheck(root: string, published: PublishedProbe = defaultPublishedProbe): Promise<RegistryCheckResult> {
+  const registry = await checkRegistryEdges(root, published);
+  const memberVersions = await checkMemberVersions(root, published);
   return {
     problems: [
       ...checkRootLockfile(root),
@@ -592,15 +639,19 @@ export function runCheck(root: string, published: PublishedProbe = defaultPublis
       ...memberVersions.problems,
     ],
     skipped: registry.skipped + memberVersions.skipped,
-    failedProbes: registry.failedProbes,
+    failedProbes: registry.failedProbes + memberVersions.failedProbes,
   };
 }
 
-function selfTest(): void {
+async function selfTest(): Promise<void> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "check-frozen-locks-"));
   // Offline probe: fixture @hasna/* packages are not real on npm, so RULE 3
-  // stays silent unless a discriminating stub is supplied below.
-  const offlineProbe: PublishedProbe = () => null;
+  // stays silent unless a discriminating stub is supplied below. UNREACHABLE
+  // is the refusal class — a probe that could not run must surface as a skip.
+  const offlineProbe: PublishedProbe = async () => ({ status: "unreachable" });
+  // NOT-PUBLISHED is the 404 class — a valid answer meaning "no public max to
+  // compare against"; the gate must stay silent on it (regression H8-00510).
+  const notPublishedProbe: PublishedProbe = async () => ({ status: "not-published" });
   try {
     // Fixture: two members, one with an own lockfile.
     fs.mkdirSync(path.join(dir, "apps", "alpha"), { recursive: true });
@@ -650,7 +701,7 @@ function selfTest(): void {
     };
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaLock, null, 2));
 
-    const clean = runCheck(dir, offlineProbe).problems;
+    const clean = (await runCheck(dir, offlineProbe)).problems;
     if (clean.length !== 0) {
       throw new Error(`positive control failed — known-good fixture reported: ${clean.join("; ")}`);
     }
@@ -659,12 +710,12 @@ function selfTest(): void {
     // with no member lockfile must fire; a present lockfile must stay silent;
     // the named escape (testers, I38-00566) stays silent without a lockfile.
     fs.writeFileSync(path.join(dir, "apps", "beta", "Dockerfile"), "COPY package.json bun.lock ./\n");
-    const r4Hits = runCheck(dir, offlineProbe).problems;
+    const r4Hits = (await runCheck(dir, offlineProbe)).problems;
     if (!r4Hits.some((p) => p.includes("apps/beta/Dockerfile") && p.includes("bun.lock"))) {
       throw new Error(`negative control 6 failed — Dockerfile COPY without member lockfile not reported: ${r4Hits.join("; ")}`);
     }
     fs.writeFileSync(path.join(dir, "apps", "beta", "Dockerfile"), "COPY package.json bun.lock* ./\n");
-    const r4Glob = runCheck(dir, offlineProbe).problems;
+    const r4Glob = (await runCheck(dir, offlineProbe)).problems;
     if (!r4Glob.some((p) => p.includes("apps/beta/Dockerfile"))) {
       throw new Error(`glob no-lockfile control failed — globbed bun.lock* COPY without member lockfile not reported: ${r4Glob.join("; ")}`);
     }
@@ -676,13 +727,13 @@ function selfTest(): void {
       JSON.stringify({ name: "@hasna/testers", version: "0.0.1", dependencies: {}, devDependencies: {} }),
     );
     fs.writeFileSync(path.join(dir, "apps", "testers", "Dockerfile"), "COPY package.json bun.lock* ./\n");
-    const r4Escape = runCheck(dir, offlineProbe).problems;
+    const r4Escape = (await runCheck(dir, offlineProbe)).problems;
     if (r4Escape.some((p) => p.includes("apps/testers/Dockerfile"))) {
       throw new Error(`escape control failed — sanctioned testers escape reported: ${r4Escape.join("; ")}`);
     }
     fs.rmSync(path.join(dir, "apps", "testers"), { recursive: true, force: true });
     fs.writeFileSync(path.join(dir, "apps", "alpha", "Dockerfile"), "COPY package.json bun.lock* ./\n");
-    const r4Present = runCheck(dir, offlineProbe).problems;
+    const r4Present = (await runCheck(dir, offlineProbe)).problems;
     if (r4Present.some((p) => p.includes("apps/alpha/Dockerfile"))) {
       throw new Error(`present-lockfile control failed — Dockerfile COPY with lockfile present reported: ${r4Present.join("; ")}`);
     }
@@ -693,7 +744,7 @@ function selfTest(): void {
     staleLock.workspaces["apps/alpha"].version = "1.1.0";
     staleLock.workspaces["apps/alpha"].dependencies["@hasna/beta"] = "^0.8.0";
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(staleLock, null, 2));
-    const rootHits = runCheck(dir, offlineProbe).problems;
+    const rootHits = (await runCheck(dir, offlineProbe)).problems;
     const rootFired =
       rootHits.some((p) => p.includes("version 1.1.0")) &&
       rootHits.some((p) => p.includes('dependencies["@hasna/beta"]'));
@@ -706,7 +757,7 @@ function selfTest(): void {
     const staleAppLock = JSON.parse(JSON.stringify(alphaLock));
     staleAppLock.workspaces[""].dependencies["lodash"] = "^3.0.0";
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(staleAppLock, null, 2));
-    const appHits = runCheck(dir, offlineProbe).problems;
+    const appHits = (await runCheck(dir, offlineProbe)).problems;
     const appFired = appHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("lodash"));
     if (!appFired) {
       throw new Error(`negative control 2 failed — stale app lockfile not reported: ${appHits.join("; ")}`);
@@ -722,7 +773,7 @@ function selfTest(): void {
     const alphaWithDevDep = JSON.parse(JSON.stringify(alphaLock));
     alphaWithDevDep.workspaces[""].devDependencies["typescript"] = "^4.0.0";
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(alphaWithDevDep, null, 2));
-    const devDriftHits = runCheck(dir, offlineProbe).problems;
+    const devDriftHits = (await runCheck(dir, offlineProbe)).problems;
     if (!devDriftHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("typescript"))) {
       throw new Error(`devDep-drift control failed — ws-entry devDep spec drift not reported: ${devDriftHits.join("; ")}`);
     }
@@ -734,7 +785,7 @@ function selfTest(): void {
     delete absentResolvedLock.workspaces[""].devDependencies["typescript"];
     absentResolvedLock.packages = { typescript: ["typescript@5.0.0", "", {}, "sha-ts"] };
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(absentResolvedLock, null, 2));
-    const absentResolvedHits = runCheck(dir, offlineProbe).problems;
+    const absentResolvedHits = (await runCheck(dir, offlineProbe)).problems;
     if (absentResolvedHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("typescript"))) {
       throw new Error(`devDep-resolved control failed — ws-entry-absent but packages-resolved devDep reported: ${absentResolvedHits.join("; ")}`);
     }
@@ -743,7 +794,7 @@ function selfTest(): void {
     const absentUnresolvedLock = JSON.parse(JSON.stringify(absentResolvedLock));
     absentUnresolvedLock.packages = {};
     fs.writeFileSync(path.join(dir, "apps", "alpha", "bun.lock"), JSON.stringify(absentUnresolvedLock, null, 2));
-    const absentUnresolvedHits = runCheck(dir, offlineProbe).problems;
+    const absentUnresolvedHits = (await runCheck(dir, offlineProbe)).problems;
     if (!absentUnresolvedHits.some((p) => p.includes("apps/alpha/bun.lock") && p.includes("typescript"))) {
       throw new Error(`devDep-unresolved control failed — ws-entry-absent and packages-absent devDep not reported: ${absentUnresolvedHits.join("; ")}`);
     }
@@ -768,7 +819,7 @@ function selfTest(): void {
         packages: {},
       }),
     );
-    const exceptedHits = runCheck(dir, offlineProbe).problems;
+    const exceptedHits = (await runCheck(dir, offlineProbe)).problems;
     if (exceptedHits.some((p) => p.includes("apps/economy"))) {
       throw new Error(`exception control failed — economy should be exempt: ${exceptedHits.join("; ")}`);
     }
@@ -777,7 +828,8 @@ function selfTest(): void {
     // fire; an edge AT the published max and a deliberate exact pin must not.
     // Stub probe: @hasna/beta's published max is 0.1.16 (mirrors the measured
     // @hasna/events 0.1.15-behind-0.1.16 case, todos T-00100).
-    const r3Published: PublishedProbe = (pkg) => (pkg === "@hasna/beta" ? "0.1.16" : null);
+    const r3Published: PublishedProbe = async (pkg) =>
+      pkg === "@hasna/beta" ? { status: "published", version: "0.1.16" } : { status: "not-published" };
     // Clear fixture leftovers from the earlier controls so RULE 1/2 stay quiet.
     fs.rmSync(path.join(dir, "apps", "economy"), { recursive: true, force: true });
     fs.rmSync(path.join(dir, "apps", "alpha", "bun.lock"), { force: true });
@@ -787,7 +839,7 @@ function selfTest(): void {
       "@hasna/alpha/@hasna/beta": ["@hasna/beta@0.1.15", "", { "dependencies": {} }, "sha-stale"],
     };
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r3Lock, null, 2));
-    const r3Hits = runCheck(dir, r3Published).problems;
+    const r3Hits = (await runCheck(dir, r3Published)).problems;
     if (!r3Hits.some((p) => p.includes("@hasna/alpha/@hasna/beta") && p.includes("0.1.16"))) {
       throw new Error(`negative control 3 failed — stale registry edge not reported: ${r3Hits.join("; ")}`);
     }
@@ -796,7 +848,7 @@ function selfTest(): void {
     const r3Current = JSON.parse(JSON.stringify(r3Lock));
     r3Current.packages["@hasna/alpha/@hasna/beta"][0] = "@hasna/beta@0.1.16";
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r3Current, null, 2));
-    const r3CurrentHits = runCheck(dir, r3Published).problems;
+    const r3CurrentHits = (await runCheck(dir, r3Published)).problems;
     if (r3CurrentHits.some((p) => p.includes("@hasna/alpha/@hasna/beta"))) {
       throw new Error(`positive control 2 failed — edge at published max reported: ${r3CurrentHits.join("; ")}`);
     }
@@ -806,7 +858,7 @@ function selfTest(): void {
     r3Exact.packages["@hasna/alpha/@hasna/beta"][0] = "@hasna/beta@0.1.15";
     r3Exact.packages["@hasna/alpha"][2].dependencies["@hasna/beta"] = "0.1.15";
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(r3Exact, null, 2));
-    const r3ExactHits = runCheck(dir, r3Published).problems;
+    const r3ExactHits = (await runCheck(dir, r3Published)).problems;
     if (r3ExactHits.some((p) => p.includes("@hasna/alpha/@hasna/beta"))) {
       throw new Error(`exact-pin control failed — deliberate old pin reported: ${r3ExactHits.join("; ")}`);
     }
@@ -814,12 +866,29 @@ function selfTest(): void {
     // Negative control 4 — a skipped npm probe must SURFACE as a skip, never
     // vanish into a silent pass: with the offline probe the stale edge must
     // not fire, but skipped must be > 0 (the runner exits 2 on skips).
-    const r3Skip = runCheck(dir, offlineProbe);
+    const r3Skip = await runCheck(dir, offlineProbe);
     if (r3Skip.problems.some((p) => p.includes("@hasna/alpha/@hasna/beta"))) {
       throw new Error(`skip control failed — offline probe fired: ${r3Skip.problems.join("; ")}`);
     }
     if (r3Skip.skipped < 1) {
       throw new Error(`skip control failed — npm-unreachable edge did not surface as a skip`);
+    }
+
+    // Negative control 4b (regression H8-00510) — a 404 probe (package not on
+    // the public registry: private scope or never published) is a VALID answer
+    // meaning "no public published max to compare against", NOT a refusal. The
+    // gate must stay silent: no problem, no skip, no failed probe. The
+    // pre-fix probe collapsed 404 into the same null as unreachable, so every
+    // private @hasna/* package on the unauthenticated runner refused the gate
+    // with "registry unreachable" (exit 2) — CI red 43h+.
+    const r3NotFound = await runCheck(dir, notPublishedProbe);
+    if (r3NotFound.problems.some((p) => p.includes("@hasna/alpha/@hasna/beta"))) {
+      throw new Error(`404 regression control failed — not-published edge fired: ${r3NotFound.problems.join("; ")}`);
+    }
+    if (r3NotFound.skipped !== 0 || r3NotFound.failedProbes !== 0) {
+      throw new Error(
+        `404 regression control failed — not-published probe surfaced as a refusal: ${r3NotFound.skipped} skipped, ${r3NotFound.failedProbes} failed probes`,
+      );
     }
 
     // Hoisted controls — a top-level registry entry (consumer edges deduped
@@ -836,7 +905,8 @@ function selfTest(): void {
       }),
     );
     const gammaEntry = { name: "@hasna/gamma", version: "0.2.0", dependencies: { "@hasna/delta": "^0.1.7" }, devDependencies: {} };
-    const r3Published2: PublishedProbe = (pkg) => (pkg === "@hasna/delta" ? "0.1.16" : null);
+    const r3Published2: PublishedProbe = async (pkg) =>
+      pkg === "@hasna/delta" ? { status: "published", version: "0.1.16" } : { status: "not-published" };
     const hoistedLock = JSON.parse(JSON.stringify(r3Lock));
     hoistedLock.workspaces["apps/gamma"] = gammaEntry;
     hoistedLock.packages = {
@@ -844,7 +914,7 @@ function selfTest(): void {
       "@hasna/alpha": ["@hasna/alpha@1.2.0", "", { "dependencies": { "@hasna/beta": "^0.1.7", lodash: "^4.0.0" } }, "sha-alpha"],
     };
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(hoistedLock, null, 2));
-    const hoistedHits = runCheck(dir, r3Published2).problems;
+    const hoistedHits = (await runCheck(dir, r3Published2)).problems;
     if (!hoistedHits.some((p) => p.includes("hoisted via gamma") && p.includes("0.1.16"))) {
       throw new Error(`negative control 5 failed — hoisted stale edge not reported: ${hoistedHits.join("; ")}`);
     }
@@ -853,7 +923,7 @@ function selfTest(): void {
     const hoistedCurrent = JSON.parse(JSON.stringify(hoistedLock));
     hoistedCurrent.packages["@hasna/delta"][0] = "@hasna/delta@0.1.16";
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(hoistedCurrent, null, 2));
-    const hoistedCurrentHits = runCheck(dir, r3Published2).problems;
+    const hoistedCurrentHits = (await runCheck(dir, r3Published2)).problems;
     if (hoistedCurrentHits.some((p) => p.includes("hoisted via gamma"))) {
       throw new Error(`positive control 3 failed — hoisted edge at published max reported: ${hoistedCurrentHits.join("; ")}`);
     }
@@ -872,7 +942,7 @@ function selfTest(): void {
       }),
     );
     fs.writeFileSync(path.join(dir, "bun.lock"), JSON.stringify(hoistedExact, null, 2));
-    const hoistedExactHits = runCheck(dir, r3Published2).problems;
+    const hoistedExactHits = (await runCheck(dir, r3Published2)).problems;
     if (hoistedExactHits.some((p) => p.includes("hoisted via gamma"))) {
       throw new Error(`hoisted exact-pin control failed — deliberate old pin reported: ${hoistedExactHits.join("; ")}`);
     }
@@ -883,28 +953,43 @@ function selfTest(): void {
     // yet — the direction that must never deadlock the cadence) must stay
     // silent. An unreachable member probe must surface as a skip, never as a
     // silent pass.
-    const r5Stale: PublishedProbe = (pkg) => (pkg === "@hasna/alpha" ? "1.2.1" : null);
-    const r5StaleHits = runCheck(dir, r5Stale).problems;
+    const r5Stale: PublishedProbe = async (pkg) =>
+      pkg === "@hasna/alpha" ? { status: "published", version: "1.2.1" } : { status: "not-published" };
+    const r5StaleHits = (await runCheck(dir, r5Stale)).problems;
     if (!r5StaleHits.some((p) => p.includes("@hasna/alpha") && p.includes("1.2.1"))) {
       throw new Error(`RULE 5 control failed — manifest behind published latest not reported: ${r5StaleHits.join("; ")}`);
     }
-    const r5Current: PublishedProbe = (pkg) => (pkg === "@hasna/alpha" ? "1.2.0" : null);
-    const r5CurrentHits = runCheck(dir, r5Current).problems;
+    const r5Current: PublishedProbe = async (pkg) =>
+      pkg === "@hasna/alpha" ? { status: "published", version: "1.2.0" } : { status: "not-published" };
+    const r5CurrentHits = (await runCheck(dir, r5Current)).problems;
     if (r5CurrentHits.some((p) => p.includes("@hasna/alpha"))) {
       throw new Error(`RULE 5 control failed — manifest at published latest reported: ${r5CurrentHits.join("; ")}`);
     }
-    const r5Ahead: PublishedProbe = (pkg) => (pkg === "@hasna/alpha" ? "1.1.0" : null);
-    const r5AheadHits = runCheck(dir, r5Ahead).problems;
+    const r5Ahead: PublishedProbe = async (pkg) =>
+      pkg === "@hasna/alpha" ? { status: "published", version: "1.1.0" } : { status: "not-published" };
+    const r5AheadHits = (await runCheck(dir, r5Ahead)).problems;
     if (r5AheadHits.some((p) => p.includes("@hasna/alpha"))) {
       throw new Error(`RULE 5 control failed — wave-in-flight manifest ahead of published reported: ${r5AheadHits.join("; ")}`);
     }
-    const r5Skip = runCheck(dir, offlineProbe).skipped;
+    const r5Skip = (await runCheck(dir, offlineProbe)).skipped;
     if (r5Skip < 1) {
       throw new Error(`RULE 5 skip control failed — unreachable member probe did not surface as a skip`);
     }
+    // RULE 5 404 regression (H8-00510) — a member whose package is not on the
+    // public registry (private scope or never published) has no public latest
+    // to lag: the check is not applicable and must stay silent, not refuse.
+    const r5NotFound = await runCheck(dir, notPublishedProbe);
+    if (r5NotFound.problems.some((p) => p.includes("@hasna/alpha"))) {
+      throw new Error(`RULE 5 404 regression control failed — not-published member fired: ${r5NotFound.problems.join("; ")}`);
+    }
+    if (r5NotFound.skipped !== 0 || r5NotFound.failedProbes !== 0) {
+      throw new Error(
+        `RULE 5 404 regression control failed — not-published member surfaced as a refusal: ${r5NotFound.skipped} skipped, ${r5NotFound.failedProbes} failed probes`,
+      );
+    }
 
     console.log(
-      "self-test PASS — positive controls clean; negative controls 1-6 + skip + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required; exception respected",
+      "self-test PASS — positive controls clean; negative controls 1-6 + skip + 404 regression (edge and member) + exact-pin (edge and hoisted) + RULE 4 glob/present + RULE 5 stale/current/ahead/skip + devDep drift/resolved/unresolved controls fired/silent as required; exception respected",
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -912,13 +997,13 @@ function selfTest(): void {
 }
 
 if (process.argv.includes("--self-test")) {
-  selfTest();
+  await selfTest();
 } else {
   const root = process.cwd();
-  const { problems, skipped, failedProbes } = runCheck(root);
+  const { problems, skipped, failedProbes } = await runCheck(root);
   if (skipped > 0) {
     console.error(
-      `FROZEN-LOCK RULE 3 COULD NOT RUN — ${skipped} check(s) skipped (${failedProbes} npm probe(s) failed, registry unreachable).`,
+      `FROZEN-LOCK REGISTRY CHECKS COULD NOT RUN — ${skipped} check(s) skipped (${failedProbes} npm probe(s) failed, registry unreachable).`,
     );
     console.error("A gate that could not run has cleared nothing: this run is NOT a pass. Fix the network and re-run.");
     process.exit(2);
