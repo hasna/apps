@@ -5,6 +5,15 @@ import { homedir } from "os";
 
 export const HASNA_HOME = resolve(join(homedir(), ".hasna"));
 
+/**
+ * Cap for buffered child-process output. Node's execSync/execFileSync default
+ * maxBuffer is 1 MiB, which kills legitimate large outputs — tar listings of
+ * real backups, sqlite dumps — with ERR_CHILD_PROCESS_STDIO_MAXBUFFER, which
+ * listTarball then misreports as "Invalid or unreadable backup archive"
+ * (O15-05161: backup restore --dry-run rejected every real backup).
+ */
+const CHILD_MAX_BUFFER = 256 * 1024 * 1024;
+
 export function dataPath(name: string): string {
   return join(HASNA_HOME, name);
 }
@@ -60,6 +69,7 @@ export function execSafe(cmd: string, timeoutMs = 10_000): string | null {
       encoding: "utf8",
       timeout: timeoutMs,
       stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: CHILD_MAX_BUFFER,
     }).trim();
   } catch {
     return null;
@@ -79,6 +89,7 @@ export function execSafeEnv(cmd: string, timeoutMs = 10_000, env: Record<string,
       timeout: timeoutMs,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...env },
+      maxBuffer: CHILD_MAX_BUFFER,
     }).trim();
   } catch {
     return null;
@@ -120,6 +131,7 @@ export function spawnSafe(
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
       cwd,
+      maxBuffer: CHILD_MAX_BUFFER,
     }).trim();
   } catch {
     return null;

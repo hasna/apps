@@ -68,6 +68,17 @@ function dumpDbToJson(dbPath: string, outputDir: string): { exported: number; om
       omitted.push(table);
       continue;
     }
+    // sqlite3 -json emits ZERO bytes for a table with no rows. An empty table
+    // is a valid export target: it exports as an empty JSON array, never
+    // falls through JSON.parse('') (a parse throw) into the CSV fallback
+    // (which is ALSO empty for zero rows) and aborts the whole export
+    // (O15-05161: export --format json aborts rc=1 on empty tables).
+    if (jsonData.trim() === "") {
+      const outFile = join(outputDir, `${table}.json`);
+      writeFileSync(outFile, "[]\n");
+      tableCount++;
+      continue;
+    }
     try {
       const parsed = JSON.parse(jsonData);
       const outFile = join(outputDir, `${table}.json`);
@@ -250,9 +261,12 @@ function exportAsTarball(service: string | undefined, output: string | undefined
   console.log(chalk.dim(`  Output: ${outputPath}\n`));
   // argv-based: outputPath is operator-supplied and must never travel through
   // a shell (release-review P1: shell injection via user-controlled paths).
+  // -h dereferences symlinks: ~/.hasna carries XDG redirect links to the
+  // paths store, and tar without -h archives only the LINK entries, so an
+  // export restored elsewhere is broken links with zero data (O15-05161).
   const result = service
-    ? spawnSafe("tar", ["-czf", outputPath, ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, service], 120000)
-    : spawnSafe("tar", ["-czf", outputPath, ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, "."], 120000);
+    ? spawnSafe("tar", ["-czf", outputPath, "-h", ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, service], 120000)
+    : spawnSafe("tar", ["-czf", outputPath, "-h", ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, "."], 120000);
   if (result !== null && existsSync(outputPath)) {
     const size = statSync(outputPath).size;
     console.log(chalk.green(`  Export created: ${outputPath}`));
