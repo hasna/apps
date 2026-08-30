@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { randomUUID } from "node:crypto";
+import pkg from "../../package.json" with { type: "json" };
 import { assertDurableStore, resolveServerConfig } from "../sdk/server.js";
 import { executeRun } from "../sdk/executor.js";
 import { ArtifactStorage, createStore, resolveDatabaseTarget } from "../sdk/storage.js";
@@ -21,6 +22,32 @@ export async function runWorkerOnce(
 }
 
 if (import.meta.main) {
+  // Binds-before-version class (todos row 19140ea1 / O15-00621): --version/
+  // --help must answer BEFORE resolveServerConfig()/createStore() opens the
+  // database. They previously fell through and entered the run loop with no
+  // output — measured hanging until killed, storage line printed, no version
+  // on stdout. Mirrors the server guard (row 7e5f8f3d).
+  const EARLY_ARGV = process.argv.slice(2);
+  if (EARLY_ARGV.includes("--version") || EARLY_ARGV.includes("-V")) {
+    console.log(pkg.version);
+    process.exit(0);
+  }
+  if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
+    console.log(`Usage: skills-worker [options]
+
+Drains @hasna/skills runs from the store.
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+      --once     process exactly one run, then exit
+
+Environment:
+  HASNA_SKILLS_WORKER_ID       Worker identity (default: worker_<random>)
+  HASNA_SKILLS_WORKER_IDLE_MS  Idle pause between polls (default: 1000)`);
+    process.exit(0);
+  }
+
   const config = resolveServerConfig();
   const store = await createStore({ databaseUrl: config.databaseUrl, bootstrapApiKey: config.bootstrapApiKey });
   // The same guard the API applies. A worker on a non-durable store is worse than a
