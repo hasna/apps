@@ -13,6 +13,10 @@ interface RepoInfo {
   hasChanges: boolean;
   unpushedCommits: number;
   needsRelease: boolean;
+  /** `git status` could not be verified (spawn failure). NEVER treated as
+   * "clean": such a repo is refused loudly instead of silently skipped or
+   * released (release-review P1: a failed git status must not read as clean). */
+  gitStatusFailed?: boolean;
 }
 
 interface ReleaseResult {
@@ -51,7 +55,14 @@ function getRepoInfo(dir: string): RepoInfo | null {
     const name = basename(dir).replace(/^open-/, "");
     const currentVersion = pkg.version || "0.0.0";
     const porcelain = spawnSafe("git", ["status", "--porcelain"], 10_000, {}, dir);
-    const hasChanges = !!porcelain && porcelain.length > 0;
+    // A failed `git status` invocation is a HARD refusal, never "clean": the
+    // repo's change state is unknown, so it cannot be released or skipped
+    // silently (release-review P1: `null` must not fail open in the batch and
+    // --check paths either).
+    if (porcelain === null) {
+      return { name, dir, packageName: pkg.name || "", currentVersion, hasChanges: false, unpushedCommits: 0, needsRelease: false, gitStatusFailed: true };
+    }
+    const hasChanges = porcelain.length > 0;
     let unpushedCommits = 0;
     const revCount = spawnSafe("git", ["rev-list", "--count", "@{u}..HEAD"], 10_000, {}, dir);
     if (revCount !== null && !revCount.includes("fatal") && !revCount.includes("error")) {
@@ -77,12 +88,16 @@ const NPM_VULNERABILITY_EGRESS = "//registry.npmjs.org/:_authToken=${NODE_AUTH_T
 function packVerifiedTarball(info: RepoInfo): { tarball: string; error: string | null } {
   // The build must NEVER see a publish token: an ambient NODE_AUTH_TOKEN is
   // stripped from the child env (release-review P1: the token is exposed only
-  // to npm, through the vault-backed route).
-  const buildEnv: Record<string, string> = {};
+  // to npm, through the vault-backed route). The exclusion must be EXPLICIT:
+  // spawnSafe merges process.env underneath the caller's env, so a bare
+  // omission would re-inject an ambient token into the child; an explicit
+  // `undefined` value deletes the key from the child environment.
+  const buildEnv: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (k === "NODE_AUTH_TOKEN") continue;
     if (v !== undefined) buildEnv[k] = v;
   }
+  buildEnv.NODE_AUTH_TOKEN = undefined;
   const buildResult = spawnSafe("bun", ["run", "build"], 60000, buildEnv, info.dir);
   if (buildResult === null) {
     return { tarball: "", error: "build failed — nothing was packed or published" };
@@ -269,6 +284,13 @@ export function registerReleaseCommand(program: Command): void {
         const info = getRepoInfo(join(baseDir, repoDir));
         if (info) infos.push(info);
       }
+      // A repo whose git status could not be verified is NEVER treated as
+      // clean: it is refused loudly in every mode (release-review P1).
+      for (const info of infos) {
+        if (info.gitStatusFailed) {
+          console.log(chalk.red(`  ${info.name}: could not verify git status — refusing (the release candidate must be exactly the reviewed HEAD)`));
+        }
+      }
       if (repo) {
         const normalizedRepo = repo.replace(/^open-/, "");
         infos = infos.filter((i) => i.name === normalizedRepo || i.name === repo);
@@ -282,7 +304,7 @@ export function registerReleaseCommand(program: Command): void {
         console.log(chalk.bold(pad("Package", 22) + pad("Version", 12) + pad("Changes", 10) + pad("Unpushed", 10) + pad("Status", 14)));
         console.log(chalk.dim("─".repeat(68)));
         for (const info of infos) {
-          const status = info.needsRelease ? chalk.yellow("needs release") : chalk.green("clean");
+          const status = info.gitStatusFailed ? chalk.red("status failed") : info.needsRelease ? chalk.yellow("needs release") : chalk.green("clean");
           console.log(
             pad(info.name, 22) +
               pad(info.currentVersion, 12) +
@@ -295,9 +317,19 @@ export function registerReleaseCommand(program: Command): void {
         console.log(chalk.dim(`\n  ${infos.length} repos scanned, ${needsRelease} need release.`));
         return;
       }
-      const releasable = repo ? infos : infos.filter((i) => i.needsRelease);
+      // A repo whose git status could not be verified is never released, even
+      // when named explicitly — its change state is unknown and the refusal
+      // above is the record (release-review P1).
+      const releasable = (repo ? infos : infos.filter((i) => i.needsRelease)).filter((i) => !i.gitStatusFailed);
       if (releasable.length === 0) {
-        console.log(chalk.green("  All repos are clean. Nothing to release."));
+        const unverifiable = infos.filter((i) => i.gitStatusFailed).length;
+        if (unverifiable > 0) {
+          // The refusals above are the record; do not print "all clean" next
+          // to them (release-review P1: a failed status is never "clean").
+          console.log(chalk.yellow(`  ${unverifiable} repo(s) could not be verified (git status failed); nothing released.`));
+        } else {
+          console.log(chalk.green("  All repos are clean. Nothing to release."));
+        }
         return;
       }
       if (opts.dryRun) {

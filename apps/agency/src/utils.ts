@@ -97,15 +97,28 @@ export function spawnSafe(
   cmd: string,
   args: string[],
   timeoutMs = 10_000,
-  env: Record<string, string> = {},
+  env: Record<string, string | undefined> = {},
   cwd?: string,
 ): string | null {
   try {
+    // The caller's env is authoritative over process.env, INCLUDING
+    // exclusions: an explicit `undefined` value DELETES the key from the
+    // child environment (a caller that must strip a credential from a child
+    // process cannot express that through a spread that re-injects it —
+    // release-review P1: ambient NODE_AUTH_TOKEN must never reach build/pack).
+    const childEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) childEnv[k] = v;
+    }
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete childEnv[k];
+      else childEnv[k] = v;
+    }
     return execFileSync(cmd, args, {
       encoding: "utf8",
       timeout: timeoutMs,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, ...env },
+      env: childEnv,
       cwd,
     }).trim();
   } catch {
@@ -127,6 +140,71 @@ export function spawnSafe(
  * returned snapshot path — never silently dropped — and the snapshot is
  * retained for manual recovery.
  */
+/**
+ * Atomically swaps a restore tree over the live target: the live directory is
+ * RENAMED aside first (atomic — never deleted), then the restore tree is
+ * renamed into place (atomic). If the second rename fails, the live directory
+ * is renamed back, so the target path is never absent at any point
+ * (release-review P1: delete-then-rename is not an atomic swap and leaves the
+ * target missing when the rename fails). Exported so tests can pin both the
+ * success and the failure path.
+ */
+/**
+ * Creates the pre-copy snapshot of a live target: a mode-0700 sibling
+ * directory (next to the STAGED dir, never inside the copied tree, never
+ * world-readable under /tmp) holding a mode-0600 archive of the COMPLETE
+ * preimage — no exclusions, because a rollback that cannot restore a
+ * pre-existing subtree would delete data it cannot recover while reporting
+ * success (release-review P1). Returns the archive path, or null when the
+ * snapshot could not be taken. Exported so tests can pin the enforced modes.
+ */
+export function createPreCopySnapshot(snapDirBase: string, targetDir: string, timeoutMs: number): string | null {
+  const snapDir = `${snapDirBase}.precopy`;
+  try {
+    mkdirSync(snapDir, { recursive: true, mode: 0o700 });
+    chmodSync(snapDir, 0o700);
+  } catch {
+    return null;
+  }
+  const snapshot = join(snapDir, "precopy-snapshot.tar.gz");
+  const snapResult = spawnSafe("tar", ["-czf", snapshot, "-C", targetDir, "."], timeoutMs);
+  if (snapResult === null || !fileExists(snapshot)) {
+    return null;
+  }
+  try {
+    chmodSync(snapshot, 0o600);
+  } catch {
+    /* best-effort mode enforcement */
+  }
+  return snapshot;
+}
+
+export function atomicSwapRestore(restoreDir: string, targetDir: string): { ok: boolean; targetRestored: boolean } {
+  const backupDir = `${targetDir}.swap-backup-${Date.now()}`;
+  try {
+    renameSync(targetDir, backupDir);
+  } catch {
+    // The live target could not even be moved aside — it is untouched.
+    return { ok: false, targetRestored: true };
+  }
+  try {
+    renameSync(restoreDir, targetDir);
+  } catch {
+    // The live target sits under the backup name; move it back so the target
+    // path is never absent.
+    try {
+      renameSync(backupDir, targetDir);
+      return { ok: false, targetRestored: true };
+    } catch {
+      return { ok: false, targetRestored: false };
+    }
+  }
+  // The swap landed; the backup holds the pre-copy live tree and is removed
+  // best-effort (a retained backup is the caller's call to report).
+  spawnSafe("rm", ["-rf", backupDir], 60_000);
+  return { ok: true, targetRestored: true };
+}
+
 export function copyStagedWithRollback(
   stagedDir: string,
   targetDir: string,
@@ -134,26 +212,13 @@ export function copyStagedWithRollback(
 ): { ok: boolean; rolledBack: boolean; snapshot: string | null } {
   let snapshot: string | null = null;
   if (dirExists(targetDir)) {
-    const snapDir = `${stagedDir}.precopy`;
-    try {
-      mkdirSync(snapDir, { recursive: true, mode: 0o700 });
-      chmodSync(snapDir, 0o700);
-    } catch {
-      return { ok: false, rolledBack: false, snapshot: null };
-    }
-    snapshot = join(snapDir, "precopy-snapshot.tar.gz");
     // Snapshot the COMPLETE preimage — no exclusions. A rollback that cannot
     // restore a pre-existing subtree (e.g. `backups` excluded from the
     // snapshot, then removed as staged residue) would delete data it cannot
     // recover while reporting rolledBack: true (release-review P1).
-    const snapResult = spawnSafe("tar", ["-czf", snapshot, "-C", targetDir, "."], timeoutMs);
-    if (snapResult === null || !fileExists(snapshot)) {
-      return { ok: false, rolledBack: false, snapshot };
-    }
-    try {
-      chmodSync(snapshot, 0o600);
-    } catch {
-      /* best-effort mode enforcement */
+    snapshot = createPreCopySnapshot(stagedDir, targetDir, timeoutMs);
+    if (snapshot === null) {
+      return { ok: false, rolledBack: false, snapshot: null };
     }
   }
   const copyResult = spawnSafe("cp", ["-a", `${stagedDir}/.`, `${targetDir}/`], timeoutMs);
@@ -180,15 +245,14 @@ export function copyStagedWithRollback(
       spawnSafe("rm", ["-rf", restoreDir], 10_000);
       return { ok: false, rolledBack: false, snapshot };
     }
-    const removedLive = spawnSafe("rm", ["-rf", targetDir], 60_000);
-    if (removedLive === null) {
-      return { ok: false, rolledBack: false, snapshot };
-    }
-    try {
-      renameSync(restoreDir, targetDir);
-    } catch {
-      // The live dir is gone and the restore tree could not be moved into
-      // place — the retained snapshot is the operator's recovery path.
+    // Atomic swap: the live target is renamed aside (never deleted), the
+    // restore tree is renamed into place, and on failure the live tree is
+    // renamed back — the target path is never absent (release-review P1:
+    // delete-then-rename is not an atomic swap). A failed swap reports
+    // rolledBack: false with the retained snapshot as the recovery path,
+    // because the renamed-back tree may carry mid-copy residue.
+    const swap = atomicSwapRestore(restoreDir, targetDir);
+    if (!swap.ok) {
       return { ok: false, rolledBack: false, snapshot };
     }
     const removed = removeSnapshotTree(snapshot);

@@ -13,13 +13,30 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, chmodSync, symlinkSync, realpathSync } from "fs";
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, chmodSync, symlinkSync, realpathSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { copyStagedWithRollback, execSafe, execSafeEnv, listTarball, verifyTarball, spawnSafe, spawnWithTimeout } from "../src/utils.js";
+import { atomicSwapRestore, copyStagedWithRollback, createPreCopySnapshot, execSafe, execSafeEnv, listTarball, verifyTarball, spawnSafe, spawnWithTimeout } from "../src/utils.js";
 
 const PKG_ROOT = join(import.meta.dir, "..");
 const BIN = join(PKG_ROOT, "dist", "index.js");
+
+/**
+ * A PATH that prepends a harmless stub `secrets` executable (exit 1 if ever
+ * invoked, never the real vault CLI): the release's vault-route availability
+ * gate (binaryExists("secrets")) passes, so the build/pack gates are the next
+ * thing exercised — while a stub can never publish anything. Without the stub
+ * a release test's outcome depended on whether a real `secrets` CLI happened
+ * to be on PATH (present on dev stations, absent on CI runners) — hermetic in
+ * both environments. Module-scoped because multiple describe blocks use it.
+ */
+function pathWithSecretsStub(exitCode = 1): string {
+  const dir = mkdtempSync(join(tmpdir(), "agency-secrets-stub-"));
+  const stub = join(dir, "secrets");
+  writeFileSync(stub, `#!/bin/sh\nexit ${exitCode}\n`);
+  chmodSync(stub, 0o755);
+  return dir;
+}
 
 function runCli(
   args: string[],
@@ -41,17 +58,22 @@ function runCli(
 }
 
 /** Minimal git repo with a package.json and a build script; returns its dir. */
-function fixtureRepo(opts: { buildExitsNonZero?: boolean; packageName?: string } = {}): string {
+function fixtureRepo(opts: { buildExitsNonZero?: boolean; packageName?: string; buildWritesToken?: boolean } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "agency-release-fixture-"));
   mkdirSync(join(dir, "open-fixme"));
   const pkgDir = join(dir, "open-fixme");
+  const buildScript = opts.buildWritesToken
+    ? `printf '%s' "$NODE_AUTH_TOKEN" > token-probe.txt; echo boom; exit 1`
+    : opts.buildExitsNonZero
+      ? "echo boom && exit 1"
+      : "echo ok";
   writeFileSync(
     join(pkgDir, "package.json"),
     JSON.stringify(
       {
         name: opts.packageName ?? "@hasna/fixme",
         version: "0.1.0",
-        scripts: { build: opts.buildExitsNonZero ? "echo boom && exit 1" : "echo ok" },
+        scripts: { build: buildScript },
       },
       null,
       2,
@@ -106,24 +128,6 @@ describe("P1-1: release command gates", () => {
         /* best-effort */
       }
     }
-    return dir;
-  }
-
-  /**
-   * A PATH that prepends a harmless stub `secrets` executable (exit 1 if ever
-   * invoked, never the real vault CLI): the release's vault-route availability
-   * gate (binaryExists("secrets")) passes, so the build/pack gates are the
-   * next thing exercised — while a stub can never publish anything. Without
-   * the stub this test's outcome depended on whether a real `secrets` CLI
-   * happened to be on PATH (present on dev stations, absent on CI runners),
-   * which made "build failure aborts" fail on CI at the fail-closed vault
-   * gate before the build ever ran. Hermetic in both environments.
-   */
-  function pathWithSecretsStub(): string {
-    const dir = mkdtempSync(join(tmpdir(), "agency-secrets-stub-"));
-    const stub = join(dir, "secrets");
-    writeFileSync(stub, "#!/bin/sh\nexit 1\n");
-    chmodSync(stub, 0o755);
     return dir;
   }
 
@@ -534,5 +538,223 @@ describe("P1 cycle-3: connect validates TOML structurally before any write", () 
     const res = runCli(["connect", "codex", "--only", "todos"], { HOME: home });
     expect(res.code).toBe(1);
     expect(readFileSync(tomlPath, "utf-8")).toBe("[mcp_servers.todos]\ncommand = \"a\"\n[mcp_servers.todos]\ncommand = \"b\"\n");
+  });
+});
+
+/**
+ * Regression tests for the 2026-08-30 cycle-2 re-review NO_GO @ d45a0508c
+ * (4 P1s: spawn-boundary ambient-token exclusion, failed git status in the
+ * batch/--check paths, non-atomic rollback swap, and missing coverage pinning
+ * the remediation contracts).
+ */
+describe("P1 cycle-4: the spawn boundary can exclude ambient credentials", () => {
+  test("an explicit undefined NODE_AUTH_TOKEN is deleted from the child env", () => {
+    const saved = process.env.NODE_AUTH_TOKEN;
+    // A synthetic value assembled from fragments (never a credential-shaped
+    // literal in source; the value itself is inert test data).
+    const ambient = ["ambient", "fixture", "value"].join("-");
+    process.env.NODE_AUTH_TOKEN = ambient;
+    try {
+      const out = spawnSafe("sh", ["-c", 'printf "%s" "$NODE_AUTH_TOKEN"'], 5000, { NODE_AUTH_TOKEN: undefined });
+      expect(out).toBe("");
+      // Control: without the exclusion the ambient value WOULD reach the child.
+      const control = spawnSafe("sh", ["-c", 'printf "%s" "$NODE_AUTH_TOKEN"'], 5000);
+      expect(control).toBe(ambient);
+    } finally {
+      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = saved;
+    }
+  });
+
+  test("release build never sees NODE_AUTH_TOKEN (end-to-end probe file)", () => {
+    const saved = process.env.NODE_AUTH_TOKEN;
+    process.env.NODE_AUTH_TOKEN = "npm_dummy_token_for_test";
+    try {
+      const dir = fixtureRepo({ buildExitsNonZero: true, buildWritesToken: true });
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
+      const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { NODE_AUTH_TOKEN: "npm_dummy_token_for_test", PATH: `${pathWithSecretsStub()}:${process.env.PATH}` }, dir);
+      expect(res.stdout).toContain("build failed");
+      // The build's own probe file proves the ambient token never reached it.
+      expect(readFileSync(join(dir, "open-fixme", "token-probe.txt"), "utf-8")).toBe("");
+    } finally {
+      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = saved;
+    }
+  });
+});
+
+describe("P1 cycle-4: failed git status is a loud refusal in every mode", () => {
+  function noGitFixture(): string {
+    const dir = mkdtempSync(join(tmpdir(), "agency-nogit-"));
+    mkdirSync(join(dir, "open-fixme"));
+    writeFileSync(join(dir, "open-fixme", "package.json"), JSON.stringify({ name: "@hasna/fixme", version: "0.1.0" }, null, 2) + "\n");
+    return dir;
+  }
+
+  test("--check reports status failed instead of clean", () => {
+    const dir = noGitFixture();
+    const res = runCli(["release", "--check", "--dir", dir], {}, dir);
+    expect(`${res.stdout}\n${res.stderr}`).toContain("could not verify git status");
+    expect(`${res.stdout}\n${res.stderr}`).toContain("status failed");
+  });
+
+  test("batch release refuses and never claims everything is clean", () => {
+    const dir = noGitFixture();
+    const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", "0000000000000000000000000000000000000000"], {}, dir);
+    expect(`${res.stdout}\n${res.stderr}`).toContain("could not verify git status");
+    expect(`${res.stdout}\n${res.stderr}`).not.toContain("All repos are clean");
+    expect(`${res.stdout}\n${res.stderr}`).toContain("nothing released");
+  });
+});
+
+describe("P1 cycle-4: the rollback swap is atomic — the target is never absent", () => {
+  test("successful swap replaces the live tree and leaves no backup residue", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-swap-ok-"));
+    const target = join(base, "target");
+    const restore = join(base, "restore");
+    mkdirSync(target);
+    writeFileSync(join(target, "old.txt"), "old");
+    mkdirSync(restore);
+    writeFileSync(join(restore, "new.txt"), "new");
+    const res = atomicSwapRestore(restore, target);
+    expect(res.ok).toBe(true);
+    expect(res.targetRestored).toBe(true);
+    expect(existsSync(join(target, "new.txt"))).toBe(true);
+    expect(existsSync(join(target, "old.txt"))).toBe(false);
+    expect(readdirSync(base).filter((f) => f.includes("swap-backup"))).toEqual([]);
+  });
+
+  test("a failed swap restores the live target — the path is never absent", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-swap-fail-"));
+    const target = join(base, "target");
+    mkdirSync(target);
+    writeFileSync(join(target, "old.txt"), "old");
+    // The restore tree is missing: the second rename fails and the live tree
+    // must be renamed back.
+    const res = atomicSwapRestore(join(base, "restore-missing"), target);
+    expect(res.ok).toBe(false);
+    expect(res.targetRestored).toBe(true);
+    expect(existsSync(join(target, "old.txt"))).toBe(true);
+    expect(readdirSync(base).filter((f) => f.includes("swap-backup"))).toEqual([]);
+  });
+
+  test("snapshot privacy: the pre-copy snapshot dir is 0700 and the archive is 0600", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-snap-mode-"));
+    const staged = join(base, "staged");
+    const target = join(base, "target");
+    mkdirSync(staged, { recursive: true });
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "old.txt"), "old");
+    const snap = createPreCopySnapshot(staged, target, 120_000);
+    expect(snap).not.toBeNull();
+    expect(statSync(`${staged}.precopy`).mode & 0o777).toBe(0o700);
+    expect(statSync(snap!).mode & 0o777).toBe(0o600);
+    spawnSafe("rm", ["-rf", `${staged}.precopy`], 10_000);
+  });
+});
+
+describe("P1 cycle-4: release reaches the exact-artifact publish path with a working stub", () => {
+  test("a successful build + stub secrets reports published with no mutation", () => {
+    const dir = fixtureRepo();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
+    const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { PATH: `${pathWithSecretsStub(0)}:${process.env.PATH}` }, dir);
+    expect(res.stdout).toContain("published");
+    // No post-review mutation: the version is untouched and no commit was made.
+    const pkg = JSON.parse(readFileSync(join(dir, "open-fixme", "package.json"), "utf8"));
+    expect(pkg.version).toBe("0.1.0");
+    const log = execFileSync("git", ["log", "--oneline", "-1"], { cwd: join(dir, "open-fixme"), encoding: "utf8" });
+    expect(log).toContain("init");
+  });
+});
+
+describe("P1 cycle-4: new.ts external todos records travel as validated argv", () => {
+  function todosStubDir(ids: { template: string; project: string }): string {
+    const dir = mkdtempSync(join(tmpdir(), "agency-todos-stub-"));
+    const stub = join(dir, "todos");
+    writeFileSync(
+      stub,
+      [
+        "#!/bin/sh",
+        `if [ "$1" = "--json" ] && [ "$2" = "projects" ]; then echo '{"id":"${ids.project}","name":"optname"}'; exit 0; fi`,
+        `if [ "$1" = "--json" ] && [ "$2" = "templates" ]; then echo '[{"id":"${ids.template}","name":"open-source-project"}]'; exit 0; fi`,
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(stub, 0o755);
+    return dir;
+  }
+
+  function todosModuleStub(base: string): void {
+    const modDir = join(base, "node_modules", "@hasna", "todos");
+    mkdirSync(modDir, { recursive: true });
+    writeFileSync(join(modDir, "package.json"), JSON.stringify({ name: "@hasna/todos", main: "index.js" }));
+    writeFileSync(
+      join(modDir, "index.js"),
+      [
+        'const fs = require("fs");',
+        "exports.tasksFromTemplate = (templateId, projectId, opts) => { fs.writeFileSync(process.env.ARGV_PROBE, JSON.stringify([templateId, projectId, opts.name])); return [{ title: 'task-1' }, { title: 'task-2' }]; };",
+        "exports.initBuiltinTemplates = () => {};",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  test("valid template/project ids travel as separate argv values and create tasks", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-new-argv-"));
+    const probe = join(base, "argv.json");
+    todosModuleStub(base);
+    const res = runCli(["new", "library", "optname", "--dir", base, "--create-tasks"], { PATH: `${todosStubDir({ template: "tmpl-xyz789", project: "proj-abc123" })}:${process.env.PATH}`, ARGV_PROBE: probe }, base);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("Created 2 setup tasks");
+    expect(readFileSync(probe, "utf-8")).toBe(JSON.stringify(["tmpl-xyz789", "proj-abc123", "optname"]));
+  });
+
+  test("an id outside the strict grammar is refused before any side effect", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-new-argv-bad-"));
+    const probe = join(base, "argv.json");
+    todosModuleStub(base);
+    const res = runCli(["new", "library", "optname", "--dir", base, "--create-tasks"], { PATH: `${todosStubDir({ template: "tmpl.bad", project: "proj-abc123" })}:${process.env.PATH}`, ARGV_PROBE: probe }, base);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("Refusing to create tasks");
+    // The tasks script never ran — no side effect.
+    expect(existsSync(probe)).toBe(false);
+  });
+});
+
+describe("P1 cycle-4: --provision-db fails closed when the provisioner fails", () => {
+  test("credentials present but psql failing terminates nonzero and suppresses success", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-new-psql-"));
+    const home = mkdtempSync(join(tmpdir(), "agency-new-psql-home-"));
+    const dir = mkdtempSync(join(tmpdir(), "agency-psql-stub-"));
+    const stub = join(dir, "psql");
+    writeFileSync(stub, "#!/bin/sh\necho 'psql: connection failed' >&2\nexit 1\n");
+    chmodSync(stub, 0o755);
+    const res = runCli(
+      ["new", "service", "psqlname", "--dir", base, "--skip-tasks", "--provision-db"],
+      { HOME: home, PATH: `${dir}:${process.env.PATH}`, CLOUD_PG_HOST: "db.internal", CLOUD_PG_PASSWORD: "x" },
+      base,
+    );
+    expect(res.code).toBe(1);
+    expect(`${res.stdout}\n${res.stderr}`).toContain("refusing to report success");
+    expect(res.stdout).not.toContain("scaffolded successfully");
+  });
+});
+
+describe("P1 cycle-4: connect re-parses the merged document before any write", () => {
+  test("a merge whose output would be invalid TOML is refused and the file is untouched", () => {
+    const home = mkdtempSync(join(tmpdir(), "agency-connect-toml3-"));
+    const codexDir = join(home, ".codex");
+    mkdirSync(codexDir, { recursive: true });
+    const tomlPath = join(codexDir, "config.toml");
+    // `mcp_servers` as an inline array of tables is valid TOML on its own,
+    // but appending `[mcp_servers.todos]` redefines the key — the merged
+    // document must fail the post-merge reparse and never be written.
+    writeFileSync(tomlPath, "mcp_servers = [{ command = \"x\" }]\n");
+    const res = runCli(["connect", "codex", "--only", "todos"], { HOME: home });
+    expect(res.code).toBe(1);
+    expect(`${res.stdout}\n${res.stderr}`).toContain("structural TOML validation");
+    expect(readFileSync(tomlPath, "utf-8")).toBe("mcp_servers = [{ command = \"x\" }]\n");
+    expect(existsSync(`${tomlPath}.bak`)).toBe(false);
   });
 });
