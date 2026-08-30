@@ -2850,6 +2850,7 @@ import { existsSync, statSync, readdirSync, mkdirSync, chmodSync, renameSync, re
 import { join, resolve, dirname } from "path";
 import { homedir } from "os";
 var HASNA_HOME = resolve(join(homedir(), ".hasna"));
+var CHILD_MAX_BUFFER = 256 * 1024 * 1024;
 function dataPath(name) {
   return join(HASNA_HOME, name);
 }
@@ -2899,7 +2900,8 @@ function execSafe(cmd, timeoutMs = 1e4) {
     return execSync(cmd, {
       encoding: "utf8",
       timeout: timeoutMs,
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: CHILD_MAX_BUFFER
     }).trim();
   } catch {
     return null;
@@ -2923,7 +2925,8 @@ function spawnSafe(cmd, args, timeoutMs = 1e4, env2 = {}, cwd) {
       timeout: timeoutMs,
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
-      cwd
+      cwd,
+      maxBuffer: CHILD_MAX_BUFFER
     }).trim();
   } catch {
     return null;
@@ -3743,7 +3746,7 @@ function registerBackupCommand(program2) {
     console.log(source_default.dim(`  Source: ${HASNA_HOME}`));
     console.log(source_default.dim(`  Output: ${outputPath}
 `));
-    const result = spawnSafe("tar", ["-czf", outputPath, "-C", HASNA_HOME, "--exclude=backups", "."], 120000);
+    const result = spawnSafe("tar", ["-czf", outputPath, "-h", "-C", HASNA_HOME, "--exclude=backups", "."], 120000);
     if (result !== null && existsSync3(outputPath)) {
       const size = statSync2(outputPath).size;
       console.log(source_default.green(`  Backup created: ${outputPath} (${formatBytes(size)})`));
@@ -6021,6 +6024,13 @@ function dumpDbToJson(dbPath, outputDir) {
       omitted.push(table);
       continue;
     }
+    if (jsonData.trim() === "") {
+      const outFile = join8(outputDir, `${table}.json`);
+      writeFileSync4(outFile, `[]
+`);
+      tableCount++;
+      continue;
+    }
     try {
       const parsed = JSON.parse(jsonData);
       const outFile = join8(outputDir, `${table}.json`);
@@ -6175,7 +6185,7 @@ function exportAsTarball(service, output) {
   console.log(source_default.dim(`  Source: ${sourceDir}`));
   console.log(source_default.dim(`  Output: ${outputPath}
 `));
-  const result = service ? spawnSafe("tar", ["-czf", outputPath, ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, service], 120000) : spawnSafe("tar", ["-czf", outputPath, ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, "."], 120000);
+  const result = service ? spawnSafe("tar", ["-czf", outputPath, "-h", ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, service], 120000) : spawnSafe("tar", ["-czf", outputPath, "-h", ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, "."], 120000);
   if (result !== null && existsSync7(outputPath)) {
     const size = statSync7(outputPath).size;
     console.log(source_default.green(`  Export created: ${outputPath}`));

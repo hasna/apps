@@ -39,7 +39,10 @@ export function registerBackupCommand(program: Command): void {
       console.log(chalk.dim(`  Output: ${outputPath}\n`));
       // argv-based: outputPath is operator-supplied and must never travel
       // through a shell (release-review P1: shell injection via user paths).
-      const result = spawnSafe("tar", ["-czf", outputPath, "-C", HASNA_HOME, "--exclude=backups", "."], 120000);
+      // -h dereferences symlinks: ~/.hasna carries XDG redirect links to the
+      // paths store, and tar without -h archives only the LINK entries, so a
+      // backup restored elsewhere is broken links with zero data (O15-05161).
+      const result = spawnSafe("tar", ["-czf", outputPath, "-h", "-C", HASNA_HOME, "--exclude=backups", "."], 120000);
       if (result !== null && existsSync(outputPath)) {
         const size = statSync(outputPath).size;
         console.log(chalk.green(`  Backup created: ${outputPath} (${formatBytes(size)})`));
