@@ -1,6 +1,6 @@
 process.env.TESTERS_DB_PATH = ":memory:";
 
-import { describe, it, expect } from "bun:test";
+import { afterEach, describe, it, expect } from "bun:test";
 import {
   resolveModel,
   BROWSER_TOOLS,
@@ -9,7 +9,40 @@ import {
   createOpenAICompatibleConfig,
   detectProvider,
   resolveProviderApiKeyForModel,
+  callOpenAICompatible,
 } from "./ai-client.js";
+
+interface CapturedMessage {
+  role: string;
+  content?: string | null;
+  tool_calls?: Array<{ id: string }>;
+  tool_call_id?: string;
+}
+
+let capturedPayload: { model: string; messages: CapturedMessage[]; tools: unknown[]; max_tokens: number } | null = null;
+let originalFetch: typeof globalThis.fetch;
+
+function mockOpenAICompatibleEndpoint() {
+  originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: unknown, init?: RequestInit) => {
+    capturedPayload = JSON.parse(String(init?.body));
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "ok", tool_calls: null }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+}
+
+afterEach(() => {
+  if (originalFetch) {
+    globalThis.fetch = originalFetch;
+    originalFetch = undefined as unknown as typeof globalThis.fetch;
+  }
+  capturedPayload = null;
+});
 
 describe("resolveModel", () => {
   it("resolves 'quick' to haiku model ID", () => {
@@ -136,5 +169,112 @@ describe("provider routing", () => {
     );
     expect(resolveProviderApiKeyForModel("qwen-3-coder", undefined, "anthropic-config-key")).toBeUndefined();
     expect(resolveProviderApiKeyForModel("glm-5.1", undefined, "anthropic-config-key")).toBeUndefined();
+  });
+});
+
+describe("callOpenAICompatible tool-call sequencing", () => {
+  // The exact multi-turn history the agent loop appends after two tool-call
+  // turns: assistant messages carry mixed text + tool_use blocks, and each
+  // tool batch comes back as a user message of tool_result blocks.
+  function twoTurnHistory() {
+    return [
+      { role: "user", content: "Scenario: log in with the test member." },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I'll fill the email field." },
+          { type: "tool_use", id: "call_a", name: "fill", input: { selector: "#email", value: "member@example.test" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "call_a", content: "filled" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Now the password." },
+          { type: "tool_use", id: "call_b", name: "fill", input: { selector: "#password", value: "s3cret" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "call_b", content: "filled" }],
+      },
+    ];
+  }
+
+  it("sends one assistant message carrying both content and tool_calls per assistant turn", async () => {
+    mockOpenAICompatibleEndpoint();
+    await callOpenAICompatible({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      system: "You are a QA engineer.",
+      messages: twoTurnHistory() as never,
+      tools: BROWSER_TOOLS,
+    });
+
+    expect(capturedPayload).not.toBeNull();
+    const assistantMessages = capturedPayload!.messages.filter((m) => m.role === "assistant");
+    // One logical assistant turn (text + tool_use) must be ONE message with
+    // both fields — splitting it into a plain assistant message followed by a
+    // tool_calls assistant message breaks OpenAI's sequence contract
+    // ("An assistant message with tool_calls must be followed by tool messages
+    // responding to each tool_call_id") and was rejected live by gpt-4o-mini.
+    expect(assistantMessages).toHaveLength(2);
+    for (const msg of assistantMessages) {
+      expect(typeof msg.content).toBe("string");
+      expect(msg.tool_calls).toBeDefined();
+      expect(msg.tool_calls!.length).toBeGreaterThan(0);
+    }
+    expect(assistantMessages[0]!.content).toContain("email field");
+    expect(assistantMessages[1]!.content).toContain("password");
+    expect(assistantMessages[0]!.tool_calls![0]!.id).toBe("call_a");
+    expect(assistantMessages[1]!.tool_calls![0]!.id).toBe("call_b");
+  });
+
+  it("never interleaves a non-tool message between an assistant tool_calls message and its tool responses", async () => {
+    mockOpenAICompatibleEndpoint();
+    await callOpenAICompatible({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      system: "You are a QA engineer.",
+      messages: twoTurnHistory() as never,
+      tools: BROWSER_TOOLS,
+    });
+
+    const msgs = capturedPayload!.messages;
+    for (let i = 0; i < msgs.length; i++) {
+      const msg = msgs[i]!;
+      if (msg.role !== "assistant" || !msg.tool_calls || msg.tool_calls.length === 0) continue;
+      const declared = new Set(msg.tool_calls.map((tc) => tc.id));
+      // The very next message must be a tool response for one of these ids —
+      // tool messages must answer the tool_calls before any next assistant turn.
+      const next = msgs[i + 1];
+      expect(next).toBeDefined();
+      expect(next!.role).toBe("tool");
+      expect(declared.has(next!.tool_call_id!)).toBe(true);
+    }
+  });
+
+  it("does not emit consecutive assistant messages", async () => {
+    mockOpenAICompatibleEndpoint();
+    await callOpenAICompatible({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      system: "You are a QA engineer.",
+      messages: twoTurnHistory() as never,
+      tools: BROWSER_TOOLS,
+    });
+
+    const msgs = capturedPayload!.messages;
+    for (let i = 0; i < msgs.length - 1; i++) {
+      if (msgs[i]!.role === "assistant") {
+        expect(msgs[i + 1]!.role).not.toBe("assistant");
+      }
+    }
   });
 });
