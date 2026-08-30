@@ -15,6 +15,9 @@
  * entry bodies are prose-sized, where LCS is unremarkable.
  */
 
+import type { SafetyPolicy } from './safety';
+import { redactSecrets, redactValueTree } from './safety';
+
 export type DiffOp = 'context' | 'add' | 'remove';
 
 export interface DiffLine {
@@ -158,4 +161,27 @@ export function formatEntryDiff(diff: EntryDiff, fromLabel: string, toLabel: str
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * Render-time redaction for a retained-version diff.
+ *
+ * A diff between a retained snapshot and another state renders the retained
+ * body line by line. A credential-shaped value that survives in history (the
+ * 2026-08 redaction residual, incident 731221) would re-enter a transcript
+ * through exactly that rendering, so the diff's body lines pass through the
+ * redaction path before they are output. The comparison itself still runs on
+ * the true bodies — the counts and line structure are the real ones; only the
+ * rendered text is masked. The store's copy is never touched.
+ */
+export function redactEntryDiff(diff: EntryDiff, policy?: Pick<SafetyPolicy, 'redaction'>): EntryDiff {
+  return {
+    ...diff,
+    fields: diff.fields.map((change) => ({
+      field: change.field,
+      from: redactValueTree(change.from, policy),
+      to: redactValueTree(change.to, policy),
+    })),
+    content: diff.content.map((line) => ({ ...line, text: redactSecrets(line.text, policy).text })),
+  };
 }

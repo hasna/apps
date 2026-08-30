@@ -7,7 +7,7 @@
 import { defaultStorePath, ensureStore, importLegacyGlobalStore, itemMatchesSearch, type KnowledgeItem } from './store';
 import { resolveItemStore, type ItemListDirection, type ItemListSort, type ItemStore } from './item-store';
 import { usesKnowledgeHttpTransport, KnowledgeVersionConflictError } from './http-store';
-import { diffEntries, formatEntryDiff, type EntrySnapshot } from './entry-diff';
+import { diffEntries, formatEntryDiff, redactEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
@@ -34,7 +34,7 @@ import {
 } from './guarded-cli';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
-import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
+import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets, redactVersionHistory } from './safety';
 import { Command } from 'commander';
 import { registerEventsCommands } from '@hasna/events/commander';
 import { basename, dirname, join } from 'node:path';
@@ -2483,6 +2483,11 @@ async function run(argv: string[]): Promise<void> {
     // line, which is precisely how the sibling implementation's empty result
     // became unreadable as evidence.
     if (!history) throw new Error(`Item not found: ${flags.id}`);
+    // Retained snapshots keep bodies verbatim (purge is the only destructive
+    // verb), so a credential-shaped value in history must not re-enter a
+    // transcript through this read — apply the redaction path at the rendering
+    // boundary, exactly as `safety redact` does (incident 731221).
+    const versions = redactVersionHistory(history.items, service.safetyPolicy());
     const result = {
       ok: true,
       id: history.item_id,
@@ -2490,7 +2495,7 @@ async function run(argv: string[]): Promise<void> {
       total: history.total,
       page: versionsPage,
       store: itemStore.location,
-      versions: history.items,
+      versions,
       message: history.total === 0
         ? `${history.item_id} is at version ${history.current_version} with no retained prior versions`
         : `${history.item_id} is at version ${history.current_version}; ${history.total} prior version(s) retained`,
@@ -2583,11 +2588,16 @@ async function run(argv: string[]): Promise<void> {
     const left = await resolveSide(fromRef);
     const right = await resolveSide(toRef);
     const diff = diffEntries(left.snapshot, right.snapshot);
+    // The diff renders retained snapshot bodies line by line; a credential-
+    // shaped value in history must not re-enter a transcript through that
+    // rendering either (same incident class as the versions read, 731221).
+    // Comparison stays on the true bodies; only the rendered text is masked.
+    const renderedDiff = redactEntryDiff(diff, service.safetyPolicy());
     if (flags.json || flags.verbose) {
-      output({ ok: true, id: current.id, from: left.label, to: right.label, ...diff }, flags.json, flags);
+      output({ ok: true, id: current.id, from: left.label, to: right.label, ...renderedDiff }, flags.json, flags);
       return;
     }
-    console.log(formatEntryDiff(diff, `${current.id} ${left.label}`, `${current.id} ${right.label}`));
+    console.log(formatEntryDiff(renderedDiff, `${current.id} ${left.label}`, `${current.id} ${right.label}`));
     return;
   }
 

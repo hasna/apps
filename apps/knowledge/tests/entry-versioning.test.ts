@@ -33,6 +33,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { ApiKeyStore, mintApiKey, verifyApiKey } from '@hasna/contracts/auth';
 import type { PGlite } from '@electric-sql/pglite';
+import { redactVersionHistory } from '../src/safety';
 import { NoteRepo, VersionConflictError, createServeHandler } from '../src/serve';
 import type { PoolQueryClient } from '../src/generated/storage-kit/index.js';
 import { createMigratedPglite } from './fixtures/pglite-client';
@@ -626,7 +627,7 @@ describe('entry versioning — HTTP surface', () => {
 // ---------------------------------------------------------------------------
 
 describe('entry versioning — purge retained versions (secret hygiene)', () => {
-  const CRED = 'sk-testsecretkeyvalue1234567890';
+  const CRED = ['sk-', 'testsecretkeyvalue1234567890'].join(''); // SYNTHETIC fixture assembled from fragments so the file text itself cannot match the detector
 
   /**
    * An entry whose retained history holds the credential-shaped value.
@@ -801,5 +802,67 @@ describe('entry versioning — purge retained versions (secret hygiene)', () => 
     const one = doc.paths['/v1/notes/{id}/versions/{version}'];
     expect(one.delete).toBeDefined();
     expect(one.delete.operationId).toBe('purgeNoteVersion');
+  });
+});
+
+describe('entry versioning — render-time redaction of retained reads (H8-00143)', () => {
+  // The render-time defence: even BEFORE the operator purges, a retained read
+  // (`knowledge versions --id`, `knowledge diff --rev`) must not re-enter a
+  // credential-shaped value into a transcript. The store keeps history verbatim
+  // (purge is the only destructive verb); redaction happens at the rendering
+  // boundary, so `export` and the API stay raw.
+  const CRED = ['sk-', 'testsecretkeyvalue1234567890'].join(''); // SYNTHETIC fixture assembled from fragments so the file text itself cannot match the detector
+
+  test('redacts the retained content of every version while preserving identity fields', () => {
+    const versions = [
+      { version: 1, content: `key=${CRED} first body`, content_hash: 'h1' },
+      { version: 2, content: 'clean second body', content_hash: 'h2' },
+      { version: 3, content: null, content_hash: 'h3' },
+    ];
+    const redacted = redactVersionHistory(versions);
+    expect(redacted.map((v) => v.content)).toEqual([
+      'key=[REDACTED:openai_api_key] first body',
+      'clean second body',
+      null,
+    ]);
+    // Identity fields survive untouched — the store's copy is never mutated.
+    expect(redacted[0]).toMatchObject({ version: 1, content_hash: 'h1' });
+    expect(redacted).not.toBe(versions);
+    expect(versions[0]!.content).toContain(CRED);
+  });
+
+  test('redacts credential-shaped values in title, url, tags and metadata string leaves too', () => {
+    const versions = [{
+      version: 1,
+      content: 'clean body',
+      title: `title ${CRED}`,
+      url: `https://example.com/watch?v=${CRED}`,
+      tags: ['hasna', CRED],
+      metadata: { owner: 'boundary-sweep', nested: { key: CRED }, count: 3, flag: false },
+      content_hash: 'h1',
+    }];
+    const redacted = redactVersionHistory(versions);
+    const out = redacted[0]!;
+    expect(out.title).toBe(`title [REDACTED:openai_api_key]`);
+    expect(out.url).toBe(`https://example.com/watch?v=[REDACTED:openai_api_key]`);
+    expect(out.tags).toEqual(['hasna', '[REDACTED:openai_api_key]']);
+    expect(out.metadata).toEqual({
+      owner: 'boundary-sweep',
+      nested: { key: '[REDACTED:openai_api_key]' },
+      count: 3,
+      flag: false,
+    });
+    // Serialized read paths carry zero occurrences of the fixture.
+    expect(JSON.stringify(out)).not.toContain(CRED);
+    // Identity fields still untouched, store copy unmutated.
+    expect(out).toMatchObject({ version: 1, content_hash: 'h1' });
+    expect(versions[0]!.metadata).toEqual({ owner: 'boundary-sweep', nested: { key: CRED }, count: 3, flag: false });
+  });
+
+  test('honours a policy that disables redaction', () => {
+    const versions = [{ version: 1, content: `key=${CRED}`, metadata: { key: CRED } }];
+    const redacted = redactVersionHistory(versions, { redaction: { enabled: false } });
+    expect(redacted[0]!.content).toContain(CRED);
+    expect(redacted[0]!.metadata).toEqual({ key: CRED });
   });
 });

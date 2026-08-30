@@ -155,6 +155,59 @@ export function redactSecrets(text: string, policy?: Pick<SafetyPolicy, 'redacti
   return { text: output, findings };
 }
 
+/**
+ * Redact every string leaf of a renderable value, preserving structure and
+ * non-string leaves. Used so retained-version reads mask credential-shaped
+ * values wherever they sit in a snapshot — body, title, url, tags, or metadata
+ * string values — not just in the field the sweep happened to clean.
+ */
+export function redactValueTree(value: unknown, policy?: Pick<SafetyPolicy, 'redaction'>): unknown {
+  if (typeof value === 'string') return redactSecrets(value, policy).text;
+  if (Array.isArray(value)) return value.map((entry) => redactValueTree(entry, policy));
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) out[key] = redactValueTree(entry, policy);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Render-time redaction for retained version history.
+ *
+ * The store keeps prior-version snapshots verbatim (purge is the only
+ * destructive verb), so a credential-shaped value redacted from the LIVE row
+ * can still be re-exposed by a retained read — measured 2026-08-24 when a
+ * `knowledge versions --id` probe rendered an openai_api_key-shaped value into
+ * a second transcript (incident 731221). This applies the redaction path to
+ * every string leaf of each version snapshot (content, title, url, tags,
+ * metadata) at the RENDERING boundary: identity fields (version, actor,
+ * hashes, bytes) survive untouched and the store's copy is never mutated, so
+ * `export` and the API stay raw.
+ */
+type VersionRenderable = {
+  content: string | null;
+  title?: string;
+  url?: string | null;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export function redactVersionHistory<T extends VersionRenderable>(
+  versions: T[],
+  policy?: Pick<SafetyPolicy, 'redaction'>,
+): T[] {
+  return versions.map((version) => {
+    const redacted: Partial<VersionRenderable> = {};
+    if (typeof version.content === 'string') redacted.content = redactSecrets(version.content, policy).text;
+    if (typeof version.title === 'string') redacted.title = redactSecrets(version.title, policy).text;
+    if (typeof version.url === 'string') redacted.url = redactSecrets(version.url, policy).text;
+    if (Array.isArray(version.tags)) redacted.tags = version.tags.map((tag) => redactSecrets(tag, policy).text);
+    if (version.metadata !== undefined) redacted.metadata = redactValueTree(version.metadata, policy) as Record<string, unknown>;
+    return { ...version, ...redacted };
+  });
+}
+
 export function auditId(input: SafetyAuditInput): string {
   return `audit_${createHash('sha256')
     .update(`${input.event_type}\u0000${input.action}\u0000${input.target_uri ?? ''}\u0000${input.created_at ?? ''}\u0000${JSON.stringify(input.metadata ?? {})}\u0000${randomUUID()}`)
