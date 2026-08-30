@@ -1,5 +1,11 @@
 # @hasna/agency
 
+## 0.3.3
+
+### Patch Changes
+
+- Version bump 0.3.2 → 0.3.3 (2026-08-30): the number 0.3.2 is permanently locked on the npm registry — @hasna/agency had prior published history under the scoped name (0.2.0/0.3.0/0.3.1/0.3.2, 0.3.2 published 2026-08-21T11:29Z) and the whole package was unpublished 2026-08-28T09:36:16.822Z; npm refuses to republish a previously published version number (E400 "Cannot publish over previously published version", measured 2026-08-30 at 06:55Z and 07:10Z, ~45.5h after the unpublish — npm's documented rule is that `package-name@version` is unique and cannot be reused by unpublishing and re-publishing it). This 0.3.3 carries the identical, fully-reviewed code of the 0.3.2 candidate (release-gate remediation cycles 1-5; [REVIEW] GO @ b589c107d6d53cf544fd23681315d306d5fc0fca, hasna/apps#1471) under a fresh publishable version number. Corrects the 0.3.2 changelog claim "first publication under `@hasna/agency`": the package had prior registry history under the scoped name before the 2026-08-28 unpublish; 0.3.3 is the first publication after that unpublish.
+
 ## 0.3.2
 
 ### Patch Changes

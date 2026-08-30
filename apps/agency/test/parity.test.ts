@@ -35,8 +35,8 @@ describe("package manifest", () => {
     name: string;
   };
 
-  test("version is 0.3.2 (parity with the release candidate)", () => {
-    expect(pkg.version).toBe("0.3.2");
+  test("version is 0.3.3 (parity with the release candidate)", () => {
+    expect(pkg.version).toBe("0.3.3");
     expect(pkg.name).toBe("@hasna/agency");
   });
 
