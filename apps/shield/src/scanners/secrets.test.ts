@@ -172,6 +172,24 @@ describe("secrets scanner", () => {
       }
     });
 
+    test("does not report database URLs without an embedded password", () => {
+      // The database-url rule is not shape-only: a connection string that
+      // carries no user:password userinfo (no userinfo at all, or a user
+      // without a password) embeds no credential, even when the host is real.
+      const postgresql = "postgres" + "ql://";
+      const postgres = "postgres" + "://";
+      const mysql = "mysql" + "://";
+      const contents = [
+        `DATABASE_URL=${postgresql}db.internal:5432/mydb`,
+        `DATABASE_URL=${postgres}app@db.internal:5432/db`,
+        `MYSQL_URL=${mysql}root@db.internal:3306/app`,
+      ];
+      for (const content of contents) {
+        const findings = scanFile(".env.example", content);
+        expect(findings.filter((f) => f.rule_id === "database-url"), content).toEqual([]);
+      }
+    });
+
     test("does not report high-entropy tokens inside a placeholder database URL", () => {
       const scheme = "postgres" + "ql://";
       const content =
