@@ -107,10 +107,13 @@ const FORBIDDEN_PACK_PATTERNS: { label: string; re: RegExp }[] = [
   // never reach a public tarball (release-review P1 @ 6f2c8b8f9).
   packPattern("private-scope string", "has", "na", "-", "internal"),
   packPattern("internal-tree string", "internal", "-", "apps"),
-  // GitHub token variants beyond o/p: u (user), s (server-to-server), r
-  // (refresh) and the fine-grained github_pat_ form (release-review P1 @
-  // 6f2c8b8f9: the o/p-only detector let the other prefixes through).
-  { label: "GitHub credential value", re: /gh[ousr]_[A-Za-z0-9]{20,}/ },
+  // GitHub token variants: p (classic personal access token), o (fine-grained
+  // org), u (user), s (server-to-server), r (refresh) and the fine-grained
+  // github_pat_ form (release-review P1 @ 6f2c8b8f9 widened o/p to o/u/s/r but
+  // dropped the classic p in the rewrite; the 2026-08-30 cycle-5 review
+  // caught the p omission — a packed classic-PAT credential could reach the
+  // publish path undetected).
+  { label: "GitHub credential value", re: /gh[pousr]_[A-Za-z0-9]{20,}/ },
   { label: "GitHub fine-grained token", re: /github_pat_[A-Za-z0-9_]{20,}/ },
   { label: "Google API key value", re: /AIza[A-Za-z0-9_-]{20,}/ },
   { label: "AWS access key id", re: /AKIA[0-9A-Z]{16}/ },

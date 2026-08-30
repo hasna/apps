@@ -985,6 +985,22 @@ describe("P1 cycle-5: the packed artifact is bound to a reviewed file set and it
     expect(res.stdout).toContain("nothing was published");
     expect(existsSync(argvOut)).toBe(false);
   });
+
+  test("packed content carrying a classic GitHub PAT shape is refused before any publish", () => {
+    // Fragment-joined so the fixture source stays clean for the staged-secrets
+    // scan; the packed dist still carries the full joined value. Regression
+    // for the 2026-08-30 cycle-5 review P1: the o/u/s/r rewrite of the GitHub
+    // token class dropped the classic p prefix, so a classic-PAT credential
+    // passed the packed-content scan undetected.
+    const tok = ["gh", "p_", "abcdefghijklmnopqrstuvwx"].join("");
+    const dir = fixtureRepo({ distContent: `console.log('x');\nconst tok = '${tok}';\n` });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("packed artifact contains");
+    expect(res.stdout).toContain("nothing was published");
+    expect(existsSync(argvOut)).toBe(false);
+  });
 });
 
 describe("P1 cycle-5: the default (no-argument) release path releases clean reviewed candidates", () => {
