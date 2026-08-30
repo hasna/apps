@@ -2,14 +2,24 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { mkdirSync, writeFileSync, existsSync } from "fs";
 import { join, resolve } from "path";
-import { execSafe } from "../utils.js";
+import { execSafe, spawnSafe, spawnWithTimeout } from "../utils.js";
+
+/** Per-effect opt-in flags for `agency new`. Every external effect (public
+ * GitHub repo creation, RDS provisioning, npm publish) requires its explicit
+ * flag; none happens implicitly. */
+interface ScaffoldOptions {
+  createRepo: boolean;
+  provisionDb: boolean;
+  publish: boolean;
+}
 
 /**
- * Scaffold templates. Reconstructed verbatim from the published
- * @hasna/agency@0.3.1 bundle (2026-08-20). The legacy `open-<name>` directory
- * naming and the create-gh-repo/publish steps are ORIGINAL behaviour and are
- * preserved for parity; the monorepo-era placement rules do not apply to this
- * legacy scaffolder's output.
+ * Scaffold templates. Reconstructed from the published @hasna/agency@0.3.1
+ * bundle (2026-08-20). The legacy `open-<name>` directory naming is preserved
+ * for parity; external effects (public GitHub repo creation, RDS provisioning)
+ * are gated behind explicit per-effect flags (--create-repo, --provision-db).
+ * npm publish from a scaffold is REFUSED (release-review P1): publication
+ * goes through the reviewed hasna/apps pipeline only.
  */
 
 function packageJson(name: string, kind: "service" | "library"): string {
@@ -34,7 +44,7 @@ function packageJson(name: string, kind: "service" | "library"): string {
         license: "Apache-2.0",
         publishConfig: { registry: "https://registry.npmjs.org", access: "public" },
         dependencies: {},
-        devDependencies: { "@types/bun": "latest", typescript: "^5" },
+        devDependencies: { "@types/bun": "1.3.14", typescript: "^5" },
       },
       null,
       2,
@@ -81,7 +91,7 @@ function packageJson(name: string, kind: "service" | "library"): string {
         chalk: "^5",
         zod: "^3",
       },
-      devDependencies: { "@types/bun": "latest", typescript: "^5" },
+      devDependencies: { "@types/bun": "1.3.14", typescript: "^5" },
     },
     null,
     2,
@@ -689,7 +699,7 @@ function createSetupTasks(name: string, dir: string): void {
   if (initResult !== null && initResult.includes("ok")) {
     console.log(chalk.dim("  Builtin templates initialized."));
   }
-  const projectResult = execSafe(`todos --json projects --add "${dir}" --name "${name}" 2>/dev/null`, 15000);
+  const projectResult = spawnSafe("todos", ["--json", "projects", "--add", dir, "--name", name], 15000);
   let projectId: string | null = null;
   if (projectResult !== null) {
     try {
@@ -741,7 +751,7 @@ function createSetupTasks(name: string, dir: string): void {
   }
 }
 
-function scaffoldService(name: string, baseDir: string, skipTasks: boolean): void {
+async function scaffoldService(name: string, baseDir: string, skipTasks: boolean, opts: ScaffoldOptions): Promise<void> {
   const dir = join(baseDir, `open-${name}`);
   console.log(chalk.bold(`\nagency new service ${name}\n`));
   if (existsSync(dir)) {
@@ -777,47 +787,62 @@ dist/
   );
   console.log(chalk.green("  Files generated."));
   console.log(chalk.dim("  Installing dependencies..."));
-  const installResult = execSafe(`cd "${dir}" && bun install 2>&1`, 60000);
+  const installResult = spawnSafe("bun", ["install"], 60000, {}, dir);
   if (installResult !== null) {
     console.log(chalk.green("  Dependencies installed."));
   } else {
     console.log(chalk.yellow("  bun install failed — run manually."));
   }
   console.log(chalk.dim("  Initializing git..."));
-  execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
-  console.log(chalk.dim("  Creating GitHub repo..."));
-  const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
-  if (ghResult !== null) {
-    console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
-  } else {
-    console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
-  }
-  console.log(chalk.dim("  Creating RDS database..."));
-  const pgHost = process.env["CLOUD_PG_HOST"] || process.env["HASNA_RDS_HOST"];
-  const pgUser = process.env["CLOUD_PG_USER"] || process.env["HASNA_RDS_USER"] || "hasna_admin";
-  const pgPassword = process.env["CLOUD_PG_PASSWORD"] || process.env["HASNA_RDS_PASSWORD"] || "";
-  const dbName = name.replace(/-/g, "_");
-  if (pgHost && pgPassword) {
-    const createDbResult = execSafe(`PGPASSWORD="${pgPassword}" psql -h "${pgHost}" -U "${pgUser}" -d postgres -c "CREATE DATABASE ${dbName};" 2>&1`, 15000);
-    if (createDbResult !== null && !createDbResult.includes("ERROR")) {
-      console.log(chalk.green(`  RDS database created: ${dbName}`));
+  spawnSafe("git", ["init", "-q"], 15000, {}, dir);
+  spawnSafe("git", ["add", "-A"], 15000, {}, dir);
+  spawnSafe("git", ["commit", "-q", "-m", `feat: scaffold ${name}`], 15000, {}, dir);
+  if (opts.createRepo) {
+    console.log(chalk.dim("  Creating GitHub repo..."));
+    const ghResult = spawnSafe("gh", ["repo", "create", `hasna/${name}`, "--public", "--source", ".", "--push", "--description", `TODO: describe ${name}`], 30000);
+    if (ghResult !== null) {
+      console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
     } else {
-      console.log(chalk.yellow(`  RDS database creation skipped (may already exist or failed).`));
+      console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
     }
   } else {
-    console.log(chalk.yellow("  RDS not configured — skipping database creation."));
+    console.log(chalk.dim("  Skipping GitHub repo creation (pass --create-repo to create hasna/" + name + " on GitHub)."));
   }
-  console.log(chalk.dim("  Publishing to npm..."));
-  const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
-  if (buildResult !== null) {
-    const publishResult = execSafe(`cd "${dir}" && npm publish --access public 2>&1`, 30000);
-    if (publishResult !== null) {
-      console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
+  if (opts.provisionDb) {
+    console.log(chalk.dim("  Creating RDS database..."));
+    const pgHost = process.env["CLOUD_PG_HOST"] || process.env["HASNA_RDS_HOST"];
+    const pgUser = process.env["CLOUD_PG_USER"] || process.env["HASNA_RDS_USER"] || "hasna_admin";
+    const pgPassword = process.env["CLOUD_PG_PASSWORD"] || process.env["HASNA_RDS_PASSWORD"] || "";
+    const dbName = name.replace(/-/g, "_");
+    if (pgHost && pgPassword) {
+      // Credentials via child env, connection fields via argv — never a shell
+      // command string (no process-argument secret exposure).
+      const createDbResult = await spawnWithTimeout(
+        "psql",
+        ["-h", pgHost, "-U", pgUser, "-d", "postgres", "-c", `CREATE DATABASE ${dbName};`],
+        15000,
+        { PGPASSWORD: pgPassword },
+      );
+      if (createDbResult.code === 0 && !createDbResult.stderr.includes("ERROR")) {
+        console.log(chalk.green(`  RDS database created: ${dbName}`));
+      } else {
+        console.log(chalk.yellow(`  RDS database creation skipped (may already exist or failed).`));
+      }
     } else {
-      console.log(chalk.yellow("  npm publish failed — publish manually."));
+      console.log(chalk.yellow("  RDS not configured — skipping database creation."));
     }
   } else {
-    console.log(chalk.yellow("  Build failed — publish manually."));
+    console.log(chalk.dim("  Skipping RDS database provisioning (pass --provision-db to enable)."));
+  }
+  if (opts.publish) {
+    // Scaffold publication was removed (release-review P1: `agency new`
+    // bypasses repository and release gates). Publishing happens only through
+    // the reviewed hasna/apps pipeline — changeset PR, adversarial review,
+    // publish intent, registry verification.
+    console.error(chalk.red("  Refusing to publish from a scaffold: publication requires the reviewed hasna/apps pipeline (changeset PR -> adversarial review -> publish intent -> npm)."));
+    process.exitCode = 1;
+  } else {
+    console.log(chalk.dim("  Skipping npm publish."));
   }
   if (!skipTasks) {
     createSetupTasks(name, dir);
@@ -832,7 +857,7 @@ dist/
   console.log(chalk.dim(`  Server:    ${name}-serve`));
 }
 
-function scaffoldLibrary(name: string, baseDir: string, skipTasks: boolean): void {
+async function scaffoldLibrary(name: string, baseDir: string, skipTasks: boolean, opts: ScaffoldOptions): Promise<void> {
   const dir = join(baseDir, `open-${name}`);
   console.log(chalk.bold(`\nagency new library ${name}\n`));
   if (existsSync(dir)) {
@@ -865,32 +890,36 @@ dist/
   );
   console.log(chalk.green("  Files generated."));
   console.log(chalk.dim("  Installing dependencies..."));
-  const installResult = execSafe(`cd "${dir}" && bun install 2>&1`, 60000);
+  const installResult = spawnSafe("bun", ["install"], 60000, {}, dir);
   if (installResult !== null) {
     console.log(chalk.green("  Dependencies installed."));
   } else {
     console.log(chalk.yellow("  bun install failed — run manually."));
   }
   console.log(chalk.dim("  Initializing git..."));
-  execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
-  console.log(chalk.dim("  Creating GitHub repo..."));
-  const ghResult = execSafe(`cd "${dir}" && gh repo create hasna/${name} --public --source . --push --description "TODO: describe ${name}" 2>&1`, 30000);
-  if (ghResult !== null) {
-    console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
-  } else {
-    console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
-  }
-  console.log(chalk.dim("  Publishing to npm..."));
-  const buildResult = execSafe(`cd "${dir}" && bun run build 2>&1`, 30000);
-  if (buildResult !== null) {
-    const publishResult = execSafe(`cd "${dir}" && npm publish --access public 2>&1`, 30000);
-    if (publishResult !== null) {
-      console.log(chalk.green(`  Published @hasna/${name}@0.1.0`));
+  spawnSafe("git", ["init", "-q"], 15000, {}, dir);
+  spawnSafe("git", ["add", "-A"], 15000, {}, dir);
+  spawnSafe("git", ["commit", "-q", "-m", `feat: scaffold ${name}`], 15000, {}, dir);
+  if (opts.createRepo) {
+    console.log(chalk.dim("  Creating GitHub repo..."));
+    const ghResult = spawnSafe("gh", ["repo", "create", `hasna/${name}`, "--public", "--source", ".", "--push", "--description", `TODO: describe ${name}`], 30000);
+    if (ghResult !== null) {
+      console.log(chalk.green(`  GitHub repo created: https://github.com/hasna/${name}`));
     } else {
-      console.log(chalk.yellow("  npm publish failed — publish manually."));
+      console.log(chalk.yellow("  GitHub repo creation failed — create manually."));
     }
   } else {
-    console.log(chalk.yellow("  Build failed — publish manually."));
+    console.log(chalk.dim("  Skipping GitHub repo creation (pass --create-repo to create hasna/" + name + " on GitHub)."));
+  }
+  if (opts.publish) {
+    // Scaffold publication was removed (release-review P1: `agency new`
+    // bypasses repository and release gates). Publishing happens only through
+    // the reviewed hasna/apps pipeline — changeset PR, adversarial review,
+    // publish intent, registry verification.
+    console.error(chalk.red("  Refusing to publish from a scaffold: publication requires the reviewed hasna/apps pipeline (changeset PR -> adversarial review -> publish intent -> npm)."));
+    process.exitCode = 1;
+  } else {
+    console.log(chalk.dim("  Skipping npm publish."));
   }
   if (!skipTasks) {
     createSetupTasks(name, dir);
@@ -910,9 +939,23 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new service with CLI, MCP server, HTTP server, and database")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
-    .action((name: string, opts) => {
+    .option("--create-repo", "Refused: remote repo creation is removed (use the reviewed hasna/apps pipeline)")
+    .option("--provision-db", "Provision an RDS database for the service")
+    .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
+    .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
-      scaffoldService(name, baseDir, !!opts.skipTasks);
+      assertSafeScaffoldName(name);
+      if (opts.createRepo) {
+        // Remote repository creation was removed (release-review P1: the
+        // scaffold can push an unreviewed public repository).
+        console.error(chalk.red("  Refusing to create a GitHub repo from a scaffold: remote effects require the reviewed hasna/apps pipeline."));
+        process.exitCode = 1;
+      }
+      await scaffoldService(name, baseDir, !!opts.skipTasks, {
+        createRepo: false,
+        provisionDb: !!opts.provisionDb,
+        publish: !!opts.publish,
+      });
     });
 
   newCmd
@@ -920,8 +963,33 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new library package (no DB, MCP, CLI, or server)")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
-    .action((name: string, opts) => {
+    .option("--create-repo", "Refused: remote repo creation is removed (use the reviewed hasna/apps pipeline)")
+    .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
+    .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
-      scaffoldLibrary(name, baseDir, !!opts.skipTasks);
+      assertSafeScaffoldName(name);
+      if (opts.createRepo) {
+        // Remote repository creation was removed (release-review P1: the
+        // scaffold can push an unreviewed public repository).
+        console.error(chalk.red("  Refusing to create a GitHub repo from a scaffold: remote effects require the reviewed hasna/apps pipeline."));
+        process.exitCode = 1;
+      }
+      await scaffoldLibrary(name, baseDir, !!opts.skipTasks, {
+        createRepo: false,
+        provisionDb: false,
+        publish: !!opts.publish,
+      });
     });
+}
+
+/**
+ * Strict scaffold-name validation (release-review P1: `name` is interpolated
+ * into CREATE DATABASE and shell commands — only a bounded lowercase
+ * kebab-case identifier may reach them). Fail closed on anything else.
+ */
+function assertSafeScaffoldName(name: string): void {
+  if (!/^[a-z][a-z0-9-]{0,62}$/.test(name)) {
+    console.error(chalk.red(`  Invalid package name: ${JSON.stringify(name)} — must match ^[a-z][a-z0-9-]{0,62}$`));
+    process.exit(1);
+  }
 }

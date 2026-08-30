@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, readFileSync, readdirSync, statSync, watch, createReadStream } from "fs";
+import { existsSync, readFileSync, readdirSync, statSync, watch, createReadStream, openSync, readSync, closeSync } from "fs";
 import { join } from "path";
 import { REGISTRY } from "../registry.js";
 import { HASNA_HOME, dataPath, dirExists } from "../utils.js";
@@ -106,9 +106,21 @@ function extractTimestamp(line: string): Date | null {
 
 function readLastLines(filePath: string, maxLines: number): string[] {
   try {
-    const content = readFileSync(filePath, "utf8");
-    const lines = content.split("\n").filter(Boolean);
-    return lines.slice(-maxLines);
+    // Read only the tail of the file (up to ~256 KiB) instead of the whole
+    // log, so `logs --tail` stays bounded on large files.
+    const { size } = statSync(filePath);
+    const TAIL_BYTES = 256 * 1024;
+    const fd = openSync(filePath, "r");
+    try {
+      const start = Math.max(0, size - TAIL_BYTES);
+      const buf = Buffer.alloc(size - start);
+      readSync(fd, buf, 0, buf.length, start);
+      const content = buf.toString("utf8");
+      const lines = content.split("\n").filter(Boolean);
+      return lines.slice(-maxLines);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return [];
   }

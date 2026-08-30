@@ -1,8 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
-import { execSafe, pad } from "../utils.js";
+import { pad, spawnSafe } from "../utils.js";
 
 interface RepoInfo {
   name: string;
@@ -44,10 +44,10 @@ function getRepoInfo(dir: string): RepoInfo | null {
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
     const name = pkg.name?.replace("@hasna/", "") || "";
     const currentVersion = pkg.version || "0.0.0";
-    const porcelain = execSafe(`cd "${dir}" && git status --porcelain 2>&1`, 10_000);
+    const porcelain = spawnSafe("git", ["status", "--porcelain"], 10_000, {}, dir);
     const hasChanges = !!porcelain && porcelain.length > 0;
     let unpushedCommits = 0;
-    const revCount = execSafe(`cd "${dir}" && git rev-list --count @{u}..HEAD 2>&1`, 10_000);
+    const revCount = spawnSafe("git", ["rev-list", "--count", "@{u}..HEAD"], 10_000, {}, dir);
     if (revCount !== null && !revCount.includes("fatal") && !revCount.includes("error")) {
       unpushedCommits = parseInt(revCount, 10) || 0;
     }
@@ -58,37 +58,88 @@ function getRepoInfo(dir: string): RepoInfo | null {
   }
 }
 
-function bumpPatch(version: string): string {
-  const parts = version.split(".");
-  if (parts.length !== 3) return `${version}.1`;
-  const major = parts[0] || "0";
-  const minor = parts[1] || "0";
-  const patch = parseInt(parts[2] || "0", 10);
-  return `${major}.${minor}.${patch + 1}`;
+/** True only when a vault-backed publish token is present in the environment. */
+export function publishTokenAvailable(): boolean {
+  return typeof process.env.NODE_AUTH_TOKEN === "string" && process.env.NODE_AUTH_TOKEN.length > 0;
 }
 
-function releaseRepo(info: RepoInfo): ReleaseResult {
-  const newVersion = bumpPatch(info.currentVersion);
+function releaseRepo(info: RepoInfo, reviewedSha: string | undefined): ReleaseResult {
+  const newVersion = info.currentVersion;
+
+  // Gate 0 — a release must be bound to a reviewed SHA. The operator passes
+  // --reviewed-sha <sha>; it must equal the current HEAD, so the published
+  // candidate is byte-for-byte the reviewed commit (release-review P1: the
+  // published candidate must equal the reviewed candidate). The command
+  // performs NO post-review mutation: no version bump, no commit, no push.
+  if (!reviewedSha) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: "refusing to release: --reviewed-sha <sha> is required (must equal the current HEAD of the reviewed candidate)",
+    };
+  }
+  const head = spawnSafe("git", ["rev-parse", "HEAD"], 10_000, {}, info.dir);
+  if (head === null || head.trim() !== reviewedSha) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: `refusing to release: HEAD (${head ? head.trim().slice(0, 12) : "unknown"}) does not match --reviewed-sha ${reviewedSha.slice(0, 12)} — the release must be bound to the reviewed commit`,
+    };
+  }
+
+  // Gate 1 — refuse ANY dirty state: the tree must be exactly the reviewed
+  // commit. Versioning happens BEFORE the review (changeset/version PR), so
+  // the reviewed sha already carries the final version.
+  const porcelain = spawnSafe("git", ["status", "--porcelain"], 10_000, {}, info.dir);
+  if (porcelain !== null && porcelain.trim().length > 0) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: `refusing to release: worktree is not clean (${porcelain.split("\n")[0]}) — the reviewed candidate must be exactly HEAD`,
+    };
+  }
+
+  // Gate 2 — publishing requires a vault-backed token in the environment
+  // (NODE_AUTH_TOKEN, per the hasna/apps publish law) paired with a temp npmrc
+  // holding only the placeholder. Ambient ~/.npmrc credentials are refused.
+  if (!publishTokenAvailable()) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: "refusing to release: NODE_AUTH_TOKEN is not set — publish with a vault-backed token (secrets exec ... --as NODE_AUTH_TOKEN -- npm publish --userconfig <tmp npmrc>)",
+    };
+  }
+
+  // Gate 3 — a failed build aborts before anything is published.
+  const buildResult = spawnSafe("bun", ["run", "build"], 60000, {}, info.dir);
+  if (buildResult === null) {
+    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "build failed — nothing was published" };
+  }
+
+  // Gate 4 — publish the exact reviewed tree through a temp npmrc holding only
+  // the ${NODE_AUTH_TOKEN} placeholder (the vault token is present, verified
+  // in Gate 2). No git mutation occurs anywhere in this command.
+  const npmrcPath = join(info.dir, ".agency-release-npmrc");
   try {
-    const pkgPath = join(info.dir, "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    pkg.version = newVersion;
-    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
-  } catch (e) {
-    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: `Failed to bump version: ${e}` };
-  }
-  execSafe(`cd "${info.dir}" && bun run build 2>&1`, 60000);
-  const commitResult = execSafe(`cd "${info.dir}" && git add -A && git commit -m "chore: release v${newVersion}" 2>&1`, 15000);
-  if (commitResult === null) {
-    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "git commit failed" };
-  }
-  const pushResult = execSafe(`cd "${info.dir}" && git push 2>&1`, 30000);
-  if (pushResult === null) {
-    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "git push failed" };
-  }
-  const publishResult = execSafe(`cd "${info.dir}" && npm publish --access public 2>&1`, 30000);
-  if (publishResult === null) {
-    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "npm publish failed" };
+    writeFileSync(npmrcPath, "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n", { mode: 0o600 });
+    const publishResult = spawnSafe("npm", ["publish", "--userconfig", npmrcPath, "--access", "public"], 30000, {}, info.dir);
+    if (publishResult === null) {
+      return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "npm publish failed" };
+    }
+  } finally {
+    try {
+      unlinkSync(npmrcPath);
+    } catch {
+      /* temp npmrc cleanup is best-effort */
+    }
   }
   return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "published" };
 }
@@ -96,9 +147,10 @@ function releaseRepo(info: RepoInfo): ReleaseResult {
 export function registerReleaseCommand(program: Command): void {
   program
     .command("release [repo]")
-    .description("Bump patch version, build, commit, push, and publish @hasna/* repos")
+    .description("Bump patch version, build, commit, publish a SHA-bound reviewed @hasna/* repo")
     .option("--dry-run", "Show what would be published without doing it")
     .option("--check", "Just show repos with unpushed changes")
+    .option("--reviewed-sha <sha>", "Exact reviewed commit SHA the release must be bound to (required for real publishes)")
     .option("-d, --dir <path>", "Base directory containing open-* repos", process.cwd())
     .action((repo: string | undefined, opts) => {
       const baseDir = resolve(opts.dir);
@@ -145,32 +197,31 @@ export function registerReleaseCommand(program: Command): void {
         return;
       }
       if (opts.dryRun) {
-        console.log(chalk.bold(`  Dry run — the following repos would be released:\n`));
-        console.log(chalk.bold(pad("Package", 22) + pad("Current", 12) + pad("New", 12) + pad("Changes", 10)));
-        console.log(chalk.dim("─".repeat(56)));
+        console.log(chalk.bold(`  Dry run — the following repos would be released at their reviewed SHA:\n`));
+        console.log(chalk.bold(pad("Package", 22) + pad("Version", 12) + pad("Changes", 10)));
+        console.log(chalk.dim("─".repeat(44)));
         for (const info of releasable) {
           console.log(
             pad(info.name, 22) +
               pad(info.currentVersion, 12) +
-              pad(bumpPatch(info.currentVersion), 12) +
               pad(
                 [
                   info.hasChanges ? "uncommitted" : "",
                   info.unpushedCommits > 0 ? `${info.unpushedCommits} unpushed` : "",
-                ].filter(Boolean).join(", ") || "force",
+                ].filter(Boolean).join(", ") || "clean",
                 10,
               ),
           );
         }
         console.log(chalk.dim(`\n  ${releasable.length} repo(s) would be released.`));
-        console.log(chalk.dim("  Run without --dry-run to execute."));
+        console.log(chalk.dim("  Run with --reviewed-sha <sha> to publish the exact reviewed commit."));
         return;
       }
       console.log(chalk.dim(`  Releasing ${releasable.length} repo(s)...\n`));
       const results: ReleaseResult[] = [];
       for (const info of releasable) {
-        process.stdout.write(chalk.dim(`  ${info.name} ${info.currentVersion} → ${bumpPatch(info.currentVersion)} ... `));
-        const result = releaseRepo(info);
+        process.stdout.write(chalk.dim(`  ${info.name} ${info.currentVersion} ... `));
+        const result = releaseRepo(info, opts.reviewedSha as string | undefined);
         results.push(result);
         if (result.status === "published") {
           console.log(chalk.green("published"));
@@ -195,5 +246,10 @@ export function registerReleaseCommand(program: Command): void {
       const published = results.filter((r) => r.status === "published").length;
       const failed = results.filter((r) => r.status === "failed").length;
       console.log(chalk.dim(`\n  ${published} published, ${failed} failed, ${results.length - published - failed} skipped.`));
+      if (failed > 0) {
+        // Release failures must exit nonzero (release-review P1: release
+        // failures exit successfully).
+        process.exitCode = 1;
+      }
     });
 }

@@ -4,7 +4,17 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "fs"
 import { join, resolve, basename } from "path";
 import { homedir } from "os";
 import { dbPackages, findPackage } from "../registry.js";
-import { HASNA_HOME, dataPath, dirExists, execSafe, formatBytes } from "../utils.js";
+import { HASNA_HOME, copyStagedWithRollback, dataPath, dirExists, execSafe, formatBytes, listTarball, spawnSafe } from "../utils.js";
+
+/**
+ * Strict SQL identifier validation: only letters, digits and underscore,
+ * never starting with a digit. Table/column names derived from sqlite_master
+ * (disk data) must pass this before being interpolated into SQL, so a
+ * malicious database cannot inject statements.
+ */
+function isSafeIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
 
 function generateExportName(format: string): string {
   const now = new Date();
@@ -36,29 +46,48 @@ function findDbFiles(dir: string): string[] {
   return files;
 }
 
-function dumpDbToJson(dbPath: string, outputDir: string): number {
-  const tablesRaw = execSafe(`sqlite3 "${dbPath}" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';" 2>/dev/null`);
-  if (!tablesRaw) return 0;
-  const tables = tablesRaw.split("\n").filter(Boolean);
+function dumpDbToJson(dbPath: string, outputDir: string): { exported: number; omitted: string[] } {
+  const tablesRaw = spawnSafe("sqlite3", [dbPath, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"]);
+  if (tablesRaw === null) {
+    // Discovery failure is NOT an empty database: it must abort, never report
+    // a successful export of zero tables (release-review P1: failed table
+    // discovery returns zero omissions).
+    return { exported: 0, omitted: [dbPath] };
+  }
+  const discovered = tablesRaw.split("\n").filter(Boolean);
+  // Tables whose names fail the strict identifier grammar are still part of
+  // the database: they are skipped by the exporter and MUST be reported, not
+  // silently discarded (release-review P1).
+  const omittedPre = discovered.filter((t) => !isSafeIdentifier(t));
+  const tables = discovered.filter(isSafeIdentifier);
   let tableCount = 0;
+  const omitted: string[] = [...omittedPre];
   for (const table of tables) {
-    const jsonData = execSafe(`sqlite3 "${dbPath}" -json "SELECT * FROM "${table}";" 2>/dev/null`, 30000);
-    if (jsonData === null) continue;
+    const jsonData = spawnSafe("sqlite3", [dbPath, "-json", `SELECT * FROM "${table}";`], 30000);
+    if (jsonData === null) {
+      omitted.push(table);
+      continue;
+    }
     try {
       const parsed = JSON.parse(jsonData);
       const outFile = join(outputDir, `${table}.json`);
       writeFileSync(outFile, JSON.stringify(parsed, null, 2));
       tableCount++;
     } catch {
-      const csvData = execSafe(`sqlite3 "${dbPath}" -header -csv "SELECT * FROM "${table}";" 2>/dev/null`, 30000);
+      const csvData = spawnSafe("sqlite3", [dbPath, "-header", "-csv", `SELECT * FROM "${table}";`], 30000);
       if (csvData) {
         const outFile = join(outputDir, `${table}.csv`);
         writeFileSync(outFile, csvData);
         tableCount++;
+      } else {
+        // A table that fails BOTH formats must never be silently dropped while
+        // the export reports success (release-review P1: JSON export can
+        // silently omit data).
+        omitted.push(table);
       }
     }
   }
-  return tableCount;
+  return { exported: tableCount, omitted };
 }
 
 const EXCLUDE_PATTERNS = ["node_modules", ".next", ".cache", "backups", "__pycache__", ".git", "*.tmp"];
@@ -97,14 +126,19 @@ export function registerExportCommand(program: Command): void {
       console.log(chalk.bold(`agency import\n`));
       console.log(chalk.dim(`  Source: ${filePath}`));
       console.log(chalk.dim(`  Target: ${HASNA_HOME}\n`));
-      const listing = execSafe(`tar -tzf "${filePath}" 2>&1 | head -40`);
-      if (listing) {
-        console.log(chalk.dim("  Contents (first 40 entries):"));
-        for (const line of listing.split("\n").filter(Boolean)) {
-          console.log(chalk.dim(`    ${line}`));
-        }
-        console.log();
+      // Validate the archive before listing or extracting: a corrupt tarball
+      // must fail here, never after live data has been touched.
+      const listing = listTarball(filePath, 40);
+      if (listing === null) {
+        console.error(chalk.red(`  Invalid or unreadable archive: ${filePath}`));
+        console.error(chalk.red("  Refusing to import from an unverified archive."));
+        process.exit(1);
       }
+      console.log(chalk.dim("  Contents (first 40 entries):"));
+      for (const line of listing.split("\n").filter(Boolean)) {
+        console.log(chalk.dim(`    ${line}`));
+      }
+      console.log();
       try {
         const size = statSync(filePath).size;
         console.log(chalk.dim(`  Archive size: ${formatBytes(size)}`));
@@ -122,15 +156,48 @@ export function registerExportCommand(program: Command): void {
         console.error(chalk.red("  Aborting. Use --force to proceed."));
         process.exit(1);
       }
-      if (!dirExists(HASNA_HOME)) {
-        mkdirSync(HASNA_HOME, { recursive: true });
-      }
-      const result = execSafe(`tar -xzf "${filePath}" -C "${HASNA_HOME}" 2>&1`, 120000);
-      if (result !== null) {
-        console.log(chalk.green(`\n  Import complete.`));
-      } else {
-        console.error(chalk.red(`\n  Import failed.`));
+      // Staged import: extract into a verified staging directory first, then
+      // copy over ~/.hasna with a pre-copy snapshot and rollback. A failed
+      // extraction leaves live data untouched; a failed copy is rolled back to
+      // the pre-copy state (and only if the rollback itself fails is the
+      // snapshot preserved at a reported path for manual recovery).
+      const staging = execSafe(`mktemp -d /tmp/hasna-import.XXXXXX`, 5000);
+      if (staging === null) {
+        console.error(chalk.red("  Import failed: could not create staging directory."));
         process.exit(1);
+      }
+      try {
+        const extractResult = spawnSafe("tar", ["-xzf", filePath, "-C", staging], 120000);
+        if (extractResult === null) {
+          console.error(chalk.red("  Import failed: archive extraction into staging failed."));
+          console.error(chalk.red(`  Live data untouched. Staging: ${staging}`));
+          process.exit(1);
+        }
+        if (!dirExists(HASNA_HOME)) {
+          mkdirSync(HASNA_HOME, { recursive: true });
+        }
+        const outcome = copyStagedWithRollback(staging, HASNA_HOME);
+        if (outcome.ok) {
+          console.log(chalk.green(`\n  Import complete.`));
+        } else if (outcome.rolledBack) {
+          console.error(chalk.red("  Import failed: copying staged content into ~/.hasna failed."));
+          console.error(chalk.red("  Live data was rolled back to the pre-copy state."));
+          process.exit(1);
+        } else {
+          console.error(chalk.red("  Import failed: copying staged content into ~/.hasna failed."));
+          if (outcome.snapshot) {
+            console.error(chalk.red(`  Rollback could not complete. Pre-copy snapshot preserved at: ${outcome.snapshot}`));
+          } else {
+            console.error(chalk.red("  No pre-copy snapshot could be taken; live data may be partially imported."));
+          }
+          console.error(chalk.red(`  Staged copy preserved at: ${staging}`));
+          process.exit(1);
+        }
+      } finally {
+        const cleanup = execSafe(`rm -rf "${staging}" 2>&1`, 5000);
+        if (cleanup === null) {
+          console.error(chalk.yellow(`  Warning: could not remove staging dir: ${staging}`));
+        }
       }
     });
 }
@@ -156,13 +223,14 @@ function exportAsTarball(service: string | undefined, output: string | undefined
     filename = generateExportName("tarball");
   }
   const outputPath = output ? resolve(output) : join(homedir(), filename);
-  const excludeArgs = EXCLUDE_PATTERNS.map((p) => `--exclude="${p}"`).join(" ");
+  const excludeArgs = EXCLUDE_PATTERNS;
   console.log(chalk.dim(`  Source: ${sourceDir}`));
   console.log(chalk.dim(`  Output: ${outputPath}\n`));
-  const cmd = service
-    ? `tar -czf "${outputPath}" ${excludeArgs} -C "${HASNA_HOME}" "${service}" 2>&1`
-    : `tar -czf "${outputPath}" ${excludeArgs} -C "${HASNA_HOME}" . 2>&1`;
-  const result = execSafe(cmd, 120000);
+  // argv-based: outputPath is operator-supplied and must never travel through
+  // a shell (release-review P1: shell injection via user-controlled paths).
+  const result = service
+    ? spawnSafe("tar", ["-czf", outputPath, ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, service], 120000)
+    : spawnSafe("tar", ["-czf", outputPath, ...excludeArgs.map((p) => `--exclude=${p}`), "-C", HASNA_HOME, "."], 120000);
   if (result !== null && existsSync(outputPath)) {
     const size = statSync(outputPath).size;
     console.log(chalk.green(`  Export created: ${outputPath}`));
@@ -200,10 +268,17 @@ function exportAsJson(service: string | undefined, output: string | undefined): 
       const dbName = basename(dbFile, ".db").replace(".sqlite3", "").replace(".sqlite", "");
       const tableDir = join(svcDir, dbName);
       mkdirSync(tableDir, { recursive: true });
-      const count = dumpDbToJson(dbFile, tableDir);
-      totalTables += count;
-      if (count > 0) {
-        console.log(chalk.dim(`  ${pkg.name}/${dbName}: ${count} table(s) exported`));
+      const { exported, omitted } = dumpDbToJson(dbFile, tableDir);
+      totalTables += exported;
+      if (omitted.length > 0) {
+        // Never report success while tables were silently dropped
+        // (release-review P1: JSON export can silently omit data).
+        console.error(chalk.red(`  ${pkg.name}/${dbName}: ${omitted.length} table(s) FAILED to export: ${omitted.slice(0, 10).join(", ")}`));
+        execSafe(`rm -rf "${tmpBase}"`, 10_000);
+        process.exit(1);
+      }
+      if (exported > 0) {
+        console.log(chalk.dim(`  ${pkg.name}/${dbName}: ${exported} table(s) exported`));
       }
     }
   }
@@ -216,7 +291,7 @@ function exportAsJson(service: string | undefined, output: string | undefined): 
     ? `hasna-export-${service}-json-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.tar.gz`
     : generateExportName("json");
   const outputPath = output ? resolve(output) : join(homedir(), filename);
-  const result = execSafe(`tar -czf "${outputPath}" -C "${tmpBase}" . 2>&1`, 120000);
+  const result = spawnSafe("tar", ["-czf", outputPath, "-C", tmpBase, "."], 120000);
   execSafe(`rm -rf "${tmpBase}"`, 10_000);
   if (result !== null && existsSync(outputPath)) {
     const size = statSync(outputPath).size;

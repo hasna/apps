@@ -1,9 +1,19 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync, statSync, openSync, closeSync, fsyncSync, chmodSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { REGISTRY, mcpPackages } from "../registry.js";
+
+/**
+ * Fail-closed config read: a config file that exists but cannot be read or
+ * parsed is a hard error — it must NEVER be silently treated as empty and then
+ * overwritten (which would destroy the operator's existing configuration).
+ */
+function failClosed(message: string): never {
+  console.error(chalk.red(message));
+  process.exit(1);
+}
 
 const TOOL_CONFIGS: Record<string, { label: string; candidates: Array<{ path: string; format: string; mode: string }> }> = {
   claude: {
@@ -78,27 +88,76 @@ function buildMcpEntries(serviceNames: string[], mode: string): Record<string, {
 
 function readJson(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
+  let raw: string;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8"));
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return {};
-    return parsed as Record<string, unknown>;
+    raw = readFileSync(path, "utf-8");
   } catch {
-    return {};
+    failClosed(`Cannot read existing config ${path}; refusing to modify it.`);
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      failClosed(`Config ${path} is not a JSON object; refusing to overwrite it.`);
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err) {
+    failClosed(`Cannot parse existing config ${path} (${(err as Error).message}); refusing to overwrite it.`);
   }
 }
 
 function readText(path: string): string {
   if (!existsSync(path)) return "";
+  let raw: string;
   try {
-    return readFileSync(path, "utf-8");
+    raw = readFileSync(path, "utf-8");
   } catch {
-    return "";
+    failClosed(`Cannot read existing config ${path}; refusing to modify it.`);
   }
+  // TOML structural fail-closed check: we only APPEND [mcp_servers.X] blocks,
+  // so the existing content must be TOML-shaped — every non-comment,
+  // non-blank line must be a key/value pair or a section header. Arbitrary
+  // malformed content is never appended to (release-review P1).
+  const lines = raw.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    if (/^\[[^\]]+\]$/.test(trimmed)) continue; // [section] or [[array]]
+    if (/^[A-Za-z0-9_."'-]+[ \t]*=/.test(trimmed)) continue; // key = value
+    failClosed(`Config ${path} is not valid TOML (line: ${trimmed.slice(0, 60)}); refusing to modify it.`);
+  }
+  return raw;
 }
 
+/**
+ * Atomic write with a preimage backup: the original file is preserved as
+ * `<path>.bak` before the replacement lands via temp-file rename, so a crash
+ * mid-write can never truncate the operator's config and the pre-write state
+ * is always recoverable. The original file mode is preserved (new configs
+ * default to 0600 — they can hold credentials) and the temp file is fsynced
+ * before the rename (release-review P1: atomic replacement changes
+ * permissions).
+ */
 function writeText(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, "utf-8");
+  let mode = 0o600;
+  if (existsSync(path)) {
+    copyFileSync(path, `${path}.bak`);
+    try {
+      mode = statSync(path).mode & 0o777;
+    } catch {
+      /* keep 0600 default */
+    }
+  }
+  const tmp = `${path}.tmp-${process.pid}`;
+  const fd = openSync(tmp, "w", mode);
+  try {
+    writeFileSync(fd, content, "utf-8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(tmp, mode);
+  renameSync(tmp, path);
 }
 
 function writeJson(path: string, data: object): void {
@@ -149,6 +208,9 @@ function connectJsonTool(
   dryRun: boolean,
 ): void {
   const settings = readJson(config.path) as { mcpServers?: Record<string, unknown> };
+  if (settings.mcpServers !== undefined && (settings.mcpServers === null || typeof settings.mcpServers !== "object" || Array.isArray(settings.mcpServers))) {
+    failClosed(`Config ${config.path}: "mcpServers" is not a plain object; refusing to modify it.`);
+  }
   const existingServers = settings.mcpServers || {};
   const { merged, added, skipped } = mergeWithoutOverwrite(existingServers, mcpEntries);
   if (added.length === 0) {

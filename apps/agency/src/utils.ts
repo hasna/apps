@@ -1,4 +1,4 @@
-import { execSync, spawn } from "child_process";
+import { execSync, spawn, execFileSync } from "child_process";
 import { existsSync, statSync, readdirSync } from "fs";
 import { join, resolve } from "path";
 import { homedir } from "os";
@@ -66,6 +66,142 @@ export function execSafe(cmd: string, timeoutMs = 10_000): string | null {
   }
 }
 
+/**
+ * execSafe variant that passes an explicit environment to the child process.
+ * Use for commands that need secrets (e.g. PGPASSWORD): the value lives in the
+ * child environment only and never appears in the command string / process
+ * argument list. `env` is merged over the ambient process environment.
+ */
+export function execSafeEnv(cmd: string, timeoutMs = 10_000, env: Record<string, string> = {}): string | null {
+  try {
+    return execSync(cmd, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...env },
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * argv-based execution — the command and every argument travel as separate
+ * argv entries, never through a shell, so operator- or disk-influenced values
+ * (search queries, archive paths, database paths, identifiers) cannot carry
+ * shell substitution or quote breakout. Use this wherever a value can be
+ * influenced by the operator or by data on disk (release-review P1: reachable
+ * shell injection through ordinary CLI input).
+ */
+export function spawnSafe(
+  cmd: string,
+  args: string[],
+  timeoutMs = 10_000,
+  env: Record<string, string> = {},
+  cwd?: string,
+): string | null {
+  try {
+    return execFileSync(cmd, args, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...env },
+      cwd,
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copies staged content over a live target directory with a pre-copy snapshot
+ * and rollback. The snapshot lives OUTSIDE the staged dir (sibling temp file),
+ * so it can never be copied into the target; it is removed on success and on a
+ * fully rolled-back failure. On copy failure the copy-created entries are
+ * removed from the target first and only then is the snapshot extracted over
+ * it, so `rolledBack: true` means the target equals the pre-copy state. When
+ * the rollback itself fails, the snapshot path is returned for manual
+ * recovery.
+ */
+export function copyStagedWithRollback(
+  stagedDir: string,
+  targetDir: string,
+  timeoutMs = 120_000,
+): { ok: boolean; rolledBack: boolean; snapshot: string | null } {
+  let snapshot: string | null = null;
+  if (dirExists(targetDir)) {
+    snapshot = `${stagedDir}.precopy-snapshot.tar.gz`;
+    // Snapshot the COMPLETE preimage — no exclusions. A rollback that cannot
+    // restore a pre-existing subtree (e.g. `backups` excluded from the
+    // snapshot, then removed as staged residue) would delete data it cannot
+    // recover while reporting rolledBack: true (release-review P1).
+    const snapResult = spawnSafe("tar", ["-czf", snapshot, "-C", targetDir, "."], timeoutMs);
+    if (snapResult === null || !fileExists(snapshot)) {
+      return { ok: false, rolledBack: false, snapshot: null };
+    }
+  }
+  const copyResult = spawnSafe("cp", ["-a", `${stagedDir}/.`, `${targetDir}/`], timeoutMs);
+  if (copyResult !== null) {
+    if (snapshot) spawnSafe("rm", ["-f", snapshot], 5000);
+    return { ok: true, rolledBack: false, snapshot: null };
+  }
+  // Copy failed — clear the copy-created residue, then restore the snapshot.
+  if (snapshot) {
+    const residueRemoved = removeStagedResidue(stagedDir, targetDir);
+    const restoreResult = spawnSafe("tar", ["-xzf", snapshot, "-C", targetDir], timeoutMs);
+    if (residueRemoved && restoreResult !== null) {
+      spawnSafe("rm", ["-f", snapshot], 5000);
+      return { ok: false, rolledBack: true, snapshot: null };
+    }
+  }
+  return { ok: false, rolledBack: false, snapshot };
+}
+
+/**
+ * Removes from `targetDir` every top-level entry that a staged copy created
+ * (the staged entries themselves), so the subsequent snapshot extraction can
+ * restore the exact pre-copy state. Returns true when every removal succeeded.
+ */
+function removeStagedResidue(stagedDir: string, targetDir: string): boolean {
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(stagedDir);
+  } catch {
+    return false;
+  }
+  let ok = true;
+  for (const entry of entries) {
+    if (entry === "." || entry === "..") continue;
+    const rm = spawnSafe("rm", ["-rf", join(targetDir, entry)], 10_000);
+    if (rm === null) ok = false;
+  }
+  return ok;
+}
+
+/**
+ * Verifies that `filePath` is a readable tar archive. Returns the full `tar -tzf`
+ * listing on success, or null when the archive is unreadable/corrupt. Callers
+ * MUST treat null as a hard failure — never display a truncated listing built
+ * from a pipe (`tar | head`) as "validated", because that masks extraction
+ * failures before live data is touched.
+ */
+export function verifyTarball(filePath: string, timeoutMs = 60_000): string | null {
+  // argv-based: the archive path is operator-supplied and must never travel
+  // through a shell (release-review P1: shell injection via user-controlled
+  // paths reaching archive verification).
+  return spawnSafe("tar", ["-tzf", filePath], timeoutMs);
+}
+
+/**
+ * Validates the tarball (rc-checked, no pipe masking) and returns up to `limit`
+ * listing lines for display. Returns null when the archive is invalid.
+ */
+export function listTarball(filePath: string, limit: number, timeoutMs = 60_000): string | null {
+  const listing = verifyTarball(filePath, timeoutMs);
+  if (listing === null) return null;
+  return listing.split("\n").slice(0, limit).join("\n");
+}
+
 export function getInstalledVersion(npmName: string): string | null {
   const result = execSafe(`npm ls -g ${npmName} --depth=0 --json 2>/dev/null`);
   if (!result) return null;
@@ -87,16 +223,45 @@ export function spawnWithTimeout(
   cmd: string,
   args: string[],
   timeoutMs: number,
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  env: Record<string, string> = {},
+): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   return new Promise((resolve2) => {
     let stdout = "";
     let stderr = "";
     let killed = false;
-    const opts = { stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"] };
+    let settled = false;
+    // Hard deadline: SIGTERM at the timeout, then SIGKILL after a short grace,
+    // and the promise resolves at the deadline regardless — a child that
+    // ignores SIGTERM must never hang the caller past the advertised timeout.
+    // (release-review P1: the advertised MCP timeout could hang indefinitely.)
+    let killTimer: NodeJS.Timeout | null = null;
+    const finish = (result: { code: number | null; stdout: string; stderr: string; timedOut: boolean }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(termTimer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve2(result);
+    };
+    const opts = {
+      stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...env },
+    };
     const child = spawn(cmd, args, opts);
-    const timer = setTimeout(() => {
+    const termTimer = setTimeout(() => {
       killed = true;
-      child.kill("SIGTERM");
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* already gone */
+      }
+      killTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        finish({ code: null, stdout, stderr: stderr + `\n[timeout]`, timedOut: true });
+      }, 1000);
     }, timeoutMs);
     child.stdout?.on("data", (d) => {
       stdout += d.toString();
@@ -105,16 +270,14 @@ export function spawnWithTimeout(
       stderr += d.toString();
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
       if (killed) {
-        resolve2({ code: null, stdout, stderr: stderr + `\n[timeout]` });
+        finish({ code: null, stdout, stderr: stderr + `\n[timeout]`, timedOut: true });
       } else {
-        resolve2({ code, stdout, stderr });
+        finish({ code, stdout, stderr, timedOut: false });
       }
     });
     child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve2({ code: null, stdout, stderr: err.message });
+      finish({ code: null, stdout, stderr: err.message, timedOut: false });
     });
   });
 }

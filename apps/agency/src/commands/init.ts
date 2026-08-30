@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { createInterface } from "readline";
 import { REGISTRY } from "../registry.js";
-import { HASNA_HOME, dataPath, dirExists, execSafe } from "../utils.js";
+import { HASNA_HOME, dataPath, dirExists, execSafe, spawnWithTimeout } from "../utils.js";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -100,8 +100,15 @@ export function registerInitCommand(program: Command): void {
           const db = opts.yes ? "cli" : (await ask("  RDS database [cli]: ")) || "cli";
           if (host) {
             const pw = process.env.HASNA_RDS_PASSWORD || process.env.CLOUD_PG_PASSWORD || "";
-            const result = execSafe(`PGPASSWORD="${pw}" psql -h ${host} -U ${user} -d ${db} -c "SELECT 1;" 2>&1`, 5000);
-            if (result && result.includes("1")) {
+            // Credentials via child env, connection fields via argv — never a
+            // shell command string (no process-argument secret exposure).
+            const result = await spawnWithTimeout(
+              "psql",
+              ["-h", host, "-U", user, "-d", db, "-c", "SELECT 1;"],
+              5000,
+              { PGPASSWORD: pw },
+            );
+            if (result.code === 0 && result.stdout.includes("1")) {
               console.log(chalk.green(`  RDS connection successful: ${host}/${db}`));
               try {
                 const cfg = JSON.parse(readFileSync(configPath, "utf8"));
