@@ -139,11 +139,17 @@ function publishViaVault(info: RepoInfo, tarball: string): string | null {
   const npmrcPath = join(tmpdir(), `.agency-release-${process.pid}.npmrc`);
   try {
     writeFileSync(npmrcPath, NPM_VULNERABILITY_EGRESS, { mode: 0o600 });
+    // The explicit `undefined` DELETES any ambient NODE_AUTH_TOKEN from the
+    // child env: the token may only reach npm through the vault-backed route
+    // (secrets exec sets it itself). An empty overlay would leave the ambient
+    // token in the child, violating the vault-only publish-path contract
+    // (release-review P1: ambient credentials must never reach the publish
+    // path).
     const result = spawnSafe(
       "secrets",
       ["exec", "hasna/npm/live/publish-token", "--as", "NODE_AUTH_TOKEN", "--", "npm", "publish", tarball, "--userconfig", npmrcPath, "--access", "public", "--ignore-scripts"],
       60000,
-      {},
+      { NODE_AUTH_TOKEN: undefined },
       info.dir,
     );
     if (result === null) {

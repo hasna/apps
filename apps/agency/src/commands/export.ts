@@ -177,11 +177,29 @@ export function registerExportCommand(program: Command): void {
           mkdirSync(HASNA_HOME, { recursive: true });
         }
         const outcome = copyStagedWithRollback(staging, HASNA_HOME);
+        if (outcome.warning) {
+          console.error(chalk.yellow(`  ${outcome.warning}`));
+        }
         if (outcome.ok) {
           console.log(chalk.green(`\n  Import complete.`));
+        } else if (outcome.copyApplied) {
+          // The staged content is live, but the sensitive pre-copy snapshot
+          // could not be removed — a HARD failure that MUST disclose the
+          // retained snapshot (release-review P1: retained full-preimage
+          // snapshots are reported with their path, never silently dropped).
+          console.error(chalk.red("  Import applied, but the pre-copy snapshot could not be removed."));
+          console.error(chalk.red(`  Sensitive pre-copy snapshot retained at: ${outcome.snapshot}`));
+          console.error(chalk.red("  Remove it manually once the imported data is verified."));
+          process.exit(1);
         } else if (outcome.rolledBack) {
           console.error(chalk.red("  Import failed: copying staged content into ~/.hasna failed."));
           console.error(chalk.red("  Live data was rolled back to the pre-copy state."));
+          if (outcome.snapshot) {
+            console.error(chalk.red(`  Pre-copy snapshot retained at: ${outcome.snapshot}`));
+          }
+          if (outcome.retainedSwap) {
+            console.error(chalk.red(`  Displaced live tree retained at: ${outcome.retainedSwap}`));
+          }
           process.exit(1);
         } else {
           console.error(chalk.red("  Import failed: copying staged content into ~/.hasna failed."));
@@ -189,6 +207,9 @@ export function registerExportCommand(program: Command): void {
             console.error(chalk.red(`  Rollback could not complete. Pre-copy snapshot preserved at: ${outcome.snapshot}`));
           } else {
             console.error(chalk.red("  No pre-copy snapshot could be taken; live data may be partially imported."));
+          }
+          if (outcome.retainedSwap) {
+            console.error(chalk.red(`  Displaced live tree retained at: ${outcome.retainedSwap}`));
           }
           console.error(chalk.red(`  Staged copy preserved at: ${staging}`));
           process.exit(1);

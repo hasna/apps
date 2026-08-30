@@ -16,7 +16,7 @@ import { execFileSync } from "child_process";
 import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, chmodSync, symlinkSync, realpathSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { atomicSwapRestore, copyStagedWithRollback, createPreCopySnapshot, execSafe, execSafeEnv, listTarball, verifyTarball, spawnSafe, spawnWithTimeout } from "../src/utils.js";
+import { atomicSwapRestore, copyStagedWithRollback, createPreCopySnapshot, execSafe, execSafeEnv, listTarball, verifyTarball, spawnSafe, spawnWithTimeout, recoverInterruptedSwap } from "../src/utils.js";
 
 const PKG_ROOT = join(import.meta.dir, "..");
 const BIN = join(PKG_ROOT, "dist", "index.js");
@@ -34,6 +34,21 @@ function pathWithSecretsStub(exitCode = 1): string {
   const dir = mkdtempSync(join(tmpdir(), "agency-secrets-stub-"));
   const stub = join(dir, "secrets");
   writeFileSync(stub, `#!/bin/sh\nexit ${exitCode}\n`);
+  chmodSync(stub, 0o755);
+  return dir;
+}
+
+/**
+ * A PATH that prepends an argv-RECORDING `secrets` stub: it writes the full
+ * command line it received to `argvOut` and exits with `exitCode`. Used to
+ * assert the EXACT publish operand the release hands to the vault route
+ * (release-review P1: the published artifact must be the verified tarball,
+ * never `.` — an argv-blind stub would pass either form).
+ */
+function pathWithSecretsStubRecording(argvOut: string, exitCode = 0): string {
+  const dir = mkdtempSync(join(tmpdir(), "agency-secrets-stub-"));
+  const stub = join(dir, "secrets");
+  writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' "$*" > "${argvOut}"\nexit ${exitCode}\n`);
   chmodSync(stub, 0o755);
   return dir;
 }
@@ -651,14 +666,122 @@ describe("P1 cycle-4: the rollback swap is atomic — the target is never absent
     expect(statSync(snap!).mode & 0o777).toBe(0o600);
     spawnSafe("rm", ["-rf", `${staged}.precopy`], 10_000);
   });
+
+  test("an interrupted swap (process death between renames) is healed by the next invocation", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-swap-heal-"));
+    const target = join(base, "target");
+    const backup = `${target}.swap-backup-123`;
+    const journal = `${target}.swap-journal`;
+    // Simulate the kill window: the journal was written and the live tree
+    // renamed aside, then the process died before the restore rename — the
+    // target is absent and the live tree sits under the backup name.
+    mkdirSync(backup);
+    writeFileSync(join(backup, "old.txt"), "old");
+    writeFileSync(journal, `${backup}\n`);
+    expect(existsSync(target)).toBe(false);
+    const msg = recoverInterruptedSwap(target);
+    expect(msg).not.toBeNull();
+    // The live tree is back at the target path — it never stays absent across
+    // invocations (release-review P1: kill window).
+    expect(existsSync(join(target, "old.txt"))).toBe(true);
+    expect(existsSync(backup)).toBe(false);
+    expect(existsSync(journal)).toBe(false);
+  });
+
+  test("a displaced live tree that cannot be removed is a hard failure with the retained path disclosed", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-swap-retain-"));
+    const target = join(base, "target");
+    mkdirSync(target);
+    writeFileSync(join(target, "old.txt"), "old");
+    const restore = join(base, "restore");
+    mkdirSync(restore);
+    writeFileSync(join(restore, "new.txt"), "new");
+    // Force the displaced-tree removal to FAIL: a stub `rm` that exits 1.
+    // The swap's own renames are syscalls (unaffected); only the cleanup rm
+    // fails, which must be a hard failure, never a silent success
+    // (release-review P1: .swap-backup-* removal failures are disclosed).
+    const stubDir = mkdtempSync(join(tmpdir(), "agency-rm-stub-"));
+    const rmStub = join(stubDir, "rm");
+    writeFileSync(rmStub, "#!/bin/sh\nexit 1\n");
+    chmodSync(rmStub, 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${stubDir}:${savedPath}`;
+    let retained: string | null = null;
+    try {
+      const res = atomicSwapRestore(restore, target);
+      expect(res.ok).toBe(false);
+      expect(res.targetRestored).toBe(true);
+      expect(res.retained).not.toBeNull();
+      retained = res.retained;
+      // The swap itself landed (the restore tree is live at the target).
+      expect(existsSync(join(target, "new.txt"))).toBe(true);
+      // The retained displaced live tree still exists at the disclosed path.
+      expect(existsSync(join(retained!, "old.txt"))).toBe(true);
+      // The journal stays so the retained tree remains discoverable.
+      expect(existsSync(`${target}.swap-journal`)).toBe(true);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    if (retained) spawnSafe("rm", ["-rf", retained], 10_000);
+    spawnSafe("rm", ["-rf", `${target}.swap-journal`], 10_000);
+  });
+
+  test("a retained pre-copy snapshot after a successful copy is a disclosed hard failure, not a silent success", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-snap-retain-"));
+    const staged = join(base, "staged");
+    const target = join(base, "target");
+    mkdirSync(staged);
+    mkdirSync(target);
+    writeFileSync(join(staged, "new.txt"), "new");
+    writeFileSync(join(target, "old.txt"), "old");
+    // Force snapshot cleanup to FAIL (stub `rm` exits 1) AFTER the copy lands:
+    // the caller must see a HARD failure disclosing the retained full-preimage
+    // snapshot — never "Restore complete." with a silent retained snapshot
+    // (release-review P1: retained snapshots are reported with their path).
+    const stubDir = mkdtempSync(join(tmpdir(), "agency-rm-stub-"));
+    const rmStub = join(stubDir, "rm");
+    writeFileSync(rmStub, "#!/bin/sh\nexit 1\n");
+    chmodSync(rmStub, 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${stubDir}:${savedPath}`;
+    let outcome: ReturnType<typeof copyStagedWithRollback> | null = null;
+    try {
+      outcome = copyStagedWithRollback(staged, target);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    expect(outcome!.ok).toBe(false);
+    expect(outcome!.copyApplied).toBe(true);
+    expect(outcome!.rolledBack).toBe(false);
+    expect(outcome!.snapshot).not.toBeNull();
+    // The staged content IS live — the failure is the retained snapshot, which
+    // is disclosed via the outcome and still present on disk.
+    expect(readFileSync(join(target, "new.txt"), "utf-8")).toBe("new");
+    expect(existsSync(outcome!.snapshot!)).toBe(true);
+    spawnSafe("rm", ["-rf", `${staged}.precopy`], 10_000);
+  });
 });
 
 describe("P1 cycle-4: release reaches the exact-artifact publish path with a working stub", () => {
-  test("a successful build + stub secrets reports published with no mutation", () => {
+  test("a successful build + stub secrets publishes the EXACT verified tarball (argv-asserted)", () => {
     const dir = fixtureRepo();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
-    const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { PATH: `${pathWithSecretsStub(0)}:${process.env.PATH}` }, dir);
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { PATH: `${pathWithSecretsStubRecording(argvOut)}:${process.env.PATH}` }, dir);
     expect(res.stdout).toContain("published");
+    // The publish operand MUST be the verified tarball path — never `.` or the
+    // bare directory, which would publish a freshly rebuilt, unreviewed
+    // artifact (release-review P1: exact-artifact publish contract). The
+    // argv-recording stub pins the operand the argv-blind stub could not.
+    const argv = readFileSync(argvOut, "utf8").trim();
+    expect(argv).toContain("exec");
+    expect(argv).toContain("hasna/npm/live/publish-token");
+    expect(argv).toContain("npm");
+    expect(argv).toContain("publish");
+    expect(argv).toContain("hasna-fixme-0.1.0.tgz");
+    expect(argv).toContain("--userconfig");
+    expect(argv).toContain("--ignore-scripts");
+    expect(argv).not.toMatch(/(^| )publish \.$/);
     // No post-review mutation: the version is untouched and no commit was made.
     const pkg = JSON.parse(readFileSync(join(dir, "open-fixme", "package.json"), "utf8"));
     expect(pkg.version).toBe("0.1.0");
