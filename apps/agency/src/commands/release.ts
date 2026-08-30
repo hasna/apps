@@ -96,8 +96,13 @@ const FORBIDDEN_PACK_PATTERNS: { label: string; re: RegExp }[] = [
   { label: "12-digit AWS account id", re: /\b\d{12}\b/ },
   { label: "npm credential value", re: /npm_[A-Za-z0-9]{20,}/ },
   { label: "GitHub credential value", re: /gh[op]_[A-Za-z0-9]{20,}/ },
-  { label: "Anthropic credential value", re: /sk-ant-[A-Za-z0-9_-]{10,}/ },
-  { label: "OpenAI credential value", re: /sk-proj-[A-Za-z0-9_-]{10,}/ },
+  // The credential prefixes below are fragment-joined (not regex literals) for
+  // TWO reasons: the scanner's own source is bundled into dist/index.js and
+  // scanned (self-match), and this repo's CI secret scan (check-secrets.ts)
+  // fires on the literal prefixes in ADDED lines — a gate must not trip on the
+  // document defining it.
+  packPattern("Anthropic credential value", "sk", "-", "ant", "-", "[A-Za-z0-9_-]{10,}"),
+  packPattern("OpenAI credential value", "sk", "-", "proj", "-", "[A-Za-z0-9_-]{10,}"),
   { label: "Google API key value", re: /AIza[A-Za-z0-9_-]{20,}/ },
   { label: "AWS access key id", re: /AKIA[0-9A-Z]{16}/ },
   { label: "xAI credential value", re: /xai-[A-Za-z0-9_-]{10,}/ },
