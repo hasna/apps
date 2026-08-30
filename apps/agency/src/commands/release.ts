@@ -95,7 +95,6 @@ const FORBIDDEN_PACK_PATTERNS: { label: string; re: RegExp }[] = [
   packPattern("AWS resource name", "ar", "n", ":", "aw", "s", ":"),
   { label: "12-digit AWS account id", re: /\b\d{12}\b/ },
   { label: "npm credential value", re: /npm_[A-Za-z0-9]{20,}/ },
-  { label: "GitHub credential value", re: /gh[op]_[A-Za-z0-9]{20,}/ },
   // The credential prefixes below are fragment-joined (not regex literals) for
   // TWO reasons: the scanner's own source is bundled into dist/index.js and
   // scanned (self-match), and this repo's CI secret scan (check-secrets.ts)
@@ -103,6 +102,16 @@ const FORBIDDEN_PACK_PATTERNS: { label: string; re: RegExp }[] = [
   // document defining it.
   packPattern("Anthropic credential value", "sk", "-", "ant", "-", "[A-Za-z0-9_-]{10,}"),
   packPattern("OpenAI credential value", "sk", "-", "proj", "-", "[A-Za-z0-9_-]{10,}"),
+  // Public-package prohibitions mirrored from the repo's publish guard
+  // (check-publish-guard.ts): private-scope and internal-tree strings must
+  // never reach a public tarball (release-review P1 @ 6f2c8b8f9).
+  packPattern("private-scope string", "has", "na", "-", "internal"),
+  packPattern("internal-tree string", "internal", "-", "apps"),
+  // GitHub token variants beyond o/p: u (user), s (server-to-server), r
+  // (refresh) and the fine-grained github_pat_ form (release-review P1 @
+  // 6f2c8b8f9: the o/p-only detector let the other prefixes through).
+  { label: "GitHub credential value", re: /gh[ousr]_[A-Za-z0-9]{20,}/ },
+  { label: "GitHub fine-grained token", re: /github_pat_[A-Za-z0-9_]{20,}/ },
   { label: "Google API key value", re: /AIza[A-Za-z0-9_-]{20,}/ },
   { label: "AWS access key id", re: /AKIA[0-9A-Z]{16}/ },
   { label: "xAI credential value", re: /xai-[A-Za-z0-9_-]{10,}/ },
@@ -146,6 +155,23 @@ const FORBIDDEN_PACK_ENTRY = /(^|\/)\.env($|\.)|(^|\/)node_modules($|\/)|(^|\/)\
  * tarball).
  */
 function packVerifiedTarball(info: RepoInfo): { tarball: string; error: string | null } {
+  // PRE-BUILD snapshot of the reviewed SOURCE manifest (release-review P1 @
+  // 6f2c8b8f9): the packed file set and manifest must bind to the REVIEWED
+  // source, never to a post-build manifest a build could mutate. The snapshot
+  // is taken before any command that could change the tree.
+  let sourcePkg: Record<string, unknown>;
+  try {
+    sourcePkg = JSON.parse(readFileSync(join(info.dir, "package.json"), "utf8"));
+  } catch {
+    return { tarball: "", error: "source package.json is not parseable — nothing was published" };
+  }
+  const sourceFiles = sourcePkg.files;
+  if (!Array.isArray(sourceFiles) || sourceFiles.length === 0) {
+    return {
+      tarball: "",
+      error: "the reviewed source manifest has no `files` array — nothing was published",
+    };
+  }
   // The build must NEVER see a publish token: an ambient NODE_AUTH_TOKEN is
   // stripped from the child env (release-review P1: the token is exposed only
   // to npm, through the vault-backed route). The exclusion must be EXPLICIT:
@@ -161,6 +187,21 @@ function packVerifiedTarball(info: RepoInfo): { tarball: string; error: string |
   const buildResult = spawnSafe("bun", ["run", "build"], 60000, buildEnv, info.dir);
   if (buildResult === null) {
     return { tarball: "", error: "build failed — nothing was packed or published" };
+  }
+  // POST-BUILD cleanliness gate (release-review P1 @ 6f2c8b8f9): a build that
+  // mutates TRACKED content (e.g. rewrites package.json) breaks the bind
+  // between the packed bytes and the reviewed commit — the release fails
+  // closed. dist/ is gitignored by the reviewed layout, so a legitimate build
+  // leaves the tree clean.
+  const afterBuild = spawnSafe("git", ["status", "--porcelain"], 10_000, {}, info.dir);
+  if (afterBuild === null) {
+    return { tarball: "", error: "could not verify the worktree stayed clean after the build — nothing was published" };
+  }
+  if (afterBuild.trim().length > 0) {
+    return {
+      tarball: "",
+      error: `worktree is dirty after the build (${afterBuild.trim().split("\n")[0].slice(0, 80)}) — the build mutated the reviewed tree — nothing was published`,
+    };
   }
   const packResult = spawnSafe("npm", ["pack", "--json", "--ignore-scripts"], 60000, buildEnv, info.dir);
   if (packResult === null) {
@@ -192,19 +233,25 @@ function packVerifiedTarball(info: RepoInfo): { tarball: string; error: string |
       return { tarball: "", error: "could not inspect the packed artifact (tar extraction failed) — nothing was published" };
     }
     const packedRoot = join(extractDir, "package");
-    let packedPkg: { files?: unknown };
+    let packedPkg: Record<string, unknown>;
     try {
       packedPkg = JSON.parse(readFileSync(join(packedRoot, "package.json"), "utf8"));
     } catch {
       return { tarball: "", error: "packed package.json is not parseable — nothing was published" };
     }
-    const declaredFiles = packedPkg.files;
-    if (!Array.isArray(declaredFiles) || declaredFiles.length === 0) {
+    // The packed manifest must equal the REVIEWED SOURCE manifest snapshot
+    // (release-review P1 @ 6f2c8b8f9): a build that rewrote package.json —
+    // e.g. adding a `files` entry and a payload — is refused here even if it
+    // preserved name/version. npm packs the manifest file verbatim, so strict
+    // equality is the correct contract.
+    if (JSON.stringify(packedPkg) !== JSON.stringify(sourcePkg)) {
       return {
         tarball: "",
-        error: "packed artifact is not bound to a file set: package.json `files` must be a non-empty array — nothing was published",
+        error: "packed package.json differs from the reviewed source manifest — nothing was published",
       };
     }
+    // The allowed file set is the SOURCE-declared set (pre-build snapshot),
+    // never the packed manifest's own claims.
     let entries: string[];
     try {
       entries = walkPackedEntries(packedRoot);
@@ -216,7 +263,7 @@ function packVerifiedTarball(info: RepoInfo): { tarball: string; error: string |
       if (FORBIDDEN_PACK_ENTRY.test(rel)) {
         return { tarball: "", error: `packed artifact contains a forbidden entry (${rel}) — nothing was published` };
       }
-      const covered = (declaredFiles as string[]).some((f) => {
+      const covered = (sourceFiles as string[]).some((f) => {
         const clean = f.replace(/\/+$/, "");
         return rel === clean || rel.startsWith(`${clean}/`);
       });

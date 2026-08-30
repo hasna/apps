@@ -83,6 +83,7 @@ function fixtureRepo(opts: {
   buildExitsNonZero?: boolean;
   packageName?: string;
   buildWritesToken?: boolean;
+  buildMutatesManifest?: boolean;
   files?: string[] | false;
   distContent?: string;
   extraEntries?: Array<{ path: string; content: string }>;
@@ -92,9 +93,11 @@ function fixtureRepo(opts: {
   const pkgDir = join(dir, "open-fixme");
   const buildScript = opts.buildWritesToken
     ? `printf '%s' "$NODE_AUTH_TOKEN" > token-probe.txt; echo boom; exit 1`
-    : opts.buildExitsNonZero
-      ? "echo boom && exit 1"
-      : "echo ok";
+    : opts.buildMutatesManifest
+      ? `printf '%s' '{"name":"@hasna/fixme","version":"0.1.0","scripts":{"build":"echo ok"},"files":["dist","evil.js"]}' > package.json; echo 'x' > evil.js`
+      : opts.buildExitsNonZero
+        ? "echo boom && exit 1"
+        : "echo ok";
   const filesField = opts.files === false ? undefined : (opts.files ?? ["dist"]);
   const pkg: Record<string, unknown> = {
     name: opts.packageName ?? "@hasna/fixme",
@@ -896,7 +899,7 @@ describe("P1 cycle-5: the packed artifact is bound to a reviewed file set and it
     const argvOut = join(dir, "secrets-argv.txt");
     const res = releaseAtHead(dir, argvOut, ["fixme"]);
     expect(res.code).not.toBe(0);
-    expect(res.stdout).toContain("file set");
+    expect(res.stdout).toContain("no `files` array");
     // The vault route never ran — nothing was published.
     expect(existsSync(argvOut)).toBe(false);
   });
@@ -944,6 +947,43 @@ describe("P1 cycle-5: the packed artifact is bound to a reviewed file set and it
     const res = releaseAtHead(dir, argvOut, ["fixme"]);
     expect(res.stdout).toContain("published");
     expect(existsSync(argvOut)).toBe(true);
+  });
+
+  test("a build that mutates the reviewed manifest is refused (post-build cleanliness gate)", () => {
+    // The build rewrites package.json (adding a files entry) and drops a
+    // payload file — the reviewed source manifest can no longer bind the
+    // packed bytes (release-review P1 @ 6f2c8b8f9).
+    const dir = fixtureRepo({
+      buildMutatesManifest: true,
+    });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("dirty after the build");
+    expect(existsSync(argvOut)).toBe(false);
+  });
+
+  test("packed content carrying a private-scope string is refused before any publish", () => {
+    const dir = fixtureRepo({ distContent: "console.log('x');\nconst dep = require('@hasna-internal/foo');\n" });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("packed artifact contains");
+    expect(res.stdout).toContain("nothing was published");
+    expect(existsSync(argvOut)).toBe(false);
+  });
+
+  test("packed content carrying a fine-grained GitHub token shape is refused before any publish", () => {
+    // Fragment-joined so the fixture source stays clean for the staged-secrets
+    // scan; the packed dist still carries the full joined value.
+    const tok = ["github_pat_", "abcdefghijklmnopqrstuvwx"].join("");
+    const dir = fixtureRepo({ distContent: `console.log('x');\nconst tok = '${tok}';\n` });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("packed artifact contains");
+    expect(res.stdout).toContain("nothing was published");
+    expect(existsSync(argvOut)).toBe(false);
   });
 });
 
