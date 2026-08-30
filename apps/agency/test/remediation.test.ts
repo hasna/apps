@@ -109,13 +109,31 @@ describe("P1-1: release command gates", () => {
     return dir;
   }
 
+  /**
+   * A PATH that prepends a harmless stub `secrets` executable (exit 1 if ever
+   * invoked, never the real vault CLI): the release's vault-route availability
+   * gate (binaryExists("secrets")) passes, so the build/pack gates are the
+   * next thing exercised — while a stub can never publish anything. Without
+   * the stub this test's outcome depended on whether a real `secrets` CLI
+   * happened to be on PATH (present on dev stations, absent on CI runners),
+   * which made "build failure aborts" fail on CI at the fail-closed vault
+   * gate before the build ever ran. Hermetic in both environments.
+   */
+  function pathWithSecretsStub(): string {
+    const dir = mkdtempSync(join(tmpdir(), "agency-secrets-stub-"));
+    const stub = join(dir, "secrets");
+    writeFileSync(stub, "#!/bin/sh\nexit 1\n");
+    chmodSync(stub, 0o755);
+    return dir;
+  }
+
   test("build failure aborts the release with no commit", () => {
     const saved = process.env.NODE_AUTH_TOKEN;
     process.env.NODE_AUTH_TOKEN = "npm_dummy_token_for_test";
     try {
       const dir = fixtureRepo({ buildExitsNonZero: true });
       const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
-      const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { NODE_AUTH_TOKEN: "npm_dummy_token_for_test" }, dir);
+      const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { NODE_AUTH_TOKEN: "npm_dummy_token_for_test", PATH: `${pathWithSecretsStub()}:${process.env.PATH}` }, dir);
       expect(res.stdout).toContain("failed");
       expect(res.stdout).toContain("build failed");
       const pkg = JSON.parse(readFileSync(join(dir, "open-fixme", "package.json"), "utf8"));
