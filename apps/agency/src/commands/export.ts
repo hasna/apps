@@ -48,10 +48,20 @@ function findDbFiles(dir: string): string[] {
 
 function dumpDbToJson(dbPath: string, outputDir: string): { exported: number; omitted: string[] } {
   const tablesRaw = spawnSafe("sqlite3", [dbPath, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"]);
-  if (!tablesRaw) return { exported: 0, omitted: [] };
-  const tables = tablesRaw.split("\n").filter(Boolean).filter(isSafeIdentifier);
+  if (tablesRaw === null) {
+    // Discovery failure is NOT an empty database: it must abort, never report
+    // a successful export of zero tables (release-review P1: failed table
+    // discovery returns zero omissions).
+    return { exported: 0, omitted: [dbPath] };
+  }
+  const discovered = tablesRaw.split("\n").filter(Boolean);
+  // Tables whose names fail the strict identifier grammar are still part of
+  // the database: they are skipped by the exporter and MUST be reported, not
+  // silently discarded (release-review P1).
+  const omittedPre = discovered.filter((t) => !isSafeIdentifier(t));
+  const tables = discovered.filter(isSafeIdentifier);
   let tableCount = 0;
-  const omitted: string[] = [];
+  const omitted: string[] = [...omittedPre];
   for (const table of tables) {
     const jsonData = spawnSafe("sqlite3", [dbPath, "-json", `SELECT * FROM "${table}";`], 30000);
     if (jsonData === null) {

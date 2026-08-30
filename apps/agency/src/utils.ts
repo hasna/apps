@@ -98,6 +98,7 @@ export function spawnSafe(
   args: string[],
   timeoutMs = 10_000,
   env: Record<string, string> = {},
+  cwd?: string,
 ): string | null {
   try {
     return execFileSync(cmd, args, {
@@ -105,6 +106,7 @@ export function spawnSafe(
       timeout: timeoutMs,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...env },
+      cwd,
     }).trim();
   } catch {
     return null;
@@ -129,7 +131,11 @@ export function copyStagedWithRollback(
   let snapshot: string | null = null;
   if (dirExists(targetDir)) {
     snapshot = `${stagedDir}.precopy-snapshot.tar.gz`;
-    const snapResult = spawnSafe("tar", ["-czf", snapshot, "-C", targetDir, "--exclude=backups", "."], timeoutMs);
+    // Snapshot the COMPLETE preimage — no exclusions. A rollback that cannot
+    // restore a pre-existing subtree (e.g. `backups` excluded from the
+    // snapshot, then removed as staged residue) would delete data it cannot
+    // recover while reporting rolledBack: true (release-review P1).
+    const snapResult = spawnSafe("tar", ["-czf", snapshot, "-C", targetDir, "."], timeoutMs);
     if (snapResult === null || !fileExists(snapshot)) {
       return { ok: false, rolledBack: false, snapshot: null };
     }

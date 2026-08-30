@@ -699,7 +699,7 @@ function createSetupTasks(name: string, dir: string): void {
   if (initResult !== null && initResult.includes("ok")) {
     console.log(chalk.dim("  Builtin templates initialized."));
   }
-  const projectResult = execSafe(`todos --json projects --add "${dir}" --name "${name}" 2>/dev/null`, 15000);
+  const projectResult = spawnSafe("todos", ["--json", "projects", "--add", dir, "--name", name], 15000);
   let projectId: string | null = null;
   if (projectResult !== null) {
     try {
@@ -787,14 +787,16 @@ dist/
   );
   console.log(chalk.green("  Files generated."));
   console.log(chalk.dim("  Installing dependencies..."));
-  const installResult = execSafe(`cd "${dir}" && bun install 2>&1`, 60000);
+  const installResult = spawnSafe("bun", ["install"], 60000, {}, dir);
   if (installResult !== null) {
     console.log(chalk.green("  Dependencies installed."));
   } else {
     console.log(chalk.yellow("  bun install failed — run manually."));
   }
   console.log(chalk.dim("  Initializing git..."));
-  execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
+  spawnSafe("git", ["init", "-q"], 15000, {}, dir);
+  spawnSafe("git", ["add", "-A"], 15000, {}, dir);
+  spawnSafe("git", ["commit", "-q", "-m", `feat: scaffold ${name}`], 15000, {}, dir);
   if (opts.createRepo) {
     console.log(chalk.dim("  Creating GitHub repo..."));
     const ghResult = spawnSafe("gh", ["repo", "create", `hasna/${name}`, "--public", "--source", ".", "--push", "--description", `TODO: describe ${name}`], 30000);
@@ -888,14 +890,16 @@ dist/
   );
   console.log(chalk.green("  Files generated."));
   console.log(chalk.dim("  Installing dependencies..."));
-  const installResult = execSafe(`cd "${dir}" && bun install 2>&1`, 60000);
+  const installResult = spawnSafe("bun", ["install"], 60000, {}, dir);
   if (installResult !== null) {
     console.log(chalk.green("  Dependencies installed."));
   } else {
     console.log(chalk.yellow("  bun install failed — run manually."));
   }
   console.log(chalk.dim("  Initializing git..."));
-  execSafe(`cd "${dir}" && git init && git add -A && git commit -m "feat: scaffold ${name}" 2>&1`, 15000);
+  spawnSafe("git", ["init", "-q"], 15000, {}, dir);
+  spawnSafe("git", ["add", "-A"], 15000, {}, dir);
+  spawnSafe("git", ["commit", "-q", "-m", `feat: scaffold ${name}`], 15000, {}, dir);
   if (opts.createRepo) {
     console.log(chalk.dim("  Creating GitHub repo..."));
     const ghResult = spawnSafe("gh", ["repo", "create", `hasna/${name}`, "--public", "--source", ".", "--push", "--description", `TODO: describe ${name}`], 30000);
@@ -935,13 +939,20 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new service with CLI, MCP server, HTTP server, and database")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
-    .option("--create-repo", "Create a public GitHub repository (gh repo create --public --push) for the scaffold")
+    .option("--create-repo", "Refused: remote repo creation is removed (use the reviewed hasna/apps pipeline)")
     .option("--provision-db", "Provision an RDS database for the service")
     .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
     .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
+      assertSafeScaffoldName(name);
+      if (opts.createRepo) {
+        // Remote repository creation was removed (release-review P1: the
+        // scaffold can push an unreviewed public repository).
+        console.error(chalk.red("  Refusing to create a GitHub repo from a scaffold: remote effects require the reviewed hasna/apps pipeline."));
+        process.exitCode = 1;
+      }
       await scaffoldService(name, baseDir, !!opts.skipTasks, {
-        createRepo: !!opts.createRepo,
+        createRepo: false,
         provisionDb: !!opts.provisionDb,
         publish: !!opts.publish,
       });
@@ -952,14 +963,33 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new library package (no DB, MCP, CLI, or server)")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
-    .option("--create-repo", "Create a public GitHub repository (gh repo create --public --push) for the scaffold")
+    .option("--create-repo", "Refused: remote repo creation is removed (use the reviewed hasna/apps pipeline)")
     .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
     .action(async (name: string, opts) => {
       const baseDir = resolve(opts.dir);
+      assertSafeScaffoldName(name);
+      if (opts.createRepo) {
+        // Remote repository creation was removed (release-review P1: the
+        // scaffold can push an unreviewed public repository).
+        console.error(chalk.red("  Refusing to create a GitHub repo from a scaffold: remote effects require the reviewed hasna/apps pipeline."));
+        process.exitCode = 1;
+      }
       await scaffoldLibrary(name, baseDir, !!opts.skipTasks, {
-        createRepo: !!opts.createRepo,
+        createRepo: false,
         provisionDb: false,
         publish: !!opts.publish,
       });
     });
+}
+
+/**
+ * Strict scaffold-name validation (release-review P1: `name` is interpolated
+ * into CREATE DATABASE and shell commands — only a bounded lowercase
+ * kebab-case identifier may reach them). Fail closed on anything else.
+ */
+function assertSafeScaffoldName(name: string): void {
+  if (!/^[a-z][a-z0-9-]{0,62}$/.test(name)) {
+    console.error(chalk.red(`  Invalid package name: ${JSON.stringify(name)} — must match ^[a-z][a-z0-9-]{0,62}$`));
+    process.exit(1);
+  }
 }

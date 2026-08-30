@@ -71,6 +71,10 @@ export function registerMcpCommand(program: Command): void {
       }
       console.log();
       console.log(`  ${chalk.green(`${passCount} ok`)}, ${chalk.red(`${failCount} issues`)} out of ${results.length} MCP servers`);
+      if (failCount > 0) {
+        // A check that reports failures must exit nonzero (release-review P2).
+        process.exitCode = 1;
+      }
     });
 
   mcpCmd.command("list").description("List all known MCP server binaries").action(() => {

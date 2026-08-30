@@ -13,7 +13,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync } from "fs";
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { copyStagedWithRollback, execSafe, execSafeEnv, listTarball, verifyTarball, spawnSafe, spawnWithTimeout } from "../src/utils.js";
@@ -359,5 +359,58 @@ describe("source pins: argv-based execution replaces shell interpolation on oper
     expect(src.includes("spawnSafe(\"sqlite3\"")).toBe(true);
     expect(src.includes("isSafeIdentifier")).toBe(true);
     expect(src.match(/execSafe\(`sqlite3/g)).toBeNull();
+  });
+});
+
+/**
+ * Regression tests for the 2026-08-30 cycle-2 remediation (re-review NO_GO
+ * @ e668b5c4e).
+ */
+describe("P1 cycle-2: strict scaffold-name grammar", () => {
+  test("an invalid scaffold name is refused before any files are created", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-new-badname-"));
+    const res = runCli(["new", "library", "Bad;Name", "--dir", base, "--skip-tasks"], {}, base);
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain("Invalid package name");
+    expect(existsSync(join(base, "open-Bad;Name"))).toBe(false);
+  });
+
+  test("--create-repo is refused (remote effects removed)", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-new-norepo-"));
+    const res = runCli(["new", "library", "okname", "--dir", base, "--skip-tasks", "--create-repo"], {}, base);
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain("Refusing to create a GitHub repo from a scaffold");
+  });
+});
+
+describe("P1 cycle-2: release refuses a dirty tree at the reviewed SHA", () => {
+  test("an uncommitted change fails the clean-tree gate before any publish", () => {
+    const saved = process.env.NODE_AUTH_TOKEN;
+    process.env.NODE_AUTH_TOKEN = "npm_dummy_token_for_test";
+    try {
+      const dir = fixtureRepo();
+      writeFileSync(join(dir, "open-fixme", "untracked.txt"), "dirty");
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
+      const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { NODE_AUTH_TOKEN: "npm_dummy_token_for_test" }, dir);
+      expect(res.stdout).toContain("worktree is not clean");
+      expect(res.stdout).toContain("failed");
+    } finally {
+      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = saved;
+    }
+  });
+});
+
+describe("P1 cycle-2: connect preserves the original config mode", () => {
+  test("a mode-0600 config stays 0600 after an atomic update", () => {
+    const home = mkdtempSync(join(tmpdir(), "agency-connect-mode-"));
+    const claudeDir = join(home, ".claude");
+    mkdirSync(claudeDir, { recursive: true });
+    const settingsPath = join(claudeDir, "settings.json");
+    writeFileSync(settingsPath, JSON.stringify({ existing: "keep" }), { mode: 0o600 });
+    chmodSync(settingsPath, 0o600);
+    const res = runCli(["connect", "claude", "--only", "todos"], { HOME: home });
+    expect(res.code).toBe(0);
+    expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
   });
 });
