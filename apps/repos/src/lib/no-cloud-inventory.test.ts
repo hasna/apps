@@ -151,6 +151,58 @@ describe("no-cloud inventory", () => {
     });
   });
 
+  it("treats clones-root checkouts as canonical ahead of shorter non-canonical rivals (migration-window dual form)", () => {
+    withTempWorkspace((root) => {
+      const legacy = join(root, "workspace", "repos", "hasna", "repos");
+      const clonesHomeRoot = join(root, ".hasna", "repos", "clones", "hasna", "apps");
+      const clonesShareRoot = join(root, ".local", "share", "hasna", "repos", "clones", "hasna", "apps");
+      const shortScratch = join(root, "scratch", "hasna", "apps");
+      for (const repo of [legacy, clonesHomeRoot, clonesShareRoot, shortScratch]) {
+        gitRepo(repo);
+        writeFileSync(join(repo, "README.md"), `${cloudPackage}\n`);
+        commitAll(repo, "add cloud evidence");
+      }
+      setTrackedGitHubRemote(legacy, "https://github.com/hasna/repos.git");
+      setTrackedGitHubRemote(clonesHomeRoot, "https://github.com/hasna/apps.git");
+      setTrackedGitHubRemote(clonesShareRoot, "https://github.com/hasna/apps.git");
+      setTrackedGitHubRemote(shortScratch, "https://github.com/hasna/apps.git");
+
+      const report = getNoCloudInventory({ root, limit: 10, maxDepth: 8 });
+
+      // Legacy ~/workspace/repos/<org>/<name> stays canonical during the migration window.
+      expect(report.repos.find((entry) => entry.path === "workspace/repos/hasna/repos")).toMatchObject({
+        repo_key: "hasna/repos",
+        routing: "canonical",
+        canonical_path: "workspace/repos/hasna/repos",
+        duplicate_of: null,
+      });
+      // Clones-root checkouts (~/.hasna and ~/.local/share forms) must be canonical:
+      // pre-fix neither matched isCanonicalCheckoutPath, so the SHORTER scratch path won
+      // the [tier, score, pathLength, path] tie-break and the real clones checkout
+      // ranked as a duplicate of it.
+      expect(report.repos.find((entry) => entry.path === ".hasna/repos/clones/hasna/apps")).toMatchObject({
+        repo_key: "hasna/apps",
+        routing: "canonical",
+        canonical_path: ".hasna/repos/clones/hasna/apps",
+        duplicate_of: null,
+      });
+      expect(report.repos.find((entry) => entry.path === ".local/share/hasna/repos/clones/hasna/apps")).toMatchObject({
+        repo_key: "hasna/apps",
+        routing: "duplicate",
+        canonical_path: ".hasna/repos/clones/hasna/apps",
+        duplicate_of: ".hasna/repos/clones/hasna/apps",
+      });
+      expect(report.repos.find((entry) => entry.path === "scratch/hasna/apps")).toMatchObject({
+        repo_key: "hasna/apps",
+        routing: "duplicate",
+        routeable: false,
+        route_blocked_reason: "duplicate-checkout",
+        canonical_path: ".hasna/repos/clones/hasna/apps",
+        duplicate_of: ".hasna/repos/clones/hasna/apps",
+      });
+    });
+  });
+
   it("keeps the shared cloud package visible but not routeable before the final tombstone gate", () => {
     withTempWorkspace((root) => {
       const repo = join(root, cloudRepoName);
