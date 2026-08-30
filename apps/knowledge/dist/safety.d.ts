@@ -39,6 +39,34 @@ export declare function assertWriteAllowed(targetPath: string, policy: SafetyPol
 export declare function assertS3ReadAllowed(uri: string, policy: SafetyPolicy): void;
 export declare function assertWebSearchAllowed(policy: SafetyPolicy): void;
 export declare function redactSecrets(text: string, policy?: Pick<SafetyPolicy, 'redaction'>): RedactionResult;
+/**
+ * Redact every string leaf of a renderable value, preserving structure and
+ * non-string leaves. Used so retained-version reads mask credential-shaped
+ * values wherever they sit in a snapshot — body, title, url, tags, or metadata
+ * string values — not just in the field the sweep happened to clean.
+ */
+export declare function redactValueTree(value: unknown, policy?: Pick<SafetyPolicy, 'redaction'>): unknown;
+/**
+ * Render-time redaction for retained version history.
+ *
+ * The store keeps prior-version snapshots verbatim (purge is the only
+ * destructive verb), so a credential-shaped value redacted from the LIVE row
+ * can still be re-exposed by a retained read — measured 2026-08-24 when a
+ * `knowledge versions --id` probe rendered an openai_api_key-shaped value into
+ * a second transcript (incident 731221). This applies the redaction path to
+ * every string leaf of each version snapshot (content, title, url, tags,
+ * metadata) at the RENDERING boundary: identity fields (version, actor,
+ * hashes, bytes) survive untouched and the store's copy is never mutated, so
+ * `export` and the API stay raw.
+ */
+type VersionRenderable = {
+    content: string | null;
+    title?: string;
+    url?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+};
+export declare function redactVersionHistory<T extends VersionRenderable>(versions: T[], policy?: Pick<SafetyPolicy, 'redaction'>): T[];
 export declare function auditId(input: SafetyAuditInput): string;
 export declare function recordAuditEvent(db: Database, input: SafetyAuditInput): string;
 export declare function recordRedactionFindings(db: Database, input: {
@@ -67,3 +95,4 @@ export declare function approvalStatus(db: Database, policy: SafetyPolicy, actio
     approved: boolean;
     decision: SafetyDecision;
 };
+export {};

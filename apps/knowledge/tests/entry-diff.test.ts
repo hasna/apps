@@ -8,7 +8,11 @@
  * the kind entry versioning exists to prevent.
  */
 import { describe, expect, test } from 'bun:test';
-import { diffEntries, diffLines, formatEntryDiff } from '../src/entry-diff';
+import { diffEntries, diffLines, formatEntryDiff, redactEntryDiff } from '../src/entry-diff';
+
+// The fixture value is SYNTHETIC — 20+ alphanumerics after `sk-`, the
+// openai_api_key detector shape — created for the test, never a live key.
+const CRED = ['sk-', 'testsecretkeyvalue1234567890'].join(''); // SYNTHETIC fixture assembled from fragments so the file text itself cannot match the detector
 
 describe('diffLines', () => {
   test('reports added, removed, and context lines with both line numbers', () => {
@@ -91,5 +95,53 @@ describe('diffEntries', () => {
   test('metadata is compared by value, not identity', () => {
     expect(diffEntries({ metadata: { a: 1 } }, { metadata: { a: 1 } }).identical).toBe(true);
     expect(diffEntries({ metadata: { a: 1 } }, { metadata: { a: 2 } }).identical).toBe(false);
+  });
+});
+
+describe('redactEntryDiff', () => {
+  test('redacts a credential-shaped value in retained body lines but keeps the diff structure', () => {
+    // The retained side carries the value (the pre-sweep body), the live side is clean.
+    const diff = diffEntries({ content: `key=${CRED} in history` }, { content: 'key=[REDACTED] in history' });
+    const redacted = redactEntryDiff(diff);
+    const rendered = formatEntryDiff(redacted, 'k_1 v1', 'k_1 current');
+    expect(rendered).not.toContain(CRED);
+    expect(rendered).toContain('[REDACTED:openai_api_key]');
+    // Structure survives: the redaction is a render-time pass, not a re-diff.
+    expect(redacted.added).toBe(diff.added);
+    expect(redacted.removed).toBe(diff.removed);
+    expect(redacted.content.map((l) => l.op)).toEqual(diff.content.map((l) => l.op));
+    expect(redacted.content[0]).toMatchObject({ op: 'remove', from_line: 1, to_line: null });
+  });
+
+  test('leaves non-matching lines untouched', () => {
+    const diff = diffEntries({ content: 'ordinary prose\nmore prose' }, { content: 'ordinary prose\nedited prose' });
+    const redacted = redactEntryDiff(diff);
+    expect(redacted.content.map((l) => l.text)).toEqual(diff.content.map((l) => l.text));
+    expect(formatEntryDiff(redacted, 'v1', 'v2')).toContain('edited prose');
+  });
+
+  test('redacts credential-shaped values in field changes (metadata/title/url/tags) too', () => {
+    const diff = diffEntries(
+      { content: 'same body', metadata: { api_key: CRED }, title: `old ${CRED}` },
+      { content: 'same body', metadata: { api_key: 'clean' }, title: 'new title' },
+    );
+    const redacted = redactEntryDiff(diff);
+    // JSON path: the typed structure survives, the string leaves are masked.
+    const json = JSON.stringify({ ...redacted });
+    expect(json).not.toContain(CRED);
+    expect(json).toContain('[REDACTED:openai_api_key]');
+    // Text path: the rendered field-change line is masked.
+    const rendered = formatEntryDiff(redacted, 'k_1 v1', 'k_1 current');
+    expect(rendered).not.toContain(CRED);
+    expect(rendered).toContain('[REDACTED:openai_api_key]');
+    // The body is untouched by the field pass (still the true body lines).
+    expect(redacted.content).toEqual(diff.content);
+    expect(redacted.identical).toBe(false);
+  });
+
+  test('honours a policy that disables redaction', () => {
+    const diff = diffEntries({ content: `key=${CRED}` }, { content: 'clean' });
+    const redacted = redactEntryDiff(diff, { redaction: { enabled: false } });
+    expect(formatEntryDiff(redacted, 'v1', 'v2')).toContain(CRED);
   });
 });
