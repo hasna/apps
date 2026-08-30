@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync, statSync, openSync, closeSync, fsyncSync, chmodSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
+import { parse as parseToml } from "smol-toml";
 import { REGISTRY, mcpPackages } from "../registry.js";
 
 /**
@@ -113,17 +114,16 @@ function readText(path: string): string {
   } catch {
     failClosed(`Cannot read existing config ${path}; refusing to modify it.`);
   }
-  // TOML structural fail-closed check: we only APPEND [mcp_servers.X] blocks,
-  // so the existing content must be TOML-shaped — every non-comment,
-  // non-blank line must be a key/value pair or a section header. Arbitrary
-  // malformed content is never appended to (release-review P1).
-  const lines = raw.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    if (/^\[[^\]]+\]$/.test(trimmed)) continue; // [section] or [[array]]
-    if (/^[A-Za-z0-9_."'-]+[ \t]*=/.test(trimmed)) continue; // key = value
-    failClosed(`Config ${path} is not valid TOML (line: ${trimmed.slice(0, 60)}); refusing to modify it.`);
+  // TOML structural fail-closed check (release-review P1): the existing
+  // content is parsed with a real TOML parser — malformed values (e.g. a bare
+  // `model =` with no value) and duplicate keys both throw. We only APPEND
+  // [mcp_servers.X] blocks, so arbitrary or duplicate-key content is never
+  // touched; the preimage must be structurally valid TOML or the modify is
+  // refused before any write.
+  try {
+    parseToml(raw);
+  } catch (err) {
+    failClosed(`Config ${path} is not structurally valid TOML (${(err as Error).message}); refusing to modify it.`);
   }
   return raw;
 }
@@ -199,7 +199,18 @@ function mergeTomlMcpBlocks(existingContent: string, mcpEntries: Record<string, 
     merged = `${merged}${merged.length > 0 ? `\n\n` : ""}${buildTomlServerBlock(name, entry)}`;
     added.push(name);
   }
-  return { merged: merged.length > 0 ? `${merged}\n` : "", added, skipped };
+  const finalContent = merged.length > 0 ? `${merged}\n` : "";
+  // P1 fix (release-review 2026-08-30): the merged document is re-parsed
+  // structurally before any write — a duplicate [mcp_servers.X] table or any
+  // malformed append fails closed instead of landing in the operator's config.
+  if (finalContent.trim().length > 0) {
+    try {
+      parseToml(finalContent);
+    } catch (err) {
+      failClosed(`Merged config failed structural TOML validation (${(err as Error).message}); refusing to write it.`);
+    }
+  }
+  return { merged: finalContent, added, skipped };
 }
 
 function connectJsonTool(

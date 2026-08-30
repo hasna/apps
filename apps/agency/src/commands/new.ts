@@ -11,6 +11,7 @@ interface ScaffoldOptions {
   createRepo: boolean;
   provisionDb: boolean;
   publish: boolean;
+  createTasks: boolean;
 }
 
 /**
@@ -734,9 +735,25 @@ function createSetupTasks(name: string, dir: string): void {
     console.log(chalk.yellow("  open-source-project template not found — skipping setup tasks."));
     return;
   }
-  const escapedName = name.replace(/'/g, "\\'");
-  const tasksResult = execSafe(
-    `bun -e "const { tasksFromTemplate } = require('@hasna/todos'); const tasks = tasksFromTemplate('${templateId}', '${projectId}', { name: '${escapedName}', org: 'hasna' }); console.log(JSON.stringify({ count: tasks.length }));" 2>/dev/null`,
+  // P1 fix (release-review 2026-08-30): the Todos-returned template/project
+  // IDs must never enter a shell-executed JavaScript string. They travel as
+  // separate argv values to a script that reads process.argv, after strict ID
+  // validation — anything outside [A-Za-z0-9_-] (a UUID or slug shape) is
+  // refused before any side effect.
+  const idShape = /^[A-Za-z0-9_-]{1,64}$/;
+  if (!idShape.test(templateId) || !idShape.test(projectId)) {
+    console.log(chalk.yellow("  Refusing to create tasks: template/project id from the todos CLI failed validation — create tasks manually."));
+    return;
+  }
+  const tasksResult = spawnSafe(
+    "bun",
+    [
+      "-e",
+      "const { tasksFromTemplate } = require('@hasna/todos'); const [templateId, projectId, name] = process.argv.slice(1); const tasks = tasksFromTemplate(templateId, projectId, { name, org: 'hasna' }); console.log(JSON.stringify({ count: tasks.length }));",
+      templateId,
+      projectId,
+      name,
+    ],
     15000,
   );
   if (tasksResult !== null) {
@@ -808,6 +825,7 @@ dist/
   } else {
     console.log(chalk.dim("  Skipping GitHub repo creation (pass --create-repo to create hasna/" + name + " on GitHub)."));
   }
+  let provisionFailed = false;
   if (opts.provisionDb) {
     console.log(chalk.dim("  Creating RDS database..."));
     const pgHost = process.env["CLOUD_PG_HOST"] || process.env["HASNA_RDS_HOST"];
@@ -826,10 +844,17 @@ dist/
       if (createDbResult.code === 0 && !createDbResult.stderr.includes("ERROR")) {
         console.log(chalk.green(`  RDS database created: ${dbName}`));
       } else {
-        console.log(chalk.yellow(`  RDS database creation skipped (may already exist or failed).`));
+        // P1 fix (release-review 2026-08-30): a REQUESTED --provision-db that
+        // fails must never degrade to a warning with exit 0 — it terminates
+        // nonzero and suppresses the success summary.
+        provisionFailed = true;
+        console.error(chalk.red(`  RDS database creation FAILED for ${dbName} — refusing to report success.`));
       }
     } else {
-      console.log(chalk.yellow("  RDS not configured — skipping database creation."));
+      // P1 fix (release-review 2026-08-30): a missing credential for a
+      // requested provision is a hard failure, not a skip.
+      provisionFailed = true;
+      console.error(chalk.red("  RDS not configured (CLOUD_PG_HOST / CLOUD_PG_PASSWORD unset) while --provision-db was requested — refusing to report success."));
     }
   } else {
     console.log(chalk.dim("  Skipping RDS database provisioning (pass --provision-db to enable)."));
@@ -844,10 +869,18 @@ dist/
   } else {
     console.log(chalk.dim("  Skipping npm publish."));
   }
-  if (!skipTasks) {
+  if (opts.createTasks) {
     createSetupTasks(name, dir);
   } else {
-    console.log(chalk.dim("  Skipping setup tasks (--skip-tasks)."));
+    // P1 fix (release-review 2026-08-30): external todos records are an
+    // explicit opt-in — a plain scaffold must never create durable project or
+    // task records by default.
+    console.log(chalk.dim("  Skipping setup tasks (pass --create-tasks to create a todos project and setup tasks)."));
+  }
+  if (provisionFailed) {
+    console.error(chalk.red(`\n  open-${name} scaffolded with failures (see above) — fix and re-run.`));
+    process.exitCode = 1;
+    return;
   }
   console.log(chalk.bold.green(`\n  open-${name} scaffolded successfully.\n`));
   console.log(chalk.dim(`  Directory: ${dir}`));
@@ -921,10 +954,13 @@ dist/
   } else {
     console.log(chalk.dim("  Skipping npm publish."));
   }
-  if (!skipTasks) {
+  if (opts.createTasks) {
     createSetupTasks(name, dir);
   } else {
-    console.log(chalk.dim("  Skipping setup tasks (--skip-tasks)."));
+    // P1 fix (release-review 2026-08-30): external todos records are an
+    // explicit opt-in — a plain scaffold must never create durable project or
+    // task records by default.
+    console.log(chalk.dim("  Skipping setup tasks (pass --create-tasks to create a todos project and setup tasks)."));
   }
   console.log(chalk.bold.green(`\n  open-${name} scaffolded successfully.\n`));
   console.log(chalk.dim(`  Directory: ${dir}`));
@@ -939,6 +975,7 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new service with CLI, MCP server, HTTP server, and database")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
+    .option("--create-tasks", "Create a todos project and setup tasks (default: local-only scaffold, no external records)")
     .option("--create-repo", "Refused: remote repo creation is removed (use the reviewed hasna/apps pipeline)")
     .option("--provision-db", "Provision an RDS database for the service")
     .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
@@ -955,6 +992,7 @@ export function registerNewCommand(program: Command): void {
         createRepo: false,
         provisionDb: !!opts.provisionDb,
         publish: !!opts.publish,
+        createTasks: !!opts.createTasks,
       });
     });
 
@@ -963,6 +1001,7 @@ export function registerNewCommand(program: Command): void {
     .description("Create a new library package (no DB, MCP, CLI, or server)")
     .option("-d, --dir <path>", "Base directory for the new project", process.cwd())
     .option("--skip-tasks", "Skip creating setup tasks from the open-source-project template")
+    .option("--create-tasks", "Create a todos project and setup tasks (default: local-only scaffold, no external records)")
     .option("--create-repo", "Refused: remote repo creation is removed (use the reviewed hasna/apps pipeline)")
     .option("--publish", "Refused: scaffold publication is removed (use the reviewed hasna/apps pipeline)")
     .action(async (name: string, opts) => {
@@ -978,6 +1017,7 @@ export function registerNewCommand(program: Command): void {
         createRepo: false,
         provisionDb: false,
         publish: !!opts.publish,
+        createTasks: !!opts.createTasks,
       });
     });
 }

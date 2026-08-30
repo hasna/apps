@@ -1,6 +1,6 @@
 import { execSync, spawn, execFileSync } from "child_process";
-import { existsSync, statSync, readdirSync } from "fs";
-import { join, resolve } from "path";
+import { existsSync, statSync, readdirSync, mkdirSync, chmodSync, renameSync, readFileSync, writeFileSync, unlinkSync } from "fs";
+import { join, resolve, dirname } from "path";
 import { homedir } from "os";
 
 export const HASNA_HOME = resolve(join(homedir(), ".hasna"));
@@ -97,15 +97,28 @@ export function spawnSafe(
   cmd: string,
   args: string[],
   timeoutMs = 10_000,
-  env: Record<string, string> = {},
+  env: Record<string, string | undefined> = {},
   cwd?: string,
 ): string | null {
   try {
+    // The caller's env is authoritative over process.env, INCLUDING
+    // exclusions: an explicit `undefined` value DELETES the key from the
+    // child environment (a caller that must strip a credential from a child
+    // process cannot express that through a spread that re-injects it —
+    // release-review P1: ambient NODE_AUTH_TOKEN must never reach build/pack).
+    const childEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) childEnv[k] = v;
+    }
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete childEnv[k];
+      else childEnv[k] = v;
+    }
     return execFileSync(cmd, args, {
       encoding: "utf8",
       timeout: timeoutMs,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, ...env },
+      env: childEnv,
       cwd,
     }).trim();
   } catch {
@@ -115,67 +128,319 @@ export function spawnSafe(
 
 /**
  * Copies staged content over a live target directory with a pre-copy snapshot
- * and rollback. The snapshot lives OUTSIDE the staged dir (sibling temp file),
- * so it can never be copied into the target; it is removed on success and on a
- * fully rolled-back failure. On copy failure the copy-created entries are
- * removed from the target first and only then is the snapshot extracted over
- * it, so `rolledBack: true` means the target equals the pre-copy state. When
- * the rollback itself fails, the snapshot path is returned for manual
- * recovery.
+ * and rollback. The snapshot lives in a mode-0700 sibling directory (never
+ * inside the copied dir, never world-readable under /tmp) with the archive
+ * forced to mode 0600, so it can never be copied into the target and never
+ * exposes the complete live-data preimage (release-review P1). On copy failure
+ * the preimage is restored by extracting the snapshot into a fresh 0700 tree
+ * and atomically swapping it over the live target, so `rolledBack: true` means
+ * the target equals the pre-copy state and no mid-copy residue survives
+ * (release-review P1: an overlay restore is not a rollback). Any snapshot that
+ * cannot be removed, or any rollback step that fails, is REPORTED via the
+ * returned snapshot path — never silently dropped — and the snapshot is
+ * retained for manual recovery.
  */
+/**
+ * Result of an atomic swap of a restore tree over the live target.
+ * `retained` names a displaced live tree (or the swap journal) that could not
+ * be cleaned up — callers MUST disclose it; it is never silently dropped
+ * (release-review P1: retained sensitive trees are reported, not ignored).
+ */
+export interface SwapResult {
+  ok: boolean;
+  targetRestored: boolean;
+  retained: string | null;
+}
+
+const SWAP_JOURNAL_SUFFIX = ".swap-journal";
+
+/**
+ * Result of interrupted-swap recovery. `ok: false` is a HARD failure: a
+ * retained sensitive tree could not be cleaned up and the caller MUST abort
+ * before touching the target (release-review P1: restore/import must never
+ * exit successfully with an orphaned sensitive tree).
+ */
+export interface SwapRecovery {
+  ok: boolean;
+  message: string | null;
+}
+
+/**
+ * Heals a swap interrupted by process death. The swap writes a journal naming
+ * the displaced live tree BEFORE the target is moved aside and clears it only
+ * after the displaced tree is gone; a process killed between the two renames
+ * therefore leaves the target absent but recoverable — the NEXT invocation
+ * restores the live tree, so the target never stays absent across runs
+ * (release-review P1: the target must not remain absent after process
+ * termination). MUST run BEFORE any code creates the target directory: if the
+ * target were recreated empty first, recovery would mistake the empty target
+ * for a completed swap and delete the live preimage (release-review P1:
+ * recover before creating the target). Exported so tests can pin the
+ * kill-window recovery.
+ */
+export function recoverInterruptedSwap(targetDir: string): SwapRecovery {
+  const journalPath = `${targetDir}${SWAP_JOURNAL_SUFFIX}`;
+  if (!fileExists(journalPath)) return { ok: true, message: null };
+  let backupName = "";
+  try {
+    backupName = readFileSync(journalPath, "utf8").trim();
+  } catch {
+    return { ok: false, message: `swap journal ${journalPath} exists but could not be read — manual recovery required` };
+  }
+  if (backupName && dirExists(backupName) && !dirExists(targetDir)) {
+    // The process died between the two renames: the live tree sits under the
+    // backup name and the target is absent — rename the live tree back.
+    try {
+      renameSync(backupName, targetDir);
+      try {
+        unlinkSync(journalPath);
+      } catch {
+        /* best-effort */
+      }
+      return { ok: true, message: `recovered interrupted swap: live tree restored at ${targetDir}` };
+    } catch {
+      return { ok: false, message: `interrupted swap: could not restore ${targetDir} from ${backupName}` };
+    }
+  }
+  if (backupName && dirExists(backupName) && dirExists(targetDir)) {
+    // The swap landed but the journal was never cleared — the displaced tree
+    // is stale residue. If it cannot be removed this is a HARD failure: the
+    // journal is PRESERVED so the retained sensitive tree stays discoverable,
+    // and the caller must abort before copying (release-review P1: a retained
+    // displaced live tree is never silently dropped and never reported as a
+    // mere warning while the copy proceeds).
+    const rm = spawnSafe("rm", ["-rf", backupName], 60_000);
+    if (rm === null) {
+      return { ok: false, message: `retained displaced live tree at ${backupName} (removal failed); journal kept` };
+    }
+    try {
+      unlinkSync(journalPath);
+    } catch {
+      /* best-effort */
+    }
+    return { ok: true, message: null };
+  }
+  try {
+    unlinkSync(journalPath);
+  } catch {
+    /* best-effort */
+  }
+  return dirExists(targetDir)
+    ? { ok: true, message: null }
+    : { ok: false, message: `interrupted swap: neither ${targetDir} nor its journaled backup exists` };
+}
+
+/**
+ * Atomically swaps a restore tree over the live target: the live directory is
+ * RENAMED aside first (atomic — never deleted), then the restore tree is
+ * renamed into place (atomic). If the second rename fails, the live directory
+ * is renamed back, so the target path is never absent at any point
+ * (release-review P1: delete-then-rename is not an atomic swap and leaves the
+ * target missing when the rename fails). A journal is written before the
+ * target moves and cleared only after the displaced tree is gone, so a
+ * process killed between the renames is healed by the next invocation
+ * (release-review P1: the target must not remain absent after process
+ * termination). A displaced live tree that cannot be removed is a HARD
+ * failure: the function returns ok=false with `retained` naming it, and the
+ * journal stays so the retained tree remains discoverable (release-review
+ * P1: removal failures must never be silently ignored). Exported so tests can
+ * pin both the success and the failure path.
+ */
+/**
+ * Creates the pre-copy snapshot of a live target: a mode-0700 sibling
+ * directory (next to the STAGED dir, never inside the copied tree, never
+ * world-readable under /tmp) holding a mode-0600 archive of the COMPLETE
+ * preimage — no exclusions, because a rollback that cannot restore a
+ * pre-existing subtree would delete data it cannot recover while reporting
+ * success (release-review P1). Returns the archive path, or null when the
+ * snapshot could not be taken. Exported so tests can pin the enforced modes.
+ */
+export function createPreCopySnapshot(snapDirBase: string, targetDir: string, timeoutMs: number): string | null {
+  const snapDir = `${snapDirBase}.precopy`;
+  try {
+    mkdirSync(snapDir, { recursive: true, mode: 0o700 });
+    chmodSync(snapDir, 0o700);
+  } catch {
+    return null;
+  }
+  const snapshot = join(snapDir, "precopy-snapshot.tar.gz");
+  const snapResult = spawnSafe("tar", ["-czf", snapshot, "-C", targetDir, "."], timeoutMs);
+  if (snapResult === null || !fileExists(snapshot)) {
+    return null;
+  }
+  try {
+    chmodSync(snapshot, 0o600);
+  } catch {
+    /* best-effort mode enforcement */
+  }
+  return snapshot;
+}
+
+export function atomicSwapRestore(restoreDir: string, targetDir: string): SwapResult {
+  const backupDir = `${targetDir}.swap-backup-${Date.now()}`;
+  const journalPath = `${targetDir}${SWAP_JOURNAL_SUFFIX}`;
+  try {
+    writeFileSync(journalPath, `${backupDir}\n`, { mode: 0o600 });
+  } catch {
+    return { ok: false, targetRestored: true, retained: journalPath };
+  }
+  try {
+    renameSync(targetDir, backupDir);
+  } catch {
+    // The live target could not even be moved aside — it is untouched.
+    try {
+      unlinkSync(journalPath);
+    } catch {
+      /* best-effort */
+    }
+    return { ok: false, targetRestored: true, retained: null };
+  }
+  try {
+    renameSync(restoreDir, targetDir);
+  } catch {
+    // The live target sits under the backup name; move it back so the target
+    // path is never absent. On failure the journal stays: the next invocation
+    // heals the interrupted swap.
+    try {
+      renameSync(backupDir, targetDir);
+      try {
+        unlinkSync(journalPath);
+      } catch {
+        /* best-effort */
+      }
+      return { ok: false, targetRestored: true, retained: null };
+    } catch {
+      return { ok: false, targetRestored: false, retained: journalPath };
+    }
+  }
+  // The swap landed; remove the displaced live tree. A failed removal is a
+  // HARD failure: the retained full live-data copy is disclosed and the
+  // journal is kept so the retained tree stays discoverable (release-review
+  // P1: removal failures must never be silently ignored).
+  const rm = spawnSafe("rm", ["-rf", backupDir], 60_000);
+  if (rm === null) {
+    return { ok: false, targetRestored: true, retained: backupDir };
+  }
+  try {
+    unlinkSync(journalPath);
+  } catch {
+    /* best-effort */
+  }
+  return { ok: true, targetRestored: true, retained: null };
+}
+
+/**
+ * Outcome of copying staged content over a live target with a pre-copy
+ * snapshot and rollback. `copyApplied` separates "the staged content is live
+ * but a retained snapshot could not be removed" (a HARD failure that must be
+ * disclosed) from "the copy itself failed". `snapshot` and `retainedSwap`
+ * name retained sensitive trees that callers MUST disclose — never silently
+ * dropped (release-review P1). `warning` carries a non-blocking disclosure
+ * (e.g. a healed interrupted swap).
+ */
+export interface StagedCopyOutcome {
+  ok: boolean;
+  copyApplied: boolean;
+  rolledBack: boolean;
+  snapshot: string | null;
+  retainedSwap: string | null;
+  warning: string | null;
+}
+
 export function copyStagedWithRollback(
   stagedDir: string,
   targetDir: string,
   timeoutMs = 120_000,
-): { ok: boolean; rolledBack: boolean; snapshot: string | null } {
+): StagedCopyOutcome {
+  // Heal any swap interrupted by a previous process death BEFORE touching the
+  // target — and CRITICALLY before the target is created: if the target were
+  // recreated empty first, recovery would mistake the empty target for a
+  // completed swap and delete the live preimage (release-review P1: recover
+  // before creating the target). A recovery that could not clean up a
+  // retained sensitive tree is a HARD failure — abort before any copy
+  // (release-review P1: restore/import must never exit successfully with an
+  // orphaned sensitive tree).
+  const recovery = recoverInterruptedSwap(targetDir);
+  if (!recovery.ok) {
+    return { ok: false, copyApplied: false, rolledBack: false, snapshot: null, retainedSwap: recovery.message, warning: null };
+  }
+  const warning = recovery.message;
+  if (!dirExists(targetDir)) {
+    try {
+      mkdirSync(targetDir, { recursive: true });
+    } catch {
+      return { ok: false, copyApplied: false, rolledBack: false, snapshot: null, retainedSwap: null, warning };
+    }
+  }
   let snapshot: string | null = null;
   if (dirExists(targetDir)) {
-    snapshot = `${stagedDir}.precopy-snapshot.tar.gz`;
     // Snapshot the COMPLETE preimage — no exclusions. A rollback that cannot
     // restore a pre-existing subtree (e.g. `backups` excluded from the
     // snapshot, then removed as staged residue) would delete data it cannot
     // recover while reporting rolledBack: true (release-review P1).
-    const snapResult = spawnSafe("tar", ["-czf", snapshot, "-C", targetDir, "."], timeoutMs);
-    if (snapResult === null || !fileExists(snapshot)) {
-      return { ok: false, rolledBack: false, snapshot: null };
+    snapshot = createPreCopySnapshot(stagedDir, targetDir, timeoutMs);
+    if (snapshot === null) {
+      return { ok: false, copyApplied: false, rolledBack: false, snapshot: null, retainedSwap: null, warning };
     }
   }
   const copyResult = spawnSafe("cp", ["-a", `${stagedDir}/.`, `${targetDir}/`], timeoutMs);
   if (copyResult !== null) {
-    if (snapshot) spawnSafe("rm", ["-f", snapshot], 5000);
-    return { ok: true, rolledBack: false, snapshot: null };
-  }
-  // Copy failed — clear the copy-created residue, then restore the snapshot.
-  if (snapshot) {
-    const residueRemoved = removeStagedResidue(stagedDir, targetDir);
-    const restoreResult = spawnSafe("tar", ["-xzf", snapshot, "-C", targetDir], timeoutMs);
-    if (residueRemoved && restoreResult !== null) {
-      spawnSafe("rm", ["-f", snapshot], 5000);
-      return { ok: false, rolledBack: true, snapshot: null };
+    if (snapshot) {
+      // A snapshot that cannot be removed is a HARD FAILURE, never a silent
+      // success: the staged content is live, but the sensitive pre-copy
+      // snapshot is retained and MUST be disclosed with its path
+      // (release-review P1: retained snapshots are reported, not dropped).
+      const removed = removeSnapshotTree(snapshot);
+      if (!removed) {
+        return { ok: false, copyApplied: true, rolledBack: false, snapshot, retainedSwap: null, warning };
+      }
     }
+    return { ok: true, copyApplied: true, rolledBack: false, snapshot: null, retainedSwap: null, warning };
   }
-  return { ok: false, rolledBack: false, snapshot };
+  // Copy failed — restore the exact preimage with an atomic swap: extract to a
+  // fresh 0700 sibling tree, then replace the live target. The live target is
+  // removed only AFTER the restore tree is verified present.
+  if (snapshot) {
+    const restoreDir = `${targetDir}.restore-${Date.now()}`;
+    try {
+      mkdirSync(restoreDir, { mode: 0o700 });
+    } catch {
+      return { ok: false, copyApplied: false, rolledBack: false, snapshot, retainedSwap: null, warning };
+    }
+    const extractResult = spawnSafe("tar", ["-xzf", snapshot, "-C", restoreDir], timeoutMs);
+    if (extractResult === null || !dirExists(restoreDir)) {
+      spawnSafe("rm", ["-rf", restoreDir], 10_000);
+      return { ok: false, copyApplied: false, rolledBack: false, snapshot, retainedSwap: null, warning };
+    }
+    // Atomic swap: the live target is renamed aside (never deleted), the
+    // restore tree is renamed into place, and on failure the live tree is
+    // renamed back — the target path is never absent (release-review P1:
+    // delete-then-rename is not an atomic swap). A failed swap reports
+    // rolledBack: false with the retained snapshot AND any retained displaced
+    // tree as the recovery path, because the renamed-back tree may carry
+    // mid-copy residue.
+    const swap = atomicSwapRestore(restoreDir, targetDir);
+    if (!swap.ok) {
+      return { ok: false, copyApplied: false, rolledBack: false, snapshot, retainedSwap: swap.retained, warning };
+    }
+    const removed = removeSnapshotTree(snapshot);
+    if (!removed) {
+      return { ok: false, copyApplied: false, rolledBack: true, snapshot, retainedSwap: null, warning };
+    }
+    return { ok: false, copyApplied: false, rolledBack: true, snapshot: null, retainedSwap: null, warning };
+  }
+  return { ok: false, copyApplied: false, rolledBack: false, snapshot: null, retainedSwap: null, warning };
 }
 
 /**
- * Removes from `targetDir` every top-level entry that a staged copy created
- * (the staged entries themselves), so the subsequent snapshot extraction can
- * restore the exact pre-copy state. Returns true when every removal succeeded.
+ * Removes the snapshot directory holding `snapshotPath`. Returns false (and
+ * leaves the tree in place) when any removal fails, so callers can REPORT the
+ * retained snapshot instead of losing it silently (release-review P1).
  */
-function removeStagedResidue(stagedDir: string, targetDir: string): boolean {
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(stagedDir);
-  } catch {
-    return false;
-  }
-  let ok = true;
-  for (const entry of entries) {
-    if (entry === "." || entry === "..") continue;
-    const rm = spawnSafe("rm", ["-rf", join(targetDir, entry)], 10_000);
-    if (rm === null) ok = false;
-  }
-  return ok;
+function removeSnapshotTree(snapshotPath: string): boolean {
+  const snapDir = dirname(snapshotPath);
+  const rm = spawnSafe("rm", ["-rf", snapDir], 5000);
+  return rm !== null;
 }
 
 /**
