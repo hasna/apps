@@ -1,8 +1,11 @@
 # Changelog
 
-## 0.0.109
+## 0.0.110
 
 ### Patch Changes
+
+- Fix OpenAI-compatible tool-call sequencing (canonical assistant-message shape, tool results emitted immediately after the tool_calls message they answer)
+- Inject TEST_* environment values into scenario prompts per the resolveCredential convention
 
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]
