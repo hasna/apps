@@ -29,6 +29,6 @@
     "build": "rm -rf dist && bun build src/index.ts --outdir dist --target bun",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "prepack": "bun run build"
+    "prepack": "bun run build && git diff --exit-code -- dist"
   }
 }

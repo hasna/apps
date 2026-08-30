@@ -1,5 +1,7 @@
 node_modules/
 dist/
+!apps/agency/dist/
+!apps/agency/dist/index.js
 .turbo/
 .env
 .env.*
