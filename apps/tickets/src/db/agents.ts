@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { getDatabase, now, uuid } from "./database.ts";
+import { getDatabase, now } from "./database.ts";
 import type { Agent, AgentType } from "../types/index.ts";
 import { NotFoundError } from "../types/index.ts";
 

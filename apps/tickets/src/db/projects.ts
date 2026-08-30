@@ -34,7 +34,7 @@ function rowToProject(row: RawProject): Project {
 }
 
 /** Generate a ticket prefix from project name: "Backend API" → "BAC" */
-function generatePrefix(name: string, existing: string[], db: Database): string {
+function generatePrefix(name: string, existing: string[]): string {
   // Take first letter of each word, up to 3 chars, uppercase
   const words = name.trim().split(/\s+/);
   let prefix = words
@@ -88,7 +88,7 @@ export function createProject(options: CreateProjectOptions, db?: Database): Pro
     .all()
     .map((r) => r.ticket_prefix);
 
-  const prefix = options.ticket_prefix ?? generatePrefix(name, existing, database);
+  const prefix = options.ticket_prefix ?? generatePrefix(name, existing);
 
   database.run(
     `INSERT INTO projects
