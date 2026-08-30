@@ -105,8 +105,8 @@ const FORBIDDEN_PACK_PATTERNS: { label: string; re: RegExp }[] = [
   // Public-package prohibitions mirrored from the repo's publish guard
   // (check-publish-guard.ts): private-scope and internal-tree strings must
   // never reach a public tarball (release-review P1 @ 6f2c8b8f9).
-  packPattern("hasna-internal string", "has", "na", "-", "internal"),
-  packPattern("internal-apps string", "internal", "-", "apps"),
+  packPattern("private-scope string", "has", "na", "-", "internal"),
+  packPattern("internal-tree string", "internal", "-", "apps"),
   // GitHub token variants beyond o/p: u (user), s (server-to-server), r
   // (refresh) and the fine-grained github_pat_ form (release-review P1 @
   // 6f2c8b8f9: the o/p-only detector let the other prefixes through).
