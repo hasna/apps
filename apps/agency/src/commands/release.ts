@@ -1,8 +1,9 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from "fs";
-import { join, resolve } from "path";
-import { pad, spawnSafe } from "../utils.js";
+import { basename, join, resolve } from "path";
+import { tmpdir } from "os";
+import { binaryExists, pad, spawnSafe } from "../utils.js";
 
 interface RepoInfo {
   name: string;
@@ -42,7 +43,12 @@ function getRepoInfo(dir: string): RepoInfo | null {
   if (!existsSync(pkgPath)) return null;
   try {
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    const name = pkg.name?.replace("@hasna/", "") || "";
+    // The identity is the DIRECTORY (open-<name>), not a self-declared field:
+    // gate 0b then validates pkg.name === `@hasna/<dirName>` — a package.json
+    // that names a different package than its directory is refused
+    // (release-review P1: the published identity must match the reviewed
+    // candidate, and a self-derived name cannot detect a mismatch).
+    const name = basename(dir).replace(/^open-/, "");
     const currentVersion = pkg.version || "0.0.0";
     const porcelain = spawnSafe("git", ["status", "--porcelain"], 10_000, {}, dir);
     const hasChanges = !!porcelain && porcelain.length > 0;
@@ -58,9 +64,84 @@ function getRepoInfo(dir: string): RepoInfo | null {
   }
 }
 
-/** True only when a vault-backed publish token is present in the environment. */
-export function publishTokenAvailable(): boolean {
-  return typeof process.env.NODE_AUTH_TOKEN === "string" && process.env.NODE_AUTH_TOKEN.length > 0;
+const NPM_VULNERABILITY_EGRESS = "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n";
+
+/**
+ * Builds, packs, and verifies the exact tarball that will be published. The
+ * build runs WITHOUT any NODE_AUTH_TOKEN in its environment — a token that
+ * exists only for npm must never reach a build step (release-review P1:
+ * ambient tokens must not be exposed to the build). The pack is verified
+ * against the package identity before anything is published (release-review
+ * P1: the published artifact must be bound to @hasna/<name>@<version>).
+ */
+function packVerifiedTarball(info: RepoInfo): { tarball: string; error: string | null } {
+  // The build must NEVER see a publish token: an ambient NODE_AUTH_TOKEN is
+  // stripped from the child env (release-review P1: the token is exposed only
+  // to npm, through the vault-backed route).
+  const buildEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k === "NODE_AUTH_TOKEN") continue;
+    if (v !== undefined) buildEnv[k] = v;
+  }
+  const buildResult = spawnSafe("bun", ["run", "build"], 60000, buildEnv, info.dir);
+  if (buildResult === null) {
+    return { tarball: "", error: "build failed — nothing was packed or published" };
+  }
+  const packResult = spawnSafe("npm", ["pack", "--json", "--ignore-scripts"], 60000, buildEnv, info.dir);
+  if (packResult === null) {
+    return { tarball: "", error: "npm pack failed — nothing was published" };
+  }
+  let manifest: { name?: string; version?: string; filename?: string } | null = null;
+  try {
+    const parsed = JSON.parse(packResult);
+    manifest = Array.isArray(parsed) ? parsed[0] : parsed;
+  } catch {
+    return { tarball: "", error: "npm pack output was not parseable — nothing was published" };
+  }
+  const expectedName = `@hasna/${info.name}`;
+  if (!manifest || manifest.name !== expectedName || manifest.version !== info.currentVersion || !manifest.filename) {
+    return {
+      tarball: "",
+      error: `packed artifact does not match the reviewed candidate: expected ${expectedName}@${info.currentVersion}, packed ${manifest?.name ?? "unknown"}@${manifest?.version ?? "unknown"} — nothing was published`,
+    };
+  }
+  return { tarball: join(info.dir, manifest.filename), error: null };
+}
+
+/**
+ * Publishes the exact verified tarball through the fleet vault-backed route
+ * ONLY — `secrets exec hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- npm
+ * publish <tarball>`. The temp npmrc holds only the ${NODE_AUTH_TOKEN}
+ * placeholder and lives OUTSIDE the package tree (mode 0600). Ambient
+ * credentials are never used; when the secrets CLI or the vault key is
+ * unavailable the release fails closed (release-review P1: ambient-credential
+ * publishes and package-tree npmrc files are refused).
+ */
+function publishViaVault(info: RepoInfo, tarball: string): string | null {
+  if (!binaryExists("secrets")) {
+    return "refusing to release: secrets CLI not found — publish requires the vault-backed route (secrets exec hasna/npm/live/publish-token)";
+  }
+  const npmrcPath = join(tmpdir(), `.agency-release-${process.pid}.npmrc`);
+  try {
+    writeFileSync(npmrcPath, NPM_VULNERABILITY_EGRESS, { mode: 0o600 });
+    const result = spawnSafe(
+      "secrets",
+      ["exec", "hasna/npm/live/publish-token", "--as", "NODE_AUTH_TOKEN", "--", "npm", "publish", tarball, "--userconfig", npmrcPath, "--access", "public", "--ignore-scripts"],
+      60000,
+      {},
+      info.dir,
+    );
+    if (result === null) {
+      return `npm publish failed for ${tarball} — nothing was published`;
+    }
+    return null;
+  } finally {
+    try {
+      unlinkSync(npmrcPath);
+    } catch {
+      /* temp npmrc cleanup is best-effort */
+    }
+  }
 }
 
 function releaseRepo(info: RepoInfo, reviewedSha: string | undefined): ReleaseResult {
@@ -80,6 +161,27 @@ function releaseRepo(info: RepoInfo, reviewedSha: string | undefined): ReleaseRe
       error: "refusing to release: --reviewed-sha <sha> is required (must equal the current HEAD of the reviewed candidate)",
     };
   }
+  // Gate 0b — the package identity must match the reviewed receipt: the dir's
+  // package.json must declare exactly @hasna/<name> and a semver version
+  // (release-review P1: name/version/scope/registry are bound to the release).
+  if (info.packageName !== `@hasna/${info.name}`) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: `refusing to release: package.json declares ${info.packageName || "(missing name)"}, expected @hasna/${info.name} — the published identity must match the reviewed candidate`,
+    };
+  }
+  if (!/^\d+\.\d+\.\d+/.test(info.currentVersion)) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: `refusing to release: package version ${info.currentVersion} is not semver — the reviewed candidate must carry a concrete version`,
+    };
+  }
   const head = spawnSafe("git", ["rev-parse", "HEAD"], 10_000, {}, info.dir);
   if (head === null || head.trim() !== reviewedSha) {
     return {
@@ -93,9 +195,20 @@ function releaseRepo(info: RepoInfo, reviewedSha: string | undefined): ReleaseRe
 
   // Gate 1 — refuse ANY dirty state: the tree must be exactly the reviewed
   // commit. Versioning happens BEFORE the review (changeset/version PR), so
-  // the reviewed sha already carries the final version.
+  // the reviewed sha already carries the final version. A failed `git status`
+  // invocation is a HARD failure, never a clean tree (release-review P1:
+  // `null` must not fail open).
   const porcelain = spawnSafe("git", ["status", "--porcelain"], 10_000, {}, info.dir);
-  if (porcelain !== null && porcelain.trim().length > 0) {
+  if (porcelain === null) {
+    return {
+      name: info.name,
+      oldVersion: info.currentVersion,
+      newVersion,
+      status: "failed",
+      error: "refusing to release: could not verify the worktree is clean (git status failed) — the reviewed candidate must be exactly HEAD",
+    };
+  }
+  if (porcelain.trim().length > 0) {
     return {
       name: info.name,
       oldVersion: info.currentVersion,
@@ -105,41 +218,32 @@ function releaseRepo(info: RepoInfo, reviewedSha: string | undefined): ReleaseRe
     };
   }
 
-  // Gate 2 — publishing requires a vault-backed token in the environment
-  // (NODE_AUTH_TOKEN, per the hasna/apps publish law) paired with a temp npmrc
-  // holding only the placeholder. Ambient ~/.npmrc credentials are refused.
-  if (!publishTokenAvailable()) {
+  // Gate 2 — the vault-backed publish route must be AVAILABLE before anything
+  // is built or packed: when the secrets CLI is missing the release can never
+  // succeed, so it fails closed immediately (release-review P1: ambient
+  // credentials are never a fallback; failing early also avoids building and
+  // packing a candidate that cannot be published).
+  if (!binaryExists("secrets")) {
     return {
       name: info.name,
       oldVersion: info.currentVersion,
       newVersion,
       status: "failed",
-      error: "refusing to release: NODE_AUTH_TOKEN is not set — publish with a vault-backed token (secrets exec ... --as NODE_AUTH_TOKEN -- npm publish --userconfig <tmp npmrc>)",
+      error: "refusing to release: secrets CLI not found — publish requires the vault-backed route (secrets exec hasna/npm/live/publish-token)",
     };
   }
 
-  // Gate 3 — a failed build aborts before anything is published.
-  const buildResult = spawnSafe("bun", ["run", "build"], 60000, {}, info.dir);
-  if (buildResult === null) {
-    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "build failed — nothing was published" };
+  // Gate 3 — build and pack the EXACT reviewed tree; the verified tarball is
+  // the only artifact ever published (no prepack rebuild at publish time).
+  const packed = packVerifiedTarball(info);
+  if (packed.error !== null || packed.tarball === "") {
+    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: packed.error ?? "pack failed" };
   }
 
-  // Gate 4 — publish the exact reviewed tree through a temp npmrc holding only
-  // the ${NODE_AUTH_TOKEN} placeholder (the vault token is present, verified
-  // in Gate 2). No git mutation occurs anywhere in this command.
-  const npmrcPath = join(info.dir, ".agency-release-npmrc");
-  try {
-    writeFileSync(npmrcPath, "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n", { mode: 0o600 });
-    const publishResult = spawnSafe("npm", ["publish", "--userconfig", npmrcPath, "--access", "public"], 30000, {}, info.dir);
-    if (publishResult === null) {
-      return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: "npm publish failed" };
-    }
-  } finally {
-    try {
-      unlinkSync(npmrcPath);
-    } catch {
-      /* temp npmrc cleanup is best-effort */
-    }
+  // Gate 4 — publish the exact tarball via the vault-backed route only.
+  const publishError = publishViaVault(info, packed.tarball);
+  if (publishError !== null) {
+    return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "failed", error: publishError };
   }
   return { name: info.name, oldVersion: info.currentVersion, newVersion, status: "published" };
 }

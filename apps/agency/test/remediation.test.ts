@@ -13,11 +13,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, chmodSync } from "fs";
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, chmodSync, symlinkSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { copyStagedWithRollback, execSafe, execSafeEnv, listTarball, verifyTarball, spawnSafe, spawnWithTimeout } from "../src/utils.js";
-import { publishTokenAvailable } from "../src/commands/release.js";
 
 const PKG_ROOT = join(import.meta.dir, "..");
 const BIN = join(PKG_ROOT, "dist", "index.js");
@@ -42,7 +41,7 @@ function runCli(
 }
 
 /** Minimal git repo with a package.json and a build script; returns its dir. */
-function fixtureRepo(opts: { buildExitsNonZero?: boolean } = {}): string {
+function fixtureRepo(opts: { buildExitsNonZero?: boolean; packageName?: string } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "agency-release-fixture-"));
   mkdirSync(join(dir, "open-fixme"));
   const pkgDir = join(dir, "open-fixme");
@@ -50,7 +49,7 @@ function fixtureRepo(opts: { buildExitsNonZero?: boolean } = {}): string {
     join(pkgDir, "package.json"),
     JSON.stringify(
       {
-        name: "@hasna/fixme",
+        name: opts.packageName ?? "@hasna/fixme",
         version: "0.1.0",
         scripts: { build: opts.buildExitsNonZero ? "echo boom && exit 1" : "echo ok" },
       },
@@ -80,26 +79,35 @@ describe("P1-3: credentials travel via child env, never argv/command string", ()
 });
 
 describe("P1-1: release command gates", () => {
-  test("publishTokenAvailable is false without NODE_AUTH_TOKEN", () => {
-    const saved = process.env.NODE_AUTH_TOKEN;
-    delete process.env.NODE_AUTH_TOKEN;
-    try {
-      expect(publishTokenAvailable()).toBe(false);
-    } finally {
-      if (saved !== undefined) process.env.NODE_AUTH_TOKEN = saved;
+  /**
+   * A PATH that resolves the tools the release flow needs (bun for the CLI,
+   * git for the gates, coreutils) but NEVER the secrets CLI. The vault-backed
+   * publish route must fail closed in tests — an ambient or reachable publish
+   * path must never let a fixture reach the registry (2026-08-30 P1:
+   * ambient-credential publishes are refused; tests must not publish anything
+   * at all). The vault gate fires before any build/pack, so npm is never
+   * needed.
+   */
+  function pathWithoutSecrets(): string {
+    const dir = mkdtempSync(join(tmpdir(), "agency-path-"));
+    const tools = ["bun", "node", "git", "sh", "which", "tar", "cp", "rm", "mkdir", "chmod", "mktemp", "sed", "grep", "env", "uname", "cat", "echo"];
+    for (const tool of tools) {
+      let target = "";
+      try {
+        target = execFileSync("which", [tool], { encoding: "utf8" }).trim();
+      } catch {
+        continue;
+      }
+      if (target === "" || !existsSync(target)) continue;
+      try {
+        const real = realpathSync(target);
+        symlinkSync(real, join(dir, tool));
+      } catch {
+        /* best-effort */
+      }
     }
-  });
-
-  test("publishTokenAvailable is true with NODE_AUTH_TOKEN", () => {
-    const saved = process.env.NODE_AUTH_TOKEN;
-    process.env.NODE_AUTH_TOKEN = "npm_dummy_token_for_test";
-    try {
-      expect(publishTokenAvailable()).toBe(true);
-    } finally {
-      if (saved === undefined) delete process.env.NODE_AUTH_TOKEN;
-      else process.env.NODE_AUTH_TOKEN = saved;
-    }
-  });
+    return dir;
+  }
 
   test("build failure aborts the release with no commit", () => {
     const saved = process.env.NODE_AUTH_TOKEN;
@@ -118,19 +126,24 @@ describe("P1-1: release command gates", () => {
     }
   });
 
-  test("release refuses without NODE_AUTH_TOKEN before any mutation", () => {
-    const saved = process.env.NODE_AUTH_TOKEN;
-    delete process.env.NODE_AUTH_TOKEN;
-    try {
-      const dir = fixtureRepo();
-      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
-      const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], {}, dir);
-      expect(res.stdout).toContain("NODE_AUTH_TOKEN");
-      const pkg = JSON.parse(readFileSync(join(dir, "open-fixme", "package.json"), "utf8"));
-      expect(pkg.version).toBe("0.1.0"); // never bumped — token gate fires first
-    } finally {
-      if (saved !== undefined) process.env.NODE_AUTH_TOKEN = saved;
-    }
+  test("release refuses when the secrets CLI is unavailable (vault route required, fail closed)", () => {
+    const dir = fixtureRepo();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
+    // PATH without the secrets bin: the vault-backed route is unreachable, so
+    // the release MUST fail closed — no ambient token, no publish attempt.
+    const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { PATH: `${pathWithoutSecrets()}:/usr/bin:/bin` }, dir);
+    expect(`${res.stdout}\n${res.stderr}`).toContain("secrets CLI not found");
+    expect(`${res.stdout}\n${res.stderr}`).toContain("failed");
+    const pkg = JSON.parse(readFileSync(join(dir, "open-fixme", "package.json"), "utf8"));
+    expect(pkg.version).toBe("0.1.0"); // never bumped — vault gate fires before any publish
+  });
+
+  test("release refuses a package whose identity does not match the reviewed directory", () => {
+    const dir = fixtureRepo({ packageName: "@hasna/other" });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
+    const res = runCli(["release", "fixme", "--dir", dir, "--reviewed-sha", head], { PATH: `${pathWithoutSecrets()}:/usr/bin:/bin` }, dir);
+    expect(res.stdout).toContain("expected @hasna/fixme");
+    expect(res.stdout).toContain("failed");
   });
 
   test("release refuses without --reviewed-sha (SHA-bound gate)", () => {
@@ -412,5 +425,96 @@ describe("P1 cycle-2: connect preserves the original config mode", () => {
     const res = runCli(["connect", "claude", "--only", "todos"], { HOME: home });
     expect(res.code).toBe(0);
     expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
+  });
+});
+
+/**
+ * Regression tests for the 2026-08-30 cycle-2 remediation (re-review NO_GO
+ * @ 8645e0d7f — 8 P1s: vault-only publish route, fail-closed clean gate,
+ * pack-exact tarball with identity binding, snapshot 0700/0600 + atomic swap,
+ * --create-tasks opt-in with argv IDs, provision-db failure exit, structural
+ * TOML validation).
+ */
+describe("P1 cycle-3: the pre-copy snapshot lives outside the copied tree and is removed on success", () => {
+  test("successful copy leaves no snapshot residue at the new 0700-dir paths", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-csr-ok3-"));
+    const staged = join(base, "staged");
+    const target = join(base, "target");
+    mkdirSync(staged, { recursive: true });
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(staged, "new.txt"), "new");
+    writeFileSync(join(target, "old.txt"), "old");
+    const outcome = copyStagedWithRollback(staged, target);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.snapshot).toBeNull();
+    // Neither the legacy flat snapshot nor the 0700 snapshot dir survives:
+    expect(existsSync(`${staged}.precopy-snapshot.tar.gz`)).toBe(false);
+    expect(existsSync(`${staged}.precopy`)).toBe(false);
+  });
+
+  test("failed copy restores the exact preimage via the atomic swap (no residue, no retained snapshot)", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-csr-fail3-"));
+    const staged = join(base, "staged");
+    const target = join(base, "target");
+    mkdirSync(staged, { recursive: true });
+    mkdirSync(target, { recursive: true });
+    mkdirSync(join(target, "clash"), { recursive: true });
+    writeFileSync(join(target, "clash", "pre.txt"), "pre");
+    writeFileSync(join(staged, "zzz.txt"), "residue");
+    writeFileSync(join(staged, "clash"), "file-over-dir");
+    const outcome = copyStagedWithRollback(staged, target);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.rolledBack).toBe(true);
+    expect(outcome.snapshot).toBeNull();
+    expect(existsSync(join(target, "zzz.txt"))).toBe(false);
+    expect(statSync(join(target, "clash")).isDirectory()).toBe(true);
+    expect(readFileSync(join(target, "clash", "pre.txt"), "utf-8")).toBe("pre");
+    expect(existsSync(`${staged}.precopy`)).toBe(false);
+  });
+});
+
+describe("P1 cycle-3: new.ts external effects are explicit opt-ins and failures exit nonzero", () => {
+  test("a plain scaffold creates no todos project by default (--create-tasks required)", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-new-tasks-"));
+    const res = runCli(["new", "library", "optname", "--dir", base], {}, base);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("pass --create-tasks");
+  });
+
+  test("--provision-db without credentials fails nonzero and suppresses the success summary", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-new-pdb-"));
+    const home = mkdtempSync(join(tmpdir(), "agency-new-home-"));
+    const res = runCli(["new", "service", "pdbname", "--dir", base, "--skip-tasks", "--provision-db"], { HOME: home, CLOUD_PG_HOST: "", CLOUD_PG_PASSWORD: "" }, base);
+    expect(res.code).toBe(1);
+    expect(res.stdout).not.toContain("scaffolded successfully");
+    expect(`${res.stdout}\n${res.stderr}`).toContain("refusing to report success");
+  });
+});
+
+describe("P1 cycle-3: connect validates TOML structurally before any write", () => {
+  test("a TOML config with a valueless key fails closed and is left untouched", () => {
+    const home = mkdtempSync(join(tmpdir(), "agency-connect-toml-"));
+    const codexDir = join(home, ".codex");
+    mkdirSync(codexDir, { recursive: true });
+    const tomlPath = join(codexDir, "config.toml");
+    // `model =` (no value) passes a line-shape regex but is NOT valid TOML:
+    writeFileSync(tomlPath, "[model]\nname = \"x\"\nmodel =\n");
+    const res = runCli(["connect", "codex", "--only", "todos"], { HOME: home });
+    expect(res.code).toBe(1);
+    expect(`${res.stdout}\n${res.stderr}`).toContain("not structurally valid TOML");
+    // The broken file is byte-identical and no .bak was created (no write happened):
+    expect(readFileSync(tomlPath, "utf-8")).toBe("[model]\nname = \"x\"\nmodel =\n");
+    expect(existsSync(`${tomlPath}.bak`)).toBe(false);
+  });
+
+  test("a duplicate-key TOML config fails closed and is left untouched", () => {
+    const home = mkdtempSync(join(tmpdir(), "agency-connect-toml2-"));
+    const codexDir = join(home, ".codex");
+    mkdirSync(codexDir, { recursive: true });
+    const tomlPath = join(codexDir, "config.toml");
+    writeFileSync(tomlPath, "[mcp_servers.todos]\ncommand = \"a\"\n[mcp_servers.todos]\ncommand = \"b\"\n");
+    const res = runCli(["connect", "codex", "--only", "todos"], { HOME: home });
+    expect(res.code).toBe(1);
+    expect(readFileSync(tomlPath, "utf-8")).toBe("[mcp_servers.todos]\ncommand = \"a\"\n[mcp_servers.todos]\ncommand = \"b\"\n");
   });
 });
