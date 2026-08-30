@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
 import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, chmodSync, symlinkSync, realpathSync, readdirSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { atomicSwapRestore, copyStagedWithRollback, createPreCopySnapshot, execSafe, execSafeEnv, listTarball, verifyTarball, spawnSafe, spawnWithTimeout, recoverInterruptedSwap } from "../src/utils.js";
 
 const PKG_ROOT = join(import.meta.dir, "..");
@@ -73,8 +73,20 @@ function runCli(
   }
 }
 
-/** Minimal git repo with a package.json and a build script; returns its dir. */
-function fixtureRepo(opts: { buildExitsNonZero?: boolean; packageName?: string; buildWritesToken?: boolean } = {}): string {
+/**
+ * Minimal git repo with a package.json and a build script; returns its dir.
+ * The fixture is bound to a `files` set by default (files: ["dist"] with a
+ * committed dist/index.js) so the pack-content gate has a reviewed contract
+ * to validate against; `files: false` omits the field entirely.
+ */
+function fixtureRepo(opts: {
+  buildExitsNonZero?: boolean;
+  packageName?: string;
+  buildWritesToken?: boolean;
+  files?: string[] | false;
+  distContent?: string;
+  extraEntries?: Array<{ path: string; content: string }>;
+} = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "agency-release-fixture-"));
   mkdirSync(join(dir, "open-fixme"));
   const pkgDir = join(dir, "open-fixme");
@@ -83,18 +95,23 @@ function fixtureRepo(opts: { buildExitsNonZero?: boolean; packageName?: string; 
     : opts.buildExitsNonZero
       ? "echo boom && exit 1"
       : "echo ok";
-  writeFileSync(
-    join(pkgDir, "package.json"),
-    JSON.stringify(
-      {
-        name: opts.packageName ?? "@hasna/fixme",
-        version: "0.1.0",
-        scripts: { build: buildScript },
-      },
-      null,
-      2,
-    ) + "\n",
-  );
+  const filesField = opts.files === false ? undefined : (opts.files ?? ["dist"]);
+  const pkg: Record<string, unknown> = {
+    name: opts.packageName ?? "@hasna/fixme",
+    version: "0.1.0",
+    scripts: { build: buildScript },
+  };
+  if (filesField !== undefined) pkg.files = filesField;
+  writeFileSync(join(pkgDir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
+  if (filesField === undefined || (filesField as string[]).includes("dist")) {
+    mkdirSync(join(pkgDir, "dist"));
+    writeFileSync(join(pkgDir, "dist", "index.js"), opts.distContent ?? "console.log('fixture-dist');\n");
+  }
+  for (const entry of opts.extraEntries ?? []) {
+    const full = join(pkgDir, entry.path);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, entry.content);
+  }
   execFileSync("git", ["init", "-q"], { cwd: pkgDir });
   execFileSync("git", ["add", "-A"], { cwd: pkgDir });
   execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: pkgDir, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
@@ -865,6 +882,95 @@ describe("P1 cycle-4: release reaches the exact-artifact publish path with a wor
     expect(pkg.version).toBe("0.1.0");
     const log = execFileSync("git", ["log", "--oneline", "-1"], { cwd: join(dir, "open-fixme"), encoding: "utf8" });
     expect(log).toContain("init");
+  });
+});
+
+describe("P1 cycle-5: the packed artifact is bound to a reviewed file set and its content is scanned", () => {
+  function releaseAtHead(dir: string, argvOut: string, extraArgs: string[] = []) {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
+    return runCli(["release", ...extraArgs, "--dir", dir, "--reviewed-sha", head], { PATH: `${pathWithSecretsStubRecording(argvOut)}:${process.env.PATH}` }, dir);
+  }
+
+  test("a packed artifact without a `files` array is refused before any publish", () => {
+    const dir = fixtureRepo({ files: false });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("file set");
+    // The vault route never ran — nothing was published.
+    expect(existsSync(argvOut)).toBe(false);
+  });
+
+  test("a packed entry that is not metadata or declared-`files` content is refused", () => {
+    // .env is DECLARED in files, so npm packs it — but the entry gate refuses
+    // environment files at any depth regardless of declaration.
+    const dir = fixtureRepo({ files: ["dist", ".env"], extraEntries: [{ path: ".env", content: "DUMMY_KEY=dummy\n" }] });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("forbidden entry");
+    expect(res.stdout).toContain(".env");
+    expect(existsSync(argvOut)).toBe(false);
+  });
+
+  test("packed content carrying an internal-infra string is refused before any publish", () => {
+    const dir = fixtureRepo({ distContent: "console.log('x');\nconst endpoint = 'arn:aws:fake:123456789012';\n" });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("packed artifact contains");
+    expect(res.stdout).toContain("nothing was published");
+    expect(existsSync(argvOut)).toBe(false);
+  });
+
+  test("packed content carrying a credential-value shape is refused before any publish", () => {
+    // The credential-shaped literal is assembled from fragments at RUNTIME so
+    // the fixture source itself stays clean for the repo's staged-secrets scan
+    // (a gate must not fire on the document defining it); the packed
+    // dist/index.js still carries the full joined value the scanner must catch.
+    const tok = ["npm_", "abcdefghijklmnopqrstuvwx"].join("");
+    const dir = fixtureRepo({ distContent: `console.log('x');\nconst tok = '${tok}';\n` });
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("packed artifact contains");
+    expect(res.stdout).toContain("nothing was published");
+    expect(existsSync(argvOut)).toBe(false);
+  });
+
+  test("a clean, bound candidate still publishes (negative control)", () => {
+    const dir = fixtureRepo();
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = releaseAtHead(dir, argvOut, ["fixme"]);
+    expect(res.stdout).toContain("published");
+    expect(existsSync(argvOut)).toBe(true);
+  });
+});
+
+describe("P1 cycle-5: the default (no-argument) release path releases clean reviewed candidates", () => {
+  test("a clean, pushed repo at the reviewed sha is released by the no-arg path", () => {
+    const dir = fixtureRepo();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(dir, "open-fixme"), encoding: "utf8" }).trim();
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = runCli(["release", "--dir", dir, "--reviewed-sha", head], { PATH: `${pathWithSecretsStubRecording(argvOut)}:${process.env.PATH}` }, dir);
+    // The previously unreachable path: a CLEAN candidate is selected and
+    // released (release-review P1 @ 3f1611276: dirty-or-unpushed-only
+    // selection made the no-argument release workflow impossible).
+    expect(res.stdout).toContain("published");
+    expect(existsSync(argvOut)).toBe(true);
+    const args = readFileSync(argvOut, "utf8").trim().split("\n");
+    const npmIdx = args.indexOf("npm");
+    expect(npmIdx).toBeGreaterThanOrEqual(0);
+    expect(args[npmIdx + 2]).toMatch(/^.*hasna-fixme-0\.1\.0\.tgz$/);
+  });
+
+  test("a batch release bound to a sha no repo holds fails closed and publishes nothing", () => {
+    const dir = fixtureRepo();
+    const argvOut = join(dir, "secrets-argv.txt");
+    const res = runCli(["release", "--dir", dir, "--reviewed-sha", "0000000000000000000000000000000000000000"], { PATH: `${pathWithSecretsStubRecording(argvOut)}:${process.env.PATH}` }, dir);
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("No repo is at --reviewed-sha");
+    expect(existsSync(argvOut)).toBe(false);
   });
 });
 
