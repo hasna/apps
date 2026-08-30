@@ -1,0 +1,13 @@
+node_modules
+dist
+dashboard
+**/*.test.ts
+.git
+.github
+examples
+*.tgz
+docs
+.claude
+.codewith
+.takumi
+!dashboard/package.json

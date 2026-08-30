@@ -1,0 +1,32 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "contacts",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.2",
+  "description": "Contact & company management for AI coding agents. CLI + MCP + HTTP API (contacts-serve) + generated SDK. Cloud mode (HASNA_CONTACTS_STORAGE_MODE=cloud / HASNA_CONTACTS_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts. PRIVATE repo — synthetic seeds only, never real PII.",
+  "bins": ["contacts", "contacts-mcp", "contacts-serve"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_CONTACTS_",
+    "aliasEnvPrefix": "CONTACTS_",
+    "databaseUrlSecretRef": "hasna/oss/contacts/database-url",
+    "sqlitePath": "~/.local/share/hasna/contacts/contacts.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 19428,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/contacts/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "CONTACTS_API_URL",
+      "apiKeyEnv": "CONTACTS_API_KEY"
+    }
+  }
+}
