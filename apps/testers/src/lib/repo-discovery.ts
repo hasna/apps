@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import { createHash } from "crypto";
 import { join, resolve, relative } from "path";
-import { getTestersDir } from "./paths.js";
+import { getHomeDir, getTestersDir } from "./paths.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -390,16 +390,44 @@ function detectSuggestedUrl(repoPath: string): string | null {
   return null;
 }
 
+function hasPlaywrightBrowsers(dir: string): boolean {
+  // A Playwright browser cache counts as "installed" when it holds at least one
+  // browser revision directory (chromium-*, firefox-*, webkit-*, ffmpeg-*).
+  if (!existsSync(dir)) return false;
+  try {
+    return readdirSync(dir).some((entry) => /^(chromium|firefox|webkit|ffmpeg)/.test(entry));
+  } catch {
+    return false;
+  }
+}
+
 function checkPlaywrightBrowserInstalled(repoPath: string): boolean {
-  // Check for .cache/ms-playwright or playwright/.cache directory
-  const cacheDir = join(repoPath, "node_modules", ".cache", "ms-playwright");
-  if (existsSync(cacheDir)) return true;
+  // Repo-local install (e.g. PLAYWRIGHT_BROWSERS_PATH=0, or browsers under
+  // node_modules).
+  if (hasPlaywrightBrowsers(join(repoPath, "node_modules", ".cache", "ms-playwright"))) {
+    return true;
+  }
 
-  // Global playwright install
-  const globalCache = join(repoPath, ".cache", "ms-playwright");
-  if (existsSync(globalCache)) return true;
+  // Explicit PLAYWRIGHT_BROWSERS_PATH override. When set, browsers live directly
+  // under that path (default installs nest under an ms-playwright/ subdir, so
+  // accept both shapes).
+  const envPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (envPath && envPath !== "0") {
+    if (hasPlaywrightBrowsers(envPath) || hasPlaywrightBrowsers(join(envPath, "ms-playwright"))) {
+      return true;
+    }
+  }
 
-  return false;
+  // Default global browser cache, per platform:
+  //   macOS:   ~/Library/Caches/ms-playwright
+  //   Linux:   ~/.cache/ms-playwright
+  //   Windows: %USERPROFILE%\AppData\Local\ms-playwright
+  const home = getHomeDir();
+  return (
+    hasPlaywrightBrowsers(join(home, "Library", "Caches", "ms-playwright")) ||
+    hasPlaywrightBrowsers(join(home, ".cache", "ms-playwright")) ||
+    hasPlaywrightBrowsers(join(home, "AppData", "Local", "ms-playwright"))
+  );
 }
 
 function getInstallCommand(pm: PackageManagers): string {
