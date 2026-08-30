@@ -177,12 +177,14 @@ function materialize(definition: CredentialPatternDefinition): CredentialPattern
   };
 }
 
-// A database URL that is obviously a placeholder — a localhost/dev default, a
-// documentation example, or an IaC template — carries no credential. Reporting
-// every connection string regardless of content floods scans with these, so the
-// database-url rule (and any high-entropy token that sits inside such a URL)
-// must stay silent for the placeholder class while continuing to flag genuinely
-// suspicious connection strings.
+// A database URL only carries a credential when it embeds a password and
+// points at a non-placeholder host. Reporting every connection string
+// regardless of content floods scans with shape-only matches (no userinfo, a
+// user without a password, a localhost/dev default, a documentation example,
+// or an IaC template), so the database-url rule (and any high-entropy token
+// that sits inside such a URL) must stay silent unless both the password and
+// the host predicates hold, while continuing to flag genuinely suspicious
+// connection strings.
 const LOOPBACK_HOST_RE = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i;
 const UPPERCASE_PLACEHOLDER_HOST_RE = /^[A-Z]{2,}$/;
 
@@ -197,24 +199,51 @@ function hostOfDatabaseUrl(dsn: string): string {
     : authority.split(":")[0];
 }
 
+/**
+ * Password segment of the URL userinfo, or null when there is no userinfo, no
+ * user/password separator, or an empty password.
+ */
+function passwordOfDatabaseUrl(dsn: string): string | null {
+  const afterScheme = dsn.slice(dsn.indexOf("://") + 3);
+  const atIndex = afterScheme.indexOf("@");
+  if (atIndex === -1) return null;
+  const userinfo = afterScheme.slice(0, atIndex);
+  const colonIndex = userinfo.indexOf(":");
+  if (colonIndex === -1) return null;
+  const password = userinfo.slice(colonIndex + 1);
+  return password.length > 0 ? password : null;
+}
+
 /** True when the matched connection string is a non-credential placeholder. */
 export function isPlaceholderDatabaseUrl(value: string): boolean {
   // Template / IaC placeholders such as <username> or ${DB_HOST}.
   if (value.includes("<") || value.includes("${")) return true;
   const host = hostOfDatabaseUrl(value);
+  if (host.length === 0) return true;
   if (LOOPBACK_HOST_RE.test(host)) return true;
   // Documentation uppercase placeholders, e.g. postgresql://USER:PASSWORD@HOST:5432/DBNAME.
   if (UPPERCASE_PLACEHOLDER_HOST_RE.test(host.replace(/^\[|\]$/g, ""))) return true;
   return false;
 }
 
-/** Span ([start, end)) of every placeholder connection string in `value`. */
-function findPlaceholderDatabaseUrlSpans(value: string): Array<[number, number]> {
+/**
+ * True only when the connection string embeds an actual credential: a
+ * non-empty password in the userinfo AND a non-placeholder host. A shape-only
+ * DSN (no userinfo, or a user without a password) or a placeholder-target DSN
+ * is not a credential and must not be reported.
+ */
+export function isCredentialDatabaseUrl(value: string): boolean {
+  if (passwordOfDatabaseUrl(value) === null) return false;
+  return !isPlaceholderDatabaseUrl(value);
+}
+
+/** Span ([start, end)) of every non-credential connection string in `value`. */
+function findNonCredentialDatabaseUrlSpans(value: string): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
   const rule = materialize(DATABASE_URL_DEFINITION);
   let match: RegExpExecArray | null;
   while ((match = rule.pattern.exec(value)) !== null) {
-    if (isPlaceholderDatabaseUrl(match[0])) {
+    if (!isCredentialDatabaseUrl(match[0])) {
       spans.push([match.index, match.index + match[0].length]);
     }
     if (match[0].length === 0) rule.pattern.lastIndex++;
@@ -249,7 +278,7 @@ function collectPatternMatches(
     while ((match = rule.pattern.exec(value)) !== null) {
       if (
         definition.id === DATABASE_URL_DEFINITION.id
-        && isPlaceholderDatabaseUrl(match[0])
+        && !isCredentialDatabaseUrl(match[0])
       ) {
         if (match[0].length === 0) rule.pattern.lastIndex++;
         continue;
@@ -313,10 +342,10 @@ function collectEntropyMatches(
   boundary = false,
 ): CredentialRecognition[] {
   const recognitions: CredentialRecognition[] = [];
-  // A high-entropy token embedded in a placeholder connection string is itself
-  // placeholder material (e.g. a long fake password in a docs example), so it
-  // must not be reported either.
-  const placeholderDatabaseUrlSpans = findPlaceholderDatabaseUrlSpans(value);
+  // A high-entropy token embedded in a non-credential connection string is
+  // itself non-credential material (e.g. a long fake password in a docs
+  // example or a shape-only DSN), so it must not be reported either.
+  const placeholderDatabaseUrlSpans = findNonCredentialDatabaseUrlSpans(value);
   // Normalize against the maximum empirical entropy reachable by this sample,
   // not merely the alphabet maximum. A 22-character Base64 token cannot
   // empirically exceed log2(22), while a hexadecimal alphabet tops out at 4.
