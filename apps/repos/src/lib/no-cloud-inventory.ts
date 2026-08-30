@@ -677,10 +677,15 @@ function isCanonicalCheckoutPath(repo: InternalRepoFinding, expectedName: string
   if (!expectedName) return false;
   if (path === expectedName) return true;
   const org = repo.repo_key?.split("/")[0] ?? "";
-  // Standalone layout: ~/workspace/repos/<org>/<name>, scanned from the repos
-  // root or from a parent. The retired opensource/open-<name> layout is never
-  // canonical.
-  if (org && (path === `${org}/${expectedName}` || path.endsWith(`/repos/${org}/${expectedName}`))) return true;
+  // Standalone layouts: ~/workspace/repos/<org>/<name> (legacy) and the clones
+  // root (~/.hasna/repos/clones/<org>/<name>, ~/.local/share/hasna/repos/clones/<org>/<name>)
+  // accepted in migration-window dual form, scanned from the repos/clones root or
+  // from a parent. The retired opensource/open-<name> layout is never canonical.
+  if (org && (
+    path === `${org}/${expectedName}`
+    || path.endsWith(`/repos/${org}/${expectedName}`)
+    || path.endsWith(`/repos/clones/${org}/${expectedName}`)
+  )) return true;
   // Monorepo member layout: <monorepo-root>/apps/<name>.
   if (path.endsWith(`/apps/${expectedName}`)) return true;
   return false;
