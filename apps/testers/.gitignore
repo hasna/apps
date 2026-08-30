@@ -13,3 +13,9 @@ dashboard/dist/
 dashboard/node_modules/
 bun.lock
 .claude/
+
+# Runtime state artifacts — never commit (O15-05112)
+<db>:heartbeat_state:*
+testers-export.json
+test-results/
+.scripts/sync.log
