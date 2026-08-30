@@ -3226,7 +3226,8 @@ repoCmd
           log(chalk.red("  --install  (install dependencies)"));
         if (!snapshot.readiness.browsersInstalled)
           log(chalk.red("  --browsers (install Playwright browsers)"));
-        return;
+        // "Not ready" is a failure, not a no-op: callers gate on $? (PLA16-00071).
+        process.exit(1);
       }
 
       log("");
@@ -3262,6 +3263,12 @@ repoCmd
 
       if (opts.json) {
         log(JSON.stringify(prepResult, null, 2));
+      }
+
+      // A failed prep step is a failure, not a no-op: callers gate on $?
+      // (PLA16-00071). Emit JSON (when requested) before the non-zero exit.
+      if (!prepResult.allSucceeded) {
+        process.exit(1);
       }
     } catch (error) {
       logError(
