@@ -1303,11 +1303,40 @@ interface AgentLoopResult {
   }>;
 }
 
+const SCENARIO_ENV_REFERENCE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+
+/**
+ * Resolves `$NAME` / `${NAME}` environment references in scenario text (the
+ * same convention `resolveCredential` uses for auth presets) from the current
+ * process environment. Resolved values are recorded in `injected` and
+ * substituted inline so the model receives the actual test values instead of
+ * a variable name it cannot read; unresolved references are left verbatim.
+ */
+function resolveScenarioEnvReferences(text: string, injected: Map<string, string>): string {
+  return text.replace(SCENARIO_ENV_REFERENCE, (match, braced: string | undefined, bare: string | undefined) => {
+    const name = braced ?? bare;
+    if (name === undefined) return match;
+    const value = process.env[name];
+    if (value === undefined) return match;
+    injected.set(name, value);
+    return value;
+  });
+}
+
 export function buildScenarioUserMessage(scenario: Scenario, baseUrl?: string): string {
   const { scenario: materializedScenario, resolution } = materializeScenarioRoute(scenario);
+
+  // Scenario steps are passed to the model verbatim; TEST_* references such
+  // as $TEST_MEMBER_EMAIL must be injected with their launch-time values, or
+  // the model reports it "doesn't have access to these environment variables"
+  // and login-gated lanes can never complete.
+  const injectedEnv = new Map<string, string>();
+  const description = resolveScenarioEnvReferences(materializedScenario.description, injectedEnv);
+  const steps = materializedScenario.steps.map((step) => resolveScenarioEnvReferences(step, injectedEnv));
+
   const userParts: string[] = [
     `**Scenario:** ${materializedScenario.name}`,
-    `**Description:** ${materializedScenario.description}`,
+    `**Description:** ${description}`,
   ];
 
   if (baseUrl) {
@@ -1334,10 +1363,18 @@ export function buildScenarioUserMessage(scenario: Scenario, baseUrl?: string): 
     }
   }
 
-  if (materializedScenario.steps.length > 0) {
+  if (steps.length > 0) {
     userParts.push("**Steps:**");
-    for (let i = 0; i < materializedScenario.steps.length; i++) {
-      userParts.push(`${i + 1}. ${materializedScenario.steps[i]}`);
+    for (let i = 0; i < steps.length; i++) {
+      userParts.push(`${i + 1}. ${steps[i]}`);
+    }
+  }
+
+  if (injectedEnv.size > 0) {
+    userParts.push("");
+    userParts.push("**Test Environment (values injected for this run):**");
+    for (const [name, value] of [...injectedEnv.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      userParts.push(`- ${name} = ${value}`);
     }
   }
 
@@ -1663,29 +1700,67 @@ export async function callOpenAICompatible(options: {
 }): Promise<{ content: Anthropic.ContentBlock[]; stop_reason: string; usage: { input_tokens: number; output_tokens: number } }> {
   const { baseUrl, apiKey, model, system, messages, tools, maxTokens = 4096 } = options;
 
-  // Convert message history (Anthropic format → OpenAI format)
+  // Convert message history (Anthropic format → OpenAI format).
+  //
+  // OpenAI's chat-completions contract requires that ONE logical assistant turn
+  // is ONE message carrying both `content` and `tool_calls`, and that an
+  // assistant message with tool_calls is IMMEDIATELY followed by tool messages
+  // responding to each tool_call_id. Splitting an Anthropic assistant message's
+  // text + tool_use blocks into two consecutive assistant messages produces a
+  // history OpenAI rejects ("An assistant message with tool_calls must be
+  // followed by tool messages responding to each tool_call_id") — measured
+  // against gpt-4o-mini in the live QA lane. Coalesce the blocks per message
+  // so the emitted sequence is always canonical.
   const oaiMessages: unknown[] = [{ role: "system", content: system }];
   for (const msg of messages) {
     if (typeof msg.content === "string") {
       oaiMessages.push({ role: msg.role, content: msg.content });
-    } else if (Array.isArray(msg.content)) {
-      // Handle tool results and text blocks
-      for (const block of msg.content as Anthropic.ContentBlockParam[]) {
-        if (block.type === "text") {
-          oaiMessages.push({ role: msg.role, content: (block as Anthropic.TextBlockParam).text });
-        } else if (block.type === "tool_use") {
-          const tb = block as Anthropic.ToolUseBlockParam;
-          oaiMessages.push({
-            role: "assistant",
-            content: null,
-            tool_calls: [{ id: tb.id, type: "function", function: { name: tb.name, arguments: JSON.stringify(tb.input) } }],
-          });
-        } else if (block.type === "tool_result") {
-          const trb = block as Anthropic.ToolResultBlockParam;
-          const resultContent = typeof trb.content === "string" ? trb.content : JSON.stringify(trb.content);
-          oaiMessages.push({ role: "tool", tool_call_id: trb.tool_use_id, content: resultContent });
-        }
+      continue;
+    }
+    if (!Array.isArray(msg.content)) continue;
+
+    const textParts: string[] = [];
+    const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
+    const toolResults: Array<{ toolCallId: string; content: string }> = [];
+
+    for (const block of msg.content as Anthropic.ContentBlockParam[]) {
+      if (block.type === "text") {
+        textParts.push((block as Anthropic.TextBlockParam).text);
+      } else if (block.type === "tool_use") {
+        const tb = block as Anthropic.ToolUseBlockParam;
+        toolCalls.push({ id: tb.id, type: "function", function: { name: tb.name, arguments: JSON.stringify(tb.input) } });
+      } else if (block.type === "tool_result") {
+        const trb = block as Anthropic.ToolResultBlockParam;
+        const resultContent = typeof trb.content === "string" ? trb.content : JSON.stringify(trb.content);
+        toolResults.push({ toolCallId: trb.tool_use_id, content: resultContent });
       }
+    }
+
+    // Tool results must be emitted immediately after the assistant tool_calls
+    // message they answer — never separated by another message. Any text in
+    // the same Anthropic message is commentary on the results and is appended
+    // AFTER the tool responses so it cannot break the pairing.
+    if (toolResults.length > 0) {
+      for (const tr of toolResults) {
+        oaiMessages.push({ role: "tool", tool_call_id: tr.toolCallId, content: tr.content });
+      }
+      if (textParts.length > 0) {
+        oaiMessages.push({ role: "user", content: textParts.join("\n") });
+      }
+      continue;
+    }
+
+    // Text + tool_calls from one message → ONE message carrying both fields.
+    // The content key is omitted when there are tool_calls and no text:
+    // content: null is spec-valid for OpenAI but some OpenAI-compatible
+    // providers reject the null form.
+    const content = textParts.join("\n");
+    if (toolCalls.length > 0) {
+      const assistantMessage: Record<string, unknown> = { role: msg.role, tool_calls: toolCalls };
+      if (content) assistantMessage.content = content;
+      oaiMessages.push(assistantMessage);
+    } else if (content) {
+      oaiMessages.push({ role: msg.role, content });
     }
   }
 
