@@ -39,16 +39,17 @@ function pathWithSecretsStub(exitCode = 1): string {
 }
 
 /**
- * A PATH that prepends an argv-RECORDING `secrets` stub: it writes the full
- * command line it received to `argvOut` and exits with `exitCode`. Used to
- * assert the EXACT publish operand the release hands to the vault route
- * (release-review P1: the published artifact must be the verified tarball,
- * never `.` — an argv-blind stub would pass either form).
+ * A PATH that prepends an argv-RECORDING `secrets` stub: it writes each
+ * argument it received on its OWN LINE to `argvOut` (argument boundaries
+ * preserved via "$@") and exits with `exitCode`. Used to assert the EXACT
+ * publish operand the release hands to the vault route (release-review P1:
+ * the published artifact must be the verified tarball, never `.` — an
+ * argv-blind stub, or a flattened "$*" recording, would pass either form).
  */
 function pathWithSecretsStubRecording(argvOut: string, exitCode = 0): string {
   const dir = mkdtempSync(join(tmpdir(), "agency-secrets-stub-"));
   const stub = join(dir, "secrets");
-  writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' "$*" > "${argvOut}"\nexit ${exitCode}\n`);
+  writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argvOut}"\nexit ${exitCode}\n`);
   chmodSync(stub, 0o755);
   return dir;
 }
@@ -611,6 +612,10 @@ describe("P1 cycle-4: failed git status is a loud refusal in every mode", () => 
     const res = runCli(["release", "--check", "--dir", dir], {}, dir);
     expect(`${res.stdout}\n${res.stderr}`).toContain("could not verify git status");
     expect(`${res.stdout}\n${res.stderr}`).toContain("status failed");
+    // A failed git status must fail the EXIT STATUS too — automation must
+    // never accept an unverifiable candidate as a clean scan (release-review
+    // P1: failed git status must fail the exit status).
+    expect(res.code).not.toBe(0);
   });
 
   test("batch release refuses and never claims everything is clean", () => {
@@ -619,7 +624,12 @@ describe("P1 cycle-4: failed git status is a loud refusal in every mode", () => 
     expect(`${res.stdout}\n${res.stderr}`).toContain("could not verify git status");
     expect(`${res.stdout}\n${res.stderr}`).not.toContain("All repos are clean");
     expect(`${res.stdout}\n${res.stderr}`).toContain("nothing released");
+    // A failed git status must fail the EXIT STATUS too, not just print a
+    // refusal — automation must never accept an unverifiable candidate as a
+    // successful run (release-review P1).
+    expect(res.code).not.toBe(0);
   });
+
 });
 
 describe("P1 cycle-4: the rollback swap is atomic — the target is never absent", () => {
@@ -679,13 +689,77 @@ describe("P1 cycle-4: the rollback swap is atomic — the target is never absent
     writeFileSync(join(backup, "old.txt"), "old");
     writeFileSync(journal, `${backup}\n`);
     expect(existsSync(target)).toBe(false);
-    const msg = recoverInterruptedSwap(target);
-    expect(msg).not.toBeNull();
+    const rec = recoverInterruptedSwap(target);
+    expect(rec.ok).toBe(true);
+    expect(rec.message).not.toBeNull();
     // The live tree is back at the target path — it never stays absent across
     // invocations (release-review P1: kill window).
     expect(existsSync(join(target, "old.txt"))).toBe(true);
     expect(existsSync(backup)).toBe(false);
     expect(existsSync(journal)).toBe(false);
+  });
+
+  test("an interrupted swap is healed BEFORE the target is created — the live preimage is never deleted as residue", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-swap-heal-order-"));
+    const staged = join(base, "staged");
+    const target = join(base, "target");
+    const backup = `${target}.swap-backup-123`;
+    const journal = `${target}.swap-journal`;
+    // The kill window: target absent, live preimage under the backup name.
+    mkdirSync(staged);
+    writeFileSync(join(staged, "new.txt"), "new");
+    mkdirSync(backup);
+    writeFileSync(join(backup, "old.txt"), "old");
+    writeFileSync(journal, `${backup}\n`);
+    // The caller must NOT have pre-created the target (the tool recovers
+    // first, then creates the target only if still absent). Recovery sees the
+    // live preimage and heals; the copy then proceeds over the healed tree.
+    const outcome = copyStagedWithRollback(staged, target);
+    expect(outcome.ok).toBe(true);
+    // The preimage survived recovery and the staged content landed on top.
+    expect(readFileSync(join(target, "old.txt"), "utf-8")).toBe("old");
+    expect(readFileSync(join(target, "new.txt"), "utf-8")).toBe("new");
+    expect(existsSync(backup)).toBe(false);
+    expect(existsSync(journal)).toBe(false);
+  });
+
+  test("a retained displaced tree that cannot be cleaned ABORTS the copy — never a warning with an orphaned sensitive tree", () => {
+    const base = mkdtempSync(join(tmpdir(), "agency-swap-abort-"));
+    const staged = join(base, "staged");
+    const target = join(base, "target");
+    const backup = `${target}.swap-backup-123`;
+    const journal = `${target}.swap-journal`;
+    mkdirSync(staged);
+    writeFileSync(join(staged, "new.txt"), "new");
+    mkdirSync(target);
+    writeFileSync(join(target, "old.txt"), "old");
+    mkdirSync(backup);
+    writeFileSync(join(backup, "preimage.txt"), "pre");
+    writeFileSync(journal, `${backup}\n`);
+    // Force the residue removal to fail: a stub `rm` that exits 1.
+    const stubDir = mkdtempSync(join(tmpdir(), "agency-rm-stub-"));
+    const rmStub = join(stubDir, "rm");
+    writeFileSync(rmStub, "#!/bin/sh\nexit 1\n");
+    chmodSync(rmStub, 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${stubDir}:${savedPath}`;
+    let outcome: ReturnType<typeof copyStagedWithRollback> | null = null;
+    try {
+      outcome = copyStagedWithRollback(staged, target);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    // HARD failure: the copy never ran, the retained tree is disclosed with
+    // its path, and the journal is preserved so it stays discoverable.
+    expect(outcome!.ok).toBe(false);
+    expect(outcome!.copyApplied).toBe(false);
+    expect(outcome!.retainedSwap).toContain("swap-backup-123");
+    expect(readFileSync(join(target, "old.txt"), "utf-8")).toBe("old");
+    expect(existsSync(join(target, "new.txt"))).toBe(false);
+    expect(existsSync(backup)).toBe(true);
+    expect(existsSync(journal)).toBe(true);
+    spawnSafe("rm", ["-rf", backup], 10_000);
+    spawnSafe("rm", ["-rf", journal], 10_000);
   });
 
   test("a displaced live tree that cannot be removed is a hard failure with the retained path disclosed", () => {
@@ -772,16 +846,20 @@ describe("P1 cycle-4: release reaches the exact-artifact publish path with a wor
     // The publish operand MUST be the verified tarball path — never `.` or the
     // bare directory, which would publish a freshly rebuilt, unreviewed
     // artifact (release-review P1: exact-artifact publish contract). The
-    // argv-recording stub pins the operand the argv-blind stub could not.
-    const argv = readFileSync(argvOut, "utf8").trim();
-    expect(argv).toContain("exec");
-    expect(argv).toContain("hasna/npm/live/publish-token");
-    expect(argv).toContain("npm");
-    expect(argv).toContain("publish");
-    expect(argv).toContain("hasna-fixme-0.1.0.tgz");
-    expect(argv).toContain("--userconfig");
-    expect(argv).toContain("--ignore-scripts");
-    expect(argv).not.toMatch(/(^| )publish \.$/);
+    // argv-recording stub pins the operand the argv-blind stub could not; the
+    // per-line "$@" recording preserves argument boundaries so a flattened
+    // "publish . <tarball>" cannot smuggle past substring checks.
+    const args = readFileSync(argvOut, "utf8").trim().split("\n");
+    expect(args).toContain("exec");
+    expect(args).toContain("hasna/npm/live/publish-token");
+    expect(args).toContain("--userconfig");
+    expect(args).toContain("--ignore-scripts");
+    expect(args).not.toContain(".");
+    // The exact ordered segment must be: npm publish <verified-tarball>.
+    const npmIdx = args.indexOf("npm");
+    expect(npmIdx).toBeGreaterThanOrEqual(0);
+    expect(args[npmIdx + 1]).toBe("publish");
+    expect(args[npmIdx + 2]).toMatch(/^.*hasna-fixme-0\.1\.0\.tgz$/);
     // No post-review mutation: the version is untouched and no commit was made.
     const pkg = JSON.parse(readFileSync(join(dir, "open-fixme", "package.json"), "utf8"));
     expect(pkg.version).toBe("0.1.0");

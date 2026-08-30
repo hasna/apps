@@ -306,6 +306,12 @@ export function registerReleaseCommand(program: Command): void {
           process.exit(1);
         }
       }
+      // Any SELECTED repo whose git status could not be verified makes the
+      // whole invocation exit nonzero in every mode (--check, dry-run,
+      // release): automation must never accept an unverifiable candidate as a
+      // successful run (release-review P1: failed git status must fail the
+      // exit status, not just print a refusal).
+      const unverifiableSelected = infos.filter((i) => i.gitStatusFailed).length;
       if (opts.check) {
         console.log(chalk.bold(pad("Package", 22) + pad("Version", 12) + pad("Changes", 10) + pad("Unpushed", 10) + pad("Status", 14)));
         console.log(chalk.dim("─".repeat(68)));
@@ -321,6 +327,11 @@ export function registerReleaseCommand(program: Command): void {
         }
         const needsRelease = infos.filter((i) => i.needsRelease).length;
         console.log(chalk.dim(`\n  ${infos.length} repos scanned, ${needsRelease} need release.`));
+        if (unverifiableSelected > 0) {
+          // The refusals above are the record; the exit status must not read
+          // as a clean scan (release-review P1).
+          process.exitCode = 1;
+        }
         return;
       }
       // A repo whose git status could not be verified is never released, even
@@ -331,8 +342,10 @@ export function registerReleaseCommand(program: Command): void {
         const unverifiable = infos.filter((i) => i.gitStatusFailed).length;
         if (unverifiable > 0) {
           // The refusals above are the record; do not print "all clean" next
-          // to them (release-review P1: a failed status is never "clean").
+          // to them (release-review P1: a failed status is never "clean"),
+          // and exit nonzero so automation does not read a successful no-op.
           console.log(chalk.yellow(`  ${unverifiable} repo(s) could not be verified (git status failed); nothing released.`));
+          process.exitCode = 1;
         } else {
           console.log(chalk.green("  All repos are clean. Nothing to release."));
         }
@@ -357,6 +370,11 @@ export function registerReleaseCommand(program: Command): void {
         }
         console.log(chalk.dim(`\n  ${releasable.length} repo(s) would be released.`));
         console.log(chalk.dim("  Run with --reviewed-sha <sha> to publish the exact reviewed commit."));
+        if (unverifiableSelected > 0) {
+          // The refusals above are the record; the dry run must not exit 0 as
+          // if every candidate were verifiable (release-review P1).
+          process.exitCode = 1;
+        }
         return;
       }
       console.log(chalk.dim(`  Releasing ${releasable.length} repo(s)...\n`));
@@ -391,6 +409,13 @@ export function registerReleaseCommand(program: Command): void {
       if (failed > 0) {
         // Release failures must exit nonzero (release-review P1: release
         // failures exit successfully).
+        process.exitCode = 1;
+      }
+      if (unverifiableSelected > 0) {
+        // A selected repo whose git status could not be verified was refused;
+        // the invocation must not exit 0 as if every candidate had been
+        // verifiable (release-review P1: failed git status must fail the exit
+        // status).
         process.exitCode = 1;
       }
     });

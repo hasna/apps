@@ -173,9 +173,10 @@ export function registerExportCommand(program: Command): void {
           console.error(chalk.red(`  Live data untouched. Staging: ${staging}`));
           process.exit(1);
         }
-        if (!dirExists(HASNA_HOME)) {
-          mkdirSync(HASNA_HOME, { recursive: true });
-        }
+        // NO pre-creation of HASNA_HOME here: interrupted-swap recovery must
+        // run BEFORE the target exists, or an empty recreated target would be
+        // mistaken for a completed swap and the live preimage deleted
+        // (release-review P1: recover before creating the target).
         const outcome = copyStagedWithRollback(staging, HASNA_HOME);
         if (outcome.warning) {
           console.error(chalk.yellow(`  ${outcome.warning}`));

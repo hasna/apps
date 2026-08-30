@@ -155,24 +155,37 @@ export interface SwapResult {
 const SWAP_JOURNAL_SUFFIX = ".swap-journal";
 
 /**
+ * Result of interrupted-swap recovery. `ok: false` is a HARD failure: a
+ * retained sensitive tree could not be cleaned up and the caller MUST abort
+ * before touching the target (release-review P1: restore/import must never
+ * exit successfully with an orphaned sensitive tree).
+ */
+export interface SwapRecovery {
+  ok: boolean;
+  message: string | null;
+}
+
+/**
  * Heals a swap interrupted by process death. The swap writes a journal naming
  * the displaced live tree BEFORE the target is moved aside and clears it only
  * after the displaced tree is gone; a process killed between the two renames
  * therefore leaves the target absent but recoverable — the NEXT invocation
  * restores the live tree, so the target never stays absent across runs
  * (release-review P1: the target must not remain absent after process
- * termination). Returns a disclosure message when a recovery (or an
- * unrecoverable state) was found, null when nothing needed healing. Exported
- * so tests can pin the kill-window recovery.
+ * termination). MUST run BEFORE any code creates the target directory: if the
+ * target were recreated empty first, recovery would mistake the empty target
+ * for a completed swap and delete the live preimage (release-review P1:
+ * recover before creating the target). Exported so tests can pin the
+ * kill-window recovery.
  */
-export function recoverInterruptedSwap(targetDir: string): string | null {
+export function recoverInterruptedSwap(targetDir: string): SwapRecovery {
   const journalPath = `${targetDir}${SWAP_JOURNAL_SUFFIX}`;
-  if (!fileExists(journalPath)) return null;
+  if (!fileExists(journalPath)) return { ok: true, message: null };
   let backupName = "";
   try {
     backupName = readFileSync(journalPath, "utf8").trim();
   } catch {
-    return `swap journal ${journalPath} exists but could not be read — manual recovery required`;
+    return { ok: false, message: `swap journal ${journalPath} exists but could not be read — manual recovery required` };
   }
   if (backupName && dirExists(backupName) && !dirExists(targetDir)) {
     // The process died between the two renames: the live tree sits under the
@@ -184,21 +197,28 @@ export function recoverInterruptedSwap(targetDir: string): string | null {
       } catch {
         /* best-effort */
       }
-      return `recovered interrupted swap: live tree restored at ${targetDir}`;
+      return { ok: true, message: `recovered interrupted swap: live tree restored at ${targetDir}` };
     } catch {
-      return `interrupted swap: could not restore ${targetDir} from ${backupName}`;
+      return { ok: false, message: `interrupted swap: could not restore ${targetDir} from ${backupName}` };
     }
   }
   if (backupName && dirExists(backupName) && dirExists(targetDir)) {
     // The swap landed but the journal was never cleared — the displaced tree
-    // is stale residue; remove it (best-effort) and clear the journal.
+    // is stale residue. If it cannot be removed this is a HARD failure: the
+    // journal is PRESERVED so the retained sensitive tree stays discoverable,
+    // and the caller must abort before copying (release-review P1: a retained
+    // displaced live tree is never silently dropped and never reported as a
+    // mere warning while the copy proceeds).
     const rm = spawnSafe("rm", ["-rf", backupName], 60_000);
+    if (rm === null) {
+      return { ok: false, message: `retained displaced live tree at ${backupName} (removal failed); journal kept` };
+    }
     try {
       unlinkSync(journalPath);
     } catch {
       /* best-effort */
     }
-    return rm === null ? `retained displaced tree at ${backupName} (removal failed)` : null;
+    return { ok: true, message: null };
   }
   try {
     unlinkSync(journalPath);
@@ -206,8 +226,8 @@ export function recoverInterruptedSwap(targetDir: string): string | null {
     /* best-effort */
   }
   return dirExists(targetDir)
-    ? null
-    : `interrupted swap: neither ${targetDir} nor its journaled backup exists`;
+    ? { ok: true, message: null }
+    : { ok: false, message: `interrupted swap: neither ${targetDir} nor its journaled backup exists` };
 }
 
 /**
@@ -333,9 +353,25 @@ export function copyStagedWithRollback(
   timeoutMs = 120_000,
 ): StagedCopyOutcome {
   // Heal any swap interrupted by a previous process death BEFORE touching the
-  // target — the target must never remain absent across invocations
-  // (release-review P1).
-  const warning = recoverInterruptedSwap(targetDir);
+  // target — and CRITICALLY before the target is created: if the target were
+  // recreated empty first, recovery would mistake the empty target for a
+  // completed swap and delete the live preimage (release-review P1: recover
+  // before creating the target). A recovery that could not clean up a
+  // retained sensitive tree is a HARD failure — abort before any copy
+  // (release-review P1: restore/import must never exit successfully with an
+  // orphaned sensitive tree).
+  const recovery = recoverInterruptedSwap(targetDir);
+  if (!recovery.ok) {
+    return { ok: false, copyApplied: false, rolledBack: false, snapshot: null, retainedSwap: recovery.message, warning: null };
+  }
+  const warning = recovery.message;
+  if (!dirExists(targetDir)) {
+    try {
+      mkdirSync(targetDir, { recursive: true });
+    } catch {
+      return { ok: false, copyApplied: false, rolledBack: false, snapshot: null, retainedSwap: null, warning };
+    }
+  }
   let snapshot: string | null = null;
   if (dirExists(targetDir)) {
     // Snapshot the COMPLETE preimage — no exclusions. A rollback that cannot
