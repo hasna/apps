@@ -1,3 +1,15 @@
+## 0.5.7
+
+### Patch Changes
+
+- d1238a4: Switch @hasna/configs (the `configs` surface of @hasna/instructions — the configs store root) local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/instructions` default (with the `HASNA_CONFIGS_HOME` exact-app override) stays the effective store home until the store has actually been migrated to the XDG config home (`~/.config/hasna/configs` on Linux; `~/Library/Application Support/Hasna/configs` on macOS) or the operator sets the config-kind override `HASNA_CONFIG_HOME` — an existing local store never becomes invisible on upgrade. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- 15be07b: The MCP server's `check_all` status reports `db_path` through the @hasna/paths resolver (`getReportedDbPath`) instead of a hardcoded legacy `~/.hasna/instructions/instructions.db` literal — the reported store path now tracks the effective store home once the XDG config home is adopted (`HASNA_CONFIG_HOME` set or the store migrated to `~/.config/hasna/configs` on Linux). The exact `HASNA_INSTRUCTIONS_DB_PATH` override still wins. Complements the #1291 configs store-root resolver switch; dependency remains exactly pinned to `@hasna/paths@0.1.0`. (XDG home migration, hotfixes plan 0f49f56a, task P3.3.)
+- 9096ffb: Route the session-render pre-render snapshot dir through the @hasna/paths resolver (XDG state layout). Pre-render rollback snapshots are state data, not provider files, so once the store has been migrated the renderer writes them under the instructions state dir (`~/.local/state/hasna/instructions` on Linux); the legacy per-target-home `~/.hasna/session-render-snapshots` default stays effective until the store has been physically migrated there or the operator sets the state-kind override `HASNA_STATE_HOME`, so an existing snapshot store never becomes invisible on upgrade (mirrors the configs store adoption in `app-home.ts`). Both snapshot write paths (`writeSessionSnapshot`, `writeProjectContextRollbackSnapshot`) resolve through the new `getSessionRenderSnapshotDir` helper; the snapshot write and restore anchors to the state dir's parent (`~/.local/state/hasna`) instead of the target home, so nested project-root target homes do not hit `PROJECT_CONTEXT_PATH_ESCAPE` and `session restore` accepts snapshots in the adopted location. An empty pre-created state dir does NOT adopt. The package `test` script isolates `HASNA_STATE_HOME` to a per-run temp dir so the suite never writes test-fixture snapshots into a real migrated store. P5 migration lane lane-session-render-snapshots (source `~/.hasna/session-render-snapshots` -> target `~/.local/state/hasna/instructions`).
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.5.6
 
 ### Patch Changes

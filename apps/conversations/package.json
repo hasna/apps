@@ -1,6 +1,6 @@
 {
   "name": "@hasna/conversations",
-  "version": "0.7.14",
+  "version": "0.7.15",
   "description": "Real-time CLI messaging for AI agents",
   "type": "module",
   "bin": {
@@ -71,8 +71,8 @@
   },
   "dependencies": {
     "@hasna/contracts": "0.14.2",
-    "@hasna/events": "^0.1.16",
-    "@hasna/paths": "0.1.0",
+    "@hasna/events": "^0.1.18",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",

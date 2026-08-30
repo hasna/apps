@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.11
+
+### Patch Changes
+
+- 2f796da: Switch @hasna/hooks local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/hooks` data root (with the `HASNA_HOOKS_DATA_DIR` / `HOOKS_DATA_DIR` and `HASNA_HOOKS_HOME` / `HOOKS_HOME` exact-app overrides) stays the effective data root until the store has actually been migrated to the XDG data home (`hooks.db` present at the resolver root) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing live store never becomes invisible on upgrade. The SQLite store (`hooks.db`), `config.json`, `hooks.lock`, the agent profile store, and the postinstall profiles-dir provisioning all resolve through the effective data root; the one-time `~/.hooks` auto-migration is preserved and now targets the effective root. Help/status surfaces (`hooks log`, registry hook descriptions) report the effective store path instead of a hardcoded legacy literal. The dependency is pinned exactly to `@hasna/paths@0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+- Updated dependencies [77aa5d4]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+  - @hasna/secrets@0.3.14
+
 ## 0.7.10
 
 ### Patch Changes

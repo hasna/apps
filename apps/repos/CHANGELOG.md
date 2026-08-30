@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.57
+
+### Patch Changes
+
+- 683bcbd: Make the worktree and clones roots configurable through the resolver (hotfixes plan 0f49f56a, task P5.1 / 7b8fc186). `worktreeRootDir()`, `clonesRootDir()`, and the primary-relocation canonical root now derive from `getDataRootForHome`, so `HASNA_REPOS_HOME`, an adopted `HASNA_DATA_HOME`, or a physically migrated store moves the worktrees (`<data-root>/worktrees`) and clones (`<data-root>/clones`) with the data. The account-database base is retained for the default legacy case, so a forged `$HOME` alone still cannot move the root — only the documented resolver overrides can. This unblocks migrating `~/.hasna/repos` to `~/.local/share/hasna/repos`: `repos worktree list <repo>` now resolves under the effective data root instead of the hardcoded `~/.hasna/repos/worktrees`.
+- 0575dfa: Switch @hasna/repos local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/repos` data root (with the `HASNA_REPOS_HOME` exact-app override, and the existing `HASNA_REPOS_CONFIG_PATH`, `HASNA_REPOS_DB_PATH` / `REPOS_DB_PATH`, `HASNA_REPOS_HOOK_QUEUE_PATH`, and `HASNA_REPOS_GITHUB_CACHE_PATH` file-level overrides layered on top) stays the effective data root until the store has been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The worktree and clones roots (`~/.hasna/repos/worktrees`, `~/.hasna/repos/clones`) stay code-derived from the OS account home for containment; making them configurable is tracked separately (hotfixes plan 0f49f56a, task P5.1). Dependency pinned exactly to `@hasna/paths@0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.1.56
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/paths",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Package-owned path resolver for Hasna apps — XDG and macOS home layout honoring HASNA_*_HOME overrides.",
   "type": "module",
   "license": "Apache-2.0",

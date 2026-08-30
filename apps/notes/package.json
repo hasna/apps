@@ -1,6 +1,6 @@
 {
   "name": "@hasna/notes",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Local-first personal notes CLI, MCP server, SDK, and self-hosted notes server (SQLite or PostgreSQL).",
   "type": "module",
   "bin": {
@@ -71,8 +71,8 @@
   },
   "dependencies": {
     "@hasna/contracts": "0.10.6",
-    "@hasna/events": "0.1.16",
-    "@hasna/paths": "0.1.0",
+    "@hasna/events": "0.1.18",
+    "@hasna/paths": "0.2.3",
     "hono": "4.13.3",
     "pg": "^8.16.3"
   },

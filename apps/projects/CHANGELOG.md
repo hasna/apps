@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.5
+
+### Patch Changes
+
+- Updated dependencies [49d75dd]
+- Updated dependencies [f50b8c0]
+- Updated dependencies [8e7403f]
+- Updated dependencies [1e9006c]
+- Updated dependencies [94e6de9]
+- Updated dependencies [500f99d]
+  - @hasna/todos@0.15.52
+  - @hasna/conversations@0.7.15
+  - @hasna/events@0.1.18
+  - @hasna/loops@0.6.6
+  - @hasna/paths@0.2.3
+
 ## 1.0.4
 
 ### Patch Changes

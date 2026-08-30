@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.6
+
+### Patch Changes
+
+- 1e9006c: Switch @hasna/loops local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/loops` default (with the `LOOPS_DATA_DIR` / `HASNA_LOOPS_DATA_DIR` exact-app overrides) stays the effective data home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.6.5
 
 ### Patch Changes

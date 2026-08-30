@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.15.52
+
+### Patch Changes
+
+- 49d75dd: Reject an explicitly empty `active --project` filter instead of silently returning unfiltered work.
+- 500f99d: `@hasna/todos/testing`'s `deliverTodosApiKeyViaDisk` now delivers fixture keys
+  through the PRIMARY disk tier (`$HOME/.hasna/fleet-env/todos.env`) instead of
+  the legacy `~/.hasna/cloud` fallback. Forced by @hasna/contracts 0.14.2, which
+  demotes the cloud tier to a NOISY deprecated fallback: a CLI subprocess test
+  delivering via cloud would print the DEPRECATED notice to stderr and break
+  stderr-exact assertions. Consumers of the exported helper that rely on the
+  cloud path must migrate to fleet-env.
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.15.51
 
 ### Patch Changes

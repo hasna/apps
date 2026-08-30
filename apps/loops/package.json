@@ -1,6 +1,6 @@
 {
   "name": "@hasna/loops",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -123,8 +123,8 @@
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1083.0",
     "@hasna/contracts": "0.14.2",
-    "@hasna/events": "^0.1.16",
-    "@hasna/paths": "0.1.0",
+    "@hasna/events": "^0.1.18",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "2.9.1",
     "ai": "6.0.204",
@@ -133,7 +133,7 @@
     "zod": "4.4.3"
   },
   "optionalDependencies": {
-    "@hasna/machines": "0.2.36"
+    "@hasna/machines": "0.2.40"
   },
   "overrides": {
     "fast-uri": "3.1.5",

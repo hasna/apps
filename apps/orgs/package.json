@@ -1,6 +1,6 @@
 {
   "name": "@hasna/orgs",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Open organization graph and delegation-context layer for agentic systems",
   "type": "module",
   "main": "dist/index.js",
@@ -76,6 +76,6 @@
     "@hasna/contracts": "0.11.1"
   },
   "dependencies": {
-    "@hasna/paths": "0.1.0"
+    "@hasna/paths": "0.2.3"
   }
 }

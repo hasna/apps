@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.40
+
+### Patch Changes
+
+- 04c018f: Switch @hasna/machines local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/machines` data root (with the `HASNA_MACHINES_HOME` / `MACHINES_HOME` exact-app overrides layered on top of the pre-existing `HASNA_MACHINES_DIR`) stays the effective data root until the store has actually been migrated to the XDG data home (`machines.db` present there) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing live store never becomes invisible on upgrade. The per-file `HASNA_MACHINES_*_PATH` overrides are preserved and layered on top. The install-time postinstall now provisions the same effective data root the runtime resolves instead of hardcoding `$HOME/.hasna/machines`. Nothing moves on disk in this phase.
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.2.39
 
 ### Patch Changes

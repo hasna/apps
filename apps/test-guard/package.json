@@ -1,6 +1,6 @@
 {
   "name": "@hasna/test-guard",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Machine-wide bun test concurrency and memory guard (SC-00062): the flock-semaphore wrapper, the sentinel that watches it, and the regression battery — packaged so the control ships through the normal PR -> review -> publish -> install chain",
   "license": "Apache-2.0",
   "repository": {
@@ -23,7 +23,7 @@
     "prepack": "bash test/smoke.sh && bun run scan:artifact"
   },
   "dependencies": {
-    "@hasna/paths": "0.1.0"
+    "@hasna/paths": "0.2.3"
   },
   "engines": {
     "bun": ">=1.0.0",

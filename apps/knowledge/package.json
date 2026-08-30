@@ -1,6 +1,6 @@
 {
   "name": "@hasna/knowledge",
-  "version": "0.2.116",
+  "version": "0.2.117",
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "exports": {
@@ -100,8 +100,8 @@
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
     "@hasna/contracts": "0.14.2",
-    "@hasna/events": "0.1.14",
-    "@hasna/paths": "0.1.0",
+    "@hasna/events": "0.1.18",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
     "ai": "^6.0.197",

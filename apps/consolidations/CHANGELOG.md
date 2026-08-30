@@ -1,5 +1,13 @@
 # @hasna/consolidations
 
+## 0.1.5
+
+### Patch Changes
+
+- 94c05b4: Switch @hasna/consolidations local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/consolidations` default (with the `HASNA_CONSOLIDATIONS_HOME` / `CONSOLIDATIONS_HOME` exact-app overrides) stays the effective data home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- Updated dependencies [94e6de9]
+  - @hasna/paths@0.2.3
+
 ## 0.1.4
 
 ### Patch Changes
@@ -21,7 +29,7 @@
   ships 0.1.1 — the contract-kit 0.10.6 remediation from PR #379 plus the version
   correction.
 - dc1ccce: fix(serve): answer `--version`/`-V` and `--help`/`-h` before binding a socket
-  
+
   The serve bin used to ignore argv and go straight to `Bun.serve`, so
   `consolidations-serve --help` hung with no output. It now prints usage or the
   version and exits 0 without binding (recordings pattern), with regression tests

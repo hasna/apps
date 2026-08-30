@@ -1,5 +1,15 @@
 # @hasna/crawl
 
+## 0.4.21
+
+### Patch Changes
+
+- 9400d94: Republication past the registry-protected 0.4.19 slot: 0.4.19 was published 2026-08-27 and the package was subsequently fully unpublished, so its npm slot is permanently burned (npm never allows reusing a published version). 0.4.20 carries the identical reviewed 0.4.19 content — the paths-resolver XDG migration and the release-review security/correctness fixes (see the CHANGELOG 0.4.19 entry).
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.4.20
 
 ### Patch Changes

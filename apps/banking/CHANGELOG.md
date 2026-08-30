@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.11
+
+### Patch Changes
+
+- 56abcec: Switch @hasna/banking local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/banking` default (with the `HASNA_BANKING_HOME` exact-app override) stays the effective data home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- Updated dependencies [94e6de9]
+  - @hasna/paths@0.2.3
+
 ## 0.0.10
 
 ### Patch Changes
@@ -36,7 +44,7 @@ the first public publish ships as 0.0.8.
 
 - Shared provider operation registry derived from conformance contracts, exposed
   through SDK exports, `banking ops list`, `banking ops describe`, `banking ops
-  plan`, and MCP operation discovery/planning tools.
+plan`, and MCP operation discovery/planning tools.
 - Mercury full-surface descriptor coverage for the current official API
   families: accounts, account statements, account-scoped transactions/cards,
   organization-wide transactions/cards, recipients, request-send-money

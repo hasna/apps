@@ -1,6 +1,6 @@
 {
   "name": "@hasna/prompts",
-  "version": "0.3.38",
+  "version": "0.3.39",
   "description": "Reusable prompt library for AI agents — CLI + MCP server + REST API + web dashboard",
   "type": "module",
   "main": "dist/index.js",
@@ -81,8 +81,8 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/events": "^0.1.11",
-    "@hasna/paths": "0.1.0",
+    "@hasna/events": "^0.1.18",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

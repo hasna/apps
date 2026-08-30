@@ -1,6 +1,6 @@
 {
   "name": "@hasna/mcps",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "keywords": [
     "mcp",
@@ -61,8 +61,8 @@
     "prepublishOnly": "bun test && bun run build && bun run artifact-scan"
   },
   "dependencies": {
-    "@hasna/events": "^0.1.16",
-    "@hasna/paths": "0.1.0",
+    "@hasna/events": "^0.1.18",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",

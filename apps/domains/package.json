@@ -1,6 +1,6 @@
 {
   "name": "@hasna/domains",
-  "version": "0.0.47",
+  "version": "0.0.48",
   "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP + HTTP API + SDK, local SQLite or cloud Postgres",
   "type": "module",
   "main": "dist/index.js",
@@ -99,7 +99,7 @@
     "@aws-sdk/client-route-53-domains": "^3.1067.0",
     "@aws-sdk/credential-provider-ini": "3.972.53",
     "@hasna/contracts": "0.14.2",
-    "@hasna/paths": "0.1.0",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
@@ -110,7 +110,7 @@
     "zod": "^3.24.2"
   },
   "optionalDependencies": {
-    "@hasna/events": "^0.1.7"
+    "@hasna/events": "^0.1.18"
   },
   "peerDependencies": {
     "@hasna/contacts": "^0.6.19"

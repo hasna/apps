@@ -1,6 +1,6 @@
 {
   "name": "@hasna/access",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Non-human-identity governance: CLI + MCP + serve over a Hasna-contract store. Identity inventory, credential & MCP-scope mapping, JIT elevation, access reviews, one-click revocation, and the cohort MCP bearer-token issuer.",
   "type": "module",
   "main": "dist/index.js",
@@ -60,7 +60,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/paths": "0.1.0",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

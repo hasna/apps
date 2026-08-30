@@ -1,11 +1,22 @@
 # Changelog
 
+## 0.0.111
+
+### Patch Changes
+
+- 481e357: Fix the OpenAI-compatible runner path (canonical assistant-message shape for tool*calls, tool results emitted immediately after the tool_calls message they answer) and inject TEST*\* environment values into scenario prompts per the resolveCredential convention, so login-gated QA lanes can complete. Unblocks the alumia merge QA gate (todos 962c6907).
+- Updated dependencies [6c1bc9d]
+- Updated dependencies [8e7403f]
+  - @hasna/browser@0.5.37
+  - @hasna/events@0.1.18
+  - @hasna/projects@1.0.5
+
 ## 0.0.110
 
 ### Patch Changes
 
 - Fix OpenAI-compatible tool-call sequencing (canonical assistant-message shape, tool results emitted immediately after the tool_calls message they answer)
-- Inject TEST_* environment values into scenario prompts per the resolveCredential convention
+- Inject TEST\_\* environment values into scenario prompts per the resolveCredential convention
 
 - Updated dependencies [6176948]
 - Updated dependencies [7575de8]

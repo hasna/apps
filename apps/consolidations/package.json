@@ -1,6 +1,6 @@
 {
   "name": "@hasna/consolidations",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Group financial consolidation: ingest entity GL data, normalize charts of accounts, translate multi-currency, run intercompany eliminations, produce consolidated P&L/BS/CF — CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
@@ -64,7 +64,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/paths": "0.1.0",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "hono": "4.13.3",
     "commander": "^13.1.0",

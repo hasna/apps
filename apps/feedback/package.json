@@ -1,6 +1,6 @@
 {
   "name": "@hasna/feedback",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Reusable feedback collection API, SDK, CLI, and MCP server for Hasna-coded apps",
   "type": "module",
   "main": "dist/index.js",
@@ -96,8 +96,8 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/events": "^0.1.16",
-    "@hasna/paths": "0.1.0",
+    "@hasna/events": "^0.1.18",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "commander": "^13.1.0",
     "zod": "^3.25.76"

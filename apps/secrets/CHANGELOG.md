@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.14
+
+### Patch Changes
+
+- 77aa5d4: Switch @hasna/secrets local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The operator vault data dir (vault.db, key material, aws.json, aws-sync-state.json) now resolves through `dataDir({app:"secrets"})` with gated legacy adoption: the legacy `~/.hasna/secrets` home stays the effective default until the store has actually been migrated to the XDG data home (`~/.local/share/hasna/secrets` on Linux, `~/Library/Application Support/Hasna/secrets` on macOS) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local vault never becomes invisible on upgrade. The `~/.secrets` env-file bridge (import-env/export-env) is a separate legacy credential store and is deliberately unchanged. Install-time dir creation (postinstall) follows the same resolution. Dependency pinned exactly to `@hasna/paths@0.1.0` — the wave-wide pin for the hasna/apps resolver-switch lanes (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.3.13
 
 ### Patch Changes

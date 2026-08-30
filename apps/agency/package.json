@@ -1,6 +1,6 @@
 {
   "name": "@hasna/agency",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Unified management CLI for all @hasna/* open-source packages",
   "type": "module",
   "bin": {

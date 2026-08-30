@@ -1,6 +1,6 @@
 {
   "name": "@hasna/holdings",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "IP portfolio system-of-record: trademarks, patents, copyrights, brand assets — registration/renewal & deadline tracking, jurisdiction status, filing docs. CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
@@ -56,7 +56,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/paths": "0.1.0",
+    "@hasna/paths": "0.2.3",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "hono": "4.13.3",
     "commander": "^13.1.0",

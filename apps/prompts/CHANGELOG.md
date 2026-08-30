@@ -1,5 +1,15 @@
 # @hasna/prompts
 
+## 0.3.39
+
+### Patch Changes
+
+- dc1c8fd: Complete the code-prompts-1 remediation in the released artifact (O15-04626): 0.3.38 was published before the loopback-origin CORS carve-out merged, so its REST API carried the bearer-token gate but no `Access-Control-Allow-Origin` at all — the documented dashboard workflow (a Vite dev server on a loopback origin) could not preflight or read the API from a browser. This release ships the full hardening: every `/api/*` data request requires `Authorization: Bearer <PROMPTS_API_TOKEN>` and fails closed (503) when no token is configured; OPTIONS preflights from a loopback origin (`http://localhost:*` / `http://127.0.0.1:*`) or from an exact origin listed in `PROMPTS_API_CORS_ORIGIN` receive restricted CORS headers without a bearer; authenticated data responses echo `Access-Control-Allow-Origin` only for those allowed origins; no wildcard CORS is ever emitted. A new pack-level regression asserts the built server bundle carries the complete hardening (bearer gate + loopback/explicit-origin CORS, no wildcard) — it fails on the published 0.3.38 bundle and passes on this source. (finding code-prompts-1)
+- Updated dependencies [8e7403f]
+- Updated dependencies [94e6de9]
+  - @hasna/events@0.1.18
+  - @hasna/paths@0.2.3
+
 ## 0.3.38
 
 ### Patch Changes

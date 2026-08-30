@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.37
+
+### Patch Changes
+
+- 6c1bc9d: Switch @hasna/browser local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout). The legacy `~/.hasna/browser` default (with the `BROWSER_DATA_DIR` exact-app override) stays the effective data home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The dependency is pinned exactly to `@hasna/paths@0.1.0` (XDG home migration, hotfixes plan 0f49f56a, task P3.3).
+- Updated dependencies [49d75dd]
+- Updated dependencies [960d099]
+- Updated dependencies [f50b8c0]
+- Updated dependencies [8e7403f]
+- Updated dependencies [7d846c2]
+- Updated dependencies [94e6de9]
+- Updated dependencies [77aa5d4]
+- Updated dependencies [a516b73]
+- Updated dependencies [500f99d]
+  - @hasna/todos@0.15.52
+  - @hasna/connectors@1.4.6
+  - @hasna/conversations@0.7.15
+  - @hasna/events@0.1.18
+  - @hasna/skills@0.1.73
+  - @hasna/paths@0.2.3
+  - @hasna/secrets@0.3.14
+
 ## 0.5.36
 
 ### Patch Changes
