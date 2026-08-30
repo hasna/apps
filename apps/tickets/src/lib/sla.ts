@@ -24,7 +24,7 @@ export function checkSlaBreaches(): { breached: number } {
   const n = now();
 
   // SQLite datetime arithmetic: sla_minutes added to created_at
-  const rows = database.query<SlaBreachRow, []>(
+  const rows = database.query<SlaBreachRow, [string]>(
     `SELECT t.*, a.email as assignee_email
      FROM tickets t
      LEFT JOIN agents a ON a.id = t.assignee_id

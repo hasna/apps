@@ -3,11 +3,6 @@ import { getDatabase } from "./database.ts";
 import type { Ticket, TicketFilters } from "../types/index.ts";
 import { listTickets } from "./tickets.ts";
 
-interface FtsRow {
-  ticket_id: string;
-  rank: number;
-}
-
 /**
  * Full-text search over ticket title + description using SQLite FTS5 BM25.
  * Returns tickets ranked by relevance, with optional project scoping.

@@ -19,10 +19,10 @@ export class ResendEmailProvider implements EmailProvider {
     const result = await client.emails.send({
       from: options.from,
       to: options.to,
-      reply_to: options.replyTo,
+      replyTo: options.replyTo,
       subject: options.subject,
       html: options.html,
-      text: options.text,
+      text: options.text ?? "",
       headers: options.headers,
     });
 

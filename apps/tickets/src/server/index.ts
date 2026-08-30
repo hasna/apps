@@ -5,15 +5,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getDatabase } from "../db/database.ts";
 import { verifyApiKey } from "../lib/auth.ts";
-import { AuthError } from "../types/index.ts";
-import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, assignTicket, listTickets, deleteTicket, bulkCreateTickets, bulkUpdateTickets, transitionTicket, normalizeTicketPagination } from "../db/tickets.ts";
+import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, assignTicket, listTickets, deleteTicket, bulkCreateTickets, bulkUpdateTickets, normalizeTicketPagination } from "../db/tickets.ts";
 import { searchTickets, getSimilarTickets } from "../db/search.ts";
 import { createComment, listComments, updateComment, deleteComment } from "../db/comments.ts";
 import { createRelation, listRelations, deleteRelation } from "../db/relations.ts";
 import { listActivity } from "../db/activity.ts";
-import { createProject, getProjectById, getProjectBySlug, listProjects, updateProject, deleteProject, getProjectStats } from "../db/projects.ts";
+import { createProject, getProjectById, listProjects, updateProject, deleteProject, getProjectStats } from "../db/projects.ts";
 import { createLabel, listLabels, updateLabel, deleteLabel } from "../db/labels.ts";
-import { createMilestone, listMilestones, getMilestoneById, updateMilestone, closeMilestone } from "../db/milestones.ts";
+import { createMilestone, listMilestones, updateMilestone, closeMilestone } from "../db/milestones.ts";
 import { registerAgent, getAgentById, getAgentByName, listAgents } from "../db/agents.ts";
 import { createWebhook, listWebhooks, getWebhookById, deleteWebhook } from "../db/webhooks.ts";
 import { createDomain, listDomains, verifyDomain, deleteDomain } from "../db/domains.ts";
@@ -33,7 +32,7 @@ function parsePaginationQuery(value: string | undefined): number | undefined {
 }
 
 export function createApp() {
-  const app = new Hono();
+  const app = new Hono<{ Variables: { agentId: string } }>();
 
   // ── Domain middleware ────────────────────────────────────────────────────
   app.use("*", domainMiddleware);
@@ -125,8 +124,8 @@ export function createApp() {
   });
 
   app.post("/api/tickets/batch", async (c) => {
-    const body = await c.req.json<{ create?: Record<string, unknown>[]; update?: { id: string; status?: TicketStatus; priority?: Priority; assignee_id?: string }[] }>();
-    const created = body.create ? bulkCreateTickets(body.create.map((t) => t as Parameters<typeof bulkCreateTickets>[0][0])) : [];
+    const body = await c.req.json<{ create?: Parameters<typeof bulkCreateTickets>[0]; update?: { id: string; status?: TicketStatus; priority?: Priority; assignee_id?: string }[] }>();
+    const created = body.create ? bulkCreateTickets(body.create) : [];
     const updated = body.update ? bulkUpdateTickets(body.update) : [];
     return c.json({ data: { created, updated }, error: null });
   });
@@ -343,8 +342,8 @@ export function createApp() {
       return c.json({ ok: true });
     }
     // Parse SNS notification containing SES email data
-    const message = body.Message ? JSON.parse(body.Message) as { mail?: { source?: string; destination?: string[]; commonHeaders?: { subject?: string[] } } } : body;
-    const mail = message.mail ?? message;
+    const message = body.Message ? JSON.parse(body.Message) as { mail?: { source?: string; destination?: string[]; commonHeaders?: { subject?: string[] } } } : undefined;
+    const mail = message?.mail ?? {};
     const email: ParsedEmail = {
       from: String((mail as { source?: string }).source ?? ""),
       to: ((mail as { destination?: string[] }).destination ?? []) as string[],

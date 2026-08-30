@@ -1,6 +1,5 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { getDomainByName } from "../../db/domains.ts";
-import { getProjectBySlug } from "../../db/projects.ts";
 import type { Project } from "../../types/index.ts";
 
 /**

@@ -6,7 +6,7 @@ import { registerBrainsCommand } from "./brains.ts";
 import { createProject, getProjectById, getProjectBySlug, listProjects, getProjectStats } from "../db/projects.ts";
 import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, listTickets, assignTicket, transitionTicket } from "../db/tickets.ts";
 import { createComment, listComments } from "../db/comments.ts";
-import { createRelation, listRelations, deleteRelation } from "../db/relations.ts";
+import { createRelation } from "../db/relations.ts";
 import { registerAgent, getAgentByName } from "../db/agents.ts";
 import { createLabel, listLabels } from "../db/labels.ts";
 import { createMilestone, listMilestones, closeMilestone } from "../db/milestones.ts";
@@ -54,7 +54,6 @@ program
   .action((name: string | undefined, _opts, cmd) => {
     const json = cmd.parent?.opts()["json"] as boolean ?? false;
     const wsName = name ?? "default";
-    const db = getDatabase();
     // Create default workspace record if tables allow it
     out({ message: `Workspace "${wsName}" initialized`, db_path: process.env["HASNA_TICKETS_DB_PATH"] ?? process.env["TICKETS_DB_PATH"] ?? getTicketsDbPath() }, json);
   });

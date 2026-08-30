@@ -7,15 +7,14 @@ import {
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, assignTicket, listTickets, bulkCreateTickets, bulkUpdateTickets, transitionTicket } from "../db/tickets.ts";
+import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, assignTicket, listTickets, bulkCreateTickets, bulkUpdateTickets } from "../db/tickets.ts";
 import { searchTickets, getSimilarTickets } from "../db/search.ts";
 import { createComment, listComments, updateComment, deleteComment } from "../db/comments.ts";
-import { createProject, getProjectById, listProjects, updateProject, getProjectStats } from "../db/projects.ts";
-import { createLabel, listLabels, deleteLabel } from "../db/labels.ts";
+import { createProject, getProjectById, listProjects, getProjectStats } from "../db/projects.ts";
+import { createLabel, listLabels } from "../db/labels.ts";
 import { createMilestone, listMilestones, closeMilestone } from "../db/milestones.ts";
 import { registerAgent, getAgentByName, listAgents, heartbeatAgent } from "../db/agents.ts";
-import { createRelation, listRelations, deleteRelation } from "../db/relations.ts";
+import { createRelation, deleteRelation } from "../db/relations.ts";
 import { listActivity } from "../db/activity.ts";
 import type { TicketType, TicketStatus, Resolution, Priority, Severity, TicketSource, RelationType } from "../types/index.ts";
 import { getPackageVersion } from "../lib/package-info";
@@ -708,9 +707,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case "get_overdue_tickets":
       return listTickets({ sla_breached: true, project_id: args["project_id"] as string | undefined });
     case "get_unassigned_tickets":
-      return listTickets({ status: "open", project_id: args["project_id"] as string | undefined }).then
-        ? listTickets({ status: "open", project_id: args["project_id"] as string | undefined })
-        : listTickets({ status: "open", project_id: args["project_id"] as string | undefined });
+      return listTickets({ status: "open", project_id: args["project_id"] as string | undefined });
     case "bootstrap": {
       const project = createProject({ name: args["project_name"] as string, ticket_prefix: args["ticket_prefix"] as string | undefined });
       createLabel(project.id, "bug", "#ef4444");
