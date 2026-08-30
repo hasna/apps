@@ -35,8 +35,10 @@ This package's source was lost upstream (the historical tarball shipped only
 `package.json` + a bundled `dist/index.js`, and the repository was deleted).
 The source in `src/` is reconstructed from the historical 0.3.1 artifact
 (2026-08-20, row 91a7b09d), which was published under the legacy unscoped
-name `hasna-agency` — a name that is no longer on the npm registry. This
-package is the first publication under `@hasna/agency`. Parity notes:
+name `hasna-agency` — a name that is no longer on the npm registry. The
+scoped name `@hasna/agency` had earlier history (0.2.0/0.3.0/0.3.1/0.3.2,
+published 2026-08-21) that was unpublished 2026-08-28; the 0.3.3 release is
+the first publication after that unpublish. Parity notes:
 
 - The CLI verb surface is the documented 16-verb set: `status, doctor, init,
   update, sync, mcp, backup, db, connect, playground, logs, search, export,

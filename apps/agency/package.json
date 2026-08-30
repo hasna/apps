@@ -1,6 +1,6 @@
 {
   "name": "@hasna/agency",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Unified management CLI for all @hasna/* open-source packages",
   "type": "module",
   "bin": {
@@ -26,9 +26,9 @@
     "typescript": "^5"
   },
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target bun",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target bun",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "prepack": "bun run build"
+    "prepack": "bun run build && git diff --exit-code -- dist"
   }
 }
