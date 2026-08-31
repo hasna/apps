@@ -3,6 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../store.js";
+import { SessionWAL } from "../wal.js";
+import { WorkflowsDaemon } from "../daemon.js";
+import type { WorkflowGraph } from "../graph.js";
 
 const pkgDir = join(import.meta.dir, "..", "..");
 const pkgVersion = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version as string;
@@ -483,6 +486,35 @@ describe("workflows CLI — slice 4 verbs (live-verify closures)", () => {
       expect(r.stderr).toContain("runs resume");
     } finally {
       store.close();
+    }
+  });
+
+  test("serve subcommand binds and answers /health", async () => {
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    const proc = Bun.spawn(["bun", "src/cli/index.ts", "serve", "--port", String(port)], {
+      cwd: pkgDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, HASNA_WORKFLOWS_DATA_DIR: dataDir },
+    });
+    try {
+      let healthy = false;
+      for (let i = 0; i < 40; i++) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/health`);
+          if (res.status === 200) {
+            healthy = true;
+            break;
+          }
+        } catch {
+          // not up yet
+        }
+        await Bun.sleep(200);
+      }
+      expect(healthy).toBe(true);
+    } finally {
+      proc.kill("SIGTERM");
+      await proc.exited;
     }
   });
 
