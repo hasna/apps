@@ -24,8 +24,8 @@ export interface CursorAdapterDeps {
 }
 
 interface RunLike {
-  status?: string;
-  result?: string;
+  status: "finished" | "error" | "cancelled";
+  result: string;
 }
 
 export function createCursorAdapter(deps: CursorAdapterDeps = {}): LaneAdapter {
@@ -68,10 +68,15 @@ export function createCursorAdapter(deps: CursorAdapterDeps = {}): LaneAdapter {
           `cursor lane (${job.prompt.slice(0, 60)})`,
         );
         const durationMs = Date.now() - started;
-        const status = run?.status ?? "finished";
+        const status = run.status;
         const ok = status === "finished";
-        return { ok, exitCode: ok ? 0 : 1, output: run?.result ?? "", durationMs };
+        return { ok, exitCode: ok ? 0 : 1, output: run.result, durationMs };
       } catch (err) {
+        // Stress V5 (measured 2026-08-30): "@cursor/sdk Agent has no send()"
+        // was swallowed into a generic failed lane result — SDK shape drift
+        // must surface as the codebase's own LaneAdapterShapeError so callers
+        // can tell "the SDK changed shape" from "the lane failed at runtime".
+        if (err instanceof LaneAdapterShapeError) throw err;
         const durationMs = Date.now() - started;
         return { ok: false, exitCode: 1, output: "", durationMs, error: String(err instanceof Error ? err.message : err) };
       }
@@ -87,7 +92,10 @@ async function runLocalAgent(sdk: unknown, job: LaneJob): Promise<RunLike> {
     throw new LaneAdapterShapeError("@cursor/sdk exports no Agent/Cursor class");
   }
   // local mode: construct an Agent directly with no cloud options
-  const agent = typeof AgentClass === "function" ? new (AgentClass as new (opts?: unknown) => { send: (m: string, o?: unknown) => Promise<RunLike> })() : undefined;
+  const agent =
+    typeof AgentClass === "function"
+      ? new (AgentClass as new (opts?: unknown) => { send: (m: string, o?: unknown) => Promise<unknown> })()
+      : undefined;
   if (!agent || typeof agent.send !== "function") {
     throw new LaneAdapterShapeError("@cursor/sdk Agent has no send()");
   }
@@ -95,7 +103,19 @@ async function runLocalAgent(sdk: unknown, job: LaneJob): Promise<RunLike> {
   if (!run || typeof run !== "object") {
     throw new LaneAdapterShapeError("@cursor/sdk Agent.send() returned no Run");
   }
-  return run;
+  // The documented Run shape is { status: finished|error|cancelled, result:
+  // string }. Validate it explicitly instead of fabricating defaults — a
+  // wrong-shaped Run used to "succeed" with an empty result (stress V5).
+  const candidate = run as Record<string, unknown>;
+  if (typeof candidate.status !== "string" || !["finished", "error", "cancelled"].includes(candidate.status)) {
+    throw new LaneAdapterShapeError(
+      `@cursor/sdk Agent.send() returned a Run without a terminal status (got ${JSON.stringify(candidate.status)}; expected finished|error|cancelled)`,
+    );
+  }
+  if (typeof candidate.result !== "string") {
+    throw new LaneAdapterShapeError("@cursor/sdk Agent.send() returned a Run without a string result");
+  }
+  return { status: candidate.status as RunLike["status"], result: candidate.result };
 }
 
 function runCursorCli(job: LaneJob, cliPath: string, started: number, timeoutMs: number): LaneResult {
