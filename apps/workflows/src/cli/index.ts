@@ -10,7 +10,7 @@
  * version/health/info.
  */
 import { Command } from "commander";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { createWorkflowsService, packageVersion, resolveWorkflowsConfig } from "../service.js";
@@ -255,14 +255,18 @@ program
   .option("-j, --json", "JSON output")
   .action(
     async (file: string, opts: { context?: string; input?: string[]; idempotencyKey?: string; maxCycles?: string; json?: boolean }) => {
-      const graph = loadGraph(file);
-      const validation = validateGraph(graph);
-      if (!validation.ok) {
-        throw new Error(`graph validation failed: ${validation.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`);
-      }
-      const context = mergeRunContext(opts.context, opts.input ?? []);
-      const { store, wal } = openLocal();
+      let store: ReturnType<typeof openStore> | undefined;
+      let createdRunId: string | undefined;
       try {
+        const graph = loadGraph(file);
+        const validation = validateGraph(graph);
+        if (!validation.ok) {
+          throw new Error(`graph validation failed: ${validation.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`);
+        }
+        const context = mergeRunContext(opts.context, opts.input ?? []);
+        const local = openLocal();
+        store = local.store;
+        const wal = local.wal;
         if (opts.idempotencyKey) {
           const existing = findRunByIdempotencyKey(store, opts.idempotencyKey);
           if (existing) {
@@ -272,13 +276,18 @@ program
             } else {
               console.log(`reused run ${existing.id}: ${existing.status}`);
             }
-            if (existing.status !== "completed") process.exit(1);
+            if (existing.status !== "completed") process.exitCode = 1;
             return;
           }
         }
         const contextWithKey = opts.idempotencyKey ? withIdempotencyKey(context, opts.idempotencyKey) : context;
         const maxCycles = Number(opts.maxCycles ?? 500);
-        const final = await runGraphToCompletion(store, wal, graph, contextWithKey, { maxCycles });
+        const final = await runGraphToCompletion(store, wal, graph, contextWithKey, {
+          maxCycles,
+          onRunCreated: (run) => {
+            createdRunId = run.id;
+          },
+        });
         const summary = runSummary(final);
         if (opts.json) {
           console.log(JSON.stringify(summary, null, 2));
@@ -286,9 +295,22 @@ program
           console.log(`run ${final.id}: ${final.status}${final.error ? ` — ${final.error}` : ""}`);
           if (final.resultJson) console.log(final.resultJson);
         }
-        if (final.status !== "completed") process.exit(1);
+        if (final.status !== "completed") process.exitCode = 1;
+      } catch (err) {
+        // Stress V1 F2 (measured 2026-08-30): a run failure in -j mode left
+        // stdout empty and the message on stderr — a JSON consumer got rc=1
+        // and nothing parseable. In -j mode the error is emitted as JSON on
+        // stdout (with the runId when the run was already created); the plain
+        // human message stays on stderr.
+        const error = err instanceof Error ? err.message : String(err);
+        if (opts.json) {
+          console.log(JSON.stringify({ error, ...(createdRunId ? { runId: createdRunId } : {}) }, null, 2));
+        } else {
+          console.error(error);
+        }
+        process.exitCode = 1;
       } finally {
-        store.close();
+        store?.close();
       }
     },
   );
@@ -650,19 +672,21 @@ program
       case "status": {
         if (!existsSync(statusFile)) {
           if (opts.json) {
-            console.log(JSON.stringify({ running: false, lastReap: null }));
+            console.log(JSON.stringify({ statusVersion: 1, running: false, pid: null, lastReap: null, cumulative: emptyReapReport() }));
           } else {
             console.log("daemon not running (no status record)");
           }
           return;
         }
-        const lastReap = JSON.parse(readFileSync(statusFile, "utf8")) as ReapReport;
+        const envelope = readReport(statusFile);
         const pid = existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim() : null;
         const running = pid !== null && processAlive(Number(pid));
         if (opts.json) {
-          console.log(JSON.stringify({ running, pid, lastReap }, null, 2));
+          console.log(JSON.stringify({ statusVersion: 1, running, pid, lastReap: envelope.latestCycle, cumulative: envelope.cumulative }, null, 2));
         } else {
-          console.log(`daemon ${running ? `running (pid ${pid})` : "not running"} — last reap: ${JSON.stringify(lastReap)}`);
+          console.log(
+            `daemon ${running ? `running (pid ${pid})` : "not running"} — latest reap: ${JSON.stringify(envelope.latestCycle)} cumulative: ${JSON.stringify(envelope.cumulative)}`,
+          );
         }
         return;
       }
@@ -695,9 +719,84 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Daemon status ledger (stress V4 P2, measured 2026-08-30): after the daemon
+ * claimed/advanced/completed a run, daemon.status.json and `daemon status -j`
+ * reported all-zero counters — each cycle overwrote the file, so the final
+ * idle cycle erased the work of earlier ones. The status file now carries a
+ * versioned envelope: the LATEST cycle and the CUMULATIVE totals, persisted
+ * (atomically) after every cycle. An idle tail can no longer erase completed
+ * work.
+ */
+interface DaemonStatusEnvelope {
+  version: 1;
+  updatedAt: string;
+  latestCycle: ReapReport;
+  cumulative: ReapReport;
+}
+
+const REAP_REPORT_KEYS = ["expired", "interrupted", "requeued", "failed", "dispatched", "advanced", "completed"] as const;
+
+function emptyReapReport(): ReapReport {
+  return { expired: 0, interrupted: 0, requeued: 0, failed: 0, dispatched: 0, advanced: 0, completed: 0 };
+}
+
+function normalizeReapReport(value: unknown): ReapReport {
+  const source = value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const report = emptyReapReport();
+  for (const key of REAP_REPORT_KEYS) {
+    const count = source[key];
+    report[key] = typeof count === "number" && Number.isFinite(count) ? count : 0;
+  }
+  return report;
+}
+
+function addReapReports(left: ReapReport, right: ReapReport): ReapReport {
+  const total = emptyReapReport();
+  for (const key of REAP_REPORT_KEYS) total[key] = left[key] + right[key];
+  return total;
+}
+
 function writeReport(statusFile: string, report: ReapReport): void {
   mkdirSync(join(statusFile, ".."), { recursive: true });
-  writeFileSync(statusFile, JSON.stringify({ ...report, at: new Date().toISOString() }), "utf8");
+  let previous = emptyReapReport();
+  if (existsSync(statusFile)) {
+    // A legacy pre-envelope status file is a flat ReapReport: treat it as the
+    // historical cumulative baseline.
+    previous = readReport(statusFile).cumulative;
+  }
+  const tempFile = `${statusFile}.tmp-${process.pid}`;
+  const envelope: DaemonStatusEnvelope = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    latestCycle: report,
+    cumulative: addReapReports(previous, report),
+  };
+  try {
+    writeFileSync(tempFile, JSON.stringify(envelope), "utf8");
+    renameSync(tempFile, statusFile); // atomic: a reader never sees a torn ledger
+  } finally {
+    rmSync(tempFile, { force: true });
+  }
+}
+
+function readReport(statusFile: string): DaemonStatusEnvelope {
+  const parsed = JSON.parse(readFileSync(statusFile, "utf8")) as unknown;
+  if (parsed !== null && typeof parsed === "object") {
+    const record = parsed as Record<string, unknown>;
+    if (record.version === 1 && record.latestCycle !== undefined && record.cumulative !== undefined) {
+      return {
+        version: 1,
+        updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
+        latestCycle: normalizeReapReport(record.latestCycle),
+        cumulative: normalizeReapReport(record.cumulative),
+      };
+    }
+  }
+  // Legacy status files were a flat ReapReport (plus an optional `at`). Treat
+  // that report as both the latest cycle and the cumulative baseline.
+  const legacy = normalizeReapReport(parsed);
+  return { version: 1, updatedAt: new Date().toISOString(), latestCycle: legacy, cumulative: legacy };
 }
 
 program

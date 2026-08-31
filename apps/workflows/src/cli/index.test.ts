@@ -568,4 +568,65 @@ describe("workflows CLI — slice 4 verbs (live-verify closures)", () => {
     const one = JSON.parse(show.stdout) as { id: string };
     expect(one.id).toBe(tickRows[1].id); // the latest iteration's row
   });
+
+  test("run -j emits a JSON error on stdout when the run cannot start (stress V1 F2)", async () => {
+    // Measured 2026-08-30: a run failure in -j mode produced 0-byte stdout,
+    // stderr-only text and rc=1 — a JSON consumer gets nothing parseable.
+    const bad = writeGraph("bad-run.json", { name: "bad", version: "1.0.0", nodes: [{ id: "solo", type: "step", prompt: "x" }] });
+    const r = await runCli(["run", bad, "--json"]);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toBe(""); // the human channel stays quiet in -j mode
+    const payload = JSON.parse(r.stdout) as { error: string };
+    expect(payload.error).toContain("graph validation failed");
+  });
+
+  test("run -j still reports runId when a created run later fails", async () => {
+    // The engine fails the RUN (runId known, status failed) rather than
+    // throwing: -j must keep parsing and carry the runId.
+    const fail = writeGraph("fail-json.json", failingGraph);
+    const r = await runCli(["run", fail, "--json"]);
+    expect(r.exitCode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { runId: string; status: string; error: string };
+    expect(typeof payload.runId).toBe("string");
+    expect(payload.status).toBe("failed");
+    expect(payload.error).toContain("exit 7");
+  });
+
+  test("daemon status accumulates real reap counters across cycles (stress V4 P2)", async () => {
+    // Measured 2026-08-30: after the daemon claimed/advanced/completed a run,
+    // daemon.status.json and `daemon status -j` reported all-zero counters —
+    // the final no-op cycle overwrote the ledger. The status must accumulate
+    // per-cycle counters, so an idle tail can never erase completed work.
+    const seed = openStore(dataDir);
+    const seedWal = SessionWAL.open(dataDir);
+    try {
+      const daemon = new WorkflowsDaemon(seed, seedWal);
+      daemon.startRun(linearGraph as WorkflowGraph, {}); // pending run + WAL graph record
+    } finally {
+      seedWal.close();
+      seed.close();
+    }
+    const run = await runCli(["daemon", "start", "--cycles", "6", "--interval-ms", "40", "--json"]);
+    expect(run.exitCode).toBe(0);
+
+    const status = await runCli(["daemon", "status", "--json"]);
+    expect(status.exitCode).toBe(0);
+    const record = JSON.parse(status.stdout) as { cumulative: { dispatched: number; completed: number } };
+    expect(record.cumulative.dispatched).toBeGreaterThan(0); // pre-fix: no cumulative field
+    expect(record.cumulative.completed).toBeGreaterThan(0);
+    const completed = await runCli(["runs", "list", "--status", "completed", "--json"]);
+    expect((JSON.parse(completed.stdout) as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  test("daemon status reads a legacy flat status record (compat baseline)", async () => {
+    const statusFile = join(dataDir, "daemon.status.json");
+    writeFileSync(statusFile, JSON.stringify({ dispatched: 2, advanced: 3, completed: 1, at: new Date().toISOString() }), "utf8");
+    const status = await runCli(["daemon", "status", "--json"]);
+    expect(status.exitCode).toBe(0);
+    const record = JSON.parse(status.stdout) as { statusVersion: number; cumulative: { dispatched: number; completed: number }; lastReap: unknown };
+    expect(record.statusVersion).toBe(1);
+    expect(record.cumulative.dispatched).toBe(2);
+    expect(record.cumulative.completed).toBe(1);
+    expect(typeof record.lastReap).toBe("object");
+  });
 });
