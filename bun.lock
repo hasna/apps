@@ -2007,7 +2007,7 @@
     },
     "apps/workflows": {
       "name": "@hasna/workflows",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "bin": {
         "workflows": "dist/cli/index.js",
         "workflows-mcp": "dist/mcp/index.js",

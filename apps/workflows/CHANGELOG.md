@@ -1,5 +1,16 @@
 # @hasna/workflows
 
+## 0.1.4
+
+### Patch Changes
+
+- Fix-on-sight from the 2026-08-30 six-variant stress test (PRs #1485, #1486):
+  - SQLite `database is locked` (SQLITE_BUSY) containment: finite `busy_timeout` + bounded retry in the store open path — concurrent CLI processes on one data dir no longer die with rc=1;
+  - memo safety: graph-level `memoWatch` (files/globs under the data dir) joins the memo key via mtime+sha256 fingerprint, so a memoized command step cannot serve a value that contradicts a live run of the same command;
+  - while-loop recording: every completed iteration owns its `run_nodes` row (`getLatestRunNode`), with retries/resumes still reusing non-completed rows;
+  - cursor lane: SDK shape drift now surfaces as a clean `LaneAdapterShapeError` instead of a generic failed result;
+  - daemon status: per-cycle counters persist in a versioned `{latestCycle, cumulative}` envelope (legacy flat reports read as baseline);
+  - CLI `run -j`: failures emit JSON with `error` + `runId` on stdout (human message stays on stderr).
 ## 0.1.3
 
 ### Patch Changes
