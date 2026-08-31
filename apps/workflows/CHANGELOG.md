@@ -10,7 +10,8 @@
   - while-loop recording: every completed iteration owns its `run_nodes` row (`getLatestRunNode`), with retries/resumes still reusing non-completed rows;
   - cursor lane: SDK shape drift now surfaces as a clean `LaneAdapterShapeError` instead of a generic failed result;
   - daemon status: per-cycle counters persist in a versioned `{latestCycle, cumulative}` envelope (legacy flat reports read as baseline);
-  - CLI `run -j`: failures emit JSON with `error` + `runId` on stdout (human message stays on stderr).
+  - CLI `run -j`: failures emit JSON with `error` + `runId` on stdout (human message stays on stderr);
+  - memoWatch: absolute glob patterns fingerprint matched files at their absolute paths (release-review P1) — a change under an absolute glob now invalidates memoized results instead of serving stale output.
 ## 0.1.3
 
 ### Patch Changes
