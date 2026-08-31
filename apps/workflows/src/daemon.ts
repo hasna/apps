@@ -12,10 +12,10 @@
  * The secrets write-gate (secrets.ts) refuses to persist credential-shaped
  * node outputs, run results, or contexts.
  */
-import { createHash } from "node:crypto";import { evaluateExpr, ExprEvalError, ExprSyntaxError } from "./expr.js";
+import { evaluateExpr, ExprEvalError, ExprSyntaxError } from "./expr.js";
 import { findNode, type GraphNode, type WorkflowGraph, validateGraph } from "./graph.js";
 import { assertNoSecrets } from "./secrets.js";
-import { recordMemo, repairTornRuns, tryMemoHit } from "./session.js";
+import { memoKey, memoWatchFingerprint, recordMemo, repairTornRuns, tryMemoHit } from "./session.js";
 import type { RunRow, WorkflowsStore } from "./store.js";
 import { SessionWAL } from "./wal.js";
 
@@ -404,15 +404,33 @@ export class WorkflowsDaemon {
     node: Extract<GraphNode, { type: "step" }>,
   ): Promise<StepOutcome> {
     const nodeId = node.id;
-    const existing = this.store.listRunNodes(run.id).find((n) => n.nodeId === nodeId);
-    const nodeRow = existing ?? this.store.createRunNode({ runId: run.id, nodeId, lane: node.lane ?? "claude" });
+    // Stress V4 P3 (measured 2026-08-30): while-loop iterations >= 2 kept ONE
+    // run_nodes row per body node (iteration 1 only) — per-iteration evidence
+    // existed only in the WAL. Each completed iteration of a loop-body step
+    // owns its own row; a pending/running/failed row is still the same
+    // execution and is reused by retries and resumes.
+    const latest = this.store.getLatestRunNode(run.id, nodeId);
+    const isLoopBody = graph.nodes.some((candidate) => candidate.type === "while" && candidate.body.includes(nodeId));
+    const nodeRow =
+      latest === undefined || (isLoopBody && latest.status === "completed")
+        ? this.store.createRunNode({ runId: run.id, nodeId, lane: node.lane ?? "claude" })
+        : latest;
 
     // memoization: same input -> reuse the cached output without executing.
     // the run state (__wf cursor/loops, accumulated steps) is stripped from
     // the memo input so identical user context + command hash identically
     // across iterations and runs
-    if (node.memo) {
-      const memoInput = { command: node.command, prompt: node.prompt, context: stripRunState(context) };
+    const memoWatch = node.memo ? memoWatchFingerprint(graph, this.store.dataDir) : undefined;
+    // Stress V3/V4 F2: a memoized command reading external state must declare
+    // it in graph.memoWatch; the fingerprint joins the input so a changed
+    // watched file can never serve a stale cached value.
+    const memoSource = { command: node.command, prompt: node.prompt, context: stripRunState(context) };
+    const memoInput = node.memo
+      ? memoWatch !== undefined
+        ? { ...memoSource, memoWatch }
+        : memoSource
+      : undefined;
+    if (memoInput !== undefined) {
       const hit = tryMemoHit(this.store, run.graphName, nodeId, memoInput);
       if (hit) {
         const cached = JSON.parse(hit.outputJson) as Record<string, unknown>;
@@ -470,9 +488,20 @@ export class WorkflowsDaemon {
 
     this.store.setRunNodeStatus(nodeRow.id, "completed", { exitCode: result.exitCode, output });
     this.wal.append({ op: "node_finished", runId: run.id, nodeId, status: "completed", at: nowIso() });
-    if (node.memo) {
-      recordMemo(this.store, run.graphName, nodeId, { command: node.command, prompt: node.prompt, context: stripRunState(context) }, output);
-      this.wal.append({ op: "memo_set", key: `${run.graphName}:${nodeId}:${createHash("sha256").update(JSON.stringify({ command: node.command, prompt: node.prompt, context: stripRunState(context) })).digest("hex")}`, at: nowIso() });
+    if (memoInput !== undefined) {
+      // Cache only when the watched state is identical before and after
+      // execution: a file that changed mid-flight cannot be associated with
+      // the pre-execution input, and caching under it would recreate the
+      // stale-memo defect for the NEXT run. If the fingerprint is unstable or
+      // went away, the completed run stays valid but is simply not memoized.
+      const memoInputAfter = node.memo ? memoWatchFingerprint(graph, this.store.dataDir) : undefined;
+      const stable =
+        (memoWatch === undefined && memoInputAfter === undefined) ||
+        (memoWatch !== undefined && memoInputAfter !== undefined && JSON.stringify(memoWatch) === JSON.stringify(memoInputAfter));
+      if (stable) {
+        recordMemo(this.store, run.graphName, nodeId, memoInput, output);
+        this.wal.append({ op: "memo_set", key: memoKey(run.graphName, nodeId, memoInput), at: nowIso() });
+      }
     }
     this.recordStepResult(context, nodeId, output);
     return this.afterNode(run, context, wf, node.next);
@@ -594,6 +623,9 @@ export interface RunToCompletionOptions {
   /** Pre-set the daemon's isolation; the foreground driver always isolates
    * to its own run anyway (see isolateRun in runGraphToCompletion). */
   isolatedRunId?: string;
+  /** Observe the durable run identity immediately after creation (the CLI -j
+   * failure surface needs the runId even when the run later throws). */
+  onRunCreated?: (run: RunRow) => void;
 }
 
 /** Drive a run to a terminal state with bounded cycles. Returns the final row. */
@@ -612,6 +644,7 @@ export async function runGraphToCompletion(
     isolatedRunId: options.isolatedRunId,
   });
   const run = daemon.startRun(graph, context);
+  options.onRunCreated?.(run);
   // The foreground driver reaps ONLY its own run — it must not dispatch,
   // advance, or repair other runs sharing the store (live-verify observation
   // 2026-08-25: an orphaned run executed its step inside the foreground

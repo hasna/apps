@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { openStore, type WorkflowsStore } from "./store.js";
 
 let dir: string;
@@ -124,6 +125,62 @@ describe("run_nodes", () => {
     store.bumpAttemptsNode(node.id);
     store.bumpAttemptsNode(node.id);
     expect(store.getRunNode(node.id)?.attempts).toBe(2);
+  });
+
+  test("getLatestRunNode returns the newest row for a (run, node) pair", () => {
+    // per-iteration rows (stress v4 P3): loop-body steps keep one row per
+    // completed iteration, so "the node row" is ambiguous — the latest one is
+    // what `nodes show` and the engine's row-reuse decision need.
+    const run = store.createRun({ graphName: "g", graphVersion: "1" });
+    const first = store.createRunNode({ runId: run.id, nodeId: "step" });
+    const second = store.createRunNode({ runId: run.id, nodeId: "step" });
+    expect(store.getLatestRunNode(run.id, "step")?.id).toBe(second.id);
+    expect(store.getLatestRunNode(run.id, "nope")).toBeUndefined();
+    expect(store.getLatestRunNode(run.id, "step")!.id).not.toBe(first.id);
+  });
+
+  test("openStore exposes the data dir it was opened on", () => {
+    expect(store.dataDir).toBe(dir);
+  });
+});
+
+describe("SQLITE_BUSY containment", () => {
+  // Stress V1 F1 (measured 2026-08-30): 3 concurrent CLI processes on one
+  // data dir — 2/3 died rc=1 with stderr exactly "database is locked" and
+  // 0-byte -j stdout. SQLite must wait for a concurrent writer within a
+  // bounded window instead of failing immediately.
+  test("a writer in another process waits for a held write lock instead of failing with SQLITE_BUSY", async () => {
+    const raw = new Database(join(dir, "workflows.db"));
+    raw.exec("PRAGMA journal_mode = WAL");
+    raw.exec("BEGIN IMMEDIATE"); // hold the write lock
+    const script = [
+      'import { openStore } from "./src/store.ts";',
+      "const s = openStore(process.env.WFTEST_DIR);",
+      "try {",
+      '  s.createRun({ graphName: "g", graphVersion: "1" });',
+      '  console.log("WRITE_OK");',
+      "} catch (e) {",
+      '  console.log("WRITE_FAIL:" + (e instanceof Error ? e.message : String(e)));',
+      "} finally {",
+      "  s.close();",
+      "}",
+    ].join("\n");
+    const worker = Bun.spawn(["bun", "-e", script], {
+      cwd: join(import.meta.dir, ".."), // app root: src/store.test.ts -> apps/workflows
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, WFTEST_DIR: dir },
+    });
+    await Bun.sleep(500); // pre-fix: the worker has already failed; post-fix: it is waiting
+    raw.exec("COMMIT"); // release the lock
+    const stdout = await new Response(worker.stdout).text();
+    const exitCode = await worker.exited;
+    const rows = raw.query("SELECT COUNT(*) AS n FROM runs").get() as { n: number };
+    raw.close();
+    expect(exitCode, `worker stdout=${JSON.stringify(stdout)}`).toBe(0);
+    expect(stdout).toContain("WRITE_OK"); // pre-fix: WRITE_FAIL:database is locked
+    expect(stdout).not.toContain("WRITE_FAIL");
+    expect(rows.n).toBe(1);
   });
 });
 

@@ -10,8 +10,11 @@
  * `resume`, whose restoreInterruptedRun guard requires status "interrupted".
  */
 import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { SessionWAL } from "./wal.js";
 import type { RunRow, WorkflowsStore } from "./store.js";
+import type { WorkflowGraph } from "./graph.js";
 
 export interface RepairResult {
   /** runs found running with no live claim */
@@ -94,6 +97,74 @@ export function tryMemoHit(store: WorkflowsStore, graphName: string, nodeId: str
 export function recordMemo(store: WorkflowsStore, graphName: string, nodeId: string, input: unknown, output: unknown): void {
   const key = memoKey(graphName, nodeId, input);
   store.memoPut(key, graphName, nodeId, inputHash(input), JSON.stringify(output));
+}
+
+/** One watched file's fingerprint entry (mtime + sha256). */
+export interface MemoWatchEntry {
+  /** The pattern as declared on the graph. */
+  pattern: string;
+  /** The resolved absolute path (or the glob-relative file path). */
+  path: string;
+  missing: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+  sha256: string | null;
+}
+
+/**
+ * Fingerprint of the graph's memoWatch files: mtimes + content hashes.
+ * Stress V3/V4 F2 (measured 2026-08-30): a memoized node reading
+ * $WORKFLOWS_DATA_DIR/scratch/wf2.cnt served a stale cached "0" while the
+ * file said "2" — the memo key covered only {command, prompt, context}. The
+ * fingerprint joins the memo input, so a changed watched file invalidates the
+ * cache exactly when the command's live result can differ. Exact paths and
+ * glob patterns are supported (relative to `dataDir` or absolute); a missing
+ * exact path keeps a stable `missing` entry so its later appearance (or a
+ * re-creation with different content) still changes the fingerprint.
+ */
+export function memoWatchFingerprint(graph: WorkflowGraph, dataDir: string): MemoWatchEntry[] | undefined {
+  if (!graph.memoWatch || graph.memoWatch.length === 0) return undefined;
+  const entries: MemoWatchEntry[] = [];
+  for (const pattern of graph.memoWatch) {
+    if (hasGlobMagic(pattern)) {
+      const matches = [...new Bun.Glob(pattern).scanSync({ cwd: dataDir, onlyFiles: true })].sort();
+      for (const match of matches) {
+        const path = join(dataDir, match);
+        entries.push(fingerprintFile(pattern, path));
+      }
+      continue;
+    }
+    const path = isAbsolute(pattern) ? pattern : join(dataDir, pattern);
+    entries.push(fingerprintFile(pattern, path));
+  }
+  return entries;
+}
+
+function hasGlobMagic(pattern: string): boolean {
+  return /[*?[\]{}]/.test(pattern);
+}
+
+function fingerprintFile(pattern: string, path: string): MemoWatchEntry {
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile()) {
+      // non-file paths (directories etc.) stay out of the fingerprint — the
+      // command arguably reads them, but mtime/hash of a directory is not a
+      // stable signal; treat as missing so nothing stale can be served.
+      return { pattern, path, missing: true, mtimeMs: null, size: null, sha256: null };
+    }
+    const content = readFileSync(path);
+    return {
+      pattern,
+      path,
+      missing: false,
+      mtimeMs: stat.mtimeMs,
+      size: content.byteLength,
+      sha256: createHash("sha256").update(content).digest("hex"),
+    };
+  } catch {
+    return { pattern, path, missing: true, mtimeMs: null, size: null, sha256: null };
+  }
 }
 
 /** Requeue a cancelled run's in-flight nodes (used by cancel + resume). */

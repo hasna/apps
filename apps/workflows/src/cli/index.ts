@@ -395,7 +395,10 @@ program
     try {
       if (action === "show") {
         if (!node) throw new Error("nodes show requires a run id and a node id");
-        const row = store.listRunNodes(run).find((n) => n.nodeId === node);
+        // Stress V4 P3: loop-body nodes own one row per completed iteration —
+        // show the LATEST execution (what the run's final state reflects),
+        // not the first row matched by nodeId.
+        const row = store.getLatestRunNode(run, node);
         if (!row) throw new Error(`run ${run} has no node ${node}`);
         console.log(JSON.stringify(row, null, 2));
         return;

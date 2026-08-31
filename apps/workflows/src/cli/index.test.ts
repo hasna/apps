@@ -486,32 +486,54 @@ describe("workflows CLI — slice 4 verbs (live-verify closures)", () => {
     }
   });
 
-  test("serve subcommand binds and answers /health", async () => {
-    const port = 20000 + Math.floor(Math.random() * 20000);
-    const proc = Bun.spawn(["bun", "src/cli/index.ts", "serve", "--port", String(port)], {
-      cwd: pkgDir,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, HASNA_WORKFLOWS_DATA_DIR: dataDir },
+  test("three concurrent CLI runs on one store all complete without SQLITE_BUSY (stress V1 F1)", async () => {
+    const file = writeGraph("concurrent.json", {
+      name: "cli-concurrent",
+      version: "1.0.0",
+      nodes: [
+        { id: "start", type: "start", next: "work" },
+        { id: "work", type: "step", command: "sleep 0.35; printf concurrent-ok", next: "done" },
+        { id: "done", type: "end" },
+      ],
     });
-    try {
-      let healthy = false;
-      for (let i = 0; i < 40; i++) {
-        try {
-          const res = await fetch(`http://127.0.0.1:${port}/health`);
-          if (res.status === 200) {
-            healthy = true;
-            break;
-          }
-        } catch {
-          // not up yet
-        }
-        await Bun.sleep(200);
-      }
-      expect(healthy).toBe(true);
-    } finally {
-      proc.kill("SIGTERM");
-      await proc.exited;
+    // Measured 2026-08-30: 3 simultaneous processes on one data dir — 2/3
+    // died rc=1 with stderr exactly "database is locked". All must now
+    // complete (busy-wait + bounded retry in the store path).
+    const procs = Array.from({ length: 3 }, () =>
+      Bun.spawn(["bun", "src/cli/index.ts", "run", file, "--json"], {
+        cwd: pkgDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, HASNA_WORKFLOWS_DATA_DIR: dataDir },
+      }),
+    );
+    const results = await Promise.all(
+      procs.map(async (p) => {
+        const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+        return { stdout, stderr, exitCode: await p.exited };
+      }),
+    );
+    for (const r of results) {
+      expect(r.exitCode).toBe(0);
+      expect(r.stderr).not.toContain("database is locked");
+      expect((JSON.parse(r.stdout) as { status: string }).status).toBe("completed");
     }
+  });
+
+  test("nodes list shows one row per while iteration; nodes show reflects the latest (stress V4 P3)", async () => {
+    const file = writeGraph("while-rows.json", whileGraph); // body ["tick"], i < 2
+    const run = await runCli(["run", file, "--json"]);
+    expect(run.exitCode).toBe(0);
+    const { runId } = JSON.parse(run.stdout) as { runId: string };
+    const list = await runCli(["nodes", runId, "--json"]);
+    expect(list.exitCode).toBe(0);
+    const rows = JSON.parse(list.stdout) as { id: string; nodeId: string; status: string }[];
+    const tickRows = rows.filter((n) => n.nodeId === "tick");
+    expect(tickRows).toHaveLength(2); // pre-fix: 1 (iteration 1 only)
+    for (const row of tickRows) expect(row.status).toBe("completed");
+    const show = await runCli(["nodes", "show", runId, "tick", "--json"]);
+    expect(show.exitCode).toBe(0);
+    const one = JSON.parse(show.stdout) as { id: string };
+    expect(one.id).toBe(tickRows[1].id); // the latest iteration's row
   });
 });

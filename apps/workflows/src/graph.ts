@@ -81,6 +81,13 @@ export interface WorkflowGraph {
   name: string;
   version: string;
   nodes: GraphNode[];
+  /**
+   * Optional files/globs (relative to the data dir, or absolute) whose
+   * fingerprint (mtime + sha256) joins every memoized node's input.
+   * A memoized command that reads external state MUST declare it here, or
+   * it can serve a stale cached value that contradicts a live run.
+   */
+  memoWatch?: string[];
 }
 
 export interface GraphIssue {
@@ -204,6 +211,18 @@ export function validateGraph(graph: WorkflowGraph): GraphValidation {
   }
   if (typeof graph.version !== "string" || graph.version.trim() === "") {
     issue(issues, "version", "graph requires a version string");
+  }
+  if (graph.memoWatch !== undefined) {
+    if (!Array.isArray(graph.memoWatch) || graph.memoWatch.length === 0) {
+      issue(issues, "memoWatch", "memoWatch must be a non-empty array of file paths or globs");
+    } else {
+      for (const entry of graph.memoWatch) {
+        if (typeof entry !== "string" || entry.trim() === "") {
+          issue(issues, "memoWatch", "each memoWatch entry must be a non-empty path or glob string");
+          break;
+        }
+      }
+    }
   }
   if (!Array.isArray(graph.nodes) || graph.nodes.length === 0) {
     issue(issues, "nodes", "graph requires at least one node");
