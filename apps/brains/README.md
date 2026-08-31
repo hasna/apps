@@ -72,16 +72,16 @@ brains-mcp
 
 ## HTTP mode
 
-Run a long-lived Streamable HTTP MCP server on `127.0.0.1` (default port **8801**):
+Run a long-lived Streamable HTTP MCP server on `127.0.0.1` (default port **8802**):
 
 ```bash
 brains-mcp --http
 # or: MCP_HTTP=1 brains-mcp
-# port override: --port 8801  or  MCP_HTTP_PORT=8801
+# port override: --port 8802  or  MCP_HTTP_PORT=8802
 ```
 
-- Health: `GET http://127.0.0.1:8801/health` → `{"status":"ok","name":"brains"}`
-- MCP: `http://127.0.0.1:8801/mcp`
+- Health: `GET http://127.0.0.1:8802/health` → `{"status":"ok","name":"brains"}`
+- MCP: `http://127.0.0.1:8802/mcp`
 
 Stdio remains the default when no `--http` / `MCP_HTTP=1` is set.
 

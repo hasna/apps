@@ -23,9 +23,19 @@ CLI with Bun.
 bun install -g @hasna/emails
 ```
 
-## Deployment modes
+## Deployment
 
-Emails has exactly two modes: `local` and `self_hosted`. Local mode keeps SQLite, files, and credentials on the current machine. Self-hosted mode connects to an Emails service deployed in user-owned infrastructure. Provider integrations always use user-supplied credentials; the package has no hosted account or control-plane service.
+The data backend is selected by `EMAILS_DATABASE_URL`: unset or blank means
+local SQLite, a PostgreSQL URL means PostgreSQL. On the client, store selection
+still follows the mode selector `EMAILS_MODE` — `local` by default, or
+`self_hosted` to talk to a server's HTTP API (`HASNA_EMAILS_MODE` and the
+`emails_mode` config key carry the same choice). Only `local` and `self_hosted`
+are supported; legacy Mailery-era selectors and `cloud`/`remote`/`hybrid`
+values are rejected. Local SQLite storage keeps the database, files, and
+credentials on the current machine; a PostgreSQL backend serves the
+authenticated `/v1` API from operator-owned infrastructure. Provider
+integrations always use user-supplied credentials; the package has no hosted
+account or control-plane service.
 
 Local provider credentials are envelope-encrypted with a root key kept outside
 SQLite. Rotation, locked-keyring recovery, and backup rebind procedures are in
@@ -500,7 +510,7 @@ Expose the service through an HTTPS reverse proxy or load balancer with edge
 rate limits, the 1 MiB request limit, bounded upstream timeouts, and network
 rules that keep Postgres and the container port private. The generated client
 rejects remote plaintext HTTP. Self-hosted sends require an idempotency key and
-support at most five inline attachments (512 KiB each, 768 KiB total);
+support at most five inline attachments (10 MiB each, 20 MiB total);
 scheduled sends are not implemented by the self-hosted API. Mailbox read,
 star, archive, label, delete, bulk-by-explicit-id, and authenticated attachment
 retrieval are supported. Outbound rows carrying a send idempotency key are a

@@ -239,7 +239,7 @@ testers-mcp --http
 # or: MCP_HTTP=1 testers-mcp
 ```
 
-Default port **8840** (`--port` / `MCP_HTTP_PORT`). Endpoints: `GET /health`, `POST /mcp`.
+Default port **8880** (`--port` / `MCP_HTTP_PORT`). Endpoints: `GET /health`, `POST /mcp`.
 
 ## REST API
 

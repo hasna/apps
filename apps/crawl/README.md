@@ -66,9 +66,9 @@ explicit detail arguments such as `format: "full"`, `full: true`, `content_limit
 Long-lived Streamable HTTP transport for shared agent sessions (binds `127.0.0.1` only):
 
 ```bash
-crawl-mcp --http              # default port 8812
-crawl-mcp --http --port 8812
-MCP_HTTP=1 MCP_HTTP_PORT=8812 crawl-mcp
+crawl-mcp --http              # default port 8857
+crawl-mcp --http --port 8857
+MCP_HTTP=1 MCP_HTTP_PORT=8857 crawl-mcp
 ```
 
 - `GET /health` → `{"status":"ok","name":"crawl"}`

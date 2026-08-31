@@ -5,7 +5,7 @@
 
 Headless presentation-deck SDK for Hasna-coded apps. Author slides in **Markdown or HTML**, model themes / transitions / fragments / vertical stacks, **serialize to JSON**, and **export a self-contained [reveal.js](https://revealjs.com) HTML deck**. A React viewer is shipped separately at `@hasna/slides/react`.
 
-The local project folder is `slides`; the published package is `@hasna/slides` and the GitHub repository is `hasna/slides`.
+The local project folder is `slides` (this repository, `hasna/apps`); the published package is `@hasna/slides`.
 
 - **`@hasna/slides`** — the headless, framework-agnostic deck model + serialization + HTML export. No React, safe to run server-side.
 - **`@hasna/slides/react`** — a reveal.js-backed `<Presentation>` / `<Deck>` viewer component (arrow-key navigation, overview mode, fragments, speaker notes).
