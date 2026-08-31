@@ -129,7 +129,11 @@ export function memoWatchFingerprint(graph: WorkflowGraph, dataDir: string): Mem
     if (hasGlobMagic(pattern)) {
       const matches = [...new Bun.Glob(pattern).scanSync({ cwd: dataDir, onlyFiles: true })].sort();
       for (const match of matches) {
-        const path = join(dataDir, match);
+        // Preserve absolute matches as-is: joining them to dataDir would
+        // mangle the path (release-review P1, 0.1.4) and fingerprint an
+        // existing watched file as missing — its changes would never
+        // invalidate memoized results and stale output stayed reachable.
+        const path = isAbsolute(match) ? match : join(dataDir, match);
         entries.push(fingerprintFile(pattern, path));
       }
       continue;

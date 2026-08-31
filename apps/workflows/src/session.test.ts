@@ -203,4 +203,24 @@ describe("memo watch fingerprint", () => {
     expect(fp).toHaveLength(2);
     expect(fp!.map((e) => e.path)).toEqual([join(dir, "scratch", "a.cnt"), join(dir, "scratch", "b.cnt")]);
   });
+
+  test("an absolute glob pattern fingerprints matched files at their absolute paths (release-review P1)", () => {
+    // 0.1.4 release review P1: absolute memoWatch globs were joined to
+    // dataDir, so every absolute match fingerprinted as missing and a change
+    // never invalidated the memo — stale memoized output stayed reachable.
+    const scratch = join(dir, "scratch");
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(join(scratch, "a.cnt"), "1", "utf8");
+    const pattern = join(scratch, "*.cnt");
+    const fp = memoWatchFingerprint(watchedGraph([pattern]), dir);
+    expect(fp).toHaveLength(1);
+    expect(fp![0].path).toBe(join(scratch, "a.cnt"));
+    expect(fp![0].missing).toBe(false);
+    expect(fp![0].sha256).not.toBeNull();
+    // a content change must invalidate the fingerprint
+    writeFileSync(join(scratch, "a.cnt"), "2", "utf8");
+    const after = memoWatchFingerprint(watchedGraph([pattern]), dir);
+    expect(after).not.toEqual(fp);
+    expect(after![0].sha256).not.toBe(fp![0].sha256);
+  });
 });
