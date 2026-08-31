@@ -81,6 +81,8 @@ export interface CreateRunNodeInput {
 }
 
 export interface WorkflowsStore {
+  /** The data dir this store was opened on (resolves relative memoWatch paths). */
+  readonly dataDir: string;
   close(): void;
   listTables(): string[];
   createRun(input: CreateRunInput): RunRow;
@@ -93,6 +95,9 @@ export interface WorkflowsStore {
   createRunNode(input: CreateRunNodeInput): RunNodeRow;
   getRunNode(id: string): RunNodeRow | undefined;
   listRunNodes(runId: string): RunNodeRow[];
+  /** The newest run_nodes row for a (run, node) pair — a node may own one row
+   * per while iteration, and `nodes show` + engine row-reuse need the latest. */
+  getLatestRunNode(runId: string, nodeId: string): RunNodeRow | undefined;
   setRunNodeStatus(id: string, status: NodeStatus, patch?: { exitCode?: number | null; output?: unknown; error?: string | null; startedAt?: string; finishedAt?: string }): void;
   bumpAttemptsNode(id: string): void;
   memoPut(key: string, graphName: string, nodeId: string, inputHash: string, outputJson: string): void;
@@ -102,12 +107,50 @@ export interface WorkflowsStore {
   memoClear(): void;
 }
 
+/**
+ * Bounded SQLite busy containment. Multiple CLI/daemon processes share one
+ * store (stress V1 F1, measured 2026-08-30: 2/3 concurrent runs died rc=1
+ * with stderr exactly "database is locked"): SQLite's default immediate-fail
+ * policy must become a finite busy wait (PRAGMA busy_timeout) plus a bounded
+ * retry for the busy call itself, so a contended writer waits instead of
+ * failing while contention is transient.
+ */
+const BUSY_TIMEOUT_MS = 3000;
+const BUSY_RETRIES = 2;
+const BUSY_RETRY_SLEEP_MS = 50;
+
+function isBusyError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = String((err as { code?: unknown }).code ?? "");
+  return code.includes("BUSY") || /\bdatabase is locked\b/i.test(err.message);
+}
+
+function retryBusy<T>(fn: () => T): T {
+  let last: unknown;
+  for (let attempt = 0; attempt <= BUSY_RETRIES; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (!isBusyError(err)) throw err;
+      last = err;
+      Bun.sleepSync(BUSY_RETRY_SLEEP_MS);
+    }
+  }
+  throw last;
+}
+
 export function openStore(dataDir: string): WorkflowsStore {
   mkdirSync(dataDir, { recursive: true });
   const db = new Database(join(dataDir, "workflows.db"));
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec(`
+  // Stress V1 F1 (measured 2026-08-30): concurrent CLI processes on one data
+  // dir died with SQLITE_BUSY. Wait for a contended writer for a bounded
+  // window instead of failing on first contact; retryBusy below covers the
+  // residual gap after the busy handler exhausts its window.
+  retryBusy(() => db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`));
+  retryBusy(() => db.exec("PRAGMA journal_mode = WAL"));
+  retryBusy(() => db.exec("PRAGMA foreign_keys = ON"));
+  retryBusy(() =>
+    db.exec(`
     CREATE TABLE IF NOT EXISTS runs (
       id            TEXT PRIMARY KEY,
       graph_name    TEXT NOT NULL,
@@ -147,7 +190,8 @@ export function openStore(dataDir: string): WorkflowsStore {
     CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
     CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
     CREATE INDEX IF NOT EXISTS idx_run_nodes_run ON run_nodes(run_id);
-  `);
+  `),
+  );
 
   const rowToRun = (r: Record<string, unknown>): RunRow => ({
     id: String(r.id),
@@ -189,39 +233,50 @@ export function openStore(dataDir: string): WorkflowsStore {
   });
 
   return {
+    dataDir,
+
     close() {
       db.close();
     },
 
     listTables(): string[] {
-      const rows = db
-        .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-        .all();
+      const rows = retryBusy(() =>
+        db
+          .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+          .all(),
+      );
       return rows.map((r) => r.name);
     },
 
     createRun(input: CreateRunInput): RunRow {
       const id = randomUUID();
       const now = nowIso();
-      db.query(
-        `INSERT INTO runs (id, graph_name, graph_version, status, attempts, context_json, created_at, updated_at)
-         VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`,
-      ).run(id, input.graphName, input.graphVersion, JSON.stringify(input.context ?? {}), now, now);
+      retryBusy(() =>
+        db
+          .query(
+            `INSERT INTO runs (id, graph_name, graph_version, status, attempts, context_json, created_at, updated_at)
+             VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`,
+          )
+          .run(id, input.graphName, input.graphVersion, JSON.stringify(input.context ?? {}), now, now),
+      );
       return this.getRun(id)!;
     },
 
     getRun(id: string): RunRow | undefined {
-      const row = db.query(`SELECT * FROM runs WHERE id = ?`).get(id) as Record<string, unknown> | null;
+      const row = retryBusy(() => db.query(`SELECT * FROM runs WHERE id = ?`).get(id) as Record<string, unknown> | null);
       return row ? rowToRun(row) : undefined;
     },
 
     listRuns(opts: { status?: RunStatus; limit?: number } = {}): RunRow[] {
       const limit = Math.min(opts.limit ?? 100, 1000);
       if (opts.status) {
-        const rows = db.query(`SELECT * FROM runs WHERE status = ? ORDER BY created_at DESC, id DESC LIMIT ?`).all(opts.status, limit);
+        const status: RunStatus = opts.status; // narrowed for the closure
+        const rows = retryBusy(() =>
+          db.query(`SELECT * FROM runs WHERE status = ? ORDER BY created_at DESC, id DESC LIMIT ?`).all(status, limit),
+        );
         return rows.map((r) => rowToRun(r as Record<string, unknown>));
       }
-      const rows = db.query(`SELECT * FROM runs ORDER BY created_at DESC, id DESC LIMIT ?`).all(limit);
+      const rows = retryBusy(() => db.query(`SELECT * FROM runs ORDER BY created_at DESC, id DESC LIMIT ?`).all(limit));
       return rows.map((r) => rowToRun(r as Record<string, unknown>));
     },
 
@@ -244,36 +299,53 @@ export function openStore(dataDir: string): WorkflowsStore {
           : terminal && existing?.finishedAt === null
             ? now
             : (existing?.finishedAt ?? null);
-      db.query(
-        `UPDATE runs SET status = ?, result_json = ?, error = ?, started_at = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
-      ).run(status, resultJson, error, startedAt, finishedAt, now, id);
+      retryBusy(() =>
+        db
+          .query(
+            `UPDATE runs SET status = ?, result_json = ?, error = ?, started_at = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(status, resultJson, error, startedAt, finishedAt, now, id),
+      );
     },
 
     bumpAttempts(id: string): void {
-      db.query(`UPDATE runs SET attempts = attempts + 1, updated_at = ? WHERE id = ?`).run(nowIso(), id);
+      retryBusy(() => db.query(`UPDATE runs SET attempts = attempts + 1, updated_at = ? WHERE id = ?`).run(nowIso(), id));
     },
 
     setRunContext(id: string, context: unknown): void {
-      db.query(`UPDATE runs SET context_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(context), nowIso(), id);
+      retryBusy(() => db.query(`UPDATE runs SET context_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(context), nowIso(), id));
     },
 
     createRunNode(input: CreateRunNodeInput): RunNodeRow {
       const id = randomUUID();
-      db.query(
-        `INSERT INTO run_nodes (id, run_id, node_id, status, attempts, lane)
-         VALUES (?, ?, ?, 'pending', 0, ?)`,
-      ).run(id, input.runId, input.nodeId, input.lane ?? null);
+      retryBusy(() =>
+        db
+          .query(
+            `INSERT INTO run_nodes (id, run_id, node_id, status, attempts, lane)
+             VALUES (?, ?, ?, 'pending', 0, ?)`,
+          )
+          .run(id, input.runId, input.nodeId, input.lane ?? null),
+      );
       return this.getRunNode(id)!;
     },
 
     getRunNode(id: string): RunNodeRow | undefined {
-      const row = db.query(`SELECT * FROM run_nodes WHERE id = ?`).get(id) as Record<string, unknown> | null;
+      const row = retryBusy(() => db.query(`SELECT * FROM run_nodes WHERE id = ?`).get(id) as Record<string, unknown> | null);
       return row ? rowToNode(row) : undefined;
     },
 
     listRunNodes(runId: string): RunNodeRow[] {
-      const rows = db.query(`SELECT * FROM run_nodes WHERE run_id = ? ORDER BY rowid ASC`).all(runId);
+      const rows = retryBusy(() => db.query(`SELECT * FROM run_nodes WHERE run_id = ? ORDER BY rowid ASC`).all(runId));
       return rows.map((r) => rowToNode(r as Record<string, unknown>));
+    },
+
+    getLatestRunNode(runId: string, nodeId: string): RunNodeRow | undefined {
+      const row = retryBusy(() =>
+        db.query(`SELECT * FROM run_nodes WHERE run_id = ? AND node_id = ? ORDER BY rowid DESC LIMIT 1`).get(runId, nodeId) as
+          | Record<string, unknown>
+          | null,
+      );
+      return row ? rowToNode(row) : undefined;
     },
 
     setRunNodeStatus(id: string, status: NodeStatus, patch: { exitCode?: number | null; output?: unknown; error?: string | null; startedAt?: string; finishedAt?: string } = {}): void {
@@ -292,39 +364,47 @@ export function openStore(dataDir: string): WorkflowsStore {
       const terminal = status === "completed" || status === "failed" || status === "skipped";
       const finishedAt =
         patch.finishedAt !== undefined ? patch.finishedAt : terminal && existing.finishedAt === null ? now : existing.finishedAt;
-      db.query(
-        `UPDATE run_nodes SET status = ?, exit_code = ?, output_json = ?, error = ?, started_at = ?, finished_at = ? WHERE id = ?`,
-      ).run(status, exitCode, outputJson, error, startedAt, finishedAt, id);
+      retryBusy(() =>
+        db
+          .query(
+            `UPDATE run_nodes SET status = ?, exit_code = ?, output_json = ?, error = ?, started_at = ?, finished_at = ? WHERE id = ?`,
+          )
+          .run(status, exitCode, outputJson, error, startedAt, finishedAt, id),
+      );
     },
 
     bumpAttemptsNode(id: string): void {
-      db.query(`UPDATE run_nodes SET attempts = attempts + 1 WHERE id = ?`).run(id);
+      retryBusy(() => db.query(`UPDATE run_nodes SET attempts = attempts + 1 WHERE id = ?`).run(id));
     },
 
     memoPut(key: string, graphName: string, nodeId: string, inputHash: string, outputJson: string): void {
-      db.query(
-        `INSERT INTO memos (key, graph_name, node_id, input_hash, output_json, hit_count, created_at)
-         VALUES (?, ?, ?, ?, ?, 0, ?)
-         ON CONFLICT(key) DO UPDATE SET output_json = excluded.output_json`,
-      ).run(key, graphName, nodeId, inputHash, outputJson, nowIso());
+      retryBusy(() =>
+        db
+          .query(
+            `INSERT INTO memos (key, graph_name, node_id, input_hash, output_json, hit_count, created_at)
+             VALUES (?, ?, ?, ?, ?, 0, ?)
+             ON CONFLICT(key) DO UPDATE SET output_json = excluded.output_json`,
+          )
+          .run(key, graphName, nodeId, inputHash, outputJson, nowIso()),
+      );
     },
 
     memoGet(key: string): MemoRow | undefined {
-      const row = db.query(`SELECT * FROM memos WHERE key = ?`).get(key) as Record<string, unknown> | null;
+      const row = retryBusy(() => db.query(`SELECT * FROM memos WHERE key = ?`).get(key) as Record<string, unknown> | null);
       return row ? rowToMemo(row) : undefined;
     },
 
     memoHit(key: string): void {
-      db.query(`UPDATE memos SET hit_count = hit_count + 1 WHERE key = ?`).run(key);
+      retryBusy(() => db.query(`UPDATE memos SET hit_count = hit_count + 1 WHERE key = ?`).run(key));
     },
 
     memoList(): MemoRow[] {
-      const rows = db.query(`SELECT * FROM memos ORDER BY created_at DESC LIMIT 1000`).all();
+      const rows = retryBusy(() => db.query(`SELECT * FROM memos ORDER BY created_at DESC LIMIT 1000`).all());
       return rows.map((r) => rowToMemo(r as Record<string, unknown>));
     },
 
     memoClear(): void {
-      db.exec(`DELETE FROM memos`);
+      retryBusy(() => db.exec(`DELETE FROM memos`));
     },
   };
 }

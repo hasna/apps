@@ -40,6 +40,20 @@ describe("validateGraph", () => {
     expect(result.issues.some((i) => i.path === "nodes" && i.message.includes("at least one"))).toBe(true);
   });
 
+  test("validates memoWatch as a non-empty array of non-empty path strings", () => {
+    expect(validateGraph(baseGraph({ memoWatch: ["scratch/wf2.cnt"] })).ok).toBe(true);
+    expect(validateGraph(baseGraph({ memoWatch: ["scratch/*.cnt"] })).ok).toBe(true);
+    const empty = validateGraph(baseGraph({ memoWatch: [] }));
+    expect(empty.ok).toBe(false);
+    expect(empty.issues.some((i) => i.path === "memoWatch")).toBe(true);
+    const blank = validateGraph(baseGraph({ memoWatch: [""] }));
+    expect(blank.ok).toBe(false);
+    expect(blank.issues.some((i) => i.path === "memoWatch")).toBe(true);
+    const scalar = validateGraph(baseGraph({ memoWatch: "scratch/wf2.cnt" as never }));
+    expect(scalar.ok).toBe(false);
+    expect(scalar.issues.some((i) => i.path === "memoWatch")).toBe(true);
+  });
+
   test("rejects a missing start node", () => {
     const result = validateGraph({ name: "x", version: "1.0.0", nodes: [{ id: "a", type: "step", prompt: "p", next: "e" }, { id: "e", type: "end" }] });
     expect(result.ok).toBe(false);

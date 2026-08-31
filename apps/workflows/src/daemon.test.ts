@@ -4,7 +4,7 @@
  * secrets write-gate).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type WorkflowsStore } from "./store.js";
@@ -500,5 +500,103 @@ describe("run engine", () => {
     expect(replay.entries.some((e) => e.op.op === "graph_registered")).toBe(false);
     // and no run was created for the refused graph
     expect(store.listRuns({ limit: 100 }).some((r) => r.graphName === "leaky-graph")).toBe(false);
+  });
+});
+
+describe("memo watch (stress V3/V4 F2 — stales on external state)", () => {
+  // Measured 2026-08-30: a memoized `collect` node reading
+  // $WORKFLOWS_DATA_DIR/scratch/wf2.cnt served cached "0" while the file said
+  // "2". The graph declares memoWatch: ["scratch/wf2.cnt"]; its fingerprint
+  // (mtime + sha256) joins the memo input, and a file changing mid-execution
+  // must never be cached under the pre-execution input.
+  const watchFile = () => join(dir, "scratch", "wf2.cnt");
+  const watchedGraph = (): WorkflowGraph => ({
+    name: "memo-watch",
+    version: "1.0.0",
+    memoWatch: ["scratch/wf2.cnt"],
+    nodes: [
+      { id: "start", type: "start", next: "collect" },
+      { id: "collect", type: "step", command: 'cat "$WORKFLOWS_DATA_DIR/scratch/wf2.cnt"', memo: true, next: "done" },
+      { id: "done", type: "end" },
+    ],
+  });
+  const runOnce = () => runGraphToCompletion(store, wal, watchedGraph(), {}, { time: () => clock.now, env: { WORKFLOWS_DATA_DIR: dir } });
+  const collectOf = (final: { resultJson: string | null }) => JSON.parse(final.resultJson!).steps.collect as { output: string; memoHit?: boolean };
+
+  test("a memoized node never serves a value contradicting its command's live result", async () => {
+    mkdirSync(join(dir, "scratch"), { recursive: true });
+
+    writeFileSync(watchFile(), "1", "utf8");
+    const first = await runOnce();
+    expect(first.status).toBe("completed");
+    expect(collectOf(first).output).toBe("1");
+
+    // external state changes ("1" -> "2"): the cached "1" must NOT be served
+    writeFileSync(watchFile(), "2", "utf8");
+    const second = await runOnce();
+    expect(second.status).toBe("completed");
+    expect(collectOf(second).memoHit).toBeUndefined(); // pre-fix: memoHit true (stale)
+    expect(collectOf(second).output).toBe("2"); // pre-fix: "1"
+
+    // an mtime-only touch must also invalidate (fingerprint covers mtimes)
+    const stat = statSync(watchFile());
+    utimesSync(watchFile(), stat.atime, new Date(stat.mtimeMs + 5_000));
+    const third = await runOnce();
+    expect(third.status).toBe("completed");
+    expect(collectOf(third).memoHit).toBeUndefined(); // pre-fix: memoHit true
+    expect(collectOf(third).output).toBe("2");
+
+    // a genuinely identical repeat still hits the cache
+    const fourth = await runOnce();
+    expect(fourth.status).toBe("completed");
+    expect(collectOf(fourth).memoHit).toBe(true);
+    expect(collectOf(fourth).output).toBe("2");
+  });
+
+  test("a watched file changing during execution is not cached under the stale input", async () => {
+    mkdirSync(join(dir, "scratch"), { recursive: true });
+    writeFileSync(watchFile(), "before", "utf8");
+    const laneRunner = async (_job: LaneJob): Promise<LaneResult> => {
+      writeFileSync(watchFile(), "changed-mid-exec", "utf8"); // mutate DURING execution
+      return { ok: true, exitCode: 0, output: "live", durationMs: 1 };
+    };
+    const final = await runGraphToCompletion(store, wal, watchedGraph(), {}, { time: () => clock.now, laneRunner });
+    expect(final.status).toBe("completed");
+    // pre-fix: the output is cached under the pre-change input -> memo row exists
+    expect(store.memoList().length).toBe(0);
+    expect(JSON.parse(final.resultJson!).steps.collect.output).toBe("live");
+  });
+});
+
+describe("loop iteration rows (stress V4 P3)", () => {
+  // Measured 2026-08-30: after >= 2 while iterations, run_nodes held ONE row
+  // per loop-body node (iteration 1 only) — per-iteration evidence existed
+  // only in the WAL. Each completed iteration must own its rows.
+  const loopGraph = (): WorkflowGraph => ({
+    name: "loop-rows",
+    version: "1.0.0",
+    nodes: [
+      { id: "start", type: "start", next: "w" },
+      { id: "w", type: "while", condition: "i < 2", body: ["a", "b"], maxIterations: 5, next: "done" },
+      { id: "a", type: "step", command: "printf step-a" },
+      { id: "b", type: "step", command: "printf step-b" },
+      { id: "done", type: "end" },
+    ],
+  });
+
+  test("each while iteration records its own run_nodes rows, distinct per iteration", async () => {
+    const final = await runGraphToCompletion(store, wal, loopGraph(), {}, { time: () => clock.now });
+    expect(final.status).toBe("completed");
+    const rows = store.listRunNodes(final.id);
+    const aRows = rows.filter((n) => n.nodeId === "a");
+    const bRows = rows.filter((n) => n.nodeId === "b");
+    expect(aRows).toHaveLength(2); // pre-fix: 1
+    expect(bRows).toHaveLength(2); // pre-fix: 1
+    expect(new Set(aRows.map((r) => r.id)).size).toBe(2);
+    expect(new Set(bRows.map((r) => r.id)).size).toBe(2);
+    for (const row of [...aRows, ...bRows]) expect(row.status).toBe("completed");
+    // the latest row per body node is the LAST iteration's
+    expect(store.getLatestRunNode(final.id, "a")?.id).toBe(aRows[1].id);
+    expect(store.getLatestRunNode(final.id, "b")?.id).toBe(bRows[1].id);
   });
 });

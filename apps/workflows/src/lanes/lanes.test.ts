@@ -191,6 +191,38 @@ describe("cursor adapter (local mode)", () => {
     expect(result.exitCode).toBe(1);
   });
 
+  test("surfaces SDK shape drift as LaneAdapterShapeError: Agent without send()", async () => {
+    // Stress V5 (measured 2026-08-30): `@cursor/sdk Agent has no send()` —
+    // the installed SDK's Agent surface had drifted; the adapter must report
+    // the drift as the codebase's own shape error, not a generic lane result.
+    const adapter = createCursorAdapter({ sdkLoader: async () => ({ Agent: class {} }) });
+    await expect(adapter.run(job)).rejects.toBeInstanceOf(LaneAdapterShapeError); // pre-fix: resolves to a failed LaneResult
+  });
+
+  test("surfaces SDK shape drift as LaneAdapterShapeError: Run with no terminal status", async () => {
+    const adapter = createCursorAdapter({
+      sdkLoader: async () => ({
+        Agent: class {
+          send = async () => ({ foo: 1 }); // status/result absent
+        },
+      }),
+    });
+    // pre-fix: `run?.status ?? "finished"` fabricates a successful run
+    await expect(adapter.run(job)).rejects.toBeInstanceOf(LaneAdapterShapeError);
+  });
+
+  test("surfaces SDK shape drift as LaneAdapterShapeError: Run with a non-string result", async () => {
+    const adapter = createCursorAdapter({
+      sdkLoader: async () => ({
+        Agent: class {
+          send = async () => ({ status: "finished", result: 42 });
+        },
+      }),
+    });
+    // pre-fix: `run?.result ?? ""` fabricates an empty output
+    await expect(adapter.run(job)).rejects.toBeInstanceOf(LaneAdapterShapeError);
+  });
+
   test("falls back to cursor-agent CLI when the SDK is unavailable", async () => {
     const cliPath = join(dir, "fake-cursor-agent");
     writeFileSync(cliPath, "#!/bin/sh\necho cursor-cli-did-it\n", "utf8");

@@ -2,12 +2,13 @@
  * Regression tests for torn-run repair and memoization (slice C).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type WorkflowsStore } from "./store.js";
 import { SessionWAL } from "./wal.js";
-import { inputHash, memoKey, recordMemo, repairTornRuns, restoreInterruptedRun, tryMemoHit } from "./session.js";
+import type { WorkflowGraph } from "./graph.js";
+import { inputHash, memoKey, memoWatchFingerprint, recordMemo, repairTornRuns, restoreInterruptedRun, tryMemoHit } from "./session.js";
 
 let dir: string;
 let store: WorkflowsStore;
@@ -138,5 +139,68 @@ describe("memoization", () => {
   test("different input misses despite a stored memo", () => {
     recordMemo(store, "g", "build", { sha: "abc" }, { ok: true });
     expect(tryMemoHit(store, "g", "build", { sha: "def" })).toBeUndefined();
+  });
+});
+
+describe("memo watch fingerprint", () => {
+  // Stress V3/V4 F2 (measured 2026-08-30): a memoized node reading a file
+  // under the data dir served a stale cached "0" while the file said "2" —
+  // the memo key covered only {command, prompt, context}, none of which is
+  // the external state the command reads. The graph-level memoWatch list
+  // joins file fingerprints (mtimes + sha256) into the memo input.
+  const watchedGraph = (memoWatch: string[]): WorkflowGraph => ({
+    name: "wf",
+    version: "1.0.0",
+    memoWatch,
+    nodes: [
+      { id: "start", type: "start", next: "collect" },
+      { id: "collect", type: "step", command: "cat scratch/wf2.cnt", memo: true, next: "done" },
+      { id: "done", type: "end" },
+    ],
+  });
+
+  test("returns undefined when the graph declares no memoWatch", () => {
+    const graph: WorkflowGraph = { name: "wf", version: "1.0.0", nodes: [] };
+    expect(memoWatchFingerprint(graph, dir)).toBeUndefined();
+  });
+
+  test("a missing watched file is a stable fingerprint entry", () => {
+    const a = memoWatchFingerprint(watchedGraph(["scratch/wf2.cnt"]), dir);
+    expect(a).toEqual([
+      { pattern: "scratch/wf2.cnt", path: join(dir, "scratch", "wf2.cnt"), missing: true, mtimeMs: null, size: null, sha256: null },
+    ]);
+    expect(memoWatchFingerprint(watchedGraph(["scratch/wf2.cnt"]), dir)).toEqual(a);
+  });
+
+  test("a content change changes the fingerprint", () => {
+    mkdirSync(join(dir, "scratch"), { recursive: true });
+    writeFileSync(join(dir, "scratch", "wf2.cnt"), "1", "utf8");
+    const before = memoWatchFingerprint(watchedGraph(["scratch/wf2.cnt"]), dir);
+    writeFileSync(join(dir, "scratch", "wf2.cnt"), "2", "utf8");
+    const after = memoWatchFingerprint(watchedGraph(["scratch/wf2.cnt"]), dir);
+    expect(before).not.toEqual(after);
+    expect(before![0].sha256).not.toBe(after![0].sha256);
+  });
+
+  test("an mtime-only touch changes the fingerprint", () => {
+    mkdirSync(join(dir, "scratch"), { recursive: true });
+    const file = join(dir, "scratch", "wf2.cnt");
+    writeFileSync(file, "2", "utf8");
+    const before = memoWatchFingerprint(watchedGraph(["scratch/wf2.cnt"]), dir);
+    const stat = statSync(file);
+    utimesSync(file, stat.atime, new Date(stat.mtimeMs + 5_000));
+    const after = memoWatchFingerprint(watchedGraph(["scratch/wf2.cnt"]), dir);
+    expect(before).not.toEqual(after);
+    expect(before![0].sha256).toBe(after![0].sha256); // content unchanged
+    expect(before![0].mtimeMs).not.toBe(after![0].mtimeMs);
+  });
+
+  test("a glob pattern fingerprints every matched file, sorted", () => {
+    mkdirSync(join(dir, "scratch"), { recursive: true });
+    writeFileSync(join(dir, "scratch", "b.cnt"), "2", "utf8");
+    writeFileSync(join(dir, "scratch", "a.cnt"), "1", "utf8");
+    const fp = memoWatchFingerprint(watchedGraph(["scratch/*.cnt"]), dir);
+    expect(fp).toHaveLength(2);
+    expect(fp!.map((e) => e.path)).toEqual([join(dir, "scratch", "a.cnt"), join(dir, "scratch", "b.cnt")]);
   });
 });
