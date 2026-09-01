@@ -9,6 +9,8 @@ fails closed. The old unauthenticated local Markdown/SQLite CRUD path and client
 database migration/DSN access are removed. The package root no longer exports
 local CRUD; pure formatting helpers are available only through the explicitly
 non-authoritative @hasna/notes/compat/markdown-format subpath.
+Authenticated API and title-sidecar fetches reject all redirects, preventing
+method-rewritten false success and credential/body replay to any destination.
 
 notes-serve now requires a valid server-only HASNA_NOTES_DATABASE_URL and uses
 PostgreSQL exclusively. The SQLite default, --db flag and

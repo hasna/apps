@@ -911,10 +911,14 @@ export async function generateTitle(text, opts = {}) {
     if (token) {
       headers['X-Hasna-Notes-Token'] = token;
     }
-    const res = await fetch(String(opts.sidecar).replace(/\/$/, '') + '/title', {
+    const fetchImpl = opts.fetchImpl ?? fetch;
+    const res = await fetchImpl(String(opts.sidecar).replace(/\/$/, '') + '/title', {
       method: 'POST',
       headers,
       body: JSON.stringify({ text: readable }),
+      // A sidecar token and note text are both sensitive. Never forward either
+      // through a redirect, including same-origin redirects.
+      redirect: 'error',
     });
     if (res.ok) {
       const data = await res.json();

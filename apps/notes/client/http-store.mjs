@@ -80,6 +80,10 @@ export class NotesHttpStore {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        // Authenticated redirects are never safe: 301/302/303 may rewrite a
+        // mutation to GET and report a false success, while 307/308 replay the
+        // bearer credential and body. Reject same- and cross-origin redirects.
+        redirect: 'error',
       });
     } catch (err) {
       throw new NotesHttpStoreError(describeFetchError(err, this.apiUrl), {

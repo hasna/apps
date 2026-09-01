@@ -11,6 +11,8 @@ The CLI, MCP server, and SDK resolve exactly one client connection in
 - Missing configuration never selects SQLite, Markdown files, or localhost.
 - `HASNA_NOTES_DATABASE_URL` is rejected in a client environment.
 - Retired mode selectors fail loud even when blank.
+- Authenticated API and title-sidecar requests use `redirect: error`; 301, 302,
+  303, 307, and 308 are never followed, even to the same HTTPS origin.
 
 The package root is the remote SDK. Pure formatting helpers are available only
 at `@hasna/notes/compat/markdown-format`, without local CRUD.
