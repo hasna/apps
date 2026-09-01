@@ -16,24 +16,34 @@ import { PG_MIGRATIONS } from "../db/pg-migrations.js";
 
 export const CONTACTS_APP_SLUG = "contacts";
 
+function oneServerValue(env: NodeJS.ProcessEnv, keys: readonly string[], label: string): string | undefined {
+  const hits = keys.filter((key) => env[key] !== undefined).map((key) => ({ key, value: env[key]!.trim() }));
+  if (hits.some(({ value }) => !value)) throw new Error(`${label} configuration contains a blank alias.`);
+  const values = new Set(hits.map(({ value }) => value));
+  if (values.size > 1) throw new Error(`${label} aliases conflict; refusing ambiguous server configuration.`);
+  return hits[0]?.value;
+}
+
+export function validatePostgresDatabaseUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error("Contacts server database URL must be an absolute PostgreSQL DSN."); }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new Error("Contacts server database URL must use postgres: or postgresql:.");
+  }
+  if (!url.hostname) throw new Error("Contacts server database URL must include a host.");
+  if (!url.pathname || url.pathname === "/") throw new Error("Contacts server database URL must name a database.");
+  return value;
+}
+
 /** Resolve the remote DATABASE_URL from the supported env vars (priority order). */
 export function resolveCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return (
-    env.HASNA_CONTACTS_DATABASE_URL ||
-    env.CONTACTS_DATABASE_URL ||
-    env.DATABASE_URL ||
-    undefined
-  );
+  const value = oneServerValue(env, ["HASNA_CONTACTS_DATABASE_URL", "CONTACTS_DATABASE_URL", "DATABASE_URL"], "Contacts PostgreSQL DSN");
+  return value === undefined ? undefined : validatePostgresDatabaseUrl(value);
 }
 
 /** Resolve the HMAC signing secret used to verify API keys. */
 export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return (
-    env.HASNA_CONTACTS_API_SIGNING_KEY ||
-    env.HASNA_API_SIGNING_KEY ||
-    env.API_KEY_SIGNING_SECRET ||
-    undefined
-  );
+  return oneServerValue(env, ["HASNA_CONTACTS_API_SIGNING_KEY", "HASNA_API_SIGNING_KEY", "API_KEY_SIGNING_SECRET"], "Contacts signing key");
 }
 
 /** True when this server process has its PostgreSQL backend configured. */

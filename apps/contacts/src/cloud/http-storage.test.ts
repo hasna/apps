@@ -69,4 +69,54 @@ describe("canonical contacts client transport", () => {
       expect(() => resolveContactsClientTransport("contacts", env({ [key]: value }))).toThrow("RETIRED_CONTACTS_CLIENT_SELECTOR");
     }
   });
+
+  test("rejects blank and conflicting canonical aliases", () => {
+    expect(() => resolveContactsClientTransport("contacts", env({ HASNA_CONTACTS_API_URL: "" }))).toThrow("CONTACTS_CLIENT_CONFIG_INVALID");
+    expect(() => resolveContactsClientTransport("contacts", env({
+      HASNA_CONTACTS_API_URL: "https://one.example.invalid",
+      CONTACTS_API_URL: "https://two.example.invalid",
+      HASNA_CONTACTS_API_KEY: "same-key",
+    }))).toThrow("CONTACTS_CLIENT_CONFIG_INVALID");
+    expect(() => resolveContactsClientTransport("contacts", env({
+      HASNA_CONTACTS_API_URL: "https://one.example.invalid",
+      HASNA_CONTACTS_API_KEY: "one-key",
+      CONTACTS_API_KEY: "two-key",
+    }))).toThrow("CONTACTS_CLIENT_CONFIG_INVALID");
+  });
+
+  test("binds a rotating credential to its original authority", async () => {
+    const mutable = env({
+      HASNA_CONTACTS_API_URL: "https://one.example.invalid",
+      HASNA_CONTACTS_API_KEY: "one-key",
+    });
+    const client = resolveContactsStorageClient("contacts", mutable).client;
+    mutable.HASNA_CONTACTS_API_URL = "https://two.example.invalid";
+    mutable.HASNA_CONTACTS_API_KEY = "two-key";
+    expect(client.list("contacts")).rejects.toThrow("CONTACTS_AUTHORITY_CHANGED");
+  });
+
+  test("accepts same-authority key rotation without retaining the previous key", async () => {
+    const mutable = env({
+      HASNA_CONTACTS_API_URL: "https://one.example.invalid",
+      HASNA_CONTACTS_API_KEY: "first-key",
+    });
+    const client = resolveContactsStorageClient("contacts", mutable).client;
+    mutable.HASNA_CONTACTS_API_KEY = "replacement-key";
+    const previousFetch = globalThis.fetch;
+    let seenUrl = "";
+    let seenKey = "";
+    globalThis.fetch = (async (input, init) => {
+      seenUrl = String(input);
+      seenKey = new Headers(init?.headers).get("x-api-key") ?? "";
+      return Response.json([]);
+    }) as typeof fetch;
+    try {
+      await client.list("contacts");
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+    expect(seenUrl).toBe("https://one.example.invalid/v1/contacts");
+    expect(seenKey).toBe("replacement-key");
+    expect(seenKey).not.toBe("first-key");
+  });
 });

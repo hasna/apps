@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -105,5 +105,18 @@ describe("contacts canonical client CLI runtime", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("Legacy SQLite sidecar");
     expect(existsSync(output)).toBe(false);
     expect(readFileSync(source, "utf8")).toBe("legacy-payload");
+  });
+
+  test("refuses a symlink source without creating output", () => {
+    const env = testEnv();
+    const target = join(tempHome!, "real.db");
+    const source = join(tempHome!, "contacts.db");
+    const output = join(tempHome!, "contacts.db.preserved");
+    writeFileSync(target, "legacy-payload");
+    symlinkSync(target, source);
+    const result = runContacts(["legacy", "preserve", "--source", source, "--output", output], env);
+    expect(result.exitCode).not.toBe(0);
+    expect(existsSync(output)).toBe(false);
+    expect(readFileSync(target, "utf8")).toBe("legacy-payload");
   });
 });

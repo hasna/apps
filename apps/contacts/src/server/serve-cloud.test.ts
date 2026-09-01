@@ -82,21 +82,28 @@ describe("contactListFilterFromUrl", () => {
 
 // ── Env resolution (A1 pure-remote wiring) ──
 describe("cloud env resolution", () => {
-  test("resolveCloudDatabaseUrl honors precedence", () => {
-    expect(resolveCloudDatabaseUrl({ HASNA_CONTACTS_DATABASE_URL: "a", CONTACTS_DATABASE_URL: "b", DATABASE_URL: "c" } as never)).toBe("a");
-    expect(resolveCloudDatabaseUrl({ CONTACTS_DATABASE_URL: "b", DATABASE_URL: "c" } as never)).toBe("b");
-    expect(resolveCloudDatabaseUrl({ DATABASE_URL: "c" } as never)).toBe("c");
+  test("resolveCloudDatabaseUrl requires one valid unambiguous PostgreSQL DSN", () => {
+    const dsn = "postgresql://db.example.invalid/contacts";
+    expect(resolveCloudDatabaseUrl({ HASNA_CONTACTS_DATABASE_URL: dsn, CONTACTS_DATABASE_URL: dsn } as never)).toBe(dsn);
+    expect(resolveCloudDatabaseUrl({ DATABASE_URL: dsn } as never)).toBe(dsn);
     expect(resolveCloudDatabaseUrl({} as never)).toBeUndefined();
+    expect(() => resolveCloudDatabaseUrl({ DATABASE_URL: "https://db.example.invalid/contacts" } as never)).toThrow("postgres");
+    expect(() => resolveCloudDatabaseUrl({ DATABASE_URL: "postgresql:///contacts" } as never)).toThrow("host");
+    expect(() => resolveCloudDatabaseUrl({ DATABASE_URL: "postgresql://db.example.invalid" } as never)).toThrow("database");
+    expect(() => resolveCloudDatabaseUrl({ DATABASE_URL: "" } as never)).toThrow("blank");
+    expect(() => resolveCloudDatabaseUrl({ HASNA_CONTACTS_DATABASE_URL: dsn, DATABASE_URL: `${dsn}2` } as never)).toThrow("conflict");
   });
 
-  test("resolveSigningSecret honors precedence", () => {
-    expect(resolveSigningSecret({ HASNA_CONTACTS_API_SIGNING_KEY: "x", HASNA_API_SIGNING_KEY: "y" } as never)).toBe("x");
+  test("resolveSigningSecret rejects blanks and conflicts", () => {
+    expect(resolveSigningSecret({ HASNA_CONTACTS_API_SIGNING_KEY: "x", HASNA_API_SIGNING_KEY: "x" } as never)).toBe("x");
     expect(resolveSigningSecret({ HASNA_API_SIGNING_KEY: "y" } as never)).toBe("y");
     expect(resolveSigningSecret({} as never)).toBeUndefined();
+    expect(() => resolveSigningSecret({ HASNA_CONTACTS_API_SIGNING_KEY: "" } as never)).toThrow("blank");
+    expect(() => resolveSigningSecret({ HASNA_CONTACTS_API_SIGNING_KEY: "x", HASNA_API_SIGNING_KEY: "y" } as never)).toThrow("conflict");
   });
 
   test("isCloudModeEnabled reflects DSN presence", () => {
-    expect(isCloudModeEnabled({ DATABASE_URL: "c" } as never)).toBe(true);
+    expect(isCloudModeEnabled({ DATABASE_URL: "postgresql://db.example.invalid/contacts" } as never)).toBe(true);
     expect(isCloudModeEnabled({ HASNA_CONTACTS_STORAGE_MODE: "cloud" } as never)).toBe(false);
     expect(isCloudModeEnabled({ CONTACTS_STORAGE_MODE: "self_hosted" } as never)).toBe(false);
     expect(isCloudModeEnabled({} as never)).toBe(false);

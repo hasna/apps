@@ -12,13 +12,15 @@
  * a different data set.
  */
 import {
-  createClientTransport,
+  createHasnaHttpTransport,
+  resolveCredential,
   resolveClientTransport as resolveSharedClientTransport,
   type ClientTransportResolution as SharedClientTransportResolution,
   type HasnaHttpTransport,
   type HasnaRequestOptions,
   type QueryParams,
 } from "@hasna/contracts/client";
+import { assertConfigurationUnchanged, clientConfigurationStamp } from "./client-config.js";
 
 export type Env = Record<string, string | undefined>;
 export type { QueryParams };
@@ -106,8 +108,9 @@ export function resolveContactsClientTransport(name: string, env: Env = process.
     throw new ContactsClientConfigurationError("CONTACTS_CLIENT_NAME_INVALID", "This resolver only accepts the contacts app slug.");
   }
   assertNoRetiredClientSelectors(env);
-
+  const stamp = clientConfigurationStamp(env);
   const resolution = resolveSharedClientTransport(name, env);
+  assertConfigurationUnchanged(env, stamp);
   if (resolution.transport !== "http" || !resolution.baseUrl) {
     const issue = resolution.misconfigured
       ? "The configured contacts API URL or credential is invalid or incomplete."
@@ -222,13 +225,39 @@ export function resolveContactsStorageClient(name: string, env: Env = process.en
     );
   }
 
-  const wired = createClientTransport(name, env);
-  if (wired.transport !== "http") {
-    throw new ContactsClientConfigurationError(
-      "CONTACTS_API_NOT_CONFIGURED",
-      "The shared client seam did not resolve an HTTP authority; local fallback is disabled.",
-    );
-  }
-  assertHttpsBaseUrl(wired.client.baseUrl);
-  return { transport: "https", client: createStorageClient(name, wired.client), resolution };
+  const baseUrl = resolution.baseUrl;
+  // Bind the authority for the lifetime of this Store. Each request resolves a
+  // fresh credential, but a changed authority requires a new client, not a key
+  // intended for the new server sent to the previous server. The send guard
+  // also runs after asynchronous vault resolution and before every retry.
+  const request: HasnaHttpTransport["request"] = async (method, path, body, opts) => {
+    const stamp = clientConfigurationStamp(env);
+    const snapshot = { ...env };
+    const current = resolveContactsClientTransport(name, snapshot);
+    if (!current.configured || current.baseUrl !== baseUrl) {
+      throw new ContactsClientConfigurationError("CONTACTS_AUTHORITY_CHANGED", "Client authority changed or disappeared; construct a new client before sending data.");
+    }
+    const credential = resolveCredential(name, snapshot);
+    if (!credential) throw new ContactsClientConfigurationError("CONTACTS_API_NOT_CONFIGURED", "No credential is available.");
+    assertConfigurationUnchanged(env, stamp);
+    const transport = createHasnaHttpTransport({
+      name,
+      baseUrl,
+      apiKey: () => credential,
+      fetchImpl: (input, init) => {
+        assertConfigurationUnchanged(env, stamp);
+        return globalThis.fetch(input, init);
+      },
+    });
+    return transport.request(method, path, body, opts);
+  };
+  const transport: HasnaHttpTransport = {
+    baseUrl, request,
+    get: (path, opts) => request("GET", path, undefined, opts),
+    post: (path, body, opts) => request("POST", path, body, opts),
+    put: (path, body, opts) => request("PUT", path, body, opts),
+    patch: (path, body, opts) => request("PATCH", path, body, opts),
+    del: (path, body, opts) => request("DELETE", path, body, opts),
+  };
+  return { transport: "https", client: createStorageClient(name, transport), resolution };
 }

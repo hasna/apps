@@ -58,7 +58,7 @@
     "aliasEnvPrefix": "CONTACTS_",
     "pgTestGate": {
       "envVar": "HASNA_CONTACTS_TEST_DATABASE_URL",
-      "command": "bun test src/server/pg-store-contact-methods.test.ts src/server/pg-store-projects.test.ts"
+      "command": "HASNA_CONTACTS_TEST_DATABASE_URL=\"${HASNA_CONTACTS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" CONTACTS_REQUIRE_LIVE_POSTGRES=1 bun test src/server/postgres-live.test.ts"
     }
   },
   "metadata": {

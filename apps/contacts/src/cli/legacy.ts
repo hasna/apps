@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { constants, copyFileSync, existsSync, lstatSync, statSync, chmodSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import chalk from "chalk";
@@ -56,13 +56,14 @@ function resolveSource(requested?: string): string {
 function preserveLegacyDatabase(sourceArg: string | undefined, outputArg: string): { source: string; output: string; bytes: number } {
   const source = resolveSource(sourceArg);
   const output = resolve(outputArg);
-  if (!existsSync(source) || !lstatSync(source).isFile()) {
+  if (!existsSync(source) || lstatSync(source).isSymbolicLink() || !lstatSync(source).isFile()) {
     throw new Error(`Legacy database is not a regular file: ${source}`);
   }
   if (source === output) throw new Error("The preservation output must differ from the source database.");
   if (existsSync(output)) throw new Error(`Refusing to overwrite existing output: ${output}`);
   if (!existsSync(dirname(output))) throw new Error(`Output directory does not exist: ${dirname(output)}`);
-  const sidecars = ["-wal", "-journal", "-shm"].map((suffix) => `${source}${suffix}`).filter(existsSync);
+  const sidecarPaths = ["-wal", "-journal", "-shm"].map((suffix) => `${source}${suffix}`);
+  const sidecars = sidecarPaths.filter(existsSync);
   if (sidecars.length > 0) {
     throw new Error(
       `Legacy SQLite sidecar file${sidecars.length === 1 ? " is" : "s are"} present: ${sidecars.join(", ")}. ` +
@@ -70,9 +71,42 @@ function preserveLegacyDatabase(sourceArg: string | undefined, outputArg: string
         "this command refuses a potentially inconsistent copy.",
     );
   }
-  copyFileSync(source, output, constants.COPYFILE_EXCL);
-  chmodSync(output, 0o600);
-  return { source, output, bytes: statSync(output).size };
+  let sourceFd: number | null = null;
+  let outputFd: number | null = null;
+  let createdOutput = false;
+  try {
+    sourceFd = openSync(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const before = fstatSync(sourceFd, { bigint: true });
+    if (!before.isFile()) throw new Error("Legacy database is not a regular file.");
+    // Create at its final private mode. There is no interval where another user
+    // can read the copy, unlike create-then-chmod.
+    outputFd = openSync(output, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    createdOutput = true;
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let bytes = 0;
+    while (true) {
+      const read = readSync(sourceFd, buffer, 0, buffer.length, null);
+      if (read === 0) break;
+      let offset = 0;
+      while (offset < read) offset += writeSync(outputFd, buffer, offset, read - offset);
+      bytes += read;
+    }
+    fsyncSync(outputFd);
+    const after = fstatSync(sourceFd, { bigint: true });
+    const stable = before.dev === after.dev && before.ino === after.ino && before.size === after.size &&
+      before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs && BigInt(bytes) === after.size;
+    if (!stable || sidecarPaths.some(existsSync)) {
+      throw new Error("Legacy database changed or gained a SQLite sidecar during preservation; no copy was kept.");
+    }
+    return { source, output, bytes };
+  } catch (error) {
+    if (outputFd !== null) { closeSync(outputFd); outputFd = null; }
+    if (createdOutput) unlinkSync(output);
+    throw error;
+  } finally {
+    if (outputFd !== null) closeSync(outputFd);
+    if (sourceFd !== null) closeSync(sourceFd);
+  }
 }
 
 export function registerLegacyCommands(program: Command): void {
