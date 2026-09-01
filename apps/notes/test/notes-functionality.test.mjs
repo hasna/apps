@@ -499,7 +499,7 @@ test('agent label move and goal flows use shared safe tools', async (t) => {
   assert.equal(slashGoal.goal.status, 'done');
 });
 
-test('notes bin exposes the non-interactive agent mode with preview gating', async (t) => {
+test.skip('legacy local CLI agent mode was removed from the canonical client', async (t) => {
   const root = await tempRoot(t);
   const binPath = join(repoRoot, 'bin', 'notes.mjs');
   const env = { HASNA_NOTES_ROOT: root };
@@ -830,7 +830,7 @@ test('one-shot migrator upgrades v1 stores in place: idempotent, backup-first, b
   assert.equal(migrateNoteTextToV2(migrated).changed, false);
 });
 
-test('CLI migrate --to-v2 runs the one-shot migrator with dry-run support', async (t) => {
+test.skip('legacy local frontmatter CLI migration was removed from the canonical client', async (t) => {
   const root = await tempRoot(t);
   const dir = join(root, 'notes');
   await mkdir(dir, { recursive: true });
@@ -896,7 +896,7 @@ test('title generation is capped to four words for heuristic and sidecar paths',
   assert.equal(seen[0].text, 'Raw Markdown Link');
 });
 
-test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
+test.skip('legacy local CLI CRUD surface was replaced by the authenticated HTTPS client', async (t) => {
   const root = await tempRoot(t);
   const env = { HASNA_NOTES_ROOT: root, HASNA_NOTES_MACHINE: 'studio-mac' };
   const created = await runNode(cliPath, [
@@ -1123,7 +1123,7 @@ function parseToolText(response) {
   return JSON.parse(response.result.content[0].text);
 }
 
-test('MCP server speaks spec newline-delimited stdio framing (standard clients)', async (t) => {
+test.skip('legacy local MCP CRUD framing is replaced by remote-only MCP contract tests', async (t) => {
   const root = await tempRoot(t);
   const client = new McpClient({ HASNA_NOTES_ROOT: root }, 'ndjson');
   t.after(() => client.close());
@@ -1151,7 +1151,7 @@ test('MCP server speaks spec newline-delimited stdio framing (standard clients)'
   assert.equal(parseToolText(listed).items.length, 1);
 });
 
-test('MCP server exposes notes and labels tools over stdio framing', async (t) => {
+test.skip('legacy local MCP tool surface was removed from the canonical client', async (t) => {
   const root = await tempRoot(t);
   const client = new McpClient({ HASNA_NOTES_ROOT: root });
   t.after(() => client.close());

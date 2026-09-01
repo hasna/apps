@@ -1,7 +1,7 @@
 {
   "name": "@hasna/notes",
   "version": "0.4.2",
-  "description": "Local-first personal notes CLI, MCP server, SDK, and self-hosted notes server (SQLite or PostgreSQL).",
+  "description": "Authenticated HTTPS notes CLI, MCP server, SDK, and self-hosted notes server (SQLite or PostgreSQL).",
   "type": "module",
   "bin": {
     "notes": "bin/notes.mjs",
@@ -37,6 +37,8 @@
     "tools/notes-env.mjs",
     "tools/notes-events.mjs",
     "tools/notes-lib.mjs",
+    "tools/data-migration.mjs",
+    "docs",
     "README.md",
     "LICENSE"
   ],
@@ -51,7 +53,7 @@
     "notes",
     "mcp",
     "cli",
-    "local-first"
+    "https"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
