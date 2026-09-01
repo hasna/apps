@@ -1,10 +1,10 @@
 {
   "schema": "hasna.service_contract.v1",
   "name": "notes",
-  "class": "cli-with-store",
+  "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.10.6",
-  "description": "Authenticated HTTPS notes CLI, MCP server, SDK, and self-hosted notes server. Every client requires HASNA_NOTES_API_URL plus HASNA_NOTES_API_KEY, rejects client database DSNs, and has no implicit local fallback. notes-serve alone may select PostgreSQL with HASNA_NOTES_DATABASE_URL or use SQLite. Server data paths are XDG-native through @hasna/paths; legacy ~/.hasna locations move only through the explicit, non-destructive migration command. The personalnotes/v1 wire dialect remains unchanged.",
+  "description": "Authenticated HTTPS Notes CLI, MCP and SDK with a PostgreSQL-only server. Clients require HASNA_NOTES_API_URL plus HASNA_NOTES_API_KEY, reject database DSNs, and have no local fallback. notes-serve requires server-only HASNA_NOTES_DATABASE_URL and fails closed. XDG paths are maintenance-only; explicit fingerprint-bound legacy copies do not become authoritative storage. The personalnotes/v1 wire dialect and separate PersonalNotes product remain unchanged.",
   "hosting": [
     "user-hosted"
   ],
@@ -14,13 +14,11 @@
     "notes-serve"
   ],
   "storage": {
-    "backend": "sqlite",
+    "backend": "postgresql",
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_NOTES_",
-    "sqlitePath": "$XDG_DATA_HOME/hasna/notes/server.db",
     "pgTestGate": {
       "envVar": "NOTES_TEST_DATABASE_URL",
       "command": "bun run test:pg"
@@ -100,7 +98,9 @@
         "migrate-legacy-path",
         "--source",
         "legacy",
-        "--yes"
+        "--yes",
+        "--plan-fingerprint",
+        "<reviewed-dry-run-fingerprint>"
       ]
     },
     "release": {

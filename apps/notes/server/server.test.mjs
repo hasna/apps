@@ -6,7 +6,7 @@
 // Run: cd server && bun test
 
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from './db.mjs';
@@ -17,7 +17,7 @@ const LOOPBACK = { ip: '127.0.0.1' };
 async function makeApp(overrides = {}) {
   const db = openDb(':memory:');
   const config = { ...resolveConfig({}, []), devMode: true, log: () => {}, ...overrides };
-  return { db, app: await createApp({ db, config }) };
+  return { db, app: await createApp({ db, config, testOnlySqlite: true }) };
 }
 
 function call(app, method, path, { token, idem, body, env = LOOPBACK } = {}) {
@@ -35,32 +35,20 @@ async function login(app, email = 'owner@example.com') {
 }
 
 describe('boot', () => {
-  test('bun index.mjs boots, serves /health and dialect discovery', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pn-server-boot-'));
-    const proc = Bun.spawn(['bun', join(import.meta.dir, 'index.mjs')], {
-      env: { ...process.env, HASNA_NOTES_SERVER_PORT: '0', HASNA_NOTES_SERVER_DB: join(dir, 'server.db') },
-      stdout: 'pipe',
-      stderr: 'pipe',
+  test('real entrypoint fails closed before binding without server PostgreSQL', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'notes-server-boot-'));
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, 'index.mjs')], {
+      env: { PATH: process.env.PATH, HOME: dir, HASNA_DATA_HOME: join(dir, 'xdg'), HASNA_NOTES_SERVER_PORT: '0' },
+      stdout: 'pipe', stderr: 'pipe',
     });
-    try {
-      let out = '';
-      const reader = proc.stdout.getReader();
-      const decoder = new TextDecoder();
-      while (!/listening on (http:\/\/\S+)/.test(out)) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        out += decoder.decode(value);
-      }
-      const url = /listening on (http:\/\/\S+)/.exec(out)?.[1];
-      expect(url).toBeTruthy();
-      const health = await (await fetch(`${url}/health`)).json();
-      expect(health).toEqual({ status: 'healthy', service: 'notes-server', version: expect.any(String) });
-      const discovery = await (await fetch(`${url}/api/v1`)).json();
-      expect(discovery.dialect).toBe('personalnotes/v1');
-      expect(discovery.service).toBe('notes-server');
-    } finally {
-      proc.kill();
-    }
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    expect(code).toBe(1);
+    expect(stdout).not.toContain('listening');
+    expect(stderr).toContain('HASNA_NOTES_DATABASE_URL');
+    expect(existsSync(join(dir, 'xdg'))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
   }, 20000);
 
   test('file-backed database is created owner-only (0600 + 0700 dir)', () => {

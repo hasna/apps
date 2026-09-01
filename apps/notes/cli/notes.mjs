@@ -33,7 +33,7 @@ Usage:
   notes markdown plain-text <id> [--json]
   notes markdown apply-command <command-id> --text markdown [--selection-start n] [--selection-end n] [--url href] [--json]
   notes storage status [--json]
-  notes storage migrate-legacy-path --source legacy|nested|server-nested (--dry-run|--yes) [--json]
+  notes storage migrate-legacy-path --source legacy|nested|server-nested (--dry-run|--yes --plan-fingerprint <sha256>) [--json]
 
 Client configuration:
   HASNA_NOTES_API_URL   absolute HTTPS service URL
@@ -239,6 +239,7 @@ async function commandMarkdown(http, action, args, opts) {
 
 function migrationSummary(plan) {
   return {
+    planFingerprint: plan.fingerprint,
     source: plan.source,
     sourcePresent: plan.sourcePresent,
     files: plan.files,
@@ -260,6 +261,9 @@ function commandLocalMigration(opts) {
     if (opts.json) return jsonOut(out);
     lineOut(JSON.stringify(out));
     return;
+  }
+  if (opts['plan-fingerprint'] !== plan.fingerprint) {
+    throw new Error('notes: apply requires --plan-fingerprint from an unchanged reviewed dry-run; run --dry-run again.');
   }
   const result = applyNotesDataMigration(plan);
   const out = {

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 const REPO = join(import.meta.dir, '..');
 let home;
 
-beforeAll(() => { home = mkdtempSync(join(tmpdir(), 'notes-storage-verbs-')); });
+beforeAll(() => { home = realpathSync(mkdtempSync(join(tmpdir(), 'notes-storage-verbs-'))); });
 afterAll(() => { rmSync(home, { recursive: true, force: true }); });
 
 function cleanEnv(extra = {}) {
@@ -71,7 +71,14 @@ describe('explicit data migration CLI', () => {
     expect(JSON.parse(dry.stdout).copyFiles).toBe(1);
     expect(existsSync(join(home, 'xdg', 'notes', 'notes', 'one.md'))).toBe(false);
 
-    const applied = runCli(['storage', 'migrate-legacy-path', '--source', 'legacy', '--yes', '--json']);
+    const unreviewed = runCli(['storage', 'migrate-legacy-path', '--source', 'legacy', '--yes', '--json']);
+    expect(unreviewed.rc).toBe(1);
+    expect(unreviewed.stderr).toContain('--plan-fingerprint');
+    const mismatched = runCli(['storage', 'migrate-legacy-path', '--source', 'legacy', '--yes', '--plan-fingerprint', 'wrong', '--json']);
+    expect(mismatched.rc).toBe(1);
+    expect(existsSync(join(home, 'xdg', 'notes'))).toBe(false);
+
+    const applied = runCli(['storage', 'migrate-legacy-path', '--source', 'legacy', '--yes', '--plan-fingerprint', JSON.parse(dry.stdout).planFingerprint, '--json']);
     expect(applied.rc, applied.stderr).toBe(0);
     expect(JSON.parse(applied.stdout).sourcePreserved).toBe(true);
     expect(readFileSync(join(home, 'xdg', 'notes', 'notes', 'one.md'), 'utf8')).toBe('one\n');

@@ -1,4 +1,4 @@
-// Hasna Notes self-hosted server — SQLite default path resolution.
+// Hasna Notes maintenance/import path resolution; never a server backend.
 //
 // Path resolution routes through the @hasna/paths resolver (XDG / macOS home
 // layout). The resolver data home (~/.local/share/hasna/notes on Linux,
