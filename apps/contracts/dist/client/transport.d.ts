@@ -75,9 +75,8 @@ export interface ResolveClientTransportOptions {
     credentials?: CredentialChainOptions;
 }
 /**
- * Resolve the sole authenticated service transport. The authority is read from
- * the environment first and then XDG app config. Missing, blank, conflicting,
- * or invalid declarations throw. Credentials are resolved at call time.
+ * Resolve the sole authenticated service transport without exposing its
+ * credential value. Invalid or incomplete configuration throws.
  */
 export declare function resolveClientTransport(name: string, env?: Env, options?: ResolveClientTransportOptions): ClientTransportResolution;
 /** Thrown when a cloud HTTP request returns a non-2xx status, including redirects. */
@@ -174,17 +173,8 @@ export interface HasnaHttpTransport {
 /** Append query params to a `/v1`-relative path (no-op when empty). */
 export declare function appendQuery(path: string, query?: QueryParams): string;
 /**
- * Build an authenticated HTTP transport for an app's cloud `/v1` API. Sends the
- * API key on every request as BOTH `x-api-key` and `Authorization: Bearer`
- * (serve apps accept either), returns parsed JSON, times out, and retries
- * transient failures with exponential backoff + jitter. Never logs the key.
- * Redirects are never followed: every 3xx response fails closed at the validated
- * base origin so credentials and request bodies cannot cross an authority
- * boundary through runtime-specific redirect behavior.
- *
- * Retry safety: idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS) are always
- * retried on transient failure; POST/PATCH are retried ONLY when an
- * `Idempotency-Key` is supplied, so replays can't create duplicates.
+ * Build an authenticated HTTP transport from a static authority and a
+ * per-request credential provider.
  */
 export declare function createHasnaHttpTransport(options: HasnaHttpTransportOptions): HasnaHttpTransport;
 /**

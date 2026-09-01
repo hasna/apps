@@ -6184,14 +6184,7 @@ export const ServiceContractManifestSchema = z
         if (!value.storage.engines.includes("postgresql")) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "service storage.engines must declare postgresql alongside sqlite or json; local engines are migration/import capabilities only",
-            path: ["storage", "engines"]
-          });
-        }
-        if (!LOCAL_STORAGE_ENGINES.some((engine) => value.storage?.engines?.includes(engine))) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "service storage.engines must declare a legacy import engine (sqlite or json)",
+            message: "service storage.engines must declare postgresql; local engines are optional migration/import capabilities only",
             path: ["storage", "engines"]
           });
         }

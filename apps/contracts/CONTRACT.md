@@ -117,6 +117,10 @@ Rules:
 - **Tier 3 is re-read per request**, not cached and not resolved once when the
   client is built — a cache is the same snapshot defect at a smaller timescale.
   This is what makes a rotation heal in any shell, however old.
+- **Authority and credential are one request binding.** The client must observe
+  a stable pair and revalidate that same reviewed pair immediately before
+  dispatch. If either changes while the request is prepared, nothing is sent;
+  a newly rotated key must never reach the client's previously captured URL.
 - **A credential alone never supplies authority.** A valid explicit
   `HASNA_<NAME>_API_URL` (or short alias) and a credential from any tier are
   both required. Missing either is a fail-closed error; a public client has no
@@ -124,8 +128,10 @@ Rules:
 - **`HOME` comes from the same env object** the caller passes. An env with no
   `HOME` performs no disk read, which is what keeps the behaviour hermetic and
   test suites independent of the machine running them.
-- **Authentication failures are terminal.** `401` and `403` are not retried or
-  converted into another data path.
+- **Authentication failures are terminal and body-redacted.** `401` and `403`
+  are not retried or converted into another data path. Their response body is
+  discarded before parsing because an auth boundary may echo rejected secret
+  material; errors retain only safe status/source/remediation diagnostics.
 - **A credential source that cannot produce a usable key fails loudly.** A key
   carrying bytes that are illegal in an HTTP header is rejected by name, never
   forwarded — otherwise `fetch` throws a `TypeError` that embeds the whole
@@ -207,7 +213,9 @@ per-repo waiver recorded in `hasna.contract.json` review. `library` repos
 
 - **Local SQLite path:** `~/.hasna/<name>/<name>.db`.
 - `storage.sqlitePath` **MUST** end in `.db`.
-- Store-owning OSS cores declare `storage.engines: ["sqlite", "postgresql"]`.
+- Store-owning CLI cores declare `storage.engines: ["sqlite", "postgresql"]`.
+  Services declare `postgresql`; they add `sqlite` or `json` only when they
+  actually ship an explicit legacy import/migration capability.
 - A PostgreSQL capability declaration **MUST** include `storage.envPrefix`, so
   the serve/migrate boundary can derive `HASNA_<NAME>_DATABASE_URL`.
 - `storage.pgTestGate` records the disposable live-Postgres test env var and
@@ -333,7 +341,9 @@ A CLI that owns local data and may connect to an HTTP service.
 ### `service`
 A long-running HTTP/MCP service.
 - **MUST** declare `storage`.
-- **MUST** declare both `sqlite` and `postgresql` in `storage.engines`.
+- **MUST** declare `postgresql` in `storage.engines`.
+- MAY additionally declare `sqlite` or `json` only for an explicit legacy
+  import/migration capability; PostgreSQL-only services do not invent one.
 - **MUST** declare `storage.pgTestGate`.
 - **MUST** ship a `<name>-serve` bin and expose `GET /health`, `GET /ready`,
   and `GET /version`.

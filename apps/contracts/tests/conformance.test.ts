@@ -35,10 +35,9 @@ function completeServiceManifest(pgCommand = "bun test tests/postgres-storage.te
     bins: ["demo", "demo-mcp", "demo-serve"],
     hosting: ["user-hosted"],
     storage: {
-      backend: "sqlite",
-      engines: ["sqlite", "postgresql"],
+      backend: "postgresql",
+      engines: ["postgresql"],
       envPrefix: "HASNA_DEMO_",
-      sqlitePath: "~/.hasna/demo/demo.db",
       pgTestGate: {
         envVar: "DEMO_TEST_DATABASE_URL",
         command: pgCommand
@@ -253,6 +252,19 @@ describe("repo conformance kit", () => {
     } finally {
       rmSync(sentinel, { force: true });
     }
+  });
+
+  test("passes PostgreSQL-only service storage without a fictional legacy import engine", () => {
+    withRepoFixture(completeServiceManifest(), completePackage, (root) => {
+      const report = runRepoConformance(root, {
+        env: { HASNA_DEMO_DATABASE_URL: "postgres://fixture.invalid/demo" },
+        skipNoCloudScan: true,
+      });
+      const storage = report.checks.find((check) => check.id === "storage_capabilities");
+      expect(storage?.status).toBe("pass");
+      expect(storage?.detail).toBe("postgresql capability plus live-PG gate declared");
+      expect(report.ok).toBe(true);
+    });
   });
 
   test("fails conformance when a service omits the SDK surface without a waiver", () => {
@@ -930,7 +942,6 @@ describe("repo conformance kit", () => {
       const report = runRepoConformance(root, { env: {}, skipNoCloudScan: true });
       const storage = report.checks.find((check) => check.id === "storage_capabilities");
       expect(storage?.status).toBe("fail");
-      expect(storage?.detail).toContain("sqlite");
       expect(storage?.detail).toContain("postgresql");
       expect(storage?.detail).toContain("pgTestGate");
     });

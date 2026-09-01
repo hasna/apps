@@ -13725,14 +13725,7 @@ var ServiceContractManifestSchema = exports_external.object({
       if (!value.storage.engines.includes("postgresql")) {
         ctx.addIssue({
           code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare postgresql alongside sqlite or json; local engines are migration/import capabilities only",
-          path: ["storage", "engines"]
-        });
-      }
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => value.storage?.engines?.includes(engine))) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare a legacy import engine (sqlite or json)",
+          message: "service storage.engines must declare postgresql; local engines are optional migration/import capabilities only",
           path: ["storage", "engines"]
         });
       }
@@ -17254,9 +17247,6 @@ function runRepoConformance(repoRoot, options = {}) {
       if (missingEngines.length > 0)
         failures.push(`missing storage engines: ${missingEngines.join(", ")}`);
     } else {
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine))) {
-        failures.push(`missing legacy import engine: ${LOCAL_STORAGE_ENGINES.join(" or ")}`);
-      }
       if (!declaredEngines.has("postgresql"))
         failures.push("missing storage engine: postgresql");
     }
@@ -17270,7 +17260,7 @@ function runRepoConformance(repoRoot, options = {}) {
     checks3.push({
       id: "storage_capabilities",
       status: failures.length === 0 ? "pass" : "fail",
-      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : declaredEngines.has("json") ? "json and postgresql capabilities plus live-PG gate declared" : "sqlite and postgresql capabilities plus live-PG gate declared"
+      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine)) ? `${engines.join(" and ")} capabilities plus live-PG gate declared` : "postgresql capability plus live-PG gate declared"
     });
   }
   if ((options.manifestTier ?? "public") === "private") {

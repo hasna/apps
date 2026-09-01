@@ -146,6 +146,35 @@ describe("HTTP transport security and request behavior", () => {
     }
   });
 
+  test("auth failures discard echoed credentials from every diagnostic surface", async () => {
+    const key = "fixture-auth-response-echo-key";
+    for (const status of [401, 403]) {
+      const transport = createHasnaHttpTransport({
+        name: "todos",
+        baseUrl: "https://todos.example.test/v1",
+        apiKey: key,
+        retry: false,
+        fetchImpl: async () => Response.json({ error: "denied", echoed: { credential: key } }, { status }),
+      });
+
+      let thrown: unknown;
+      try {
+        await transport.get("/items");
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(HasnaHttpError);
+      const authError = thrown as HasnaHttpError;
+      expect(authError.body).toBeUndefined();
+      expect(Object.keys(authError)).not.toContain("body");
+      expect(JSON.stringify(authError)).not.toContain(key);
+      expect(JSON.stringify({ ...authError })).not.toContain(key);
+      expect(Bun.inspect(authError)).not.toContain(key);
+      expect(authError.message).not.toContain(key);
+      expect(authError.stack).not.toContain(key);
+    }
+  });
+
   test("retries a transient GET without changing credentials mid-request", async () => {
     let calls = 0;
     const keys: string[] = [];

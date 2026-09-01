@@ -13725,14 +13725,7 @@ var ServiceContractManifestSchema = exports_external.object({
       if (!value.storage.engines.includes("postgresql")) {
         ctx.addIssue({
           code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare postgresql alongside sqlite or json; local engines are migration/import capabilities only",
-          path: ["storage", "engines"]
-        });
-      }
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => value.storage?.engines?.includes(engine))) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare a legacy import engine (sqlite or json)",
+          message: "service storage.engines must declare postgresql; local engines are optional migration/import capabilities only",
           path: ["storage", "engines"]
         });
       }
@@ -19558,9 +19551,6 @@ function runRepoConformance(repoRoot, options = {}) {
       if (missingEngines.length > 0)
         failures.push(`missing storage engines: ${missingEngines.join(", ")}`);
     } else {
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine))) {
-        failures.push(`missing legacy import engine: ${LOCAL_STORAGE_ENGINES.join(" or ")}`);
-      }
       if (!declaredEngines.has("postgresql"))
         failures.push("missing storage engine: postgresql");
     }
@@ -19574,7 +19564,7 @@ function runRepoConformance(repoRoot, options = {}) {
     checks3.push({
       id: "storage_capabilities",
       status: failures.length === 0 ? "pass" : "fail",
-      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : declaredEngines.has("json") ? "json and postgresql capabilities plus live-PG gate declared" : "sqlite and postgresql capabilities plus live-PG gate declared"
+      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine)) ? `${engines.join(" and ")} capabilities plus live-PG gate declared` : "postgresql capability plus live-PG gate declared"
     });
   }
   if ((options.manifestTier ?? "public") === "private") {
@@ -21680,7 +21670,7 @@ class ClientTransportConfigurationError extends Error {
     this.sources = Object.freeze([...sources]);
   }
 }
-function resolveClientTransport(name, env = process.env, options = {}) {
+function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
   const keys2 = clientTransportEnvKeys(name);
   const definedUrlEntries = keys2.apiUrlKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, raw: String(env[key]) }));
   const blankUrl = definedUrlEntries.find((entry) => entry.raw.trim().length === 0);
@@ -21729,16 +21719,22 @@ function resolveClientTransport(name, env = process.env, options = {}) {
     throw new ClientTransportConfigurationError(name, `Invalid API URL from ${apiUrlSource}: ${message}`, [apiUrlSource]);
   }
   return {
-    transport: "http",
-    transportSource: urlHit.key,
-    baseUrl,
-    apiUrlSource,
-    apiKeyPresent: true,
-    apiKeySource: credential.source,
-    apiKeyTier: credential.tier,
-    misconfigured: false,
-    warning: warnings.length > 0 ? warnings.join(" ") : null
+    resolution: {
+      transport: "http",
+      transportSource: urlHit.key,
+      baseUrl,
+      apiUrlSource,
+      apiKeyPresent: true,
+      apiKeySource: credential.source,
+      apiKeyTier: credential.tier,
+      misconfigured: false,
+      warning: warnings.length > 0 ? warnings.join(" ") : null
+    },
+    credential
   };
+}
+function resolveClientTransport(name, env = process.env, options = {}) {
+  return resolveClientTransportSnapshot(name, env, options).resolution;
 }
 function credentialDiskSourcesForMessage(name, env) {
   const paths = credentialDiskSources(name, env);
@@ -21749,7 +21745,6 @@ class HasnaHttpError extends Error {
   status;
   method;
   path;
-  body;
   credentialSource;
   credentialTier;
   constructor(method, path, status, body, credential) {
@@ -21759,7 +21754,12 @@ class HasnaHttpError extends Error {
     this.status = status;
     this.method = method;
     this.path = path;
-    this.body = body;
+    Object.defineProperty(this, "body", {
+      value: body,
+      enumerable: status !== 401 && status !== 403,
+      writable: false,
+      configurable: false
+    });
     this.credentialSource = credential?.source ?? null;
     this.credentialTier = credential?.tier ?? null;
   }
@@ -21829,7 +21829,7 @@ function appendQuery(path, query) {
   return `${path}${path.includes("?") ? "&" : "?"}${qs}`;
 }
 var defaultSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
-function createHasnaHttpTransport(options) {
+function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const base = toV1BaseUrl(options.baseUrl);
   const timeoutMs = options.timeoutMs ?? 30000;
@@ -21891,13 +21891,20 @@ function createHasnaHttpTransport(options) {
       if (opts.signal)
         opts.signal.removeEventListener("abort", onAbort);
     }
-    const text = await response.text();
+    const authenticationFailure = response.status === 401 || response.status === 403;
     let parsed = undefined;
-    if (text.length > 0) {
+    if (authenticationFailure) {
       try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = text;
+        await response.body?.cancel();
+      } catch {}
+    } else {
+      const text = await response.text();
+      if (text.length > 0) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = text;
+        }
       }
     }
     if (!response.ok) {
@@ -21908,11 +21915,11 @@ function createHasnaHttpTransport(options) {
           error: new HasnaHttpError(method, rel, response.status, parsed)
         };
       }
-      if (response.status === 401 || response.status === 403) {
+      if (authenticationFailure) {
         return {
           ok: false,
           retryable: false,
-          error: new HasnaHttpError(method, rel, response.status, parsed, {
+          error: new HasnaHttpError(method, rel, response.status, undefined, {
             source: credential.source,
             tier: credential.tier,
             guidance: authFailureGuidance(credential)
@@ -21928,11 +21935,15 @@ function createHasnaHttpTransport(options) {
   async function request(method, path, body, opts = {}) {
     const upper = method.toUpperCase();
     const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
-    const url = `${base}${rel}`;
     const retry = resolveRetry(opts.retry);
     const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
     const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
-    const credential = await resolveRequestCredential(options.name, options.apiKey);
+    const binding = requestBindingProvider ? await requestBindingProvider() : {
+      baseUrl: base,
+      credential: await resolveRequestCredential(options.name, options.apiKey)
+    };
+    const url = `${binding.baseUrl}${rel}`;
+    const credential = binding.credential;
     let last = null;
     for (let attempt = 1;attempt <= maxAttempts; attempt++) {
       const result = await once(upper, rel, url, body, opts, credential);
@@ -21958,32 +21969,46 @@ function createHasnaHttpTransport(options) {
     del: (path, body, opts) => request("DELETE", path, body, opts)
   };
 }
+function createHasnaHttpTransport(options) {
+  return createHasnaHttpTransportInternal(options);
+}
 function createClientTransport(name, env = process.env, overrides) {
   const credentialOptions = overrides?.credentials;
-  const resolution = resolveClientTransport(name, env, { ...credentialOptions ? { credentials: credentialOptions } : {} });
-  const credentialProvider = () => {
-    const current = resolveClientTransport(name, env, { ...credentialOptions ? { credentials: credentialOptions } : {} });
-    if (current.baseUrl !== resolution.baseUrl) {
+  const snapshotOptions = { ...credentialOptions ? { credentials: credentialOptions } : {} };
+  const resolution = resolveClientTransportSnapshot(name, env, snapshotOptions).resolution;
+  const sameBinding = (left, right) => left.resolution.baseUrl === right.resolution.baseUrl && left.credential.apiKey === right.credential.apiKey && left.credential.pointerVaultKey === right.credential.pointerVaultKey && left.credential.source === right.credential.source && left.credential.tier === right.credential.tier;
+  const unstableConfiguration = () => new ClientTransportConfigurationError(name, "The configured service authority or credential changed while a request was being prepared; no authenticated request was sent.");
+  const requestBindingProvider = async () => {
+    const first = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    const reviewed = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    if (!sameBinding(first, reviewed))
+      throw unstableConfiguration();
+    if (reviewed.resolution.baseUrl !== resolution.baseUrl) {
       throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
     }
-    const resolved = resolveCredential(name, env, credentialOptions);
-    if (!resolved) {
-      throw new Error(`Client for '${name}' resolved to the http transport but no API key is available any more. ` + `Looked at ${credentialDiskSourcesForMessage(name, env)}, then the environment. ` + `A credential file that was removed after this client was built is the usual cause.`);
+    const credential = await resolveRequestCredential(name, () => reviewed.credential, env);
+    const immediatelyBeforeDispatch = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    if (!sameBinding(reviewed, immediatelyBeforeDispatch))
+      throw unstableConfiguration();
+    if (immediatelyBeforeDispatch.resolution.baseUrl !== resolution.baseUrl) {
+      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
     }
-    return resolved;
+    return { baseUrl: immediatelyBeforeDispatch.resolution.baseUrl, credential };
   };
   return {
     transport: "http",
-    client: createHasnaHttpTransport({
+    client: createHasnaHttpTransportInternal({
       name,
       baseUrl: resolution.baseUrl,
-      apiKey: credentialProvider,
+      apiKey: () => {
+        throw new Error("The authenticated request binding provider was not invoked.");
+      },
       ...overrides?.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {},
       ...overrides?.headers ? { headers: overrides.headers } : {},
       ...overrides?.timeoutMs ? { timeoutMs: overrides.timeoutMs } : {},
       ...overrides?.retry !== undefined ? { retry: overrides.retry } : {},
       ...overrides?.sleepImpl ? { sleepImpl: overrides.sleepImpl } : {}
-    }),
+    }, requestBindingProvider),
     resolution
   };
 }

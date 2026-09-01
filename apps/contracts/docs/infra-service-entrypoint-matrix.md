@@ -44,7 +44,8 @@ Use `hasna.service_contract.v1` with:
 - `serviceSurfaces[].status`: `supported`, `deferred`, or `unsupported`.
 - `serviceSurfaces[].deferReason`: required for `deferred` and `unsupported`.
 - `serviceSurfaces[kind=sdk].exportSubpath`: a real `package.json` export key.
-- `storage.engines`: both `sqlite` and `postgresql` for store-owning OSS cores.
+- `storage.engines`: `postgresql` for services; `sqlite` or `json` is additional
+  capability metadata only when explicit legacy import/migration tooling exists.
 - `storage.pgTestGate`: the disposable live-Postgres test env var and command;
   conformance records this command but never executes it.
 - `serviceSurfaces[].readinessGates[]`: auth, storage, secret-ref, migration,

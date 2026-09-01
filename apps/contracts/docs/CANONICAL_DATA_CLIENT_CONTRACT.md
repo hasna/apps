@@ -16,6 +16,12 @@ credentials do the same. A public client never opens SQLite, a local file
 store, PostgreSQL, or any other database DSN, and it never turns an auth or
 network failure into a local read.
 
+For each request, authority and credential form one stability-checked binding.
+The client revalidates the reviewed pair immediately before dispatch and sends
+nothing if either changed while the request was prepared. Authentication error
+bodies are discarded before parsing so an upstream echo cannot enter error
+enumeration, JSON serialization, inspection, logs, or stack diagnostics.
+
 Retired deployment and storage selector variables are inert. They are not
 parsed, mapped, rejected as a compatibility mode, or used to select a backend.
 
@@ -37,6 +43,10 @@ Legacy SQLite or local-file paths may be described only as explicit migration
 inputs. Migration tooling must require a deliberate source and destination,
 preserve the source until verification succeeds, and must never make legacy
 data an automatic fallback.
+
+Service capability manifests may truthfully declare PostgreSQL alone. They add
+`sqlite` or `json` only when explicit legacy import/migration tooling supports
+that engine; conformance never requires a fictional legacy capability.
 
 `Notes` is the Hasna app and CLI name. `PersonalNotes` is a separate SaaS
 product; this contract does not couple or rename either identity.

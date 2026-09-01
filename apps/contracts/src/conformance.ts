@@ -882,9 +882,6 @@ export function runRepoConformance(repoRoot: string, options: RepoConformanceOpt
       );
       if (missingEngines.length > 0) failures.push(`missing storage engines: ${missingEngines.join(", ")}`);
     } else {
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine))) {
-        failures.push(`missing legacy import engine: ${LOCAL_STORAGE_ENGINES.join(" or ")}`);
-      }
       if (!declaredEngines.has("postgresql")) failures.push("missing storage engine: postgresql");
     }
     // `storage.envPrefix` and `storage.pgTestGate` both exist to serve the
@@ -905,9 +902,9 @@ export function runRepoConformance(repoRoot: string, options: RepoConformanceOpt
           ? failures.join("; ")
           : storageWaivers.summaries.length > 0
             ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}`
-            : declaredEngines.has("json")
-              ? "json and postgresql capabilities plus live-PG gate declared"
-              : "sqlite and postgresql capabilities plus live-PG gate declared"
+            : LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine))
+              ? `${engines.join(" and ")} capabilities plus live-PG gate declared`
+              : "postgresql capability plus live-PG gate declared"
     });
   }
 

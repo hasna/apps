@@ -376,16 +376,21 @@ export interface ResolveClientTransportOptions {
   credentials?: CredentialChainOptions;
 }
 
+interface ResolvedClientTransportSnapshot {
+  resolution: ClientTransportResolution;
+  credential: ResolvedCredential;
+}
+
 /**
  * Resolve the sole authenticated service transport. The authority is read from
  * the environment first and then XDG app config. Missing, blank, conflicting,
  * or invalid declarations throw. Credentials are resolved at call time.
  */
-export function resolveClientTransport(
+function resolveClientTransportSnapshot(
   name: string,
   env: Env = process.env,
   options: ResolveClientTransportOptions = {},
-): ClientTransportResolution {
+): ResolvedClientTransportSnapshot {
   const keys = clientTransportEnvKeys(name);
   const definedUrlEntries = keys.apiUrlKeys
     .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
@@ -482,16 +487,31 @@ export function resolveClientTransport(
   }
 
   return {
-    transport: "http",
-    transportSource: urlHit.key,
-    baseUrl,
-    apiUrlSource,
-    apiKeyPresent: true,
-    apiKeySource: credential.source,
-    apiKeyTier: credential.tier,
-    misconfigured: false,
-    warning: warnings.length > 0 ? warnings.join(" ") : null,
+    resolution: {
+      transport: "http",
+      transportSource: urlHit.key,
+      baseUrl,
+      apiUrlSource,
+      apiKeyPresent: true,
+      apiKeySource: credential.source,
+      apiKeyTier: credential.tier,
+      misconfigured: false,
+      warning: warnings.length > 0 ? warnings.join(" ") : null,
+    },
+    credential,
   };
+}
+
+/**
+ * Resolve the sole authenticated service transport without exposing its
+ * credential value. Invalid or incomplete configuration throws.
+ */
+export function resolveClientTransport(
+  name: string,
+  env: Env = process.env,
+  options: ResolveClientTransportOptions = {},
+): ClientTransportResolution {
+  return resolveClientTransportSnapshot(name, env, options).resolution;
 }
 
 /** Render the disk candidates for a diagnostic, without touching their contents. */
@@ -505,7 +525,7 @@ export class HasnaHttpError extends Error {
   readonly status: number;
   readonly method: string;
   readonly path: string;
-  readonly body: unknown;
+  declare readonly body: unknown;
   /** WHICH source supplied the rejected key (an env key name or a file path). Never a value. */
   readonly credentialSource: string | null;
   /** Which tier of the provider chain supplied it. */
@@ -525,7 +545,12 @@ export class HasnaHttpError extends Error {
     this.status = status;
     this.method = method;
     this.path = path;
-    this.body = body;
+    Object.defineProperty(this, "body", {
+      value: body,
+      enumerable: status !== 401 && status !== 403,
+      writable: false,
+      configurable: false,
+    });
     this.credentialSource = credential?.source ?? null;
     this.credentialTier = credential?.tier ?? null;
   }
@@ -598,8 +623,7 @@ function authFailureGuidance(credential: ResolvedCredential): string {
     // Reaching the legacy tier PROVES the disk had no credential — tier 3 runs
     // first. So the advice must be "write the key to disk", never "unset this
     // variable": unsetting it with nothing on disk leaves the client with no
-    // credential at all, which drops it back to its local store and prints
-    // healthy output from the wrong dataset.
+    // credential and makes the authenticated request fail closed.
     const target = credential.diskCandidates[0];
     const remedy = target
       ? `Write the CURRENT key to ${target} — that file is re-read on every call, so rotations take ` +
@@ -621,6 +645,13 @@ function authFailureGuidance(credential: ResolvedCredential): string {
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+interface AuthenticatedRequestBinding {
+  baseUrl: string;
+  credential: ResolvedCredential;
+}
+
+type AuthenticatedRequestBindingProvider = () => Promise<AuthenticatedRequestBinding>;
 
 /** Query params for a request. Nullish values are dropped; arrays repeat the key. */
 export type QueryParams =
@@ -754,7 +785,10 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
  * retried on transient failure; POST/PATCH are retried ONLY when an
  * `Idempotency-Key` is supplied, so replays can't create duplicates.
  */
-export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): HasnaHttpTransport {
+function createHasnaHttpTransportInternal(
+  options: HasnaHttpTransportOptions,
+  requestBindingProvider?: AuthenticatedRequestBindingProvider,
+): HasnaHttpTransport {
   const fetchImpl: FetchLike = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const base = toV1BaseUrl(options.baseUrl);
   const timeoutMs = options.timeoutMs ?? 30_000;
@@ -825,13 +859,26 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
       clearTimeout(timer);
       if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
     }
-    const text = await response.text();
+    const authenticationFailure = response.status === 401 || response.status === 403;
     let parsed: unknown = undefined;
-    if (text.length > 0) {
+    // Authentication responses are controlled by a boundary that just received
+    // the credential. Some providers echo rejected credentials in their error
+    // payloads. Never read, parse, or retain that payload: an Error is commonly
+    // enumerated, JSON-serialized, or inspected by a logger.
+    if (authenticationFailure) {
       try {
-        parsed = JSON.parse(text);
+        await response.body?.cancel();
       } catch {
-        parsed = text;
+        // A diagnostic body that cannot be cancelled is still never read.
+      }
+    } else {
+      const text = await response.text();
+      if (text.length > 0) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = text;
+        }
       }
     }
     if (!response.ok) {
@@ -853,11 +900,11 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
       // and delays the actionable error. This is also the boundary that keeps
       // 401 handling from drifting back toward retry-on-401 — the pattern that
       // silently rescues a revoked deliberate override as the wrong principal.
-      if (response.status === 401 || response.status === 403) {
+      if (authenticationFailure) {
         return {
           ok: false,
           retryable: false,
-          error: new HasnaHttpError(method, rel, response.status, parsed, {
+          error: new HasnaHttpError(method, rel, response.status, undefined, {
             source: credential.source,
             tier: credential.tier,
             guidance: authFailureGuidance(credential),
@@ -874,7 +921,6 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
   async function request<T>(method: string, path: string, body?: unknown, opts: HasnaRequestOptions = {}): Promise<T> {
     const upper = method.toUpperCase();
     const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
-    const url = `${base}${rel}`;
     const retry = resolveRetry(opts.retry);
     const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
     const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
@@ -886,7 +932,14 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
     // same logical call under two different principals, which is precisely the
     // audit-log confusion that makes retry-on-401 the wrong pattern here.
     // A pointer tier resolves through the secrets vault at this request boundary.
-    const credential = await resolveRequestCredential(options.name, options.apiKey);
+    const binding = requestBindingProvider
+      ? await requestBindingProvider()
+      : {
+          baseUrl: base,
+          credential: await resolveRequestCredential(options.name, options.apiKey),
+        };
+    const url = `${binding.baseUrl}${rel}`;
+    const credential = binding.credential;
 
     let last: { retryable: boolean; error: Error } | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -914,6 +967,14 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
 }
 
 /**
+ * Build an authenticated HTTP transport from a static authority and a
+ * per-request credential provider.
+ */
+export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): HasnaHttpTransport {
+  return createHasnaHttpTransportInternal(options);
+}
+
+/**
  * Resolve the sole public client transport and build it. Missing, blank,
  * conflicting, or invalid authority/credential configuration throws; there is
  * no local-data return branch.
@@ -927,39 +988,71 @@ export function createClientTransport(
   },
 ): { transport: "http"; client: HasnaHttpTransport; resolution: ClientTransportResolution } {
   const credentialOptions = overrides?.credentials;
-  const resolution = resolveClientTransport(name, env, { ...(credentialOptions ? { credentials: credentialOptions } : {}) });
-  // The credential is NOT read here. It is resolved per request through the
-  // same chain `resolveClientTransport` used, so this path cannot drift from
-  // that one — an earlier version of this function re-read the key straight out
-  // of `env`, which was a second, divergent resolution on the code path most
-  // callers actually take.
-  const credentialProvider: CredentialProvider = () => {
-    const current = resolveClientTransport(name, env, { ...(credentialOptions ? { credentials: credentialOptions } : {}) });
-    if (current.baseUrl !== resolution.baseUrl) {
-      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
-    }
-    const resolved = resolveCredential(name, env, credentialOptions);
-    if (!resolved) {
-      throw new Error(
-        `Client for '${name}' resolved to the http transport but no API key is available any more. ` +
-          `Looked at ${credentialDiskSourcesForMessage(name, env)}, then the environment. ` +
-          `A credential file that was removed after this client was built is the usual cause.`,
+  const snapshotOptions = { ...(credentialOptions ? { credentials: credentialOptions } : {}) };
+  const resolution = resolveClientTransportSnapshot(name, env, snapshotOptions).resolution;
+
+  const sameBinding = (
+    left: ResolvedClientTransportSnapshot,
+    right: ResolvedClientTransportSnapshot,
+  ): boolean =>
+    left.resolution.baseUrl === right.resolution.baseUrl &&
+    left.credential.apiKey === right.credential.apiKey &&
+    left.credential.pointerVaultKey === right.credential.pointerVaultKey &&
+    left.credential.source === right.credential.source &&
+    left.credential.tier === right.credential.tier;
+
+  const unstableConfiguration = () =>
+    new ClientTransportConfigurationError(
+      name,
+      "The configured service authority or credential changed while a request was being prepared; no authenticated request was sent.",
+    );
+
+  const requestBindingProvider: AuthenticatedRequestBindingProvider = async () => {
+    // Read a stable pair rather than validating the authority and then reading
+    // the credential independently. The second snapshot closes the bounded
+    // authority/key rotation race; the final snapshot below revalidates the
+    // exact reviewed pair immediately before dispatch.
+    const first = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    const reviewed = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    if (!sameBinding(first, reviewed)) throw unstableConfiguration();
+    if (reviewed.resolution.baseUrl !== resolution.baseUrl) {
+      throw new ClientTransportConfigurationError(
+        name,
+        "The configured service authority changed; rebuild the client before sending credentials.",
       );
     }
-    return resolved;
+
+    const credential = await resolveRequestCredential(name, () => reviewed.credential, env);
+    const immediatelyBeforeDispatch = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    if (!sameBinding(reviewed, immediatelyBeforeDispatch)) throw unstableConfiguration();
+    if (immediatelyBeforeDispatch.resolution.baseUrl !== resolution.baseUrl) {
+      throw new ClientTransportConfigurationError(
+        name,
+        "The configured service authority changed; rebuild the client before sending credentials.",
+      );
+    }
+    return { baseUrl: immediatelyBeforeDispatch.resolution.baseUrl, credential };
   };
   return {
     transport: "http",
-    client: createHasnaHttpTransport({
-      name,
-      baseUrl: resolution.baseUrl,
-      apiKey: credentialProvider,
-      ...(overrides?.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
-      ...(overrides?.headers ? { headers: overrides.headers } : {}),
-      ...(overrides?.timeoutMs ? { timeoutMs: overrides.timeoutMs } : {}),
-      ...(overrides?.retry !== undefined ? { retry: overrides.retry } : {}),
-      ...(overrides?.sleepImpl ? { sleepImpl: overrides.sleepImpl } : {}),
-    }),
+    client: createHasnaHttpTransportInternal(
+      {
+        name,
+        baseUrl: resolution.baseUrl,
+        // The bound provider supplies this value for every request. This
+        // fallback provider is unreachable and prevents a placeholder secret
+        // from existing in source or generated artifacts.
+        apiKey: () => {
+          throw new Error("The authenticated request binding provider was not invoked.");
+        },
+        ...(overrides?.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
+        ...(overrides?.headers ? { headers: overrides.headers } : {}),
+        ...(overrides?.timeoutMs ? { timeoutMs: overrides.timeoutMs } : {}),
+        ...(overrides?.retry !== undefined ? { retry: overrides.retry } : {}),
+        ...(overrides?.sleepImpl ? { sleepImpl: overrides.sleepImpl } : {}),
+      },
+      requestBindingProvider,
+    ),
     resolution,
   };
 }

@@ -115,6 +115,39 @@ describe("canonical public client", () => {
     await expect(wired.client.get("/items")).rejects.toThrow(/authority changed/);
     expect(calls).toBe(0);
   });
+
+  test("binds authority and credential when rotation lands between their reads", async () => {
+    let authority = "https://old.example.test";
+    let key = "old-key";
+    let rotateDuringCredentialRead = false;
+    const env: Record<string, string> = {};
+    Object.defineProperties(env, {
+      HASNA_DEMO_API_URL: { enumerable: true, get: () => authority },
+      HASNA_DEMO_API_KEY: {
+        enumerable: true,
+        get: () => {
+          if (rotateDuringCredentialRead) {
+            authority = "https://new.example.test";
+            key = "new-authority-key";
+          }
+          return key;
+        },
+      },
+    });
+
+    let calls = 0;
+    const wired = createClientTransport("demo", env, {
+      fetchImpl: async () => {
+        calls++;
+        return Response.json({});
+      },
+      retry: false,
+    });
+    rotateDuringCredentialRead = true;
+
+    await expect(wired.client.get("/items")).rejects.toThrow(/changed while a request was being prepared/);
+    expect(calls).toBe(0);
+  });
 });
 
 describe("canonical server backend", () => {
