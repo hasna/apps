@@ -1,18 +1,9 @@
 // @hasna/contacts — public library API
 //
-// The public surface is the Store abstraction plus the shared domain types and
-// the typed cloud /v1 SDK client. EVERY SDK consumer reads and writes contacts
-// DATA through `getStore()`, which returns a `Store` bound to the local SQLite
-// (LocalStore) or the cloud HTTP API (ApiStore) based on the client-flip env —
-// the SAME single interface the CLI and MCP use. Presence of
-// HASNA_CONTACTS_API_URL + HASNA_CONTACTS_API_KEY (and/or
-// HASNA_CONTACTS_STORAGE_MODE) selects the ApiStore; otherwise the LocalStore.
-//
-// The raw on-box SQLite layer (`db/*` — getDatabase/SqliteAdapter/createContact/
-// … and the local feedback/storage helpers) is NOT public API. Exposing it was
-// the split-brain bug this rebuild eliminates: an SDK caller importing
-// `createContact` from the package root would write on-box SQLite even while
-// pointed at the cloud. All domain reads/writes now flow through the Store.
+// The public surface is the Store abstraction plus shared domain types and the
+// typed `/v1` SDK client. Every data operation uses an explicitly configured,
+// authenticated HTTPS authority. The raw SQLite and PostgreSQL layers are not
+// public client API; missing or invalid URL/key configuration fails closed.
 
 // ─── Storage abstraction (the ONLY data entry point) ────────────────────────────
 export {

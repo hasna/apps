@@ -1,32 +1,27 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-const remoteEnv = [
-  "HASNA_CONTACTS_POSTGRES_URL",
-  "OPEN_CONTACTS_POSTGRES_URL",
-  "CONTACTS_POSTGRES_URL",
-  "HASNA_CONTACTS_DATABASE_URL",
-  "CONTACTS_DATABASE_URL",
-  "HASNA_CONTACTS_API_URL",
-  "HASNA_CONTACTS_API_KEY",
-] as const;
 
 let tempHome: string | null = null;
 
 function testEnv(): Record<string, string> {
   tempHome = mkdtempSync(join(tmpdir(), "contacts-cli-home-"));
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") env[key] = value;
-  }
-  env["HOME"] = tempHome;
-  delete env["USERPROFILE"];
-  delete env["CONTACTS_DB_PATH"];
-  delete env["HASNA_CONTACTS_DB_PATH"];
-  for (const name of remoteEnv) delete env[name];
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  env.HOME = tempHome;
+  delete env.USERPROFILE;
+  for (const key of [
+    "HASNA_CONTACTS_API_URL",
+    "CONTACTS_API_URL",
+    "HASNA_CONTACTS_API_KEY",
+    "CONTACTS_API_KEY",
+    "HASNA_CONTACTS_STORAGE_MODE",
+    "CONTACTS_STORAGE_MODE",
+    "HASNA_CONTACTS_DB_PATH",
+    "CONTACTS_DB_PATH",
+    "HASNA_CONTACTS_DATABASE_URL",
+    "CONTACTS_DATABASE_URL",
+  ]) delete env[key];
   return env;
 }
 
@@ -39,16 +34,12 @@ function runContacts(args: string[], env = testEnv()) {
   });
 }
 
-function parseStdout(result: ReturnType<typeof runContacts>) {
-  return JSON.parse(new TextDecoder().decode(result.stdout));
-}
-
 function stdoutText(result: ReturnType<typeof runContacts>): string {
   return new TextDecoder().decode(result.stdout);
 }
 
-function mode(path: string): number {
-  return statSync(path).mode & 0o777;
+function parseStdout(result: ReturnType<typeof runContacts>) {
+  return JSON.parse(stdoutText(result));
 }
 
 afterEach(() => {
@@ -56,57 +47,63 @@ afterEach(() => {
   tempHome = null;
 });
 
-describe("contacts storage CLI runtime", () => {
-  test("reports local transport when no client-flip env is set", () => {
-    const result = runContacts(["storage", "status", "--json"]);
-
+describe("contacts canonical client CLI runtime", () => {
+  test("reports unconfigured with local fallback disabled when URL/key are absent", () => {
+    const result = runContacts(["connection", "--json"]);
     expect(result.exitCode).toBe(0);
-    const status = parseStdout(result);
-    expect(status.transport.transport).toBe("local");
-    expect(status.transport.mode).toBe("local");
-    expect(status.transport.api_key_present).toBe(false);
-    expect(status.local.mode).toBe("local");
+    expect(parseStdout(result)).toMatchObject({
+      transport: "unconfigured",
+      configured: false,
+      misconfigured: true,
+      local_fallback: false,
+    });
   });
 
-  test("does NOT expose any client-side Postgres DSN sync command", () => {
-    // The forbidden DSN sync path (storage/cloud push|pull|sync) must be gone.
-    const push = runContacts(["storage", "push", "--tables", "contacts", "--json"]);
-    expect(push.exitCode).not.toBe(0);
-    const cloudPush = runContacts(["cloud", "push", "--tables", "contacts", "--json"]);
-    expect(cloudPush.exitCode).not.toBe(0);
-  });
-
-  test("cloud status reports cloud-http transport when API_URL + API_KEY are set (no DSN)", () => {
+  test("reports HTTPS without exposing the API key", () => {
     const env = testEnv();
-    env["HASNA_CONTACTS_API_URL"] = "https://contacts.hasna.xyz";
-    env["HASNA_CONTACTS_API_KEY"] = "test-key-not-a-real-secret";
-
-    const result = runContacts(["cloud", "status", "--json"], env);
-
+    env.HASNA_CONTACTS_API_URL = "https://contacts.example.invalid";
+    env.HASNA_CONTACTS_API_KEY = "test-key-not-a-real-secret";
+    const result = runContacts(["connection", "--json"], env);
     expect(result.exitCode).toBe(0);
-    const status = parseStdout(result);
-    expect(status.transport.transport).toBe("cloud-http");
-    expect(status.transport.mode).toBe("cloud");
-    expect(status.transport.api_key_present).toBe(true);
-    // The API key value must NEVER be echoed back.
-    expect(JSON.stringify(status)).not.toContain("test-key-not-a-real-secret");
+    expect(parseStdout(result)).toMatchObject({ transport: "https", configured: true, api_key_present: true });
+    expect(stdoutText(result)).not.toContain("contacts.example.invalid");
+    expect(stdoutText(result)).not.toContain("test-key-not-a-real-secret");
   });
 
-  test("backup checkpoints current SQLite data and writes an owner-only file", () => {
+  test("rejects a retired storage selector", () => {
     const env = testEnv();
-    const backupPath = join(tempHome!, "contacts-backup.db");
+    env.HASNA_CONTACTS_STORAGE_MODE = "cloud";
+    const result = runContacts(["connection", "--json"], env);
+    expect(result.exitCode).not.toBe(0);
+    expect(new TextDecoder().decode(result.stderr)).toContain("RETIRED_CONTACTS_CLIENT_SELECTOR");
+  });
 
-    const create = runContacts(["tags", "add", "--name", "BackupTag"], env);
-    expect(create.exitCode).toBe(0);
+  test("preserves a legacy database without changing or deleting its source", () => {
+    const env = testEnv();
+    const source = join(tempHome!, ".local", "share", "hasna", "contacts", "contacts.db");
+    const output = join(tempHome!, "contacts.db.pre-https.20260901");
+    mkdirSync(join(tempHome!, ".local", "share", "hasna", "contacts"), { recursive: true });
+    writeFileSync(source, "legacy-payload");
 
-    const backup = runContacts(["backup", "--output", backupPath], env);
-    expect(backup.exitCode).toBe(0);
-    expect(mode(backupPath)).toBe(0o600);
+    const result = runContacts(["legacy", "preserve", "--source", source, "--output", output, "--json"], env);
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(source)).toBe(true);
+    expect(readFileSync(source, "utf8")).toBe("legacy-payload");
+    expect(readFileSync(output, "utf8")).toBe("legacy-payload");
+    expect(statSync(output).mode & 0o777).toBe(0o600);
+  });
 
-    const db = new Database(backupPath, { readonly: true });
-    const row = db.query("SELECT name FROM tags WHERE name = ?").get("BackupTag") as { name: string } | null;
-    db.close();
+  test("refuses a preservation copy while a SQLite sidecar is present", () => {
+    const env = testEnv();
+    const source = join(tempHome!, "contacts.db");
+    const output = join(tempHome!, "contacts.db.preserved");
+    writeFileSync(source, "legacy-payload");
+    writeFileSync(`${source}-journal`, "pending-transaction");
 
-    expect(row?.name).toBe("BackupTag");
+    const result = runContacts(["legacy", "preserve", "--source", source, "--output", output, "--json"], env);
+    expect(result.exitCode).not.toBe(0);
+    expect(new TextDecoder().decode(result.stderr)).toContain("Legacy SQLite sidecar");
+    expect(existsSync(output)).toBe(false);
+    expect(readFileSync(source, "utf8")).toBe("legacy-payload");
   });
 });

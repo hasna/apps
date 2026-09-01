@@ -9,6 +9,7 @@ const originalHome = process.env["HOME"];
 const originalUserProfile = process.env["USERPROFILE"];
 const originalContactsDbPath = process.env["CONTACTS_DB_PATH"];
 const originalHasnaContactsDbPath = process.env["HASNA_CONTACTS_DB_PATH"];
+const originalHasnaDataHome = process.env["HASNA_DATA_HOME"];
 let tempRoot: string | null = null;
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -26,12 +27,13 @@ afterEach(() => {
   restoreEnv("USERPROFILE", originalUserProfile);
   restoreEnv("CONTACTS_DB_PATH", originalContactsDbPath);
   restoreEnv("HASNA_CONTACTS_DB_PATH", originalHasnaContactsDbPath);
+  restoreEnv("HASNA_DATA_HOME", originalHasnaDataHome);
   if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
   tempRoot = null;
 });
 
 describe("contacts data directory", () => {
-  it("migrates legacy ~/.contacts files into the XDG data root", () => {
+  it("does not silently migrate a legacy database into the XDG data root", () => {
     tempRoot = mkdtempSync(join(tmpdir(), "contacts-home-"));
     const oldDir = join(tempRoot, ".contacts");
     const dataDir = join(tempRoot, ".local", "share", "hasna", "contacts");
@@ -40,6 +42,7 @@ describe("contacts data directory", () => {
     writeFileSync(join(oldDir, "contacts.db"), "legacy-db");
 
     process.env["HOME"] = tempRoot;
+    process.env["HASNA_DATA_HOME"] = join(tempRoot, ".local", "share", "hasna");
     delete process.env["USERPROFILE"];
     delete process.env["CONTACTS_DB_PATH"];
     delete process.env["HASNA_CONTACTS_DB_PATH"];
@@ -47,17 +50,17 @@ describe("contacts data directory", () => {
 
     expect(getDataDir()).toBe(dataDir);
     expect(getDbPath()).toBe(join(dataDir, "contacts.db"));
-    expect(existsSync(join(dataDir, "contacts.db"))).toBe(true);
-    expect(readFileSync(join(dataDir, "contacts.db"), "utf8")).toBe("legacy-db");
+    expect(existsSync(join(dataDir, "contacts.db"))).toBe(false);
+    expect(readFileSync(join(oldDir, "contacts.db"), "utf8")).toBe("legacy-db");
     expect(mode(join(tempRoot, ".local", "share", "hasna"))).toBe(0o700);
     expect(mode(dataDir)).toBe(0o700);
-    expect(mode(join(dataDir, "contacts.db"))).toBe(0o600);
   });
 
   it("creates managed contacts storage with owner-only permissions", () => {
     tempRoot = mkdtempSync(join(tmpdir(), "contacts-private-home-"));
 
     process.env["HOME"] = tempRoot;
+    process.env["HASNA_DATA_HOME"] = join(tempRoot, ".local", "share", "hasna");
     delete process.env["USERPROFILE"];
     delete process.env["CONTACTS_DB_PATH"];
     delete process.env["HASNA_CONTACTS_DB_PATH"];

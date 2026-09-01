@@ -6,15 +6,10 @@ import { existsSync, mkdirSync, copyFileSync, unlinkSync, readdirSync, readFileS
 import { join, extname, basename } from "node:path";
 import { getDataDir } from "../db/database.js";
 
-const IMAGES_DIR = join(getDataDir(), "images");
-
-function ensureImagesDir(): void {
-  if (!existsSync(IMAGES_DIR)) mkdirSync(IMAGES_DIR, { recursive: true });
-}
-
 export function getImagesDir(): string {
-  ensureImagesDir();
-  return IMAGES_DIR;
+  const imagesDir = join(getDataDir(), "images");
+  if (!existsSync(imagesDir)) mkdirSync(imagesDir, { recursive: true });
+  return imagesDir;
 }
 
 /**
@@ -27,7 +22,7 @@ export function saveImage(
   source: string,
   options?: { format?: string }
 ): string {
-  ensureImagesDir();
+  const imagesDir = getImagesDir();
 
   // Remove existing images for this entity
   deleteImage(entityId);
@@ -38,7 +33,7 @@ export function saveImage(
     const ext = base64Match[1] === "jpeg" ? "jpg" : base64Match[1]!;
     const data = Buffer.from(base64Match[2]!, "base64");
     const filename = `${entityId}.${ext}`;
-    writeFileSync(join(IMAGES_DIR, filename), data);
+    writeFileSync(join(imagesDir, filename), data);
     return filename;
   }
 
@@ -47,7 +42,7 @@ export function saveImage(
     const ext = options?.format || "jpg";
     const data = Buffer.from(source.trim(), "base64");
     const filename = `${entityId}.${ext}`;
-    writeFileSync(join(IMAGES_DIR, filename), data);
+    writeFileSync(join(imagesDir, filename), data);
     return filename;
   }
 
@@ -63,7 +58,7 @@ export function saveImage(
   }
 
   const filename = `${entityId}.${ext === "jpeg" ? "jpg" : ext}`;
-  copyFileSync(source, join(IMAGES_DIR, filename));
+  copyFileSync(source, join(imagesDir, filename));
   return filename;
 }
 
@@ -71,10 +66,10 @@ export function saveImage(
  * Get the image path for an entity. Returns null if no image exists.
  */
 export function getImagePath(entityId: string): string | null {
-  ensureImagesDir();
-  const files = readdirSync(IMAGES_DIR);
+  const imagesDir = getImagesDir();
+  const files = readdirSync(imagesDir);
   const match = files.find(f => f.startsWith(`${entityId}.`));
-  return match ? join(IMAGES_DIR, match) : null;
+  return match ? join(imagesDir, match) : null;
 }
 
 /**
@@ -93,12 +88,12 @@ export function getImageAsBase64(entityId: string): string | null {
  * Delete an entity's image.
  */
 export function deleteImage(entityId: string): boolean {
-  ensureImagesDir();
-  const files = readdirSync(IMAGES_DIR);
+  const imagesDir = getImagesDir();
+  const files = readdirSync(imagesDir);
   let deleted = false;
   for (const f of files) {
     if (f.startsWith(`${entityId}.`)) {
-      unlinkSync(join(IMAGES_DIR, f));
+      unlinkSync(join(imagesDir, f));
       deleted = true;
     }
   }
@@ -109,11 +104,11 @@ export function deleteImage(entityId: string): boolean {
  * List all stored images.
  */
 export function listImages(): Array<{ entity_id: string; filename: string; path: string }> {
-  ensureImagesDir();
-  const files = readdirSync(IMAGES_DIR).filter(f => !f.startsWith("."));
+  const imagesDir = getImagesDir();
+  const files = readdirSync(imagesDir).filter(f => !f.startsWith("."));
   return files.map(f => ({
     entity_id: basename(f, extname(f)),
     filename: f,
-    path: join(IMAGES_DIR, f),
+    path: join(imagesDir, f),
   }));
 }

@@ -37,8 +37,7 @@ describe("ApiStore contact project operations", () => {
     }) as typeof fetch;
 
     const store = getStore({
-      HASNA_CONTACTS_STORAGE_MODE: "cloud",
-      HASNA_CONTACTS_API_URL: "https://contacts.hasna.xyz",
+      HASNA_CONTACTS_API_URL: "https://contacts.example.invalid",
       HASNA_CONTACTS_API_KEY: "test-key",
     });
 
@@ -51,27 +50,27 @@ describe("ApiStore contact project operations", () => {
     expect(calls).toEqual([
       {
         method: "PUT",
-        url: "https://contacts.hasna.xyz/v1/contacts/contact-1/projects/project%2Falpha",
+        url: "https://contacts.example.invalid/v1/contacts/contact-1/projects/project%2Falpha",
         body: undefined,
       },
       {
         method: "GET",
-        url: "https://contacts.hasna.xyz/v1/contacts/contact-1/projects",
+        url: "https://contacts.example.invalid/v1/contacts/contact-1/projects",
         body: undefined,
       },
       {
         method: "PUT",
-        url: "https://contacts.hasna.xyz/v1/contacts/contact-1/projects",
+        url: "https://contacts.example.invalid/v1/contacts/contact-1/projects",
         body: { project_ids: ["project-beta", "project-gamma", "project-beta"] },
       },
       {
         method: "GET",
-        url: "https://contacts.hasna.xyz/v1/projects/project%2Falpha/contacts",
+        url: "https://contacts.example.invalid/v1/projects/project%2Falpha/contacts",
         body: undefined,
       },
       {
         method: "DELETE",
-        url: "https://contacts.hasna.xyz/v1/contacts/contact-1/projects/project%2Falpha",
+        url: "https://contacts.example.invalid/v1/contacts/contact-1/projects/project%2Falpha",
         body: undefined,
       },
     ]);

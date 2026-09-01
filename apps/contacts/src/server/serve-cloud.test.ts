@@ -97,9 +97,8 @@ describe("cloud env resolution", () => {
 
   test("isCloudModeEnabled reflects DSN presence", () => {
     expect(isCloudModeEnabled({ DATABASE_URL: "c" } as never)).toBe(true);
-    expect(isCloudModeEnabled({ HASNA_CONTACTS_STORAGE_MODE: "cloud" } as never)).toBe(true);
-    expect(isCloudModeEnabled({ CONTACTS_STORAGE_MODE: "self_hosted" } as never)).toBe(true);
-    expect(isCloudModeEnabled({ HASNA_CONTACTS_STORAGE_MODE: "local" } as never)).toBe(false);
+    expect(isCloudModeEnabled({ HASNA_CONTACTS_STORAGE_MODE: "cloud" } as never)).toBe(false);
+    expect(isCloudModeEnabled({ CONTACTS_STORAGE_MODE: "self_hosted" } as never)).toBe(false);
     expect(isCloudModeEnabled({} as never)).toBe(false);
   });
 

@@ -1,16 +1,16 @@
 /**
- * Cloud (A1 pure-remote) service wiring for `contacts-serve`.
+ * PostgreSQL service wiring for `contacts-serve`.
  *
  * This module powers the versioned `/v1` API and its API-key auth. Per Amendment
  * A1 the serve process reads and writes the shared RDS Postgres DIRECTLY through
  * the vendored @hasna/contracts storage kit — there is NO local sync/cache in
  * the service. Everything is lazy: nothing touches Postgres or crypto until the
- * first `/v1` / `/ready` request, so the local-first CLI/dashboard SQLite paths
- * keep ZERO cloud dependencies.
+ * first `/v1` / `/ready` request. Public clients never import this server-only
+ * PostgreSQL boundary.
  */
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type AuthQueryClient } from "@hasna/contracts/auth";
-import { createCloudPoolFromEnv } from "../generated/storage-kit/pool.js";
-import type { PoolQueryClient } from "../generated/storage-kit/query.js";
+import { createPgPool } from "../generated/storage-kit/pool.js";
+import { createQueryClient, type PoolQueryClient } from "../generated/storage-kit/query.js";
 import { checkHealth } from "../generated/storage-kit/health.js";
 import { PG_MIGRATIONS } from "../db/pg-migrations.js";
 
@@ -36,12 +36,9 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
   );
 }
 
-/** True when this process is configured to serve the cloud `/v1` API.
- * Explicit remote mode remains cloud even when its DSN is missing so readiness
- * fails closed instead of presenting the process as a healthy local server. */
+/** True when this server process has its PostgreSQL backend configured. */
 export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const mode = env.HASNA_CONTACTS_STORAGE_MODE || env.CONTACTS_STORAGE_MODE;
-  return Boolean(resolveCloudDatabaseUrl(env)) || mode === "cloud" || mode === "self_hosted";
+  return Boolean(resolveCloudDatabaseUrl(env));
 }
 
 let cachedClient: PoolQueryClient | null = null;
@@ -59,24 +56,17 @@ export function getCloudClient(): PoolQueryClient {
       "Cloud /v1 requires a remote database URL (HASNA_CONTACTS_DATABASE_URL / CONTACTS_DATABASE_URL / DATABASE_URL).",
     );
   }
-  // The vendored kit resolves its DSN from `HASNA_CONTACTS_DATABASE_URL` (or the
-  // `CONTACTS_DATABASE_URL` alias) ONLY — it does not read the generic
-  // `DATABASE_URL` that the ECS hasna-app module injects. We resolve the DSN
-  // ourselves (accepting DATABASE_URL too) and bridge it into the kit's expected
-  // key, and force cloud mode, so any supported env-var spelling works.
-  const env = { ...process.env } as Record<string, string | undefined>;
-  env.HASNA_CONTACTS_DATABASE_URL = url;
-  if (!env.HASNA_CONTACTS_STORAGE_MODE && !env.CONTACTS_STORAGE_MODE) {
-    env.HASNA_CONTACTS_STORAGE_MODE = "cloud";
-  }
-  const { client } = createCloudPoolFromEnv(CONTACTS_APP_SLUG, {
-    env,
+  // Resolve the server-only DSN ourselves, then create PostgreSQL directly.
+  // No storage or deployment mode variable participates.
+  const pool = createPgPool({
+    connectionString: url,
+    env: process.env,
     max: 6,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 15_000,
     applicationName: "contacts-serve",
   });
-  cachedClient = client;
+  cachedClient = createQueryClient(pool);
   return cachedClient;
 }
 

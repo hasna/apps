@@ -1,19 +1,64 @@
+/** @hasna/contacts SDK — explicit authenticated HTTPS `/v1` client. */
+import {
+  ContactsV1Client as GeneratedContactsV1Client,
+  ApiError,
+  type ContactsV1ClientOptions as GeneratedContactsV1ClientOptions,
+} from "./v1.generated.js";
+
+export interface ContactsV1ClientOptions
+  extends Omit<GeneratedContactsV1ClientOptions, "baseUrl" | "apiKey"> {
+  /** Explicit HTTPS service authority. No default is composed. */
+  baseUrl: string;
+  /** API key sent to the configured authority. Required and never logged. */
+  apiKey: string;
+}
+
+function validateBaseUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("ContactsV1Client baseUrl must be an absolute HTTPS URL.");
+  }
+  if (url.protocol !== "https:") throw new Error("ContactsV1Client baseUrl must use HTTPS.");
+  if (url.username || url.password) throw new Error("ContactsV1Client baseUrl must not contain credentials.");
+  if (url.search || url.hash) throw new Error("ContactsV1Client baseUrl must not contain a query or fragment.");
+  const path = url.pathname.replace(/\/+$/, "");
+  if (path && path !== "/v1") {
+    throw new Error("ContactsV1Client baseUrl must be an authority root or end in /v1.");
+  }
+  // Generated methods already prefix /v1.
+  url.pathname = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
+function validateApiKey(apiKey: string): string {
+  const key = apiKey.trim();
+  if (!key) throw new Error("ContactsV1Client requires an API key.");
+  if (/[^\t\x20-\x7e]/.test(key)) {
+    throw new Error("ContactsV1Client API key contains bytes that are invalid in an HTTP header.");
+  }
+  return key;
+}
+
 /**
- * @hasna/contacts SDK — typed `/v1` cloud client.
- *
- * Generated from the serve OpenAPI document (src/server/openapi.ts).
- * Regenerate with `bun run scripts/generate-sdk.ts`.
- *
- *   import { ContactsV1Client } from "@hasna/contacts/sdk";
- *   const client = new ContactsV1Client({
- *     baseUrl: process.env.CONTACTS_API_URL!,   // self_hosted service URL
- *     apiKey: process.env.CONTACTS_API_KEY!,     // contracts-issued key
- *   });
- *   const { contacts } = await client.listContacts({ limit: 20 });
+ * Validated wrapper around the generated API surface. Redirects are never
+ * followed, so credentials cannot cross to another authority.
  */
-export { ContactsV1Client, ApiError as ContactsV1ApiError } from "./v1.generated.js";
+export class ContactsV1Client extends GeneratedContactsV1Client {
+  constructor(options: ContactsV1ClientOptions) {
+    const fetchImpl = options.fetch ?? globalThis.fetch;
+    super({
+      ...options,
+      baseUrl: validateBaseUrl(options.baseUrl),
+      apiKey: validateApiKey(options.apiKey),
+      fetch: ((input, init) => fetchImpl(input, { ...init, redirect: "manual" })) as typeof fetch,
+    });
+  }
+}
+
+export { ApiError as ContactsV1ApiError };
 export type {
-  ContactsV1ClientOptions,
   Contact as ContactsV1Contact,
   Company as ContactsV1Company,
   Tag as ContactsV1Tag,
