@@ -54,7 +54,7 @@
   ],
   "storage": {
     "backend": "postgresql",
-    "engines": ["sqlite", "postgresql"],
+    "engines": ["postgresql"],
     "envPrefix": "HASNA_CONTACTS_",
     "aliasEnvPrefix": "CONTACTS_",
     "pgTestGate": {
