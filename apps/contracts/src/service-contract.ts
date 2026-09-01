@@ -1,5 +1,6 @@
 // Hasna Service Contract v1 helpers: load, validate, and derive the canonical
-// env-key spec, secret refs, and sqlite path for a repo's `hasna.contract.json`.
+// env-key spec, secret refs, and explicit legacy-import path for a repo's
+// `hasna.contract.json`.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,7 +41,7 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
   $id: "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
   title: "Hasna Service Contract v1",
   description:
-    "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Hosting story, product surfaces, and storage capabilities are separate declarations; the server data backend (sqlite | postgresql) is the only technical switch.",
+    "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Public clients use one authenticated HTTPS service transport; authoritative server data is PostgreSQL.",
   type: "object",
   additionalProperties: false,
   required: ["schema", "name", "class", "contractVersion", "kitVersion"],
@@ -203,7 +204,7 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
       properties: {
         backend: {
           enum: ["sqlite", "postgresql"],
-          description: "Active server data backend. sqlite|postgresql only."
+          description: "Manifested runtime/migration capability. Server startup still requires PostgreSQL; SQLite is legacy import input only."
         },
         engines: {
           type: "array",
@@ -230,7 +231,7 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
         sqlitePath: {
           type: "string",
           pattern: "\\.db$",
-          description: "Local sqlite path (~/.hasna/<name>/<name>.db)."
+          description: "Explicit legacy SQLite import path; never a live client/server store."
         },
         pgTestGate: {
           type: "object",

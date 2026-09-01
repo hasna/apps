@@ -11,8 +11,8 @@ function requiredFunction(name: string): (...args: any[]) => any {
 }
 
 describe("server data-backend contract", () => {
-  test("uses sqlite|postgresql and exposes no storage-mode API", () => {
-    expect(api.SERVER_DATA_BACKENDS).toEqual(["sqlite", "postgresql"]);
+  test("uses authoritative postgresql and exposes no storage-mode API", () => {
+    expect(api.SERVER_DATA_BACKENDS).toEqual(["postgresql"]);
     for (const retired of [
       "STORAGE_MODES",
       "StorageModeSchema",
@@ -26,12 +26,7 @@ describe("server data-backend contract", () => {
 
   test("derives the server backend from database configuration only", () => {
     const resolveServerDataBackend = requiredFunction("resolveServerDataBackend");
-    expect(resolveServerDataBackend("demo", {})).toMatchObject({
-      backend: "sqlite",
-      source: "default",
-      databaseUrlPresent: false,
-      databaseUrlSource: null,
-    });
+    expect(() => resolveServerDataBackend("demo", {})).toThrow(/DATABASE_URL.*required/);
     expect(
       resolveServerDataBackend("demo", {
         HASNA_DEMO_DATABASE_URL: "postgres://fixture.invalid/demo",
@@ -47,9 +42,7 @@ describe("server data-backend contract", () => {
   test("legacy storage-mode configuration is inert; DATABASE_URL is the only selector", () => {
     const resolveServerDataBackend = requiredFunction("resolveServerDataBackend");
     for (const value of ["cloud", "", "   "]) {
-      expect(resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: value }).backend).toBe(
-        "sqlite",
-      );
+      expect(() => resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: value })).toThrow(/DATABASE_URL/);
       expect(
         resolveServerDataBackend("demo", {
           HASNA_DEMO_STORAGE_MODE: value,
@@ -90,15 +83,10 @@ describe("server data-backend contract", () => {
 });
 
 describe("client transport contract", () => {
-  test("uses sqlite|http and does not expose a server backend as client state", () => {
-    expect(api.CLIENT_TRANSPORTS).toEqual(["sqlite", "http"]);
+  test("uses only authenticated HTTP and does not expose a server backend as client state", () => {
+    expect(api.CLIENT_TRANSPORTS).toEqual(["http"]);
     const resolveClientTransport = requiredFunction("resolveClientTransport");
-
-    const local = resolveClientTransport("demo", {});
-    expect(local.transport).toBe("sqlite");
-    expect(local.transportSource).toBe("default");
-    expect("mode" in local).toBe(false);
-    expect("modeSource" in local).toBe(false);
+    expect(() => resolveClientTransport("demo", {})).toThrow(/API_URL.*required/);
 
     const http = resolveClientTransport("demo", {
       HASNA_DEMO_API_URL: "https://demo.example.com",

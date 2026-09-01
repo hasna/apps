@@ -24,21 +24,16 @@
 //   1. an explicit argument            — `--api-key` / `--profile`
 //   2. a deliberate env pointer        — `HASNA_<NAME>_API_KEY_OVERRIDE`, `HASNA_PROFILE`,
 //                                        `HASNA_<NAME>_API_KEY_REF` (secrets-vault pointer)
-//   3. DISK, read at call time         — fleet-env primary, then the NOISY legacy-cloud
-//                                        fallback, then the config tier, then the
-//                                        deprecated config `-cloud.env` alias
+//   3. DISK, read at call time         — `$XDG_CONFIG_HOME/hasna/<app>.env`
+//                                        (`~/.config/hasna/<app>.env` by default)
 //   4. the legacy `HASNA_<NAME>_API_KEY` process env — fallback only, deprecated
 //
 // Tier 4 is the demotion that fixes stale shells IMMEDIATELY, without waiting
 // for shells to cycle or for a shell-init change to land on every machine.
 //
-// The disk tier is ordered by the migration under hasna/cloud retirement:
-//   `~/.hasna/fleet-env/<app>.env`         — PRIMARY (fleet-env)
-//   `~/.hasna/cloud/<app>.env`             — legacy-cloud, NOISY, removed after
-//                                            LEGACY_CLOUD_REMOVAL_DEADLINE
-//   `~/.config/hasna/<app>.env`            — config tier (renamed from `-cloud.env`)
-//   `~/.config/hasna/<app>-cloud.env`      — config legacy alias, NOISY, removed with the
-//                                            same deadline
+// Retired `~/.hasna/**` and `*-cloud.env` locations are not automatic inputs.
+// Explicit migration tooling may inspect them, but ordinary client resolution
+// cannot acquire authority or credentials from those paths.
 //
 // NEVER FALL BACK TO LOCAL DATA ON A 401. Serving local results when auth fails
 // prints healthy output while authentication is broken — a false green that is
@@ -46,9 +41,10 @@
 // but they must be a deliberate mode decided BEFORE the request, never an error
 // path. Nothing in this module may acquire such a fallback.
 
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
+import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { Env } from "../env-token.js";
 import {
   CREDENTIAL_PROFILE_ENV_KEY,
@@ -64,10 +60,7 @@ export type CredentialTier =
   | "pointer"
   | "profile"
   | "disk"
-  | "fleet-env"
-  | "legacy-cloud"
   | "config"
-  | "config-legacy"
   | "legacy-env";
 
 export interface ResolvedCredential {
@@ -89,7 +82,7 @@ export interface ResolvedCredential {
   readonly source: string;
   /** True for tiers an operator sets on purpose. These never fall through. */
   readonly deliberate: boolean;
-  /** True when it came from a deprecated legacy tier (legacy-env, legacy-cloud, config-legacy). */
+  /** True when it came from the deprecated process-environment tier. */
   readonly deprecated: boolean;
   /**
    * When tier === "pointer", the vault ITEM KEY to resolve through the
@@ -141,27 +134,23 @@ export class CredentialResolutionError extends Error {
   }
 }
 
-// The fleet credential directories, composed from path SEGMENTS on purpose.
-// `src/no-cloud.ts` forbids the joined literal anywhere in `src/`, and building
-// the path from parts is also what keeps this portable.
-const HASNA_STATE_DIR = ".hasna";
-/** Primary fleet credential dir — `~/.hasna/fleet-env/<app>.env`. */
-const FLEET_CREDENTIAL_DIR = "fleet-env";
-/** Deprecated legacy dir — `~/.hasna/cloud/<app>.env`. Removed after the deadline. */
-const LEGACY_CLOUD_DIR = "cloud";
+/** An existing credential/config file is unsafe and is never treated as absent. */
+export class CredentialFileUnsafeError extends Error {
+  readonly path: string;
+
+  constructor(path: string, reason: string) {
+    super(`Refusing unsafe credential/config file ${path}: ${reason}.`);
+    this.name = "CredentialFileUnsafeError";
+    this.path = path;
+  }
+}
+
+// Credential and endpoint files are non-authoritative client configuration, so
+// they belong under the XDG config root. Legacy ~/.hasna data paths are not
+// automatic client inputs; explicit migration tooling owns any import from
+// them.
 const CONFIG_DIR = ".config";
 const CONFIG_NAMESPACE = "hasna";
-
-/**
- * The explicit removal deadline for the deprecated credential tiers
- * (legacy-cloud `~/.hasna/cloud/<app>.env` and the config `-cloud.env` alias).
- *
- * Kept in code so the deprecation notice and the docs name the SAME date. After
- * this date the deprecated sources are no longer consulted; the migration that
- * lands the removal is tracked separately, this constant is the date it is
- * measured against.
- */
-export const LEGACY_CLOUD_REMOVAL_DEADLINE = "2026-10-01";
 
 /**
  * A credential file is small. The cap bounds how much a hostile or corrupt file
@@ -224,18 +213,15 @@ function homeDir(env: Env): string | null {
 export interface DiskCredentialSource {
   path: string;
   tier: CredentialTier;
-  /** True for the legacy-cloud and config `-cloud.env` sources — NOISY, removal-deadline bound. */
+  /** Retained in the public shape; canonical XDG sources are never deprecated. */
   deprecated: boolean;
 }
 
 /**
  * All on-disk credential sources for an app, in precedence order.
  *
- * Four layers exist, and the first entry wins. Returns an empty list when there
- * is no HOME to anchor them, or when the app name is not safe to place in a
- * path. The deprecated layers are consulted (loudly) until
- * {@link LEGACY_CLOUD_REMOVAL_DEADLINE}; they are not dropped so an existing
- * install keeps working while the fleet migrates.
+ * Exactly one XDG layer exists. Returns an empty list when there is no HOME to
+ * anchor the default, or when the app name is not safe to place in a path.
  */
 export function credentialDiskSourceList(
   name: string,
@@ -248,32 +234,16 @@ export function credentialDiskSourceList(
   // credential directory, and the transport's slug check runs too late to stop
   // the read.
   if (!home || !SAFE_APP_SLUG.test(name)) return [];
-  const stem = profile ? `${name}.${profile}` : name;
   const configStem = profile ? `${name}-${profile}` : name;
+  const configuredRoot = env.XDG_CONFIG_HOME?.trim();
+  const configRoot = configuredRoot && isAbsolute(configuredRoot)
+    ? configuredRoot
+    : join(home, CONFIG_DIR);
   return [
-    // PRIMARY — fleet-env.
     {
-      path: join(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
-      tier: "fleet-env",
-      deprecated: false,
-    },
-    // NOISY legacy-cloud fallback.
-    {
-      path: join(home, HASNA_STATE_DIR, LEGACY_CLOUD_DIR, `${stem}.env`),
-      tier: "legacy-cloud",
-      deprecated: true,
-    },
-    // Config tier — final name (the `-cloud` suffix was retired in this change).
-    {
-      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}.env`),
+      path: join(configRoot, CONFIG_NAMESPACE, `${configStem}.env`),
       tier: "config",
       deprecated: false,
-    },
-    // Config legacy alias — NOISY, removed with the same deadline.
-    {
-      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`),
-      tier: "config-legacy",
-      deprecated: true,
     },
   ];
 }
@@ -281,10 +251,8 @@ export function credentialDiskSourceList(
 /**
  * The disk files that may hold an app's credential, in precedence order.
  *
- * Four layers exist in the field, and the first entry wins. Returns an empty
- * list when there is no HOME to anchor them, or when the app name is not safe
- * to place in a path. Exported so callers and error messages can name the exact
- * paths consulted.
+ * Exactly one XDG layer exists. Exported so callers and error messages can name
+ * the exact path consulted.
  */
 export function credentialDiskSources(name: string, env: Env): string[] {
   return credentialDiskSourceList(name, env, null).map((s) => s.path);
@@ -304,8 +272,14 @@ function profileDiskSources(name: string, env: Env, profile: string | null): str
  * authentication in a way that looked like a revoked key rather than a corrupt
  * file.
  */
-function parseEnvFile(text: string): Map<string, string> {
+interface ParsedConfigFile {
+  values: Map<string, string>;
+  unusable: Set<string>;
+}
+
+function parseEnvFile(text: string): ParsedConfigFile {
   const values = new Map<string, string>();
+  const unusable = new Set<string>();
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
@@ -318,49 +292,87 @@ function parseEnvFile(text: string): Map<string, string> {
     const quote = value[0];
     if (quote === '"' || quote === "'") {
       // Opened a quote: it must close, or this line is not a value we can trust.
-      if (value.length < 2 || !value.endsWith(quote)) continue;
+      if (value.length < 2 || !value.endsWith(quote)) {
+        unusable.add(key);
+        continue;
+      }
       value = value.slice(1, -1);
     }
-    if (value.length === 0) continue;
+    if (value.trim().length === 0) {
+      unusable.add(key);
+      continue;
+    }
+    if (values.has(key) && values.get(key) !== value) unusable.add(key);
     values.set(key, value);
   }
-  return values;
+  return { values, unusable };
 }
 
 /**
- * Read and parse one fleet app-config file. A missing, unreadable, oversized,
- * or non-regular path is simply "nothing here".
+ * Read and parse one XDG app-config file. Missing paths are absent; unsafe,
+ * unreadable, oversized, and non-regular paths fail closed.
  *
- * `statSync` before opening is deliberate: a FIFO planted in the credential
- * directory blocks `open()` FOREVER, and this read now happens on every
- * request, ahead of the transport's own AbortController — so no timeout could
- * rescue it. Stat does not block on a FIFO or a character device, so the type
- * check happens before anything that could hang.
+ * Open without following the leaf symlink and without blocking on a FIFO;
+ * validate ownership, mode, size and file type on that same descriptor. A
+ * second fstat refuses files changed during the read.
  *
  * Both the credential tier and the non-secret config tier go through here, so
  * there is exactly ONE spelling of those guards. A second reader added beside
  * this one is a second place for the FIFO and size checks to drift out of sync.
  */
-function readAppConfigFile(path: string): Map<string, string> | null {
-  let text: string;
+function readAppConfigFile(path: string): ParsedConfigFile | null {
+  const unsafe = (reason: string): never => {
+    throw new CredentialFileUnsafeError(path, reason);
+  };
+  let fd = -1;
   try {
-    const stats = statSync(path);
-    if (!stats.isFile() || stats.size > MAX_CREDENTIAL_FILE_BYTES) return null;
-    text = readFileSync(path, "utf8");
-  } catch {
-    return null;
+    fd = openSync(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    if (code === "ELOOP") unsafe("the path is a symlink");
+    unsafe(`the path could not be opened (${code ?? "unknown error"})`);
   }
-  return parseEnvFile(text);
+  try {
+    const before = fstatSync(fd);
+    if (!before.isFile()) unsafe("the path is not a regular file");
+    const permissions = before.mode & 0o7777;
+    if (permissions !== 0o400 && permissions !== 0o600) {
+      unsafe(`permission mode ${permissions.toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
+    }
+    const uid = process.getuid?.() ?? process.geteuid?.();
+    if (uid !== undefined && before.uid !== uid) unsafe("the file is not owned by the current user");
+    if (before.size > MAX_CREDENTIAL_FILE_BYTES) unsafe("the file exceeds the size limit");
+    const bytes = readFileSync(fd);
+    const after = fstatSync(fd);
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
+    ) {
+      unsafe("the file changed while being read");
+    }
+    return parseEnvFile(bytes.toString("utf8"));
+  } finally {
+    if (fd !== -1) closeSync(fd);
+  }
 }
 
 function readCredentialFile(path: string, apiKeyKeys: readonly string[]): string | null {
-  const values = readAppConfigFile(path);
-  if (!values) return null;
+  const parsed = readAppConfigFile(path);
+  if (!parsed) return null;
   for (const key of apiKeyKeys) {
-    const value = values.get(key)?.trim();
-    if (value) return value;
+    if (parsed.unusable.has(key)) {
+      throw new CredentialFileUnsafeError(path, `${key} is declared but blank or malformed`);
+    }
   }
-  return null;
+  const values = apiKeyKeys.map((key) => parsed.values.get(key)?.trim()).filter((value): value is string => Boolean(value));
+  if (new Set(values).size > 1) {
+    throw new CredentialFileUnsafeError(path, "credential aliases disagree");
+  }
+  return values[0] ?? null;
 }
 
 /** A non-secret config value read off disk, with the file that supplied it. */
@@ -371,12 +383,14 @@ export interface AppConfigDiskHit {
   value: string;
   /** Absolute path of the file that supplied it, so a diagnostic can name it. */
   path: string;
+  /** The key was explicitly declared but blank or malformed. */
+  unusable?: boolean;
 }
 
 /**
  * Keys this function will never hand back, however the caller asks for them.
  *
- * The fleet app-config file holds a credential AND non-secret routing config in
+ * The XDG app-config file holds a credential AND non-secret routing config in
  * the same place. That is exactly why this boundary has to be explicit: without
  * it, `appConfigDiskValue(name, env, ["HASNA_TODOS_API_KEY"])` would be a
  * second, UNSEALED way to read the secret out of a file whose only other reader
@@ -402,12 +416,9 @@ const CREDENTIAL_SHAPED_KEY =
  *
  * This is the tier that closes the gap the credential chain left open: the same
  * file already supplies the API key, and every other field in it was discarded.
- * A non-interactive shell — a coding agent's Bash tool, a loop-spawned `/bin/sh`,
- * cron — inherits none of the fleet environment, so before this existed the
- * client answered from its local SQLite store at `misconfigured: false` while a
- * complete, usable server config sat on disk one line away from the key it did
- * read. That is a confident wrong answer, which is the single failure mode this
- * module exists to prevent.
+ * A non-interactive shell may inherit no service environment, so this source
+ * keeps the authority and credential together without introducing a local-data
+ * fallback.
  *
  * Precedence is file-major, then the caller's key order within a file: the first
  * disk layer that can answer wins, and inside it the caller's first key wins
@@ -426,10 +437,16 @@ export function appConfigDiskValue(
   const wanted = keys.filter((key) => !CREDENTIAL_SHAPED_KEY.test(key));
   if (wanted.length === 0) return null;
   for (const path of credentialDiskSources(name, env)) {
-    const values = readAppConfigFile(path);
-    if (!values) continue;
+    const parsed = readAppConfigFile(path);
+    if (!parsed) continue;
+    if (wanted.some((key) => parsed.unusable.has(key))) {
+      return { key: wanted.find((key) => parsed.unusable.has(key))!, value: "", path, unusable: true };
+    }
+    const values = wanted.map((key) => parsed.values.get(key)?.trim()).filter((value): value is string => Boolean(value));
+    if (new Set(values).size > 1) throw new CredentialFileUnsafeError(path, "configuration aliases disagree");
     for (const key of wanted) {
-      const value = values.get(key)?.trim();
+      if (parsed.unusable.has(key)) return { key, value: "", path, unusable: true };
+      const value = parsed.values.get(key)?.trim();
       if (value) return { key, value, path };
     }
   }
@@ -641,6 +658,7 @@ export function validateAndSealResolvedCredential(
 
 function firstEnvValue(env: Env, keys: readonly string[]): { key: string; value: string } | null {
   for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(env, key)) continue;
     const value = env[key]?.trim();
     if (value) return { key, value };
   }
@@ -699,8 +717,15 @@ export function resolveCredential(
   const diskPaths = credentialDiskSources(name, env);
 
   // ---- Tier 1: an explicit argument. -------------------------------------
-  const explicitKey = options.apiKey?.trim();
-  if (explicitKey) {
+  if (options.apiKey !== undefined) {
+    const explicitKey = options.apiKey.trim();
+    if (!explicitKey) {
+      throw new CredentialResolutionError(
+        name,
+        "The explicit apiKey argument is blank; an explicit credential never falls through to another identity.",
+        ["explicit apiKey argument"],
+      );
+    }
     assertUsableCredential(name, "the explicit apiKey argument", explicitKey);
     return sealCredential({
       apiKey: explicitKey,
@@ -719,7 +744,7 @@ export function resolveCredential(
   // selection that turns out to be revoked must surface as a 401, never as a
   // quiet switch to a different identity.
   const overrideKeyName = credentialOverrideEnvKey(name);
-  const overrideRaw = env[overrideKeyName];
+  const overrideRaw = Object.prototype.hasOwnProperty.call(env, overrideKeyName) ? env[overrideKeyName] : undefined;
   if (overrideRaw !== undefined) {
     const override = overrideRaw.trim();
     if (!override) {
@@ -750,7 +775,7 @@ export function resolveCredential(
   // override outranks it, so a manual emergency key beats a pointer when both
   // are set.
   const pointerKeyName = credentialPointerEnvKey(name);
-  const pointerRaw = env[pointerKeyName];
+  const pointerRaw = Object.prototype.hasOwnProperty.call(env, pointerKeyName) ? env[pointerKeyName] : undefined;
   if (pointerRaw !== undefined) {
     const pointer = pointerRaw.trim();
     if (!pointer) {
@@ -781,7 +806,18 @@ export function resolveCredential(
     });
   }
 
-  const profile = options.profile?.trim() || env[CREDENTIAL_PROFILE_ENV_KEY]?.trim();
+  if (options.profile !== undefined && !options.profile.trim()) {
+    throw new CredentialResolutionError(
+      name,
+      "The explicit profile argument is blank; an explicit identity selection never falls through.",
+      ["explicit profile argument"],
+    );
+  }
+  const profileRaw = Object.prototype.hasOwnProperty.call(env, CREDENTIAL_PROFILE_ENV_KEY) ? env[CREDENTIAL_PROFILE_ENV_KEY] : undefined;
+  if (profileRaw !== undefined && !profileRaw.trim()) {
+    throw new CredentialResolutionError(name, `${CREDENTIAL_PROFILE_ENV_KEY} is set but blank.`, [CREDENTIAL_PROFILE_ENV_KEY]);
+  }
+  const profile = options.profile?.trim() || profileRaw?.trim();
   if (profile) {
     const profileSource = options.profile?.trim()
       ? "explicit profile argument"
@@ -820,18 +856,32 @@ export function resolveCredential(
     );
   }
 
+  const definedLegacyEntries = apiKeyKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
+    .map((key) => ({ key, value: String(env[key]).trim() }));
+  const blankLegacy = definedLegacyEntries.find((entry) => entry.value.length === 0);
+  if (blankLegacy) {
+    throw new CredentialResolutionError(
+      name,
+      `${blankLegacy.key} is set but blank; a declared credential never falls through to another alias or identity.`,
+      [blankLegacy.key],
+    );
+  }
+  if (definedLegacyEntries.length > 1 && new Set(definedLegacyEntries.map((entry) => entry.value)).size > 1) {
+    throw new CredentialResolutionError(
+      name,
+      `${definedLegacyEntries.map((entry) => entry.key).join(" and ")} disagree; credential aliases must be identical or only one may be set.`,
+      definedLegacyEntries.map((entry) => entry.key),
+    );
+  }
+
   // ---- Tier 3: disk, read at call time. ----------------------------------
   // This is what makes a rotation heal in any shell, however old: the file is
   // re-read on every call, so there is no snapshot to go stale. There is
   // deliberately NO CACHE here — a cache is the same defect at a smaller
   // timescale.
   //
-  // The disk sources are ordered fleet-env -> legacy-cloud -> config ->
-  // config-legacy. A winner from a DEPRECATED source is NOISY: it emits a
-  // once-per-source deprecation line naming the migration target and the
-  // LEGACY_CLOUD_REMOVAL_DEADLINE, and it reports its granular tier so the
-  // doctor's transportSource/apiKeySource/apiKeyTier tell the operator exactly
-  // where the credential came from.
+  // The sole automatic disk source is the owner-only XDG config file.
   const diskSourceList = credentialDiskSourceList(name, env, null);
   const diskHits = diskSourceList
     .map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) }))
@@ -864,36 +914,14 @@ export function resolveCredential(
           `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.`
         : null;
 
-    let deprecated = winner.src.deprecated;
-    let finalWarning = warning;
-    if (winner.src.deprecated) {
-      deprecated = true;
-      // NOISY: name the legacy source, the primary target, and the deadline.
-      const sink = options.onDeprecation ?? defaultDeprecationSink;
-      const notified = deprecationNotified();
-      const noticeKey = `${name}:${winner.src.path}`;
-      if (!notified.has(noticeKey)) {
-        notified.add(noticeKey);
-        const message =
-          `[${name}] DEPRECATED: the API key came from ${winner.src.path} — a legacy credential location. ` +
-          `The legacy 'cloud' tiers are removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}. Provision the key in ` +
-          `the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` +
-          `${credentialOverrideEnvKey(name)}.`;
-        sink(message);
-      }
-      finalWarning = [warning, `Legacy credential source: ${winner.src.path}. Removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}.`]
-        .filter(Boolean)
-        .join(" ") || null;
-    }
-
     return sealCredential({
       apiKey: winner.value,
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
-      deprecated,
+      deprecated: false,
       diskCandidates: diskPaths,
-      warning: finalWarning,
+      warning,
     });
   }
 

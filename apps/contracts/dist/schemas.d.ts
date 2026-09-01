@@ -37742,13 +37742,11 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
     }[] | undefined;
 }>;
 export type ServiceSurface = z.infer<typeof ServiceSurfaceSchema>;
-/**
- * Active server data backend. `sqlite | postgresql` ONLY — the single switch that
- * replaced the removed runtime-placement axis (owner directive 2026-07-29).
- */
-export declare const SERVER_DATA_BACKENDS: readonly ["sqlite", "postgresql"];
-export declare const ServerDataBackendSchema: z.ZodEnum<["sqlite", "postgresql"]>;
+/** Authoritative server storage. SQLite is legacy-import input, never a live backend. */
+export declare const SERVER_DATA_BACKENDS: readonly ["postgresql"];
+export declare const ServerDataBackendSchema: z.ZodLiteral<"postgresql">;
 export type ServerDataBackend = z.infer<typeof ServerDataBackendSchema>;
+/** Required authoritative storage capability. */
 export declare const STORAGE_ENGINES: readonly ["sqlite", "postgresql"];
 export declare const STORAGE_ENGINE_VALUES: readonly ["sqlite", "json", "postgresql"];
 export declare const LOCAL_STORAGE_ENGINES: readonly ["sqlite", "json"];
@@ -37757,9 +37755,8 @@ export type StorageEngine = z.infer<typeof StorageEngineSchema>;
 /**
  * Storage engines a store-owning repo may waive instead of declaring.
  *
- * SQLite is the local source of truth for every `cli-with-store` repo, so it is
- * never waivable; PostgreSQL is the forward-looking capability a repo may defer
- * behind an explicit, auditable waiver.
+ * PostgreSQL waivers remain parseable only for bounded CLI-only migration
+ * tooling. Service-capable packages cannot use them.
  */
 export declare const WAIVABLE_STORAGE_ENGINES: readonly ["postgresql"];
 export type WaivableStorageEngine = (typeof WAIVABLE_STORAGE_ENGINES)[number];
@@ -37863,7 +37860,8 @@ export interface StorageWaiverEligibilityInput {
     name: string;
     bins: readonly string[];
     hosting: readonly HostingMode[];
-    storageBackend?: ServerDataBackend | undefined;
+    /** Manifest capability metadata; SQLite here is legacy import tooling, not a live server backend. */
+    storageBackend?: "sqlite" | "postgresql" | undefined;
     /** Declared surfaces. Omitted is treated as none declared. */
     serviceSurfaces?: readonly ApiSurfaceCapabilityInput[] | undefined;
 }
@@ -38479,9 +38477,10 @@ export declare function allowedBinsForName(name: string): string[];
  * there and keep concrete secret bindings in private deployment config.
  */
 export declare function databaseUrlSecretRefFor(name: string): string;
-/** Canonical local sqlite path for an app: `~/.hasna/<name>/<name>.db`. */
+/** Legacy SQLite import-path helper retained for explicit migration tooling. */
 export declare function defaultSqlitePathFor(name: string): string;
 export declare const StorageContractSchema: z.ZodEffects<z.ZodObject<{
+    /** Manifested runtime/migration capability; server startup still requires PostgreSQL. */
     backend: z.ZodEnum<["sqlite", "postgresql"]>;
     /** Supported storage engines. This capability matrix is independent of the active backend. */
     engines: z.ZodOptional<z.ZodArray<z.ZodEnum<["sqlite", "json", "postgresql"]>, "many">>;
@@ -38491,7 +38490,7 @@ export declare const StorageContractSchema: z.ZodEffects<z.ZodObject<{
     aliasEnvPrefix: z.ZodOptional<z.ZodString>;
     /** Legacy/private-tier secret ref. Public conformance rejects this field. */
     databaseUrlSecretRef: z.ZodOptional<z.ZodString>;
-    /** Local sqlite path (`~/.hasna/<name>/<name>.db`). */
+    /** Explicit legacy SQLite import path. Never an authoritative client/server store. */
     sqlitePath: z.ZodOptional<z.ZodString>;
     /** Live PostgreSQL proof gate. The DSN environment variable is test-only. */
     pgTestGate: z.ZodOptional<z.ZodObject<{
@@ -39758,6 +39757,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     description: z.ZodOptional<z.ZodString>;
     bins: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
     storage: z.ZodOptional<z.ZodEffects<z.ZodObject<{
+        /** Manifested runtime/migration capability; server startup still requires PostgreSQL. */
         backend: z.ZodEnum<["sqlite", "postgresql"]>;
         /** Supported storage engines. This capability matrix is independent of the active backend. */
         engines: z.ZodOptional<z.ZodArray<z.ZodEnum<["sqlite", "json", "postgresql"]>, "many">>;
@@ -39767,7 +39767,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
         aliasEnvPrefix: z.ZodOptional<z.ZodString>;
         /** Legacy/private-tier secret ref. Public conformance rejects this field. */
         databaseUrlSecretRef: z.ZodOptional<z.ZodString>;
-        /** Local sqlite path (`~/.hasna/<name>/<name>.db`). */
+        /** Explicit legacy SQLite import path. Never an authoritative client/server store. */
         sqlitePath: z.ZodOptional<z.ZodString>;
         /** Live PostgreSQL proof gate. The DSN environment variable is test-only. */
         pgTestGate: z.ZodOptional<z.ZodObject<{
@@ -42004,15 +42004,15 @@ export type ServiceContractManifest = z.infer<typeof ServiceContractManifestSche
 export declare const HealthResponseSchema: z.ZodObject<{
     status: z.ZodEnum<["ok", "degraded", "unavailable"]>;
     version: z.ZodString;
-    backend: z.ZodEnum<["sqlite", "postgresql"]>;
+    backend: z.ZodLiteral<"postgresql">;
 }, "strict", z.ZodTypeAny, {
     version: string;
     status: "unavailable" | "degraded" | "ok";
-    backend: "sqlite" | "postgresql";
+    backend: "postgresql";
 }, {
     version: string;
     status: "unavailable" | "degraded" | "ok";
-    backend: "sqlite" | "postgresql";
+    backend: "postgresql";
 }>;
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 /** Shape of `GET /ready`. */
@@ -70542,6 +70542,7 @@ declare const CoreContractSchemaRegistry: {
         description: z.ZodOptional<z.ZodString>;
         bins: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
         storage: z.ZodOptional<z.ZodEffects<z.ZodObject<{
+            /** Manifested runtime/migration capability; server startup still requires PostgreSQL. */
             backend: z.ZodEnum<["sqlite", "postgresql"]>;
             /** Supported storage engines. This capability matrix is independent of the active backend. */
             engines: z.ZodOptional<z.ZodArray<z.ZodEnum<["sqlite", "json", "postgresql"]>, "many">>;
@@ -70551,7 +70552,7 @@ declare const CoreContractSchemaRegistry: {
             aliasEnvPrefix: z.ZodOptional<z.ZodString>;
             /** Legacy/private-tier secret ref. Public conformance rejects this field. */
             databaseUrlSecretRef: z.ZodOptional<z.ZodString>;
-            /** Local sqlite path (`~/.hasna/<name>/<name>.db`). */
+            /** Explicit legacy SQLite import path. Never an authoritative client/server store. */
             sqlitePath: z.ZodOptional<z.ZodString>;
             /** Live PostgreSQL proof gate. The DSN environment variable is test-only. */
             pgTestGate: z.ZodOptional<z.ZodObject<{

@@ -192,7 +192,7 @@ describe("repo conformance kit", () => {
   test("retired storage-mode env vars are inert in the backend configuration check", () => {
     const report = runRepoConformance(repoRoot, { env: { HASNA_CONTRACTS_STORAGE_MODE: "sync" } });
     const backend = report.checks.find((c) => c.id === "server_backend_configuration");
-    expect(backend?.status).toBe("pass");
+    expect(backend?.status).toBe("skip");
     expect(report.ok).toBe(true);
   });
 
@@ -201,9 +201,17 @@ describe("repo conformance kit", () => {
       env: { HASNA_CONTRACTS_DATABASE_URL: "postgres://user@host/db" },
     });
     const backend = report.checks.find((c) => c.id === "server_backend_configuration");
-    expect(backend?.status).toBe("pass");
-    expect(backend?.detail).toContain("HASNA_CONTRACTS_DATABASE_URL");
-    expect(backend?.detail).toContain("postgresql");
+    expect(backend?.status).toBe("skip");
+    expect(backend?.detail).toContain("no server runtime declared");
+  });
+
+  test("a server with no DATABASE_URL passes only because its resolver demonstrably fails closed", () => {
+    withRepoFixture(completeServiceManifest(), completePackage, (root) => {
+      const report = runRepoConformance(root, { env: {} });
+      const backend = report.checks.find((c) => c.id === "server_backend_configuration");
+      expect(backend?.status).toBe("pass");
+      expect(backend?.detail).toContain("fails closed instead of selecting SQLite");
+    });
   });
 
   test("validates a serve health sample shape", () => {
@@ -232,7 +240,10 @@ describe("repo conformance kit", () => {
     ];
     try {
       withRepoFixture(manifest, completePackage, (root) => {
-        const report = runRepoConformance(root, { env: {}, skipNoCloudScan: true });
+        const report = runRepoConformance(root, {
+          env: { HASNA_DEMO_DATABASE_URL: "postgres://fixture.invalid/demo" },
+          skipNoCloudScan: true,
+        });
         expect(report.ok).toBe(true);
         expect(report.checks.find((check) => check.id === "surface_matrix")?.status).toBe("pass");
         expect(report.checks.find((check) => check.id === "surface_bindings")?.status).toBe("pass");
@@ -848,7 +859,10 @@ describe("repo conformance kit", () => {
       }
     };
     withRepoFixture(manifest, completePackage, (root) => {
-      const report = runRepoConformance(root, { env: {}, skipNoCloudScan: true });
+      const report = runRepoConformance(root, {
+        env: { HASNA_DEMO_DATABASE_URL: "postgres://fixture.invalid/demo" },
+        skipNoCloudScan: true,
+      });
       expect(report.checks.find((check) => check.id === "surface_matrix")?.status).toBe("pass");
       expect(report.ok).toBe(true);
     });

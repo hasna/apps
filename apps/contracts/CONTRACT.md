@@ -11,6 +11,13 @@ root, validated by `hasna.service_contract.v1` (Zod: `ServiceContractManifestSch
 JSON Schema: `src/hasna.contract.schema.json`). Repos verify themselves with the
 conformance kit (`runRepoConformance` / `contracts repo-conformance`).
 
+The canonical data/client architecture is defined in
+`docs/CANONICAL_DATA_CLIENT_CONTRACT.md`: public clients use one authenticated
+service transport and authoritative server data is PostgreSQL. Older
+SQLite-or-HTTP and server-SQLite language below is superseded by that contract
+and retained only as migration history until downstream manifests complete the
+breaking adoption.
+
 ---
 
 ## 1. Product stories
@@ -20,7 +27,7 @@ in the manifest's `hosting` array. There is no third.
 
 | Story | Meaning |
 | --- | --- |
-| `user-hosted` | The user runs the whole thing, in any environment of theirs. SQLite by default, their own PostgreSQL by choice. |
+| `user-hosted` | The user operates the service with PostgreSQL; public clients use its authenticated HTTPS API. |
 | `hasna-saas` | Hasna operates the product as a multi-tenant SaaS. |
 
 The deployment-placement axis that used to sit next to this (three runtime
@@ -32,36 +39,22 @@ carries is its server's **data backend**.
 
 ## 2. Server data backend
 
-The backend enum is **`sqlite | postgresql` ONLY**, and it describes the
-**SERVER's internal storage**:
+The sole live server backend is **`postgresql`**. Both reads and writes go to
+the service's configured PostgreSQL database. Missing, blank, malformed or
+conflicting database URL declarations stop startup; no local backend is
+selected.
 
-- **`sqlite`** — SQLite at `~/.hasna/<name>/<name>.db` is authoritative.
-- **`postgresql`** — reads **AND** writes go to a PostgreSQL server
-  (`DATABASE_URL`). Who operates that server — the user or Hasna — does not
-  change the backend, the code path, or this contract.
+Public clients use only the authenticated service API. Production authorities
+require HTTPS; exact loopback HTTP is a bounded development/test allowance.
+Clients never open PostgreSQL, SQLite, or another local authoritative store.
 
-Invariants, spelled out — these override everything:
+SQLite/JSON engine and path fields in legacy manifest metadata describe
+explicit import/migration capabilities only. They do not authorize a live
+server backend or public client data branch. Migration tooling must preserve
+the source until verification succeeds; source removal is not implicit.
 
-1. `postgresql` means both reads and writes hit PostgreSQL directly.
-2. There is **NO** sync engine.
-3. There is **NO** cache-as-backend (no blended local-cache runtime).
-4. There is **NO** merge logic and **NO** conflict resolution.
-5. After a one-time migration, the local SQLite file becomes a dated backup
-   file (`<name>.db.pre-postgres.<YYYYMMDD>`), not a live read path.
-6. The **only** sanctioned exception is the OpenTodos dual-write **SHADOW**:
-   during a pre-cutover validation window, writes MAY be mirrored async
-   sqlite→postgres for comparison; **reads stay on sqlite** and the app
-   **never reads from postgres** in shadow. Shadow is a migration step, not a
-   backend.
-
-The **OSS client is `sqlite`-or-HTTP** and **never opens PostgreSQL
-directly**: a client whose data lives in the server's PostgreSQL reaches it
-over the HTTP `/v1` API (see `resolveClientTransport`). There is no
-client-side Postgres store.
-
-Backend resolution lives in `src/server-backend.ts` and depends only on
-database configuration. There are no deployment or storage modes; the two
-backends are selected by the environment contract alone.
+Backend resolution lives in `src/server-backend.ts`. Retired deployment and
+storage selector variables are inert.
 
 ---
 
@@ -78,9 +71,9 @@ environment.
 `<NAME>` is the upper-snake form of the app name (e.g. `todos` → `TODOS`,
 the `mailery` app name → `MAILERY`).
 
-`resolveServerDataBackend` uses the canonical database URL first, then the
-short alias. A non-empty URL selects `postgresql`; otherwise the backend is
-`sqlite`. The resolver reports only backend and source names, never the URL.
+`resolveServerDataBackend` accepts the canonical database URL or an identical
+short alias. Missing, blank, conflicting, invalid, or non-PostgreSQL values
+fail closed. The resolver reports only backend and source names, never the URL.
 
 ### 3a. Credential resolution — env holds a pointer, disk holds the secret
 
@@ -99,7 +92,7 @@ The credential is resolved by the transport, at call time, through
 | 1 | argument | `--api-key` / `--profile` passed by the caller | Deliberate. |
 | 2 | override | `HASNA_<NAME>_API_KEY_OVERRIDE`, or the `HASNA_PROFILE` pointer | Deliberate. Nothing sets these automatically. |
 | 2.5 | pointer | `HASNA_<NAME>_API_KEY_REF` (a secrets-vault ITEM KEY) | Deliberate. Resolved through the `@hasna/secrets` SDK at request time; a vault that cannot be reached is TERMINAL, never a fall-through. |
-| 3 | **disk** | `$HOME/.hasna/fleet-env/<name>.env` (**primary**), then `$HOME/.hasna/cloud/<name>.env` (legacy-cloud, NOISY), then `$HOME/.config/hasna/<name>.env` (config), then `$HOME/.config/hasna/<name>-cloud.env` (config legacy alias, NOISY) | **The default path.** Re-read on every call. The two `-cloud`/legacy layers are deprecated and removed after `LEGACY_CLOUD_REMOVAL_DEADLINE` (`2026-10-01`). |
+| 3 | **disk** | `$XDG_CONFIG_HOME/hasna/<name>.env` (default `$HOME/.config/hasna/<name>.env`) | Owner-only XDG configuration, re-read on every call. Retired `$HOME/.hasna/**` and `*-cloud.env` locations are never automatic inputs. |
 | 4 | legacy env | `HASNA_<NAME>_API_KEY` / `<NAME>_API_KEY` | Deprecated fallback, used only when the disk yields nothing. Warns once per app. |
 
 Rules:
@@ -117,29 +110,22 @@ Rules:
   dereferences a path-shaped value; a value that looks like a vault item key
   (`namespace/app/live/api_key`) is refused with a message naming
   `HASNA_<NAME>_API_KEY_REF` as the correct variable.
-- **The legacy-cloud fallback is NOISY.** A credential resolved from
-  `$HOME/.hasna/cloud/<name>.env` or from a config `-cloud.env` alias reports
-  `deprecated: true`, names its granular tier (`legacy-cloud` / `config-legacy`)
-  in `apiKeyTier`, emits a once-per-source deprecation notice naming the
-  removal deadline and the sanctioned replacement route (the
-  `HASNA_<NAME>_API_KEY_REF` secrets-vault pointer or the override key), and
-  carries the deadline in its `warning`. `resolveClientTransport()`'s
-  `transportSource` / `apiKeySource` / `apiKeyTier` fields let a doctor see
-  exactly which source supplied the key, always value-free.
+- **Legacy data roots never supply live client configuration.** `$HOME/.hasna/**`
+  may be inspected only by explicit migration tooling. The transport and
+  credential resolvers consult the owner-only XDG config file and no retired
+  path.
 - **Tier 3 is re-read per request**, not cached and not resolved once when the
   client is built — a cache is the same snapshot defect at a smaller timescale.
   This is what makes a rotation heal in any shell, however old.
-- **A credential alone never routes anything to the network.** An explicit
-  `HASNA_<NAME>_API_URL` (or short alias) and a credential from any tier select
-  HTTP. Without an API URL, the client stays on SQLite. A URL without a usable
-  credential is a fail-closed misconfiguration, never a silent local read.
+- **A credential alone never supplies authority.** A valid explicit
+  `HASNA_<NAME>_API_URL` (or short alias) and a credential from any tier are
+  both required. Missing either is a fail-closed error; a public client has no
+  SQLite or local-data selection.
 - **`HOME` comes from the same env object** the caller passes. An env with no
   `HOME` performs no disk read, which is what keeps the behaviour hermetic and
   test suites independent of the machine running them.
-- **Never fall back to local data on an auth failure.** Offline reads are a
-  legitimate feature, but they MUST be a deliberate connection chosen *before* the
-  request. A `401`-to-local fallback prints healthy output while authentication
-  is broken — a false green, strictly worse than the loud failure.
+- **Authentication failures are terminal.** `401` and `403` are not retried or
+  converted into another data path.
 - **A credential source that cannot produce a usable key fails loudly.** A key
   carrying bytes that are illegal in an HTTP header is rejected by name, never
   forwarded — otherwise `fetch` throws a `TypeError` that embeds the whole

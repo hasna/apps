@@ -5404,14 +5404,12 @@ export const ServiceSurfaceSchema = z
   });
 export type ServiceSurface = z.infer<typeof ServiceSurfaceSchema>;
 
-/**
- * Active server data backend. `sqlite | postgresql` ONLY — the single switch that
- * replaced the removed runtime-placement axis (owner directive 2026-07-29).
- */
-export const SERVER_DATA_BACKENDS = ["sqlite", "postgresql"] as const;
-export const ServerDataBackendSchema = z.enum(SERVER_DATA_BACKENDS);
+/** Authoritative server storage. SQLite is legacy-import input, never a live backend. */
+export const SERVER_DATA_BACKENDS = ["postgresql"] as const;
+export const ServerDataBackendSchema = z.literal("postgresql");
 export type ServerDataBackend = z.infer<typeof ServerDataBackendSchema>;
 
+/** Required authoritative storage capability. */
 export const STORAGE_ENGINES = ["sqlite", "postgresql"] as const;
 export const STORAGE_ENGINE_VALUES = ["sqlite", "json", "postgresql"] as const;
 export const LOCAL_STORAGE_ENGINES = ["sqlite", "json"] as const;
@@ -5421,9 +5419,8 @@ export type StorageEngine = z.infer<typeof StorageEngineSchema>;
 /**
  * Storage engines a store-owning repo may waive instead of declaring.
  *
- * SQLite is the local source of truth for every `cli-with-store` repo, so it is
- * never waivable; PostgreSQL is the forward-looking capability a repo may defer
- * behind an explicit, auditable waiver.
+ * PostgreSQL waivers remain parseable only for bounded CLI-only migration
+ * tooling. Service-capable packages cannot use them.
  */
 export const WAIVABLE_STORAGE_ENGINES = ["postgresql"] as const;
 export type WaivableStorageEngine = (typeof WAIVABLE_STORAGE_ENGINES)[number];
@@ -5538,7 +5535,8 @@ export interface StorageWaiverEligibilityInput {
   name: string;
   bins: readonly string[];
   hosting: readonly HostingMode[];
-  storageBackend?: ServerDataBackend | undefined;
+  /** Manifest capability metadata; SQLite here is legacy import tooling, not a live server backend. */
+  storageBackend?: "sqlite" | "postgresql" | undefined;
   /** Declared surfaces. Omitted is treated as none declared. */
   serviceSurfaces?: readonly ApiSurfaceCapabilityInput[] | undefined;
 }
@@ -5675,14 +5673,15 @@ export function databaseUrlSecretRefFor(name: string): string {
   return `hasna/oss/${name}/database-url`;
 }
 
-/** Canonical local sqlite path for an app: `~/.hasna/<name>/<name>.db`. */
+/** Legacy SQLite import-path helper retained for explicit migration tooling. */
 export function defaultSqlitePathFor(name: string): string {
   return `~/.hasna/${name}/${name}.db`;
 }
 
 export const StorageContractSchema = z
   .object({
-    backend: ServerDataBackendSchema,
+    /** Manifested runtime/migration capability; server startup still requires PostgreSQL. */
+    backend: z.enum(["sqlite", "postgresql"]),
     /** Supported storage engines. This capability matrix is independent of the active backend. */
     engines: z.array(StorageEngineSchema).min(1).optional(),
     /** Primary env prefix, e.g. `HASNA_TODOS_`. Defaults to `HASNA_<NAME>_`. */
@@ -5694,7 +5693,7 @@ export const StorageContractSchema = z
       .string()
       .regex(/^hasna\/oss\/[a-z0-9-]+\/database-url$/)
       .optional(),
-    /** Local sqlite path (`~/.hasna/<name>/<name>.db`). */
+    /** Explicit legacy SQLite import path. Never an authoritative client/server store. */
     sqlitePath: z.string().min(1).endsWith(".db", "storage.sqlitePath must end in .db").optional(),
     /** Live PostgreSQL proof gate. The DSN environment variable is test-only. */
     pgTestGate: z
@@ -6138,13 +6137,6 @@ export const ServiceContractManifestSchema = z
       if (!value.storage) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cli-with-store repos must declare storage", path: ["storage"] });
       } else {
-        if (value.storage.backend === "sqlite" && !value.storage.sqlitePath) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "sqlite cli-with-store storage requires sqlitePath (~/.hasna/<name>/<name>.db)",
-            path: ["storage", "sqlitePath"]
-          });
-        }
         if (value.storage.engines) {
           // An eligible `cli-with-store` repo may ship sqlite-only while it
           // works toward PostgreSQL, but only behind an explicit waiver that
@@ -6174,7 +6166,7 @@ export const ServiceContractManifestSchema = z
             const refusal = ineligible && declaredWaivers.length > 0 ? `; declared waiver ignored: ${ineligible}` : "";
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
-              message: `cli-with-store storage.engines must declare both sqlite and postgresql unless the engine carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
+            message: `cli-with-store storage.engines must declare sqlite and postgresql unless bounded migration tooling carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
               path: ["storage", "engines"]
             });
           }
@@ -6192,14 +6184,14 @@ export const ServiceContractManifestSchema = z
         if (!value.storage.engines.includes("postgresql")) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "service storage.engines must declare postgresql alongside sqlite or json; both sqlite and postgresql remain supported",
+            message: "service storage.engines must declare postgresql alongside sqlite or json; local engines are migration/import capabilities only",
             path: ["storage", "engines"]
           });
         }
         if (!LOCAL_STORAGE_ENGINES.some((engine) => value.storage?.engines?.includes(engine))) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "service storage.engines must declare a local engine (sqlite or json)",
+            message: "service storage.engines must declare a legacy import engine (sqlite or json)",
             path: ["storage", "engines"]
           });
         }

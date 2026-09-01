@@ -1,9 +1,10 @@
 // Client-side transport resolver for the Hasna Service Contract v1.
 //
-// An OSS client has exactly two connections: its on-box SQLite file or the
-// server's HTTP API. It never opens PostgreSQL directly. An explicit API URL
-// plus a resolved credential selects HTTP; otherwise the client stays local.
-// Server backend configuration never participates in this decision.
+// A public app client has exactly one data connection: the server's
+// authenticated HTTP API. Production authorities MUST use HTTPS; exact
+// loopback HTTP is retained only as a deliberately bounded development/test
+// allowance. Clients never open SQLite or PostgreSQL and never infer a local
+// data fallback from missing or invalid configuration.
 //
 // SAFETY: this module never returns, logs, or embeds an API-key value. Callers
 // receive only presence flags and source names.
@@ -28,7 +29,6 @@ import {
 import { appConfigDiskValue, credentialDiskSources } from "./credentials.js";
 
 export {
-  LEGACY_CLOUD_REMOVAL_DEADLINE,
   appConfigDiskValue,
   completePointerCredential,
   credentialDiskSourceList,
@@ -195,19 +195,6 @@ function firstEnv(
   return null;
 }
 
-/**
- * The first URL key that is DEFINED in the environment, even when its value is
- * blank. A defined-but-blank key is an explicit opinion ("no server") and must
- * be told apart from a fully silent environment: only silence may fall through
- * to the disk pointer tier, and only a VALUE may select HTTP.
- */
-function firstEnvDefinedKey(env: Env, keys: readonly string[]): string | null {
-  for (const key of keys) {
-    if (env[key] !== undefined) return key;
-  }
-  return null;
-}
-
 function rawAuthority(value: string): string {
   const match = /^[a-z][a-z0-9+.-]*:\/\//i.exec(value);
   if (!match) throw new Error("API URL must be absolute.");
@@ -331,21 +318,32 @@ export function toV1BaseUrl(apiUrl: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-export const CLIENT_TRANSPORTS = ["sqlite", "http"] as const;
+export const CLIENT_TRANSPORTS = ["http"] as const;
 export type ClientTransportKind = (typeof CLIENT_TRANSPORTS)[number];
+
+/** A client authority or credential declaration cannot be used safely. */
+export class ClientTransportConfigurationError extends Error {
+  readonly appName: string;
+  readonly sources: readonly string[];
+
+  constructor(appName: string, message: string, sources: readonly string[] = []) {
+    super(message);
+    this.name = "ClientTransportConfigurationError";
+    this.appName = appName;
+    this.sources = Object.freeze([...sources]);
+  }
+}
 
 export interface ClientTransportResolution {
   /** Where the client should read/write from. */
   transport: ClientTransportKind;
   /**
-   * What selected the transport: an API URL env key NAME, the absolute PATH of
-   * the fleet app-config file that supplied the URL, `"default"` for local
-   * SQLite with a silent environment, or the env key NAME of a DEFINED-but-blank
-   * URL that explicitly selected local.
+   * What selected the transport: an API URL env key NAME or the absolute PATH
+   * of the XDG app-config file that supplied the URL.
    */
   transportSource: string;
-  /** `<origin>/v1` base for the server API when transport is http, else null. */
-  baseUrl: string | null;
+  /** `<origin>/v1` base for the server API. */
+  baseUrl: string;
   /**
    * WHERE the API URL/domain came from: an env key NAME, an absolute file PATH,
    * `"default"` (neutral placeholder), or null.
@@ -357,19 +355,16 @@ export interface ClientTransportResolution {
    * WHERE the API key came from: an env key NAME or an absolute file path.
    * Never the value.
    *
-   * On local SQLite this reports only whether the legacy env key is set, since
-   * a client reading its own file resolves no credential at all. On HTTP it
-   * names the tier of the provider chain that supplied the key.
+   * Names the tier of the provider chain that supplied the key.
    */
   apiKeySource: string | null;
   /**
-   * Which tier of the credential chain supplied the key, or null on the
-   * local SQLite / when no credential resolved. See {@link CredentialTier}.
+   * Which tier of the credential chain supplied the key.
    */
-  apiKeyTier: CredentialTier | null;
+  apiKeyTier: CredentialTier;
   /**
-   * True when an API URL requests HTTP but the connection is incomplete.
-   * Callers SHOULD treat this as an error rather than reading stale local data.
+   * Kept for diagnostic shape compatibility. A successful resolution is never
+   * misconfigured; invalid configurations throw before a value is returned.
    */
   misconfigured: boolean;
   /** Human-readable warning, or null. Never contains secret values. */
@@ -382,20 +377,9 @@ export interface ResolveClientTransportOptions {
 }
 
 /**
- * Resolve how a client should reach an app's data given the environment.
- *
- * An explicit API URL requests HTTP. It is read from the environment first and,
- * when the environment is silent, from the fleet app-config file on disk — the
- * same file the credential tier already reads. The credential resolves at CALL
- * TIME through {@link resolveCredential}: argument, deliberate override/profile,
- * disk, then the deprecated legacy env variable. With no API URL in either tier
- * the client stays on local SQLite and never consults credential files.
- *
- * The disk tier is a FALLBACK and never an override: an API URL exported in the
- * environment always wins over the file. It exists because a non-interactive
- * shell inherits no fleet environment, and the honest answer for one is the
- * config its operator actually wrote down — not a silent local-store read at
- * `misconfigured: false`.
+ * Resolve the sole authenticated service transport. The authority is read from
+ * the environment first and then XDG app config. Missing, blank, conflicting,
+ * or invalid declarations throw. Credentials are resolved at call time.
  */
 export function resolveClientTransport(
   name: string,
@@ -403,60 +387,60 @@ export function resolveClientTransport(
   options: ResolveClientTransportOptions = {},
 ): ClientTransportResolution {
   const keys = clientTransportEnvKeys(name);
-  const envUrlHit = firstEnv(env, keys.apiUrlKeys, { preserveRaw: true });
-  // A URL key that is DEFINED in the environment with a blank value is an
-  // explicit local choice ("no server"). Presence of a pointer must never
-  // override an explicit opinion, so the disk tier is consulted only when the
-  // environment is fully silent about the URL — not when it blanked it.
-  const explicitLocalKey = envUrlHit ? null : firstEnvDefinedKey(env, keys.apiUrlKeys);
-  // Only consulted when the environment is silent, so the env keeps precedence
-  // and a client with an explicit URL never pays a stat for a file it ignores.
-  const diskUrlHit = envUrlHit || explicitLocalKey ? null : appConfigDiskValue(name, env, keys.apiUrlKeys);
+  const definedUrlEntries = keys.apiUrlKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
+    .map((key) => ({ key, raw: String(env[key]) }));
+  const blankUrl = definedUrlEntries.find((entry) => entry.raw.trim().length === 0);
+  if (blankUrl) {
+    throw new ClientTransportConfigurationError(
+      name,
+      `${blankUrl.key} is set but blank; public clients require an explicit HTTPS API URL and never select local storage.`,
+      [blankUrl.key],
+    );
+  }
+  const controlledUrl = definedUrlEntries.find((entry) => ASCII_CONTROL_PATTERN.test(entry.raw));
+  if (controlledUrl) {
+    throw new ClientTransportConfigurationError(name, `${controlledUrl.key} contains ASCII control characters.`, [controlledUrl.key]);
+  }
+  const usableUrlEntries = definedUrlEntries.map((entry) => ({ key: entry.key, value: entry.raw.trim() }));
+  if (usableUrlEntries.length > 1 && new Set(usableUrlEntries.map((entry) => entry.value)).size > 1) {
+    throw new ClientTransportConfigurationError(
+      name,
+      `${usableUrlEntries.map((entry) => entry.key).join(" and ")} disagree; client authority aliases must be identical or only one may be set.`,
+      usableUrlEntries.map((entry) => entry.key),
+    );
+  }
+  const envUrlHit = usableUrlEntries[0] ?? null;
+  const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys);
+  if (diskConfigUrlHit?.unusable) {
+    throw new ClientTransportConfigurationError(
+      name,
+      `${diskConfigUrlHit.key} in ${diskConfigUrlHit.path} is declared but blank or malformed; public clients require a valid HTTPS service authority.`,
+      [diskConfigUrlHit.path],
+    );
+  }
+  if (envUrlHit && diskConfigUrlHit && envUrlHit.value !== diskConfigUrlHit.value.trim()) {
+    throw new ClientTransportConfigurationError(
+      name,
+      `${envUrlHit.key} and ${diskConfigUrlHit.path} select different service authorities; refusing to send a credential written for one authority to the other.`,
+      [envUrlHit.key, diskConfigUrlHit.path],
+    );
+  }
+  const diskUrlHit = envUrlHit ? null : diskConfigUrlHit;
   // `key` carries the SOURCE for every downstream field: an env key name, or the
   // absolute path of the file that decided. `apiKeySource` already reports its
   // tier this way, so an operator reads both the same way.
   const urlHit = envUrlHit ?? (diskUrlHit ? { key: diskUrlHit.path, value: diskUrlHit.value } : null);
-  const keyHit = firstEnv(env, keys.apiKeyKeys);
   const warnings: string[] = [];
 
-  // No URL in the environment or on disk means local SQLite. Do not resolve the
-  // credential chain here: a client authenticating to nothing must not read or
-  // emit credential state.
+  // No URL is never a local-data selection. Public clients fail before any
+  // data operation can run.
   if (!urlHit) {
-    // A DEFINED-but-blank URL key selected local on purpose. When a disk
-    // pointer exists it was overridden, and the override must not be silent:
-    // the operator learns the pointer existed and was not selected.
-    if (explicitLocalKey) {
-      const overriddenPointer = appConfigDiskValue(name, env, keys.apiUrlKeys);
-      if (overriddenPointer) {
-        warnings.push(
-          `${explicitLocalKey} is defined but blank, which selects the local store. ` +
-            `The server URL in ${overriddenPointer.path} was NOT selected: an explicit blank wins over a disk pointer.`,
-        );
-      }
-      return {
-        transport: "sqlite",
-        transportSource: explicitLocalKey,
-        baseUrl: null,
-        apiUrlSource: null,
-        apiKeyPresent: Boolean(keyHit),
-        apiKeySource: keyHit ? keyHit.key : null,
-        apiKeyTier: null,
-        misconfigured: false,
-        warning: warnings.length > 0 ? warnings.join(" ") : null,
-      };
-    }
-    return {
-      transport: "sqlite",
-      transportSource: "default",
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: Boolean(keyHit),
-      apiKeySource: keyHit ? keyHit.key : null,
-      apiKeyTier: null,
-      misconfigured: false,
-      warning: null,
-    };
+    throw new ClientTransportConfigurationError(
+      name,
+      `${keys.apiUrlKeys[0]} is required; public clients use only the authenticated HTTPS service and never fall back to SQLite or another local store.`,
+      keys.apiUrlKeys,
+    );
   }
 
   // A server URL decided by a disk pointer while the environment was silent is
@@ -464,7 +448,7 @@ export function resolveClientTransport(
   if (diskUrlHit) {
     warnings.push(
       `No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` +
-        `Unset the pointer or remove the file to stay on the local store.`,
+        `Keep this XDG config entry aligned with the intended service authority.`,
     );
   }
 
@@ -477,20 +461,10 @@ export function resolveClientTransport(
     const diskHint = credentialDiskSourcesForMessage(name, env);
     warnings.push(
       `${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` +
-        `refusing to route and leaving the local sqlite store selected. ` +
+        `refusing to create an unauthenticated client. ` +
         `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`,
     );
-    return {
-      transport: "sqlite",
-      transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
-      apiKeyPresent: false,
-      apiKeySource: null,
-      apiKeyTier: null,
-      misconfigured: true,
-      warning: warnings.join(" "),
-    };
+    throw new ClientTransportConfigurationError(name, warnings.join(" "), [urlHit.key]);
   }
   if (credential.warning) warnings.push(credential.warning);
 
@@ -500,18 +474,11 @@ export function resolveClientTransport(
     baseUrl = toV1BaseUrl(urlHit.value);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    warnings.push(`Invalid API URL from ${apiUrlSource}: ${message}. Using local store.`);
-    return {
-      transport: "sqlite",
-      transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
-      apiKeyPresent: true,
-      apiKeySource: credential.source,
-      apiKeyTier: credential.tier,
-      misconfigured: true,
-      warning: warnings.join(" "),
-    };
+    throw new ClientTransportConfigurationError(
+      name,
+      `Invalid API URL from ${apiUrlSource}: ${message}`,
+      [apiUrlSource],
+    );
   }
 
   return {
@@ -947,11 +914,9 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
 }
 
 /**
- * Convenience: resolve transport from env and, when http, build the HTTP
- * client in one call. Returns `{ transport: 'sqlite', resolution }` for the
- * local file, or `{ transport: 'http', client, resolution }` for server data.
- * Throws if the config is `misconfigured` (server data requested but unusable)
- * so callers can't drift onto local data by accident.
+ * Resolve the sole public client transport and build it. Missing, blank,
+ * conflicting, or invalid authority/credential configuration throws; there is
+ * no local-data return branch.
  */
 export function createClientTransport(
   name: string,
@@ -960,23 +925,19 @@ export function createClientTransport(
     /** Tier-1 credential inputs, e.g. from `--api-key` / `--profile` flags. */
     credentials?: CredentialChainOptions;
   },
-):
-  | { transport: "sqlite"; client: null; resolution: ClientTransportResolution }
-  | { transport: "http"; client: HasnaHttpTransport; resolution: ClientTransportResolution } {
+): { transport: "http"; client: HasnaHttpTransport; resolution: ClientTransportResolution } {
   const credentialOptions = overrides?.credentials;
   const resolution = resolveClientTransport(name, env, { ...(credentialOptions ? { credentials: credentialOptions } : {}) });
-  if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the API client.`);
-  }
-  if (resolution.transport === "sqlite" || !resolution.baseUrl) {
-    return { transport: "sqlite", client: null, resolution };
-  }
   // The credential is NOT read here. It is resolved per request through the
   // same chain `resolveClientTransport` used, so this path cannot drift from
   // that one — an earlier version of this function re-read the key straight out
   // of `env`, which was a second, divergent resolution on the code path most
   // callers actually take.
   const credentialProvider: CredentialProvider = () => {
+    const current = resolveClientTransport(name, env, { ...(credentialOptions ? { credentials: credentialOptions } : {}) });
+    if (current.baseUrl !== resolution.baseUrl) {
+      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
+    }
     const resolved = resolveCredential(name, env, credentialOptions);
     if (!resolved) {
       throw new Error(

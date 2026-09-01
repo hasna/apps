@@ -292,7 +292,7 @@ describe("service contract manifest validation", () => {
     const parsed = validateServiceContractManifest(service);
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
-      expect(parsed.error.issues.some((issue) => issue.message.includes("both sqlite and postgresql"))).toBe(true);
+      expect(parsed.error.issues.some((issue) => issue.message.includes("postgresql alongside sqlite or json"))).toBe(true);
     }
   });
 

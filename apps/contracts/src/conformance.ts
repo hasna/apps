@@ -883,7 +883,7 @@ export function runRepoConformance(repoRoot: string, options: RepoConformanceOpt
       if (missingEngines.length > 0) failures.push(`missing storage engines: ${missingEngines.join(", ")}`);
     } else {
       if (!LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine))) {
-        failures.push(`missing local storage engine: ${LOCAL_STORAGE_ENGINES.join(" or ")}`);
+        failures.push(`missing legacy import engine: ${LOCAL_STORAGE_ENGINES.join(" or ")}`);
       }
       if (!declaredEngines.has("postgresql")) failures.push("missing storage engine: postgresql");
     }
@@ -942,16 +942,49 @@ export function runRepoConformance(repoRoot: string, options: RepoConformanceOpt
 
   // Check 6: server backend configuration.
   const env = options.env ?? process.env;
-  const resolution = resolveServerDataBackend(manifest.name, env);
   const keys = serverDataBackendEnvKeys(manifest.name).databaseUrlKeys;
-  checks.push({
-    id: "server_backend_configuration",
-    status: "pass",
-    detail:
-      resolution.backend === "postgresql"
-        ? `${resolution.databaseUrlSource} selects postgresql`
-        : `no database URL set; defaults to sqlite (keys: ${keys.join(", ")})`,
-  });
+  if (!hasServeBin && manifest.class !== "service" && manifest.class !== "saas") {
+    checks.push({
+      id: "server_backend_configuration",
+      status: "skip",
+      detail: "no server runtime declared; PostgreSQL backend configuration is not applicable",
+    });
+  } else {
+    const hasDatabaseUrlDeclaration = keys.some(
+      (key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined,
+    );
+    if (!hasDatabaseUrlDeclaration) {
+      try {
+        resolveServerDataBackend(manifest.name, env);
+        checks.push({
+          id: "server_backend_configuration",
+          status: "fail",
+          detail: "server backend resolver did not fail closed when DATABASE_URL was absent",
+        });
+      } catch {
+        checks.push({
+          id: "server_backend_configuration",
+          status: "pass",
+          detail: `${keys[0]} is not declared; the server resolver fails closed instead of selecting SQLite`,
+        });
+      }
+    } else {
+      try {
+        const resolution = resolveServerDataBackend(manifest.name, env);
+        checks.push({
+          id: "server_backend_configuration",
+          status: "pass",
+          detail: `${resolution.databaseUrlSource} configures authoritative postgresql`,
+        });
+      } catch (error) {
+        checks.push({
+          id: "server_backend_configuration",
+          status: "fail",
+          detail: error instanceof Error ? error.message : `invalid PostgreSQL configuration (keys: ${keys.join(", ")})`,
+        });
+      }
+    }
+  }
 
   // Check 7: health shape when a serve bin exists.
   if (!hasServeBin) {

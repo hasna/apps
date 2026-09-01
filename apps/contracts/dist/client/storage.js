@@ -39,9 +39,10 @@ function credentialPointerEnvKey(name) {
 }
 
 // src/client/credentials.ts
-import { readFileSync, statSync } from "fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "fs";
+import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "constants";
 import { createRequire } from "module";
-import { join } from "path";
+import { isAbsolute, join } from "path";
 class CredentialResolutionError extends Error {
   appName;
   attempted;
@@ -52,12 +53,17 @@ class CredentialResolutionError extends Error {
     this.attempted = attempted;
   }
 }
-var HASNA_STATE_DIR = ".hasna";
-var FLEET_CREDENTIAL_DIR = "fleet-env";
-var LEGACY_CLOUD_DIR = "cloud";
+
+class CredentialFileUnsafeError extends Error {
+  path;
+  constructor(path, reason) {
+    super(`Refusing unsafe credential/config file ${path}: ${reason}.`);
+    this.name = "CredentialFileUnsafeError";
+    this.path = path;
+  }
+}
 var CONFIG_DIR = ".config";
 var CONFIG_NAMESPACE = "hasna";
-var LEGACY_CLOUD_REMOVAL_DEADLINE = "2026-10-01";
 var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 var SAFE_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 var SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
@@ -71,28 +77,14 @@ function credentialDiskSourceList(name, env, profile = null) {
   const home = homeDir(env);
   if (!home || !SAFE_APP_SLUG.test(name))
     return [];
-  const stem = profile ? `${name}.${profile}` : name;
   const configStem = profile ? `${name}-${profile}` : name;
+  const configuredRoot = env.XDG_CONFIG_HOME?.trim();
+  const configRoot = configuredRoot && isAbsolute(configuredRoot) ? configuredRoot : join(home, CONFIG_DIR);
   return [
     {
-      path: join(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
-      tier: "fleet-env",
-      deprecated: false
-    },
-    {
-      path: join(home, HASNA_STATE_DIR, LEGACY_CLOUD_DIR, `${stem}.env`),
-      tier: "legacy-cloud",
-      deprecated: true
-    },
-    {
-      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}.env`),
+      path: join(configRoot, CONFIG_NAMESPACE, `${configStem}.env`),
       tier: "config",
       deprecated: false
-    },
-    {
-      path: join(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`),
-      tier: "config-legacy",
-      deprecated: true
     }
   ];
 }
@@ -104,6 +96,7 @@ function profileDiskSources(name, env, profile) {
 }
 function parseEnvFile(text) {
   const values = new Map;
+  const unusable = new Set;
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line.length === 0 || line.startsWith("#"))
@@ -118,38 +111,75 @@ function parseEnvFile(text) {
     let value = withoutExport.slice(equals + 1).trim();
     const quote = value[0];
     if (quote === '"' || quote === "'") {
-      if (value.length < 2 || !value.endsWith(quote))
+      if (value.length < 2 || !value.endsWith(quote)) {
+        unusable.add(key);
         continue;
+      }
       value = value.slice(1, -1);
     }
-    if (value.length === 0)
+    if (value.trim().length === 0) {
+      unusable.add(key);
       continue;
+    }
+    if (values.has(key) && values.get(key) !== value)
+      unusable.add(key);
     values.set(key, value);
   }
-  return values;
+  return { values, unusable };
 }
 function readAppConfigFile(path) {
-  let text;
+  const unsafe = (reason) => {
+    throw new CredentialFileUnsafeError(path, reason);
+  };
+  let fd = -1;
   try {
-    const stats = statSync(path);
-    if (!stats.isFile() || stats.size > MAX_CREDENTIAL_FILE_BYTES)
+    fd = openSync(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  } catch (error) {
+    const code = error.code;
+    if (code === "ENOENT" || code === "ENOTDIR")
       return null;
-    text = readFileSync(path, "utf8");
-  } catch {
-    return null;
+    if (code === "ELOOP")
+      unsafe("the path is a symlink");
+    unsafe(`the path could not be opened (${code ?? "unknown error"})`);
   }
-  return parseEnvFile(text);
+  try {
+    const before = fstatSync(fd);
+    if (!before.isFile())
+      unsafe("the path is not a regular file");
+    const permissions = before.mode & 4095;
+    if (permissions !== 256 && permissions !== 384) {
+      unsafe(`permission mode ${permissions.toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
+    }
+    const uid = process.getuid?.() ?? process.geteuid?.();
+    if (uid !== undefined && before.uid !== uid)
+      unsafe("the file is not owned by the current user");
+    if (before.size > MAX_CREDENTIAL_FILE_BYTES)
+      unsafe("the file exceeds the size limit");
+    const bytes = readFileSync(fd);
+    const after = fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      unsafe("the file changed while being read");
+    }
+    return parseEnvFile(bytes.toString("utf8"));
+  } finally {
+    if (fd !== -1)
+      closeSync(fd);
+  }
 }
 function readCredentialFile(path, apiKeyKeys) {
-  const values = readAppConfigFile(path);
-  if (!values)
+  const parsed = readAppConfigFile(path);
+  if (!parsed)
     return null;
   for (const key of apiKeyKeys) {
-    const value = values.get(key)?.trim();
-    if (value)
-      return value;
+    if (parsed.unusable.has(key)) {
+      throw new CredentialFileUnsafeError(path, `${key} is declared but blank or malformed`);
+    }
   }
-  return null;
+  const values = apiKeyKeys.map((key) => parsed.values.get(key)?.trim()).filter((value) => Boolean(value));
+  if (new Set(values).size > 1) {
+    throw new CredentialFileUnsafeError(path, "credential aliases disagree");
+  }
+  return values[0] ?? null;
 }
 var CREDENTIAL_SHAPED_KEY = /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)(?:_|$)/;
 function appConfigDiskValue(name, env, keys) {
@@ -157,11 +187,19 @@ function appConfigDiskValue(name, env, keys) {
   if (wanted.length === 0)
     return null;
   for (const path of credentialDiskSources(name, env)) {
-    const values = readAppConfigFile(path);
-    if (!values)
+    const parsed = readAppConfigFile(path);
+    if (!parsed)
       continue;
+    if (wanted.some((key) => parsed.unusable.has(key))) {
+      return { key: wanted.find((key) => parsed.unusable.has(key)), value: "", path, unusable: true };
+    }
+    const values = wanted.map((key) => parsed.values.get(key)?.trim()).filter((value) => Boolean(value));
+    if (new Set(values).size > 1)
+      throw new CredentialFileUnsafeError(path, "configuration aliases disagree");
     for (const key of wanted) {
-      const value = values.get(key)?.trim();
+      if (parsed.unusable.has(key))
+        return { key, value: "", path, unusable: true };
+      const value = parsed.values.get(key)?.trim();
       if (value)
         return { key, value, path };
     }
@@ -261,6 +299,8 @@ function validateAndSealResolvedCredential(appName, credential) {
 }
 function firstEnvValue(env, keys) {
   for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(env, key))
+      continue;
     const value = env[key]?.trim();
     if (value)
       return { key, value };
@@ -289,8 +329,11 @@ function defaultDeprecationSink(message) {
 function resolveCredential(name, env, options = {}) {
   const { apiKeyKeys } = clientTransportEnvKeys(name);
   const diskPaths = credentialDiskSources(name, env);
-  const explicitKey = options.apiKey?.trim();
-  if (explicitKey) {
+  if (options.apiKey !== undefined) {
+    const explicitKey = options.apiKey.trim();
+    if (!explicitKey) {
+      throw new CredentialResolutionError(name, "The explicit apiKey argument is blank; an explicit credential never falls through to another identity.", ["explicit apiKey argument"]);
+    }
     assertUsableCredential(name, "the explicit apiKey argument", explicitKey);
     return sealCredential({
       apiKey: explicitKey,
@@ -303,7 +346,7 @@ function resolveCredential(name, env, options = {}) {
     });
   }
   const overrideKeyName = credentialOverrideEnvKey(name);
-  const overrideRaw = env[overrideKeyName];
+  const overrideRaw = Object.prototype.hasOwnProperty.call(env, overrideKeyName) ? env[overrideKeyName] : undefined;
   if (overrideRaw !== undefined) {
     const override = overrideRaw.trim();
     if (!override) {
@@ -321,7 +364,7 @@ function resolveCredential(name, env, options = {}) {
     });
   }
   const pointerKeyName = credentialPointerEnvKey(name);
-  const pointerRaw = env[pointerKeyName];
+  const pointerRaw = Object.prototype.hasOwnProperty.call(env, pointerKeyName) ? env[pointerKeyName] : undefined;
   if (pointerRaw !== undefined) {
     const pointer = pointerRaw.trim();
     if (!pointer) {
@@ -341,7 +384,14 @@ function resolveCredential(name, env, options = {}) {
       warning: null
     });
   }
-  const profile = options.profile?.trim() || env[CREDENTIAL_PROFILE_ENV_KEY]?.trim();
+  if (options.profile !== undefined && !options.profile.trim()) {
+    throw new CredentialResolutionError(name, "The explicit profile argument is blank; an explicit identity selection never falls through.", ["explicit profile argument"]);
+  }
+  const profileRaw = Object.prototype.hasOwnProperty.call(env, CREDENTIAL_PROFILE_ENV_KEY) ? env[CREDENTIAL_PROFILE_ENV_KEY] : undefined;
+  if (profileRaw !== undefined && !profileRaw.trim()) {
+    throw new CredentialResolutionError(name, `${CREDENTIAL_PROFILE_ENV_KEY} is set but blank.`, [CREDENTIAL_PROFILE_ENV_KEY]);
+  }
+  const profile = options.profile?.trim() || profileRaw?.trim();
   if (profile) {
     const profileSource = options.profile?.trim() ? "explicit profile argument" : CREDENTIAL_PROFILE_ENV_KEY;
     if (!SAFE_PROFILE.test(profile)) {
@@ -365,6 +415,14 @@ function resolveCredential(name, env, options = {}) {
     }
     throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
   }
+  const definedLegacyEntries = apiKeyKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]).trim() }));
+  const blankLegacy = definedLegacyEntries.find((entry) => entry.value.length === 0);
+  if (blankLegacy) {
+    throw new CredentialResolutionError(name, `${blankLegacy.key} is set but blank; a declared credential never falls through to another alias or identity.`, [blankLegacy.key]);
+  }
+  if (definedLegacyEntries.length > 1 && new Set(definedLegacyEntries.map((entry) => entry.value)).size > 1) {
+    throw new CredentialResolutionError(name, `${definedLegacyEntries.map((entry) => entry.key).join(" and ")} disagree; credential aliases must be identical or only one may be set.`, definedLegacyEntries.map((entry) => entry.key));
+  }
   const diskSourceList = credentialDiskSourceList(name, env, null);
   const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) })).filter((hit) => hit.value !== null);
   if (diskHits.length > 0) {
@@ -378,28 +436,14 @@ function resolveCredential(name, env, options = {}) {
       })()
     ];
     const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.src.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.src.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
-    let deprecated = winner.src.deprecated;
-    let finalWarning = warning;
-    if (winner.src.deprecated) {
-      deprecated = true;
-      const sink = options.onDeprecation ?? defaultDeprecationSink;
-      const notified = deprecationNotified();
-      const noticeKey = `${name}:${winner.src.path}`;
-      if (!notified.has(noticeKey)) {
-        notified.add(noticeKey);
-        const message = `[${name}] DEPRECATED: the API key came from ${winner.src.path} \u2014 a legacy credential location. ` + `The legacy 'cloud' tiers are removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}. Provision the key in ` + `the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` + `${credentialOverrideEnvKey(name)}.`;
-        sink(message);
-      }
-      finalWarning = [warning, `Legacy credential source: ${winner.src.path}. Removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}.`].filter(Boolean).join(" ") || null;
-    }
     return sealCredential({
       apiKey: winner.value,
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
-      deprecated,
+      deprecated: false,
       diskCandidates: diskPaths,
-      warning: finalWarning
+      warning
     });
   }
   const legacy = firstEnvValue(env, apiKeyKeys);
@@ -543,22 +587,6 @@ function fleetApiDomain(env = process.env) {
 function defaultCloudBaseUrl(name, env = process.env) {
   return resolveDefaultCloudBaseUrl(name, env).baseUrl;
 }
-function firstEnv(env, keys, options = {}) {
-  for (const key of keys) {
-    const raw = env[key];
-    const value = raw?.trim();
-    if (value)
-      return { key, value: options.preserveRaw ? raw : value };
-  }
-  return null;
-}
-function firstEnvDefinedKey(env, keys) {
-  for (const key of keys) {
-    if (env[key] !== undefined)
-      return key;
-  }
-  return null;
-}
 function rawAuthority(value) {
   const match = /^[a-z][a-z0-9+.-]*:\/\//i.exec(value);
   if (!match)
@@ -660,63 +688,55 @@ function toV1BaseUrl(apiUrl) {
   url.pathname = `${path}/v1`;
   return url.toString().replace(/\/+$/, "");
 }
-var CLIENT_TRANSPORTS = ["sqlite", "http"];
+var CLIENT_TRANSPORTS = ["http"];
+
+class ClientTransportConfigurationError extends Error {
+  appName;
+  sources;
+  constructor(appName, message, sources = []) {
+    super(message);
+    this.name = "ClientTransportConfigurationError";
+    this.appName = appName;
+    this.sources = Object.freeze([...sources]);
+  }
+}
 function resolveClientTransport(name, env = process.env, options = {}) {
   const keys = clientTransportEnvKeys(name);
-  const envUrlHit = firstEnv(env, keys.apiUrlKeys, { preserveRaw: true });
-  const explicitLocalKey = envUrlHit ? null : firstEnvDefinedKey(env, keys.apiUrlKeys);
-  const diskUrlHit = envUrlHit || explicitLocalKey ? null : appConfigDiskValue(name, env, keys.apiUrlKeys);
+  const definedUrlEntries = keys.apiUrlKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, raw: String(env[key]) }));
+  const blankUrl = definedUrlEntries.find((entry) => entry.raw.trim().length === 0);
+  if (blankUrl) {
+    throw new ClientTransportConfigurationError(name, `${blankUrl.key} is set but blank; public clients require an explicit HTTPS API URL and never select local storage.`, [blankUrl.key]);
+  }
+  const controlledUrl = definedUrlEntries.find((entry) => ASCII_CONTROL_PATTERN.test(entry.raw));
+  if (controlledUrl) {
+    throw new ClientTransportConfigurationError(name, `${controlledUrl.key} contains ASCII control characters.`, [controlledUrl.key]);
+  }
+  const usableUrlEntries = definedUrlEntries.map((entry) => ({ key: entry.key, value: entry.raw.trim() }));
+  if (usableUrlEntries.length > 1 && new Set(usableUrlEntries.map((entry) => entry.value)).size > 1) {
+    throw new ClientTransportConfigurationError(name, `${usableUrlEntries.map((entry) => entry.key).join(" and ")} disagree; client authority aliases must be identical or only one may be set.`, usableUrlEntries.map((entry) => entry.key));
+  }
+  const envUrlHit = usableUrlEntries[0] ?? null;
+  const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys);
+  if (diskConfigUrlHit?.unusable) {
+    throw new ClientTransportConfigurationError(name, `${diskConfigUrlHit.key} in ${diskConfigUrlHit.path} is declared but blank or malformed; public clients require a valid HTTPS service authority.`, [diskConfigUrlHit.path]);
+  }
+  if (envUrlHit && diskConfigUrlHit && envUrlHit.value !== diskConfigUrlHit.value.trim()) {
+    throw new ClientTransportConfigurationError(name, `${envUrlHit.key} and ${diskConfigUrlHit.path} select different service authorities; refusing to send a credential written for one authority to the other.`, [envUrlHit.key, diskConfigUrlHit.path]);
+  }
+  const diskUrlHit = envUrlHit ? null : diskConfigUrlHit;
   const urlHit = envUrlHit ?? (diskUrlHit ? { key: diskUrlHit.path, value: diskUrlHit.value } : null);
-  const keyHit = firstEnv(env, keys.apiKeyKeys);
   const warnings = [];
   if (!urlHit) {
-    if (explicitLocalKey) {
-      const overriddenPointer = appConfigDiskValue(name, env, keys.apiUrlKeys);
-      if (overriddenPointer) {
-        warnings.push(`${explicitLocalKey} is defined but blank, which selects the local store. ` + `The server URL in ${overriddenPointer.path} was NOT selected: an explicit blank wins over a disk pointer.`);
-      }
-      return {
-        transport: "sqlite",
-        transportSource: explicitLocalKey,
-        baseUrl: null,
-        apiUrlSource: null,
-        apiKeyPresent: Boolean(keyHit),
-        apiKeySource: keyHit ? keyHit.key : null,
-        apiKeyTier: null,
-        misconfigured: false,
-        warning: warnings.length > 0 ? warnings.join(" ") : null
-      };
-    }
-    return {
-      transport: "sqlite",
-      transportSource: "default",
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: Boolean(keyHit),
-      apiKeySource: keyHit ? keyHit.key : null,
-      apiKeyTier: null,
-      misconfigured: false,
-      warning: null
-    };
+    throw new ClientTransportConfigurationError(name, `${keys.apiUrlKeys[0]} is required; public clients use only the authenticated HTTPS service and never fall back to SQLite or another local store.`, keys.apiUrlKeys);
   }
   if (diskUrlHit) {
-    warnings.push(`No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` + `Unset the pointer or remove the file to stay on the local store.`);
+    warnings.push(`No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` + `Keep this XDG config entry aligned with the intended service authority.`);
   }
   const credential = resolveCredential(name, env, options.credentials);
   if (!credential) {
     const diskHint = credentialDiskSourcesForMessage(name, env);
-    warnings.push(`${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` + `refusing to route and leaving the local sqlite store selected. ` + `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`);
-    return {
-      transport: "sqlite",
-      transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
-      apiKeyPresent: false,
-      apiKeySource: null,
-      apiKeyTier: null,
-      misconfigured: true,
-      warning: warnings.join(" ")
-    };
+    warnings.push(`${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` + `refusing to create an unauthenticated client. ` + `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`);
+    throw new ClientTransportConfigurationError(name, warnings.join(" "), [urlHit.key]);
   }
   if (credential.warning)
     warnings.push(credential.warning);
@@ -726,18 +746,7 @@ function resolveClientTransport(name, env = process.env, options = {}) {
     baseUrl = toV1BaseUrl(urlHit.value);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    warnings.push(`Invalid API URL from ${apiUrlSource}: ${message}. Using local store.`);
-    return {
-      transport: "sqlite",
-      transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
-      apiKeyPresent: true,
-      apiKeySource: credential.source,
-      apiKeyTier: credential.tier,
-      misconfigured: true,
-      warning: warnings.join(" ")
-    };
+    throw new ClientTransportConfigurationError(name, `Invalid API URL from ${apiUrlSource}: ${message}`, [apiUrlSource]);
   }
   return {
     transport: "http",
@@ -972,13 +981,11 @@ function createHasnaHttpTransport(options) {
 function createClientTransport(name, env = process.env, overrides) {
   const credentialOptions = overrides?.credentials;
   const resolution = resolveClientTransport(name, env, { ...credentialOptions ? { credentials: credentialOptions } : {} });
-  if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the API client.`);
-  }
-  if (resolution.transport === "sqlite" || !resolution.baseUrl) {
-    return { transport: "sqlite", client: null, resolution };
-  }
   const credentialProvider = () => {
+    const current = resolveClientTransport(name, env, { ...credentialOptions ? { credentials: credentialOptions } : {} });
+    if (current.baseUrl !== resolution.baseUrl) {
+      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
+    }
     const resolved = resolveCredential(name, env, credentialOptions);
     if (!resolved) {
       throw new Error(`Client for '${name}' resolved to the http transport but no API key is available any more. ` + `Looked at ${credentialDiskSourcesForMessage(name, env)}, then the environment. ` + `A credential file that was removed after this client was built is the usual cause.`);
@@ -1103,10 +1110,7 @@ function createHasnaStorageClient(name, transport) {
 }
 function resolveStorageClient(name, env = process.env, overrides) {
   const wired = createClientTransport(name, env, overrides);
-  if (wired.transport === "http") {
-    return { transport: "http", client: createHasnaStorageClient(name, wired.client) };
-  }
-  return { transport: "sqlite", client: null };
+  return { transport: "http", client: createHasnaStorageClient(name, wired.client) };
 }
 export {
   resolveStorageClient,
