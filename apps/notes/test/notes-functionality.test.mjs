@@ -896,6 +896,38 @@ test('title generation is capped to four words for heuristic and sidecar paths',
   assert.equal(seen[0].text, 'Raw Markdown Link');
 });
 
+for (const status of [301, 302, 303, 307, 308]) {
+  test(`authenticated title sidecar rejects ${status} without forwarding token or note body`, async () => {
+    for (const destination of [
+      'https://other.example.test/title',
+      'http://other.example.test/title',
+      'https://sidecar.example.test/same-origin-title',
+    ]) {
+      const sourceRequests = [];
+      const destinationRequests = [];
+      const token = ['sidecar', 'fixture', 'not-real'].join('-');
+      const fetchImpl = async (url, options) => {
+        sourceRequests.push({ url, options });
+        if (options.redirect === 'error') throw new TypeError(`redirect ${status} blocked`);
+        destinationRequests.push({
+          url: destination,
+          method: [301, 302, 303].includes(status) ? 'GET' : options.method,
+          headers: options.headers,
+          body: [301, 302, 303].includes(status) ? undefined : options.body,
+        });
+        return new Response('{"title":"redirected"}', { status: 200 });
+      };
+      await assert.rejects(generateTitle('private note body', {
+        sidecar: 'https://sidecar.example.test', sidecarToken: token, fetchImpl,
+      }), /redirect/);
+      assert.equal(sourceRequests.length, 1);
+      assert.equal(sourceRequests[0].options.redirect, 'error');
+      assert.equal(sourceRequests[0].options.headers['X-Hasna-Notes-Token'], token);
+      assert.equal(destinationRequests.length, 0);
+    }
+  });
+}
+
 test.skip('legacy local CLI CRUD surface was replaced by the authenticated HTTPS client', async (t) => {
   const root = await tempRoot(t);
   const env = { HASNA_NOTES_ROOT: root, HASNA_NOTES_MACHINE: 'studio-mac' };

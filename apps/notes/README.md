@@ -24,6 +24,8 @@ Both variables are required. The URL must be absolute HTTPS and cannot contain
 credentials, a query, or a fragment. Partial or missing configuration fails
 closed before any note data is read or written. There is no local
 SQLite/Markdown fallback and no default localhost endpoint.
+Authenticated requests reject every HTTP redirect instead of forwarding an API
+key/body or accepting method-rewritten 301/302/303 responses as success.
 
 `HASNA_NOTES_DATABASE_URL` is server-only. A client process that contains it
 fails closed; client status and errors never print credentials. PostgreSQL

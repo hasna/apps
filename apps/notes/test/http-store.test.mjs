@@ -94,7 +94,42 @@ test('request carries the bearer key and JSON content-type; body is JSON-seriali
   assert.equal(captured.headers.authorization, `Bearer ${API_KEY}`);
   assert.equal(captured.headers['content-type'], 'application/json');
   assert.deepEqual(JSON.parse(captured.body), { title: 'T', bodyMarkdown: 'B' });
+  assert.equal(captured.redirect, 'error');
 });
+
+for (const status of [301, 302, 303, 307, 308]) {
+  test(`authenticated ${status} redirects are rejected before credentials or body reach any destination`, async () => {
+    for (const destination of [
+      'https://other.example.test/redirected',
+      'http://other.example.test/redirected',
+      `${API_URL}/same-origin-redirected`,
+    ]) {
+      const sourceRequests = [];
+      const destinationRequests = [];
+      // This deterministic fetch double reproduces Fetch's default redirect
+      // behavior, including method rewriting, and honors redirect:'error'. It
+      // therefore fails the pre-fix implementation by recording a destination
+      // request while remaining independent of external TLS/network state.
+      const fetchImpl = async (url, options) => {
+        sourceRequests.push({ url, options });
+        if (options.redirect === 'error') throw new TypeError(`redirect ${status} blocked`);
+        destinationRequests.push({
+          url: destination,
+          method: [301, 302, 303].includes(status) ? 'GET' : options.method,
+          headers: options.headers,
+          body: [301, 302, 303].includes(status) ? undefined : options.body,
+        });
+        return new Response('{}', { status: 200 });
+      };
+      const store = storeWith(fetchImpl);
+      await assert.rejects(store.createNote({ title: 'redirect probe', bodyMarkdown: 'sensitive body' }), /cannot reach/);
+      assert.equal(sourceRequests.length, 1);
+      assert.equal(sourceRequests[0].options.redirect, 'error');
+      assert.equal(sourceRequests[0].options.headers.authorization, `Bearer ${API_KEY}`);
+      assert.equal(destinationRequests.length, 0);
+    }
+  });
+}
 
 test('fetch failure maps to NotesHttpStoreError with the cause code and a safe message', async () => {
   const store = storeWith(() => {
@@ -173,7 +208,7 @@ test('NotesClient SDK facade delegates every note operation to the HTTPS store',
     HASNA_NOTES_API_URL: API_URL,
     HASNA_NOTES_API_KEY: API_KEY,
   }, async (url, options) => {
-    seen.push([url, options.method]);
+    seen.push([url, options.method, options]);
     return new Response('{}', { status: 200 });
   });
   await client.list({ cursor: 'next' });
@@ -184,4 +219,5 @@ test('NotesClient SDK facade delegates every note operation to the HTTPS store',
   await client.export();
   assert.deepEqual(seen.map(([, method]) => method), ['GET', 'GET', 'POST', 'PATCH', 'DELETE', 'POST']);
   assert.ok(seen.every(([url]) => url.startsWith(API_URL)));
+  assert.ok(seen.every(([, , options]) => options?.redirect === 'error'));
 });

@@ -36,6 +36,9 @@
   SQLite/Markdown fallback or client DSN path remains. Root imports no longer
   export local CRUD; pure formatting is available only at
   `@hasna/notes/compat/markdown-format`.
+- Authenticated API and title-sidecar requests reject every redirect, including
+  same-origin HTTPS redirects, so credentials/bodies are never replayed and
+  301/302/303 method rewrites cannot report false success.
 - **BREAKING:** notes-serve is PostgreSQL-only and requires a valid server-side
   HASNA_NOTES_DATABASE_URL. The SQLite default, --db and HASNA_NOTES_SERVER_DB
   are removed. SQLite is isolated to unshipped test fixtures.
