@@ -6,7 +6,7 @@ speaks — backed by SQLite (PostgreSQL via `HASNA_NOTES_DATABASE_URL`). The
 `notes` client talks to it over HTTP: one protocol.
 
 - **Stack**: [Bun](https://bun.sh) + [Hono](https://hono.dev) + `bun:sqlite`. One runtime dependency.
-- **Storage**: one SQLite file (default `~/.hasna/notes/server.db`, resolved via `@hasna/paths`). Back it up by copying the file.
+- **Storage**: one SQLite file at the XDG-native `@hasna/paths` data root. Back it up by copying the file.
 - **Scope**: notes CRUD, device-code auth, export, health. The multi-machine
   sync round-trip endpoint and its `sync_batches` table were removed in 0.2.0.
   No billing, no multi-tenant admin, no email service — those are
@@ -19,13 +19,13 @@ speaks — backed by SQLite (PostgreSQL via `HASNA_NOTES_DATABASE_URL`). The
 bun install
 bun index.mjs --auto-approve
 # → [notes-server] v0.1.0 listening on http://127.0.0.1:8788
-# → [notes-server] database: ~/.hasna/notes/server.db  # legacy default until the @hasna/paths XDG data home is adopted
+# → [notes-server] database: <XDG data root>/hasna/notes/server.db
 ```
 
 Point a client at it:
 
 ```sh
-HASNA_NOTES_API_URL=http://127.0.0.1:8788 HASNA_NOTES_API_KEY=pn_... notes ...
+HASNA_NOTES_API_URL=https://notes.example.test HASNA_NOTES_API_KEY=pn_... notes ...
 ```
 
 With `--auto-approve`, device logins coming from this machine (loopback) are
@@ -53,22 +53,23 @@ curl -X POST http://127.0.0.1:8788/api/v1/auth/device/approve \
 |---|---|---|---|
 | `--port <n>` | `HASNA_NOTES_SERVER_PORT`, `PORT` | `8788` | listen port |
 | `--host [addr]` | `HASNA_NOTES_SERVER_HOST` | `127.0.0.1` | bind address; bare `--host` binds `0.0.0.0` |
-| `--db <path>` | `HASNA_NOTES_SERVER_DB` | `~/.hasna/notes/server.db` | SQLite file (resolved via `@hasna/paths`; `HASNA_DATA_HOME` or a migrated store adopts the XDG data home) |
+| `--db <path>` | `HASNA_NOTES_SERVER_DB` | `<XDG data root>/hasna/notes/server.db` | SQLite file resolved via `@hasna/paths`; legacy roots require explicit migration |
 | `--auto-approve` | `HASNA_NOTES_SERVER_AUTO_APPROVE=1` | off | auto-approve loopback device logins |
 | `--dev` | `HASNA_NOTES_SERVER_DEV=1` | off | include `devCode` in OTP responses (tests/dev) |
 | | `HASNA_NOTES_SERVER_URL` | `http://<host>:<port>` | public URL used in `verificationUri` |
 | | `HASNA_NOTES_SERVER_JWT_SECRET` | generated, persisted in DB | session-JWT secret |
 
-The server binds loopback by default. If you expose it (`--host`), put a TLS
-reverse proxy (Caddy, nginx, or your mesh VPN's proxy) in front — bearer keys must
-not travel over plain HTTP outside your machine.
+The server binds loopback over HTTP by default. Canonical Notes clients require
+HTTPS, so put a TLS reverse proxy in front of it before connecting a client.
+Bearer keys must not travel over plain HTTP.
 
 If a client reaches this server over the LAN, keep the address out of any
 background/service context: macOS Local Network Privacy silently blocks
 background launchd agents from RFC1918/link-local addresses (`EHOSTUNREACH`,
 no permission prompt). Give clients a non-LAN address — a Tailscale MagicDNS
 FQDN (`http://<host>.<tailnet>.ts.net:8788`, mesh traffic is not LNP-gated) or
-a public hostname behind your TLS proxy.
+a public hostname behind your TLS proxy. Configure the client with that HTTPS
+hostname, never the server's loopback HTTP listener.
 
 ## API surface (personalnotes/v1 dialect)
 

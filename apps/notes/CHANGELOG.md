@@ -31,6 +31,15 @@
 
 ### Minor Changes
 
+- **BREAKING:** CLI, MCP, and SDK note access now uses one authenticated HTTPS
+  path. `HASNA_NOTES_API_URL` and `HASNA_NOTES_API_KEY` are both required;
+  missing/partial configuration fails closed and no local SQLite/Markdown
+  fallback is selected. Client environments reject the server-only
+  `HASNA_NOTES_DATABASE_URL`. Data paths are XDG-native, and legacy data moves
+  only through the explicit, copy-only `storage migrate-legacy-path` command.
+  The separate `hasna-products/personalnotes` product and the shared
+  `personalnotes/v1` wire name are unchanged.
+
 - **BREAKING: the macOS desktop app is removed from `@hasna/notes` and now lives in
   `hasna-products/personalnotes` (repo `hasna-products/personalnotes`).** Owner
   directive 2026-08-22: `@hasna/notes` will not ship a macOS app. This package is

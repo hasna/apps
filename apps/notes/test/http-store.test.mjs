@@ -7,7 +7,7 @@
 // errors, the dialect error envelope surfaces status/code/details, query
 // serialization and id encoding are exact, and construction fails closed.
 
-import test from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import {
   NotesHttpStore,
@@ -15,6 +15,7 @@ import {
   createNotesHttpStore,
 } from '../client/http-store.mjs';
 import { RetiredNotesStorageSelectorError } from '../client/transport.mjs';
+import { NotesClient } from '../sdk/index.mjs';
 
 const API_URL = 'https://notes.example.test';
 // Synthetic fixture credential, assembled at runtime so no credential-shaped
@@ -27,10 +28,10 @@ function storeWith(fetchImpl, { url = API_URL, key = API_KEY } = {}) {
 }
 
 test('construction fails closed: URL without key and key without URL both throw', () => {
-  assert.throws(() => createNotesHttpStore({}), /HASNA_NOTES_API_URL is required/);
+  assert.throws(() => createNotesHttpStore({}), /HASNA_NOTES_API_URL and HASNA_NOTES_API_KEY/);
   assert.throws(
     () => createNotesHttpStore({ HASNA_NOTES_API_URL: API_URL }),
-    /HASNA_NOTES_API_KEY is missing/,
+    /HASNA_NOTES_API_KEY is required/,
   );
   assert.throws(
     () => createNotesHttpStore({ HASNA_NOTES_API_URL: API_URL, HASNA_NOTES_API_KEY: API_KEY, HASNA_NOTES_STORAGE_MODE: 'local' }),
@@ -50,16 +51,16 @@ test('trailing slash on the API URL is stripped and never doubled in paths', () 
   });
 });
 
-test('listNotes serializes limit and include_deleted; no params -> bare path', async () => {
+test('listNotes serializes limit, cursor, and include_deleted; no params -> bare path', async () => {
   const seen = [];
   const store = storeWith(async (url) => {
     seen.push(url);
     return new Response('null', { status: 200 });
   });
-  await store.listNotes({ limit: 5, includeDeleted: true });
+  await store.listNotes({ limit: 5, cursor: 'next page', includeDeleted: true });
   await store.listNotes({});
   assert.deepEqual(seen, [
-    'https://notes.example.test/api/v1/notes?limit=5&include_deleted=1',
+    'https://notes.example.test/api/v1/notes?limit=5&include_deleted=1&cursor=next+page',
     'https://notes.example.test/api/v1/notes',
   ]);
 });
@@ -154,7 +155,8 @@ test('dialect error envelope surfaces status, code and details; the key still ne
 test('a non-JSON error body still fails (no silent success) and never leaks the key', async () => {
   const store = storeWith(async () => new Response('<html>Internal Server Error</html>', { status: 500 }));
   await assert.rejects(store.health(), (err) => {
-    assert.ok(err instanceof Error);
+    assert.ok(err instanceof NotesHttpStoreError);
+    assert.equal(err.code, 'invalid_json');
     assert.ok(!String(err.message).includes(API_KEY), 'non-JSON failures must not leak the key');
     return true;
   });
@@ -163,4 +165,23 @@ test('a non-JSON error body still fails (no silent success) and never leaks the 
 test('an empty ok body resolves to null', async () => {
   const store = storeWith(async () => new Response('', { status: 200 }));
   assert.equal(await store.health(), null);
+});
+
+test('NotesClient SDK facade delegates every note operation to the HTTPS store', async () => {
+  const seen = [];
+  const client = new NotesClient({
+    HASNA_NOTES_API_URL: API_URL,
+    HASNA_NOTES_API_KEY: API_KEY,
+  }, async (url, options) => {
+    seen.push([url, options.method]);
+    return new Response('{}', { status: 200 });
+  });
+  await client.list({ cursor: 'next' });
+  await client.get('id');
+  await client.create({ title: 'T' });
+  await client.update('id', { title: 'U' });
+  await client.delete('id');
+  await client.export();
+  assert.deepEqual(seen.map(([, method]) => method), ['GET', 'GET', 'POST', 'PATCH', 'DELETE', 'POST']);
+  assert.ok(seen.every(([url]) => url.startsWith(API_URL)));
 });

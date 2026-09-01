@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.10.6",
-  "description": "Local-first personal notes CLI, MCP server, SDK, and self-hosted notes server. Clients use the local SQLite+markdown store or the HTTP API selected by HASNA_NOTES_API_URL; notes-serve reads PostgreSQL selected by HASNA_NOTES_DATABASE_URL or SQLite by default. The local store path resolves via @hasna/paths: the XDG data home (~/.local/share/hasna/notes on Linux) is adopted only once the store is migrated there or HASNA_DATA_HOME is set, and HASNA_NOTES_HOME / HASNA_NOTES_ROOT / NOTES_HOME win unconditionally; the legacy ~/.hasna/notes default stays effective until then. The personalnotes/v1 wire dialect is served identically on both backends.",
+  "description": "Authenticated HTTPS notes CLI, MCP server, SDK, and self-hosted notes server. Every client requires HASNA_NOTES_API_URL plus HASNA_NOTES_API_KEY, rejects client database DSNs, and has no implicit local fallback. notes-serve alone may select PostgreSQL with HASNA_NOTES_DATABASE_URL or use SQLite. Server data paths are XDG-native through @hasna/paths; legacy ~/.hasna locations move only through the explicit, non-destructive migration command. The personalnotes/v1 wire dialect remains unchanged.",
   "hosting": [
     "user-hosted"
   ],
@@ -20,7 +20,7 @@
       "postgresql"
     ],
     "envPrefix": "HASNA_NOTES_",
-    "sqlitePath": "~/.hasna/notes/server.db",
+    "sqlitePath": "$XDG_DATA_HOME/hasna/notes/server.db",
     "pgTestGate": {
       "envVar": "NOTES_TEST_DATABASE_URL",
       "command": "bun run test:pg"
@@ -64,14 +64,14 @@
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "notes-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "notes-cli",
       "kind": "cli",
       "status": "supported",
       "bin": "notes",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "metadata": {
@@ -91,7 +91,17 @@
     },
     "client": {
       "apiUrlEnv": "HASNA_NOTES_API_URL",
-      "apiKeyEnv": "HASNA_NOTES_API_KEY"
+      "apiKeyEnv": "HASNA_NOTES_API_KEY",
+      "transport": "authenticated-https",
+      "localFallback": false,
+      "legacyDataMigrationCommand": [
+        "notes",
+        "storage",
+        "migrate-legacy-path",
+        "--source",
+        "legacy",
+        "--yes"
+      ]
     },
     "release": {
       "artifactScan": {
