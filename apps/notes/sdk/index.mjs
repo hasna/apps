@@ -8,8 +8,8 @@
 // Bearer api-key auth) — the same dialect the future hosted wrapper speaks;
 // documented, not renamed.
 //
-// The package root retains explicit legacy data helpers for migration and
-// format compatibility; they are not a client transport.
+// The package root exports this same remote-only client. Pure, non-authoritative
+// format helpers live only at the explicit ./compat/markdown-format subpath.
 
 import {
   NOTES_APP_SLUG,

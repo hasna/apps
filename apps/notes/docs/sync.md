@@ -10,8 +10,8 @@ API. Both `HASNA_NOTES_API_URL` and `HASNA_NOTES_API_KEY` are required, and the
 URL must be HTTPS. Missing or partial configuration fails closed; there is no
 local-store or localhost fallback.
 
-The server may store its own data in SQLite or PostgreSQL. This is strictly a
-server concern: clients reject `HASNA_NOTES_DATABASE_URL` and never open a
+The server stores its authoritative data in PostgreSQL only and fails closed
+without its server DSN. This is strictly a server concern: clients reject `HASNA_NOTES_DATABASE_URL` and never open a
 database directly.
 
 The separate macOS product continues to live at

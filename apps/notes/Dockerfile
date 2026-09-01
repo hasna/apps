@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
 # @hasna/notes — notes-serve HTTP API image (personalnotes/v1 dialect).
-# ARM64 / Bun. The service reads/writes SQLite (default) or PostgreSQL
-# (HASNA_NOTES_DATABASE_URL) — never both.
+# ARM64 / Bun. The service requires PostgreSQL through
+# HASNA_NOTES_DATABASE_URL and fails closed when it is absent or invalid.
 # =============================================================================
 FROM --platform=linux/arm64 oven/bun:1-alpine AS base
 WORKDIR /app

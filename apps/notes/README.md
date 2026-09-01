@@ -1,8 +1,8 @@
 # Hasna Notes
 
 `@hasna/notes` is a headless Notes package: an authenticated HTTPS CLI, MCP
-server, SDK, and a self-hosted `personalnotes/v1` server. The server can use
-SQLite or PostgreSQL. Client processes never open either database directly.
+server, SDK, and a PostgreSQL-only `personalnotes/v1` server. Client processes
+never open a database directly.
 
 > There is no desktop app in this package. The separate macOS product remains
 > [hasna-products/personalnotes](https://github.com/hasna-products/personalnotes).
@@ -41,13 +41,13 @@ const notes = new NotesClient();
 const page = await notes.list({ limit: 10 });
 ```
 
-The package-root export and `tools/notes-lib.mjs` retain the Markdown/frontmatter
-format library for explicit import/export and migration tooling. They are not a
-fallback selected by the CLI, MCP server, or SDK client.
+The package root exports the same authenticated remote client as `./sdk`.
+Pure Markdown/frontmatter formatting helpers are available only at
+`@hasna/notes/compat/markdown-format`; that subpath exports no local CRUD.
 
 ## Data paths and explicit migration
 
-Server and maintenance data paths resolve through `@hasna/paths`. Without an
+Maintenance data paths resolve through `@hasna/paths`. Without an
 exact app override, the destination is the platform XDG data location, for
 example `$XDG_DATA_HOME/hasna/notes` on Linux or
 `~/Library/Application Support/Hasna/notes` on macOS. Exact overrides retain
@@ -58,27 +58,33 @@ then apply it explicitly:
 
 ```sh
 notes storage migrate-legacy-path --source legacy --dry-run --json
-notes storage migrate-legacy-path --source legacy --yes --json
+notes storage migrate-legacy-path --source legacy --yes --plan-fingerprint <reviewed-hash> --json
 notes storage migrate-legacy-path --source nested --dry-run --json
 notes storage migrate-legacy-path --source server-nested --dry-run --json
 ```
 
 `legacy` means `~/.hasna/notes`; `nested` means `~/.hasna/apps/notes`; and
-`server-nested` means `~/.hasna/apps/notes-server`. Stop `notes-serve` before
-migrating a SQLite database. SQLite `-shm` files are deliberately skipped.
-Migration
+`server-nested` means `~/.hasna/apps/notes-server`. Stop all legacy writers before copying archived SQLite/Markdown data. SQLite `-shm` files are deliberately skipped.
+The dry-run returns a fingerprint; apply requires that unchanged fingerprint.
+Migration stages at most 256 MiB of reviewed bytes before copying, rejects
+symlinks in every path component (use canonical absolute paths), and
 rejects symlinks and destination conflicts, never overwrites a file, verifies
 each copy, preserves the source, and writes an owner-only receipt. It is safe to
-re-run after a successful copy.
+re-run after a successful copy using a fresh dry-run. Existing receipts are never
+overwritten. Interrupted copies are preserved for inspection; there is no
+automatic deletion rollback. This command only preserves offline import material:
+it does not import records into PostgreSQL or enable local CRUD.
 
 ## Self-hosted server
 
 `notes-serve` implements the existing `personalnotes/v1` CRUD, auth, export,
-health, readiness, version, and OpenAPI surfaces. It uses XDG-native SQLite by
-default. Setting `HASNA_NOTES_DATABASE_URL` selects PostgreSQL on the server
-only.
+health, readiness, version, and OpenAPI surfaces. A valid server-only
+`HASNA_NOTES_DATABASE_URL` is mandatory; missing/invalid configuration fails
+before listening. `--db` and `HASNA_NOTES_SERVER_DB` are removed. SQLite exists
+only in unshipped, explicitly injected dialect-test fixtures.
 
 ```sh
+# Inject server DSN and signing key through the approved runtime secret mechanism.
 bun server/index.mjs --port 8788
 ```
 

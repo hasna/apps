@@ -12,14 +12,16 @@ The CLI, MCP server, and SDK resolve exactly one client connection in
 - `HASNA_NOTES_DATABASE_URL` is rejected in a client environment.
 - Retired mode selectors fail loud even when blank.
 
-The package-root Markdown/frontmatter library remains available only as an
-explicit format/import/export surface. It is not a client transport.
+The package root is the remote SDK. Pure formatting helpers are available only
+at `@hasna/notes/compat/markdown-format`, without local CRUD.
 
-## Server: SQLite or PostgreSQL
+## Server: PostgreSQL only
 
-Only `notes-serve` and server migration tooling select a database backend.
-`HASNA_NOTES_DATABASE_URL` selects PostgreSQL; otherwise the server uses SQLite
-at the `@hasna/paths` XDG data root. A DSN is never logged or returned.
+Only `notes-serve` and server migration tooling consume database credentials.
+A valid server-only `HASNA_NOTES_DATABASE_URL` is mandatory. Missing/invalid
+configuration fails before listening. No SQLite default, `--db` flag or
+`HASNA_NOTES_SERVER_DB` selector remains. SQLite is an unshipped test fixture;
+production imports do not load it. A DSN is never logged or returned.
 
 PostgreSQL schema changes use the checksum ledger:
 
@@ -38,29 +40,35 @@ NOTES_TEST_DATABASE_URL=<throwaway-dsn> bun run test:pg
 
 ## XDG-native paths and migration
 
-New server and maintenance writes use `@hasna/paths`. Exact overrides retain
+Maintenance writes use `@hasna/paths`. Exact overrides retain
 their established precedence: `HASNA_NOTES_HOME`, `HASNA_NOTES_ROOT`, then
 `NOTES_HOME`. Legacy `~/.hasna/notes` and `~/.hasna/apps/notes` roots are
 migration sources only and are never selected or copied on startup.
 
 ```sh
 notes storage migrate-legacy-path --source legacy --dry-run --json
-notes storage migrate-legacy-path --source legacy --yes --json
+notes storage migrate-legacy-path --source legacy --yes --plan-fingerprint <reviewed-hash> --json
 notes storage migrate-legacy-path --source nested --dry-run --json
 notes storage migrate-legacy-path --source server-nested --dry-run --json
 ```
 
-The `server-nested` source is `~/.hasna/apps/notes-server`. Stop `notes-serve`
-before copying SQLite data; transient SQLite `-shm` files are skipped.
+The `server-nested` source is `~/.hasna/apps/notes-server`. Stop all legacy writers
+before copying archived SQLite/Markdown data; transient SQLite `-shm` files are skipped.
 
-The explicit migration is copy-only. Planning scans regular files, rejects
-symlinks, hashes existing destinations, and reports conflicts without copying.
-Apply refuses any conflict, uses exclusive copies, verifies content, preserves
-the source, and writes an owner-only receipt. A completed migration is
-idempotent.
+The explicit migration is copy-only, not a PostgreSQL import or a local-store
+selector. Planning hashes source bytes and binds file metadata plus directory
+identities. Apply requires the dry-run fingerprint, stages at most 256 MiB of
+reviewed bytes, and uses descriptor-relative no-follow directory/file operations
+on macOS/Linux with Bun. Every component must be a canonical, non-symlink path.
+Root/parent replacement cannot redirect writes. Source changes fail closed;
+stop writers before planning. Conflicts are rejected, files/receipts are created
+exclusively with owner-only modes, and sources are never changed. Existing
+receipts must match the source snapshot and cannot be overwritten. Re-run a
+fresh dry-run for idempotence. Failure may leave verified copies for manual
+inspection, never automatic deletion; remove nothing until independently reviewed.
 
 ## Wire compatibility
 
-Both server backends retain the `personalnotes/v1` paths and JSON shapes. That
+The PostgreSQL server retains the `personalnotes/v1` paths and JSON shapes. That
 wire name is shared with the separate `hasna-products/personalnotes` product and
 must not be renamed.
