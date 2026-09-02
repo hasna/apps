@@ -204,10 +204,16 @@ export async function validateApiKey(db, presented, config = {}) {
     const verifier = verifyApiKey({
       app: 'notes',
       signingSecret: config.signingSecret,
+      requireTenant: true,
       keyStatus: store.keyStatus,
     });
     const outcome = await verifier.authenticate({ authorization: `Bearer ${presented}` });
-    if (!outcome.ok) return null;
+    if (!outcome.ok) {
+      if (outcome.reason === 'tenant_required' || outcome.reason === 'tenant_mismatch') {
+        throw new ApiError('forbidden', outcome.message, 403);
+      }
+      return null;
+    }
     const { principal } = outcome;
     await store.touchLastUsed(principal.kid);
     return {
