@@ -33,6 +33,7 @@ import { describe, expect, test } from "bun:test";
 import { mintApiKey } from "../src/auth/keys";
 import { verifyApiKey, type VerifyApiKeyOptions } from "../src/auth/middleware";
 import type { ApiKeyStatus } from "../src/auth/store";
+import { tamperApiKeySignature } from "./helpers/tamper-api-key-signature";
 
 const SIGNING = "real-app-signing-secret-0000000000000000";
 const ATTACKER_SIGNING = "attacker-signing-secret-1111111111111111";
@@ -611,7 +612,7 @@ describe("verifyApiKey: polluted `context.method`/`context.path` cannot forge th
     // that harness only reverts sites the fix touched, and this one was not a
     // site until now. A per-site control cannot find a site nobody listed.
     const good = tokenFor();
-    const tampered = `${good.slice(0, -4)}AAAA`;
+    const tampered = tamperApiKeySignature(good);
     const events: Array<Record<string, unknown>> = [];
     const decision = await withPolluted(["kid"], async () => {
       const verifier = verifyApiKey(
