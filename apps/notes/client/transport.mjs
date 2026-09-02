@@ -36,6 +36,26 @@ export const RETIRED_SELECTOR_ENV_KEYS = [
 
 export const NOTES_CLIENT_TRANSPORTS = ['http'];
 
+/** Read data properties only: credential getters must not mutate their authority. */
+export function readPlainClientValue(object, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (!descriptor) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')
+      || (descriptor.value !== undefined && typeof descriptor.value !== 'string')) {
+    throw new Error(`notes: ${key} must be a plain string configuration value.`);
+  }
+  return descriptor.value;
+}
+
+/** Take one data-only snapshot, without invoking supplied configuration getters. */
+export function snapshotNotesClientEnvironment(env = process.env) {
+  const snapshot = Object.create(null);
+  for (const key of [NOTES_API_URL_ENV, NOTES_API_KEY_ENV, NOTES_DATABASE_URL_ENV, ...RETIRED_SELECTOR_ENV_KEYS]) {
+    if (Object.prototype.hasOwnProperty.call(env, key)) snapshot[key] = readPlainClientValue(env, key);
+  }
+  return snapshot;
+}
+
 export function isPresent(env, key) {
   if (!Object.prototype.hasOwnProperty.call(env, key)) return false;
   return (env[key] ?? '').trim().length > 0;
@@ -71,6 +91,7 @@ export function assertNoRetiredNotesStorageSelector(env = process.env) {
  * Values are never included in the report or in errors.
  */
 export function resolveNotesClientTransport(env = process.env) {
+  env = snapshotNotesClientEnvironment(env);
   assertNoRetiredNotesStorageSelector(env);
   if (Object.prototype.hasOwnProperty.call(env, NOTES_DATABASE_URL_ENV)) {
     throw new Error(
