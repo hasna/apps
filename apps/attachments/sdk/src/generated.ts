@@ -12,11 +12,11 @@ export interface ReadyStatus { "status": string; "version": string; "mode": stri
 
 export interface VersionInfo { "status": string; "version": string; "mode": string }
 
-export interface CreateAttachmentRequest { "filename": string; "content_base64": string; "expiry"?: string; "tag"?: string; "password"?: string; "max_downloads"?: number; "link_type"?: "presigned" | "server" }
+export interface CreateAttachmentRequest { "filename": string; "content_base64": string; "expiry"?: string; "tag"?: string; "password"?: string; "max_downloads"?: number; "link_type"?: "presigned" | "server"; "base_url"?: string; "require_email"?: boolean; "allowed_emails"?: Array<string> }
 
 export interface LinkResponse { "link": string | null; "expires_at"?: number | null; "slug"?: string }
 
-export interface RegenerateLinkRequest { "expiry"?: string; "password"?: string; "max_downloads"?: number; "link_type"?: "presigned" | "server"; "slug"?: string }
+export interface RegenerateLinkRequest { "expiry"?: string; "password"?: string; "max_downloads"?: number; "link_type"?: "presigned" | "server"; "slug"?: string; "base_url"?: string }
 
 export interface SlugAvailability { "slug": string; "available": boolean }
 
@@ -30,7 +30,7 @@ export interface AttachmentsApiClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
   /** API key, e.g. process.env.APP_API_KEY. Sent as the 'x-api-key' header. */
-  apiKey?: string;
+  apiKey: string;
   /** Custom fetch (defaults to global fetch). */
   fetch?: typeof fetch;
   /** Extra headers merged into every request. */
@@ -46,16 +46,16 @@ export class ApiError extends Error {
 
 export class AttachmentsApiClient {
   private readonly baseUrl: string;
-  private readonly apiKey: string | undefined;
+  #apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly baseHeaders: Record<string, string>;
 
   constructor(options: AttachmentsApiClientOptions) {
-    if (!options.baseUrl) throw new Error("AttachmentsApiClient requires a baseUrl.");
+    validateSdkConfig(options.baseUrl, options.apiKey);
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.apiKey = options.apiKey;
+    this.#apiKey = options.apiKey;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.baseHeaders = options.headers ?? {};
+    if (Object.keys(options.headers ?? {}).some(name => /^(authorization|x-api-key)$/i.test(name))) throw new Error("Authentication header overrides are not supported."); this.baseHeaders = { ...options.headers };
   }
 
   private async request<T>(method: string, path: string, opts: { body?: unknown; query?: Record<string, unknown>; init?: RequestInit }): Promise<T> {
@@ -66,17 +66,17 @@ export class AttachmentsApiClient {
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    for (const name of Object.keys(headers)) { if (/^(authorization|x-api-key)$/i.test(name)) throw new Error("Authentication header overrides are not supported."); } headers["x-api-key"] = this.#apiKey;
     let payload: BodyInit | undefined;
     if (opts.body !== undefined) {
       headers["Content-Type"] = "application/json";
       payload = JSON.stringify(opts.body);
     }
-    const response = await this.fetchImpl(url.toString(), { ...opts.init, method, headers, body: payload });
+    const response = await this.fetchImpl(url.toString(), { ...opts.init, method, headers, body: payload, redirect: "error" });
     const text = await response.text();
     const data = text ? (() => { try { return JSON.parse(text); } catch { return text; } })() : undefined;
     if (!response.ok) {
-      throw new ApiError(response.status, `${method} ${path} failed: ${response.status}`, data);
+      throw new ApiError(response.status, `${method} ${path} failed: ${response.status}`, undefined);
     }
     return data as T;
   }
@@ -111,6 +111,15 @@ export class AttachmentsApiClient {
     /** Create an attachment from base64 content. */
     async createAttachment(body: CreateAttachmentRequest, init?: RequestInit): Promise<Attachment> {
       return this.request("POST", `/v1/attachments`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Mint a presigned S3 PUT URL so a client can upload directly to S3 without holding credentials. */
+    async presignAttachmentUpload(body: { "filename": string; "content_type"?: string; "expiry"?: string; "size"?: number }, init?: RequestInit): Promise<{ "id"?: string; "upload_url"?: string; "content_type"?: string; "filename"?: string; "expires_at"?: number; "finalize_url"?: string }> {
+      return this.request("POST", `/v1/attachments/presign-upload`, {
         body,
         query: undefined,
         init,
@@ -153,6 +162,15 @@ export class AttachmentsApiClient {
       });
     }
 
+    /** Verify and finalize a presigned direct upload: check the object, generate the share link, mark ready. */
+    async completePresignedAttachmentUpload(id: string, body?: { "expiry"?: string; "password"?: string; "max_downloads"?: number; "link_type"?: "presigned" | "server" }, init?: RequestInit): Promise<{ "attachment"?: Attachment; "link"?: string; "size"?: number }> {
+      return this.request("POST", `/v1/attachments/${encodeURIComponent(String(id))}/presign-upload/complete`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Check whether a friendly /a/<slug> alias is available. */
     async getFriendlySlugAvailability(slug: string, init?: RequestInit): Promise<SlugAvailability> {
       return this.request("GET", `/v1/slugs/${encodeURIComponent(String(slug))}`, {
@@ -170,4 +188,11 @@ export class AttachmentsApiClient {
         init,
       });
     }
+}
+
+export function validateSdkConfig(url: string, key: string): void {
+  if (typeof url !== "string" || typeof key !== "string" || !key || key !== key.trim() || /[\s\x00-\x1f\x7f]/.test(key)) throw new Error("Explicit HTTPS URL and API key required.");
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error("Valid HTTPS API URL required."); }
+  if (url !== url.trim() || parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("HTTPS API URL must not include credentials, query, or fragment.");
 }

@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.8.2",
-  "description": "Open-source attachment transfer with local or private S3 storage, app-hosted share links, CLI, MCP, REST API (attachments-serve), and a generated SDK. Cloud service is PURE REMOTE (Amendment A1): reads/writes RDS Postgres and S3 directly.",
+  "description": "Authenticated HTTPS clients; server-side PostgreSQL metadata and object storage.",
   "bins": [
     "attachments",
     "attachments-mcp",
@@ -15,17 +15,15 @@
   ],
   "storage": {
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_ATTACHMENTS_",
     "aliasEnvPrefix": "ATTACHMENTS_",
     "pgTestGate": {
       "envVar": "HASNA_ATTACHMENTS_TEST_DATABASE_URL",
-      "command": "HASNA_ATTACHMENTS_DATABASE_URL=\"${HASNA_ATTACHMENTS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" HASNA_ATTACHMENTS_STORAGE_MODE=cloud ATTACHMENTS_REQUIRE_POSTGRES=1 bun test src/db"
+      "command": "HASNA_ATTACHMENTS_DATABASE_URL=\"${HASNA_ATTACHMENTS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" ATTACHMENTS_REQUIRE_POSTGRES=1 bun test src/db"
     },
-    "backend": "sqlite",
-    "sqlitePath": "~/.hasna/attachments/attachments.db"
+    "backend": "postgresql"
   },
   "serviceSurfaces": [
     {
@@ -56,7 +54,7 @@
       "name": "attachments-sdk",
       "kind": "sdk",
       "status": "supported",
-      "authMode": "none",
+      "authMode": "api-key",
       "exportSubpath": ".",
       "generatedFrom": "/openapi.json"
     },
@@ -65,14 +63,14 @@
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "attachments-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "attachments-cli",
       "kind": "cli",
       "status": "supported",
       "bin": "attachments",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "metadata": {

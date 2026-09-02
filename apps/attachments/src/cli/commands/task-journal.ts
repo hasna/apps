@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import type { Attachment } from "../../core/db";
 import { resolveStore, type Store } from "../../core/store";
-import { withTodosAuth } from "../../core/todos";
+import { withTodosAuth, serviceConfig } from "../../core/todos";
 
 export interface TaskJournalOptions {
   todosUrl?: string;
@@ -109,7 +109,7 @@ export async function buildTaskJournal(
   fetchFn: typeof fetch = fetch,
   storeFactory?: () => Store
 ): Promise<{ journal: TaskJournal; todosReachable: boolean }> {
-  const todosUrl = options.todosUrl ?? "http://localhost:3000";
+  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
   // Fetch from todos (parallel)
   const [meta, history] = await Promise.all([
@@ -246,7 +246,7 @@ export function registerTaskJournal(program: Command): void {
     .option(
       "--todos-url <url>",
       "Todos REST server base URL",
-      "http://localhost:3000"
+      undefined
     )
     .option(
       "--format <format>",
@@ -254,7 +254,7 @@ export function registerTaskJournal(program: Command): void {
       "markdown"
     )
     .action(async (taskId: string, options: TaskJournalOptions) => {
-      const todosUrl = options.todosUrl ?? "http://localhost:3000";
+      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
       const format = options.format ?? "markdown";
 
       try {
