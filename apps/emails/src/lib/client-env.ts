@@ -1,4 +1,8 @@
 import { spawnSync } from "node:child_process";
+import {
+  EMAILS_API_KEY_SETTINGS, EMAILS_API_URL_SETTINGS, assertNoRetiredEmailsSelectors,
+  readAliasedSetting, validateEmailsCredential, StoreConfigurationError,
+} from "./client-settings.js";
 
 export const EMAILS_CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 
@@ -26,7 +30,7 @@ export const EMAILS_SELF_HOSTED_API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
 export const CLIENT_ENV_CREDENTIAL_SELECTION_KEYS = Object.freeze([
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  ...EMAILS_API_KEY_SETTINGS,
 ] as const);
 
 export type EmailsClientCredentialSetting = (typeof CLIENT_ENV_CREDENTIAL_SELECTION_KEYS)[number];
@@ -41,9 +45,13 @@ export interface EmailsClientCredentialCandidate {
 export function resolveEmailsClientCredentialCandidates(
   env: NodeJS.ProcessEnv = process.env,
 ): EmailsClientCredentialCandidate[] {
-  return CLIENT_ENV_CREDENTIAL_SELECTION_KEYS
-    .map((setting) => ({ setting, value: env[setting]?.trim() ?? "" }))
-    .filter((candidate) => candidate.value !== "");
+  const candidates: EmailsClientCredentialCandidate[] = [];
+  for (const setting of [EMAILS_SESSION_TOKEN_ENV, EMAILS_IDP_TOKEN_ENV] as const) {
+    if (env[setting] !== undefined) candidates.push({ setting, value: validateEmailsCredential(env[setting]!, setting) });
+  }
+  const apiKey = readAliasedSetting(env, EMAILS_API_KEY_SETTINGS);
+  if (apiKey) candidates.push({ ...apiKey, value: validateEmailsCredential(apiKey.value, apiKey.setting) });
+  return candidates;
 }
 
 // Structural keys the vault entry MUST carry (endpoint + mode). A credential is
@@ -53,8 +61,7 @@ export function resolveEmailsClientCredentialCandidates(
 // caller that has to construct a vault entry (e.g. an emulated `secrets` store in
 // a test) names these keys from here rather than restating them.
 export const CLIENT_ENV_REQUIRED_KEYS = [
-  "EMAILS_MODE",
-  "EMAILS_SELF_HOSTED_URL",
+  "HASNA_EMAILS_API_URL",
 ] as const;
 
 // At least one of these must be present — ANY one is a complete credential: a
@@ -63,18 +70,16 @@ export const CLIENT_ENV_REQUIRED_KEYS = [
 // session first, then identity, then key (see src/store-resolution.ts and the
 // legacy client). An operator with only the API key keeps working unchanged.
 const CLIENT_ENV_CREDENTIAL_KEYS = [
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  ...EMAILS_API_KEY_SETTINGS,
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
 ] as const;
 
 // Every key the vault entry may carry (loaded into env whenever present).
 const CLIENT_ENV_KEYS = [
-  ...CLIENT_ENV_REQUIRED_KEYS,
+  ...EMAILS_API_URL_SETTINGS,
   ...CLIENT_ENV_CREDENTIAL_KEYS,
 ] as const;
-
-const MODE_ENV_KEYS = ["EMAILS_MODE", "HASNA_EMAILS_MODE"] as const;
 
 const SECRETS_COMMAND_ENV_ALLOWLIST = [
   "PATH",
@@ -141,11 +146,7 @@ function hasClientEnvCredential(env: NodeJS.ProcessEnv): boolean {
 }
 
 function hasCompleteCanonicalClientEnv(env: NodeJS.ProcessEnv): boolean {
-  return CLIENT_ENV_REQUIRED_KEYS.every((key) => Boolean(env[key]?.trim())) && hasClientEnvCredential(env);
-}
-
-function hasExplicitLocalMode(env: NodeJS.ProcessEnv): boolean {
-  return MODE_ENV_KEYS.some((key) => env[key]?.trim().toLowerCase() === "local");
+  return readAliasedSetting(env, EMAILS_API_URL_SETTINGS) !== null && hasClientEnvCredential(env);
 }
 
 // The `secrets` CLI needs its OWN backend configuration to resolve a vault path.
@@ -179,9 +180,12 @@ function secretsCommandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * EMAILS_* names.
  */
 export function loadEmailsClientEnvSecret(env: NodeJS.ProcessEnv = process.env): EmailsClientEnvSecretLoad {
+  assertNoRetiredEmailsSelectors(env);
   const secretPath = env[EMAILS_CLIENT_ENV_SECRET_ENV]?.trim() ?? null;
+  if (env[EMAILS_CLIENT_ENV_SECRET_ENV] !== undefined && !secretPath) {
+    throw new StoreConfigurationError(`${EMAILS_CLIENT_ENV_SECRET_ENV} must not be blank.`, [EMAILS_CLIENT_ENV_SECRET_ENV]);
+  }
   if (!secretPath) return { secretPath: null, loaded: false, ready: false };
-  if (hasExplicitLocalMode(env)) return { secretPath, loaded: false, ready: false };
 
   if (hasCompleteCanonicalClientEnv(env)) {
     return {
@@ -222,15 +226,20 @@ export function loadEmailsClientEnvSecret(env: NodeJS.ProcessEnv = process.env):
   }
 
   const loaded = parseClientEnvSecret(result.stdout ?? "");
+  assertNoRetiredEmailsSelectors(loaded);
+  // Validate the complete candidate before changing the caller's environment.
+  // A vault payload must not silently override a conflicting explicit value.
+  const candidate = { ...env };
   for (const key of CLIENT_ENV_KEYS) {
-    const value = loaded[key]?.trim();
-    if (value) env[key] = value;
+    if (loaded[key] === undefined) continue;
+    if (candidate[key] !== undefined && candidate[key]!.trim() !== loaded[key]!.trim()) {
+      throw new StoreConfigurationError(`${key} conflicts with the client credential pointer payload.`, [key]);
+    }
+    candidate[key] = loaded[key];
   }
   const missing: string[] = [];
-  for (const key of CLIENT_ENV_REQUIRED_KEYS) {
-    if (!env[key]?.trim()) missing.push(key);
-  }
-  if (!hasClientEnvCredential(env)) missing.push(CLIENT_ENV_CREDENTIAL_KEYS.join(" or "));
+  if (!readAliasedSetting(candidate, EMAILS_API_URL_SETTINGS)) missing.push(CLIENT_ENV_REQUIRED_KEYS[0]);
+  if (!resolveEmailsClientCredentialCandidates(candidate).length) missing.push(CLIENT_ENV_CREDENTIAL_KEYS.join(" or "));
   if (missing.length > 0) {
     throw new Error(
       `${EMAILS_CLIENT_ENV_SECRET_ENV} loaded from the secrets vault, but its entry must contain ` +
@@ -238,6 +247,8 @@ export function loadEmailsClientEnvSecret(env: NodeJS.ProcessEnv = process.env):
         `and a credential (${CLIENT_ENV_CREDENTIAL_KEYS.join(" or ")}); missing ${missing.join(", ")}.`,
     );
   }
+
+  for (const key of CLIENT_ENV_KEYS) if (candidate[key] !== undefined) env[key] = candidate[key];
 
   loadedClientEnvSecrets.set(env, secretPath);
   return { secretPath, loaded: true, ready: true };

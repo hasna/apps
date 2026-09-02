@@ -15,14 +15,10 @@ if (args.includes("--help") || args.includes("-h")) {
 Runs the Emails HTTP service (or a background worker).
 
 Commands:
-  (default)          Run the HTTP service. Which one follows the internal store
-                     this server is configured with, and nothing else:
-                       - PostgreSQL (EMAILS_DATABASE_URL +
-                         EMAILS_API_SIGNING_KEY): the operator-owned Postgres API
-                         (GET /health, /ready, /version and the API-key
-                         authenticated /v1 surface), binding 0.0.0.0.
-                       - SQLite (EMAILS_DATABASE_URL unset): the SQLite
-                         dashboard on 127.0.0.1.
+  (default)          Run the PostgreSQL HTTP service. Requires server-side
+                     HASNA_EMAILS_DATABASE_URL and EMAILS_API_SIGNING_KEY.
+                     GET /health, /ready, /version and authenticated /v1.
+                     Missing configuration fails before listener startup.
   ingest-worker      Run the SES-inbound ingestion worker: long-poll the SQS
                      queue (EMAILS_INGEST_QUEUE_URL), fetch each archived raw
                      message from S3, and write it to self-hosted Postgres.
@@ -53,9 +49,8 @@ Commands:
                      Pre-0017 compatible and accepts no options.
 
 Options:
-  --host <host>      Host to bind to (local non-loopback requires
-                     EMAILS_ALLOW_REMOTE=1)
-  --port <port>      Port to listen on (default: postgresql 8080 / sqlite 3900)
+  --host <host>      Host to bind to (default: 0.0.0.0)
+  --port <port>      Port to listen on (default: 8080)
   --message-id <id>  Exact message canary; repeat for every row bound to the object
   --object-key <key> One exact S3 object key (repair command only)
   --recipient <addr> Trusted envelope recipient (repeatable; repair command only)
@@ -162,20 +157,8 @@ if (args[0] === "ingest-worker") {
   const { runInboundProvenanceFence } = await import("./self-hosted/ingest-worker.js");
   await runInboundProvenanceFence();
 } else {
-  // The `switch` is exhaustive over `ServerStorageBackend`, so a third backend arm would
-  // fail to compile here — the intended structural limit, not an oversight.
   const backend = resolveServerStorageBackend();
   const { port, host } = resolveServerBindOptions(args, process.env, backend);
-  switch (backend) {
-    case "postgresql": {
-      const { startSelfHostedServer } = await import("./self-hosted/serve.js");
-      await startSelfHostedServer(pkg.version, port, host);
-      break;
-    }
-    case "sqlite": {
-      const { startServer } = await import("./serve.js");
-      await startServer(port, host);
-      break;
-    }
-  }
+  const { startSelfHostedServer } = await import("./self-hosted/serve.js");
+  await startSelfHostedServer(pkg.version, port, host);
 }

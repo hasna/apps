@@ -2,6 +2,7 @@ import { createPgPool, createQueryClient, type PoolQueryClient } from "../../sto
 import { assertNoLegacyHostedEnvironment } from "../../lib/mode.js";
 import {
   SERVER_DATABASE_URL_SETTING,
+  resolveServerDatabaseUrl,
   resolveServerStorageBackend,
 } from "../storage-backend.js";
 
@@ -77,7 +78,7 @@ let cachedPool: SelfHostedPool | null = null;
 export function getSelfHostedPool(env: NodeJS.ProcessEnv = process.env): SelfHostedPool {
   assertSelfHostedEnvironment(env);
   if (!cachedPool) {
-    const connectionString = env[SELF_HOSTED_DATABASE_ENV]!.trim();
+    const connectionString = resolveServerDatabaseUrl(env);
     const pool = createPgPool({
       connectionString,
       env,

@@ -57,12 +57,12 @@ function parsePort(raw: string, source: "--port" | "PORT"): number {
 export function resolveServerBindOptions(
   args: string[],
   env: Record<string, string | undefined>,
-  backend: ServerStorageBackend,
+  _backend: ServerStorageBackend,
 ): ServerBindOptions {
   const hostFlag = optionValue(args, "--host");
   const portFlag = optionValue(args, "--port");
-  const defaultHost = backend === "postgresql" ? "0.0.0.0" : "127.0.0.1";
-  const defaultPort = backend === "postgresql" ? 8080 : 3900;
+  const defaultHost = "0.0.0.0";
+  const defaultPort = 8080;
 
   const envPort = env["PORT"] || undefined;
   return {
