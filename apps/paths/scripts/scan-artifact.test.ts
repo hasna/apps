@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { packCommand, scanPackedArtifact, scannerCommand } from "./scan-artifact";
+import { assertSupportedNpmVersion, packCommand, scanPackedArtifact, scannerCommand } from "./scan-artifact";
 
 afterEach(() => { Bun.spawnSync = originalSpawnSync; });
 const originalSpawnSync = Bun.spawnSync;
@@ -11,13 +11,66 @@ function output(stdout: string, exitCode = 0) {
   return { stdout: Buffer.from(stdout), stderr: Buffer.from(""), exitCode } as ReturnType<typeof Bun.spawnSync>;
 }
 
+function scanFailure(): string {
+  try { scanPackedArtifact(); }
+  catch (error) { return (error as Error).message; }
+  throw new Error("expected artifact scan to fail");
+}
+
 describe("npm artifact gate", () => {
+  test("npm 11 release versions and newer satisfy the release-only prerequisite", () => {
+    for (const version of ["11.0.0", "11.19.0", "12.0.0"]) {
+      expect(() => assertSupportedNpmVersion(version)).not.toThrow();
+    }
+  });
+
+  test("old npm fails before packing with a version-only diagnostic", () => {
+    for (const version of ["9.9.4", "10.9.8"]) {
+      const calls: string[][] = [];
+      spyOn(Bun, "spawnSync").mockImplementation(((command: string[]) => {
+        calls.push(command);
+        return output(version);
+      }) as typeof Bun.spawnSync);
+      expect(scanFailure()).toBe(`artifact scan: npm ${version} is unsupported; npm >=11.0.0 is required to suppress prepare lifecycle scripts`);
+      expect(calls).toEqual([["npm", "--version"]]);
+    }
+  });
+
+  test("malformed npm versions fail before packing without disclosing command output", () => {
+    for (const version of ["", "11", "11.19", "v11.19.0", "11.19.0-preview.1", "011.19.0", "11.19.0\nuntrusted-output", "9007199254740992.0.0", "untrusted-output"]) {
+      const calls: string[][] = [];
+      spyOn(Bun, "spawnSync").mockImplementation(((command: string[]) => {
+        calls.push(command);
+        return output(version);
+      }) as typeof Bun.spawnSync);
+      expect(scanFailure()).toBe("artifact scan: npm --version returned an invalid version; npm >=11.0.0 is required");
+      expect(calls).toEqual([["npm", "--version"]]);
+    }
+  });
+
+  test("failed or unavailable npm version probes stop before packing without disclosing subprocess output", () => {
+    for (const unavailable of [false, true]) {
+      const calls: string[][] = [];
+      spyOn(Bun, "spawnSync").mockImplementation(((command: string[]) => {
+        calls.push(command);
+        if (unavailable) throw new Error("untrusted-output");
+        return { ...output("untrusted-output", 7), stderr: Buffer.from("untrusted-error") };
+      }) as typeof Bun.spawnSync);
+      expect(scanFailure()).toBe("artifact scan: could not determine npm version; npm >=11.0.0 is required");
+      expect(calls).toEqual([["npm", "--version"]]);
+    }
+  });
+
   test("scans exactly the local npm tarball, suppresses lifecycle recursion, and cleans its workspace", () => {
     let workspace = "";
     const calls: string[][] = [];
     spyOn(Bun, "spawnSync").mockImplementation(((command: string[]) => {
       calls.push(command);
       if (calls.length === 1) {
+        expect(command).toEqual(["npm", "--version"]);
+        return output("11.19.0\n");
+      }
+      if (calls.length === 2) {
         expect(command.slice(0, 2)).toEqual(["npm", "pack"]);
         expect(command).toContain("--json");
         expect(command).toContain("--ignore-scripts");
@@ -32,7 +85,7 @@ describe("npm artifact gate", () => {
       return output("artifact scan: clean");
     }) as typeof Bun.spawnSync);
     expect(scanPackedArtifact().output).toBe("artifact scan: clean");
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(existsSync(workspace)).toBe(false);
   });
 
@@ -71,10 +124,11 @@ describe("npm artifact gate", () => {
       const calls: string[][] = [];
       spyOn(Bun, "spawnSync").mockImplementation(((command: string[]) => {
         calls.push(command);
+        if (calls.length === 1) return output("11.19.0");
         return output(packed);
       }) as typeof Bun.spawnSync);
       expect(() => scanPackedArtifact()).toThrow();
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(2);
     }
   });
 
@@ -86,13 +140,14 @@ describe("npm artifact gate", () => {
         const calls: string[][] = [];
         spyOn(Bun, "spawnSync").mockImplementation(((command: string[]) => {
           calls.push(command);
+          if (calls.length === 1) return output("11.19.0");
           const workspace = command[command.indexOf("--pack-destination") + 1]!;
           if (symlink) symlinkSync(join(external, "target.tgz"), join(workspace, "archive.tgz"));
           else mkdirSync(join(workspace, "archive.tgz"));
           return output(JSON.stringify([{ filename: "archive.tgz" }]));
         }) as typeof Bun.spawnSync);
         expect(() => scanPackedArtifact()).toThrow();
-        expect(calls).toHaveLength(1);
+        expect(calls).toHaveLength(2);
       }
     } finally { rmSync(external, { recursive: true, force: true }); }
   });
@@ -103,7 +158,8 @@ describe("npm artifact gate", () => {
       let calls = 0;
       spyOn(Bun, "spawnSync").mockImplementation(((command: string[]) => {
         calls++;
-        if (calls === 1) {
+        if (calls === 1) return output("11.19.0");
+        if (calls === 2) {
           workspace = command[command.indexOf("--pack-destination") + 1]!;
           writeFileSync(join(workspace, "archive.tgz"), "fixture");
           return output(JSON.stringify([{ filename: "archive.tgz" }]), failPack ? 9 : 0);
@@ -111,7 +167,7 @@ describe("npm artifact gate", () => {
         return output("", 7);
       }) as typeof Bun.spawnSync);
       expect(() => scanPackedArtifact()).toThrow(failPack ? "exited 9" : "exited 7");
-      expect(calls).toBe(failPack ? 1 : 2);
+      expect(calls).toBe(failPack ? 2 : 3);
       expect(existsSync(workspace)).toBe(false);
     }
   });

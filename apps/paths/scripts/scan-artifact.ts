@@ -22,6 +22,30 @@ import { join } from "node:path";
 
 export const CONTRACTS_KIT_VERSION = "0.14.2";
 
+export function assertSupportedNpmVersion(version: string): void {
+  // Fail closed on non-release or unparseable output; never echo that output.
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version);
+  if (!match || !match.slice(1).every((part) => Number.isSafeInteger(Number(part)))) {
+    throw new Error("artifact scan: npm --version returned an invalid version; npm >=11.0.0 is required");
+  }
+  if (Number(match[1]) < 11) {
+    throw new Error(`artifact scan: npm ${version} is unsupported; npm >=11.0.0 is required to suppress prepare lifecycle scripts`);
+  }
+}
+
+function requireSupportedNpm(cwd: string): void {
+  let version: string;
+  try {
+    const result = Bun.spawnSync(["npm", "--version"], { cwd, stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) throw new Error("npm version probe failed");
+    version = new TextDecoder().decode(result.stdout).trim();
+  } catch {
+    // Version probes can contain arbitrary npm config/diagnostic output.
+    throw new Error("artifact scan: could not determine npm version; npm >=11.0.0 is required");
+  }
+  assertSupportedNpmVersion(version);
+}
+
 function run(command: string[], cwd: string): string {
   const result = Bun.spawnSync(command, { cwd, stdout: "pipe", stderr: "pipe" });
   const stdout = new TextDecoder().decode(result.stdout).trim();
@@ -72,6 +96,9 @@ function packedArchive(packed: string, workspace: string): string {
 /** Pack the tarball npm would publish, then scan that tarball — never src/. */
 export function scanPackedArtifact(): { command: string[]; output: string } {
   const repoRoot = join(import.meta.dir, "..");
+  // npm 10's bundled pacote ignores --ignore-scripts for prepare. Refuse
+  // that toolchain before packing can run any package lifecycle script.
+  requireSupportedNpm(repoRoot);
   const workspace = mkdtempSync(join(tmpdir(), "paths-artifact-scan-"));
 
   try {

@@ -84,7 +84,17 @@ fleet migrates its stores behind the same abstraction.
 
 ## Release artifact gate
 
-Build first, then run `bun run scan:artifact`. The gate uses
+Release/scanner tooling requires **npm >=11.0.0** (CI pins and verifies
+**npm 11.19.0**) alongside the repository's pinned Bun 1.3.14. This is not an
+npm requirement for library or CLI consumers. npm 10's bundled pacote can
+run `prepare` despite `--ignore-scripts`; the upstream lifecycle suppression
+fix first shipped in [pacote 20](https://github.com/npm/pacote/blob/main/CHANGELOG.md#2000-2024-10-17)
+and is included in npm 11. The gate checks `npm --version` before packing
+and fails closed on old, malformed, or unavailable versions without logging
+arbitrary command output.
+
+Build first, then run `bun run scan:artifact` with the supported release
+toolchain. The gate uses
 `npm pack . --json --ignore-scripts --workspaces=false --dry-run=false --pack-destination <temporary-directory>`
 and requires exactly one local regular `.tgz` before invoking the pinned
 Contracts scanner. JSON, filename, missing-file, pack, and scanner failures
