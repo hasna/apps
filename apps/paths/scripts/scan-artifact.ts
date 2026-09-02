@@ -16,9 +16,9 @@
  * exact bypass the gate exists to close.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 
 export const CONTRACTS_KIT_VERSION = "0.14.2";
 
@@ -36,17 +36,47 @@ export function scannerCommand(archive: string): string[] {
   return ["bunx", `@hasna/contracts@${CONTRACTS_KIT_VERSION}`, "artifact-scan", archive];
 }
 
+export function packCommand(workspace: string): string[] {
+  // An outer `npm pack --dry-run` exports npm_config_dry_run=true to prepack.
+  // This inner pack must create a real archive even in that environment.
+  return ["npm", "pack", ".", "--json", "--pack-destination", workspace, "--ignore-scripts", "--workspaces=false", "--dry-run=false"];
+}
+
+function packedArchive(packed: string, workspace: string): string {
+  let entries: unknown;
+  try {
+    entries = JSON.parse(packed);
+  } catch {
+    throw new Error("artifact scan: npm pack did not return valid JSON");
+  }
+  if (!Array.isArray(entries) || entries.length !== 1) {
+    throw new Error("artifact scan: npm pack must return exactly one artifact");
+  }
+  const filename = entries[0]?.filename;
+  // npm filenames are basenames, never paths or options. Validate before
+  // joining so neither traversal nor a different package location can scan.
+  if (typeof filename !== "string" || !/^[a-z0-9][a-z0-9._-]*\.tgz$/i.test(filename)) {
+    throw new Error("artifact scan: npm pack returned an invalid archive filename");
+  }
+  const archive = join(workspace, filename);
+  let regular = false;
+  try {
+    regular = lstatSync(archive).isFile();
+  } catch {
+    // A dry-run or missing pack result is not a scanable artifact.
+  }
+  if (!regular) throw new Error("artifact scan: npm pack did not create a local regular archive");
+  return archive;
+}
+
 /** Pack the tarball npm would publish, then scan that tarball — never src/. */
 export function scanPackedArtifact(): { command: string[]; output: string } {
   const repoRoot = join(import.meta.dir, "..");
   const workspace = mkdtempSync(join(tmpdir(), "paths-artifact-scan-"));
 
   try {
-    const packed = run(
-      ["bun", "pm", "pack", "--destination", workspace, "--ignore-scripts", "--quiet"],
-      repoRoot,
-    );
-    const archive = isAbsolute(packed) ? packed : join(workspace, packed);
+    const packed = run(packCommand(workspace), repoRoot);
+    const archive = packedArchive(packed, workspace);
     const command = scannerCommand(archive);
     return { command, output: run(command, repoRoot) };
   } finally {
