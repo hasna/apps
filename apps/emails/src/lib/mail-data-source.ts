@@ -8,6 +8,7 @@
 // MailboxCounts / MessageBody / …) so callers stay independent of the backend.
 
 import { getEmailsMode, type EmailsMode } from "./mode.js";
+import { loadEmailsClientConfig, type EmailsClientConfig } from "./client-config.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
 import { SelfHostedMailDataSource, resolveSelfHostedMailDataSource } from "./self-hosted-mail-data-source.js";
@@ -590,18 +591,51 @@ export interface ResolveMailDataSourceOptions {
   selfHosted?: SelfHostedMailDataSource;
 }
 
-let memoized: { mode: MailDataSourceMode; source: MailDataSource } | null = null;
+let memoized: { config: EmailsClientConfig; source: MailDataSource } | null = null;
+
+/** Compare secret values only in memory; never serialize a credential cache key. */
+function sameClientContext(left: EmailsClientConfig, right: EmailsClientConfig): boolean {
+  return left.baseUrl === right.baseUrl
+    && left.credentialSetting === right.credentialSetting
+    && left.credential === right.credential
+    && left.credentialFallbacks.length === right.credentialFallbacks.length
+    && left.credentialFallbacks.every((candidate, index) => {
+      const other = right.credentialFallbacks[index]!;
+      return candidate.setting === other.setting && candidate.value === other.value;
+    });
+}
 
 /**
- * Resolve exactly one process-wide backend. Self-hosted never falls through to
- * SQLite; local never consults URL/API-key configuration.
+ * Resolve the configured API on every call before reusing its data caches. A
+ * changed identity/endpoint gets a new source; invalid configuration discards the
+ * previous context. Explicit legacy source injection remains separately scoped.
  */
 export function resolveMailDataSource(opts: ResolveMailDataSourceOptions = {}): MailDataSource {
   const override = Boolean(opts.mode || opts.selfHosted);
-  const mode = opts.mode ?? getEmailsMode();
-  if (!override && memoized?.mode === mode) {
-    return memoized.source;
+  if (!override) {
+    let config: EmailsClientConfig;
+    try {
+      config = loadEmailsClientConfig();
+    } catch (error) {
+      memoized = null;
+      throw error;
+    }
+    if (memoized && sameClientContext(memoized.config, config)) return memoized.source;
+    // Never retain a previous tenant's row/count caches across a context change,
+    // including a later switch back to credentials used earlier in this process.
+    memoized = null;
+    const source = new SelfHostedMailDataSource({
+      baseUrl: config.baseUrl,
+      apiKey: config.credential,
+      credentials: [
+        { setting: config.credentialSetting, value: config.credential },
+        ...config.credentialFallbacks,
+      ],
+    });
+    memoized = { config, source };
+    return source;
   }
+  const mode = opts.mode ?? getEmailsMode();
   let source: MailDataSource;
   if (mode === "self_hosted") {
     const selfHosted = opts.selfHosted ?? resolveSelfHostedMailDataSource();
@@ -615,11 +649,10 @@ export function resolveMailDataSource(opts: ResolveMailDataSourceOptions = {}): 
   } else {
     source = new SqliteMailDataSource();
   }
-  if (!override) memoized = { mode, source };
   return source;
 }
 
-/** Clear the memoized data source (tests / after a mode change). */
+/** Clear the memoized source and its credential/data context. */
 export function resetMailDataSource(): void {
   memoized = null;
 }
