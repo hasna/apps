@@ -69,47 +69,28 @@ emails whoami
 emails inbox mailboxes
 ```
 
-The following are explicit operator/send workflows, not installation steps.
-Use existing provider and domain configuration where it is already established:
+Use the provider/domain configuration already established on that service:
 
 ```bash
-# Add a provider (SES or Resend). Prefer an AWS profile locally or the
-# deployment IAM role in self-hosted AWS; avoid storing long-lived AWS keys.
-AWS_PROFILE=emails-operator emails provider add --name production-ses --type ses --region us-east-1
-emails provider add --name production-resend --type resend --api-key ...
-
-# Register a domain you already own and have verified with the provider
-emails domain adopt example.com --provider <id>
-
-# See the DNS records the domain must publish, then confirm what is live
-emails domain dns example.com --provider <id>
-emails domain check example.com
-
-# Buy a domain first, if you do not own one yet
-emails domain available example.com
-emails domain buy example.com --email you@example.com ...
-
-# SES send-only setup preserves existing MX, such as Google Workspace
-emails domain adopt example.com --provider <ses-id> --no-inbound
-
-# Send an email
-emails send --from you@example.com --to them@example.com --subject "Hi" --body "Hello"
-
-# Pull inbound mail from SES/S3 or Cloudflare-routed storage
-emails inbox source add-s3 --bucket <bucket> --prefix inbound/example.com/ --provider <provider-id>
-emails inbox sync-s3 --bucket <bucket> --prefix inbound/example.com/
-
-# Inspect mailbox folders and ingestion sources
-emails inbox mailboxes
+# Inspect metadata and mail already ingested by the service
+emails provider list
 emails inbox sources
 emails inbox list --folder unread --source provider:<id>
-
-# Check sent email log
 emails email list
+```
 
-# Operate a self-hosted PostgreSQL service
-EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails db migrate
-EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails self-hosted key create
+Provider credentials are configured on the service, not written through client
+provider metadata. The legacy `provider add --api-key`/`--access-key`/`--secret-key`
+options are rejected by the API-backed client before provider validation; an
+operator label does not enable those options. SES uses the service's IAM role;
+Resend uses service-side credential configuration. See the service runtime
+section below. Provisioning AWS/DNS is a separate authorized operator workflow.
+
+Sending is an explicit action, not a connection test. With a permitted sender
+and recipient, the existing service send path is:
+
+```bash
+emails send --from you@example.com --to them@example.com --subject "Hi" --body "Hello" --idempotency-key <unique-key>
 ```
 
 ## Domain ownership and setup
@@ -480,14 +461,12 @@ console.log(formatDnsTable(records, providerDnsPublishing(provider)));
 
 ## Inbound Email (AWS SES -> S3)
 
+The service worker ingests notifications and stored messages. Clients read and
+organize mail after that ingestion; installing a client does not configure SES,
+create a queue or pull messages from S3.
+
 ```bash
-# Set up S3 bucket + SES receipt rules
-emails aws setup-inbound --domain example.com --bucket my-emails
-
-# Pull received emails on demand
-emails inbox sync-s3 --bucket my-emails --prefix inbound/example.com/
-
-# Read-state / organize (works for SES-S3, SMTP, Cloudflare-routed, and legacy imported mail)
+# Read and organize messages already stored by the service
 emails inbox list --unread            # filters: --unread/--read/--starred/--archived/--label <l>
 emails inbox latest ops@example.com --json
 emails inbox wait ops@example.com --timeout 120
@@ -498,14 +477,18 @@ emails inbox read <id>                # opening marks it read
 emails inbox star|archive|label <id>  # --undo / --remove to reverse
 ```
 
-### Real-time inbound (no manual sync)
+### Service-owned real-time ingestion
 
-Push delivery so mail lands automatically. `setup-realtime` wires SES → SNS → SQS
-(and attaches the topic to the receipt rule); `watch` long-polls and auto-syncs:
+The legacy CLI names `inbox sync-s3`, `inbox setup-realtime`,
+`inbox realtime-status` and `inbox watch` remain registered for compatibility.
+These client commands intentionally refuse: ingestion is server-owned. Do not
+run them as operator-host alternatives to the worker; the same API client still
+refuses them. A deployment with its queue, canonical bucket, PostgreSQL and IAM
+permissions already configured runs the existing worker on the service host:
 
 ```bash
-emails inbox setup-realtime example.com   # creates SNS topic + SQS queue, saves the queue URL
-emails inbox watch                        # auto-delivers new mail in real-time (--once to poll once)
+# Service host only, with reviewed worker configuration already injected:
+emails-serve ingest-worker
 ```
 
 The existing service ingestion worker (`emails-serve ingest-worker`) consumes

@@ -32,4 +32,13 @@ describe("canonical client documentation", () => {
     expect(readme).toContain("Raw library storage helpers");
     expect(readme).not.toMatch(/^curl ['"]?localhost:3900\/api\//m);
   });
+
+  test("does not recommend refused credential writes or client-side ingestion commands", () => {
+    const shellExamples = [...readme.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)].map(match => match[1]!).join("\n");
+    expect(/emails provider add[^\n]*--(?:api|access|secret)-key\b/.test(shellExamples)).toBe(false);
+    expect(/^emails inbox (?:sync-s3|setup-realtime|realtime-status|watch)\b/m.test(shellExamples)).toBe(false);
+    expect(prose.includes("Provider credentials are configured on the service")).toBe(true);
+    expect(prose.includes("These client commands intentionally refuse")).toBe(true);
+    expect(readme.includes("emails-serve ingest-worker")).toBe(true);
+  });
 });
