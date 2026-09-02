@@ -22,6 +22,29 @@ afterEach(() => {
 });
 
 describe("legacy preservation pathname races", () => {
+  for (const replacement of ["", "rewritten content"]) {
+    test(`rejects same-inode ${replacement ? "equal-length rewrite" : "truncation"} at fsync without deleting the output`, () => {
+      const { source, output } = fixture();
+      const originalFsync = fs.fsyncSync;
+      let sameInode = false;
+      const spy = spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+        originalFsync(fd);
+        const before = fs.statSync(output, { bigint: true });
+        if (replacement) expect(Buffer.byteLength(replacement)).toBe(Number(before.size));
+        fs.writeFileSync(output, replacement);
+        const after = fs.statSync(output, { bigint: true });
+        sameInode = before.dev === after.dev && before.ino === after.ino;
+      });
+      restores.push(() => spy.mockRestore());
+
+      expect(() => preserveLegacyDatabase(source, output)).toThrow("unverified");
+      expect(sameInode).toBe(true);
+      expect(fs.readFileSync(output, "utf8")).toBe(replacement);
+      expect(fs.statSync(output).mode & 0o777).toBe(0o600);
+      expect(fs.readFileSync(source, "utf8")).toBe("original database");
+    });
+  }
+
   test("never deletes an unrelated replacement output after a late sidecar", () => {
     const { source, output, root } = fixture();
     const savedCopy = join(root, "moved-copy.db");

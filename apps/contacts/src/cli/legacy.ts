@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { createHash } from "node:crypto";
 import fs, { constants, closeSync, existsSync, fstatSync, lstatSync, readSync, realpathSync, statSync, writeSync, type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -107,22 +108,43 @@ export function preserveLegacyDatabase(sourceArg: string | undefined, outputArg:
     }
     // Create at its final private mode. There is no interval where another user
     // can read the copy, unlike create-then-chmod.
-    outputFd = fs.openSync(output, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    outputFd = fs.openSync(output, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
     const createdOutput = fstatSync(outputFd, { bigint: true });
     const buffer = Buffer.allocUnsafe(64 * 1024);
+    const copiedHash = createHash("sha256");
     let bytes = 0;
     while (true) {
       const read = readSync(sourceFd, buffer, 0, buffer.length, null);
       if (read === 0) break;
+      copiedHash.update(buffer.subarray(0, read));
       let offset = 0;
       while (offset < read) offset += writeSync(outputFd, buffer, offset, read - offset);
       bytes += read;
     }
     fs.fsyncSync(outputFd);
+    // Identity alone cannot detect truncation or an equal-length rewrite through
+    // another handle. Verify the actual bytes through our exclusive output fd,
+    // and bind both its metadata and final pathname across that verification.
+    const verificationStart = fstatSync(outputFd, { bigint: true });
+    const verifiedHash = createHash("sha256");
+    let verifiedBytes = 0;
+    while (verifiedBytes < bytes) {
+      const read = readSync(outputFd, buffer, 0, Math.min(buffer.length, bytes - verifiedBytes), verifiedBytes);
+      if (read === 0) break;
+      verifiedHash.update(buffer.subarray(0, read));
+      verifiedBytes += read;
+    }
+    const extraBytes = readSync(outputFd, buffer, 0, 1, verifiedBytes);
+    const verificationEnd = fstatSync(outputFd, { bigint: true });
+    const verifiedOutput = sameFile(createdOutput, verificationStart) &&
+      BigInt(bytes) === verificationStart.size && verifiedBytes === bytes && extraBytes === 0 &&
+      copiedHash.digest("hex") === verifiedHash.digest("hex") &&
+      unchangedFile(verificationStart, verificationEnd) &&
+      unchangedFile(verificationEnd, lstatSync(output, { bigint: true }));
     const after = fstatSync(sourceFd, { bigint: true });
     const stable = unchangedFile(before, after) && unchangedFile(after, lstatSync(source, { bigint: true })) &&
       BigInt(bytes) === after.size && parentIdentity(source) === sourceParents && parentIdentity(output) === outputParents;
-    if (!stable || sidecarPaths.some(existsSync) || !sameFile(createdOutput, lstatSync(output, { bigint: true }))) {
+    if (!stable || !verifiedOutput || sidecarPaths.some(existsSync)) {
       throw new Error("Legacy database, output, or ancestor changed or a SQLite sidecar appeared during preservation.");
     }
     return { source, output, bytes };
