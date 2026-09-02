@@ -1,7 +1,7 @@
 /**
  * Regression tests for the three-table store (slice B): runs, run_nodes, memos.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -40,10 +41,23 @@ describe("runs", () => {
   });
 
   test("lists runs newest-first", () => {
+    setSystemTime(new Date("2026-08-01T12:00:00.000Z"));
     const a = store.createRun({ graphName: "g", graphVersion: "1" });
+    setSystemTime(new Date("2026-08-01T12:00:00.001Z"));
     const b = store.createRun({ graphName: "g", graphVersion: "1" });
+    expect(b.createdAt > a.createdAt).toBe(true);
     const runs = store.listRuns();
     expect(runs.map((r) => r.id)).toEqual([b.id, a.id]);
+  });
+
+  test("breaks equal creation timestamps by descending id", () => {
+    setSystemTime(new Date("2026-08-01T12:00:00.000Z"));
+    const a = store.createRun({ graphName: "g", graphVersion: "1" });
+    const b = store.createRun({ graphName: "g", graphVersion: "1" });
+    expect(b.createdAt).toBe(a.createdAt);
+    const expected = [a.id, b.id].sort().reverse();
+    expect(store.listRuns().map((r) => r.id)).toEqual(expected);
+    expect(store.listRuns({ status: "pending" }).map((r) => r.id)).toEqual(expected);
   });
 
   test("filters runs by status", () => {
