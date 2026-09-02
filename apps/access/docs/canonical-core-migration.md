@@ -85,3 +85,33 @@ Root standard gates used a restricted PATH with `Bun.which("todos") === null`;
 automatic task filing reports **NOT FILED**. No credentials, live database,
 cloud resources, pushes, PR writes, deployment, merge or publication were used.
 Independent exact-commit review is the next gate.
+
+## Core security re-review fixes
+
+The independent review of `05e9f308ebe94f373b898eca6056868c6be74752` identified
+three P1s. The follow-up keeps changes confined to the canonical core:
+
+- Expiry sweeps constrain both SELECT and UPDATE to the caller's entity set;
+  an empty allowed set cannot change rows or append expiry audit events.
+- Token issuance requires an active identity. Every issued-bearer verification
+  rechecks current identity status, so suspension/retirement invalidates use.
+- Every explicit signing-key and key-file declaration must validate and agree.
+  Missing/unreadable/blank pointers cannot fall through to inline credentials.
+  Each server captures its signer before asynchronous startup, with request-local
+  binding across issuance/authentication. File/env changes require an explicit
+  server restart to adopt new signing authority; they cannot retarget an in-flight
+  request or silently switch a running server's signer.
+
+Five adversarial tests reproduced the findings before implementation; after the
+fix they pass alongside all 43 PostgreSQL-engine operations. Additional tests
+check overlapping signing contexts, equivalent aliases, weak/development keys,
+and invalid key files. The historical extraction script must not overwrite these
+independently reviewed divergences with legacy service behavior.
+
+P1 verification: **158 pass, 0 fail** using the exact reviewed Contracts source
+as a test-only substitution; native published-validator run is **156 pass,
+2 conformance failures**, unchanged in cause. Typecheck/build and frozen root and
+standalone installs pass. The rebuilt package contains 201 scanned entries with
+zero artifact findings/skips/unreadables. Root standards/publish-guard are rerun
+with the same restricted PATH and no task filing; their published-validator and
+unrelated declaration blockers remain separate from the repaired core behavior.

@@ -1,11 +1,10 @@
 // PostgreSQL core extraction; legacy services remain only for unresolved compatibility surfaces.
 import { Buffer } from "node:buffer";
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { getDatabase, now, uuid } from "../core-store.js";
 import { appendAuditEvent } from "./audit.js";
 import { clampLimit, clampOffset } from "../../db/crud.js";
-import { type StorageMode } from "../../config.js";
+import { createTokenSigner, currentTokenSigner } from "../core-signing.js";
 import { entityScopeFilter, type AuthorizationContext } from "../../services/authorization.js";
 import { authorize } from "../../services/authorization-scopes.js";
 import { getIdentity } from "./identities.js";
@@ -20,72 +19,22 @@ import {
 
 /**
  * access is the cohort MCP bearer-token ISSUER. Tokens are HMAC-SHA256 signed
- * with a dev-mode local signing key. Only the token HASH is stored (never the
+ * with the server-bound signing authority. Only the token HASH is stored (never the
  * raw token). Verification checks signature (timing-safe), expiry, and that the
- * jti is still active (not revoked).
+ * jti and its identity are still active.
  */
 
 const DEFAULT_TTL_MINUTES = 60;
-const LOCAL_MAX_TTL_MINUTES = 24 * 60;
 const HARDENED_MAX_TTL_MINUTES = 60;
-const MIN_SIGNING_KEY_LENGTH = 32;
-const DEV_SIGNING_KEY = "access-dev-signing-key-local-only-do-not-use-in-prod";
 
 export interface TokenSigningRuntimeOptions {
-  mode?: StorageMode;
+  mode?: "local" | "cloud";
   exposed?: boolean;
 }
 
-function configuredSigningKey(): string | undefined {
-  for (const fileKey of ["HASNA_ACCESS_TOKEN_SIGNING_KEY_FILE", "ACCESS_TOKEN_SIGNING_KEY_FILE"]) {
-    const filePath = process.env[fileKey]?.trim();
-    if (filePath && existsSync(filePath)) {
-      const value = readFileSync(filePath, "utf8").trim();
-      if (value) return value;
-    }
-  }
-  return process.env["HASNA_ACCESS_TOKEN_SIGNING_KEY"]?.trim() || process.env["ACCESS_TOKEN_SIGNING_KEY"]?.trim() || undefined;
-}
-
-function isLoopbackHost(host: string): boolean {
-  return host === "127.0.0.1" || host === "::1" || host === "localhost";
-}
-
-function exposedBindHost(): string | null {
-  const hosts = [
-    process.env["HASNA_ACCESS_BIND_HOST"],
-    process.env["ACCESS_BIND_HOST"],
-    process.env["HASNA_ACCESS_MCP_BIND_HOST"],
-    process.env["ACCESS_MCP_BIND_HOST"],
-  ]
-    .map((host) => host?.trim())
-    .filter((host): host is string => Boolean(host));
-  return hosts.find((host) => !isLoopbackHost(host)) ?? null;
-}
-
-function hardenedRuntime(options: TokenSigningRuntimeOptions = {}): boolean {
-  return (options.mode ?? "cloud") === "cloud" || options.exposed === true || exposedBindHost() !== null;
-}
-
-function isStrongSigningKey(key: string): boolean {
-  return key.length >= MIN_SIGNING_KEY_LENGTH && key !== DEV_SIGNING_KEY;
-}
-
-function signingKey(options: TokenSigningRuntimeOptions = {}): string {
-  const configured = configuredSigningKey();
-  if (hardenedRuntime(options)) {
-    if (!configured || !isStrongSigningKey(configured)) {
-      throw new ValidationError(
-        "A strong HASNA_ACCESS_TOKEN_SIGNING_KEY is required for cloud mode or exposed bind hosts.",
-      );
-    }
-    return configured;
-  }
-  return configured || DEV_SIGNING_KEY;
-}
-
-export function assertTokenSigningPosture(options: TokenSigningRuntimeOptions = {}): void {
-  void signingKey(options);
+/** Core signing is always fail-closed, regardless of the legacy option names. */
+export function assertTokenSigningPosture(_options: TokenSigningRuntimeOptions = {}): void {
+  createTokenSigner();
 }
 
 function b64url(input: Buffer | string): string {
@@ -93,7 +42,7 @@ function b64url(input: Buffer | string): string {
 }
 
 function sign(body: string): string {
-  return createHmac("sha256", signingKey()).update(body).digest("base64url");
+  return currentTokenSigner().sign(body);
 }
 
 function sha256(input: string): string {
@@ -147,9 +96,10 @@ export interface IssuedTokenResult {
 export async function issueToken(input: IssueTokenInput, ctx?: AuthorizationContext): Promise<IssuedTokenResult> {
   const ttlMinutes = normalizeTtlMinutes(input.ttl_minutes);
   // Validate signing posture before any token material is created.
-  void signingKey();
+  void currentTokenSigner();
   const identity = (await getIdentity(input.identity_id, ctx));
   authorize("issue", ctx, { entity_id: identity.entity_id, resource: "token" });
+  if (identity.status !== "active") throw new ValidationError("Tokens may be issued only for active identities.");
 
   // Default to the identity's effective granted scopes; a caller may narrow but
   // not widen beyond what is granted.
@@ -233,6 +183,8 @@ export async function verifyToken(token: string): Promise<VerifiedToken> {
   const row = (await db.query("SELECT * FROM issued_tokens WHERE jti = ?").get(claims.jti)) as TokenRow | null;
   if (!row) throw new TokenVerificationError("Token not recognized (unknown jti).");
   if (row.status !== "active") throw new TokenVerificationError("Token has been revoked.");
+  const identity = (await db.query("SELECT status FROM identities WHERE id = ?").get(row.identity_id)) as { status: string } | null;
+  if (!identity || identity.status !== "active") throw new TokenVerificationError("Token identity is not active.");
   if (!safeEqual(row.token_hash, sha256(token))) throw new TokenVerificationError("Token hash mismatch.");
 
   return {
@@ -315,7 +267,7 @@ function normalizeTtlMinutes(value: number | undefined): number {
   if (!Number.isFinite(ttl) || ttl <= 0 || !Number.isInteger(ttl)) {
     throw new ValidationError("ttl_minutes must be a positive integer.");
   }
-  const ceiling = hardenedRuntime() ? HARDENED_MAX_TTL_MINUTES : LOCAL_MAX_TTL_MINUTES;
+  const ceiling = HARDENED_MAX_TTL_MINUTES;
   if (ttl > ceiling) {
     throw new ValidationError(`ttl_minutes must be ${ceiling} or less for this runtime.`);
   }

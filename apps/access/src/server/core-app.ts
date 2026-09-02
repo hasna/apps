@@ -7,10 +7,12 @@ import { runOperation } from "./core-domain/registry.js";
 import { AccessError, errorStatus, toErrorEnvelope } from "../types/index.js";
 import { APP_VERSION } from "../version.js";
 import { serializeOpenApiDocument } from "../api/index.js";
+import { createTokenSigner, withTokenSigner } from "./core-signing.js";
 
 /** PostgreSQL-only core server. No local-storage transport can be selected here. */
 export function buildCoreApp(pool: CorePool, env: Record<string, string | undefined> = process.env): Hono {
   const authenticate = createCoreAuthenticator(env);
+  const signer = createTokenSigner(env);
   const app = new Hono();
   const origins = new Set((env.HASNA_ACCESS_CORS_ORIGINS ?? env.ACCESS_CORS_ORIGINS ?? "").split(",").map(value => value.trim()).filter(Boolean));
   const capacity = Number(env.HASNA_ACCESS_RATE_LIMIT ?? 120);
@@ -26,7 +28,7 @@ export function buildCoreApp(pool: CorePool, env: Record<string, string | undefi
       c.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     }
     if (c.req.method === "OPTIONS") return c.body(null, 204);
-    await next();
+    await withTokenSigner(signer, next);
   });
   app.use("/v1/*", async (c, next) => {
     // Peer comes from the server socket, never caller-controlled proxy headers.
