@@ -444,7 +444,13 @@ export function selfHostedApiRequest(
 export function selfHostedProbe(path: string): SelfHostedApiResult {
   const config = resolveSelfHostedConfig();
   const origin = config.baseUrl.replace(/\/v1$/, "");
-  const { status, body } = httpRequest({ ...config, baseUrl: origin }, "GET", path);
+  // Canonical credentials are non-enumerable; spreading the config alone would
+  // discard both the selected identity and its ordered fallback candidates.
+  const probeConfig = Object.defineProperties({ ...config, baseUrl: origin }, {
+    credential: { value: config.credential, enumerable: false },
+    credentialFallbacks: { value: config.credentialFallbacks, enumerable: false },
+  });
+  const { status, body } = httpRequest(probeConfig, "GET", path);
   const json = status >= 200 && status < 300
     ? parseSelfHostedSuccessJson(body, { status, method: "GET", path })
     : projectSelfHostedErrorBody(

@@ -6,6 +6,10 @@ import { join, relative } from "node:path";
 import ts from "typescript";
 import { buildPrepublishTestEnv } from "../scripts/prepublish-local-test.mjs";
 import {
+  CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_SETTINGS, EMAILS_API_URL_SETTINGS,
+  RETIRED_EMAILS_SELECTOR_SETTINGS,
+} from "./lib/client-settings.js";
+import {
   SelfHostedHttpError,
   selfHostedStoreFor,
   resetSelfHostedConfigCache,
@@ -609,35 +613,33 @@ async function startLoopbackServer(): Promise<{ server: Subprocess; baseUrl: str
 }
 
 function applySelfHostedEnv(): void {
-  process.env["EMAILS_MODE"] = "self_hosted";
-  process.env["EMAILS_SELF_HOSTED_URL"] = baseUrl;
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = "loopback-test-key";
+  process.env["HASNA_EMAILS_API_URL"] = baseUrl;
+  process.env["HASNA_EMAILS_API_KEY"] = "loopback-test-key";
   resetSelfHostedConfigCache();
   resetMailDataSource();
 }
 
-// `bun test` shares one process across every test file, and the harness sets
-// local mode exactly once for that process. Deleting these keys rather
-// than restoring them leaves every file that runs after this one falling
-// through the mode resolver to EMAILS_CLIENT_ENV_SECRET or the
-// on-disk config, which resolves to self_hosted and fails unrelated suites.
-// Restore the values this process started with instead.
+// Every test isolates its client inputs and restores the full prior environment,
+// including the pre-import database floor and absent/blank/conflicting aliases.
 const MODE_ENV_KEY = ["EMAILS", "MODE"].join("_");
 const SELF_HOSTED_ENV_KEYS = [
-  MODE_ENV_KEY,
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  ...RETIRED_EMAILS_SELECTOR_SETTINGS,
+  ...CLIENT_DATABASE_SETTINGS,
+  ...EMAILS_API_URL_SETTINGS,
+  ...EMAILS_API_KEY_SETTINGS,
+  "EMAILS_CLIENT_ENV_SECRET", "EMAILS_SESSION_TOKEN", "EMAILS_IDP_TOKEN",
+  "EMAILS_SELF_HOSTED_HTTP_CONNECT_TIMEOUT",
+  "EMAILS_SELF_HOSTED_HTTP_TIMEOUT",
   "EMAILS_SELF_HOSTED_HTTP_MAX_RESPONSE_BYTES",
 ] as const;
 
 let INHERITED_SELF_HOSTED_ENV: Record<string, string | undefined>;
 
 function clearSelfHostedEnv(): void {
-  for (const key of SELF_HOSTED_ENV_KEYS) {
-    const inherited = INHERITED_SELF_HOSTED_ENV[key];
-    if (inherited === undefined) delete process.env[key];
-    else process.env[key] = inherited;
+  for (const key of Object.keys(process.env)) {
+    if (!Object.prototype.hasOwnProperty.call(INHERITED_SELF_HOSTED_ENV, key)) delete process.env[key];
   }
+  Object.assign(process.env, INHERITED_SELF_HOSTED_ENV);
   resetSelfHostedConfigCache();
   resetMailDataSource();
 }
@@ -663,9 +665,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  INHERITED_SELF_HOSTED_ENV = Object.fromEntries(
-    SELF_HOSTED_ENV_KEYS.map((key) => [key, process.env[key]]),
-  );
+  INHERITED_SELF_HOSTED_ENV = { ...process.env };
+  for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
 });
 afterEach(clearSelfHostedEnv);
 
