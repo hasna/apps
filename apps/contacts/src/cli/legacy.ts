@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
+import fs, { constants, closeSync, existsSync, fstatSync, lstatSync, readSync, realpathSync, statSync, writeSync, type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import chalk from "chalk";
@@ -53,15 +53,39 @@ function resolveSource(requested?: string): string {
   return matches[0]!.path;
 }
 
-function preserveLegacyDatabase(sourceArg: string | undefined, outputArg: string): { source: string; output: string; bytes: number } {
+function sameFile(left: BigIntStats, right: BigIntStats): boolean {
+  return left.isFile() && right.isFile() && left.dev === right.dev && left.ino === right.ino;
+}
+
+function unchangedFile(left: BigIntStats, right: BigIntStats): boolean {
+  return sameFile(left, right) && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+/** Bind every ancestor, including stable platform links such as macOS /var. */
+function parentIdentity(path: string): string {
+  const identities: string[] = [];
+  let parent = dirname(path);
+  while (true) {
+    const stat = lstatSync(parent, { bigint: true });
+    identities.push(`${parent}:${stat.dev}:${stat.ino}:${stat.mode}:${realpathSync(parent)}`);
+    const next = dirname(parent);
+    if (next === parent) return JSON.stringify(identities);
+    parent = next;
+  }
+}
+
+export function preserveLegacyDatabase(sourceArg: string | undefined, outputArg: string): { source: string; output: string; bytes: number } {
   const source = resolveSource(sourceArg);
   const output = resolve(outputArg);
-  if (!existsSync(source) || lstatSync(source).isSymbolicLink() || !lstatSync(source).isFile()) {
+  const sourceParents = parentIdentity(source);
+  const inspectedSource = lstatSync(source, { bigint: true });
+  if (!inspectedSource.isFile()) {
     throw new Error(`Legacy database is not a regular file: ${source}`);
   }
   if (source === output) throw new Error("The preservation output must differ from the source database.");
   if (existsSync(output)) throw new Error(`Refusing to overwrite existing output: ${output}`);
   if (!existsSync(dirname(output))) throw new Error(`Output directory does not exist: ${dirname(output)}`);
+  const outputParents = parentIdentity(output);
   const sidecarPaths = ["-wal", "-journal", "-shm"].map((suffix) => `${source}${suffix}`);
   const sidecars = sidecarPaths.filter(existsSync);
   if (sidecars.length > 0) {
@@ -73,15 +97,18 @@ function preserveLegacyDatabase(sourceArg: string | undefined, outputArg: string
   }
   let sourceFd: number | null = null;
   let outputFd: number | null = null;
-  let createdOutput = false;
   try {
-    sourceFd = openSync(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    if (constants.O_NOFOLLOW === undefined) throw new Error("This platform cannot safely preserve a legacy database without O_NOFOLLOW.");
+    sourceFd = fs.openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW);
     const before = fstatSync(sourceFd, { bigint: true });
-    if (!before.isFile()) throw new Error("Legacy database is not a regular file.");
+    if (!unchangedFile(inspectedSource, before) || !unchangedFile(before, lstatSync(source, { bigint: true })) ||
+      parentIdentity(source) !== sourceParents || parentIdentity(output) !== outputParents) {
+      throw new Error("Legacy source or an ancestor changed between inspection and opening; preservation refused.");
+    }
     // Create at its final private mode. There is no interval where another user
     // can read the copy, unlike create-then-chmod.
-    outputFd = openSync(output, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
-    createdOutput = true;
+    outputFd = fs.openSync(output, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    const createdOutput = fstatSync(outputFd, { bigint: true });
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let bytes = 0;
     while (true) {
@@ -91,17 +118,21 @@ function preserveLegacyDatabase(sourceArg: string | undefined, outputArg: string
       while (offset < read) offset += writeSync(outputFd, buffer, offset, read - offset);
       bytes += read;
     }
-    fsyncSync(outputFd);
+    fs.fsyncSync(outputFd);
     const after = fstatSync(sourceFd, { bigint: true });
-    const stable = before.dev === after.dev && before.ino === after.ino && before.size === after.size &&
-      before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs && BigInt(bytes) === after.size;
-    if (!stable || sidecarPaths.some(existsSync)) {
-      throw new Error("Legacy database changed or gained a SQLite sidecar during preservation; no copy was kept.");
+    const stable = unchangedFile(before, after) && unchangedFile(after, lstatSync(source, { bigint: true })) &&
+      BigInt(bytes) === after.size && parentIdentity(source) === sourceParents && parentIdentity(output) === outputParents;
+    if (!stable || sidecarPaths.some(existsSync) || !sameFile(createdOutput, lstatSync(output, { bigint: true }))) {
+      throw new Error("Legacy database, output, or ancestor changed or a SQLite sidecar appeared during preservation.");
     }
     return { source, output, bytes };
   } catch (error) {
-    if (outputFd !== null) { closeSync(outputFd); outputFd = null; }
-    if (createdOutput) unlinkSync(output);
+    // Never unlink by pathname: a concurrent rename may now put an unrelated
+    // file there, even after an identity check. Retain any private partial copy
+    // for explicit inspection instead of risking deletion of someone else's file.
+    if (outputFd !== null) {
+      throw new Error(`${error instanceof Error ? error.message : "Preservation failed."} Any created output is unverified and was left untouched for manual inspection.`);
+    }
     throw error;
   } finally {
     if (outputFd !== null) closeSync(outputFd);

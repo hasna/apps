@@ -120,6 +120,11 @@ portable contact records, use a legacy release against the preserved copy to
 export JSON, then run `contacts import exported.json` with the HTTPS client
 configured. Existing files are never overwritten.
 
+Preservation rejects source, ancestor, or output replacement races. If a copy
+fails after output creation, any private partial output is left untouched and
+reported as unverified for manual inspection; the command never deletes a
+pathname that another process might have replaced.
+
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
