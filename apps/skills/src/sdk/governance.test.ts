@@ -432,10 +432,17 @@ describe("governance spend: ceilings at admission, reservations, reconciliation"
     const governance = new MemoryGovernanceStore();
     governance.seedRuns([{ orgId: "org_a", costCents: 4900, status: "succeeded", createdAt: "2026-08-01T00:00:00.000Z" }]);
     const spend = createSpendService({ governanceStore: governance, ceilings: { ...DEFAULT_SPEND_CEILINGS, monthlyTotalCents: 5000, concurrency: 10 } });
-    await expect(spend.admit({ principal: principalA, slug: "audio-transcript-pack", estimatedCents: 200 })).rejects.toMatchObject({
+    await expect(spend.admit({ principal: principalA, slug: "audio-transcript-pack", estimatedCents: 200, now: new Date("2026-08-31T23:59:59.999Z") })).rejects.toMatchObject({
       code: GOVERNANCE_ERROR_CODES.RUN_BUDGET_EXHAUSTED,
       ceiling: "monthly",
     });
+  });
+
+  test("positive: prior-month spend does not exhaust the next month's ceiling", async () => {
+    const governance = new MemoryGovernanceStore();
+    governance.seedRuns([{ orgId: "org_a", costCents: 4900, status: "succeeded", createdAt: "2026-08-01T00:00:00.000Z" }]);
+    const spend = createSpendService({ governanceStore: governance, ceilings: { ...DEFAULT_SPEND_CEILINGS, monthlyTotalCents: 5000, concurrency: 10 } });
+    await expect(spend.admit({ principal: principalA, slug: "audio-transcript-pack", estimatedCents: 200, now: new Date("2026-09-01T00:00:00.000Z") })).resolves.toBeUndefined();
   });
 
   test("NEGATIVE 5: admission refuses at the concurrency ceiling", async () => {
