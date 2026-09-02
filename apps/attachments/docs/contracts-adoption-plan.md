@@ -56,3 +56,72 @@ migrations and store, not future shared-kit adoption or a deployed object store.
 Version 2.0.0 must receive a fresh exact-artifact audit after final dependency
 adoption. No npm publication, deployment, production migration or legacy-data
 import is performed by this version preparation.
+
+## Concrete implementation map after registry verification
+
+- `src/core/client-config.ts`: retain explicit authority validation and rejection
+  of retired selectors/DSNs. Adapt published `resolveCredential`,
+  `validateAndSealResolvedCredential` and, for pointer-tier credentials,
+  `completePointerCredential`; never reinterpret a missing/failed provider as a
+  reason to fall back to environment or local storage. Keep the app-owned
+  authority binding alongside the resolved credential rather than reading them
+  independently. Verify exact signatures against the published artifact first.
+- `src/core/cloud-v1.ts`: JSON requests may use `createClientTransport` with
+  `retry: false`; preserve existing list/get envelopes, 404 handling and upload
+  metadata. File/stream/source-URL uploads still perform validation before
+  consuming input and again before the authenticated dispatch. Preserve
+  encryption, presigned transfers, password headers and all share-link options.
+- Keep binary downloads in a clearly application-owned adapter. The inspected
+  Contracts `HasnaHttpTransport` serializes request bodies as JSON and parses
+  responses; it does not expose a raw response stream. Do not fake a JSON
+  response or widen Contracts solely to force this use case through that API.
+  Resolve the published credential primitives, retain redirect rejection and
+  zero retries, and preserve content-disposition validation, content-length,
+  password headers and the streaming pipeline to an explicit destination.
+- `src/core/todos.ts` and its callers: preserve each service's independent
+  credential/authority, including existing `/api/` routes. Do not silently
+  rewrite them to `/v1` through a transport normalizer. Use the same app-owned
+  bound credential adapter for these legacy route contracts until their
+  authoritative service specifications establish another route.
+- `scripts/generate-sdk.ts`, both generated copies and `src/sdk/index.ts`:
+  inspect the released generator before replacing existing fail-closed template
+  patches. Keep credential rotation, auth-header override rejection, manual
+  redirect policy and non-disclosing errors; generated provenance must identify
+  actual generation and any retained application patching truthfully.
+
+### Stable binding and binary regression requirements
+
+An independent mocked-fetch probe against commit
+`7fe76ca2ecab172e12ea78034ab07bc75f705914` exposed a reentrant environment-object
+edge: an API-key property accessor changed API_URL while `resolveClientConfig`
+was reading the pair, and download dispatched the new key to the old URL.
+No network request or output-file write occurred in the probe. Ordinary
+`process.env` reads have no intervening await, so this is specifically an
+accessor/reentrant supplied-environment case, not a claim that normal key
+rotation always races. The follow-up app-owned fix reads and compares two
+complete pairs before returning credentials in Attachments and Todos/Sessions.
+Ten regressions prove mismatched pairs dispatch nothing while stable between-call
+rotation still works for JSON, binary and both integrations. This is a synchronous
+environment fix, not a claim that unpublished pointer-provider adoption is done.
+
+The adapter must obtain two equal authority/credential snapshots, resolve any
+asynchronous pointer, then re-read and compare the exact pair immediately before
+calling fetch. Authority remains pinned for the client lifetime; same-authority
+rotation is accepted only when stable. Disallow mismatched source/tier/pointer
+identity as well as mismatched values. No await may intervene after the final
+validation and before dispatch.
+
+Required negative/positive controls:
+
+1. Reentrant key getters changing authority or key, pointer completion changing
+   authority, and source/tier changes all produce zero authenticated dispatches.
+   Stable same-authority rotation uses the new key on the next request.
+2. JSON upload, streaming download and each integration repeat the binding
+   controls. Missing/conflicting configuration fails before file/stream input,
+   output creation or network access; pointer failures never fall through.
+3. 301/302/303/307/308 never forward credentials or replay bodies, including
+   same-origin redirects. 401/403 errors never read or expose credential-bearing
+   response bodies. Network/5xx failures produce one attempt, not implicit retries.
+4. Binary bytes, download filename/length, password headers, streaming behavior,
+   upload metadata/encryption and presigned/share-link features survive unchanged.
+   Integration requests preserve their own authority and existing API paths.

@@ -14,7 +14,17 @@ export function validateClientConfig(url: string, key: string): { url: string; k
   return { url: parsed.href.replace(/\/+$/, ""), key };
 }
 
-export function resolveClientConfig(env: NodeJS.ProcessEnv) {
+/** A supplied environment may contain reentrant accessors. Never mix snapshots. */
+export function resolveStableClientConfig(read: () => { url: string; key: string }) {
+  const first = read();
+  const second = read();
+  if (first.url !== second.url || first.key !== second.key) {
+    throw new Error("API authority or credential changed during configuration resolution; no request was sent.");
+  }
+  return second;
+}
+
+function readClientConfig(env: NodeJS.ProcessEnv) {
   for (const name of ["HASNA_ATTACHMENTS_STORAGE_MODE", "HASNA_ATTACHMENTS_MODE", "ATTACHMENTS_CLIENT_MODE", "ATTACHMENTS_STORAGE_MODE", "ATTACHMENTS_MODE", "HASNA_ATTACHMENTS_DATABASE_URL", "ATTACHMENTS_DATABASE_URL", "HASNA_ATTACHMENTS_DB_PATH"]) {
     if (env[name] !== undefined) throw new Error(`${name} is not supported by the HTTPS client; configure HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY.`);
   }
@@ -26,4 +36,8 @@ export function resolveClientConfig(env: NodeJS.ProcessEnv) {
     return values[0]!;
   };
   return validateClientConfig(read("HASNA_ATTACHMENTS_API_URL", "ATTACHMENTS_API_URL"), read("HASNA_ATTACHMENTS_API_KEY", "ATTACHMENTS_API_KEY"));
+}
+
+export function resolveClientConfig(env: NodeJS.ProcessEnv) {
+  return resolveStableClientConfig(() => readClientConfig(env));
 }

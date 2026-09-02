@@ -1,4 +1,4 @@
-import { validateClientConfig } from "./client-config";
+import { resolveStableClientConfig, validateClientConfig } from "./client-config";
 
 export function serviceConfig(service: "TODOS" | "SESSIONS", env: NodeJS.ProcessEnv = process.env) {
   const read = (suffix: string) => {
@@ -7,7 +7,7 @@ export function serviceConfig(service: "TODOS" | "SESSIONS", env: NodeJS.Process
     if (!values.length || values.some(v => !v.trim()) || new Set(values).size !== 1) throw new Error(`Missing, blank, or conflicting ${service} ${suffix} configuration.`);
     return values[0]!;
   };
-  return validateClientConfig(read("API_URL"), read("API_KEY"));
+  return resolveStableClientConfig(() => validateClientConfig(read("API_URL"), read("API_KEY")));
 }
 
 export function withServiceAuth(service: "TODOS" | "SESSIONS", requestUrl?: string | URL, init?: RequestInit): RequestInit {
