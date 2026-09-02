@@ -1,3 +1,11 @@
+import { beforeEach as configureIntegrationFixture } from "bun:test";
+configureIntegrationFixture(() => {
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.TODOS_API_KEY = "remote-key";
+  delete process.env.HASNA_TODOS_API_KEY;
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
 import { describe, it, expect, mock, beforeEach, spyOn } from "bun:test";
 
 // ---------------------------------------------------------------------------
@@ -38,6 +46,12 @@ mock.module("../../core/upload", () => ({
 }));
 
 // Import after mocks
+// Command behavior uses an explicit test-only Store seam, never production fallback.
+const { MockedStoreFixture } = await import("../../testing/mocked-store-fixture");
+const actualStore = await import("../../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
 const { completeTaskWithFiles, registerCompleteTask } = await import("./complete-task");
 
 // ---------------------------------------------------------------------------
@@ -179,7 +193,7 @@ describe("completeTaskWithFiles", () => {
     const result = await completeTaskWithFiles(
       "TASK-001",
       ["/tmp/file.txt"],
-      { todosUrl: "http://localhost:3000" },
+      { todosUrl: "https://todos.example.test" },
       makeStoreFactory(upload),
       fakeFetch
     );
@@ -192,11 +206,11 @@ describe("completeTaskWithFiles", () => {
     // GET -> PATCH -> POST /complete
     expect(calls).toHaveLength(3);
     expect(calls.every(([, init]) => new Headers(init?.headers).get("x-api-key") === "remote-key")).toBe(true);
-    expect(calls[0][0]).toBe("http://localhost:3000/api/tasks/TASK-001");
+    expect(calls[0][0]).toBe("https://todos.example.test/api/tasks/TASK-001");
     expect((calls[0][1]?.method ?? "GET").toUpperCase()).toBe("GET");
-    expect(calls[1][0]).toBe("http://localhost:3000/api/tasks/TASK-001");
+    expect(calls[1][0]).toBe("https://todos.example.test/api/tasks/TASK-001");
     expect(calls[1][1]?.method).toBe("PATCH");
-    expect(calls[2][0]).toBe("http://localhost:3000/api/tasks/TASK-001/complete");
+    expect(calls[2][0]).toBe("https://todos.example.test/api/tasks/TASK-001/complete");
     expect(calls[2][1]?.method).toBe("POST");
 
     // Evidence persisted in the exact shape resolve-evidence reads.
@@ -231,7 +245,7 @@ describe("completeTaskWithFiles", () => {
     await completeTaskWithFiles(
       "TASK-001",
       ["/tmp/new.txt"],
-      { todosUrl: "http://localhost:3000" },
+      { todosUrl: "https://todos.example.test" },
       makeStoreFactory(upload),
       fakeFetch
     );
@@ -272,7 +286,7 @@ describe("completeTaskWithFiles", () => {
     const result = await completeTaskWithFiles(
       "TASK-002",
       ["/tmp/file1.txt", "/tmp/file2.txt"],
-      { todosUrl: "http://localhost:3000" },
+      { todosUrl: "https://todos.example.test" },
       makeStoreFactory(upload),
       fakeFetch
     );
@@ -296,7 +310,7 @@ describe("completeTaskWithFiles", () => {
     await completeTaskWithFiles(
       "TASK-001",
       ["/tmp/file.txt"],
-      { todosUrl: "http://localhost:3000", notes: "All tests passed" },
+      { todosUrl: "https://todos.example.test", notes: "All tests passed" },
       makeStoreFactory(upload),
       fakeFetch
     );
@@ -313,7 +327,7 @@ describe("completeTaskWithFiles", () => {
     await completeTaskWithFiles(
       "TASK-001",
       ["/tmp/file.txt"],
-      { todosUrl: "http://localhost:3000", expiry: "7d" },
+      { todosUrl: "https://todos.example.test", expiry: "7d" },
       makeStoreFactory(upload),
       fakeFetch
     );
@@ -329,7 +343,7 @@ describe("completeTaskWithFiles", () => {
       completeTaskWithFiles(
         "TASK-999",
         ["/tmp/file.txt"],
-        { todosUrl: "http://localhost:3000" },
+        { todosUrl: "https://todos.example.test" },
         makeStoreFactory(upload),
         fakeFetch
       )
@@ -344,7 +358,7 @@ describe("completeTaskWithFiles", () => {
       completeTaskWithFiles(
         "TASK-001",
         ["/tmp/file.txt"],
-        { todosUrl: "http://localhost:3000" },
+        { todosUrl: "https://todos.example.test" },
         makeStoreFactory(upload),
         fakeFetch
       )
@@ -359,14 +373,14 @@ describe("completeTaskWithFiles", () => {
       completeTaskWithFiles(
         "TASK-001",
         ["/tmp/file.txt"],
-        { todosUrl: "http://localhost:3000" },
+        { todosUrl: "https://todos.example.test" },
         makeStoreFactory(upload),
         fakeFetch
       )
     ).rejects.toThrow("HTTP 500");
   });
 
-  it("defaults todos-url to http://localhost:3000", async () => {
+  it("defaults todos-url to https://todos.example.test", async () => {
     const upload = makeUpload("att_001");
     const fakeFetch = makeFetch();
 
@@ -379,7 +393,7 @@ describe("completeTaskWithFiles", () => {
     );
 
     const [url] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string];
-    expect(url).toContain("http://localhost:3000");
+    expect(url).toContain("https://todos.example.test");
   });
 
   it("handles attachment with null link", async () => {
@@ -389,7 +403,7 @@ describe("completeTaskWithFiles", () => {
     const result = await completeTaskWithFiles(
       "TASK-001",
       ["/tmp/file.txt"],
-      { todosUrl: "http://localhost:3000" },
+      { todosUrl: "https://todos.example.test" },
       makeStoreFactory(upload),
       fakeFetch
     );
@@ -410,7 +424,7 @@ describe("completeTaskWithFiles", () => {
       completeTaskWithFiles(
         "TASK-001",
         ["/tmp/file.txt"],
-        { todosUrl: "http://localhost:3000" },
+        { todosUrl: "https://todos.example.test" },
         makeStoreFactory(upload),
         fakeFetch
       )
@@ -479,6 +493,7 @@ describe("complete-task CLI command", () => {
   });
 
   it("uses custom --todos-url when provided", async () => {
+    process.env.HASNA_TODOS_API_URL = "https://custom.example.test";
     const seen: string[] = [];
     const base = makeFetch();
     const originalFetch = globalThis.fetch;
@@ -491,10 +506,10 @@ describe("complete-task CLI command", () => {
     try {
       const program = buildProgram();
       await program.parseAsync(
-        ["complete-task", "TASK-001", "--file", "/tmp/report.pdf", "--todos-url", "http://localhost:4000"],
+        ["complete-task", "TASK-001", "--file", "/tmp/report.pdf", "--todos-url", "https://custom.example.test"],
         { from: "user" }
       );
-      expect(seen.every((u) => u.startsWith("http://localhost:4000"))).toBe(true);
+      expect(seen.every((u) => u.startsWith("https://custom.example.test"))).toBe(true);
     } finally {
       capture.restore();
       globalThis.fetch = originalFetch;

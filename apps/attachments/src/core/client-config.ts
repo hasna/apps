@@ -3,7 +3,7 @@ export function validateClientConfig(url: string, key: string): { url: string; k
   if (typeof url !== "string" || !url.trim() || typeof key !== "string" || !key.trim()) {
     throw new Error("Attachments requires an explicit HTTPS API URL and API key.");
   }
-  if (url !== url.trim() || key !== key.trim() || /[\s\x00-\x1f\x7f]/.test(key)) {
+  if (url !== url.trim() || /[\x00-\x20\x7f]/.test(url) || key !== key.trim() || /[\s\x00-\x1f\x7f]/.test(key)) {
     throw new Error("Attachments API configuration contains invalid whitespace.");
   }
   let parsed: URL;

@@ -13,7 +13,8 @@ export function serviceConfig(service: "TODOS" | "SESSIONS", env: NodeJS.Process
 export function withServiceAuth(service: "TODOS" | "SESSIONS", requestUrl?: string | URL, init?: RequestInit): RequestInit {
   const config = serviceConfig(service);
   const url = new URL(String(requestUrl));
-  if (!(url.href === config.url || url.href.startsWith(config.url + "/"))) throw new Error(`Request is outside the configured ${service} API URL.`);
+  const apiBoundary = url.href.indexOf("/api/");
+  if (apiBoundary < 0 || url.href.slice(0, apiBoundary) !== config.url) throw new Error(`Request is outside the configured ${service} API URL.`);
   const headers = new Headers(init?.headers);
   headers.delete("authorization");
   headers.set("x-api-key", config.key);

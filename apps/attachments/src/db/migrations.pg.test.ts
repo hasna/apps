@@ -11,8 +11,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkHealth, checkReady } from "../generated/storage-kit/health.js";
-import { MigrationLedger, defineMigration } from "../generated/storage-kit/migrations.js";
+import { checkHealth, checkReady } from "../server-storage/health.js";
+import { MigrationLedger, defineMigration } from "../server-storage/migrations.js";
 import { ATTACHMENTS_MIGRATIONS } from "./migrations.js";
 import {
   LIVE_PG_ENABLED,

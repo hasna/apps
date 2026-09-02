@@ -57,9 +57,9 @@ export async function linkAttachmentToTask(
     if (response.status === 404) {
       throw new Error(`Task not found: ${taskId}`);
     }
-    const body = await response.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to update task ${taskId}: HTTP ${response.status}${body ? ` — ${body}` : ""}`
+      `Failed to update task ${taskId}: HTTP ${response.status}`
     );
   }
 }

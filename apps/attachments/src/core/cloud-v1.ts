@@ -139,10 +139,15 @@ export function resolveAttachmentsV1(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: ResolveStorageClientOverrides,
 ): ResolveAttachmentsV1Result {
-  const config = resolveClientConfig(env);
+  const authority = resolveClientConfig(env).url;
+  const credentials = () => {
+    const current = resolveClientConfig(env);
+    if (current.url !== authority) throw new Error("Attachments API authority changed; construct a new client explicitly.");
+    return current;
+  };
   const fetchImpl = overrides?.fetchImpl ?? fetch;
-  const client = createStorageClient(config.url, config.key, fetchImpl);
-  return { transport: "cloud-http", store: makeStore(client, config, fetchImpl) };
+  const client = createStorageClient(authority, credentials, fetchImpl);
+  return { transport: "cloud-http", store: makeStore(client, credentials, fetchImpl) };
 }
 
 /**
@@ -177,9 +182,10 @@ export function describeApiFailure(
     : `${route} failed: HTTP ${status}`;
 }
 
-function createStorageClient(apiUrl: string, apiKey: string, fetchImpl: JsonFetch): HasnaStorageClient {
+function createStorageClient(apiUrl: string, credentials: () => { url: string; key: string }, fetchImpl: JsonFetch): HasnaStorageClient {
   const baseUrl = `${apiUrl.replace(/\/+$/, "")}/v1`;
   const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
+    const apiKey = credentials().key;
     const response = await fetchImpl(`${baseUrl}${path}`, {
       ...init,
       redirect: "error",
@@ -237,7 +243,7 @@ function createStorageClient(apiUrl: string, apiKey: string, fetchImpl: JsonFetc
   };
 }
 
-function makeStore(client: HasnaStorageClient, config: { url: string; key: string }, fetchImpl: JsonFetch): AttachmentsV1Store {
+function makeStore(client: HasnaStorageClient, credentials: () => { url: string; key: string }, fetchImpl: JsonFetch): AttachmentsV1Store {
   const uploadBody = (filename: string, bytes: Uint8Array, options: V1UploadOptions) => ({
     filename,
     content_base64: Buffer.from(bytes).toString("base64"),
@@ -277,17 +283,20 @@ function makeStore(client: HasnaStorageClient, config: { url: string; key: strin
     },
 
     async uploadFile(path: string, options: V1UploadOptions = {}): Promise<Attachment> {
+      credentials();
       const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
       return store.uploadBuffer(options.filename || basename(path), bytes, options);
     },
 
     async uploadStream(stream: NodeJS.ReadableStream, filename: string, options: V1UploadOptions = {}): Promise<Attachment> {
+      credentials();
       const chunks: Buffer[] = [];
       for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       return store.uploadBuffer(options.filename || filename, Buffer.concat(chunks), options);
     },
 
     async uploadUrl(url: string, options: V1UploadOptions = {}): Promise<Attachment> {
+      credentials();
       const source = new URL(url);
       if (source.protocol !== "https:" || source.username || source.password) throw new Error("Upload source must be an HTTPS URL without credentials.");
       const response = await fetchImpl(url, { redirect: "error" });
@@ -328,6 +337,7 @@ function makeStore(client: HasnaStorageClient, config: { url: string; key: strin
       // The JSON transport can't carry a binary stream, so hit the download route
       // directly with a scoped fetch using the same env creds. The key is read
       // here only; it is never logged or returned.
+      const config = credentials();
       const apiUrl = config.url;
       const apiKey = config.key;
       const response = await fetchImpl(`${apiUrl}/v1/attachments/${encodeURIComponent(id)}/download`, {

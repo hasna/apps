@@ -57,7 +57,7 @@ ${body}
 
 async function fetchSessionMessages(sessionId: string, sessionsUrl: string): Promise<SessionMessage[]> {
   // Try /api/sessions/:id/messages first, fall back to /api/sessions/:id
-  const messagesUrl = `${sessionsUrl}/api/sessions/${sessionId}/messages`;
+  const messagesUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(sessionId)}/messages`;
   const res = await fetch(messagesUrl, withServiceAuth("SESSIONS", messagesUrl));
 
   if (res.ok) {
@@ -72,7 +72,7 @@ async function fetchSessionMessages(sessionId: string, sessionsUrl: string): Pro
 
   if (res.status !== 404) throw new Error(`Sessions request failed: HTTP ${res.status}`);
   // Compatibility read only when the messages route is absent.
-  const sessionUrl = `${sessionsUrl}/api/sessions/${sessionId}`;
+  const sessionUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(sessionId)}`;
   const res2 = await fetch(sessionUrl, withServiceAuth("SESSIONS", sessionUrl));
   if (!res2.ok) {
     throw new Error(`Failed to fetch session ${sessionId}: HTTP ${res2.status}`);

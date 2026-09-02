@@ -103,7 +103,7 @@ describe("scan:artifact release gate", () => {
     // and build:js delegates to it, so verify:release and prepare reach the
     // exact same dist.
     const scripts = readJson("package.json").scripts as Record<string, string>;
-    expect(scripts["build"]).toContain("--external @hasna/events");
+    expect(scripts["build"]).not.toContain("@hasna/events");
     expect(scripts["build:js"]).toBe("bun run build");
     // Both the scan path and the pack-time rebuild path must terminate at the
     // same single build command.
@@ -119,18 +119,17 @@ describe("scan:artifact release gate", () => {
     // no workflow it runs when someone types it, which is not a gate.
     const workflow = readText(".github/workflows/ci.yml");
     expect(workflow).toContain(`bunx @hasna/contracts@${CONTRACTS_KIT_VERSION} repo-conformance .`);
-    expect(workflow).toContain(`bunx @hasna/contracts@${CONTRACTS_KIT_VERSION} vendor-kit --check .`);
+    expect(workflow).toContain("bun test src/core/canonical-client.test.ts");
     expect(workflow).toContain("bun run verify:release");
     // The live-PG gate declared in the contract has to actually execute.
     expect(workflow).toContain("HASNA_ATTACHMENTS_TEST_DATABASE_URL");
     expect(workflow).toContain("ATTACHMENTS_REQUIRE_POSTGRES");
   });
 
-  it("keeps the kit version in lockstep with the contract, vendored kit and dependency", () => {
+  it("records published tooling and honest application-owned storage provenance", () => {
     expect(readJson("hasna.contract.json").kitVersion).toBe(CONTRACTS_KIT_VERSION);
-    expect(readJson("src/generated/storage-kit/.storage-kit-manifest.json").kitVersion).toBe(
-      CONTRACTS_KIT_VERSION,
-    );
+    expect(readText("src/server-storage/README.md")).toContain("0.8.2");
+    expect(readText("src/server-storage/README.md")).toContain("unpublished");
     expect(rangeBaseVersion(readJson("package.json").dependencies["@hasna/contracts"])).toBe(
       CONTRACTS_KIT_VERSION,
     );

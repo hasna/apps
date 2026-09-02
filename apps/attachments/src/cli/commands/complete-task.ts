@@ -81,9 +81,9 @@ export async function completeTaskWithFiles(
     if (getResponse.status === 404) {
       throw new Error(`Task not found: ${taskId}`);
     }
-    const responseBody = await getResponse.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to fetch task ${taskId}: HTTP ${getResponse.status}${responseBody ? ` — ${responseBody}` : ""}`
+      `Failed to fetch task ${taskId}: HTTP ${getResponse.status}`
     );
   }
   const task = (await getResponse.json()) as Record<string, unknown>;
@@ -121,9 +121,9 @@ export async function completeTaskWithFiles(
     body: JSON.stringify(patchBody),
   }));
   if (!patchResponse.ok) {
-    const responseBody = await patchResponse.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to persist attachment evidence for task ${taskId}: HTTP ${patchResponse.status}${responseBody ? ` — ${responseBody}` : ""}`
+      `Failed to persist attachment evidence for task ${taskId}: HTTP ${patchResponse.status}`
     );
   }
 
@@ -138,9 +138,9 @@ export async function completeTaskWithFiles(
     if (completeResponse.status === 404) {
       throw new Error(`Task not found: ${taskId}`);
     }
-    const responseBody = await completeResponse.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to complete task ${taskId}: HTTP ${completeResponse.status}${responseBody ? ` — ${responseBody}` : ""}`
+      `Failed to complete task ${taskId}: HTTP ${completeResponse.status}`
     );
   }
 

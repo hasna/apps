@@ -1,3 +1,11 @@
+import { beforeEach as configureIntegrationFixture } from "bun:test";
+configureIntegrationFixture(() => {
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.TODOS_API_KEY = "remote-key";
+  delete process.env.HASNA_TODOS_API_KEY;
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
 import { describe, it, expect, mock, beforeEach, spyOn } from "bun:test";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +42,12 @@ mock.module("../../core/db", () => ({
 }));
 
 // Import after mocks
+// Command behavior uses an explicit test-only Store seam, never production fallback.
+const { MockedStoreFixture } = await import("../../testing/mocked-store-fixture");
+const actualStore = await import("../../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
 const { resolveEvidence, registerResolveEvidence } = await import("./resolve-evidence");
 
 // ---------------------------------------------------------------------------
@@ -132,7 +146,7 @@ describe("resolveEvidence", () => {
     const fakeFetch = makeFetch(200, task);
     process.env.TODOS_API_KEY = "remote-key";
 
-    const result = await resolveEvidence("TASK-001", { todosUrl: "http://localhost:3000" }, fakeFetch);
+    const result = await resolveEvidence("TASK-001", { todosUrl: "https://todos.example.test" }, fakeFetch);
     delete process.env.TODOS_API_KEY;
     const [, init] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
 
@@ -220,11 +234,12 @@ describe("resolveEvidence", () => {
     const fakeFetch = makeFetchError("ECONNREFUSED");
 
     await expect(
-      resolveEvidence("TASK-001", { todosUrl: "http://localhost:3000" }, fakeFetch)
-    ).rejects.toThrow("Could not reach todos server at http://localhost:3000");
+      resolveEvidence("TASK-001", { todosUrl: "https://todos.example.test" }, fakeFetch)
+    ).rejects.toThrow("Could not reach todos server at https://todos.example.test");
   });
 
   it("uses custom todosUrl for the fetch request", async () => {
+    process.env.HASNA_TODOS_API_URL = "https://custom.example.test";
     const task = makeTaskResponse([]);
     let capturedUrl = "";
     const fakeFetch = mock(async (url: unknown) => {
@@ -232,9 +247,9 @@ describe("resolveEvidence", () => {
       return { ok: true, status: 200, json: async () => task, text: async () => "" } as Response;
     }) as unknown as typeof fetch;
 
-    await resolveEvidence("TASK-001", { todosUrl: "http://localhost:9999" }, fakeFetch);
+    await resolveEvidence("TASK-001", { todosUrl: "https://custom.example.test" }, fakeFetch);
 
-    expect(capturedUrl).toBe("http://localhost:9999/api/tasks/TASK-001");
+    expect(capturedUrl).toBe("https://custom.example.test/api/tasks/TASK-001");
   });
 
   it("closes DB after successful resolution", async () => {
@@ -355,6 +370,7 @@ describe("resolve-evidence CLI command", () => {
   });
 
   it("uses custom --todos-url", async () => {
+    process.env.HASNA_TODOS_API_URL = "https://custom.example.test";
     const task = makeTaskResponse([]);
     let capturedUrl = "";
     globalThis.fetch = mock(async (url: unknown) => {
@@ -366,10 +382,10 @@ describe("resolve-evidence CLI command", () => {
     try {
       const program = buildProgram();
       await program.parseAsync(
-        ["resolve-evidence", "TASK-001", "--todos-url", "http://localhost:4444"],
+        ["resolve-evidence", "TASK-001", "--todos-url", "https://custom.example.test"],
         { from: "user" }
       );
-      expect(capturedUrl).toContain("http://localhost:4444");
+      expect(capturedUrl).toContain("https://custom.example.test");
     } finally {
       capture.restore();
     }

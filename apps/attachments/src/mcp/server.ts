@@ -14,7 +14,7 @@ import { runHealthCheck } from "../cli/commands/health-check.js";
 import { completeTaskWithFiles } from "../cli/commands/complete-task.js";
 import { linkAttachmentToTask } from "../cli/commands/link-task.js";
 import { resolveStore } from "../core/store.js";
-import { getConfig, parseExpiryStrict, setConfig } from "../core/config.js";
+import { getConfig, parseExpiryStrict } from "../core/config.js";
 
 // ---------------------------------------------------------------------------
 // In-memory agent registry (attribution for uploads)
@@ -812,17 +812,6 @@ function handleConfigureS3(args: {
     throw new Error("access_key and secret_key must be provided together, or both omitted for default credential-chain auth");
   }
   throw new Error("Client-side S3 configuration is retired; configure the HTTPS API using environment credentials.");
-  setConfig({
-    s3: {
-      bucket: args.bucket,
-      region: args.region,
-      ...(args.access_key && args.secret_key
-        ? { accessKeyId: args.access_key, secretAccessKey: args.secret_key }
-        : {}),
-      ...(args.base_url !== undefined ? { endpoint: args.base_url } : {}),
-    },
-  });
-  return "ok";
 }
 
 function handleDescribeTools(args: { tool_name?: string }) {
@@ -878,7 +867,7 @@ async function handleSaveSession(args: {
 
   // Fetch messages from sessions API
   async function fetchMessages(): Promise<Array<Record<string, unknown>>> {
-    const messagesUrl = `${sessionsUrl}/api/sessions/${args.session_id}/messages`;
+    const messagesUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(args.session_id)}/messages`;
     const res = await fetch(messagesUrl, withServiceAuth("SESSIONS", messagesUrl));
     if (res.ok) {
       const data = await res.json() as unknown;
@@ -889,7 +878,7 @@ async function handleSaveSession(args: {
       return [{ role: "raw", content: JSON.stringify(data) }];
     }
     if (res.status !== 404) throw new Error(`Sessions request failed: HTTP ${res.status}`);
-    const sessionUrl = `${sessionsUrl}/api/sessions/${args.session_id}`;
+    const sessionUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(args.session_id)}`;
     const res2 = await fetch(sessionUrl, withServiceAuth("SESSIONS", sessionUrl));
     if (!res2.ok) {
       throw new Error(`Failed to fetch session ${args.session_id}: HTTP ${res2.status}`);

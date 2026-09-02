@@ -35,7 +35,7 @@ async function runServe(...args: string[]): Promise<{
     HASNA_ATTACHMENTS_API_URL: undefined,
     HASNA_ATTACHMENTS_API_KEY: undefined,
   };
-  const proc = Bun.spawn(["bun", "run", SERVE_ENTRY, ...args], {
+  const proc = Bun.spawn([process.execPath, "run", SERVE_ENTRY, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     env,
@@ -94,7 +94,7 @@ describe("attachments-serve early arguments (binds-before-help class, BUG 970d7c
       expect(result.timedOut).toBe(false);
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("[attachments-serve] fatal:");
-      expect(result.stderr).toContain("createCloudPoolFromEnv");
+      expect(result.stderr).toContain("startup failed");
     },
     15_000,
   );

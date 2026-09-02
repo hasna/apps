@@ -28,11 +28,11 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./sdk": "./dist/index.js"
+    "./sdk": "./dist/sdk/index.js"
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli/index.ts src/mcp/server.ts src/serve/index.ts --root src --outdir dist --target bun --external @hasna/events --external @hasna/events/* && bun run scripts/write-types.ts",
+    "build": "bun run clean && bun build src/index.ts src/sdk/index.ts src/cli/index.ts src/mcp/server.ts src/serve/index.ts --root src --outdir dist --target bun && bun run scripts/write-types.ts",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "build:cli": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun",
     "prepare": "bun run build:js",
@@ -55,7 +55,6 @@
   "keywords": [
     "attachments",
     "s3",
-    "local-storage",
     "file-transfer",
     "share-links",
     "ai-agents",
@@ -69,7 +68,6 @@
     "@aws-sdk/s3-request-presigner": "^3.1007.0",
     "@aws-sdk/credential-provider-ini": "^3.972.60",
     "@hasna/contracts": "^0.8.2",
-    "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@types/mime-types": "^3.0.1",
     "commander": "^14.0.3",
