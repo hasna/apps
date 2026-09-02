@@ -66,7 +66,11 @@ export function validateTransactionalSql(sql: string): void {
   for (let i = 0; i < sql.length;) {
     const c = sql[i]!;
     if (sql.startsWith("--", i)) {
-      const end = sql.indexOf("\n", i); i = end < 0 ? sql.length : end; plain += " "; continue;
+      // PostgreSQL ends a line comment at either CR or LF, not only LF.
+      // Leave the terminator for the normal whitespace path (also handles CRLF).
+      i += 2;
+      while (i < sql.length && sql[i] !== "\r" && sql[i] !== "\n") i++;
+      plain += " "; continue;
     }
     if (sql.startsWith("/*", i)) {
       let depth = 1; i += 2;
