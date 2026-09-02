@@ -27,7 +27,7 @@
     "test:standard": "bun test tooling/ci/tests/standard",
     "test:versioning": "bun test test/versioning",
     "test:suites": "bun run test:versioning && bun run test:standard",
-    "prepare:ordered": "bun run --filter @hasna/attachments build && bun run --filter @hasna/loops build && bun run --filter @hasna/machines build && bun run --filter @hasna/mementos build && bun run --filter @hasna/skills build && bun run --filter @hasna/connectors postinstall && bun run --filter @hasna/slides postinstall",
+    "prepare:ordered": "bun run --filter @hasna/paths build && bun run --filter @hasna/attachments build && bun run --filter @hasna/loops build && bun run --filter @hasna/machines build && bun run --filter @hasna/mementos build && bun run --filter @hasna/skills build && bun run --filter @hasna/connectors postinstall && bun run --filter @hasna/slides postinstall",
     "check:frozen-locks": "bun tooling/ci/check-frozen-locks.ts"
   },
   "devDependencies": {

@@ -20,7 +20,7 @@
  *
  * Three assertions:
  *   CENSUS   — `prepare:ordered` names EXACTLY the members that declare a
- *              prepare script. A new prepare member fails the suite until the
+ *              prepare script plus verified build prerequisites. A new prepare member fails the suite until the
  *              chain gains it (and a stale chain entry is equally a failure).
  *   ORDER    — @hasna/contracts precedes every prepare member that depends on
  *              @hasna/contracts (the measured TS7016 edge: machines, mementos,
@@ -145,10 +145,23 @@ export function ciInstallViolations(ciYml: string): string[] {
 }
 
 describe("standard-adherence: install ordering", () => {
-  test("prepare:ordered names exactly the members with a prepare script (census)", () => {
+  test("paths is built before attachments on a scriptless fresh checkout", () => {
     const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG_PATH, "utf8"));
     const chain = orderedPrepareMembers(rootPkg);
-    const withPrepare = prepareScriptMembers(path.join(REPO_ROOT, "apps")).map((n) => `@hasna/${n}`);
+    const attachments = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "apps/attachments/package.json"), "utf8"));
+    const paths = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "apps/paths/package.json"), "utf8"));
+    // This exact pin links the workspace, whose dist is not committed. A
+    // previous build or registry cache must not conceal the missing edge.
+    expect(attachments.dependencies["@hasna/paths"]).toBe(paths.version);
+    expect(chain.indexOf("@hasna/paths")).toBeGreaterThanOrEqual(0);
+    expect(chain.indexOf("@hasna/paths")).toBeLessThan(chain.indexOf("@hasna/attachments"));
+  });
+  test("prepare:ordered names exactly prepare members and verified build prerequisites (census)", () => {
+    const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG_PATH, "utf8"));
+    const chain = orderedPrepareMembers(rootPkg);
+    // paths has no lifecycle hook; the regression above verifies its exact
+    // workspace dependency and ordering before its prepare-time consumer.
+    const withPrepare = [...prepareScriptMembers(path.join(REPO_ROOT, "apps")).map((n) => `@hasna/${n}`), "@hasna/paths"];
     const chainSet = new Set(chain);
     const missing = withPrepare.filter((p) => !chainSet.has(p));
     const extra = chain.filter((p) => !withPrepare.includes(p));
