@@ -1,11 +1,10 @@
-import { SYSTEM_AUTHORIZATION_CONTEXT } from "../services/authorization.js";
-import { runOperation, type OperationInput } from "../services/registry.js";
+import { runOperation, type CoreOperation } from "../client/index.js";
+import type { OperationInput } from "../services/registry.js";
 import { errorStatus, toErrorEnvelope } from "../types/index.js";
 
 /**
- * Builds the CLI run context. The local CLI operates against the authoritative
- * local SQLite store as a system principal (the store IS the trust boundary in
- * local mode); network surfaces (serve/MCP) apply the bearer/scope stack.
+ * CLI output helpers. Core operations use the HTTPS credential's server-side
+ * scope and tenant boundary; there is no local system-principal fallback.
  */
 
 export function jsonMode(): boolean {
@@ -27,10 +26,10 @@ export function fail(error: unknown): never {
   process.exit(1);
 }
 
-/** Run a registry op with the local system context and emit its result (or fail). */
-export function runAndEmit(op: string, input: OperationInput): void {
+/** Run an authenticated HTTPS operation and emit its result (or fail). */
+export async function runAndEmit(op: string, input: OperationInput): Promise<void> {
   try {
-    const result = runOperation(op, input, SYSTEM_AUTHORIZATION_CONTEXT);
+    const result = await runOperation(op as CoreOperation, input);
     emit(result);
   } catch (error) {
     void errorStatus(error);

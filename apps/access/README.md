@@ -1,5 +1,40 @@
 # @hasna/access
 
+## Canonical core migration (partial, not a release)
+
+The CLI and new `@hasna/access/sdk` export now use only an explicit authenticated
+HTTPS API. Set `HASNA_ACCESS_API_URL` and `HASNA_ACCESS_API_KEY`; their `ACCESS_*`
+aliases may coexist only when equivalent. Blank/conflicting configuration,
+database connection strings, local database paths, and retired placement selectors
+are rejected. A client captures authority and credential together, refuses
+redirects, and never falls back to local application data. The SDK provides
+`AccessClient.runOperation(operation, input)` for all 43 existing domain operations.
+It writes no local config, state, cache, or data.
+
+`access-serve` now runs the 43 operations on server-side PostgreSQL only. Configure
+server API credentials with tenant scopes, a strong token-signing key, and an
+explicit PostgreSQL DSN with `sslmode=verify-full` (optionally `PGSSLROOTCERT`).
+Absent schema/configuration fails before binding. Schema creation is a separate,
+transactional `access-serve --migrate` action requiring operational approval; it
+is never invoked automatically or by clients. No legacy SQLite data is copied,
+deleted, or treated as server truth. Each operation has one database transaction,
+with a PostgreSQL advisory lock preserving read-modify-write and audit ordering.
+
+**Remaining legacy surfaces:** the root library export and MCP (including its
+HTTP caller-authentication path), agent registration/heartbeat/focus, feedback,
+storage sync tools, and postinstall/XDG adoption remain unchanged and are **not
+canonical-migration complete**. MCP storage sync currently returns audited no-op
+results; feedback has no delivery backend. No remote identity-introspection or
+feedback semantics have been invented. The legacy sections below document those
+retained compatibility surfaces, not the new CLI/serve/SDK transport behavior.
+Do not publish this partial lane as a completed fleet migration.
+
+Core domain rules were extracted asynchronously into `src/server/core-domain`
+while retaining legacy services for those compatibility surfaces. The extraction
+script records the transformation; PostgreSQL-engine tests exercise all 43
+operations through the authenticated HTTP boundary. The engine is in-memory and
+test-only; production accepts only `pg` connections, never an embedded backend.
+
 `access` is the scalable access gate for Hasna agents and services. Agents
 request access, API keys, provider credentials, MCP scopes, and short-lived
 bearer tokens here; `access` records the decision, exposes the same
