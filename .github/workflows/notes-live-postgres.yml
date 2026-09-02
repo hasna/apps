@@ -1,0 +1,65 @@
+name: notes live PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - 'apps/notes/**'
+      - 'bun.lock'
+      - '.github/workflows/notes-live-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/notes/**'
+      - 'bun.lock'
+      - '.github/workflows/notes-live-postgres.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  notes-live-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: notes_ci
+          # Disposable runner-local database; no production credentials or data.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d notes_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Prove the PostgreSQL gate refuses missing configuration
+        working-directory: apps/notes
+        run: |
+          set -euo pipefail
+          set +e
+          env -u NOTES_TEST_DATABASE_URL bun run test:pg > "$RUNNER_TEMP/notes-pg-negative.log" 2>&1
+          result=$?
+          set -e
+          if [ "$result" -ne 2 ]; then
+            echo "Missing-database control did not fail with the expected configuration status"
+            exit 1
+          fi
+          grep -Fq 'NOTES_TEST_DATABASE_URL is not set' "$RUNNER_TEMP/notes-pg-negative.log"
+      - name: Exercise Notes schema, authentication, and note round-trip
+        working-directory: apps/notes
+        env:
+          NOTES_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/notes_ci
+        run: |
+          set -euo pipefail
+          bun -e 'const u = new URL(process.env.NOTES_TEST_DATABASE_URL); if (u.protocol !== "postgres:" || u.hostname !== "127.0.0.1" || u.port !== "5432" || u.pathname !== "/notes_ci" || u.username !== "postgres" || u.password || u.search || u.hash) throw new Error("Refusing a non-isolated integration database");'
+          bun run test:pg 2>&1 | tee "$RUNNER_TEMP/notes-live-postgres.log"
+          grep -Fq '[pg-test-gate] PASS: 6 live PostgreSQL checks' "$RUNNER_TEMP/notes-live-postgres.log"
