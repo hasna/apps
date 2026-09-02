@@ -40,7 +40,7 @@ Legacy directories remain untouched; no migration/copy/cleanup code was introduc
 
 ## Verification on Bun 1.3.14
 
-- Full verify:release passes: typecheck, 63 isolated checks, build/declarations and
+- Full verify:release passes: typecheck, 65 isolated checks, build/declarations and
   packed-artifact scan (93 members, zero unreadable). Live PG cases are skipped,
   not represented as successful integration.
 - Generated SDK build passes; both generated source copies match.
@@ -63,6 +63,13 @@ Legacy directories remain untouched; no migration/copy/cleanup code was introduc
   PostgreSQL, cloud credentials, deployed service or production data were accessed.
 
 ## Release blockers
+
+Independent-review follow-up fixes the pg DSN parser TLS override and makes
+migration plan/apply/record atomic under a dedicated transaction and advisory lock.
+Thirty additional server-storage regression tests cover actual pg.Client options,
+ambiguous TLS parameters, rollback, connection disposal, concurrency, drift and
+transaction-control rejection. pg 8.22.0 and 8.23.0 Client construction were checked
+without connecting; live PostgreSQL remains unverified.
 
 An independent review of the exact implementation commit, released canonical
 Contracts adoption and revalidation against that published artifact, separately
