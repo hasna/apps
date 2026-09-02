@@ -1,0 +1,72 @@
+name: attachments live PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - 'apps/attachments/**'
+      - 'bun.lock'
+      - '.github/workflows/attachments-live-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/attachments/**'
+      - 'bun.lock'
+      - '.github/workflows/attachments-live-postgres.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  attachments-live-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: attachments_ci
+          # Disposable runner-local database; never production data or credentials.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d attachments_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Prove the required PostgreSQL gate refuses missing configuration
+        working-directory: apps/attachments
+        run: |
+          set -euo pipefail
+          set +e
+          env -u HASNA_ATTACHMENTS_TEST_DATABASE_URL -u HASNA_ATTACHMENTS_DATABASE_URL ATTACHMENTS_REQUIRE_POSTGRES=1 bun test src/db > "$RUNNER_TEMP/attachments-pg-negative.log" 2>&1
+          result=$?
+          set -e
+          if [ "$result" -eq 0 ]; then
+            echo "Missing-database control unexpectedly passed"
+            exit 1
+          fi
+          grep -Fq 'refuses to report a pass without a database' "$RUNNER_TEMP/attachments-pg-negative.log"
+      - name: Exercise the declared live PostgreSQL gate without skips
+        working-directory: apps/attachments
+        env:
+          HASNA_ATTACHMENTS_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/attachments_ci
+          NO_COLOR: '1'
+        run: |
+          set -euo pipefail
+          bun -e 'const u = new URL(process.env.HASNA_ATTACHMENTS_TEST_DATABASE_URL); if (u.protocol !== "postgres:" || u.hostname !== "127.0.0.1" || u.port !== "5432" || u.pathname !== "/attachments_ci" || u.username !== "postgres" || u.password || u.search || u.hash) throw new Error("Refusing a non-isolated integration database");'
+          HASNA_ATTACHMENTS_DATABASE_URL="${HASNA_ATTACHMENTS_TEST_DATABASE_URL:?disposable database required}" ATTACHMENTS_REQUIRE_POSTGRES=1 bun test src/db 2>&1 | tee "$RUNNER_TEMP/attachments-live-postgres.log"
+          # Four gate-wiring tests, five migration tests, six real-store tests.
+          grep -Eq '^[[:space:]]*15 pass$' "$RUNNER_TEMP/attachments-live-postgres.log"
+          grep -Eq '^[[:space:]]*0 fail$' "$RUNNER_TEMP/attachments-live-postgres.log"
+          if grep -Eq 'SKIPPED|^[[:space:]]*[1-9][0-9]* skip$' "$RUNNER_TEMP/attachments-live-postgres.log"; then
+            echo "Live PostgreSQL proof must not skip database tests"
+            exit 1
+          fi
