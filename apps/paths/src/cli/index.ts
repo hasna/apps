@@ -12,8 +12,8 @@
  *   paths --app mailery --internal        internal app layout
  *   paths --app todos --json              machine-readable
  *
- * Env overrides (HASNA_CONFIG_HOME, HASNA_DATA_HOME, HASNA_STATE_HOME,
- * HASNA_CACHE_HOME) are honored exactly as the SDK honors them.
+ * HASNA_*_HOME and XDG_*_HOME overrides use the same precedence and
+ * validation as the SDK.
  */
 
 import {

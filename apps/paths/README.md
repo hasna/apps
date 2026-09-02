@@ -7,26 +7,42 @@ without per-package hardcoding.
 
 ## Resolved layout
 
-| kind    | env override        | Linux / other (XDG)          | macOS                        |
-|---------|---------------------|------------------------------|------------------------------|
-| config  | `HASNA_CONFIG_HOME` | `~/.config/hasna/<app>`      | `~/Library/Application Support/Hasna/<app>` |
-| data    | `HASNA_DATA_HOME`   | `~/.local/share/hasna/<app>` | `~/Library/Application Support/Hasna/<app>` |
-| state   | `HASNA_STATE_HOME`  | `~/.local/state/hasna/<app>` | `~/Library/Logs/Hasna/<app>` |
-| cache   | `HASNA_CACHE_HOME`  | `~/.cache/hasna/<app>`       | `~/Library/Caches/Hasna/<app>` |
+| kind    | Hasna override      | Standard XDG root | Linux / other default | macOS default |
+|---------|---------------------|-------------------|-----------------------|---------------|
+| config  | `HASNA_CONFIG_HOME` | `XDG_CONFIG_HOME` | `~/.config/hasna/<app>` | `~/Library/Application Support/Hasna/<app>` |
+| data    | `HASNA_DATA_HOME`   | `XDG_DATA_HOME` | `~/.local/share/hasna/<app>` | `~/Library/Application Support/Hasna/<app>` |
+| state   | `HASNA_STATE_HOME`  | `XDG_STATE_HOME` | `~/.local/state/hasna/<app>` | `~/Library/Logs/Hasna/<app>` |
+| cache   | `HASNA_CACHE_HOME`  | `XDG_CACHE_HOME` | `~/.cache/hasna/<app>` | `~/Library/Caches/Hasna/<app>` |
 
 **Internal apps** (`internal: true`) resolve one level deeper:
 `hasna/internal/<app>` beneath the same four roots. This retires the legacy
 `~/.hasna` internal home prefix as a concept — an internal app keeps the
 same layout, nested under `internal/`.
 
-**Env override semantics mirror XDG:** `HASNA_<KIND>_HOME` names the
-hasna-level base root and the app slug is appended, e.g.
-`HASNA_CONFIG_HOME=/srv/cfg` -> `/srv/cfg/<app>`. An env var that is set but
-empty is treated as unset and falls back to the default. Overrides win on
-every platform, macOS included.
+Resolution is per kind, in this order on every platform (including macOS):
 
-On macOS, config and data share `Application Support`, `state` maps to
-`Library/Logs`, and `cache` maps to `Library/Caches` — the Apple convention.
+1. A nonempty `HASNA_<KIND>_HOME` replaces the **Hasna-level** root:
+   `HASNA_CONFIG_HOME=/srv/cfg` produces `/srv/cfg/<app>`. It must be an
+   absolute path with no surrounding whitespace or control characters.
+   Invalid explicit Hasna roots throw a `TypeError` naming only the variable,
+   never its value. An empty string remains equivalent to unset.
+2. A valid `XDG_<KIND>_HOME` replaces the **parent** root:
+   `XDG_CONFIG_HOME=/srv/cfg` produces `/srv/cfg/hasna/<app>`.
+   Unset, empty, relative, or NUL-containing XDG values are ignored. Absolute
+   XDG values are not trimmed; spaces are part of the path.
+3. Otherwise the platform default in the table applies.
+
+The standard variables, absolute-path rule, and Linux defaults follow the
+[XDG Base Directory Specification 0.8](https://specifications.freedesktop.org/basedir/latest/).
+Hasna's higher-precedence root and stricter explicit-override validation are
+package policy, not additional XDG requirements. `XDG_CONFIG_DIRS`,
+`XDG_DATA_DIRS`, and `XDG_RUNTIME_DIR` are outside this four-home resolver.
+
+On macOS, the existing package defaults remain unchanged: config and data
+share `Application Support`, `state` maps to `Library/Logs`, and `cache` maps
+to `Library/Caches`. A valid explicit XDG root opts that kind into the XDG
+layout; missing or ignored XDG roots do not move macOS homes. The `platform`
+test option selects defaults; path syntax still uses the host's `node:path`.
 
 ## Usage (SDK)
 
@@ -38,12 +54,16 @@ import { dataDir as sdkDataDir } from "@hasna/paths/sdk";
 dataDir({ app: "todos" });                      // ~/.local/share/hasna/todos (linux)
 dataDir({ app: "mailery", internal: true });    // ~/.local/share/hasna/internal/mailery
 dataDir({ app: "todos", env: { HASNA_DATA_HOME: "/mnt/data" } });
+dataDir({ app: "todos", env: { XDG_DATA_HOME: "/mnt/data" } }); // /mnt/data/hasna/todos
 const all = dirs({ app: "todos" });             // { config, data, state, cache }
 resolvePath("config", { app: "todos" });
 ```
 
 All helpers are pure and injectable (`home`, `platform`, `env`), so the
 resolver is deterministic in tests.
+
+This library only returns paths. It creates no directories, moves no data,
+and owns no service or authoritative application-data store.
 
 ## Usage (CLI)
 
@@ -61,3 +81,27 @@ Phase 3 of the XDG home migration (hotfixes plan `0f49f56a`): every
 `@hasna/<name>` package switches its reads/writes to this resolver, then a
 machine can point anywhere via `HASNA_*_HOME` without code changes, and the
 fleet migrates its stores behind the same abstraction.
+
+## Release artifact gate
+
+Release/scanner tooling requires **npm >=11.0.0** (CI pins and verifies
+**npm 11.19.0**) alongside the repository's pinned Bun 1.3.14. This is not an
+npm requirement for library or CLI consumers. npm 10's bundled pacote can
+run `prepare` despite `--ignore-scripts`; the upstream lifecycle suppression
+fix first shipped in [pacote 20](https://github.com/npm/pacote/blob/main/CHANGELOG.md#2000-2024-10-17)
+and is included in npm 11. The gate checks `npm --version` before packing
+and fails closed on old, malformed, or unavailable versions without logging
+arbitrary command output.
+
+Build first, then run `bun run scan:artifact` with the supported release
+toolchain. The gate uses
+`npm pack . --json --ignore-scripts --workspaces=false --dry-run=false --pack-destination <temporary-directory>`
+and requires exactly one local regular `.tgz` before invoking the pinned
+Contracts scanner. JSON, filename, missing-file, pack, and scanner failures
+stop the gate; symlinks are rejected and its temporary directory is removed.
+`--ignore-scripts` prevents the `prepack` hook from recursively invoking itself.
+`--dry-run=false` ensures a real archive even when an outer npm dry-run invokes
+the hook and passes its configuration to child processes.
+These flags follow the [npm pack documentation](https://docs.npmjs.com/cli/v11/commands/npm-pack/).
+The existing package version and Contracts pin are not changed by this fix;
+release versioning remains with the separate version wave.

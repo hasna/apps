@@ -2,14 +2,15 @@
  * @hasna/paths — package-owned path resolver for Hasna apps.
  *
  * Resolves the home directories Hasna apps read and write, honoring
- * HASNA_*_HOME environment overrides and platform defaults:
+ * HASNA_*_HOME, then XDG_*_HOME environment overrides and platform defaults:
  *
  *   config   HASNA_CONFIG_HOME    ~/.config/hasna/<app>
  *   data     HASNA_DATA_HOME      ~/.local/share/hasna/<app>
  *   state    HASNA_STATE_HOME     ~/.local/state/hasna/<app>
  *   cache    HASNA_CACHE_HOME     ~/.cache/hasna/<app>
  *
- * On macOS the XDG defaults are replaced by the Apple convention:
+ * Explicit XDG roots contain `hasna/<app>`. On macOS, when neither override
+ * applies, the XDG defaults are replaced by the existing native layout:
  *
  *   config/data   ~/Library/Application Support/Hasna/<app>
  *   cache         ~/Library/Caches/Hasna/<app>
@@ -19,18 +20,19 @@
  * beneath the same four roots — the same layout, one level deeper — which
  * retires the legacy `~/.hasna` internal home prefix as a concept.
  *
- * Env override semantics mirror XDG: `HASNA_<KIND>_HOME` names the
+ * `HASNA_<KIND>_HOME` names the
  * hasna-level base root and the app slug is appended, e.g.
  * `HASNA_CONFIG_HOME=/srv/cfg` -> `/srv/cfg/<app>`. An env var that is set
- * but empty is treated as unset and falls back to the default, so an empty
- * value can never produce the literal `/hasna/<app>` path.
+ * but empty is treated as unset. Nonempty HASNA roots must be absolute,
+ * without surrounding whitespace or control characters; invalid values
+ * fail closed. Empty/relative XDG roots are ignored per the XDG spec.
  *
  * Everything is pure and injectable (`home`, `platform`, `env`) so the
  * resolver is deterministic in tests and portable across machines.
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 /** The four path kinds a Hasna app may own. */
 export type PathKind = "config" | "data" | "state" | "cache";
@@ -43,6 +45,13 @@ const KIND_ENV: Record<PathKind, string> = {
   data: "HASNA_DATA_HOME",
   state: "HASNA_STATE_HOME",
   cache: "HASNA_CACHE_HOME",
+};
+
+const XDG_ENV: Record<PathKind, string> = {
+  config: "XDG_CONFIG_HOME",
+  data: "XDG_DATA_HOME",
+  state: "XDG_STATE_HOME",
+  cache: "XDG_CACHE_HOME",
 };
 
 export interface PathsOptions {
@@ -102,8 +111,14 @@ function envOf(options: PathsOptions): Record<string, string | undefined> {
 
 /** The env override for one kind, or undefined when unset or empty. */
 function envValue(options: PathsOptions, kind: PathKind): string | undefined {
-  const value = envOf(options)[KIND_ENV[kind]];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  const key = KIND_ENV[kind];
+  const value = envOf(options)[key];
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  if (!isAbsolute(value) || value !== value.trim() || /[\x00-\x1f\x7f]/.test(value)) {
+    // Never include the configured value: roots can contain private records.
+    throw new TypeError(`paths: ${key} must be an absolute path without surrounding whitespace or control characters`);
+  }
+  return value;
 }
 
 function isMacOS(platform: NodeJS.Platform): boolean {
@@ -112,12 +127,19 @@ function isMacOS(platform: NodeJS.Platform): boolean {
 
 /**
  * The hasna-level base root for one kind, before the app segment is
- * appended. Env overrides win on every platform.
+ * appended. HASNA overrides win, then valid XDG roots, on every platform.
  */
 export function baseDir(kind: PathKind, options: PathsOptions): string {
   assertKind(kind);
   const override = envValue(options, kind);
   if (override) return override;
+
+  const xdg = envOf(options)[XDG_ENV[kind]];
+  // XDG Base Directory Specification 0.8: ignore relative/empty roots.
+  // Do not trim: spaces within an absolute XDG path are valid path data.
+  if (typeof xdg === "string" && isAbsolute(xdg) && !xdg.includes("\0")) {
+    return join(xdg, "hasna");
+  }
 
   const home = options.home ?? homedir();
   const platform = options.platform ?? process.platform;
