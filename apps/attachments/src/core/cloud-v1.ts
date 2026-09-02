@@ -1,37 +1,18 @@
-// Self-hosted (`mode=self_hosted`) storage backend for the attachments CLI.
-//
-// LOCKED ARCHITECTURE: when `HASNA_ATTACHMENTS_API_URL` + `HASNA_ATTACHMENTS_API_KEY`
-// are set, every read and write routes to the app's cloud HTTP API at
-// `<API_URL>/v1` with the bearer key — never the local SQLite store, never a raw
-// DSN. This uses a small in-repo JSON HTTP client for the attachments `/v1`
-// surface so the CLI does not depend on unpublished contracts package exports.
-//
-// The toggle is the presence of the two env vars (that is what the fleet flip
-// tool writes): both set -> cloud; either unset -> local. An explicit
-// `HASNA_ATTACHMENTS_STORAGE_MODE=local` forces local even when the vars are set.
-//
-// SAFETY: the API key never appears in logs or return values. It lives only
-// inside the contracts transport (and, for the binary download stream that the
-// JSON transport can't carry, a single scoped fetch below).
-
+// Authenticated HTTPS attachment client; no local transport or DSN.
 import { createWriteStream, existsSync, statSync } from "fs";
 import { basename, join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { lookup as mimeLookup } from "mime-types";
 import type { Attachment } from "./db";
+import { resolveClientConfig } from "./client-config";
 
-const APP_SLUG = "attachments";
 
 type JsonFetch = typeof fetch;
 
 type ResolveStorageClientOverrides = {
   fetchImpl?: JsonFetch;
 };
-
-type StorageClientResolution =
-  | { transport: "cloud-http"; client: HasnaStorageClient }
-  | { transport: "local"; client: null };
 
 type ListResult<T> = { items: T[] };
 
@@ -134,9 +115,7 @@ function expiryMsToString(expiryMs: number | null): string {
   return `${Math.ceil(expiryMs / 60000)}m`;
 }
 
-export type ResolveAttachmentsV1Result =
-  | { transport: "cloud-http"; store: AttachmentsV1Store }
-  | { transport: "local"; store: null };
+export type ResolveAttachmentsV1Result = { transport: "cloud-http"; store: AttachmentsV1Store };
 
 function toAttachment(input: ApiAttachment): Attachment {
   return {
@@ -155,57 +134,15 @@ function toAttachment(input: ApiAttachment): Attachment {
   };
 }
 
-/**
- * Bridge the fleet flip's two-var convention to the local cloud resolver: when
- * both `HASNA_ATTACHMENTS_API_URL` and `HASNA_ATTACHMENTS_API_KEY` are present
- * (and the mode is not explicitly forced to `local`), treat the client as
- * `self_hosted` so `resolveStorageClient` returns the cloud-http transport.
- */
-function deriveEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const url = env.HASNA_ATTACHMENTS_API_URL || env.ATTACHMENTS_API_URL;
-  const key = env.HASNA_ATTACHMENTS_API_KEY || env.ATTACHMENTS_API_KEY;
-  const explicitMode = (env.HASNA_ATTACHMENTS_STORAGE_MODE || env.HASNA_ATTACHMENTS_MODE || "").toLowerCase();
-  if (url && key && explicitMode !== "local") {
-    return { ...env, HASNA_ATTACHMENTS_STORAGE_MODE: "self_hosted" };
-  }
-  return env;
-}
-
-/**
- * Resolve the attachments storage backend for this process. Returns a
- * `cloud-http` store wired to `<API_URL>/v1` when self_hosted is configured,
- * otherwise `{ transport: 'local' }` so the caller uses the local SQLite store.
- * Throws if cloud is explicitly requested but misconfigured, so a client never
- * silently drifts back to local.
- */
+/** Resolve an explicit authenticated HTTPS client, or fail before side effects. */
 export function resolveAttachmentsV1(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: ResolveStorageClientOverrides,
 ): ResolveAttachmentsV1Result {
-  const resolved = resolveStorageClient(APP_SLUG, deriveEnv(env), overrides);
-  if (resolved.transport !== "cloud-http") return { transport: "local", store: null };
-  return { transport: "cloud-http", store: makeStore(resolved.client, env) };
-}
-
-function resolveStorageClient(
-  _appName: string,
-  env: NodeJS.ProcessEnv,
-  overrides: ResolveStorageClientOverrides = {},
-): StorageClientResolution {
-  const explicitMode = (env.HASNA_ATTACHMENTS_STORAGE_MODE || env.HASNA_ATTACHMENTS_MODE || "").toLowerCase();
-  if (explicitMode === "local") return { transport: "local", client: null };
-
-  const apiUrl = env.HASNA_ATTACHMENTS_API_URL || env.ATTACHMENTS_API_URL;
-  const apiKey = env.HASNA_ATTACHMENTS_API_KEY || env.ATTACHMENTS_API_KEY;
-  if (!apiUrl && !apiKey) return { transport: "local", client: null };
-  if (!apiUrl || !apiKey) {
-    if (explicitMode === "self_hosted") {
-      throw new Error("Self-hosted attachments mode requires HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY");
-    }
-    return { transport: "local", client: null };
-  }
-
-  return { transport: "cloud-http", client: createStorageClient(apiUrl, apiKey, overrides.fetchImpl ?? fetch) };
+  const config = resolveClientConfig(env);
+  const fetchImpl = overrides?.fetchImpl ?? fetch;
+  const client = createStorageClient(config.url, config.key, fetchImpl);
+  return { transport: "cloud-http", store: makeStore(client, config, fetchImpl) };
 }
 
 /**
@@ -245,6 +182,7 @@ function createStorageClient(apiUrl: string, apiKey: string, fetchImpl: JsonFetc
   const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const response = await fetchImpl(`${baseUrl}${path}`, {
       ...init,
+      redirect: "error",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "x-api-key": apiKey,
@@ -254,10 +192,8 @@ function createStorageClient(apiUrl: string, apiKey: string, fetchImpl: JsonFetc
     });
     if (response.status === 404) throw Object.assign(new Error("Not found"), { status: 404 });
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw Object.assign(new Error(describeApiFailure(init.method ?? "GET", path, response.status, text)), {
+      throw Object.assign(new Error(`Attachments API request failed: HTTP ${response.status}`), {
         status: response.status,
-        body: text,
       });
     }
     const text = await response.text();
@@ -301,7 +237,7 @@ function createStorageClient(apiUrl: string, apiKey: string, fetchImpl: JsonFetc
   };
 }
 
-function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): AttachmentsV1Store {
+function makeStore(client: HasnaStorageClient, config: { url: string; key: string }, fetchImpl: JsonFetch): AttachmentsV1Store {
   const uploadBody = (filename: string, bytes: Uint8Array, options: V1UploadOptions) => ({
     filename,
     content_base64: Buffer.from(bytes).toString("base64"),
@@ -352,8 +288,10 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
     },
 
     async uploadUrl(url: string, options: V1UploadOptions = {}): Promise<Attachment> {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Could not fetch ${url}: HTTP ${response.status}`);
+      const source = new URL(url);
+      if (source.protocol !== "https:" || source.username || source.password) throw new Error("Upload source must be an HTTPS URL without credentials.");
+      const response = await fetchImpl(url, { redirect: "error" });
+      if (!response.ok) throw new Error(`Could not fetch upload source: HTTP ${response.status}`);
       const bytes = new Uint8Array(await response.arrayBuffer());
       const parsed = new URL(url);
       const filename = options.filename || decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "download");
@@ -390,9 +328,10 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
       // The JSON transport can't carry a binary stream, so hit the download route
       // directly with a scoped fetch using the same env creds. The key is read
       // here only; it is never logged or returned.
-      const apiUrl = (env.HASNA_ATTACHMENTS_API_URL || env.ATTACHMENTS_API_URL || "").replace(/\/+$/, "");
-      const apiKey = env.HASNA_ATTACHMENTS_API_KEY || env.ATTACHMENTS_API_KEY || "";
-      const response = await fetch(`${apiUrl}/v1/attachments/${encodeURIComponent(id)}/download`, {
+      const apiUrl = config.url;
+      const apiKey = config.key;
+      const response = await fetchImpl(`${apiUrl}/v1/attachments/${encodeURIComponent(id)}/download`, {
+        redirect: "error",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "x-api-key": apiKey,
@@ -400,14 +339,14 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
         },
       });
       if (!response.ok || !response.body) {
-        const text = await response.text().catch(() => "");
-        throw new Error(text || `Download failed with HTTP ${response.status}`);
+        throw new Error(`Download failed with HTTP ${response.status}`);
       }
       const disposition = response.headers.get("content-disposition");
       const match = disposition ? /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition) : null;
       const filename = (match ? decodeURIComponent(match[1]!.replace(/^"|"$/g, "")) : null)
-        || basename(new URL(response.url).pathname)
+        || "attachment"
         || "attachment";
+      if (filename === "." || filename === ".." || filename !== basename(filename) || /[\\\x00]/.test(filename)) throw new Error("Unsafe download filename from service.");
       const path = resolveDownloadPath(output, filename);
       await pipeline(Readable.fromWeb(response.body as never), createWriteStream(path));
       return { path, filename, size: Number(response.headers.get("content-length") || statSync(path).size) };

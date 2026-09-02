@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { resolveStore, type Store } from "../../core/store";
-import { withTodosAuth } from "../../core/todos";
+import { withTodosAuth, serviceConfig } from "../../core/todos";
 
 export interface CompleteTaskOptions {
   file?: string[];
@@ -48,7 +48,7 @@ export async function completeTaskWithFiles(
   storeFactory: () => Store = () => resolveStore(),
   fetchFn: typeof fetch = fetch
 ): Promise<CompleteTaskResult> {
-  const todosUrl = options.todosUrl ?? "http://localhost:3000";
+  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
   // 1. Upload each file (via the Store) and collect the evidence entries.
   const attachment_ids: string[] = [];
@@ -156,7 +156,7 @@ export function registerCompleteTask(program: Command): void {
     .option(
       "--todos-url <url>",
       "Todos REST server base URL",
-      "http://localhost:3000"
+      undefined
     )
     .option("--expiry <time>", "Link expiry: e.g. 24h, 7d, never")
     .option("--notes <text>", "Completion notes to attach")
@@ -167,7 +167,7 @@ export function registerCompleteTask(program: Command): void {
         process.exit(1);
       }
 
-      const todosUrl = options.todosUrl ?? "http://localhost:3000";
+      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
       try {
         const result = await completeTaskWithFiles(taskId, files, {

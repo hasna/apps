@@ -1,0 +1,29 @@
+/** Canonical client boundary. Never reads local application data or a DSN. */
+export function validateClientConfig(url: string, key: string): { url: string; key: string } {
+  if (typeof url !== "string" || !url.trim() || typeof key !== "string" || !key.trim()) {
+    throw new Error("Attachments requires an explicit HTTPS API URL and API key.");
+  }
+  if (url !== url.trim() || key !== key.trim() || /[\s\x00-\x1f\x7f]/.test(key)) {
+    throw new Error("Attachments API configuration contains invalid whitespace.");
+  }
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error("Attachments requires a valid HTTPS API URL."); }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("Attachments requires an HTTPS API URL without credentials, query, or fragment.");
+  }
+  return { url: parsed.href.replace(/\/+$/, ""), key };
+}
+
+export function resolveClientConfig(env: NodeJS.ProcessEnv) {
+  for (const name of ["HASNA_ATTACHMENTS_STORAGE_MODE", "HASNA_ATTACHMENTS_MODE", "ATTACHMENTS_CLIENT_MODE", "ATTACHMENTS_STORAGE_MODE", "ATTACHMENTS_MODE", "HASNA_ATTACHMENTS_DATABASE_URL", "ATTACHMENTS_DATABASE_URL", "HASNA_ATTACHMENTS_DB_PATH"]) {
+    if (env[name] !== undefined) throw new Error(`${name} is not supported by the HTTPS client; configure HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY.`);
+  }
+  const read = (canonical: string, alias: string): string => {
+    const values = [env[canonical], env[alias]].filter((v): v is string => v !== undefined);
+    if (!values.length || values.some(v => !v.trim()) || new Set(values).size > 1) {
+      throw new Error(`Missing, blank, or conflicting ${canonical} configuration.`);
+    }
+    return values[0]!;
+  };
+  return validateClientConfig(read("HASNA_ATTACHMENTS_API_URL", "ATTACHMENTS_API_URL"), read("HASNA_ATTACHMENTS_API_KEY", "ATTACHMENTS_API_KEY"));
+}

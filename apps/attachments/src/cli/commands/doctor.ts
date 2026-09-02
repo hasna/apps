@@ -248,13 +248,9 @@ export function registerDoctor(program: Command): void {
       const results: CheckResult[] = [];
 
       results.push(checkConfigFile());
-      results.push(checkS3Configured());
-      results.push(await checkS3Connection());
       results.push(await checkDatabase());
       results.push(await checkExpiredLinks());
       results.push(await checkMcpInstalled());
-      results.push(await checkIntegration("todos", "TODOS_URL", "http://localhost:19427"));
-      results.push(await checkIntegration("sessions", "SESSIONS_URL", "http://localhost:3458"));
       results.push(checkVersion(pkgVersion));
 
       process.stdout.write(formatResults(results));

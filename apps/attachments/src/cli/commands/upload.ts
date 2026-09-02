@@ -53,8 +53,8 @@ export function registerUpload(program: Command): void {
     .option("--internal", "Generate a local-network/Tailscale server link")
     .action(async (files: string[], options: { expiry?: string; linkType?: "presigned" | "server"; tag?: string; password?: string; encrypt?: boolean; maxDownloads?: string; requireEmail?: boolean; allowedEmail?: string[]; format?: string; copy?: boolean; brief?: boolean; stdin?: boolean; filename?: string; clientMode?: string; internal?: boolean }) => {
       const config = getConfig();
-      if (options.clientMode && options.clientMode !== "local" && options.clientMode !== "cloud") {
-        exitError("--client-mode must be local or cloud");
+      if (options.clientMode !== undefined) {
+        exitError("--client-mode is retired; configure the authenticated HTTPS API.");
       }
       // Env drives self_hosted/cloud vs local; `--client-mode local` pins on-box.
       const store = resolveStore(process.env, { forceLocal: options.clientMode === "local" });

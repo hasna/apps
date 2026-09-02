@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { serviceConfig, withServiceAuth } from "../core/todos";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -120,7 +121,7 @@ const FULL_SCHEMAS: Record<string, object> = {
   },
   configure_s3: {
     name: "configure_s3",
-    description: "Persist S3 configuration to ~/.hasna/attachments/config.json.",
+    description: "Retired: configure S3 on the service, not in clients.",
     inputSchema: {
       type: "object",
       properties: {
@@ -201,7 +202,7 @@ const FULL_SCHEMAS: Record<string, object> = {
       properties: {
         attachment_id: { type: "string", description: "Attachment ID (att_xxx)." },
         task_id: { type: "string", description: "Task ID to link the attachment to (e.g. TASK-001)." },
-        todos_url: { type: "string", description: "Todos REST server base URL. Defaults to http://localhost:3000." },
+        todos_url: { type: "string", description: "Todos REST server base URL. Requires configured authenticated HTTPS Todos service." },
       },
       required: ["attachment_id", "task_id"],
     },
@@ -213,7 +214,7 @@ const FULL_SCHEMAS: Record<string, object> = {
       type: "object",
       properties: {
         session_id: { type: "string", description: "Session ID to snapshot." },
-        sessions_url: { type: "string", description: "Sessions REST API base URL. Defaults to http://localhost:3458." },
+        sessions_url: { type: "string", description: "Sessions REST API base URL. Requires configured authenticated HTTPS Sessions service." },
         format: { type: "string", enum: ["markdown", "html"], description: "Transcript format. Defaults to markdown." },
         expiry: { type: "string", description: "Link expiry, e.g. '7d', '24h', 'never'." },
         tag: { type: "string", description: "Optional tag for the attachment." },
@@ -240,7 +241,7 @@ const FULL_SCHEMAS: Record<string, object> = {
       properties: {
         task_id: { type: "string", description: "Task ID to complete (e.g. TASK-001)." },
         paths: { type: "array", items: { type: "string" }, description: "Array of absolute or relative file paths to upload as evidence." },
-        todos_url: { type: "string", description: "Todos REST server base URL. Defaults to http://localhost:3000." },
+        todos_url: { type: "string", description: "Todos REST server base URL. Requires configured authenticated HTTPS Todos service." },
         expiry: { type: "string", description: "Link expiry for uploaded files, e.g. '24h', '7d', 'never'." },
         notes: { type: "string", description: "Optional completion notes to include in the task completion." },
       },
@@ -810,6 +811,7 @@ function handleConfigureS3(args: {
   if (!!args.access_key !== !!args.secret_key) {
     throw new Error("access_key and secret_key must be provided together, or both omitted for default credential-chain auth");
   }
+  throw new Error("Client-side S3 configuration is retired; configure the HTTPS API using environment credentials.");
   setConfig({
     s3: {
       bucket: args.bucket,
@@ -837,7 +839,7 @@ async function handleLinkToTask(args: {
   task_id: string;
   todos_url?: string;
 }) {
-  const todosUrl = args.todos_url ?? "http://localhost:3000";
+  const todosUrl = args.todos_url ?? serviceConfig("TODOS").url;
   await linkAttachmentToTask(args.attachment_id, args.task_id, todosUrl);
 
   return `Linked ${args.attachment_id} → task ${args.task_id}`;
@@ -871,13 +873,13 @@ async function handleSaveSession(args: {
   expiry?: string;
   tag?: string;
 }) {
-  const sessionsUrl = args.sessions_url ?? "http://localhost:3458";
+  const sessionsUrl = args.sessions_url ?? serviceConfig("SESSIONS").url;
   const fmt = args.format === "html" ? "html" : "markdown";
 
   // Fetch messages from sessions API
   async function fetchMessages(): Promise<Array<Record<string, unknown>>> {
     const messagesUrl = `${sessionsUrl}/api/sessions/${args.session_id}/messages`;
-    const res = await fetch(messagesUrl);
+    const res = await fetch(messagesUrl, withServiceAuth("SESSIONS", messagesUrl));
     if (res.ok) {
       const data = await res.json() as unknown;
       if (Array.isArray(data)) return data as Array<Record<string, unknown>>;
@@ -886,8 +888,9 @@ async function handleSaveSession(args: {
       if (Array.isArray(obj.data)) return obj.data as Array<Record<string, unknown>>;
       return [{ role: "raw", content: JSON.stringify(data) }];
     }
+    if (res.status !== 404) throw new Error(`Sessions request failed: HTTP ${res.status}`);
     const sessionUrl = `${sessionsUrl}/api/sessions/${args.session_id}`;
-    const res2 = await fetch(sessionUrl);
+    const res2 = await fetch(sessionUrl, withServiceAuth("SESSIONS", sessionUrl));
     if (!res2.ok) {
       throw new Error(`Failed to fetch session ${args.session_id}: HTTP ${res2.status}`);
     }

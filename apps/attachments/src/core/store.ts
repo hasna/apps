@@ -1,57 +1,8 @@
-// Unified storage abstraction for the attachments client (CLI / MCP / SDK).
-//
-// LOCKED ARCHITECTURE: there is ONE `Store` interface with exactly two client
-// transports behind it:
-//   - LocalStore  — on-box: SQLite metadata (AttachmentsDB) + S3/local object
-//                   bytes. Fully first-class, works with zero cloud config.
-//   - ApiStore    — HTTP `<API_URL>/v1` + bearer key, via @hasna/contracts. Used
-//                   for BOTH `self_hosted` (our AWS) and `cloud` (SaaS); the two
-//                   differ only by URL/key, which is a server-side tenancy detail,
-//                   not client code.
-//
-// The mode is resolved purely from env by `resolveStore` (delegating to the
-// contracts client-flip): presence of HASNA_ATTACHMENTS_API_URL +
-// HASNA_ATTACHMENTS_API_KEY (and/or HASNA_ATTACHMENTS_STORAGE_MODE) => ApiStore;
-// otherwise LocalStore. This is the ONLY place that decision is made, so every
-// command/tool/method routes through the same interface and no caller ever
-// touches sqlite (`bun:sqlite`) or a raw `fetch` directly. That is the
-// split-brain bug this module exists to eliminate.
-//
-// SAFETY: the bearer key lives only inside the contracts transport (ApiStore).
-// A raw DB DSN is NEVER used on the client. LocalStore never sees a key.
-
 import { basename } from "path";
-import { nanoid } from "nanoid";
-import { lookup as mimeLookup } from "mime-types";
 import type { Attachment } from "./db";
-import { AttachmentsDB } from "./db";
-import { S3Client } from "./s3";
-import { LocalObjectStore } from "./object-storage";
-import {
-  getConfig,
-  parseExpiryStrict,
-  validateS3Config,
-  validateStorageConfig,
-  type AttachmentsConfig,
-} from "./config";
-import {
-  generatePresignedLink,
-  generateShareLink,
-  getLinkType,
-  resolveDeliverableLinkType,
-  resolveLocalShareBaseUrl,
-} from "./links";
-import { createObjectKey, sanitizeFilename } from "./security";
-import {
-  uploadFile as coreUploadFile,
-  uploadFromUrl as coreUploadFromUrl,
-  uploadFromBuffer as coreUploadFromBuffer,
-  uploadStreamAttachment as coreUploadStream,
-  type UploadOptions,
-} from "./upload";
-import { downloadAttachment, type DownloadResult } from "./download";
+import type { UploadOptions } from "./upload";
+import type { DownloadResult } from "./download";
 import { resolveAttachmentsV1, type AttachmentsV1Store, type V1UploadOptions } from "./cloud-v1";
-import { parseFriendlySlug, requireFriendlySlugPassword } from "./friendly-slug";
 
 export type { UploadOptions } from "./upload";
 
@@ -88,7 +39,7 @@ export interface FeedbackInput {
 
 /**
  * The single storage surface every CLI command, MCP tool and SDK method uses.
- * Both {@link LocalStore} and {@link ApiStore} implement it identically so a
+ * The authenticated {@link ApiStore} implements it so a
  * caller never branches on transport.
  */
 export interface Store {
@@ -164,249 +115,7 @@ function toV1UploadOptions(options: UploadOptions = {}): V1UploadOptions {
   };
 }
 
-/**
- * On-box store: SQLite metadata + S3/local object bytes. First-class; works with
- * no cloud configuration. A single {@link AttachmentsDB} handle is reused across
- * calls and released by {@link LocalStore.close}.
- */
-export class LocalStore implements Store {
-  readonly transport = "local" as const;
-  readonly baseUrl = null;
-
-  private _db: AttachmentsDB | null = null;
-  private readonly config: AttachmentsConfig;
-
-  constructor(config?: AttachmentsConfig) {
-    this.config = config ?? getConfig();
-  }
-
-  private db(): AttachmentsDB {
-    if (!this._db) this._db = new AttachmentsDB();
-    return this._db;
-  }
-
-  async list(options: ListOptions = {}): Promise<Attachment[]> {
-    return this.db().findAll(options);
-  }
-
-  async get(id: string): Promise<Attachment | null> {
-    return this.db().findById(id);
-  }
-
-  async uploadFile(path: string, options: UploadOptions = {}): Promise<Attachment> {
-    validateStorageConfig(this.config);
-    return coreUploadFile(path, options, { db: this.db(), config: this.config });
-  }
-
-  async uploadUrl(url: string, options: UploadOptions = {}): Promise<Attachment> {
-    validateStorageConfig(this.config);
-    return coreUploadFromUrl(url, options, { db: this.db(), config: this.config });
-  }
-
-  async uploadBuffer(buffer: Buffer | Uint8Array, filename: string, options: UploadOptions = {}): Promise<Attachment> {
-    validateStorageConfig(this.config);
-    return coreUploadFromBuffer(Buffer.from(buffer), filename, options, { db: this.db(), config: this.config });
-  }
-
-  async uploadStream(
-    stream: NodeJS.ReadableStream,
-    filename: string,
-    contentType: string | undefined,
-    options: UploadOptions = {},
-  ): Promise<Attachment> {
-    validateStorageConfig(this.config);
-    return coreUploadStream(stream, filename, contentType, options, { db: this.db(), config: this.config });
-  }
-
-  async delete(id: string): Promise<void> {
-    const db = this.db();
-    const att = db.findById(id);
-    if (!att) throw new Error(`Attachment not found: ${id}`);
-    await this.deleteObjectBytes(att);
-    db.delete(id);
-  }
-
-  async deleteExpired(): Promise<number> {
-    const db = this.db();
-    const now = Date.now();
-    const expired = db.findAll({ includeExpired: true }).filter((a) => a.expiresAt !== null && a.expiresAt <= now);
-    for (const att of expired) {
-      // Delete the bytes first; only drop the DB record once the object is
-      // gone. If object deletion fails, surface the error rather than orphaning
-      // the bytes with a dangling (deleted) record.
-      await this.deleteObjectBytes(att);
-      db.delete(att.id);
-    }
-    return expired.length;
-  }
-
-  private async deleteObjectBytes(att: Attachment): Promise<void> {
-    const backend = att.storageBackend ?? (att.bucket === "local" ? "local" : "s3");
-    if (backend === "local") {
-      await new LocalObjectStore(this.config).delete(att.s3Key);
-    } else {
-      await new S3Client(this.config.s3).delete(att.s3Key);
-    }
-  }
-
-  async getLink(id: string): Promise<LinkResult> {
-    const att = this.db().findById(id);
-    if (!att) throw new Error(`Attachment not found: ${id}`);
-    return { link: att.link, expires_at: att.expiresAt };
-  }
-
-  async isSlugAvailable(slugInput: string): Promise<boolean> {
-    const slug = parseFriendlySlug(slugInput);
-    return this.db().findShareLinkByToken(slug) === null;
-  }
-
-  async regenerateLink(id: string, options: RegenerateLinkOptions): Promise<LinkResult> {
-    const db = this.db();
-    const att = db.findById(id);
-    if (!att) throw new Error(`Attachment not found: ${id}`);
-
-    const slug = options.slug ? parseFriendlySlug(options.slug) : undefined;
-    requireFriendlySlugPassword(slug, options.password);
-    if (slug && !(await this.isSlugAvailable(slug))) {
-      throw new Error(`Friendly slug is already in use: ${slug}`);
-    }
-    const { milliseconds: expiryMs } = parseExpiryStrict(options.expiry ?? this.config.defaults.expiry);
-    const expiresAt = expiryMs !== null ? Date.now() + expiryMs : null;
-    const linkType = resolveDeliverableLinkType({
-      requested: options.linkType ?? getLinkType(this.config),
-      backend: att.storageBackend ?? "s3",
-      expiryMs,
-      password: options.password,
-      maxDownloads: options.maxDownloads,
-      slug,
-    });
-
-    let link: string;
-    if (linkType === "presigned") {
-      link = await generatePresignedLink(new S3Client(this.config.s3), att.s3Key, expiryMs);
-    } else {
-      const { token } = db.createShareLink({
-        attachmentId: att.id,
-        expiresAt,
-        token: slug,
-        password: options.password,
-        maxUses: options.maxDownloads ?? null,
-      });
-      link = generateShareLink(
-        token,
-        options.baseUrl ?? resolveLocalShareBaseUrl(this.config).baseUrl,
-        this.config.server.publicPath,
-      );
-    }
-    db.updateLink(att.id, link, expiresAt);
-    return { link, expires_at: expiresAt, ...(slug ? { slug } : {}) };
-  }
-
-  async download(idOrUrl: string, output?: string, options: { password?: string } = {}): Promise<DownloadResult> {
-    return downloadAttachment(idOrUrl, output, { db: this.db(), config: this.config }, { password: options.password });
-  }
-
-  /**
-   * Create a presigned S3 PUT URL for a direct client->S3 upload plus a pending
-   * DB record. Local/S3 only (the caller holds S3 creds). expiryMs must be > 0.
-   */
-  async presignUpload(
-    filenameInput: string,
-    contentTypeInput: string | undefined,
-    expiryMs: number,
-  ): Promise<{ id: string; uploadUrl: string; contentType: string; filename: string }> {
-    validateS3Config(this.config);
-    const filename = sanitizeFilename(filenameInput);
-    const detected = mimeLookup(filename);
-    const contentType = contentTypeInput ?? (detected !== false ? detected : "application/octet-stream");
-    const id = `att_${nanoid(11)}`;
-    const s3Key = createObjectKey(id, filename);
-    const uploadUrl = await new S3Client(this.config.s3).presignPut(s3Key, contentType, Math.floor(expiryMs / 1000));
-    const now = Date.now();
-    this.db().insert({
-      id,
-      filename,
-      s3Key,
-      bucket: this.config.s3.bucket,
-      size: 0,
-      contentType,
-      link: null,
-      tag: null,
-      expiresAt: now + expiryMs,
-      createdAt: now,
-      storageBackend: "s3",
-      status: "pending",
-    });
-    return { id, uploadUrl, contentType, filename };
-  }
-
-  /** Finalize a presigned direct upload: verify size, generate the link, mark ready. */
-  async presignComplete(
-    id: string,
-    options: { expiryMs: number | null; password?: string; maxDownloads?: number; linkType: "presigned" | "server" },
-  ): Promise<{ attachment: Attachment; link: string; size: number }> {
-    validateS3Config(this.config);
-    const db = this.db();
-    const attachment = db.findById(id);
-    if (!attachment) throw new Error(`Pending attachment not found: ${id}`);
-    if (attachment.status !== "pending") throw new Error(`Attachment upload is already complete: ${id}`);
-
-    const s3 = new S3Client(this.config.s3);
-    const info = await s3.head(attachment.s3Key);
-    const size = info.contentLength ?? attachment.size;
-    if (size > this.config.storage.maxSizeBytes) {
-      await s3.delete(attachment.s3Key).catch(() => undefined);
-      db.delete(id);
-      throw new Error(`File too large. Maximum size is ${this.config.storage.maxSizeBytes} bytes.`);
-    }
-
-    const expiresAt = options.expiryMs !== null ? Date.now() + options.expiryMs : null;
-    const linkType = resolveDeliverableLinkType({
-      requested: options.linkType,
-      backend: attachment.storageBackend ?? "s3",
-      expiryMs: options.expiryMs,
-      password: options.password,
-      maxDownloads: options.maxDownloads,
-    });
-    let link: string;
-    if (linkType === "presigned") {
-      link = await generatePresignedLink(s3, attachment.s3Key, options.expiryMs);
-    } else {
-      const { token } = db.createShareLink({
-        attachmentId: attachment.id,
-        expiresAt,
-        password: options.password,
-        maxUses: options.maxDownloads ?? null,
-      });
-      link = generateShareLink(
-        token,
-        resolveLocalShareBaseUrl(this.config).baseUrl,
-        this.config.server.publicPath,
-      );
-    }
-    db.markReady({ id: attachment.id, size, contentType: info.contentType ?? attachment.contentType, link, expiresAt });
-    return { attachment, link, size };
-  }
-
-  /** Persist a feedback note to the on-box feedback table. */
-  async saveFeedback(input: FeedbackInput): Promise<void> {
-    this.db().run(
-      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-      [input.message, input.email ?? null, input.category ?? "general", input.version ?? null],
-    );
-  }
-
-  close(): void {
-    this._db?.close();
-    this._db = null;
-  }
-}
-
-/**
- * Self_hosted / cloud store: every read and write goes to `<API_URL>/v1` with the
- * bearer key, via the @hasna/contracts HTTP storage client. Never touches sqlite,
- * never sees a DSN.
- */
+/** Authenticated HTTPS Store. */
 export class ApiStore implements Store {
   readonly transport = "cloud-http" as const;
   readonly baseUrl: string;
@@ -454,7 +163,7 @@ export class ApiStore implements Store {
     const all = await this.v1.list({ includeExpired: true });
     const now = Date.now();
     const expired = all.filter((a) => a.expiresAt !== null && a.expiresAt <= now);
-    for (const att of expired) await this.v1.delete(att.id).catch(() => undefined);
+    for (const att of expired) await this.v1.delete(att.id);
     return expired.length;
   }
 
@@ -495,23 +204,15 @@ export class ApiStore implements Store {
 }
 
 export interface ResolveStoreOptions {
-  /** Force the on-box LocalStore even when cloud env is present (e.g. `--local`). */
+  /** Retired option: true is rejected. */
   forceLocal?: boolean;
 }
 
-/**
- * The one call every command/tool/method makes to get its store. Resolves the
- * client-flip env for `attachments`; returns an {@link ApiStore} when
- * self_hosted/cloud is configured, otherwise a {@link LocalStore}. Throws (via the
- * contracts resolver) if cloud was requested but misconfigured, so a client never
- * silently reads the wrong dataset.
- */
+/** Resolve HTTPS credentials before any client data operation. */
 export function resolveStore(env: NodeJS.ProcessEnv = process.env, options: ResolveStoreOptions = {}): Store {
-  if (!options.forceLocal) {
-    const resolved = resolveAttachmentsV1(env);
-    if (resolved.transport === "cloud-http") return new ApiStore(resolved.store);
-  }
-  return new LocalStore();
+  if (options.forceLocal) throw new Error("Local client storage is retired; configure the authenticated HTTPS API.");
+  const resolved = resolveAttachmentsV1(env);
+  return new ApiStore(resolved.store!);
 }
 
 /** Convenience: filename from a path, matching the CLI's display behavior. */

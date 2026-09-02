@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { resolveStore, type Store } from "../../core/store";
-import { withTodosAuth } from "../../core/todos";
+import { withTodosAuth, serviceConfig } from "../../core/todos";
 import { checkAttachment } from "./health-check";
 
 // ---------------------------------------------------------------------------
@@ -138,6 +138,7 @@ export async function connectAndWatch(
   sleepFn: (ms: number) => Promise<void> = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms))
 ): Promise<void> {
+  const requestInit = withTodosAuth(url, { signal });
   let backoffMs = 5000;
   const maxBackoffMs = 60_000;
 
@@ -147,7 +148,7 @@ export async function connectAndWatch(
         process.stdout.write(`[watch] Connecting to ${url}\n`);
       }
 
-      const response = await fetchFn(url, withTodosAuth(url, { signal }));
+      const response = await fetchFn(url, requestInit);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -227,7 +228,7 @@ export function registerWatch(program: Command): void {
     .option(
       "--todos-url <url>",
       "Todos REST server base URL",
-      "http://localhost:3000"
+      undefined
     )
     .option(
       "--events <list>",
@@ -236,7 +237,7 @@ export function registerWatch(program: Command): void {
     )
     .option("--verbose", "Log all events received, not just ones with attachments", false)
     .action(async (options: WatchOptions) => {
-      const todosUrl = options.todosUrl ?? "http://localhost:3000";
+      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
       const events = options.events ?? "task.completed";
       const verbose = !!options.verbose;
 
