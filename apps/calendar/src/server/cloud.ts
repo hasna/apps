@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createCalendarCloudQueryClient, type CalendarCloudQueryClient } from "./cloud-client.js";
 import { CalendarPgStore } from "./pg-store.js";
-import { validateDatabaseUrl } from "./database-config.js";
+import { validateDatabaseUrl, readPostgresCa } from "./database-config.js";
 export { validateDatabaseUrl } from "./database-config.js";
 
 export const CALENDAR_APP_SLUG = "calendar";
@@ -38,6 +38,7 @@ export type ServerBackend = "postgres";
 
 export function resolveBackend(env: NodeJS.ProcessEnv = process.env): ServerBackend {
   if (!hasHostedDatabase(env)) throw new Error("HASNA_CALENDAR_DATABASE_URL is required before serving Calendar traffic.");
+  readPostgresCa(env);
   return "postgres";
 }
 
@@ -83,7 +84,7 @@ function getClient(): CalendarCloudQueryClient {
     );
   }
   const max = Number(process.env.HASNA_CALENDAR_DB_POOL_MAX) || 6;
-  cachedClient = createCalendarCloudQueryClient(url, { max, idleTimeout: 30, connectionTimeout: 15 });
+  cachedClient = createCalendarCloudQueryClient(url, { max, idleTimeout: 30, connectionTimeout: 15, ca: readPostgresCa() });
   return cachedClient;
 }
 

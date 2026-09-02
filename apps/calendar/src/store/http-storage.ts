@@ -1,4 +1,5 @@
 // Calendar domain HTTPS seam; no claim of unpublished Contracts provenance.
+import { CalendarResponseError, validateResponseEnvelope } from "./response-envelope.js";
 export type Env = Record<string, string | undefined>;
 export type QueryParams = Record<string, string | number | boolean | null | undefined>;
 export interface RequestOptions { query?: QueryParams; idempotencyKey?: string; timeoutMs?: number; headers?: HeadersInit; signal?: AbortSignal | null; retries?: number; }
@@ -81,8 +82,11 @@ export function createHttpTransport(options: { name: string; baseUrl: string; ap
         const response = await fetchImpl(url.href, { method: upper, headers: new Headers(headers), body: payload, redirect: "error", signal: controller.signal });
         if (response.redirected) throw new Error("Calendar redirect rejected.");
         if (!response.ok) throw new HasnaHttpError(upper, path, response.status);
-        return response.status === 204 ? undefined as T : await response.json() as T;
+        const result = await response.json();
+        validateResponseEnvelope(upper, path, result);
+        return result as T;
       } catch (e) {
+        if (e instanceof CalendarResponseError) throw e;
         const retryable = !(e instanceof HasnaHttpError) || [408,425,429,500,502,503,504].includes(e.status);
         if (signal?.aborted || !retryable || attempt >= retries) { if (e instanceof HasnaHttpError) throw e; throw new Error("Calendar API request failed; no local fallback."); }
       } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }

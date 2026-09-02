@@ -247,7 +247,7 @@ describe("release bin artifacts", () => {
         // refuses to start rather than exposing /mcp anonymously. This bin smoke
         // test binds loopback, so the loopback-only anonymous plane is correct.
         CALENDAR_ALLOW_ANONYMOUS: "1",
-        HASNA_CALENDAR_DATABASE_URL: "postgres://fixture@127.0.0.1:1/calendar_test",
+        HASNA_CALENDAR_DATABASE_URL: "postgres://fixture@127.0.0.1:1/calendar_test?sslmode=verify-full",
       },
       stdio: "ignore",
     });

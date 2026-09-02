@@ -18,7 +18,7 @@
  * it (the same opt-in the existing v1.pg.test.ts uses):
  *
  *   CALENDAR_TEST_DATABASE_URL =
- *   postgres://postgres@127.0.0.1:5432/calendar_pg_test?sslmode=disable \
+ *   postgres://postgres@127.0.0.1:5432/calendar_pg_test?sslmode=verify-full \
  *     bun test src/server/cloud-auth-wiring.pg.test.ts
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";

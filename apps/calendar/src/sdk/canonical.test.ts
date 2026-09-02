@@ -10,8 +10,8 @@ test("SDK and server enforce explicit authenticated authorities", async () => {
     expect(() => new CalendarV1Client(options as never)).toThrow();
   }
   expect(() => createCalendarClient({})).toThrow();
-  for (const env of [{}, { HASNA_CALENDAR_DATABASE_URL: " " }, { HASNA_CALENDAR_DATABASE_URL: "sqlite:/tmp/test" }, { HASNA_CALENDAR_DATABASE_URL: "postgres://fixture@localhost/db", CALENDAR_DATABASE_URL: "postgres://other@localhost/db" }]) expect(() => resolveBackend(env)).toThrow();
-  expect(validateDatabaseUrl("postgres://fixture@localhost/calendar_test")).toBe("postgres://fixture@localhost/calendar_test");
+  for (const env of [{}, { HASNA_CALENDAR_DATABASE_URL: " " }, { HASNA_CALENDAR_DATABASE_URL: "sqlite:/tmp/test" }, { HASNA_CALENDAR_DATABASE_URL: "postgres://fixture@localhost/db?sslmode=verify-full", CALENDAR_DATABASE_URL: "postgres://other@localhost/db?sslmode=verify-full" }]) expect(() => resolveBackend(env)).toThrow();
+  expect(validateDatabaseUrl("postgres://fixture@localhost/calendar_test?sslmode=verify-full")).toBe("postgres://fixture@localhost/calendar_test?sslmode=verify-full");
   let calls = 0;
   const sdk = new CalendarV1Client({ baseUrl: "https://calendar.example.test/v1", apiKey: "fixture", fetch: (async (_url, init) => {
     calls++;

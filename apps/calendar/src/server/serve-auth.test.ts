@@ -26,7 +26,7 @@ import { closeDatabase } from "../db/database.js";
  */
 
 const CREDENTIAL = "serve-credential-for-tests-only";
-const DUMMY_DSN = "postgres://calendar_app@127.0.0.1:1/calendar_test";
+const DUMMY_DSN = "postgres://calendar_app@127.0.0.1:1/calendar_test?sslmode=verify-full";
 const DUMMY_SIGNING_SECRET = "signing-secret-for-tests-only";
 
 const CLIENT_FLIP_AND_HOSTED_VARS = [

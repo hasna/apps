@@ -36,7 +36,12 @@ is not established. Response errors do not expose server bodies.
 
 `calendar-serve` requires an app-scoped valid PostgreSQL URL before binding:
 `HASNA_CALENDAR_DATABASE_URL` or the nonconflicting `CALENDAR_DATABASE_URL`
-alias. `/v1` also requires `HASNA_CALENDAR_API_SIGNING_KEY` (or supported
+alias. The DSN must contain exactly one `sslmode=verify-full`; absent, weaker,
+duplicate or competing SSL/TLS parameters are rejected. Certificate and hostname
+verification are forced in the Bun driver. An explicit PEM trust bundle may be
+read from `HASNA_CALENDAR_PG_CA_FILE` or the existing `PGSSLROOTCERT` (values must
+agree). No plaintext production or test-mode exception is provided.
+`/v1` also requires `HASNA_CALENDAR_API_SIGNING_KEY` (or supported
 signing-secret alias). Schema changes remain explicit `calendar-serve migrate`
 operations, never automatic request-time migrations.
 
@@ -46,6 +51,13 @@ The HTTP server uses `CALENDAR_PORT` (default 19428); MCP HTTP mode uses
 domain API URL/key.
 
 ### Unresolved public integrations — package remains incomplete
+
+**Multi-tenant authorization is NOT established.** The current server checks
+Calendar app scopes but does not bind `principal.tid` to organization queries.
+Adversarial tests reproduce cross-organization reads/deletes. Do not interpret
+HTTPS authentication as tenant isolation or approve this package for a shared
+multi-tenant deployment. See `TENANCY-GAP.md` in the source tree for required
+product/API decisions; no tenant mapping or administrative scope was invented.
 
 - Embedded `events` and `channels` commands from `@hasna/events` still use
   that package's local event/channel/delivery store. They are distinct from

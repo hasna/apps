@@ -47,7 +47,7 @@ Readiness errors do not return driver messages to callers.
 - Artifact lifecycle wiring remains the separately inventoried open #459 work.
   Direct scans here do not imply that release/prepack gates are complete.
 
-## Verification evidence
+## Original implementation verification (1cce817)
 
 Runtime: Bun 1.3.14, initially via `npx -y bun@1.3.14`, then a temporary
 PATH-only symlink to that exact binary. System Bun was not replaced.
@@ -81,10 +81,55 @@ PATH-only symlink to that exact binary. System Bun was not replaced.
   unrelated Attachments bash/mapfile and Contracts baseline prepack failures;
   no aggregate-green claim. Direct packed artifact scan also passes.
 - Secret scanner self-test passes. Staged scan is required before commit.
-- Final local audit tarball: `/tmp/calendar-pack.1gOFqL/hasna-calendar-0.3.9.tgz`,
+- Original local audit tarball (since replaced by review artifact below):
+  `/tmp/calendar-pack.1gOFqL/hasna-calendar-0.3.9.tgz`,
   SHA-256 `7b997d38dab6776d6d2dfd7d9028d6fcbbec63621cb214beb7fd8eef3d12a38f`.
   This is an unpublished audit artifact, not a released version or provenance claim.
 
 No live database test, package publication, push, PR update, deployment,
 credential change or data migration was performed. Independent exact-commit
 review is still required; this document is implementation evidence, not approval.
+
+## Review remediation — still NO_GO
+
+The independent review reproduced three defects: Bun's driver-effective TLS
+could be weaker than intended, event listing dropped offset/created_by, and
+successful malformed response envelopes could masquerade as domain values.
+All three are fixed in this follow-up; tenant enforcement is NOT fixed.
+
+- PostgreSQL URLs require exactly one `sslmode=verify-full`; absent, weak,
+  duplicate, case-variant or competing SSL/TLS settings fail before binding.
+  Bun SQL also receives explicit verified TLS and hostname settings. Existing
+  `PGSSLROOTCERT` and app-scoped CA files are validated before binding. No
+  production or test plaintext exception exists. This follows Bun's documented
+  [verify-full semantics](https://bun.sh/docs/runtime/sql).
+- Offline TLS fixture exercises actual Bun 1.3.14 SQL: untrusted and wrong-host
+  certificates fail, explicitly trusted matching-host certificate succeeds
+  through TLS startup, and a server refusing TLS receives no plaintext startup.
+  The same test sets hostile ambient TLS/PG variables to prove they do not
+  weaken the explicit connection options. Certificates are synthetic temporary
+  fixtures, not user credentials; no real database is contacted.
+- All nondefault list filters now survive ApiStore, generated SDK and `/v1`,
+  including creator and offset together. SDK generation is byte-identical on
+  regeneration. Operation-specific singular/collection envelopes reject null,
+  arrays in singular slots, object availability lists and malformed entities;
+  genuine 404 remains absence. Missing agent update now returns actual 404.
+- Tenant-A credentials can currently list/read/delete tenant-B organizations
+  through the real router/store query path. Tests characterize this confirmed
+  vulnerability, not passing isolation. See [TENANCY-GAP.md](TENANCY-GAP.md) for
+  source evidence and required ownership/provisioning decisions. No invented
+  tid-to-org mapping or withdrawal of global operations was introduced.
+- Latest full suite: 239 pass, 12 live-PG skips, the same 3 unchanged baseline
+  legacy-path failures; 781 assertions. Targeted review suite: 25 pass, 137
+  assertions. Typecheck, frozen install, scoped Turbo build and release-bin
+  checks pass. Root standard now passes 72/72, 138 assertions. Root names and
+  dependency direction pass; exact unpublished canonical manifest validator
+  passes. Todos remains unavailable under restricted PATH (NOT FILED).
+- Updated audit artifact: 76 members, 0 artifact-scan findings/unreadable files;
+  SHA-256 `f4d432c1a71f826cc6b09d8c7242af195c1fb5149e3510f4f8cd52c3fc4d831e`.
+  Package/version remain unchanged and unpublished. Historical broad guard
+  limitations above still apply; no aggregate publish-guard success is claimed.
+
+Events integration, explicit db-migrate and legacy data remain untouched.
+Tenant semantics, unpublished shared Contracts and package-wide gaps still
+block release/deployment approval. This follow-up requires exact-commit review.

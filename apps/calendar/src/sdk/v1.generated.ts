@@ -235,7 +235,7 @@ export class CalendarV1Client {
     }
 
     /** List events */
-    async listEvents(query?: { "calendar_id"?: string; "org_id"?: string; "status"?: string; "after"?: string; "before"?: string; "source_task_id"?: string; "limit"?: number }, init?: RequestInit): Promise<{ "events"?: Array<Event>; "count"?: number }> {
+    async listEvents(query?: { "calendar_id"?: string; "org_id"?: string; "status"?: string; "after"?: string; "before"?: string; "source_task_id"?: string; "created_by"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "events"?: Array<Event>; "count"?: number }> {
       return this.request("GET", `/v1/events`, {
         body: undefined,
         query,
