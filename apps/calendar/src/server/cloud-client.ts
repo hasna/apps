@@ -11,6 +11,8 @@
  * and the calendar Postgres store both consume.
  */
 
+import { validateDatabaseUrl } from "./database-config.js";
+
 export interface CloudQueryResult<T = Record<string, unknown>> {
   rows: T[];
 }
@@ -57,6 +59,7 @@ export function createCalendarCloudQueryClient(
   url: string,
   options: CreateCloudQueryClientOptions = {},
 ): CalendarCloudQueryClient {
+  validateDatabaseUrl(url);
   const SQL = resolveBunSql();
   const sql = new SQL(url, {
     max: options.max ?? 5,

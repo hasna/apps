@@ -144,6 +144,12 @@ describe("release bin artifacts", () => {
     "build emits executable bun bin files and package metadata preserves them",
     () => {
       const pkg = readPackageJson();
+      for (const surface of ["dist/index.js", "dist/sdk/index.js", "dist/mcp/index.js", "dist/server/index.js"]) {
+        const code = readFileSync(join(repoRoot, surface), "utf8");
+        expect(code).not.toContain("bun:sqlite");
+        expect(code).not.toContain("class LocalStore");
+        expect(code).not.toContain("installDomainFixture");
+      }
       const binEntries = Object.entries(pkg.bin ?? {});
       expect(binEntries.length).toBeGreaterThan(0);
 
@@ -241,6 +247,7 @@ describe("release bin artifacts", () => {
         // refuses to start rather than exposing /mcp anonymously. This bin smoke
         // test binds loopback, so the loopback-only anonymous plane is correct.
         CALENDAR_ALLOW_ANONYMOUS: "1",
+        HASNA_CALENDAR_DATABASE_URL: "postgres://fixture@127.0.0.1:1/calendar_test",
       },
       stdio: "ignore",
     });

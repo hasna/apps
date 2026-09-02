@@ -1,14 +1,5 @@
-// The single storage abstraction for @hasna/calendar.
-//
-// Every CLI command, MCP tool, and internal caller talks to a `CalendarStore`.
-// Two transports implement it:
-//   - LocalStore — on-box SQLite (src/db/*).
-//   - ApiStore   — HTTPS `/v1` + bearer key (the hosted API).
-//
-// The resolver (`getStore`) picks the transport from the client env
-// (HASNA_CALENDAR_API_URL + HASNA_CALENDAR_API_KEY both set -> hosted API,
-// otherwise local SQLite). No command reaches SQLite or `fetch` directly —
-// that is the split-brain bug this abstraction eliminates.
+// Calendar domain interface. Public clients use authenticated HTTPS only.
+// LocalStore remains an internal test fixture, never selected by getStore().
 
 import type {
   Org, CreateOrgInput, UpdateOrgInput,
