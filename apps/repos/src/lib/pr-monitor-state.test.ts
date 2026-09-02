@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { closeDb, getDb } from "../db/database.js";
 import {
   DEFAULT_PRUNE_OLDER_THAN_DAYS,
@@ -233,6 +233,15 @@ describe("pr-monitor state accessors", () => {
   });
 
   describe("prune", () => {
+    beforeEach(() => {
+      // Pruning scans every watch row, so each case must own its database.
+      // In particular, fixed-date fixtures must not reach the real-clock case.
+      closeDb();
+      getDb(":memory:");
+    });
+
+    afterEach(() => closeDb());
+
     it("prunes rows whose PR is terminal and older than the cutoff", () => {
       seedPullRequest({ owner: "hasna", repo: "apps", number: 900, state: "merged" });
       upsertWatchState(observe({ owner: "hasna", repo: "apps", number: 900, seenAt: "2026-06-01 00:00:00" }));
@@ -259,6 +268,13 @@ describe("pr-monitor state accessors", () => {
       expect(readWatchStateByPr("hasna", "apps", 902)).not.toBeNull();
     });
 
+    it("keeps terminal rows seen exactly at the cutoff", () => {
+      seedPullRequest({ owner: "hasna", repo: "apps", number: 906, state: "closed" });
+      upsertWatchState(observe({ owner: "hasna", repo: "apps", number: 906, seenAt: "2026-07-19 00:00:00" }));
+      expect(pruneWatchState({ now: "2026-08-18 00:00:00" })).toEqual({ scanned: 1, pruned: 0 });
+      expect(readWatchStateByPr("hasna", "apps", 906)).not.toBeNull();
+    });
+
     it("prunes orphan rows whose PR row no longer exists", () => {
       upsertWatchState(observe({ owner: "hasna", repo: "ghost", number: 1, seenAt: "2026-05-01 00:00:00" }));
       const result = pruneWatchState({ now: "2026-08-18 00:00:00" });
@@ -268,10 +284,24 @@ describe("pr-monitor state accessors", () => {
 
     it("defaults to 30 days", () => {
       expect(DEFAULT_PRUNE_OLDER_THAN_DAYS).toBe(30);
+      // Exercise the actual default clock, using its own timestamp format.
+      // The one-hour margin avoids racing a second/day boundary while still
+      // distinguishing 30 days from either a 29- or 31-day implementation.
+      const { old, recent } = getDb().query(`SELECT
+        datetime('now', '-30 days', '-1 hour') AS old,
+        datetime('now', '-30 days', '+1 hour') AS recent
+      `).get() as { old: string; recent: string };
       seedPullRequest({ owner: "hasna", repo: "apps", number: 903, state: "merged" });
-      upsertWatchState(observe({ owner: "hasna", repo: "apps", number: 903, seenAt: "2026-06-01 00:00:00" }));
+      seedPullRequest({ owner: "hasna", repo: "apps", number: 904, state: "closed" });
+      seedPullRequest({ owner: "hasna", repo: "apps", number: 905, state: "open" });
+      upsertWatchState(observe({ owner: "hasna", repo: "apps", number: 903, seenAt: old }));
+      upsertWatchState(observe({ owner: "hasna", repo: "apps", number: 904, seenAt: recent }));
+      upsertWatchState(observe({ owner: "hasna", repo: "apps", number: 905, seenAt: old }));
       const result = pruneWatchState();
-      expect(result.pruned).toBe(1);
+      expect(result).toEqual({ scanned: 3, pruned: 1 });
+      expect(readWatchStateByPr("hasna", "apps", 903)).toBeNull();
+      expect(readWatchStateByPr("hasna", "apps", 904)).not.toBeNull();
+      expect(readWatchStateByPr("hasna", "apps", 905)).not.toBeNull();
     });
 
     it("rejects invalid age bounds", () => {
