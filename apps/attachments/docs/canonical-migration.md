@@ -1,31 +1,72 @@
-# Canonical-client migration checkpoint
+# Canonical-client migration: review candidate
 
-This is an owner-directed breaking removal of local client storage, not a release.
-PRs 561 and 565 were inspected: both retain absent-config SQLite fallback; 561 also
-depends on the stale shared client contract. Their placement model is not adopted.
+This owner-directed breaking removal of local client storage is not a release.
+PRs 561 and 565 were inspected against verified main base
+5d2fcfb02cc7a06d3f36c40b9c51141e1bc993dc. Both retain absent-config SQLite fallback;
+561 also uses the stale client placement contract. Their placement model is not adopted.
 
-The local HTTPS seam and reproducible SDK generator hardening do not claim an
-unpublished Contracts dependency. Contracts remains at the existing dependency range.
-The reviewed shared Contracts change is not yet released.
+## Architecture and dependency provenance
 
-Removed public capabilities: LocalStore, local object/storage primitives, raw local
-upload/download functions, local createApp/startServer, and legacy AttachmentsClient.
-Use resolveStore for the root SDK or AttachmentsApiClient in the separate SDK.
-Unsupported legacy operations fail instead of silently using a local dataset.
+All public client entries require authenticated explicit HTTPS configuration.
+The package root exports the remote Store; ./sdk exports the generated /v1 JSON
+client. LocalStore, local storage primitives, local createApp/startServer and the
+legacy /api AttachmentsClient are no longer public exports. Removed operations
+fail explicitly rather than selecting another dataset.
 
-Release is blocked pending full legacy-test reconciliation, generated-kit/contract
-reconciliation with the released shared contract, lockfile audit, exact-commit
-independent review, and separately authorized live PostgreSQL verification.
-The old unit suite assumes SQLite/localhost and is not evidence of the new boundary.
-No package version or published dependency release has been invented.
+Key and configuration validation runs before every authenticated dispatch. Same
+authority key rotation is supported; changed authority requires a new client.
+Redirects and body retries are disabled, including binary download. Remote errors
+do not echo arbitrary response bodies. Todos/Sessions integrations follow their
+own explicit HTTPS authority and key configuration.
 
-Checkpoint verification on Bun 1.3.14: package build/type declarations and 11
-canonical security tests pass. The full historical runner reports 61 checks,
-33 passed and 28 failed; it is not a passing release suite. The required live-PG
-negative control correctly fails when its test DSN is absent. No live PostgreSQL
-or service verification was performed.
+The server requires explicit validated PostgreSQL configuration and S3 object
+storage. The old generated mode selector was removed. src/server-storage contains
+application-owned adapters derived from the existing 0.8.2 kit, with provenance
+in its README; it is not falsely labeled an unmodified generated kit.
+No unpublished Contracts source was copied or consumed.
 
-Root conformance reporting tests pass (10 tests), but report Attachments manifest
-incompatibility against the old published validator; task filing was NOT FILED
-because the test PATH excluded Hasna CLIs. Full root gates and affected builds
-were attempted but could not complete with unrelated dependencies absent.
+Contracts remains at ^0.8.2 (the standalone committed lock resolves 0.8.7);
+the artifact scanner remains pinned to published 0.8.2. Reviewed security commit
+7ab022d87b48fd15f0ce1831fc560e0651b8c232 and test-only successor
+2b15c73f949729a001d5dc88509650f61e58ee41 were used only as read-only conformance
+evidence. Their canonical credential/server kit changes are unpublished.
+The static credential-seam check passing is NOT proof of actual shared-seam adoption:
+this application currently enforces the boundary in application-owned code.
+Adopting the released canonical shared implementation remains a release blocker.
+
+Configuration uses @hasna/paths; agent attribution uses its state directory.
+Explicit input files and download destinations are not an application dataset.
+Legacy directories remain untouched; no migration/copy/cleanup code was introduced.
+
+## Verification on Bun 1.3.14
+
+- Full verify:release passes: typecheck, 63 isolated checks, build/declarations and
+  packed-artifact scan (93 members, zero unreadable). Live PG cases are skipped,
+  not represented as successful integration.
+- Generated SDK build passes; both generated source copies match.
+- Fifty lifecycle tests include forty-five real HTTP redirect cases across upload,
+  download and SDK writes: 301/302/303/307/308 to same HTTPS, cross HTTPS and HTTP.
+  No destination receives credentials or a replayed body.
+- Legacy command/MCP behavior remains covered through an explicit test-only
+  in-memory fixture. Unmocked security tests enforce the actual production boundary.
+  Legacy-data sentinel tests prove import/config failure neither copies nor modifies it.
+- Root filtered frozen install and isolated standalone frozen install pass.
+  Lock changes are scoped to replacing the inherited Events client dependency
+  with @hasna/paths 0.2.2; other resolutions are preserved.
+- Exact local reviewed-validator repo-conformance passes (health shape skipped
+  without a live sample). The currently published validator remains incompatible
+  with the PostgreSQL-only manifest; the CI conformance gate is not waived.
+- Root conformance reporting tests pass 10/10 while reporting existing violations,
+  including the old validator incompatibility. Restricted PATH confirms todos and
+  hasna are absent: automatic reconcile tasks were NOT FILED.
+- Requiring live PostgreSQL with no disposable DSN correctly fails. No live
+  PostgreSQL, cloud credentials, deployed service or production data were accessed.
+
+## Release blockers
+
+An independent review of the exact implementation commit, released canonical
+Contracts adoption and revalidation against that published artifact, separately
+authorized live PostgreSQL verification, and the normal version/provenance release
+audit remain required. Versions have not been bumped; nothing was pushed,
+published, deployed or migrated. The earlier failing checkpoint test counts are
+superseded by this completed local verification, not used as release evidence.

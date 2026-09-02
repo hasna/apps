@@ -138,11 +138,14 @@ export async function connectAndWatch(
   sleepFn: (ms: number) => Promise<void> = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms))
 ): Promise<void> {
-  const requestInit = withTodosAuth(url, { signal });
+  withTodosAuth(url, { signal });
+  const authority = serviceConfig("TODOS").url;
   let backoffMs = 5000;
   const maxBackoffMs = 60_000;
 
   while (!signal?.aborted) {
+    if (serviceConfig("TODOS").url !== authority) throw new Error("Todos authority changed; restart the watch explicitly.");
+    const requestInit = withTodosAuth(url, { signal });
     try {
       if (opts.verbose) {
         process.stdout.write(`[watch] Connecting to ${url}\n`);

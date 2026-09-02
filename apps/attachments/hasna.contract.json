@@ -1,7 +1,7 @@
 {
   "schema": "hasna.service_contract.v1",
   "name": "attachments",
-  "class": "cli-with-store",
+  "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.8.2",
   "description": "Authenticated HTTPS clients; server-side PostgreSQL metadata and object storage.",
@@ -55,7 +55,7 @@
       "kind": "sdk",
       "status": "supported",
       "authMode": "api-key",
-      "exportSubpath": ".",
+      "exportSubpath": "./sdk",
       "generatedFrom": "/openapi.json"
     },
     {

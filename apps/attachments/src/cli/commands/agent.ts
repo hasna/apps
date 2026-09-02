@@ -1,11 +1,11 @@
 import { Command } from "commander";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { randomBytes } from "crypto";
-import { ensureAttachmentsDataDir } from "../../core/paths";
+import { resolvePath } from "@hasna/paths";
 
 function getAgentFilePath(): string {
-  return join(ensureAttachmentsDataDir(), "agent.json");
+  return join(resolvePath("state", { app: "attachments" }), "agent.json");
 }
 
 interface AgentState {
@@ -22,6 +22,7 @@ function loadAgent(): AgentState | null {
 }
 
 function saveAgent(agent: AgentState): void {
+  mkdirSync(resolvePath("state", { app: "attachments" }), { recursive: true, mode: 0o700 });
   writeFileSync(getAgentFilePath(), JSON.stringify(agent, null, 2));
 }
 

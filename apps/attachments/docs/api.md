@@ -1,80 +1,45 @@
-# HTTP API Reference
+# HTTP API and SDK
 
-Attachments ships two Hono applications with different persistence and route
-contracts.
+The supported attachment API is the service's authenticated /v1 surface.
+The retired local /api server and AttachmentsClient are not public package exports.
+An approved deployment terminates HTTPS in front of attachments-serve.
 
-## Local API: `attachments serve`
+Every client requires an explicit HTTPS base URL and API key. Missing, blank or
+conflicting configuration fails before dispatch. Authenticated requests reject
+all redirects; writes are not automatically retried or replayed.
 
-The local API uses the selected local/S3 object store and SQLite metadata. It
-listens on `localhost:3459` by default. Authentication is disabled unless
-`ATTACHMENTS_API_TOKEN` or `HASNA_ATTACHMENTS_API_TOKEN` is set. When set, send
-`Authorization: Bearer <token>` or `X-API-Key: <token>`. `/api/health` stays
-public.
+## Service routes
 
-### System Routes
+GET /health, /ready, /version and /openapi.json are public service metadata.
+The following attachment routes require the service API key:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/health` | Storage status and attachment counts |
-| `GET` | `/api/deployment` | Current public routing plan |
-| `GET` | `/api/context` | Compact text or JSON context |
-| `GET` | `/api/report` | Detailed activity report |
+- GET and POST /v1/attachments: list metadata or upload.
+- GET and DELETE /v1/attachments/:id: metadata or deletion.
+- GET /v1/attachments/:id/download: authenticated binary download.
+- GET and POST /v1/attachments/:id/link: obtain or regenerate a link.
+- POST /v1/attachments/presign-upload: request a direct upload URL.
+- POST /v1/attachments/:id/presign-upload/complete: confirm uploaded object.
+- GET /v1/slugs/:slug: friendly-link availability.
+- POST /v1/feedback: submit feedback.
 
-### Attachment Routes
+Public share links under /a have their own token, expiry, password and email
+access controls; they are not unauthenticated client CRUD endpoints.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/attachments` | JSON/base64 attachment upload |
-| `PUT` | `/api/attachments` | Raw request-body upload |
-| `GET` | `/api/attachments` | List, filter, or project fields |
-| `GET` | `/api/attachments/:id` | Get metadata |
-| `DELETE` | `/api/attachments/:id` | Delete bytes and metadata |
-| `GET` | `/api/attachments/:id/download` | Stream bytes |
-| `GET` | `/api/attachments/:id/link` | Get current link |
-| `POST` | `/api/attachments/:id/link` | Regenerate link |
-| `POST` | `/api/attachments/multipart` | Begin multipart S3 upload |
-| `POST` | `/api/attachments/:id/multipart/part` | Presign a multipart part |
-| `POST` | `/api/attachments/:id/multipart/complete` | Complete multipart upload |
-| `POST` | `/api/attachments/:id/multipart/abort` | Abort multipart upload |
-| `POST` | `/api/attachments/presign-upload` | Begin direct S3 upload |
-| `POST` | `/api/attachments/:id/presign-upload/complete` | Finalize direct upload |
+## Public clients
 
-Uploads enforce `ATTACHMENTS_MAX_SIZE` when set, otherwise the configured
-10-GiB default. Oversized requests return `413`.
+The package root exports resolveStore, ApiStore and resolveAttachmentsV1.
+They adapt command/MCP workflows to the authenticated service; file input and
+explicit download output are not a local application-data backend.
 
-### Public Routes
+@hasna/attachments/sdk and the standalone @hasna/attachments-sdk expose the
+generated AttachmentsApiClient. Construct it with baseUrl and apiKey.
+The generated JSON client has twelve operations from src/serve/openapi.ts;
+it does not claim a generated binary-download or multipart-upload interface.
+Use the root Store adapter for those workflows. Generated sources are kept
+byte-identical by scripts/generate-sdk.ts.
 
-`/a/:token` renders a share/download page. `/a/:token/download` accepts GET,
-HEAD, and password-form POST. Email gates use `/a/:token/request-access`. The
-configured public path is registered in addition to `/a`. `/d/:id` supports
-legacy public downloads.
+Same-authority API key rotation is revalidated before each dispatch. Authority
+changes require a new client. Caller authentication-header overrides are rejected.
+Errors report status without echoing arbitrary response bodies.
 
-Unencrypted downloads support byte ranges. HEAD and unconfirmed GET probes do
-not consume limited-use links.
-
-## Self-Hosted API: `attachments-serve`
-
-The hosted service reads/writes Postgres directly and stores bytes in
-S3-compatible storage. It does not use local SQLite.
-
-| Method | Path | Authentication |
-|--------|------|----------------|
-| `GET` | `/health` | Public liveness/database probe |
-| `GET` | `/ready` | Public migration readiness probe |
-| `GET` | `/version` | Public version and mode |
-| `GET` | `/openapi.json` | Public OpenAPI 3.1 document |
-| `GET`, `POST` | `/v1/attachments` | API key |
-| `GET`, `DELETE` | `/v1/attachments/:id` | API key |
-| `GET` | `/v1/attachments/:id/download` | API key |
-| `GET`, `POST` | `/v1/attachments/:id/link` | API key |
-| `POST` | `/v1/feedback` | API key |
-
-Create accepts JSON/base64, multipart form data, or raw bytes. Signed API keys
-are checked for app, scope, expiry, and revocation; read-only keys cannot write.
-
-The hosted service also registers public share routes at the configured path.
-Email-gated links fail closed there because the cloud public-route
-implementation does not configure email delivery.
-
-Use `/openapi.json` as the authoritative machine-readable `/v1` contract and to
-regenerate the TypeScript SDK.
+See [configuration](configuration.md) and the service OpenAPI document for fields.

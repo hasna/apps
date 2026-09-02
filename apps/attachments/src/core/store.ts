@@ -44,9 +44,9 @@ export interface FeedbackInput {
  */
 export interface Store {
   /** Which transport backs this store — for diagnostics only, not for branching logic. */
-  readonly transport: "local" | "cloud-http";
-  /** `<origin>/v1` base URL for ApiStore; null for LocalStore. */
-  readonly baseUrl: string | null;
+  readonly transport: "cloud-http";
+  /** Authenticated `<origin>/v1` base URL. */
+  readonly baseUrl: string;
 
   list(options?: ListOptions): Promise<Attachment[]>;
   get(id: string): Promise<Attachment | null>;
@@ -70,15 +70,10 @@ export interface Store {
 
   download(idOrUrl: string, output?: string, options?: { password?: string }): Promise<DownloadResult>;
 
-  /** Persist a feedback note about the service (on-box in local mode, `<API_URL>/v1/feedback` in api mode). */
+  /** Persist feedback through the authenticated service. */
   saveFeedback(input: FeedbackInput): Promise<void>;
 
-  /**
-   * Create a presigned S3 PUT URL for a direct client->S3 upload plus a pending
-   * record. The URL is minted by whichever side holds the S3 credentials — the
-   * client's own config in local mode, the `/v1` server in self_hosted/cloud
-   * mode — so the client itself never needs credentials. expiryMs must be > 0.
-   */
+  /** Mint a presigned upload URL through the service; no client S3 credentials. */
   presignUpload(
     filename: string,
     contentType: string | undefined,
@@ -158,7 +153,7 @@ export class ApiStore implements Store {
   }
 
   async deleteExpired(): Promise<number> {
-    // The self_hosted/cloud server enforces expiry server-side; there is no bulk
+    // The service enforces expiry server-side; there is no bulk
     // purge route, so remove the expired records the API still reports.
     const all = await this.v1.list({ includeExpired: true });
     const now = Date.now();

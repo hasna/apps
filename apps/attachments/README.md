@@ -8,8 +8,8 @@ Provide HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY through your
 approved environment/secret manager, then run attachments list or attachments upload.
 The URL must use HTTPS. Both values are required; there is no local database fallback.
 
-The package root and @hasna/attachments/sdk export resolveStore and ApiStore.
-The separate sdk directory exports the generated AttachmentsApiClient with required
+The package root exports resolveStore and ApiStore.
+@hasna/attachments/sdk and the separate SDK export AttachmentsApiClient with required
 baseUrl and apiKey options. All authenticated requests refuse redirects.
 
 attachments-mcp exposes attachment operations over MCP. Client S3 configuration,

@@ -3,7 +3,7 @@ import { mintApiKey } from "@hasna/contracts/auth";
 import { createServeApp } from "./app.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { normalizeConfig } from "../core/config.js";
-import type { PoolQueryClient } from "../generated/storage-kit/query.js";
+import type { PoolQueryClient } from "../server-storage/query.js";
 import { PgAttachmentsStore } from "../db/pg-store.js";
 
 const SIGNING = "test-signing-secret";

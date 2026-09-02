@@ -10,7 +10,7 @@
  * the same object-storage + link core without the local database.
  */
 
-import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import type { TypedQueryClient } from "../server-storage/query.js";
 import type { AccessGrant, Attachment, ShareLink } from "../core/db.js";
 import { buildPasswordHash, generateShareToken, hashShareToken } from "../core/security.js";
 

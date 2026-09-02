@@ -1,3 +1,11 @@
+import { beforeEach as configureIntegrationFixture } from "bun:test";
+configureIntegrationFixture(() => {
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.TODOS_API_KEY = "remote-key";
+  delete process.env.HASNA_TODOS_API_KEY;
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
 import { describe, it, expect, mock, beforeEach, afterAll, beforeAll, spyOn } from "bun:test";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -77,7 +85,7 @@ beforeAll(() => {
   setConfigPath(join(_testConfigDir, "config.json"));
   setConfig({
     s3: { bucket: "test-bucket", region: "us-east-1", accessKeyId: "K", secretAccessKey: "S" },
-    server: { port: 3458, baseUrl: "http://localhost:3458" },
+    server: { port: 3458, baseUrl: "https://sessions.example.test" },
     defaults: { expiry: "7d", linkType: "presigned" },
   });
 });
@@ -88,6 +96,12 @@ afterAll(() => {
 });
 
 // Import after mocks
+// Command behavior uses an explicit test-only Store seam, never production fallback.
+const { MockedStoreFixture } = await import("../../testing/mocked-store-fixture");
+const actualStore = await import("../../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
 const { handleTaskEvent, parseSseBlock, connectAndWatch, registerWatch } = await import("./watch");
 
 // ---------------------------------------------------------------------------
@@ -371,7 +385,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "http://localhost:3000/api/tasks/stream",
+        "https://todos.example.test/api/tasks/stream",
         { verbose: false },
         controller.signal,
         mockFetch as unknown as typeof fetch,
@@ -415,7 +429,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "http://localhost:3000/api/tasks/stream",
+        "https://todos.example.test/api/tasks/stream",
         {},
         controller.signal,
         mockFetch as unknown as typeof fetch,
@@ -482,7 +496,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "http://localhost:3000/api/tasks/stream",
+        "https://todos.example.test/api/tasks/stream",
         { verbose: true },
         controller.signal,
         customFetch as unknown as typeof fetch,
@@ -540,7 +554,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "http://localhost:3000/api/tasks/stream",
+        "https://todos.example.test/api/tasks/stream",
         {},
         controller.signal,
         customFetch as unknown as typeof fetch,
