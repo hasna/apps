@@ -65,12 +65,10 @@
   "storage": {
     "backend": "postgresql",
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_ACCESS_",
     "aliasEnvPrefix": "ACCESS_",
-    "sqlitePath": "~/.hasna/access/access.db",
     "pgTestGate": {
       "envVar": "ACCESS_TEST_DATABASE_URL",
       "command": "bun scripts/pg-test-gate.mjs"
