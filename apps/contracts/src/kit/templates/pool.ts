@@ -2,8 +2,8 @@
 //
 // The single sanctioned way for a SERVER to open its PostgreSQL connection.
 // TLS is resolved through `tls.ts` (one correct approach), and env resolution
-// runs through `backend.ts` (the contract). A Pool is only ever built for the
-// `postgresql` backend; clients never open PostgreSQL directly (sqlite-or-http).
+// runs through `backend.ts` (the contract). Clients never open PostgreSQL
+// directly; they use the authenticated service API.
 
 import pg from "pg";
 import type { Pool, PoolConfig } from "pg";
@@ -125,11 +125,8 @@ export interface ServerPoolFromEnv {
 }
 
 /**
- * Resolve backend + database URL from the environment and build the server's
- * PostgreSQL pool.
- *
- * Throws when no database URL selects the `postgresql` backend. Never logs the
- * URL.
+ * Resolve the required database URL and build the server's PostgreSQL pool.
+ * Missing or invalid configuration throws without logging the URL.
  */
 export function createServerPoolFromEnv(
   appName: string,
@@ -139,12 +136,6 @@ export function createServerPoolFromEnv(
   const env = own.env ?? process.env;
   const resolution = resolveServerDataBackend(appName, env);
   const connectionString = resolveDatabaseUrl(appName, env);
-  if (!connectionString) {
-    throw new Error(
-      `postgresql storage for ${appName} needs a database URL. Set ` +
-        `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`,
-    );
-  }
   const pool = createPgPool({
     ...own,
     connectionString,
@@ -152,6 +143,6 @@ export function createServerPoolFromEnv(
   });
   return {
     client: createQueryClient(pool),
-    connectionSource: resolution.databaseUrlSource ?? "unknown",
+    connectionSource: resolution.databaseUrlSource,
   };
 }

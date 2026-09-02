@@ -9171,7 +9171,7 @@ function createDeploymentEnvelopeSchema(primitives) {
 
 // src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "0.14.2";
+var CONTRACTS_PACKAGE_VERSION = "1.0.0";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -13304,8 +13304,8 @@ var ServiceSurfaceSchema = exports_external.object({
     ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: "Version endpoint must use GET", path: ["version", "method"] });
   }
 });
-var SERVER_DATA_BACKENDS = ["sqlite", "postgresql"];
-var ServerDataBackendSchema = exports_external.enum(SERVER_DATA_BACKENDS);
+var SERVER_DATA_BACKENDS = ["postgresql"];
+var ServerDataBackendSchema = exports_external.literal("postgresql");
 var STORAGE_ENGINES = ["sqlite", "postgresql"];
 var STORAGE_ENGINE_VALUES = ["sqlite", "json", "postgresql"];
 var LOCAL_STORAGE_ENGINES = ["sqlite", "json"];
@@ -13393,7 +13393,7 @@ function defaultSqlitePathFor(name) {
   return `~/.hasna/${name}/${name}.db`;
 }
 var StorageContractSchema = exports_external.object({
-  backend: ServerDataBackendSchema,
+  backend: exports_external.enum(["sqlite", "postgresql"]),
   engines: exports_external.array(StorageEngineSchema).min(1).optional(),
   envPrefix: exports_external.string().regex(/^HASNA_[A-Z][A-Z0-9]*_$/).optional(),
   aliasEnvPrefix: exports_external.string().regex(/^[A-Z][A-Z0-9]*_$/).optional(),
@@ -13691,13 +13691,6 @@ var ServiceContractManifestSchema = exports_external.object({
     if (!value.storage) {
       ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: "cli-with-store repos must declare storage", path: ["storage"] });
     } else {
-      if (value.storage.backend === "sqlite" && !value.storage.sqlitePath) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "sqlite cli-with-store storage requires sqlitePath (~/.hasna/<name>/<name>.db)",
-          path: ["storage", "sqlitePath"]
-        });
-      }
       if (value.storage.engines) {
         const declaredEngines = new Set(value.storage.engines);
         const declaredWaivers = value.metadata?.conformance?.waivedStorageEngines ?? [];
@@ -13715,7 +13708,7 @@ var ServiceContractManifestSchema = exports_external.object({
           const refusal = ineligible && declaredWaivers.length > 0 ? `; declared waiver ignored: ${ineligible}` : "";
           ctx.addIssue({
             code: exports_external.ZodIssueCode.custom,
-            message: `cli-with-store storage.engines must declare both sqlite and postgresql unless the engine carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
+            message: `cli-with-store storage.engines must declare sqlite and postgresql unless bounded migration tooling carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
             path: ["storage", "engines"]
           });
         }
@@ -13732,14 +13725,7 @@ var ServiceContractManifestSchema = exports_external.object({
       if (!value.storage.engines.includes("postgresql")) {
         ctx.addIssue({
           code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare postgresql alongside sqlite or json; both sqlite and postgresql remain supported",
-          path: ["storage", "engines"]
-        });
-      }
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => value.storage?.engines?.includes(engine))) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare a local engine (sqlite or json)",
+          message: "service storage.engines must declare postgresql; local engines are optional migration/import capabilities only",
           path: ["storage", "engines"]
         });
       }
@@ -17664,25 +17650,43 @@ function serverDataBackendEnvKeys(name) {
     databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`]
   };
 }
-function firstEnv(env, keys) {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value)
-      return { key, value };
+function definedDatabaseUrlEntries(env, keys) {
+  return keys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]) }));
+}
+function assertPostgresqlDatabaseUrl(name, entries) {
+  const canonicalKey = serverDataBackendEnvKeys(name).databaseUrlKeys[0];
+  if (entries.length === 0) {
+    throw new Error(`${canonicalKey} is required; Hasna servers use authoritative PostgreSQL and never default to SQLite.`);
   }
-  return null;
+  const blank2 = entries.filter((entry) => entry.value.trim().length === 0);
+  if (blank2.length > 0) {
+    throw new Error(`${blank2.map((entry) => entry.key).join(" and ")} is set but blank; a PostgreSQL database URL is required.`);
+  }
+  const controlled = entries.find((entry) => /[\u0000-\u001f\u007f]/.test(entry.value));
+  if (controlled)
+    throw new Error(`${controlled.key} must not contain ASCII control characters.`);
+  const normalized = entries.map((entry) => ({ key: entry.key, value: entry.value.trim() }));
+  if (normalized.length > 1 && new Set(normalized.map((entry) => entry.value)).size > 1) {
+    throw new Error(`${normalized.map((entry) => entry.key).join(" and ")} disagree; database URL aliases must be identical or only one may be set.`);
+  }
+  const selected = normalized[0];
+  let parsed;
+  try {
+    parsed = new URL(selected.value);
+  } catch {
+    throw new Error(`${selected.key} must be an absolute PostgreSQL connection URL.`);
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error(`${selected.key} must use the postgres or postgresql scheme.`);
+  }
+  if (!parsed.hostname || parsed.pathname.length <= 1) {
+    throw new Error(`${selected.key} must name a PostgreSQL host and database.`);
+  }
+  return selected;
 }
 function resolveServerDataBackend(name, env = process.env) {
   const { databaseUrlKeys } = serverDataBackendEnvKeys(name);
-  const databaseUrl = firstEnv(env, databaseUrlKeys);
-  if (!databaseUrl) {
-    return {
-      backend: "sqlite",
-      source: "default",
-      databaseUrlPresent: false,
-      databaseUrlSource: null
-    };
-  }
+  const databaseUrl = assertPostgresqlDatabaseUrl(name, definedDatabaseUrlEntries(env, databaseUrlKeys));
   return {
     backend: "postgresql",
     source: databaseUrl.key,
@@ -17691,8 +17695,8 @@ function resolveServerDataBackend(name, env = process.env) {
   };
 }
 function resolveDatabaseUrl(name, env = process.env) {
-  const hit = firstEnv(env, serverDataBackendEnvKeys(name).databaseUrlKeys);
-  return hit?.value ?? null;
+  const keys = serverDataBackendEnvKeys(name).databaseUrlKeys;
+  return assertPostgresqlDatabaseUrl(name, definedDatabaseUrlEntries(env, keys)).value;
 }
 
 // src/service-contract.ts
@@ -17704,7 +17708,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
   $id: "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
   title: "Hasna Service Contract v1",
-  description: "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Hosting story, product surfaces, and storage capabilities are separate declarations; the server data backend (sqlite | postgresql) is the only technical switch.",
+  description: "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Public clients use one authenticated HTTPS service transport; authoritative server data is PostgreSQL.",
   type: "object",
   additionalProperties: false,
   required: ["schema", "name", "class", "contractVersion", "kitVersion"],
@@ -17864,7 +17868,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
       properties: {
         backend: {
           enum: ["sqlite", "postgresql"],
-          description: "Active server data backend. sqlite|postgresql only."
+          description: "Manifested runtime/migration capability. Server startup still requires PostgreSQL; SQLite is legacy import input only."
         },
         engines: {
           type: "array",
@@ -17891,7 +17895,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
         sqlitePath: {
           type: "string",
           pattern: "\\.db$",
-          description: "Local sqlite path (~/.hasna/<name>/<name>.db)."
+          description: "Explicit legacy SQLite import path; never a live client/server store."
         },
         pgTestGate: {
           type: "object",
@@ -19547,9 +19551,6 @@ function runRepoConformance(repoRoot, options = {}) {
       if (missingEngines.length > 0)
         failures.push(`missing storage engines: ${missingEngines.join(", ")}`);
     } else {
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine))) {
-        failures.push(`missing local storage engine: ${LOCAL_STORAGE_ENGINES.join(" or ")}`);
-      }
       if (!declaredEngines.has("postgresql"))
         failures.push("missing storage engine: postgresql");
     }
@@ -19563,7 +19564,7 @@ function runRepoConformance(repoRoot, options = {}) {
     checks3.push({
       id: "storage_capabilities",
       status: failures.length === 0 ? "pass" : "fail",
-      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : declaredEngines.has("json") ? "json and postgresql capabilities plus live-PG gate declared" : "sqlite and postgresql capabilities plus live-PG gate declared"
+      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine)) ? `${engines.join(" and ")} capabilities plus live-PG gate declared` : "postgresql capability plus live-PG gate declared"
     });
   }
   if ((options.manifestTier ?? "public") === "private") {
@@ -19584,13 +19585,47 @@ function runRepoConformance(repoRoot, options = {}) {
     detail: manifest.hosting.includes(requiredHosting) ? manifest.class === "saas" ? `Hasna SaaS control-plane story declared${manifest.hosting.includes("user-hosted") ? " with user-hosted parity" : ""}` : `user-hosted product story declared${manifest.hosting.includes("hasna-saas") ? " with optional Hasna SaaS" : ""}` : manifest.class === "saas" ? "saas repos must declare the hasna-saas product story" : "public OSS cores must declare the user-hosted product story"
   });
   const env = options.env ?? process.env;
-  const resolution = resolveServerDataBackend(manifest.name, env);
   const keys = serverDataBackendEnvKeys(manifest.name).databaseUrlKeys;
-  checks3.push({
-    id: "server_backend_configuration",
-    status: "pass",
-    detail: resolution.backend === "postgresql" ? `${resolution.databaseUrlSource} selects postgresql` : `no database URL set; defaults to sqlite (keys: ${keys.join(", ")})`
-  });
+  if (!hasServeBin && manifest.class !== "service" && manifest.class !== "saas") {
+    checks3.push({
+      id: "server_backend_configuration",
+      status: "skip",
+      detail: "no server runtime declared; PostgreSQL backend configuration is not applicable"
+    });
+  } else {
+    const hasDatabaseUrlDeclaration = keys.some((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined);
+    if (!hasDatabaseUrlDeclaration) {
+      try {
+        resolveServerDataBackend(manifest.name, env);
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "fail",
+          detail: "server backend resolver did not fail closed when DATABASE_URL was absent"
+        });
+      } catch {
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "pass",
+          detail: `${keys[0]} is not declared; the server resolver fails closed instead of selecting SQLite`
+        });
+      }
+    } else {
+      try {
+        const resolution = resolveServerDataBackend(manifest.name, env);
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "pass",
+          detail: `${resolution.databaseUrlSource} configures authoritative postgresql`
+        });
+      } catch (error2) {
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "fail",
+          detail: error2 instanceof Error ? error2.message : `invalid PostgreSQL configuration (keys: ${keys.join(", ")})`
+        });
+      }
+    }
+  }
   if (!hasServeBin) {
     checks3.push({ id: "health_shape", status: "skip", detail: "no serve bin declared" });
   } else if (options.healthSample === undefined) {
@@ -20583,7 +20618,7 @@ function identityEnvKeys(name) {
     leewayKeys: [`HASNA_${token}_IDENTITY_LEEWAY_SECONDS`, `${token}_IDENTITY_LEEWAY_SECONDS`]
   };
 }
-function firstEnv2(env, keys) {
+function firstEnv(env, keys) {
   for (const key of keys) {
     const raw = env[key];
     if (raw === undefined)
@@ -20602,11 +20637,11 @@ function resolveIdentityConfig(name, env = process.env) {
     ...keys.jwksKeys,
     ...keys.leewayKeys
   ];
-  const issuer = firstEnv2(env, keys.issuerKeys);
-  const audience = firstEnv2(env, keys.audienceKeys);
-  const jwksUri = firstEnv2(env, keys.jwksUriKeys);
-  const inline = firstEnv2(env, keys.jwksKeys);
-  const leeway = firstEnv2(env, keys.leewayKeys);
+  const issuer = firstEnv(env, keys.issuerKeys);
+  const audience = firstEnv(env, keys.audienceKeys);
+  const jwksUri = firstEnv(env, keys.jwksUriKeys);
+  const inline = firstEnv(env, keys.jwksKeys);
+  const leeway = firstEnv(env, keys.leewayKeys);
   const present = [issuer, audience, jwksUri, inline, leeway].filter((hit) => hit !== null);
   if (present.length === 0) {
     return { enabled: false, reason: "unconfigured", checkedKeys };
@@ -20974,9 +21009,10 @@ function generateSdkFromOpenApi(spec, options = {}) {
 import { isIP } from "net";
 
 // src/client/credentials.ts
-import { readFileSync as readFileSync6, statSync as statSync4 } from "fs";
+import { closeSync, fstatSync, openSync, readFileSync as readFileSync6 } from "fs";
+import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "constants";
 import { createRequire } from "module";
-import { join as join7 } from "path";
+import { isAbsolute, join as join7 } from "path";
 class CredentialResolutionError extends Error {
   appName;
   attempted;
@@ -20987,12 +21023,17 @@ class CredentialResolutionError extends Error {
     this.attempted = attempted;
   }
 }
-var HASNA_STATE_DIR = ".hasna";
-var FLEET_CREDENTIAL_DIR = "fleet-env";
-var LEGACY_CLOUD_DIR = "cloud";
+
+class CredentialFileUnsafeError extends Error {
+  path;
+  constructor(path, reason) {
+    super(`Refusing unsafe credential/config file ${path}: ${reason}.`);
+    this.name = "CredentialFileUnsafeError";
+    this.path = path;
+  }
+}
 var CONFIG_DIR = ".config";
 var CONFIG_NAMESPACE = "hasna";
-var LEGACY_CLOUD_REMOVAL_DEADLINE = "2026-10-01";
 var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 var SAFE_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 var SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
@@ -21006,28 +21047,14 @@ function credentialDiskSourceList(name, env, profile = null) {
   const home = homeDir(env);
   if (!home || !SAFE_APP_SLUG.test(name))
     return [];
-  const stem = profile ? `${name}.${profile}` : name;
   const configStem = profile ? `${name}-${profile}` : name;
+  const configuredRoot = env.XDG_CONFIG_HOME?.trim();
+  const configRoot = configuredRoot && isAbsolute(configuredRoot) ? configuredRoot : join7(home, CONFIG_DIR);
   return [
     {
-      path: join7(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
-      tier: "fleet-env",
-      deprecated: false
-    },
-    {
-      path: join7(home, HASNA_STATE_DIR, LEGACY_CLOUD_DIR, `${stem}.env`),
-      tier: "legacy-cloud",
-      deprecated: true
-    },
-    {
-      path: join7(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}.env`),
+      path: join7(configRoot, CONFIG_NAMESPACE, `${configStem}.env`),
       tier: "config",
       deprecated: false
-    },
-    {
-      path: join7(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`),
-      tier: "config-legacy",
-      deprecated: true
     }
   ];
 }
@@ -21039,6 +21066,7 @@ function profileDiskSources(name, env, profile) {
 }
 function parseEnvFile(text) {
   const values = new Map;
+  const unusable = new Set;
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line.length === 0 || line.startsWith("#"))
@@ -21053,38 +21081,75 @@ function parseEnvFile(text) {
     let value = withoutExport.slice(equals + 1).trim();
     const quote = value[0];
     if (quote === '"' || quote === "'") {
-      if (value.length < 2 || !value.endsWith(quote))
+      if (value.length < 2 || !value.endsWith(quote)) {
+        unusable.add(key);
         continue;
+      }
       value = value.slice(1, -1);
     }
-    if (value.length === 0)
+    if (value.trim().length === 0) {
+      unusable.add(key);
       continue;
+    }
+    if (values.has(key) && values.get(key) !== value)
+      unusable.add(key);
     values.set(key, value);
   }
-  return values;
+  return { values, unusable };
 }
 function readAppConfigFile(path) {
-  let text;
+  const unsafe = (reason) => {
+    throw new CredentialFileUnsafeError(path, reason);
+  };
+  let fd = -1;
   try {
-    const stats = statSync4(path);
-    if (!stats.isFile() || stats.size > MAX_CREDENTIAL_FILE_BYTES)
+    fd = openSync(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  } catch (error2) {
+    const code = error2.code;
+    if (code === "ENOENT" || code === "ENOTDIR")
       return null;
-    text = readFileSync6(path, "utf8");
-  } catch {
-    return null;
+    if (code === "ELOOP")
+      unsafe("the path is a symlink");
+    unsafe(`the path could not be opened (${code ?? "unknown error"})`);
   }
-  return parseEnvFile(text);
+  try {
+    const before = fstatSync(fd);
+    if (!before.isFile())
+      unsafe("the path is not a regular file");
+    const permissions = before.mode & 4095;
+    if (permissions !== 256 && permissions !== 384) {
+      unsafe(`permission mode ${permissions.toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
+    }
+    const uid = process.getuid?.() ?? process.geteuid?.();
+    if (uid !== undefined && before.uid !== uid)
+      unsafe("the file is not owned by the current user");
+    if (before.size > MAX_CREDENTIAL_FILE_BYTES)
+      unsafe("the file exceeds the size limit");
+    const bytes = readFileSync6(fd);
+    const after = fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      unsafe("the file changed while being read");
+    }
+    return parseEnvFile(bytes.toString("utf8"));
+  } finally {
+    if (fd !== -1)
+      closeSync(fd);
+  }
 }
 function readCredentialFile(path, apiKeyKeys) {
-  const values = readAppConfigFile(path);
-  if (!values)
+  const parsed = readAppConfigFile(path);
+  if (!parsed)
     return null;
   for (const key of apiKeyKeys) {
-    const value = values.get(key)?.trim();
-    if (value)
-      return value;
+    if (parsed.unusable.has(key)) {
+      throw new CredentialFileUnsafeError(path, `${key} is declared but blank or malformed`);
+    }
   }
-  return null;
+  const values = apiKeyKeys.map((key) => parsed.values.get(key)?.trim()).filter((value) => Boolean(value));
+  if (new Set(values).size > 1) {
+    throw new CredentialFileUnsafeError(path, "credential aliases disagree");
+  }
+  return values[0] ?? null;
 }
 var CREDENTIAL_SHAPED_KEY = /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)(?:_|$)/;
 function appConfigDiskValue(name, env, keys2) {
@@ -21092,11 +21157,19 @@ function appConfigDiskValue(name, env, keys2) {
   if (wanted.length === 0)
     return null;
   for (const path of credentialDiskSources(name, env)) {
-    const values = readAppConfigFile(path);
-    if (!values)
+    const parsed = readAppConfigFile(path);
+    if (!parsed)
       continue;
+    if (wanted.some((key) => parsed.unusable.has(key))) {
+      return { key: wanted.find((key) => parsed.unusable.has(key)), value: "", path, unusable: true };
+    }
+    const values = wanted.map((key) => parsed.values.get(key)?.trim()).filter((value) => Boolean(value));
+    if (new Set(values).size > 1)
+      throw new CredentialFileUnsafeError(path, "configuration aliases disagree");
     for (const key of wanted) {
-      const value = values.get(key)?.trim();
+      if (parsed.unusable.has(key))
+        return { key, value: "", path, unusable: true };
+      const value = parsed.values.get(key)?.trim();
       if (value)
         return { key, value, path };
     }
@@ -21196,6 +21269,8 @@ function validateAndSealResolvedCredential(appName, credential) {
 }
 function firstEnvValue(env, keys2) {
   for (const key of keys2) {
+    if (!Object.prototype.hasOwnProperty.call(env, key))
+      continue;
     const value = env[key]?.trim();
     if (value)
       return { key, value };
@@ -21221,11 +21296,40 @@ function defaultDeprecationSink(message) {
 `);
   }
 }
+function snapshotClientEnvironment(name, env) {
+  const keys2 = clientTransportEnvKeys(name);
+  const snapshot = Object.create(null);
+  for (const key of [
+    ...keys2.apiUrlKeys,
+    ...keys2.apiKeyKeys,
+    credentialOverrideEnvKey(name),
+    credentialPointerEnvKey(name),
+    CREDENTIAL_PROFILE_ENV_KEY,
+    "HOME",
+    "XDG_CONFIG_HOME"
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(env, key);
+    if (!descriptor)
+      continue;
+    if (!("value" in descriptor)) {
+      throw new CredentialResolutionError(name, `${key} is accessor-backed; client configuration requires own data properties.`, [key]);
+    }
+    if (descriptor.value !== undefined && typeof descriptor.value !== "string") {
+      throw new CredentialResolutionError(name, `${key} must be a string data property.`, [key]);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
 function resolveCredential(name, env, options = {}) {
+  env = snapshotClientEnvironment(name, env);
   const { apiKeyKeys } = clientTransportEnvKeys(name);
   const diskPaths = credentialDiskSources(name, env);
-  const explicitKey = options.apiKey?.trim();
-  if (explicitKey) {
+  if (options.apiKey !== undefined) {
+    const explicitKey = options.apiKey.trim();
+    if (!explicitKey) {
+      throw new CredentialResolutionError(name, "The explicit apiKey argument is blank; an explicit credential never falls through to another identity.", ["explicit apiKey argument"]);
+    }
     assertUsableCredential(name, "the explicit apiKey argument", explicitKey);
     return sealCredential({
       apiKey: explicitKey,
@@ -21238,7 +21342,7 @@ function resolveCredential(name, env, options = {}) {
     });
   }
   const overrideKeyName = credentialOverrideEnvKey(name);
-  const overrideRaw = env[overrideKeyName];
+  const overrideRaw = Object.prototype.hasOwnProperty.call(env, overrideKeyName) ? env[overrideKeyName] : undefined;
   if (overrideRaw !== undefined) {
     const override = overrideRaw.trim();
     if (!override) {
@@ -21256,7 +21360,7 @@ function resolveCredential(name, env, options = {}) {
     });
   }
   const pointerKeyName = credentialPointerEnvKey(name);
-  const pointerRaw = env[pointerKeyName];
+  const pointerRaw = Object.prototype.hasOwnProperty.call(env, pointerKeyName) ? env[pointerKeyName] : undefined;
   if (pointerRaw !== undefined) {
     const pointer = pointerRaw.trim();
     if (!pointer) {
@@ -21276,7 +21380,14 @@ function resolveCredential(name, env, options = {}) {
       warning: null
     });
   }
-  const profile = options.profile?.trim() || env[CREDENTIAL_PROFILE_ENV_KEY]?.trim();
+  if (options.profile !== undefined && !options.profile.trim()) {
+    throw new CredentialResolutionError(name, "The explicit profile argument is blank; an explicit identity selection never falls through.", ["explicit profile argument"]);
+  }
+  const profileRaw = Object.prototype.hasOwnProperty.call(env, CREDENTIAL_PROFILE_ENV_KEY) ? env[CREDENTIAL_PROFILE_ENV_KEY] : undefined;
+  if (profileRaw !== undefined && !profileRaw.trim()) {
+    throw new CredentialResolutionError(name, `${CREDENTIAL_PROFILE_ENV_KEY} is set but blank.`, [CREDENTIAL_PROFILE_ENV_KEY]);
+  }
+  const profile = options.profile?.trim() || profileRaw?.trim();
   if (profile) {
     const profileSource = options.profile?.trim() ? "explicit profile argument" : CREDENTIAL_PROFILE_ENV_KEY;
     if (!SAFE_PROFILE.test(profile)) {
@@ -21300,6 +21411,14 @@ function resolveCredential(name, env, options = {}) {
     }
     throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
   }
+  const definedLegacyEntries = apiKeyKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]).trim() }));
+  const blankLegacy = definedLegacyEntries.find((entry) => entry.value.length === 0);
+  if (blankLegacy) {
+    throw new CredentialResolutionError(name, `${blankLegacy.key} is set but blank; a declared credential never falls through to another alias or identity.`, [blankLegacy.key]);
+  }
+  if (definedLegacyEntries.length > 1 && new Set(definedLegacyEntries.map((entry) => entry.value)).size > 1) {
+    throw new CredentialResolutionError(name, `${definedLegacyEntries.map((entry) => entry.key).join(" and ")} disagree; credential aliases must be identical or only one may be set.`, definedLegacyEntries.map((entry) => entry.key));
+  }
   const diskSourceList = credentialDiskSourceList(name, env, null);
   const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) })).filter((hit) => hit.value !== null);
   if (diskHits.length > 0) {
@@ -21313,28 +21432,14 @@ function resolveCredential(name, env, options = {}) {
       })()
     ];
     const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.src.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.src.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
-    let deprecated = winner.src.deprecated;
-    let finalWarning = warning;
-    if (winner.src.deprecated) {
-      deprecated = true;
-      const sink = options.onDeprecation ?? defaultDeprecationSink;
-      const notified = deprecationNotified();
-      const noticeKey = `${name}:${winner.src.path}`;
-      if (!notified.has(noticeKey)) {
-        notified.add(noticeKey);
-        const message = `[${name}] DEPRECATED: the API key came from ${winner.src.path} \u2014 a legacy credential location. ` + `The legacy 'cloud' tiers are removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}. Provision the key in ` + `the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` + `${credentialOverrideEnvKey(name)}.`;
-        sink(message);
-      }
-      finalWarning = [warning, `Legacy credential source: ${winner.src.path}. Removed after ${LEGACY_CLOUD_REMOVAL_DEADLINE}.`].filter(Boolean).join(" ") || null;
-    }
     return sealCredential({
       apiKey: winner.value,
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
-      deprecated,
+      deprecated: false,
       diskCandidates: diskPaths,
-      warning: finalWarning
+      warning
     });
   }
   const legacy = firstEnvValue(env, apiKeyKeys);
@@ -21478,22 +21583,6 @@ function fleetApiDomain(env = process.env) {
 function defaultCloudBaseUrl(name, env = process.env) {
   return resolveDefaultCloudBaseUrl(name, env).baseUrl;
 }
-function firstEnv3(env, keys2, options = {}) {
-  for (const key of keys2) {
-    const raw = env[key];
-    const value = raw?.trim();
-    if (value)
-      return { key, value: options.preserveRaw ? raw : value };
-  }
-  return null;
-}
-function firstEnvDefinedKey(env, keys2) {
-  for (const key of keys2) {
-    if (env[key] !== undefined)
-      return key;
-  }
-  return null;
-}
 function rawAuthority(value) {
   const match = /^[a-z][a-z0-9+.-]*:\/\//i.exec(value);
   if (!match)
@@ -21595,63 +21684,56 @@ function toV1BaseUrl(apiUrl) {
   url.pathname = `${path}/v1`;
   return url.toString().replace(/\/+$/, "");
 }
-var CLIENT_TRANSPORTS = ["sqlite", "http"];
-function resolveClientTransport(name, env = process.env, options = {}) {
+var CLIENT_TRANSPORTS = ["http"];
+
+class ClientTransportConfigurationError extends Error {
+  appName;
+  sources;
+  constructor(appName, message, sources = []) {
+    super(message);
+    this.name = "ClientTransportConfigurationError";
+    this.appName = appName;
+    this.sources = Object.freeze([...sources]);
+  }
+}
+function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
+  env = snapshotClientEnvironment(name, env);
   const keys2 = clientTransportEnvKeys(name);
-  const envUrlHit = firstEnv3(env, keys2.apiUrlKeys, { preserveRaw: true });
-  const explicitLocalKey = envUrlHit ? null : firstEnvDefinedKey(env, keys2.apiUrlKeys);
-  const diskUrlHit = envUrlHit || explicitLocalKey ? null : appConfigDiskValue(name, env, keys2.apiUrlKeys);
+  const definedUrlEntries = keys2.apiUrlKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, raw: String(env[key]) }));
+  const blankUrl = definedUrlEntries.find((entry) => entry.raw.trim().length === 0);
+  if (blankUrl) {
+    throw new ClientTransportConfigurationError(name, `${blankUrl.key} is set but blank; public clients require an explicit HTTPS API URL and never select local storage.`, [blankUrl.key]);
+  }
+  const controlledUrl = definedUrlEntries.find((entry) => ASCII_CONTROL_PATTERN.test(entry.raw));
+  if (controlledUrl) {
+    throw new ClientTransportConfigurationError(name, `${controlledUrl.key} contains ASCII control characters.`, [controlledUrl.key]);
+  }
+  const usableUrlEntries = definedUrlEntries.map((entry) => ({ key: entry.key, value: entry.raw.trim() }));
+  if (usableUrlEntries.length > 1 && new Set(usableUrlEntries.map((entry) => entry.value)).size > 1) {
+    throw new ClientTransportConfigurationError(name, `${usableUrlEntries.map((entry) => entry.key).join(" and ")} disagree; client authority aliases must be identical or only one may be set.`, usableUrlEntries.map((entry) => entry.key));
+  }
+  const envUrlHit = usableUrlEntries[0] ?? null;
+  const diskConfigUrlHit = appConfigDiskValue(name, env, keys2.apiUrlKeys);
+  if (diskConfigUrlHit?.unusable) {
+    throw new ClientTransportConfigurationError(name, `${diskConfigUrlHit.key} in ${diskConfigUrlHit.path} is declared but blank or malformed; public clients require a valid HTTPS service authority.`, [diskConfigUrlHit.path]);
+  }
+  if (envUrlHit && diskConfigUrlHit && envUrlHit.value !== diskConfigUrlHit.value.trim()) {
+    throw new ClientTransportConfigurationError(name, `${envUrlHit.key} and ${diskConfigUrlHit.path} select different service authorities; refusing to send a credential written for one authority to the other.`, [envUrlHit.key, diskConfigUrlHit.path]);
+  }
+  const diskUrlHit = envUrlHit ? null : diskConfigUrlHit;
   const urlHit = envUrlHit ?? (diskUrlHit ? { key: diskUrlHit.path, value: diskUrlHit.value } : null);
-  const keyHit = firstEnv3(env, keys2.apiKeyKeys);
   const warnings = [];
   if (!urlHit) {
-    if (explicitLocalKey) {
-      const overriddenPointer = appConfigDiskValue(name, env, keys2.apiUrlKeys);
-      if (overriddenPointer) {
-        warnings.push(`${explicitLocalKey} is defined but blank, which selects the local store. ` + `The server URL in ${overriddenPointer.path} was NOT selected: an explicit blank wins over a disk pointer.`);
-      }
-      return {
-        transport: "sqlite",
-        transportSource: explicitLocalKey,
-        baseUrl: null,
-        apiUrlSource: null,
-        apiKeyPresent: Boolean(keyHit),
-        apiKeySource: keyHit ? keyHit.key : null,
-        apiKeyTier: null,
-        misconfigured: false,
-        warning: warnings.length > 0 ? warnings.join(" ") : null
-      };
-    }
-    return {
-      transport: "sqlite",
-      transportSource: "default",
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: Boolean(keyHit),
-      apiKeySource: keyHit ? keyHit.key : null,
-      apiKeyTier: null,
-      misconfigured: false,
-      warning: null
-    };
+    throw new ClientTransportConfigurationError(name, `${keys2.apiUrlKeys[0]} is required; public clients use only the authenticated HTTPS service and never fall back to SQLite or another local store.`, keys2.apiUrlKeys);
   }
   if (diskUrlHit) {
-    warnings.push(`No ${keys2.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` + `Unset the pointer or remove the file to stay on the local store.`);
+    warnings.push(`No ${keys2.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` + `Keep this XDG config entry aligned with the intended service authority.`);
   }
   const credential = resolveCredential(name, env, options.credentials);
   if (!credential) {
     const diskHint = credentialDiskSourcesForMessage(name, env);
-    warnings.push(`${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` + `refusing to route and leaving the local sqlite store selected. ` + `Looked for a credential file at ${diskHint}, then for ${keys2.apiKeyKeys[0]} in the environment.`);
-    return {
-      transport: "sqlite",
-      transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
-      apiKeyPresent: false,
-      apiKeySource: null,
-      apiKeyTier: null,
-      misconfigured: true,
-      warning: warnings.join(" ")
-    };
+    warnings.push(`${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` + `refusing to create an unauthenticated client. ` + `Looked for a credential file at ${diskHint}, then for ${keys2.apiKeyKeys[0]} in the environment.`);
+    throw new ClientTransportConfigurationError(name, warnings.join(" "), [urlHit.key]);
   }
   if (credential.warning)
     warnings.push(credential.warning);
@@ -21661,30 +21743,25 @@ function resolveClientTransport(name, env = process.env, options = {}) {
     baseUrl = toV1BaseUrl(urlHit.value);
   } catch (error2) {
     const message = error2 instanceof Error ? error2.message : String(error2);
-    warnings.push(`Invalid API URL from ${apiUrlSource}: ${message}. Using local store.`);
-    return {
-      transport: "sqlite",
+    throw new ClientTransportConfigurationError(name, `Invalid API URL from ${apiUrlSource}: ${message}`, [apiUrlSource]);
+  }
+  return {
+    resolution: {
+      transport: "http",
       transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
+      baseUrl,
+      apiUrlSource,
       apiKeyPresent: true,
       apiKeySource: credential.source,
       apiKeyTier: credential.tier,
-      misconfigured: true,
-      warning: warnings.join(" ")
-    };
-  }
-  return {
-    transport: "http",
-    transportSource: urlHit.key,
-    baseUrl,
-    apiUrlSource,
-    apiKeyPresent: true,
-    apiKeySource: credential.source,
-    apiKeyTier: credential.tier,
-    misconfigured: false,
-    warning: warnings.length > 0 ? warnings.join(" ") : null
+      misconfigured: false,
+      warning: warnings.length > 0 ? warnings.join(" ") : null
+    },
+    credential
   };
+}
+function resolveClientTransport(name, env = process.env, options = {}) {
+  return resolveClientTransportSnapshot(name, env, options).resolution;
 }
 function credentialDiskSourcesForMessage(name, env) {
   const paths = credentialDiskSources(name, env);
@@ -21695,7 +21772,6 @@ class HasnaHttpError extends Error {
   status;
   method;
   path;
-  body;
   credentialSource;
   credentialTier;
   constructor(method, path, status, body, credential) {
@@ -21705,7 +21781,12 @@ class HasnaHttpError extends Error {
     this.status = status;
     this.method = method;
     this.path = path;
-    this.body = body;
+    Object.defineProperty(this, "body", {
+      value: body,
+      enumerable: status !== 401 && status !== 403,
+      writable: false,
+      configurable: false
+    });
     this.credentialSource = credential?.source ?? null;
     this.credentialTier = credential?.tier ?? null;
   }
@@ -21775,7 +21856,7 @@ function appendQuery(path, query) {
   return `${path}${path.includes("?") ? "&" : "?"}${qs}`;
 }
 var defaultSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
-function createHasnaHttpTransport(options) {
+function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const base = toV1BaseUrl(options.baseUrl);
   const timeoutMs = options.timeoutMs ?? 30000;
@@ -21837,13 +21918,20 @@ function createHasnaHttpTransport(options) {
       if (opts.signal)
         opts.signal.removeEventListener("abort", onAbort);
     }
-    const text = await response.text();
+    const authenticationFailure = response.status === 401 || response.status === 403;
     let parsed = undefined;
-    if (text.length > 0) {
+    if (authenticationFailure) {
       try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = text;
+        await response.body?.cancel();
+      } catch {}
+    } else {
+      const text = await response.text();
+      if (text.length > 0) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = text;
+        }
       }
     }
     if (!response.ok) {
@@ -21854,11 +21942,11 @@ function createHasnaHttpTransport(options) {
           error: new HasnaHttpError(method, rel, response.status, parsed)
         };
       }
-      if (response.status === 401 || response.status === 403) {
+      if (authenticationFailure) {
         return {
           ok: false,
           retryable: false,
-          error: new HasnaHttpError(method, rel, response.status, parsed, {
+          error: new HasnaHttpError(method, rel, response.status, undefined, {
             source: credential.source,
             tier: credential.tier,
             guidance: authFailureGuidance(credential)
@@ -21874,11 +21962,15 @@ function createHasnaHttpTransport(options) {
   async function request(method, path, body, opts = {}) {
     const upper = method.toUpperCase();
     const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
-    const url = `${base}${rel}`;
     const retry = resolveRetry(opts.retry);
     const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
     const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
-    const credential = await resolveRequestCredential(options.name, options.apiKey);
+    const binding = requestBindingProvider ? await requestBindingProvider() : {
+      baseUrl: base,
+      credential: await resolveRequestCredential(options.name, options.apiKey)
+    };
+    const url = `${binding.baseUrl}${rel}`;
+    const credential = binding.credential;
     let last = null;
     for (let attempt = 1;attempt <= maxAttempts; attempt++) {
       const result = await once(upper, rel, url, body, opts, credential);
@@ -21904,34 +21996,46 @@ function createHasnaHttpTransport(options) {
     del: (path, body, opts) => request("DELETE", path, body, opts)
   };
 }
+function createHasnaHttpTransport(options) {
+  return createHasnaHttpTransportInternal(options);
+}
 function createClientTransport(name, env = process.env, overrides) {
   const credentialOptions = overrides?.credentials;
-  const resolution = resolveClientTransport(name, env, { ...credentialOptions ? { credentials: credentialOptions } : {} });
-  if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the API client.`);
-  }
-  if (resolution.transport === "sqlite" || !resolution.baseUrl) {
-    return { transport: "sqlite", client: null, resolution };
-  }
-  const credentialProvider = () => {
-    const resolved = resolveCredential(name, env, credentialOptions);
-    if (!resolved) {
-      throw new Error(`Client for '${name}' resolved to the http transport but no API key is available any more. ` + `Looked at ${credentialDiskSourcesForMessage(name, env)}, then the environment. ` + `A credential file that was removed after this client was built is the usual cause.`);
+  const snapshotOptions = { ...credentialOptions ? { credentials: credentialOptions } : {} };
+  const resolution = resolveClientTransportSnapshot(name, env, snapshotOptions).resolution;
+  const sameBinding = (left, right) => left.resolution.baseUrl === right.resolution.baseUrl && left.credential.apiKey === right.credential.apiKey && left.credential.pointerVaultKey === right.credential.pointerVaultKey && left.credential.source === right.credential.source && left.credential.tier === right.credential.tier;
+  const unstableConfiguration = () => new ClientTransportConfigurationError(name, "The configured service authority or credential changed while a request was being prepared; no authenticated request was sent.");
+  const requestBindingProvider = async () => {
+    const first = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    const reviewed = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    if (!sameBinding(first, reviewed))
+      throw unstableConfiguration();
+    if (reviewed.resolution.baseUrl !== resolution.baseUrl) {
+      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
     }
-    return resolved;
+    const credential = await resolveRequestCredential(name, () => reviewed.credential, env);
+    const immediatelyBeforeDispatch = resolveClientTransportSnapshot(name, env, snapshotOptions);
+    if (!sameBinding(reviewed, immediatelyBeforeDispatch))
+      throw unstableConfiguration();
+    if (immediatelyBeforeDispatch.resolution.baseUrl !== resolution.baseUrl) {
+      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
+    }
+    return { baseUrl: immediatelyBeforeDispatch.resolution.baseUrl, credential };
   };
   return {
     transport: "http",
-    client: createHasnaHttpTransport({
+    client: createHasnaHttpTransportInternal({
       name,
       baseUrl: resolution.baseUrl,
-      apiKey: credentialProvider,
+      apiKey: () => {
+        throw new Error("The authenticated request binding provider was not invoked.");
+      },
       ...overrides?.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {},
       ...overrides?.headers ? { headers: overrides.headers } : {},
       ...overrides?.timeoutMs ? { timeoutMs: overrides.timeoutMs } : {},
       ...overrides?.retry !== undefined ? { retry: overrides.retry } : {},
       ...overrides?.sleepImpl ? { sleepImpl: overrides.sleepImpl } : {}
-    }),
+    }, requestBindingProvider),
     resolution
   };
 }
@@ -22038,10 +22142,7 @@ function createHasnaStorageClient(name, transport) {
 }
 function resolveStorageClient(name, env = process.env, overrides) {
   const wired = createClientTransport(name, env, overrides);
-  if (wired.transport === "http") {
-    return { transport: "http", client: createHasnaStorageClient(name, wired.client) };
-  }
-  return { transport: "sqlite", client: null };
+  return { transport: "http", client: createHasnaStorageClient(name, wired.client) };
 }
 export {
   writeKitVersionToContract,
@@ -22319,7 +22420,6 @@ export {
   LocalStoreRootSchema,
   LaunchEvidenceSchema,
   LOCAL_STORAGE_ENGINES,
-  LEGACY_CLOUD_REMOVAL_DEADLINE,
   KIT_VERSION_PLACEHOLDER,
   KIT_TEMPLATE_FILES,
   KIT_TARGET_SUBDIR,
@@ -22390,6 +22490,7 @@ export {
   CommsChannelNoiseSchema,
   CommsChannelMetadataSchema,
   CommsChannelClassSchema,
+  ClientTransportConfigurationError,
   CapabilityCardSchema,
   CREDENTIAL_PROFILE_ENV_KEY,
   CONTRACTS_PACKAGE_VERSION,

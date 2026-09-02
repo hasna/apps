@@ -298,10 +298,8 @@ wildcardGate.describe("resolveStorageClient — the resolver an app wires", () =
   });
   afterAll(() => server.stop(true));
 
-  test("no env => sqlite (client null)", () => {
-    const r = resolveStorageClient("demo", {});
-    expect(r.transport).toBe("sqlite");
-    expect(r.client).toBeNull();
+  test("no env fails closed before a storage client can be created", () => {
+    expect(() => resolveStorageClient("demo", {})).toThrow(/API_URL/);
   });
 
   test("url + key => http, full CRUD lands in the server store", async () => {

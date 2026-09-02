@@ -45,7 +45,10 @@ const root = realpathSync(join(import.meta.dir, ".."));
 
 /** A scratch dir that is torn down whether the body throws or not. */
 function withScratch<T>(prefix: string, body: (scratch: string) => T): T {
-  const scratch = mkdtempSync(join(tmpdir(), prefix));
+  // The record helpers take resolved roots, just like the real audit. On macOS
+  // tmpdir() may spell /private/var as /var; derive every fixture path from the
+  // same canonical root so a host alias does not change the containment test.
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   try {
     return body(scratch);
   } finally {

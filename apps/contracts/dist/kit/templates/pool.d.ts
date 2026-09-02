@@ -25,10 +25,7 @@ export interface ServerPoolFromEnv {
     connectionSource: string;
 }
 /**
- * Resolve backend + database URL from the environment and build the server's
- * PostgreSQL pool.
- *
- * Throws when no database URL selects the `postgresql` backend. Never logs the
- * URL.
+ * Resolve the required database URL and build the server's PostgreSQL pool.
+ * Missing or invalid configuration throws without logging the URL.
  */
 export declare function createServerPoolFromEnv(appName: string, options?: CreateServerPoolFromEnvOptions): ServerPoolFromEnv;

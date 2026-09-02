@@ -7,8 +7,8 @@ import {
 } from "../src";
 
 describe("server data backend", () => {
-  test("enum is sqlite|postgresql only", () => {
-    expect(SERVER_DATA_BACKENDS).toEqual(["sqlite", "postgresql"]);
+  test("enum is postgresql only", () => {
+    expect(SERVER_DATA_BACKENDS).toEqual(["postgresql"]);
   });
 
   test("derives canonical and alias database URL keys", () => {
@@ -19,13 +19,8 @@ describe("server data backend", () => {
     });
   });
 
-  test("defaults to sqlite with no database URL", () => {
-    expect(resolveServerDataBackend("todos", {})).toEqual({
-      backend: "sqlite",
-      source: "default",
-      databaseUrlPresent: false,
-      databaseUrlSource: null,
-    });
+  test("fails closed with no database URL", () => {
+    expect(() => resolveServerDataBackend("todos", {})).toThrow(/DATABASE_URL.*required/);
   });
 
   test("canonical or alias database URL selects postgresql without exposing it", () => {
@@ -59,9 +54,7 @@ describe("server data backend", () => {
       "TODOS_MODE",
     ]) {
       for (const value of ["cloud", "", "   "]) {
-        expect(resolveServerDataBackend("todos", { [key]: value }).backend, `${key} must be inert`).toBe(
-          "sqlite",
-        );
+        expect(() => resolveServerDataBackend("todos", { [key]: value }), `${key} must be inert`).toThrow(/DATABASE_URL/);
         expect(
           resolveServerDataBackend("todos", {
             [key]: value,

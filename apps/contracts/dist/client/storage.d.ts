@@ -36,9 +36,7 @@ export interface StorageListResult<T> {
     raw: unknown;
 }
 /**
- * The app storage interface, HTTP edition. This is deliberately the same small
- * CRUD surface a local store exposes, so an app's resolver can return either a
- * local implementation or this one behind one interface.
+ * The app storage interface exposed by the authenticated service API.
  */
 export interface HasnaStorageClient {
     /** App slug this client targets. */
@@ -65,18 +63,13 @@ export interface HasnaStorageClient {
 export declare function createHasnaStorageClient(name: string, transport: HasnaHttpTransport): HasnaStorageClient;
 /** Result of {@link resolveStorageClient}. */
 export type ResolveStorageClientResult = {
-    transport: "sqlite";
-    client: null;
-} | {
     transport: "http";
     client: HasnaStorageClient;
 };
 /**
  * The one call an app's storage resolver makes. Reads the client-flip env for
- * `name`; when an API URL and credential resolve to `http`, returns a ready
- * {@link HasnaStorageClient}. Otherwise returns
- * `{ transport: 'sqlite', client: null }` so the app uses its local store.
- * Throws if server data was requested but is misconfigured (so callers never
- * silently read the wrong dataset).
+ * `name`; returns a ready authenticated {@link HasnaStorageClient}. Missing,
+ * blank, conflicting, or invalid configuration throws, so callers cannot
+ * silently read or write a local dataset.
  */
 export declare function resolveStorageClient(name: string, env?: Env, overrides?: Parameters<typeof createClientTransport>[2]): ResolveStorageClientResult;

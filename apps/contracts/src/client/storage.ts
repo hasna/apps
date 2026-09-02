@@ -1,8 +1,8 @@
 // HTTP storage client for the Hasna Service Contract v1.
 //
-// This is the http half of the `sqlite | http` client seam: a client whose
-// data lives in the server's PostgreSQL reaches it here, over the API — never
-// by opening the database directly. It sits on top of
+// This is the sole public app client data seam: authoritative PostgreSQL data
+// is reached over the authenticated service API, never by opening a local
+// SQLite file or a database connection directly. It sits on top of
 // `createHasnaHttpTransport` and implements the generic resource CRUD
 // vocabulary every Hasna serve app exposes under `/v1`:
 //
@@ -12,9 +12,8 @@
 //   update -> PATCH  /v1/<resource>/<id>       -> <entity>   (PUT via method opt)
 //   delete -> DELETE /v1/<resource>/<id>       -> void       (204/404 => ok)
 //
-// An app's storage resolver selects this client when the client-flip contract
-// resolves to `http` (an API URL and credential are configured), and falls
-// through to the local sqlite store otherwise.
+// An app's storage resolver returns this client only after the URL and
+// credential have been validated. Missing or invalid configuration throws.
 // See `resolveClientTransport` / `createClientTransport` in ./transport.ts.
 //
 // Guarantees carried up from the transport: JSON in/out, per-request timeout,
@@ -75,9 +74,7 @@ export interface StorageListResult<T> {
 }
 
 /**
- * The app storage interface, HTTP edition. This is deliberately the same small
- * CRUD surface a local store exposes, so an app's resolver can return either a
- * local implementation or this one behind one interface.
+ * The app storage interface exposed by the authenticated service API.
  */
 export interface HasnaStorageClient {
   /** App slug this client targets. */
@@ -226,17 +223,13 @@ export function createHasnaStorageClient(name: string, transport: HasnaHttpTrans
 }
 
 /** Result of {@link resolveStorageClient}. */
-export type ResolveStorageClientResult =
-  | { transport: "sqlite"; client: null }
-  | { transport: "http"; client: HasnaStorageClient };
+export type ResolveStorageClientResult = { transport: "http"; client: HasnaStorageClient };
 
 /**
  * The one call an app's storage resolver makes. Reads the client-flip env for
- * `name`; when an API URL and credential resolve to `http`, returns a ready
- * {@link HasnaStorageClient}. Otherwise returns
- * `{ transport: 'sqlite', client: null }` so the app uses its local store.
- * Throws if server data was requested but is misconfigured (so callers never
- * silently read the wrong dataset).
+ * `name`; returns a ready authenticated {@link HasnaStorageClient}. Missing,
+ * blank, conflicting, or invalid configuration throws, so callers cannot
+ * silently read or write a local dataset.
  */
 export function resolveStorageClient(
   name: string,
@@ -244,8 +237,5 @@ export function resolveStorageClient(
   overrides?: Parameters<typeof createClientTransport>[2],
 ): ResolveStorageClientResult {
   const wired = createClientTransport(name, env, overrides);
-  if (wired.transport === "http") {
-    return { transport: "http", client: createHasnaStorageClient(name, wired.client) };
-  }
-  return { transport: "sqlite", client: null };
+  return { transport: "http", client: createHasnaStorageClient(name, wired.client) };
 }

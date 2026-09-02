@@ -12,7 +12,7 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
     readonly $schema: "http://json-schema.org/draft-07/schema#";
     readonly $id: "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json";
     readonly title: "Hasna Service Contract v1";
-    readonly description: "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Hosting story, product surfaces, and storage capabilities are separate declarations; the server data backend (sqlite | postgresql) is the only technical switch.";
+    readonly description: "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Public clients use one authenticated HTTPS service transport; authoritative server data is PostgreSQL.";
     readonly type: "object";
     readonly additionalProperties: false;
     readonly required: readonly ["schema", "name", "class", "contractVersion", "kitVersion"];
@@ -262,7 +262,7 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
             readonly properties: {
                 readonly backend: {
                     readonly enum: readonly ["sqlite", "postgresql"];
-                    readonly description: "Active server data backend. sqlite|postgresql only.";
+                    readonly description: "Manifested runtime/migration capability. Server startup still requires PostgreSQL; SQLite is legacy import input only.";
                 };
                 readonly engines: {
                     readonly type: "array";
@@ -291,7 +291,7 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
                 readonly sqlitePath: {
                     readonly type: "string";
                     readonly pattern: "\\.db$";
-                    readonly description: "Local sqlite path (~/.hasna/<name>/<name>.db).";
+                    readonly description: "Explicit legacy SQLite import path; never a live client/server store.";
                 };
                 readonly pgTestGate: {
                     readonly type: "object";

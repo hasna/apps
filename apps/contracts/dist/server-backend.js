@@ -26,25 +26,43 @@ function serverDataBackendEnvKeys(name) {
     databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`]
   };
 }
-function firstEnv(env, keys) {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value)
-      return { key, value };
+function definedDatabaseUrlEntries(env, keys) {
+  return keys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]) }));
+}
+function assertPostgresqlDatabaseUrl(name, entries) {
+  const canonicalKey = serverDataBackendEnvKeys(name).databaseUrlKeys[0];
+  if (entries.length === 0) {
+    throw new Error(`${canonicalKey} is required; Hasna servers use authoritative PostgreSQL and never default to SQLite.`);
   }
-  return null;
+  const blank = entries.filter((entry) => entry.value.trim().length === 0);
+  if (blank.length > 0) {
+    throw new Error(`${blank.map((entry) => entry.key).join(" and ")} is set but blank; a PostgreSQL database URL is required.`);
+  }
+  const controlled = entries.find((entry) => /[\u0000-\u001f\u007f]/.test(entry.value));
+  if (controlled)
+    throw new Error(`${controlled.key} must not contain ASCII control characters.`);
+  const normalized = entries.map((entry) => ({ key: entry.key, value: entry.value.trim() }));
+  if (normalized.length > 1 && new Set(normalized.map((entry) => entry.value)).size > 1) {
+    throw new Error(`${normalized.map((entry) => entry.key).join(" and ")} disagree; database URL aliases must be identical or only one may be set.`);
+  }
+  const selected = normalized[0];
+  let parsed;
+  try {
+    parsed = new URL(selected.value);
+  } catch {
+    throw new Error(`${selected.key} must be an absolute PostgreSQL connection URL.`);
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error(`${selected.key} must use the postgres or postgresql scheme.`);
+  }
+  if (!parsed.hostname || parsed.pathname.length <= 1) {
+    throw new Error(`${selected.key} must name a PostgreSQL host and database.`);
+  }
+  return selected;
 }
 function resolveServerDataBackend(name, env = process.env) {
   const { databaseUrlKeys } = serverDataBackendEnvKeys(name);
-  const databaseUrl = firstEnv(env, databaseUrlKeys);
-  if (!databaseUrl) {
-    return {
-      backend: "sqlite",
-      source: "default",
-      databaseUrlPresent: false,
-      databaseUrlSource: null
-    };
-  }
+  const databaseUrl = assertPostgresqlDatabaseUrl(name, definedDatabaseUrlEntries(env, databaseUrlKeys));
   return {
     backend: "postgresql",
     source: databaseUrl.key,
@@ -53,8 +71,8 @@ function resolveServerDataBackend(name, env = process.env) {
   };
 }
 function resolveDatabaseUrl(name, env = process.env) {
-  const hit = firstEnv(env, serverDataBackendEnvKeys(name).databaseUrlKeys);
-  return hit?.value ?? null;
+  const keys = serverDataBackendEnvKeys(name).databaseUrlKeys;
+  return assertPostgresqlDatabaseUrl(name, definedDatabaseUrlEntries(env, keys)).value;
 }
 export {
   serverDataBackendEnvKeys,

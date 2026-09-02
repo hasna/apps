@@ -16015,7 +16015,7 @@ function createDeploymentEnvelopeSchema(primitives) {
 }
 
 // src/schemas.ts
-var CONTRACTS_PACKAGE_VERSION = "0.14.2";
+var CONTRACTS_PACKAGE_VERSION = "1.0.0";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -19751,8 +19751,7 @@ var ServiceSurfaceSchema = exports_external.object({
     ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: "Version endpoint must use GET", path: ["version", "method"] });
   }
 });
-var SERVER_DATA_BACKENDS = ["sqlite", "postgresql"];
-var ServerDataBackendSchema = exports_external.enum(SERVER_DATA_BACKENDS);
+var ServerDataBackendSchema = exports_external.literal("postgresql");
 var STORAGE_ENGINES = ["sqlite", "postgresql"];
 var STORAGE_ENGINE_VALUES = ["sqlite", "json", "postgresql"];
 var LOCAL_STORAGE_ENGINES = ["sqlite", "json"];
@@ -19837,7 +19836,7 @@ function databaseUrlSecretRefFor(name) {
   return `hasna/oss/${name}/database-url`;
 }
 var StorageContractSchema = exports_external.object({
-  backend: ServerDataBackendSchema,
+  backend: exports_external.enum(["sqlite", "postgresql"]),
   engines: exports_external.array(StorageEngineSchema).min(1).optional(),
   envPrefix: exports_external.string().regex(/^HASNA_[A-Z][A-Z0-9]*_$/).optional(),
   aliasEnvPrefix: exports_external.string().regex(/^[A-Z][A-Z0-9]*_$/).optional(),
@@ -20135,13 +20134,6 @@ var ServiceContractManifestSchema = exports_external.object({
     if (!value.storage) {
       ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: "cli-with-store repos must declare storage", path: ["storage"] });
     } else {
-      if (value.storage.backend === "sqlite" && !value.storage.sqlitePath) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "sqlite cli-with-store storage requires sqlitePath (~/.hasna/<name>/<name>.db)",
-          path: ["storage", "sqlitePath"]
-        });
-      }
       if (value.storage.engines) {
         const declaredEngines = new Set(value.storage.engines);
         const declaredWaivers = value.metadata?.conformance?.waivedStorageEngines ?? [];
@@ -20159,7 +20151,7 @@ var ServiceContractManifestSchema = exports_external.object({
           const refusal = ineligible && declaredWaivers.length > 0 ? `; declared waiver ignored: ${ineligible}` : "";
           ctx.addIssue({
             code: exports_external.ZodIssueCode.custom,
-            message: `cli-with-store storage.engines must declare both sqlite and postgresql unless the engine carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
+            message: `cli-with-store storage.engines must declare sqlite and postgresql unless bounded migration tooling carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
             path: ["storage", "engines"]
           });
         }
@@ -20176,14 +20168,7 @@ var ServiceContractManifestSchema = exports_external.object({
       if (!value.storage.engines.includes("postgresql")) {
         ctx.addIssue({
           code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare postgresql alongside sqlite or json; both sqlite and postgresql remain supported",
-          path: ["storage", "engines"]
-        });
-      }
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => value.storage?.engines?.includes(engine))) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare a local engine (sqlite or json)",
+          message: "service storage.engines must declare postgresql; local engines are optional migration/import capabilities only",
           path: ["storage", "engines"]
         });
       }
@@ -22025,25 +22010,43 @@ function serverDataBackendEnvKeys(name) {
     databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`]
   };
 }
-function firstEnv(env, keys) {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value)
-      return { key, value };
+function definedDatabaseUrlEntries(env, keys) {
+  return keys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]) }));
+}
+function assertPostgresqlDatabaseUrl(name, entries) {
+  const canonicalKey = serverDataBackendEnvKeys(name).databaseUrlKeys[0];
+  if (entries.length === 0) {
+    throw new Error(`${canonicalKey} is required; Hasna servers use authoritative PostgreSQL and never default to SQLite.`);
   }
-  return null;
+  const blank2 = entries.filter((entry) => entry.value.trim().length === 0);
+  if (blank2.length > 0) {
+    throw new Error(`${blank2.map((entry) => entry.key).join(" and ")} is set but blank; a PostgreSQL database URL is required.`);
+  }
+  const controlled = entries.find((entry) => /[\u0000-\u001f\u007f]/.test(entry.value));
+  if (controlled)
+    throw new Error(`${controlled.key} must not contain ASCII control characters.`);
+  const normalized = entries.map((entry) => ({ key: entry.key, value: entry.value.trim() }));
+  if (normalized.length > 1 && new Set(normalized.map((entry) => entry.value)).size > 1) {
+    throw new Error(`${normalized.map((entry) => entry.key).join(" and ")} disagree; database URL aliases must be identical or only one may be set.`);
+  }
+  const selected = normalized[0];
+  let parsed;
+  try {
+    parsed = new URL(selected.value);
+  } catch {
+    throw new Error(`${selected.key} must be an absolute PostgreSQL connection URL.`);
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error(`${selected.key} must use the postgres or postgresql scheme.`);
+  }
+  if (!parsed.hostname || parsed.pathname.length <= 1) {
+    throw new Error(`${selected.key} must name a PostgreSQL host and database.`);
+  }
+  return selected;
 }
 function resolveServerDataBackend(name, env = process.env) {
   const { databaseUrlKeys } = serverDataBackendEnvKeys(name);
-  const databaseUrl = firstEnv(env, databaseUrlKeys);
-  if (!databaseUrl) {
-    return {
-      backend: "sqlite",
-      source: "default",
-      databaseUrlPresent: false,
-      databaseUrlSource: null
-    };
-  }
+  const databaseUrl = assertPostgresqlDatabaseUrl(name, definedDatabaseUrlEntries(env, databaseUrlKeys));
   return {
     backend: "postgresql",
     source: databaseUrl.key,
@@ -22059,7 +22062,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
   $id: "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
   title: "Hasna Service Contract v1",
-  description: "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Hosting story, product surfaces, and storage capabilities are separate declarations; the server data backend (sqlite | postgresql) is the only technical switch.",
+  description: "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Public clients use one authenticated HTTPS service transport; authoritative server data is PostgreSQL.",
   type: "object",
   additionalProperties: false,
   required: ["schema", "name", "class", "contractVersion", "kitVersion"],
@@ -22219,7 +22222,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
       properties: {
         backend: {
           enum: ["sqlite", "postgresql"],
-          description: "Active server data backend. sqlite|postgresql only."
+          description: "Manifested runtime/migration capability. Server startup still requires PostgreSQL; SQLite is legacy import input only."
         },
         engines: {
           type: "array",
@@ -22246,7 +22249,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
         sqlitePath: {
           type: "string",
           pattern: "\\.db$",
-          description: "Local sqlite path (~/.hasna/<name>/<name>.db)."
+          description: "Explicit legacy SQLite import path; never a live client/server store."
         },
         pgTestGate: {
           type: "object",
@@ -23439,9 +23442,6 @@ function runRepoConformance(repoRoot, options = {}) {
       if (missingEngines.length > 0)
         failures.push(`missing storage engines: ${missingEngines.join(", ")}`);
     } else {
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine))) {
-        failures.push(`missing local storage engine: ${LOCAL_STORAGE_ENGINES.join(" or ")}`);
-      }
       if (!declaredEngines.has("postgresql"))
         failures.push("missing storage engine: postgresql");
     }
@@ -23455,7 +23455,7 @@ function runRepoConformance(repoRoot, options = {}) {
     checks3.push({
       id: "storage_capabilities",
       status: failures.length === 0 ? "pass" : "fail",
-      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : declaredEngines.has("json") ? "json and postgresql capabilities plus live-PG gate declared" : "sqlite and postgresql capabilities plus live-PG gate declared"
+      detail: failures.length > 0 ? failures.join("; ") : storageWaivers.summaries.length > 0 ? `${declaredDetail}; ${storageWaivers.summaries.join("; ")}` : LOCAL_STORAGE_ENGINES.some((engine) => declaredEngines.has(engine)) ? `${engines.join(" and ")} capabilities plus live-PG gate declared` : "postgresql capability plus live-PG gate declared"
     });
   }
   if ((options.manifestTier ?? "public") === "private") {
@@ -23476,13 +23476,47 @@ function runRepoConformance(repoRoot, options = {}) {
     detail: manifest.hosting.includes(requiredHosting) ? manifest.class === "saas" ? `Hasna SaaS control-plane story declared${manifest.hosting.includes("user-hosted") ? " with user-hosted parity" : ""}` : `user-hosted product story declared${manifest.hosting.includes("hasna-saas") ? " with optional Hasna SaaS" : ""}` : manifest.class === "saas" ? "saas repos must declare the hasna-saas product story" : "public OSS cores must declare the user-hosted product story"
   });
   const env = options.env ?? process.env;
-  const resolution = resolveServerDataBackend(manifest.name, env);
   const keys = serverDataBackendEnvKeys(manifest.name).databaseUrlKeys;
-  checks3.push({
-    id: "server_backend_configuration",
-    status: "pass",
-    detail: resolution.backend === "postgresql" ? `${resolution.databaseUrlSource} selects postgresql` : `no database URL set; defaults to sqlite (keys: ${keys.join(", ")})`
-  });
+  if (!hasServeBin && manifest.class !== "service" && manifest.class !== "saas") {
+    checks3.push({
+      id: "server_backend_configuration",
+      status: "skip",
+      detail: "no server runtime declared; PostgreSQL backend configuration is not applicable"
+    });
+  } else {
+    const hasDatabaseUrlDeclaration = keys.some((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined);
+    if (!hasDatabaseUrlDeclaration) {
+      try {
+        resolveServerDataBackend(manifest.name, env);
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "fail",
+          detail: "server backend resolver did not fail closed when DATABASE_URL was absent"
+        });
+      } catch {
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "pass",
+          detail: `${keys[0]} is not declared; the server resolver fails closed instead of selecting SQLite`
+        });
+      }
+    } else {
+      try {
+        const resolution = resolveServerDataBackend(manifest.name, env);
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "pass",
+          detail: `${resolution.databaseUrlSource} configures authoritative postgresql`
+        });
+      } catch (error2) {
+        checks3.push({
+          id: "server_backend_configuration",
+          status: "fail",
+          detail: error2 instanceof Error ? error2.message : `invalid PostgreSQL configuration (keys: ${keys.join(", ")})`
+        });
+      }
+    }
+  }
   if (!hasServeBin) {
     checks3.push({ id: "health_shape", status: "skip", detail: "no serve bin declared" });
   } else if (options.healthSample === undefined) {

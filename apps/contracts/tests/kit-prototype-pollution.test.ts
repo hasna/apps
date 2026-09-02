@@ -303,17 +303,17 @@ describe("backend.ts env reads do not walk the prototype chain", () => {
     // measure the shell rather than the code.
     test(`[${route.token}] a polluted DATABASE_URL neither flips the backend nor is returned`, () => {
       pollute(route, "HASNA_KITPROBE_DATABASE_URL", "postgres://attacker@evil.invalid/db");
-      expect(resolveServerDataBackend("kitprobe", {}).backend).toBe("sqlite");
-      expect(resolveDatabaseUrl("kitprobe", {})).toBeNull();
+      expect(() => resolveServerDataBackend("kitprobe", {})).toThrow(/DATABASE_URL/);
+      expect(() => resolveDatabaseUrl("kitprobe", {})).toThrow(/DATABASE_URL/);
       // Default env: MEASURED, process.env is prototype-pollutable on this runtime.
-      expect(resolveDatabaseUrl("kitprobe")).toBeNull();
-      expect(resolveServerDataBackend("kitprobe").backend).toBe("sqlite");
+      expect(() => resolveDatabaseUrl("kitprobe")).toThrow(/DATABASE_URL/);
+      expect(() => resolveServerDataBackend("kitprobe")).toThrow(/DATABASE_URL/);
     });
 
     test(`[${route.token}] a polluted legacy mode key does not fabricate a throw`, () => {
       pollute(route, "HASNA_KITPROBE_STORAGE_MODE", "cloud");
-      expect(resolveServerDataBackend("kitprobe", {}).backend).toBe("sqlite");
-      expect(resolveServerDataBackend("kitprobe").backend).toBe("sqlite");
+      expect(() => resolveServerDataBackend("kitprobe", {})).toThrow(/DATABASE_URL/);
+      expect(() => resolveServerDataBackend("kitprobe")).toThrow(/DATABASE_URL/);
     });
   }
 
@@ -325,9 +325,7 @@ describe("backend.ts env reads do not walk the prototype chain", () => {
   });
 
   test("an own legacy mode key is inert and never selects a backend", () => {
-    expect(resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: "cloud" }).backend).toBe(
-      "sqlite",
-    );
+    expect(() => resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: "cloud" })).toThrow(/DATABASE_URL/);
     expect(
       resolveServerDataBackend("todos", {
         HASNA_TODOS_STORAGE_MODE: "cloud",

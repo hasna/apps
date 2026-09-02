@@ -12,18 +12,20 @@ A canonical Postgres storage kit shared across the Hasna fleet:
 
 | File            | Purpose                                                              |
 | --------------- | ------------------------------------------------------------------- |
-| `backend.ts`    | Server backend + `DATABASE_URL` resolution (`sqlite` \| `postgresql`) |
+| `backend.ts`    | Required PostgreSQL `DATABASE_URL` resolution (fail closed)           |
 | `tls.ts`        | The one correct TLS approach (libpq `sslmode` semantics + RDS CA)    |
 | `pool.ts`       | `pg.Pool` factory with fleet-standard TLS                            |
 | `query.ts`      | Typed query wrapper (`query` / `many` / `get` / `one` / `execute`)   |
 | `migrations.ts` | `schema_migrations` ledger with sha256 checksums                     |
 | `health.ts`     | `checkHealth` (SELECT 1) and `checkReady` (migrated?) probes         |
 
-## The two-backend contract
+## Canonical PostgreSQL contract
 
-With `HASNA_<APP>_DATABASE_URL` set, reads **and** writes go directly to
-PostgreSQL. This kit contains **no sync engine and no merge logic**. With no
-`DATABASE_URL`, there is no Postgres pool at all; SQLite is authoritative.
+Reads **and** writes go directly to PostgreSQL. A valid
+`HASNA_<APP>_DATABASE_URL` (or identical short alias) is required; missing,
+blank, invalid, or conflicting configuration stops startup. This kit contains
+**no sync engine, no merge logic, and no SQLite default**. Public clients never
+import it or open a DSN; they use the authenticated service API.
 
 ## TLS
 

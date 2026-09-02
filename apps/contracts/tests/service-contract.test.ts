@@ -267,7 +267,7 @@ describe("service contract manifest validation", () => {
     }
   });
 
-  test("service storage capability declarations require both engines", () => {
+  test("service storage capability declarations require PostgreSQL", () => {
     const service = {
       schema: SCHEMA_IDS.serviceContract,
       name: "loops",
@@ -292,8 +292,29 @@ describe("service contract manifest validation", () => {
     const parsed = validateServiceContractManifest(service);
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
-      expect(parsed.error.issues.some((issue) => issue.message.includes("both sqlite and postgresql"))).toBe(true);
+      expect(parsed.error.issues.some((issue) => issue.message.includes("must declare postgresql"))).toBe(true);
     }
+  });
+
+  test("service storage accepts PostgreSQL without inventing a legacy import engine", () => {
+    const service = {
+      schema: SCHEMA_IDS.serviceContract,
+      name: "loops",
+      class: "service",
+      contractVersion: SERVICE_CONTRACT_VERSION,
+      kitVersion: "0.6.0",
+      bins: ["loops", "loops-serve"],
+      storage: {
+        backend: "postgresql",
+        engines: ["postgresql"],
+        envPrefix: "HASNA_LOOPS_",
+        pgTestGate: { envVar: "LOOPS_TEST_DATABASE_URL", command: "bun test tests/postgres.test.ts" }
+      },
+      serviceSurfaces: [
+        { name: "http", status: "deferred", authMode: "api-key", deferReason: "Fixture only." }
+      ]
+    };
+    expect(validateServiceContractManifest(service).success).toBe(true);
   });
 
   test("rejects non-database SQLite paths", () => {

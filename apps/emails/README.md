@@ -122,8 +122,8 @@ Authentication records are required only for the capability you enable:
   aggregation, but it should be present before production sending and monitored
   before moving from `p=none` to stricter policies.
 
-Self-hosted clients must set `EMAILS_MODE=self_hosted`,
-`EMAILS_SELF_HOSTED_URL`, and one bearer credential:
+Self-hosted clients must select `self_hosted` using the
+[client mode settings](#deployment), set `EMAILS_SELF_HOSTED_URL`, and one bearer credential:
 `EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or
 `EMAILS_SELF_HOSTED_API_KEY` (in that precedence order). The service uses
 `EMAILS_DATABASE_URL`, `EMAILS_API_SIGNING_KEY`,
@@ -490,7 +490,7 @@ allowlists before it confirms or syncs a notification.
 ## Self-Hosted Runtime (PostgreSQL/S3/SES)
 
 The server uses operator-owned Postgres and provider accounts. A client must
-configure `EMAILS_MODE=self_hosted`, `EMAILS_SELF_HOSTED_URL`, and one of
+select `self_hosted` using the [client mode settings](#deployment), configure `EMAILS_SELF_HOSTED_URL`, and one of
 `EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or
 `EMAILS_SELF_HOSTED_API_KEY`. The service requires `EMAILS_DATABASE_URL`,
 `EMAILS_API_SIGNING_KEY`, `EMAILS_SEND_PROVIDER=ses|resend`,

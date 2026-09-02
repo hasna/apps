@@ -9171,7 +9171,7 @@ function createDeploymentEnvelopeSchema(primitives) {
 
 // src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "0.14.2";
+var CONTRACTS_PACKAGE_VERSION = "1.0.0";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -13304,8 +13304,8 @@ var ServiceSurfaceSchema = exports_external.object({
     ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: "Version endpoint must use GET", path: ["version", "method"] });
   }
 });
-var SERVER_DATA_BACKENDS = ["sqlite", "postgresql"];
-var ServerDataBackendSchema = exports_external.enum(SERVER_DATA_BACKENDS);
+var SERVER_DATA_BACKENDS = ["postgresql"];
+var ServerDataBackendSchema = exports_external.literal("postgresql");
 var STORAGE_ENGINES = ["sqlite", "postgresql"];
 var STORAGE_ENGINE_VALUES = ["sqlite", "json", "postgresql"];
 var LOCAL_STORAGE_ENGINES = ["sqlite", "json"];
@@ -13393,7 +13393,7 @@ function defaultSqlitePathFor(name) {
   return `~/.hasna/${name}/${name}.db`;
 }
 var StorageContractSchema = exports_external.object({
-  backend: ServerDataBackendSchema,
+  backend: exports_external.enum(["sqlite", "postgresql"]),
   engines: exports_external.array(StorageEngineSchema).min(1).optional(),
   envPrefix: exports_external.string().regex(/^HASNA_[A-Z][A-Z0-9]*_$/).optional(),
   aliasEnvPrefix: exports_external.string().regex(/^[A-Z][A-Z0-9]*_$/).optional(),
@@ -13691,13 +13691,6 @@ var ServiceContractManifestSchema = exports_external.object({
     if (!value.storage) {
       ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: "cli-with-store repos must declare storage", path: ["storage"] });
     } else {
-      if (value.storage.backend === "sqlite" && !value.storage.sqlitePath) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "sqlite cli-with-store storage requires sqlitePath (~/.hasna/<name>/<name>.db)",
-          path: ["storage", "sqlitePath"]
-        });
-      }
       if (value.storage.engines) {
         const declaredEngines = new Set(value.storage.engines);
         const declaredWaivers = value.metadata?.conformance?.waivedStorageEngines ?? [];
@@ -13715,7 +13708,7 @@ var ServiceContractManifestSchema = exports_external.object({
           const refusal = ineligible && declaredWaivers.length > 0 ? `; declared waiver ignored: ${ineligible}` : "";
           ctx.addIssue({
             code: exports_external.ZodIssueCode.custom,
-            message: `cli-with-store storage.engines must declare both sqlite and postgresql unless the engine carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
+            message: `cli-with-store storage.engines must declare sqlite and postgresql unless bounded migration tooling carries a metadata.conformance.waivedStorageEngines waiver; missing: ${missingEngines.join(", ")}${refusal}`,
             path: ["storage", "engines"]
           });
         }
@@ -13732,14 +13725,7 @@ var ServiceContractManifestSchema = exports_external.object({
       if (!value.storage.engines.includes("postgresql")) {
         ctx.addIssue({
           code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare postgresql alongside sqlite or json; both sqlite and postgresql remain supported",
-          path: ["storage", "engines"]
-        });
-      }
-      if (!LOCAL_STORAGE_ENGINES.some((engine) => value.storage?.engines?.includes(engine))) {
-        ctx.addIssue({
-          code: exports_external.ZodIssueCode.custom,
-          message: "service storage.engines must declare a local engine (sqlite or json)",
+          message: "service storage.engines must declare postgresql; local engines are optional migration/import capabilities only",
           path: ["storage", "engines"]
         });
       }

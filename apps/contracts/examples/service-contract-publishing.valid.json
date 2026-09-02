@@ -29,7 +29,7 @@
     }
   ],
   "storage": {
-    "backend": "sqlite",
+    "backend": "postgresql",
     "engines": [
       "sqlite",
       "postgresql"
