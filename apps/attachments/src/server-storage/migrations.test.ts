@@ -100,3 +100,23 @@ test("checksum drift rolls back before any additional schema application", async
 for (const sql of ["COMMIT; CREATE TABLE x (id INT)", "CREATE TABLE x (id INT); /* hidden */ END", "BEGIN", "CREATE INDEX CONCURRENTLY x ON y (id)", "DO $$ BEGIN COMMIT; END $$", "CREATE TABLE x (id INT); -- comment\nROLLBACK"]) test("reject transaction escape: " + sql, () => {
   expect(() => validateTransactionalSql(sql)).toThrow();
 });
+
+for (const [label, newline] of [["CR", "\r"], ["LF", "\n"], ["CRLF", "\r\n"]]) {
+  for (const control of ["COMMIT", "ROLLBACK", "END", "ABORT", "BEGIN", "START TRANSACTION", "SAVEPOINT escape", "PREPARE TRANSACTION 'escape'"]) {
+    test("line-comment " + label + " cannot hide " + control, () => {
+      expect(() => validateTransactionalSql("CREATE TABLE x(id int); -- hidden" + newline + control + ";")).toThrow();
+      expect(() => validateTransactionalSql("CREATE TABLE x(id int); -- first" + newline + "-- second" + newline + control + ";")).toThrow();
+    });
+  }
+  test("line-comment " + label + " still permits subsequent schema DDL", () => {
+    expect(() => validateTransactionalSql("CREATE TABLE x(id int); -- ignored COMMIT;" + newline + "CREATE INDEX idx ON x(id);")).not.toThrow();
+  });
+}
+test("comment and quote boundaries remain distinct", () => {
+  expect(() => validateTransactionalSql("CREATE TABLE x(id int); -- COMMIT at EOF")).not.toThrow();
+  expect(() => validateTransactionalSql("CREATE TABLE x(id int); /* outer --\r /* inner */ END */ CREATE INDEX idx ON x(id);")).not.toThrow();
+  expect(() => validateTransactionalSql("CREATE TABLE x(value text DEFAULT '--\rCOMMIT; it''s quoted', \"--END\" int);")).not.toThrow();
+  expect(() => validateTransactionalSql("CREATE TABLE x(id int); /* outer /* inner */ */ -- hidden\r/* gap */ END;")).toThrow();
+  expect(() => validateTransactionalSql("CREATE TABLE x(id int); /* unfinished")).toThrow();
+  expect(() => validateTransactionalSql("CREATE TABLE x(value text DEFAULT 'unfinished);")).toThrow();
+});

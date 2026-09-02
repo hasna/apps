@@ -66,9 +66,10 @@ Legacy directories remain untouched; no migration/copy/cleanup code was introduc
 
 Independent-review follow-up fixes the pg DSN parser TLS override and makes
 migration plan/apply/record atomic under a dedicated transaction and advisory lock.
-Thirty additional server-storage regression tests cover actual pg.Client options,
+Fifty-eight server-storage regression tests cover actual pg.Client options,
 ambiguous TLS parameters, rollback, connection disposal, concurrency, drift and
-transaction-control rejection. pg 8.22.0 and 8.23.0 Client construction were checked
+transaction-control rejection, including CR/LF/CRLF line-comment termination and
+nearby quote/nested-comment boundaries. pg 8.22.0 and 8.23.0 Client construction were checked
 without connecting; live PostgreSQL remains unverified.
 
 An independent review of the exact implementation commit, released canonical
