@@ -3,7 +3,6 @@ import { buildCoreApp } from "./core-app.js";
 import { createCoreAuthenticator } from "./core-auth.js";
 import { createCorePool } from "./core-store.js";
 import { migrateCoreSchema } from "./core-schema.js";
-import { assertTokenSigningPosture } from "./core-domain/tokens.js";
 import { APP_VERSION } from "../version.js";
 
 export const DEFAULT_SERVE_PORT = 3483;
@@ -58,15 +57,16 @@ export async function startServer(): Promise<ReturnType<typeof Bun.serve>> {
   const port = getPort();
   const host = getBindHost();
   assertAuthPosture(host, "cloud");
-  assertTokenSigningPosture({ mode: "cloud" });
   const pool = createCorePool();
   try {
+    // Bind signing authority before the first async startup step; runtime env/file
+    // changes cannot retarget a running server's issuance or authentication.
+    const app = buildCoreApp(pool);
     const connection = await pool.connect();
     try {
       const result = await connection.query("SELECT id FROM schema_migrations WHERE id = 1");
       if (result.rows.length !== 1) throw new Error("Access PostgreSQL schema migration is required.");
     } finally { connection.release(); }
-    const app = buildCoreApp(pool);
     const server = Bun.serve({ port, hostname: host, fetch(req, server) {
       return app.fetch(req, { peer: server.requestIP(req)?.address ?? "unknown" });
     } });

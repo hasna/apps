@@ -1,6 +1,8 @@
 // Transitional extraction: preserve the legacy MCP/storage implementation while
 // moving the unchanged core domain rules onto an asynchronous PostgreSQL seam.
 // Prints an apply_patch payload; does not mutate files or application state.
+// HISTORICAL EXTRACTION ONLY: subsequent core security fixes intentionally diverge
+// from legacy services. Never overwrite reviewed core files with this output.
 const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');

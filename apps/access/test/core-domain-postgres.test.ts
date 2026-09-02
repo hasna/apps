@@ -9,13 +9,12 @@ test("all 43 core operations execute against the PostgreSQL engine through authe
   // In-memory test-only PostgreSQL engine. No DSN, socket, real credential, or disk data.
   const pg = new PGlite();
   const pool: CorePool = { async connect() { return { async query(sql, params) { return pg.query(sql, params); }, release() {} }; }, async end() { await pg.close(); } };
-  const signingBefore = process.env.HASNA_ACCESS_TOKEN_SIGNING_KEY;
-  process.env.HASNA_ACCESS_TOKEN_SIGNING_KEY = "isolated-unit-test-signing-material-not-real";
+  const signingKey = "isolated-unit-test-signing-material-not-real";
   try {
     await migrateCoreSchema(pool);
     const entity = crypto.randomUUID();
     const key = "isolated-unit-test-api-credential";
-    const app = buildCoreApp(pool, { HASNA_ACCESS_API_CREDENTIALS: JSON.stringify([{ id: "unit", token: key, roles: ["owner"], entity_ids: [entity] }]) });
+    const app = buildCoreApp(pool, { HASNA_ACCESS_TOKEN_SIGNING_KEY: signingKey, HASNA_ACCESS_API_CREDENTIALS: JSON.stringify([{ id: "unit", token: key, roles: ["owner"], entity_ids: [entity] }]) });
     const client = new AccessClient({ HASNA_ACCESS_API_URL: "https://access.example.test", HASNA_ACCESS_API_KEY: key }, (async (url, options) => app.fetch(new Request(url, options))) as typeof fetch);
     const covered = new Set<string>();
     const call = async (op: CoreOperation, input: Record<string, unknown> = {}): Promise<any> => { covered.add(op); return client.runOperation(op, input); };
@@ -59,19 +58,18 @@ test("all 43 core operations execute against the PostgreSQL engine through authe
     expect((await call("audit.verify")).valid).toBe(true);
     expect([...covered].sort()).toEqual(Object.keys(CORE_ROUTES).sort());
     await expect(pg.query("DELETE FROM audit_log")).rejects.toThrow("append-only");
-    const unscopedApp = buildCoreApp(pool, { HASNA_ACCESS_API_CREDENTIALS: JSON.stringify([{ id: "unscoped", token: key, roles: ["owner"] }]) });
+    const unscopedApp = buildCoreApp(pool, { HASNA_ACCESS_TOKEN_SIGNING_KEY: signingKey, HASNA_ACCESS_API_CREDENTIALS: JSON.stringify([{ id: "unscoped", token: key, roles: ["owner"] }]) });
     expect((await unscopedApp.request(`/v1/identities/${id}`, { headers: { Authorization: `Bearer ${key}` } })).status).toBe(403);
     expect((await app.request(`/v1/identities/${id}`)).status).toBe(401);
     const failingPool: CorePool = { async connect() { return { async query(sql, params) {
       if (sql.startsWith("INSERT INTO audit_log")) throw new Error("test audit write failure");
       return pg.query(sql, params);
     }, release() {} }; }, async end() {} };
-    const failingApp = buildCoreApp(failingPool, { HASNA_ACCESS_API_CREDENTIALS: JSON.stringify([{ id: "unit", token: key, roles: ["owner"], entity_ids: [entity] }]) });
+    const failingApp = buildCoreApp(failingPool, { HASNA_ACCESS_TOKEN_SIGNING_KEY: signingKey, HASNA_ACCESS_API_CREDENTIALS: JSON.stringify([{ id: "unit", token: key, roles: ["owner"], entity_ids: [entity] }]) });
     const failedWrite = await failingApp.request("/v1/identities", { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ entity_id: entity, kind: "agent", name: "must-rollback" }) });
     expect(failedWrite.status).toBe(500);
     expect((await pg.query("SELECT id FROM identities WHERE name = 'must-rollback'")).rows).toHaveLength(0);
   } finally {
-    if (signingBefore === undefined) delete process.env.HASNA_ACCESS_TOKEN_SIGNING_KEY; else process.env.HASNA_ACCESS_TOKEN_SIGNING_KEY = signingBefore;
     await pool.end();
   }
 }, 60_000);

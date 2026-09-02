@@ -159,14 +159,18 @@ export async function expireElevations(ctx?: AuthorizationContext): Promise<{ ex
   authorize("write", ctx, { resource: "elevation" });
   const db = getDatabase();
   const nowTs = now();
-  const rows = (await db.query("SELECT id, entity_id, scope, status FROM elevations WHERE status IN ('pending', 'active') AND expires_at <= ?").all(nowTs)) as {
+  const scope = entityScopeFilter(ctx);
+  const predicate = scope ? ` AND (${scope.clause})` : "";
+  const params = scope?.params ?? [];
+  const rows = (await db.query(`SELECT id, entity_id, scope, status FROM elevations WHERE status IN ('pending', 'active') AND expires_at <= ?${predicate}`).all(nowTs, ...params)) as {
     id: string;
     entity_id: string;
     scope: string;
     status: ElevationStatus;
   }[];
   for (const row of rows) {
-    (await db.query("UPDATE elevations SET status = 'expired', updated_at = ?, version = version + 1 WHERE id = ?").run(nowTs, row.id));
+    authorize("write", ctx, { entity_id: row.entity_id, resource: "elevation" });
+    (await db.query(`UPDATE elevations SET status = 'expired', updated_at = ?, version = version + 1 WHERE id = ? AND entity_id = ? AND status IN ('pending', 'active') AND expires_at <= ?${predicate}`).run(nowTs, row.id, row.entity_id, nowTs, ...params));
     (await appendAuditEvent(db, {
       entity_id: row.entity_id,
       event_type: "elevation.expired",
