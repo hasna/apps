@@ -23,20 +23,11 @@ export interface EmailsModeResolution {
   warning: string | null;
 }
 
-const LEGACY_HOSTED_ENV_KEYS = [
-  "MAILERY_API_URL", "MAILERY_API_KEY", "MAILERY_CLOUD_API_URL", "MAILERY_CLOUD_TOKEN",
-  "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY", "HASNA_MAILERY_ENV_FILE",
-] as const;
-
 export function assertNoLegacyHostedEnvironment(
   env: NodeJS.ProcessEnv = process.env,
   _options: { allowHostedApiEnvWithExplicitSelfHosted?: boolean } = {},
 ): void {
   assertNoRetiredEmailsSelectors(env);
-  const present = LEGACY_HOSTED_ENV_KEYS.filter((key) => env[key] !== undefined);
-  if (present.length) throw new StoreConfigurationError(
-    `${present.join(", ")} belong to a retired runtime. Configure the Emails HTTPS API instead.`, present,
-  );
 }
 
 export function labelForEmailsMode(_mode: EmailsMode): EmailsModeLabel { return "Server API"; }

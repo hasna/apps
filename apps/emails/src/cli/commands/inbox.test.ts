@@ -159,6 +159,7 @@ function allRegisteredCommands(program: Command): Command[] {
 beforeAll(async () => {
   stub = await startV1Stub();
   attachmentInventoryServer = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch(request) {
       const url = new URL(request.url);
@@ -192,9 +193,8 @@ function useAttachmentInventoryPages(
   pages: Array<[cursor: string, page: { items: Array<Record<string, unknown>>; next_cursor: string | null }]>,
 ): void {
   attachmentInventoryPages = new Map(pages);
-  process.env.EMAILS_MODE = "self_hosted";
-  process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+  process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+  process.env.HASNA_EMAILS_API_KEY = "inventory-test-key";
   resetSelfHostedConfigCache();
 }
 
@@ -1002,7 +1002,7 @@ describe("inbox links", () => {
 // ─── inbox attachments inventory ─────────────────────────────────────────────
 
 describe("inbox attachments", () => {
-  it("honors config-file-only self_hosted mode without opening usable SQLite", async () => {
+  it("rejects a client database path despite legacy config, then uses only the configured API", async () => {
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-config-only-inventory-"));
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-config-only-poison-db-"));
@@ -1018,11 +1018,17 @@ describe("inbox attachments", () => {
       }
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
       delete process.env.EMAILS_SESSION_TOKEN;
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = "inventory-test-key";
       process.env.EMAILS_DB_PATH = poisonDbDir;
       resetSelfHostedConfigCache();
 
+      const rejected = await runInboxSubprocessExpectingExit(["--json", "inbox", "attachments"]);
+      expect(rejected.exitCode).not.toBe(0);
+      expect(rejected.stderr).toContain("EMAILS_DB_PATH cannot configure an Emails client");
+      expect(attachmentInventoryRequests).toHaveLength(0);
+      expect(readdirSync(poisonDbDir)).toEqual([]);
+      delete process.env.EMAILS_DB_PATH;
       const result = await runInboxCommand(["--json", "inbox", "attachments"]);
 
       expect(result.data).toEqual({ items: [], next_cursor: null });
@@ -1059,7 +1065,7 @@ describe("inbox attachments", () => {
     }]]);
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
-    process.env.EMAILS_DB_PATH = poisonDbDir;
+    delete process.env.EMAILS_DB_PATH;
     try {
       const { data } = await runInboxCommand([
         "--json",
@@ -1092,6 +1098,7 @@ describe("inbox attachments", () => {
       expect(attachmentInventoryRequests[0]?.searchParams.get("limit")).toBe("1");
       expect(attachmentInventoryRequests[0]?.searchParams.get("direction")).toBe("inbound");
       expect(attachmentInventoryRequests[0]?.searchParams.get("since")).toBe("2026-07-24T08:00:00.000Z");
+      expect(readdirSync(poisonDbDir)).toEqual([]);
     } finally {
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;
       else process.env.EMAILS_DB_PATH = previousDbPath;
@@ -1450,9 +1457,8 @@ describe("inbox attachment", () => {
     const inheritedProcessEnv = { ...process.env };
 
     try {
-      process.env.EMAILS_MODE = "self_hosted";
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${legacyServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "legacy-attachment-test-key";
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${legacyServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = "legacy-test-key";
       resetSelfHostedConfigCache();
       resetMailDataSource();
 

@@ -30,7 +30,13 @@ import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
 import { resetMailDataSource } from "../lib/mail-data-source.js";
 import { emailsSelfHostedOpenApi } from "../server/self-hosted/openapi.js";
 import { SELF_HOSTED_RESOURCES, resourceListOrderBy } from "../server/self-hosted/resources.js";
-import { DATABASE_PATH_SETTINGS } from "../store-resolution.js";
+import {
+  CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_KEY_SETTINGS,
+  EMAILS_API_URL_ENV, EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS,
+} from "../lib/client-settings.js";
+import {
+  EMAILS_CLIENT_ENV_SECRET_ENV, EMAILS_IDP_TOKEN_ENV, EMAILS_SESSION_TOKEN_ENV,
+} from "../lib/client-env.js";
 
 /**
  * The ORDER BY the real generic list route applies to each `/v1/<resource>`, parsed
@@ -175,8 +181,8 @@ export interface V1Stub {
   }): Promise<void>;
   /**
    * Make this stub the ONE store this test context is configured to use:
-   * EMAILS_MODE=self_hosted, EMAILS_SELF_HOSTED_URL, EMAILS_SELF_HOSTED_API_KEY, the
-   * database-path settings UNSET (see `MANAGED_ENV_KEYS`), then the config and
+   * HASNA_EMAILS_API_URL and HASNA_EMAILS_API_KEY only; competing credentials,
+   * aliases, retired selectors and database settings UNSET, then the config and
    * mail-data-source caches reset. Call in `beforeEach`.
    */
   applyEnv(): void;
@@ -890,6 +896,7 @@ function messageCounts() {
 }
 
 const server = Bun.serve({
+  hostname: "127.0.0.1",
   port: 0,
   async fetch(req) {
     const url = new URL(req.url);
@@ -1531,42 +1538,22 @@ const server = Bun.serve({
 console.log("PORT=" + server.port);
 `;
 
-const MODE_ENV = "EMAILS_MODE";
-const URL_ENV = "EMAILS_SELF_HOSTED_URL";
-const KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
-const SESSION_ENV = "EMAILS_SESSION_TOKEN";
-const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
-
 /**
  * Every environment key `applyEnv` writes and `clearEnv` puts back, in one list so the
- * snapshot and the restore cannot disagree about which keys they cover.
- *
- * THE DATABASE-PATH SETTINGS ARE IN HERE, AND THAT IS THE POINT. `scripts/run-hermetic-
- * tests.sh` sets a database path for the WHOLE suite — a hermeticity floor, so that no
- * test can ever open the operator's real mail file. For a test that runs against a local
- * store that floor is exactly right. For a test that runs against THIS STUB it is a
- * second store: an installation with both a database path and an API base URL configured
- * has two places to keep its mail and no way to tell which one was meant, which
- * `planEmailStore` (src/store-resolution.ts) refuses to boot from — correctly, and by
- * design, because a precedence rule there would silently serve rows from the store the
- * operator did not choose. So any consumer that resolved its store from configuration
- * threw instead of running inside every self-hosted test in the repo.
- *
- * The resolver is right; the helper was the thing configuring two stores. `applyEnv`
- * therefore REMOVES the local-store configuration for as long as the API configuration
- * is installed, and `clearEnv` puts it back — restoring the hermeticity floor for
- * whatever runs next in this process. Both settings are handled, read from
- * `DATABASE_PATH_SETTINGS` rather than re-spelled here, so a helper that unset only the
- * lower-precedence one (and left the higher-precedence one to win) is not expressible.
+ * snapshot and restore cannot disagree. API fixtures must not inherit host credentials,
+ * a vault pointer, conflicting aliases, or retired database/mode configuration. Explicit
+ * local-storage maintenance tests may still run separately; their exact prior environment
+ * is restored after this fixture, including absent versus blank settings.
  */
-const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([
-  MODE_ENV,
-  URL_ENV,
-  KEY_ENV,
-  SESSION_ENV,
-  CLIENT_ENV_SECRET_ENV,
-  ...DATABASE_PATH_SETTINGS,
-]);
+const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([...new Set([
+  ...RETIRED_EMAILS_SELECTOR_SETTINGS,
+  ...CLIENT_DATABASE_SETTINGS,
+  ...EMAILS_API_URL_SETTINGS,
+  ...EMAILS_API_KEY_SETTINGS,
+  EMAILS_SESSION_TOKEN_ENV,
+  EMAILS_IDP_TOKEN_ENV,
+  EMAILS_CLIENT_ENV_SECRET_ENV,
+])]);
 
 /**
  * Start an out-of-process /v1 stub server and return a handle for driving it.
@@ -1712,14 +1699,9 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
         for (const key of MANAGED_ENV_KEYS) snapshot[key] = process.env[key];
         priorEnv = snapshot;
       }
-      process.env[MODE_ENV] = "self_hosted";
-      process.env[URL_ENV] = baseUrl;
-      process.env[KEY_ENV] = apiKey;
-      delete process.env[SESSION_ENV];
-      delete process.env[CLIENT_ENV_SECRET_ENV];
-      // The local store's configuration goes away while the API's is in force, so this
-      // process is configured with exactly ONE place to keep its mail.
-      for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
+      for (const key of MANAGED_ENV_KEYS) delete process.env[key];
+      process.env[EMAILS_API_URL_ENV] = baseUrl;
+      process.env[EMAILS_API_KEY_ENV] = apiKey;
       resetSelfHostedConfigCache();
       resetMailDataSource();
     },

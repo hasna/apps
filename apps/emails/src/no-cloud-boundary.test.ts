@@ -379,11 +379,9 @@ describe("no hosted control plane", () => {
     expect(lockName).toBe(pkg.name);
   });
 
-  it("ships exactly local and self_hosted without hosted aliases", () => {
-    expect(normalizeEmailsMode("local")).toBe("local");
-    expect(normalizeEmailsMode("self_hosted")).toBe("self_hosted");
-    for (const value of ["cloud", "remote", "hybrid", "self-hosted", "selfhosted"]) {
-      expect(() => normalizeEmailsMode(value)).toThrow();
+  it("rejects all retired deployment selectors instead of selecting a backend", () => {
+    for (const value of ["local", "self_hosted", "cloud", "remote", "hybrid", "self-hosted", "selfhosted"]) {
+      expect(() => normalizeEmailsMode(value)).toThrow(/deployment selectors are retired/);
     }
   });
 

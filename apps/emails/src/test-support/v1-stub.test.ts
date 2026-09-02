@@ -8,6 +8,11 @@ import { startV1Stub, type V1Stub } from "./v1-stub.js";
 import { selfHostedStoreFor } from "../db/self-hosted-store.js";
 import { resolveSelfHostedMailDataSource } from "../lib/self-hosted-mail-data-source.js";
 import { SELF_HOSTED_RESOURCES } from "../server/self-hosted/resources.js";
+import { resolveEmailsClientConfig } from "../lib/client-config.js";
+import {
+  CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_SETTINGS, EMAILS_API_URL_SETTINGS,
+  RETIRED_EMAILS_SELECTOR_SETTINGS,
+} from "../lib/client-settings.js";
 
 let stub: V1Stub;
 
@@ -30,6 +35,57 @@ beforeEach(async () => {
 
 afterEach(() => {
   stub.clearEnv();
+});
+
+describe("v1-stub — canonical configuration isolation", () => {
+  it("installs only canonical endpoint and key, with no mode or client database", () => {
+    expect(process.env.HASNA_EMAILS_API_URL).toBe(stub.baseUrl);
+    expect(process.env.HASNA_EMAILS_API_KEY).toBe(stub.apiKey);
+    for (const key of [...RETIRED_EMAILS_SELECTOR_SETTINGS, ...CLIENT_DATABASE_SETTINGS]) {
+      expect(process.env[key], key).toBeUndefined();
+    }
+    const config = resolveEmailsClientConfig();
+    expect(config.baseUrl).toBe(`${stub.baseUrl}/v1`);
+    expect(config.credential).toBe(stub.apiKey);
+  });
+
+  it("isolates all aliases and credentials, then restores blank, absent and conflicting values exactly", () => {
+    stub.clearEnv();
+    const keys = [...new Set([
+      ...RETIRED_EMAILS_SELECTOR_SETTINGS, ...CLIENT_DATABASE_SETTINGS,
+      ...EMAILS_API_URL_SETTINGS, ...EMAILS_API_KEY_SETTINGS,
+      "EMAILS_SESSION_TOKEN", "EMAILS_IDP_TOKEN", "EMAILS_CLIENT_ENV_SECRET",
+    ])];
+    const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    try {
+      for (const [index, key] of keys.entries()) {
+        if (index % 3 === 0) delete process.env[key];
+        else process.env[key] = index % 3 === 1 ? "" : `synthetic-isolation-${index}`;
+      }
+      const expected = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+      stub.applyEnv();
+      stub.applyEnv(); // A repeated apply must not replace the original snapshot.
+      const config = resolveEmailsClientConfig();
+      expect(config.credentialSetting).toBe("HASNA_EMAILS_API_KEY");
+      expect(config.credential).toBe(stub.apiKey);
+      expect(config.baseUrl).toBe(`${stub.baseUrl}/v1`);
+      for (const key of keys) {
+        if (key !== "HASNA_EMAILS_API_URL" && key !== "HASNA_EMAILS_API_KEY") {
+          expect(process.env[key], key).toBeUndefined();
+        }
+      }
+      stub.clearEnv();
+      expect(Object.fromEntries(keys.map((key) => [key, process.env[key]]))).toEqual(expected);
+      stub.clearEnv(); // No snapshot means no environment edits.
+      expect(Object.fromEntries(keys.map((key) => [key, process.env[key]]))).toEqual(expected);
+    } finally {
+      stub.clearEnv();
+      for (const key of keys) {
+        if (prior[key] === undefined) delete process.env[key];
+        else process.env[key] = prior[key];
+      }
+    }
+  });
 });
 
 describe("v1-stub — generic resource CRUD over the synchronous curl store", () => {

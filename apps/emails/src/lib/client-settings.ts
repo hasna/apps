@@ -10,12 +10,17 @@ export const EMAILS_API_KEY_SETTINGS = Object.freeze([
 
 // These inputs never select a transport. Presence, including a blank value,
 // means an operator still has configuration to remove.
-export const RETIRED_EMAILS_SELECTOR_SETTINGS = Object.freeze([
+// Keep the legacy names in the existing, narrowly recognized rejection list.
+// The source/artifact guard still scans every occurrence outside this list.
+const LEGACY_HOSTED_ENV_KEYS = [
+  "MAILERY_API_URL", "MAILERY_API_KEY", "MAILERY_CLOUD_API_URL", "MAILERY_CLOUD_TOKEN",
+  "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY", "HASNA_MAILERY_ENV_FILE",
+] as const;
+export const RETIRED_EMAILS_SELECTOR_SETTINGS: readonly string[] = Object.freeze([
   "EMAILS_MODE", "HASNA_EMAILS_MODE", "EMAILS_STORAGE_MODE", "HASNA_EMAILS_STORAGE_MODE",
   "EMAILS_BACKEND", "HASNA_EMAILS_BACKEND", "EMAILS_LOCAL", "HASNA_EMAILS_LOCAL",
   "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
-  "MAILERY_API_URL", "MAILERY_API_KEY", "MAILERY_CLOUD_API_URL", "MAILERY_CLOUD_TOKEN",
-  "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY", "HASNA_MAILERY_ENV_FILE",
+  ...LEGACY_HOSTED_ENV_KEYS,
 ] as const);
 
 export const CLIENT_DATABASE_SETTINGS = Object.freeze([

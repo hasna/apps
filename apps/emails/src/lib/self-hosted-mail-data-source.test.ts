@@ -2439,11 +2439,10 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
   });
 });
 
-describe("resolveMailDataSource — self-hosted seam selection", () => {
-  it("selects self_hosted only from explicit mode, URL, and key", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "k";
+describe("resolveMailDataSource — canonical API configuration", () => {
+  it("constructs the API data source from URL and key without a mode selector", () => {
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "k";
     resetSelfHostedConfigCache();
     resetMailDataSource();
     const ds = resolveMailDataSource();
@@ -2452,11 +2451,18 @@ describe("resolveMailDataSource — self-hosted seam selection", () => {
     expect(resolveSelfHostedMailDataSource()).toBeInstanceOf(SelfHostedMailDataSource);
   });
 
-  it("does not construct a self-hosted client while local mode is selected", () => {
-    process.env["EMAILS_MODE"] = "local";
+  it.each(["local", "self_hosted"])("rejects the retired %s selector before constructing a client", (mode) => {
+    process.env["EMAILS_MODE"] = mode;
     resetSelfHostedConfigCache();
     resetMailDataSource();
-    expect(resolveSelfHostedMailDataSource()).toBeNull();
+    expect(() => resolveSelfHostedMailDataSource()).toThrow(/EMAILS_MODE.*retired/);
+    expect(() => resolveMailDataSource()).toThrow(/EMAILS_MODE.*retired/);
+  });
+
+  it("rejects missing API configuration instead of constructing a local data source", () => {
+    resetSelfHostedConfigCache();
+    resetMailDataSource();
+    expect(() => resolveMailDataSource()).toThrow(/HASNA_EMAILS_API_URL/);
   });
 });
 
