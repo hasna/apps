@@ -2,10 +2,10 @@
   "$schema": "./node_modules/@hasna/contracts/src/hasna.contract.schema.json",
   "schema": "hasna.service_contract.v1",
   "name": "access",
-  "class": "cli-with-store",
+  "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.14.2",
-  "description": "Non-human-identity governance CLI + MCP + serve: inventory of every agent/service identity, its credentials and MCP tool scopes, owner mapping, JIT elevation, access reviews and one-click revocation, plus the cohort MCP bearer-token issuer. SQLite at ~/.hasna/access/access.db by default (resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set, and HASNA_ACCESS_HOME / ACCESS_HOME win unconditionally); operator-owned PostgreSQL when HASNA_ACCESS_DATABASE_URL is set.",
+  "description": "Non-human-identity governance: 43 core CLI and SDK operations use authenticated explicit HTTPS; access-serve requires server PostgreSQL. Migration is partial: legacy root exports, MCP authentication/tools and postinstall paths retain their existing behavior pending separate boundary decisions.",
   "bins": [
     "access",
     "access-mcp",
@@ -44,7 +44,7 @@
       "kind": "sdk",
       "status": "supported",
       "authMode": "api-key",
-      "exportSubpath": ".",
+      "exportSubpath": "./sdk",
       "generatedFrom": "/openapi.json"
     },
     {
@@ -59,24 +59,27 @@
       "kind": "cli",
       "status": "supported",
       "bin": "access",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {
-    "backend": "sqlite",
+    "backend": "postgresql",
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_ACCESS_",
     "aliasEnvPrefix": "ACCESS_",
-    "sqlitePath": "~/.hasna/access/access.db",
     "pgTestGate": {
       "envVar": "ACCESS_TEST_DATABASE_URL",
       "command": "bun scripts/pg-test-gate.mjs"
     }
   },
   "metadata": {
+    "canonicalMigration": {
+      "status": "partial",
+      "completedSurfaces": ["cli", "./sdk", "http-api"],
+      "remainingSurfaces": ["root-library", "mcp", "postinstall", "legacy-xdg-adoption", "live-postgresql-domain-proof"]
+    },
     "release": {
       "artifactScan": {
         "script": "scan:artifact"

@@ -70,11 +70,12 @@ describe("access-serve early arguments (binds-before-args class, BUG 2920eed6)",
   });
 
   test(
-    "plain serve (no args) still binds and stays up (negative probe)",
+    "plain serve refuses to bind without PostgreSQL and authentication configuration",
     async () => {
       const result = await runServe();
-      expect(result.timedOut).toBe(true);
-      expect(result.stderr).toContain("listening on");
+      expect(result.timedOut).toBe(false);
+      expect(result.stderr).not.toContain("listening on");
+      expect(result.stderr).toContain("could not start");
     },
     15_000,
   );

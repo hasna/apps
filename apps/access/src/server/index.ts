@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-import { buildApp } from "./app.js";
-import { isApiAuthConfigured } from "./auth.js";
-import { resolveStorageMode } from "../config.js";
-import { assertTokenSigningPosture } from "../services/tokens.js";
+import { buildCoreApp } from "./core-app.js";
+import { createCoreAuthenticator } from "./core-auth.js";
+import { createCorePool } from "./core-store.js";
+import { migrateCoreSchema } from "./core-schema.js";
+import { assertTokenSigningPosture } from "./core-domain/tokens.js";
 import { APP_VERSION } from "../version.js";
 
 export const DEFAULT_SERVE_PORT = 3483;
@@ -20,13 +21,14 @@ export function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
 }
 
 export function printHelp(): void {
-  console.log(`usage: access-serve [--help] [--version]
+  console.log(`usage: access-serve [--help] [--version] [--migrate]
 
 access-serve — self-hosted HTTP API for @hasna/access.
 
 options:
   --help          show this help and exit
   --version       print the package version and exit
+  --migrate       explicitly apply PostgreSQL schema, then exit (requires separate operational approval)
 `);
 }
 
@@ -44,36 +46,36 @@ export function getBindHost(): string {
   return process.env["HASNA_ACCESS_BIND_HOST"] || process.env["ACCESS_BIND_HOST"] || "127.0.0.1";
 }
 
-function isLoopback(host: string): boolean {
-  return host === "127.0.0.1" || host === "::1" || host === "localhost";
-}
-
 /**
- * Fail-closed startup guard (§6.3): auth is decoupled from storage mode. Serving
- * /v1 unauthenticated is permitted ONLY when bound strictly to loopback AND mode
- * is local. A cloud-mode or non-loopback bind with no credentials configured is
- * a hard startup error.
+ * Core server credentials are mandatory on every bind address. The historical
+ * signature remains for import compatibility; mode cannot disable authentication.
  */
-export function assertAuthPosture(host: string, mode: "local" | "cloud"): void {
-  const open = !isApiAuthConfigured();
-  if (open && (!isLoopback(host) || mode === "cloud")) {
-    throw new Error(
-      "Refusing to start: /v1 would be served without credentials on a non-loopback bind or cloud mode. " +
-        "Configure HASNA_ACCESS_API_CREDENTIALS (or bind to 127.0.0.1 in local mode).",
-    );
-  }
+export function assertAuthPosture(_host: string, _mode: "local" | "cloud"): void {
+  createCoreAuthenticator();
 }
 
-export function startServer(): ReturnType<typeof Bun.serve> {
+export async function startServer(): Promise<ReturnType<typeof Bun.serve>> {
   const port = getPort();
   const host = getBindHost();
-  const mode = resolveStorageMode();
-  assertAuthPosture(host, mode);
-  assertTokenSigningPosture({ mode, exposed: !isLoopback(host) });
-  const app = buildApp();
-  const server = Bun.serve({ port, hostname: host, fetch: app.fetch });
-  console.error(`access-serve v${APP_VERSION} listening on http://${host}:${port} (mode=${mode})`);
-  return server;
+  assertAuthPosture(host, "cloud");
+  assertTokenSigningPosture({ mode: "cloud" });
+  const pool = createCorePool();
+  try {
+    const connection = await pool.connect();
+    try {
+      const result = await connection.query("SELECT id FROM schema_migrations WHERE id = 1");
+      if (result.rows.length !== 1) throw new Error("Access PostgreSQL schema migration is required.");
+    } finally { connection.release(); }
+    const app = buildCoreApp(pool);
+    const server = Bun.serve({ port, hostname: host, fetch(req, server) {
+      return app.fetch(req, { peer: server.requestIP(req)?.address ?? "unknown" });
+    } });
+    console.error(`access-serve v${APP_VERSION} listening on http://${host}:${port} (backend=postgresql)`);
+    return server;
+  } catch {
+    await pool.end();
+    throw new Error("Access PostgreSQL startup failed; verify server configuration and explicit schema migration.");
+  }
 }
 
 if (import.meta.main) {
@@ -86,5 +88,13 @@ if (import.meta.main) {
     printVersion();
     process.exit(0);
   }
-  startServer();
+  try {
+    if (process.argv.includes("--migrate")) {
+      const pool = createCorePool();
+      try { await migrateCoreSchema(pool); } finally { await pool.end(); }
+    } else await startServer();
+  } catch {
+    console.error("Access server could not start or migrate; check PostgreSQL, schema, and authentication configuration.");
+    process.exitCode = 1;
+  }
 }
