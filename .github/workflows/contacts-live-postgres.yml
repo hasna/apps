@@ -1,0 +1,62 @@
+name: contacts live PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - 'apps/contacts/**'
+      - 'bun.lock'
+      - '.github/workflows/contacts-live-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/contacts/**'
+      - 'bun.lock'
+      - '.github/workflows/contacts-live-postgres.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contacts-live-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: contacts_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d contacts_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Prove the required gate refuses a missing database
+        working-directory: apps/contacts
+        run: |
+          if env -u HASNA_CONTACTS_TEST_DATABASE_URL CONTACTS_REQUIRE_LIVE_POSTGRES=1 bun test src/server/postgres-live.test.ts; then
+            echo "Required PostgreSQL gate incorrectly accepted a missing database"
+            exit 1
+          fi
+      - name: Exercise the actual schema and production PostgreSQL store
+        working-directory: apps/contacts
+        env:
+          HASNA_CONTACTS_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/contacts_ci
+          CONTACTS_REQUIRE_LIVE_POSTGRES: '1'
+        run: |
+          set -euo pipefail
+          bun -e 'const u = new URL(process.env.HASNA_CONTACTS_TEST_DATABASE_URL); if (u.hostname !== "127.0.0.1" || u.pathname !== "/contacts_ci") throw new Error("Refusing a non-isolated integration database");'
+          bun test src/server/postgres-live.test.ts --timeout 120000 2>&1 | tee "$RUNNER_TEMP/contacts-live-postgres.log"
+          if grep -q '[(]skip[)]' "$RUNNER_TEMP/contacts-live-postgres.log"; then
+            echo "Live PostgreSQL gate refused skipped tests"
+            exit 1
+          fi
