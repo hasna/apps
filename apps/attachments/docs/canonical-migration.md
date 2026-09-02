@@ -1,5 +1,12 @@
 # Canonical-client migration: review candidate
 
+Current preparation update: version 2.0.0 has been applied from a scoped major
+changeset. The original local-only checkpoint below is historical. Follow-up CI
+run 33618602968 executed all 15 live PostgreSQL tests without skips, and the
+implementation is published for review in PRs 1493/1496, not on npm. Canonical
+shared Contracts adoption and final release gates remain open; see
+[the adoption plan](contracts-adoption-plan.md). No deployment or data import occurred.
+
 This owner-directed breaking removal of local client storage is not a release.
 PRs 561 and 565 were inspected against verified main base
 5d2fcfb02cc7a06d3f36c40b9c51141e1bc993dc. Both retain absent-config SQLite fallback;
