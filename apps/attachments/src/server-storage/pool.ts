@@ -29,8 +29,12 @@ export function createPgPool(options: CreatePgPoolOptions): Pool {
     ...(options.env !== undefined ? { env: options.env } : {}),
   });
 
-  const config: PoolConfig = { connectionString: options.connectionString };
-  if (ssl !== undefined) config.ssl = ssl;
+  // pg reparses connectionString after merging options and can overwrite ssl.
+  // Validate above, then remove every accepted TLS directive from that parser.
+  const connection = new URL(options.connectionString);
+  connection.searchParams.delete("sslmode");
+  connection.searchParams.delete("ssl");
+  const config: PoolConfig = { connectionString: connection.href, ssl: ssl ?? false };
   if (options.max !== undefined) config.max = options.max;
   if (options.idleTimeoutMillis !== undefined) config.idleTimeoutMillis = options.idleTimeoutMillis;
   if (options.connectionTimeoutMillis !== undefined) config.connectionTimeoutMillis = options.connectionTimeoutMillis;

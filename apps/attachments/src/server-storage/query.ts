@@ -45,6 +45,7 @@ export interface TypedQueryClient {
   /** Exactly one row; throws if zero or more than one row is returned. */
   one<T extends QueryResultRow>(sql: string, params?: readonly unknown[]): Promise<T>;
   execute(sql: string, params?: readonly unknown[]): Promise<void>;
+  transaction?<T>(fn: (client: TypedQueryClient) => Promise<T>): Promise<T>;
 }
 
 /** Wrap any `PgExecutor` (a Pool, a PoolClient, or a test shim) with the typed vocabulary. */
@@ -90,6 +91,7 @@ export function createQueryClient(pool: Pool): PoolQueryClient {
     pool,
     async transaction<T>(fn: (client: TypedQueryClient) => Promise<T>): Promise<T> {
       const client: PoolClient = await pool.connect();
+      let discard: Error | undefined;
       try {
         await client.query("BEGIN");
         const result = await fn(wrapExecutor(client));
@@ -99,11 +101,12 @@ export function createQueryClient(pool: Pool): PoolQueryClient {
         try {
           await client.query("ROLLBACK");
         } catch {
-          // ignore rollback failure; surface the original error
+          // Never return a connection with unknown transaction state to the pool.
+          discard = new Error("Transaction rollback failed");
         }
         throw error;
       } finally {
-        client.release();
+        client.release(discard);
       }
     },
     async close(): Promise<void> {
