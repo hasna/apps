@@ -48,3 +48,48 @@ operations without these rules would invent product semantics and could withdraw
 existing capabilities. This scoped patch makes none of those changes. Tenant
 enforcement remains a concrete release/deployment blocker requiring an approved
 API/data contract, implementation, adversarial denial tests, and independent review.
+
+## Source-contract reinspection (2026-09-02)
+
+Rechecked against PR #1489 head `fbb860631e0e94173103e5a664a07e06013ee2ee`:
+
+- `apps/contracts/docs/AUTH_RBAC_VERIFIER_CONTRACT.md`, "Tenant Identifier",
+  requires an organization-scoped service to reject keys without `tid` (403).
+  Its "Boundary Rules" require predicates before every query/mutation and
+  overlapping-identifier multi-tenant negative fixtures. Calendar does neither.
+- The same contract's "tid -> org" section and
+  `apps/contracts/src/auth/identity.ts:TenantOrgResolver` explicitly distinguish
+  issuer tenant IDs from the service's organization IDs. Unknown mappings must
+  deny; they must not auto-provision an organization. The generic resolver is
+  not a Calendar provisioning rule or evidence that `tid === org.id`.
+- Calendar's only domain migration contains no issuer-tenant mapping. Its
+  OpenAPI has organization CRUD, globally named agents, memberships in multiple
+  organizations, and public/org/private calendars, but no bootstrap or
+  tenant-admin authorization contract. The verified authentication claim alone
+  therefore cannot determine authorized rows for all existing operations.
+- PR #459 overlaps manifest/artifact lifecycle only. It does not supply the
+  missing tenancy contract. No live deployment or private database state was
+  consulted to invent one.
+
+### Minimal contract choices for owner review — not implemented defaults
+
+1. **Shared multi-tenant service:** explicitly provision issuer-tenant-to-local-org
+   mappings, rejecting missing/unknown tenants before domain access. The contract
+   must specify who provisions/rebinds them and how existing organizations and
+   keys migrate, without assuming equivalent IDs or modifying existing data.
+2. **Explicit single-tenant service boundary:** pin one authenticated issuer
+   tenant to one explicitly selected existing organization. This still requires
+   a decision for organization creation/list/delete and global agent operations;
+   it is not a silent downgrade of the current multi-organization capabilities.
+
+Either choice needs the same bounded policy matrix: global versus tenant-owned
+agents; membership role grants and cross-org membership visibility; calendar
+visibility/ownership; event/calendar organization consistency; attendees and
+availability through their parent resources; and administrative/bootstrap
+permissions. Define those decisions before implementation, then cover read,
+create, update, delete, search/conflicts, heartbeat and relationship edges with
+two-tenant allow/deny tests, including overlapping identifiers and an unknown or
+absent tenant. Current exposure-characterization tests are not acceptance tests.
+
+The response-envelope repair does not change authentication, queries, schemas,
+roles, provisioning, or legacy keys. Tenant isolation remains **NO_GO**.
