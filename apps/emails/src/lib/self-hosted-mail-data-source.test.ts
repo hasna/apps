@@ -11,6 +11,10 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import {
+  CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_SETTINGS, EMAILS_API_URL_SETTINGS,
+  RETIRED_EMAILS_SELECTOR_SETTINGS,
+} from "./client-settings.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -23,28 +27,18 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-const LEGACY_ENV_KEYS = [
-  "MAILERY_MODE",
-  "HASNA_MAILERY_MODE",
-  "MAILERY_STORAGE_MODE",
-  "HASNA_MAILERY_STORAGE_MODE",
-  "EMAILS_STORAGE_MODE",
-  "HASNA_EMAILS_STORAGE_MODE",
-  "MAILERY_API_URL",
-  "MAILERY_API_KEY",
-  "MAILERY_CLOUD_API_URL",
-  "MAILERY_CLOUD_TOKEN",
-  "HASNA_MAILERY_API_URL",
-  "HASNA_MAILERY_API_KEY",
-  "HASNA_MAILERY_ENV_FILE",
+const CLIENT_CONFIG_ENV_KEYS = [
+  ...RETIRED_EMAILS_SELECTOR_SETTINGS,
+  ...CLIENT_DATABASE_SETTINGS,
+  ...EMAILS_API_URL_SETTINGS,
+  ...EMAILS_API_KEY_SETTINGS,
+  "EMAILS_SESSION_TOKEN", "EMAILS_IDP_TOKEN", "EMAILS_CLIENT_ENV_SECRET",
 ] as const;
 
 function clearModeEnv(): void {
-  delete process.env["EMAILS_MODE"];
-  delete process.env["HASNA_EMAILS_MODE"];
-  delete process.env["EMAILS_SELF_HOSTED_URL"];
-  delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
-  for (const key of LEGACY_ENV_KEYS) delete process.env[key];
+  // Each test snapshots and restores the full inherited environment. During the
+  // test, no canonical alias or legacy database floor may select another context.
+  for (const key of CLIENT_CONFIG_ENV_KEYS) delete process.env[key];
 }
 
 // A self-hosted /v1 message row (snake_case, as the API returns).

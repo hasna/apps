@@ -112,6 +112,31 @@ describe("canonical client aliases and credentials", () => {
 
 describe("actual source entrypoints with no configured service", () => {
   test.each([
+    ...["src/cli/index.tsx", "src/mcp/index.ts", "src/server/index.ts"].flatMap((entry) =>
+      ["--help", "--version"].map((flag) => ({ args: [entry, flag] }))),
+    ...["index", "storage", "inbound", "selfhost"].map((entry) => ({
+      args: ["--eval", `await import("./src/${entry}.ts"); console.log("import-ok")`],
+    })),
+  ])("help, version and public imports create no home or XDG application state: %j", ({ args }) => {
+    const root = mkdtempSync(join(tmpdir(), "emails-stateless-entrypoint-"));
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH, AWS_EC2_METADATA_DISABLED: "true", NO_COLOR: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(root, "bun-transpiler-cache"),
+    };
+    for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR"]) {
+      env[key] = join(root, key);
+      mkdirSync(env[key]!);
+    }
+    const child = spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: 15000 });
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    expect(child.stdout.length).toBeGreaterThan(0);
+    for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) {
+      expect(readdirSync(env[key]!)).toEqual([]);
+    }
+  });
+
+  test.each([
     ["src/cli/index.tsx", "inbox", "list", "--json"],
     ["src/mcp/index.ts", "--stdio"],
     ["src/server/index.ts"],
