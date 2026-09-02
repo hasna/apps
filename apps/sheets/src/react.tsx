@@ -8,7 +8,7 @@
  * a recalculated copy of the model and surfaced through `onWorkbookChange`.
  */
 import * as React from "react";
-import RSpreadsheet from "react-spreadsheet";
+import { Spreadsheet as RSpreadsheet } from "react-spreadsheet";
 import type { CellBase, Matrix } from "react-spreadsheet";
 import type { Sheet, Workbook } from "./types/index.js";
 import { toA1 } from "./lib/a1.js";
