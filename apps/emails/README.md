@@ -193,7 +193,7 @@ emails send-intent       # inspect/reconcile uncertain self-hosted send outcomes
 emails send              # send an email
 emails reply / forward   # reply (in-thread) or forward a sent/inbound email
 emails email             # sent email: list, search, show, replies, thread
-emails inbox             # mailbox folders, sources, sync, read/star/archive/label, watch
+emails inbox             # mailbox folders, sources, status, read/star/archive/label
 emails template          # email templates
 emails contact           # contacts (suppression list)
 emails group             # recipient groups
@@ -472,7 +472,6 @@ emails inbox latest ops@example.com --json
 emails inbox wait ops@example.com --timeout 120
 emails inbox wait-code ops@example.com --from openai --timeout 120
 emails inbox sync-status --json       # S3 and realtime status
-emails inbox explain <id>             # route/owner/readiness trace
 emails inbox read <id>                # opening marks it read
 emails inbox star|archive|label <id>  # --undo / --remove to reverse
 ```
@@ -480,11 +479,13 @@ emails inbox star|archive|label <id>  # --undo / --remove to reverse
 ### Service-owned real-time ingestion
 
 The legacy CLI names `inbox sync-s3`, `inbox setup-realtime`,
-`inbox realtime-status` and `inbox watch` remain registered for compatibility.
-These client commands intentionally refuse: ingestion is server-owned. Do not
-run them as operator-host alternatives to the worker; the same API client still
-refuses them. A deployment with its queue, canonical bucket, PostgreSQL and IAM
-permissions already configured runs the existing worker on the service host:
+`inbox realtime-status`, `inbox watch`, `inbox listen` and `inbox explain`
+remain registered for compatibility. These client commands intentionally refuse:
+ingestion and local routing inspection are not available through these client
+commands. Do not run them as operator-host alternatives to the worker; the same
+API client still refuses them. A deployment with its queue, canonical bucket,
+PostgreSQL and IAM permissions already configured runs the existing worker on
+the service host:
 
 ```bash
 # Service host only, with reviewed worker configuration already injected:
