@@ -2,7 +2,7 @@
 #
 # Five jobs, split by what they NEED rather than by what they check:
 #
-#   gates         — no network beyond checkout. The checks that can refuse a
+#   gates         — shared toolchain/dependency setup, then checks that can refuse a
 #                   pull request in seconds: secret scan (with its own
 #                   two-sided self-test), name-conformance, and the
 #                   contract-manifest gate (contracts repo-conformance per
@@ -23,6 +23,13 @@
 # the gates here are re-derived for a producer tree and must never be copied
 # verbatim from the consumer repo.
 name: ci
+
+# npm 10's bundled pacote runs prepare despite --ignore-scripts. Provision
+# the tested npm 11 toolchain in each ephemeral job before package work so
+# nested artifact packs suppress every lifecycle hook. Bun stays pinned.
+# Use a fresh runner-local prefix: the image's system manpage directories
+# are not writable by the runner user. Verify the installed executable
+# before adding only its bin directory to subsequent steps' PATH.
 
 # Least privilege: nothing in this workflow needs write access to the
 # repository. Every job is read-only over the checkout (the token is still
@@ -49,6 +56,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14 # in lockstep with package.json "packageManager"
+
+      - name: Install npm for artifact gates
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
 
       # bun install runs workspace member prepare scripts CONCURRENTLY with no
       # topological ordering (measured on bun 1.3.14, 2026-08-21), so
@@ -182,6 +197,14 @@ jobs:
         with:
           bun-version: 1.3.14 # in lockstep with package.json "packageManager"
 
+      - name: Install npm for artifact gates
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
       - name: Install
         run: |
           bun install --frozen-lockfile --ignore-scripts
@@ -209,6 +232,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
+
+      - name: Install npm for artifact gates
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
 
       - name: Install
         run: |
@@ -369,6 +400,14 @@ jobs:
         with:
           bun-version: 1.3.14 # LOAD-BEARING — see the note above and in apps/knowledge ci.yml
 
+      - name: Install npm for artifact gates
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
       - name: Install
         run: |
           bun install --frozen-lockfile --ignore-scripts
@@ -392,6 +431,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
+
+      - name: Install npm for artifact gates
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
 
       - name: Install
         run: |

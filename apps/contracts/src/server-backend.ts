@@ -1,9 +1,9 @@
 // Server data-backend resolution for the Hasna Service Contract v1.
 //
-// The server has exactly one technical switch: `sqlite | postgresql`.
-// A configured `HASNA_<NAME>_DATABASE_URL` (or the short alias) selects
-// PostgreSQL; otherwise the on-box SQLite file is authoritative. There is no
-// deployment/storage mode and no client-side PostgreSQL path.
+// A Hasna server has one authoritative backend: PostgreSQL. A configured,
+// valid `HASNA_<NAME>_DATABASE_URL` (or the short alias) is required. Missing,
+// blank, invalid, or conflicting declarations fail closed; they never select
+// SQLite. Retired storage/mode variables are inert and never select anything.
 
 import { type ServerDataBackend } from "./schemas";
 import { envToken, type Env } from "./env-token";
@@ -24,20 +24,61 @@ export function serverDataBackendEnvKeys(name: string): ServerDataBackendEnvKeys
   };
 }
 
-function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value) return { key, value };
+function definedDatabaseUrlEntries(
+  env: Env,
+  keys: readonly string[],
+): Array<{ key: string; value: string }> {
+  return keys
+    .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
+    .map((key) => ({ key, value: String(env[key]) }));
+}
+
+function assertPostgresqlDatabaseUrl(
+  name: string,
+  entries: Array<{ key: string; value: string }>,
+): { key: string; value: string } {
+  const canonicalKey = serverDataBackendEnvKeys(name).databaseUrlKeys[0];
+  if (entries.length === 0) {
+    throw new Error(
+      `${canonicalKey} is required; Hasna servers use authoritative PostgreSQL and never default to SQLite.`,
+    );
   }
-  return null;
+  const blank = entries.filter((entry) => entry.value.trim().length === 0);
+  if (blank.length > 0) {
+    throw new Error(
+      `${blank.map((entry) => entry.key).join(" and ")} is set but blank; a PostgreSQL database URL is required.`,
+    );
+  }
+  const controlled = entries.find((entry) => /[\u0000-\u001f\u007f]/.test(entry.value));
+  if (controlled) throw new Error(`${controlled.key} must not contain ASCII control characters.`);
+  const normalized = entries.map((entry) => ({ key: entry.key, value: entry.value.trim() }));
+  if (normalized.length > 1 && new Set(normalized.map((entry) => entry.value)).size > 1) {
+    throw new Error(
+      `${normalized.map((entry) => entry.key).join(" and ")} disagree; database URL aliases must be identical or only one may be set.`,
+    );
+  }
+  const selected = normalized[0]!;
+  let parsed: URL;
+  try {
+    parsed = new URL(selected.value);
+  } catch {
+    throw new Error(`${selected.key} must be an absolute PostgreSQL connection URL.`);
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error(`${selected.key} must use the postgres or postgresql scheme.`);
+  }
+  if (!parsed.hostname || parsed.pathname.length <= 1) {
+    throw new Error(`${selected.key} must name a PostgreSQL host and database.`);
+  }
+  return selected;
 }
 
 export interface ServerDataBackendResolution {
   backend: ServerDataBackend;
-  /** Env key that selected PostgreSQL, or `"default"` for SQLite. */
+  /** Env key that configured PostgreSQL. */
   source: string;
   databaseUrlPresent: boolean;
-  /** Env key the database URL came from, or `null`. */
+  /** Env key the database URL came from. */
   databaseUrlSource: string | null;
 }
 
@@ -50,15 +91,10 @@ export function resolveServerDataBackend(
   env: Env = process.env,
 ): ServerDataBackendResolution {
   const { databaseUrlKeys } = serverDataBackendEnvKeys(name);
-  const databaseUrl = firstEnv(env, databaseUrlKeys);
-  if (!databaseUrl) {
-    return {
-      backend: "sqlite",
-      source: "default",
-      databaseUrlPresent: false,
-      databaseUrlSource: null,
-    };
-  }
+  const databaseUrl = assertPostgresqlDatabaseUrl(
+    name,
+    definedDatabaseUrlEntries(env, databaseUrlKeys),
+  );
   return {
     backend: "postgresql",
     source: databaseUrl.key,
@@ -67,8 +103,8 @@ export function resolveServerDataBackend(
   };
 }
 
-/** Resolve the database URL without logging it. Returns `null` when unset. */
-export function resolveDatabaseUrl(name: string, env: Env = process.env): string | null {
-  const hit = firstEnv(env, serverDataBackendEnvKeys(name).databaseUrlKeys);
-  return hit?.value ?? null;
+/** Resolve the required PostgreSQL URL without logging it. */
+export function resolveDatabaseUrl(name: string, env: Env = process.env): string {
+  const keys = serverDataBackendEnvKeys(name).databaseUrlKeys;
+  return assertPostgresqlDatabaseUrl(name, definedDatabaseUrlEntries(env, keys)).value;
 }

@@ -182,10 +182,13 @@ async function startFakePostgres(material: { key: string; cert: string }): Promi
         } catch {}
         return;
       }
-      socket.write(Buffer.from("S", "ascii"));
       const upstream = net.connect(tlsPort, "127.0.0.1", () => {
         socket.pipe(upstream);
         upstream.pipe(socket);
+        // Announce TLS only after the proxy is ready. Sending 'S' first lets
+        // the client send its ClientHello while the accepted socket is still
+        // flowing with no data listener, losing those bytes nondeterministically.
+        socket.write(Buffer.from("S", "ascii"));
       });
       track(upstream);
     });

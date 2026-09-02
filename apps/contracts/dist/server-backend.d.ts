@@ -10,10 +10,10 @@ export interface ServerDataBackendEnvKeys {
 export declare function serverDataBackendEnvKeys(name: string): ServerDataBackendEnvKeys;
 export interface ServerDataBackendResolution {
     backend: ServerDataBackend;
-    /** Env key that selected PostgreSQL, or `"default"` for SQLite. */
+    /** Env key that configured PostgreSQL. */
     source: string;
     databaseUrlPresent: boolean;
-    /** Env key the database URL came from, or `null`. */
+    /** Env key the database URL came from. */
     databaseUrlSource: string | null;
 }
 /**
@@ -21,5 +21,5 @@ export interface ServerDataBackendResolution {
  * Never returns or logs the database URL value.
  */
 export declare function resolveServerDataBackend(name: string, env?: Env): ServerDataBackendResolution;
-/** Resolve the database URL without logging it. Returns `null` when unset. */
-export declare function resolveDatabaseUrl(name: string, env?: Env): string | null;
+/** Resolve the required PostgreSQL URL without logging it. */
+export declare function resolveDatabaseUrl(name: string, env?: Env): string;

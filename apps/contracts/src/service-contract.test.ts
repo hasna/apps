@@ -19,7 +19,20 @@ const baseServiceManifest = {
 } as const;
 
 describe("service storage engines", () => {
-  test("accepts a JSON-file local store with PostgreSQL support", () => {
+  test("accepts a truthful PostgreSQL-only service", () => {
+    const parsed = ServiceContractManifestSchema.safeParse({
+      ...baseServiceManifest,
+      storage: {
+        backend: "postgresql",
+        engines: ["postgresql"],
+        envPrefix: "HASNA_IDENTITIES_"
+      }
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  test("accepts JSON only when it is an explicitly declared additional capability", () => {
     const parsed = ServiceContractManifestSchema.safeParse({
       ...baseServiceManifest,
       storage: {

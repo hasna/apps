@@ -1,1473 +1,204 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 import {
-  clientTransportEnvKeys,
+  CLIENT_TRANSPORTS,
+  ClientTransportConfigurationError,
+  HasnaHttpError,
+  appendQuery,
   createClientTransport,
   createHasnaHttpTransport,
-  defaultCloudBaseUrl,
-  fleetApiDomain,
-  HasnaHttpError,
   resolveClientTransport,
   toV1BaseUrl,
 } from "./transport.js";
-import { __resetCredentialDeprecationNotices, resolveCredential } from "./credentials.js";
-import { createLoopbackTestGate } from "../testing/loopback.js";
 
-// Each suite below is gated on the bind it actually performs, not on a single
-// combined probe: a sandbox that refuses 0.0.0.0 usually still allows
-// 127.0.0.1, and the redirect-loop and Host-override boundaries only ever bind
-// 127.0.0.1. The gates are fail-closed — an unavailable bind produces a failing
-// case, not a silent skip — unless CONTRACTS_ALLOW_LOOPBACK_SKIP=1 is set, and
-// the positive control below fails in that case so no run is ever green
-// without these suites.
-const loopbackGate = createLoopbackTestGate(["loopback"], { describe, test });
-const wildcardGate = createLoopbackTestGate(["wildcard"], { describe, test });
-const crossAuthorityGate = createLoopbackTestGate(["loopback", "wildcard"], { describe, test });
+const validEnv = {
+  HASNA_TODOS_API_URL: "https://todos.example.test",
+  HASNA_TODOS_API_KEY: "test-key",
+};
 
-test("positive control: the loopback-gated security suites actually ran", () => {
-  expect({
-    loopback: loopbackGate.requirement.decision,
-    wildcard: wildcardGate.requirement.decision,
-    crossAuthority: crossAuthorityGate.requirement.decision,
-  }).toEqual({ loopback: "run", wildcard: "run", crossAuthority: "run" });
-});
-
-describe("resolveClientTransport — the client-flip contract", () => {
-  test("no env => sqlite", () => {
-    const r = resolveClientTransport("todos", {});
-    expect(r.transport).toBe("sqlite");
-    expect(r.transportSource).toBe("default");
-    expect(r.misconfigured).toBe(false);
+describe("canonical client transport", () => {
+  test("publishes exactly one runtime transport", () => {
+    expect(CLIENT_TRANSPORTS).toEqual(["http"]);
   });
 
-  test("url + key => http with /v1 base", () => {
-    const r = resolveClientTransport("todos", {
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-      HASNA_TODOS_API_KEY: "hasna_todos_abc",
-    });
-    expect(r.transport).toBe("http");
-    expect(r.baseUrl).toBe("https://todos.your-deployment.example/v1");
-    expect(r.apiKeyPresent).toBe(true);
-    // secret value is never surfaced
-    expect(JSON.stringify(r)).not.toContain("hasna_todos_abc");
-  });
-
-  test("url without key fails closed to sqlite and marks the connection incomplete", () => {
-    const r = resolveClientTransport("todos", {
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    });
-    expect(r.transport).toBe("sqlite");
-    expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
-    expect(r.baseUrl).toBeNull();
-    expect(r.misconfigured).toBe(true);
-    expect(r.warning).toContain("HASNA_TODOS_API_KEY");
-  });
-
-  test("legacy mode variables are inert; explicit URL and key select HTTP", () => {
-    for (const key of [
-      "HASNA_KNOWLEDGE_STORAGE_MODE",
-      "HASNA_KNOWLEDGE_MODE",
-      "KNOWLEDGE_STORAGE_MODE",
-      "KNOWLEDGE_MODE",
-    ]) {
-      for (const value of ["cloud", "", "   "]) {
-        const r = resolveClientTransport("knowledge", {
-          [key]: value,
-          HASNA_KNOWLEDGE_API_URL: "https://knowledge.example.com",
-          HASNA_KNOWLEDGE_API_KEY: "hasna_knowledge_k",
-        });
-        expect(r.transport, `${key}=${JSON.stringify(value)} must not throw`).toBe("http");
-        expect(r.baseUrl).toBe("https://knowledge.example.com/v1");
-      }
-    }
-  });
-
-  test("explicit per-app API URL wins over a malformed fleet domain", () => {
-    const r = resolveClientTransport("todos", {
-      HASNA_TODOS_API_URL: "  https://api.customer.example/contracts/  ",
-      HASNA_TODOS_API_KEY: "hasna_todos_custom",
-      HASNA_FLEET_API_DOMAIN: "https://malformed.example/path",
-    });
-    expect(r.transport).toBe("http");
-    expect(r.baseUrl).toBe("https://api.customer.example/contracts/v1");
-    expect(r.apiUrlSource).toBe("HASNA_TODOS_API_URL");
-    expect(r.misconfigured).toBe(false);
-  });
-
-  test("fleet-domain helpers stay config-driven but never select a transport", () => {
-    expect(fleetApiDomain({ HASNA_FLEET_API_DOMAIN: "  Fleet.Customer.Example  " })).toBe(
-      "fleet.customer.example"
+  test("fails closed when authority or credential configuration is missing", () => {
+    expect(() => resolveClientTransport("todos", {})).toThrow(ClientTransportConfigurationError);
+    expect(() => resolveClientTransport("todos", { HASNA_TODOS_API_URL: validEnv.HASNA_TODOS_API_URL })).toThrow(
+      ClientTransportConfigurationError,
     );
-    const env = { HASNA_FLEET_API_DOMAIN: " \t\n " };
-    expect(fleetApiDomain(env)).toBe("your-deployment.example");
-    expect(defaultCloudBaseUrl("todos", env)).toBe("https://todos.your-deployment.example");
-    expect(resolveClientTransport("todos", { ...env, HASNA_TODOS_API_KEY: "x" }).transport).toBe("sqlite");
-  });
-
-  test("explicit API URLs reject raw controls and userinfo before authority parsing", () => {
-    const unsafe = [
-      "https://api.customer.example\n@evil.example",
-      "https://api.customer.example\r@evil.example",
-      "https://api.customer.example\t@evil.example",
-      "https://api.customer.example@evil.example",
-      "https://evil.example@api.customer.example",
-      "https://user:password@api.customer.example",
-      "https://api.customer.example\\@evil.example",
-      "https:\\\\evil.example\\contracts",
-    ];
-
-    for (const apiUrl of unsafe) {
-      expect(() => toV1BaseUrl(apiUrl)).toThrow();
-      const env = {
-        HASNA_TODOS_API_URL: apiUrl,
-        HASNA_TODOS_API_KEY: "x",
-      };
-      const r = resolveClientTransport("todos", env);
-      expect(r.transport).toBe("sqlite");
-      expect(r.baseUrl).toBeNull();
-      expect(r.misconfigured).toBe(true);
-      expect(() =>
-        createHasnaHttpTransport({
-          name: "todos",
-          baseUrl: apiUrl,
-          apiKey: "x",
-        }),
-      ).toThrow();
-
-      let fetched = false;
-      expect(() =>
-        createClientTransport("todos", env, {
-          fetchImpl: async () => {
-            fetched = true;
-            return Response.json({ ok: true });
-          },
-        }),
-      ).toThrow();
-      expect(fetched).toBe(false);
-    }
-  });
-
-  test("explicit API URLs reject Unicode, percent-normalized, and punycode authorities", () => {
-    for (const apiUrl of [
-      "https://例え.customer.example",
-      "https://éxample.customer.example",
-      "https://xn--r8jz45g.customer.example",
-      "https://%65xample.customer.example",
-    ]) {
-      expect(() => toV1BaseUrl(apiUrl)).toThrow();
-    }
-  });
-
-  test("explicit API URLs reject parser-normalized noncanonical authorities", () => {
-    for (const apiUrl of [
-      "https://api_customer.example",
-      "https://-bad.example",
-      "https://foo..bar",
-      "https://api.customer.example.",
-      "https://2130706433",
-      "https://127.1",
-      "https://0x7f000001",
-      "https://0177.0.0.1",
-      "https://1.2.3.4.5",
-    ]) {
-      expect(() => toV1BaseUrl(apiUrl)).toThrow();
-      expect(() =>
-        createHasnaHttpTransport({
-          name: "todos",
-          baseUrl: apiUrl,
-          apiKey: "x",
-        }),
-      ).toThrow();
-    }
-  });
-
-  test("explicit API URLs reject noncanonical and out-of-range ports while preserving canonical bounds", () => {
-    for (const apiUrl of [
-      "https://api.customer.example:0443",
-      "https://203.0.113.10:000443",
-      "https://[2001:db8::1]:08443",
-      "http://localhost:08080",
-      "http://127.0.0.1:00080",
-      "http://[::1]:00080",
-      "https://api.customer.example:0",
-      "https://api.customer.example:65536",
-    ]) {
-      expect(() => toV1BaseUrl(apiUrl)).toThrow(/canonical.*port/i);
-      expect(() =>
-        createHasnaHttpTransport({
-          name: "todos",
-          baseUrl: apiUrl,
-          apiKey: "x",
-        }),
-      ).toThrow(/canonical.*port/i);
-    }
-
-    expect(toV1BaseUrl("https://api.customer.example:1/contracts")).toBe(
-      "https://api.customer.example:1/contracts/v1",
-    );
-    expect(toV1BaseUrl("https://203.0.113.10:65535/contracts")).toBe(
-      "https://203.0.113.10:65535/contracts/v1",
-    );
-    expect(toV1BaseUrl("https://[2001:db8::1]:443/contracts")).toBe(
-      "https://[2001:db8::1]/contracts/v1",
-    );
-    expect(toV1BaseUrl("http://localhost:80/contracts")).toBe(
-      "http://localhost/contracts/v1",
-    );
-    expect(toV1BaseUrl("http://127.0.0.1:65535/contracts")).toBe(
-      "http://127.0.0.1:65535/contracts/v1",
-    );
-    expect(toV1BaseUrl("http://[::1]:1/contracts")).toBe(
-      "http://[::1]:1/contracts/v1",
+    expect(() => resolveClientTransport("todos", { HASNA_TODOS_API_KEY: "key" })).toThrow(
+      ClientTransportConfigurationError,
     );
   });
 
-  test("invalid raw authorities are rejected before WHATWG URL construction", () => {
-    const OriginalURL = globalThis.URL;
-    let constructorCalled = false;
-    class TrackingURL extends OriginalURL {
-      constructor(url: string | URL, base?: string | URL) {
-        constructorCalled = true;
-        super(url, base);
-      }
-    }
-
-    Object.defineProperty(globalThis, "URL", {
-      configurable: true,
-      value: TrackingURL,
-      writable: true,
-    });
-    try {
-      expect(() => toV1BaseUrl("https://2130706433")).toThrow();
-      expect(constructorCalled).toBe(false);
-      expect(() => toV1BaseUrl("https://api.customer.example:0443")).toThrow();
-      expect(constructorCalled).toBe(false);
-    } finally {
-      Object.defineProperty(globalThis, "URL", {
-        configurable: true,
-        value: OriginalURL,
-        writable: true,
-      });
-    }
+  test("defined-blank declarations are errors, never local selectors", () => {
+    expect(() => resolveClientTransport("todos", { ...validEnv, HASNA_TODOS_API_URL: " " })).toThrow(/blank/);
+    expect(() => resolveClientTransport("todos", { ...validEnv, HASNA_TODOS_API_KEY: " " })).toThrow(/blank|empty/);
   });
 
-  test("explicit API URL policy preserves HTTPS paths and ports plus deliberate loopback HTTP", () => {
-    expect(toV1BaseUrl("  https://x.test:8443/contracts/  ")).toBe(
-      "https://x.test:8443/contracts/v1",
-    );
-    expect(toV1BaseUrl("https://203.0.113.10:8443/contracts/")).toBe(
-      "https://203.0.113.10:8443/contracts/v1",
-    );
-    expect(toV1BaseUrl("https://[2001:db8::1]:8443/contracts/")).toBe(
-      "https://[2001:db8::1]:8443/contracts/v1",
-    );
-    expect(toV1BaseUrl("http://127.0.0.1:43123")).toBe("http://127.0.0.1:43123/v1");
-    expect(toV1BaseUrl("http://localhost:43123/contracts")).toBe(
-      "http://localhost:43123/contracts/v1",
-    );
-    expect(toV1BaseUrl("http://[::1]:43123/contracts")).toBe(
-      "http://[::1]:43123/contracts/v1",
-    );
-    expect(() => toV1BaseUrl("http://api.customer.example/contracts")).toThrow();
-    expect(() => toV1BaseUrl("https://api.customer.example/contracts?tenant=one")).toThrow();
-    expect(() => toV1BaseUrl("https://api.customer.example/contracts#fragment")).toThrow();
-  });
-
-  test("default host app slug is one canonical DNS label", () => {
-    for (const valid of ["todos", "agent-registry", "app2", "2fa"]) {
-      expect(defaultCloudBaseUrl(valid)).toBe(`https://${valid}.your-deployment.example`);
-    }
-
-    for (const invalid of [
-      "",
-      "Todos",
-      " todos",
-      "todos ",
-      "todos/path",
-      "todos.path",
-      "todos.example",
-      "-todos",
-      "todos-",
-      "tódos",
-      "todos\npath",
-    ]) {
-      expect(() => defaultCloudBaseUrl(invalid)).toThrow();
-    }
-
-  });
-
-  test("default host validates the composed app-prefix and fleet-domain length", () => {
-    const maximumStandaloneDomain = [
-      "a".repeat(63),
-      "b".repeat(63),
-      "c".repeat(63),
-      "d".repeat(61),
-    ].join(".");
-    const env = { HASNA_FLEET_API_DOMAIN: maximumStandaloneDomain };
-    expect(maximumStandaloneDomain).toHaveLength(253);
-    expect(fleetApiDomain(env)).toBe(maximumStandaloneDomain);
-    expect(defaultCloudBaseUrl("todos", env)).toBe(
-      "https://todos.your-deployment.example",
-    );
-
-  });
-
-  test("bare API aliases select HTTP", () => {
-    const r = resolveClientTransport("todos", {
-      TODOS_API_URL: "https://todos.your-deployment.example",
-      TODOS_API_KEY: "hasna_todos_z",
-    });
-    expect(r.transport).toBe("http");
-    expect(r.transportSource).toBe("TODOS_API_URL");
-  });
-
-  test("API URL configured but NO key => local + misconfigured (never silent wrong data)", () => {
-    const r = resolveClientTransport("todos", {
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    });
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(true);
-    expect(r.warning).toContain("HASNA_TODOS_API_KEY");
-  });
-
-  test("createClientTransport throws on a URL without credentials", () => {
-    expect(() => createClientTransport("todos", {
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    })).toThrow();
-  });
-
-  test("env-key spec + defaults", () => {
-    const keys = clientTransportEnvKeys("agent-registry");
-    expect(keys.apiUrlKeys[0]).toBe("HASNA_AGENT_REGISTRY_API_URL");
-    expect(keys.apiKeyKeys[0]).toBe("HASNA_AGENT_REGISTRY_API_KEY");
-    expect(defaultCloudBaseUrl("agent-registry")).toBe("https://agent-registry.your-deployment.example");
-  });
-
-  test("toV1BaseUrl is idempotent and strips trailing slash / existing /v1", () => {
-    expect(toV1BaseUrl("https://todos.your-deployment.example")).toBe("https://todos.your-deployment.example/v1");
-    expect(toV1BaseUrl("https://todos.your-deployment.example/")).toBe("https://todos.your-deployment.example/v1");
-    expect(toV1BaseUrl("https://todos.your-deployment.example/v1")).toBe("https://todos.your-deployment.example/v1");
-  });
-});
-
-describe("authenticated redirect boundary", () => {
-  const API_KEY = ["fixture", "redirect", "value"].join("-");
-
-  crossAuthorityGate.test("301/302/303/307/308 never forward credentials or bodies to a redirected authority", async () => {
-    const cases: Array<{
-      status: 301 | 302 | 303 | 307 | 308;
-      method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
-      body?: { marker: string };
-    }> = [
-      { status: 301, method: "GET" },
-      { status: 302, method: "POST", body: { marker: "post-body" } },
-      { status: 303, method: "PATCH", body: { marker: "patch-body" } },
-      { status: 307, method: "PUT", body: { marker: "put-body" } },
-      { status: 308, method: "DELETE", body: { marker: "delete-body" } },
-    ];
-
-    for (const redirectCase of cases) {
-      const targetRequests: Array<{
-        method: string;
-        apiKey: string | null;
-        authorization: string | null;
-        body: string;
-      }> = [];
-      const target = Bun.serve({
-        hostname: "0.0.0.0",
-        port: 0,
-        async fetch(req) {
-          targetRequests.push({
-            method: req.method,
-            apiKey: req.headers.get("x-api-key"),
-            authorization: req.headers.get("authorization"),
-            body: await req.text(),
-          });
-          return Response.json({ reached: true });
-        },
-      });
-      const sourceRequests: Array<{
-        apiKey: string | null;
-        authorization: string | null;
-      }> = [];
-      const source = Bun.serve({
-        hostname: "127.0.0.1",
-        port: 0,
-        fetch(req) {
-          sourceRequests.push({
-            apiKey: req.headers.get("x-api-key"),
-            authorization: req.headers.get("authorization"),
-          });
-          return new Response(null, {
-            status: redirectCase.status,
-            headers: { Location: `http://0.0.0.0:${target.port}/capture` },
-          });
-        },
-      });
-
-      try {
-        const transport = createHasnaHttpTransport({
-          name: "redirect-regression",
-          baseUrl: `http://127.0.0.1:${source.port}`,
-          apiKey: API_KEY,
-          retry: false,
-        });
-        let thrown: unknown;
-        try {
-          await transport.request(
-            redirectCase.method,
-            `/redirect-${redirectCase.status}`,
-            redirectCase.body,
-            { headers: { "x-transport-marker": `status-${redirectCase.status}` } },
-          );
-        } catch (error) {
-          thrown = error;
-        }
-
-        expect(thrown).toBeInstanceOf(HasnaHttpError);
-        const httpError = thrown as HasnaHttpError;
-        expect(httpError.status).toBe(redirectCase.status);
-        expect(httpError.method).toBe(redirectCase.method);
-        expect(httpError.path).toBe(`/redirect-${redirectCase.status}`);
-        expect(httpError.message).toBe(
-          `Hasna cloud request failed: ${redirectCase.method} /redirect-${redirectCase.status} -> ${redirectCase.status}`,
-        );
-        expect(sourceRequests).toEqual([
-          { apiKey: API_KEY, authorization: `Bearer ${API_KEY}` },
-        ]);
-        expect(targetRequests).toEqual([]);
-      } finally {
-        source.stop(true);
-        target.stop(true);
-      }
-    }
-  });
-
-  loopbackGate.test("same-origin redirects and redirect loops fail after exactly one request", async () => {
-    let sameOriginDestinationHits = 0;
-    let loopHits = 0;
-    let source: ReturnType<typeof Bun.serve>;
-    source = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(req) {
-        const url = new URL(req.url);
-        if (url.pathname === "/v1/same-origin") {
-          return new Response(null, {
-            status: 307,
-            headers: { Location: `http://127.0.0.1:${source.port}/v1/destination` },
-          });
-        }
-        if (url.pathname === "/v1/destination") {
-          sameOriginDestinationHits++;
-          return Response.json({ reached: true });
-        }
-        if (url.pathname === "/v1/loop") {
-          loopHits++;
-          return new Response(null, {
-            status: 308,
-            headers: { Location: `http://127.0.0.1:${source.port}/v1/loop` },
-          });
-        }
-        return Response.json({ error: "not_found" }, { status: 404 });
-      },
-    });
-
-    try {
-      const transport = createHasnaHttpTransport({
-        name: "redirect-regression",
-        baseUrl: `http://127.0.0.1:${source.port}`,
-        apiKey: API_KEY,
-        retry: false,
-      });
-
-      await expect(transport.get("/same-origin")).rejects.toMatchObject({
-        status: 307,
-        method: "GET",
-        path: "/same-origin",
-      });
-      expect(sameOriginDestinationHits).toBe(0);
-
-      await expect(transport.get("/loop")).rejects.toMatchObject({
-        status: 308,
-        method: "GET",
-        path: "/loop",
-      });
-      expect(loopHits).toBe(1);
-    } finally {
-      source.stop(true);
-    }
-  });
-
-  test("redirect destinations are never interpreted or followed by the authenticated fetch", async () => {
-    for (const location of [
-      "https://redirect.customer.example/v1",
-      "http://api.customer.example/v1",
-      "https://user:password@redirect.customer.example/v1",
-      "file:///tmp/redirect-target",
-      "data:application/json,%7B%22reached%22%3Atrue%7D",
-    ]) {
-      const calls: Array<{ url: string; redirect: RequestRedirect | undefined }> = [];
-      const transport = createHasnaHttpTransport({
-        name: "redirect-regression",
-        baseUrl: "https://api.customer.example/v1",
-        apiKey: API_KEY,
-        retry: false,
-        fetchImpl: async (url, init) => {
-          calls.push({ url, redirect: init?.redirect });
-          return new Response(null, {
-            status: 307,
-            headers: { Location: location },
-          });
-        },
-      });
-
-      await expect(transport.get("/items")).rejects.toMatchObject({
-        status: 307,
-        method: "GET",
-        path: "/items",
-      });
-      expect(calls).toEqual([
-        {
-          url: "https://api.customer.example/v1/items",
-          redirect: "manual",
-        },
-      ]);
-    }
-  });
-
-  test("redirect responses are never retried even when a caller lists their status", async () => {
-    let hits = 0;
-    const transport = createHasnaHttpTransport({
-      name: "redirect-regression",
-      baseUrl: "https://api.customer.example/v1",
-      apiKey: API_KEY,
-      fetchImpl: async () => {
-        hits++;
-        return new Response(null, {
-          status: 307,
-          headers: { Location: "https://redirect.customer.example/v1" },
-        });
-      },
-      sleepImpl: async () => {},
-    });
-
-    await expect(
-      transport.get("/items", {
-        retry: { retries: 3, retryStatuses: [307] },
+  test("conflicting authority aliases fail closed", () => {
+    expect(() =>
+      resolveClientTransport("todos", {
+        ...validEnv,
+        TODOS_API_URL: "https://other.example.test",
       }),
-    ).rejects.toMatchObject({ status: 307 });
-    expect(hits).toBe(1);
-  });
-});
-
-describe("authenticated authority-header boundary", () => {
-  const API_KEY = ["fixture", "authority", "value"].join("-");
-  const forbiddenHeaders = [
-    "Host",
-    "hOsT",
-    ":authority",
-    "Forwarded",
-    "X-Forwarded-Host",
-    "X-Original-Host"
-  ];
-
-  test("default headers cannot override the validated request authority", async () => {
-    for (const header of forbiddenHeaders) {
-      let calls = 0;
-      const transport = createHasnaHttpTransport({
-        name: "authority-regression",
-        baseUrl: "https://api.customer.example/v1",
-        apiKey: API_KEY,
-        headers: { [header]: "evil.example" },
-        retry: false,
-        fetchImpl: async () => {
-          calls++;
-          return Response.json({ ok: true });
-        }
-      });
-
-      await expect(transport.get("/items")).rejects.toThrow(/authority header/i);
-      expect(calls).toBe(0);
-    }
+    ).toThrow(/disagree/);
   });
 
-  test("per-call headers cannot override the validated request authority", async () => {
-    for (const header of forbiddenHeaders) {
-      let calls = 0;
-      const transport = createHasnaHttpTransport({
-        name: "authority-regression",
-        baseUrl: "https://api.customer.example/v1",
-        apiKey: API_KEY,
-        retry: false,
-        fetchImpl: async () => {
-          calls++;
-          return Response.json({ ok: true });
-        }
-      });
-
-      await expect(
-        transport.get("/items", { headers: { [header]: "evil.example" } })
-      ).rejects.toThrow(/authority header/i);
-      expect(calls).toBe(0);
-    }
-  });
-
-  loopbackGate.test("real Bun HTTP routing never receives an authenticated Host override", async () => {
-    const received: Array<{
-      host: string | null;
-      apiKey: string | null;
-      authorization: string | null;
-    }> = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request) {
-        received.push({
-          host: request.headers.get("host"),
-          apiKey: request.headers.get("x-api-key"),
-          authorization: request.headers.get("authorization")
-        });
-        return Response.json({ ok: true });
+  test("retired storage/mode selectors cannot select a backend", () => {
+    for (const key of ["HASNA_TODOS_MODE", "HASNA_TODOS_STORAGE_MODE", "TODOS_MODE", "TODOS_STORAGE_MODE"]) {
+      for (const value of ["sqlite", "local", "cloud", "postgresql", ""]) {
+        expect(resolveClientTransport("todos", { ...validEnv, [key]: value }).transport).toBe("http");
+        expect(() => resolveClientTransport("todos", { [key]: value })).toThrow(/API_URL/);
       }
-    });
-
-    try {
-      const defaults = createHasnaHttpTransport({
-        name: "authority-regression",
-        baseUrl: `http://127.0.0.1:${server.port}`,
-        apiKey: API_KEY,
-        headers: { hOsT: "evil.example" },
-        retry: false
-      });
-      await expect(defaults.get("/items")).rejects.toThrow(/authority header/i);
-
-      const perCall = createHasnaHttpTransport({
-        name: "authority-regression",
-        baseUrl: `http://127.0.0.1:${server.port}`,
-        apiKey: API_KEY,
-        retry: false
-      });
-      await expect(
-        perCall.get("/items", { headers: { Host: "evil.example" } })
-      ).rejects.toThrow(/authority header/i);
-
-      expect(received).toEqual([]);
-    } finally {
-      server.stop(true);
     }
   });
-});
 
-// ---------------------------------------------------------------------------
-// END-TO-END PROOF: a real loopback `/v1` server (the "cloud") + a demo app
-// storage resolver that uses the shared contract to flip between a local file
-// and the HTTP transport. Proves: flip on => reads/writes hit the cloud server
-// (data lands in the server's store); flip off => reads/writes hit the local
-// file. Same code path every real app will use.
-// ---------------------------------------------------------------------------
-
-interface Item {
-  id: string;
-  text: string;
-}
-
-wildcardGate.describe("end-to-end data-source flip (real HTTP loopback)", () => {
-  const EXPECTED_KEY = "hasna_demo_e2e_secret";
-  const cloudStore = new Map<string, Item>();
-  const seenAuth: string[] = [];
-  let server: ReturnType<typeof Bun.serve>;
-  let baseUrl: string;
-  let localFile: string;
-  let tmp: string;
-
-  beforeAll(() => {
-    server = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        const url = new URL(req.url);
-        const key = req.headers.get("x-api-key") ?? "";
-        const bearer = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
-        seenAuth.push(key);
-        if (key !== EXPECTED_KEY || bearer !== EXPECTED_KEY) {
-          return Response.json({ error: "unauthorized" }, { status: 401 });
-        }
-        if (url.pathname === "/v1/items" && req.method === "GET") {
-          return Response.json({ items: [...cloudStore.values()] });
-        }
-        if (url.pathname === "/v1/items" && req.method === "POST") {
-          const body = (await req.json()) as Item;
-          cloudStore.set(body.id, body);
-          return Response.json({ ok: true, item: body }, { status: 201 });
-        }
-        return Response.json({ error: "not_found", path: url.pathname }, { status: 404 });
-      },
+  test("successful resolution exposes sources but never secret values", () => {
+    const resolution = resolveClientTransport("todos", validEnv);
+    expect(resolution).toMatchObject({
+      transport: "http",
+      baseUrl: "https://todos.example.test/v1",
+      transportSource: "HASNA_TODOS_API_URL",
+      apiKeySource: "HASNA_TODOS_API_KEY",
+      apiKeyPresent: true,
+      misconfigured: false,
     });
-    baseUrl = `http://127.0.0.1:${server.port}`;
-    tmp = mkdtempSync(join(tmpdir(), "hasna-flip-"));
-    localFile = join(tmp, "db.json");
-    writeFileSync(localFile, JSON.stringify({ items: [{ id: "local-1", text: "from local file" }] }));
+    expect(JSON.stringify(resolution)).not.toContain("test-key");
   });
 
-  afterAll(() => {
-    server.stop(true);
-    rmSync(tmp, { recursive: true, force: true });
+  test("production authorities require HTTPS; exact loopback HTTP is bounded", () => {
+    expect(toV1BaseUrl("https://api.example.test/root/")).toBe("https://api.example.test/root/v1");
+    expect(toV1BaseUrl("http://127.0.0.1:8787")).toBe("http://127.0.0.1:8787/v1");
+    expect(toV1BaseUrl("http://localhost:8787")).toBe("http://localhost:8787/v1");
+    expect(() => toV1BaseUrl("http://api.example.test")).toThrow(/loopback/);
+    expect(() => toV1BaseUrl("http://127.0.0.1.example.test")).toThrow(/loopback/);
   });
 
-  // A demo app storage layer whose ONLY decision is `resolveClientTransport`.
-  function makeStore(env: Record<string, string | undefined>) {
-    const wired = createClientTransport("demo", env, {});
-    return {
-      wired,
-      async list(): Promise<Item[]> {
-        if (wired.transport === "http") {
-          const res = await wired.client.get<{ items: Item[] }>("/items");
-          return res.items;
-        }
-        return JSON.parse(readFileSync(localFile, "utf8")).items as Item[];
+  test("rejects credentials, controls, fragments, queries, IDNs, and non-canonical ports in URLs", () => {
+    for (const url of [
+      "https://user:pass@example.test",
+      "https://example.test/path?x=1",
+      "https://example.test/path#x",
+      "https://xn--bcher-kva.example",
+      "https://example.test:0443",
+      "https://example.test\n.evil.test",
+    ]) {
+      expect(() => toV1BaseUrl(url)).toThrow();
+    }
+  });
+
+  test("built client sends authentication through the sole HTTPS transport", async () => {
+    const requests: Request[] = [];
+    const wired = createClientTransport("todos", validEnv, {
+      fetchImpl: async (input, init) => {
+        requests.push(new Request(input, init));
+        return Response.json({ ok: true });
       },
-      async add(item: Item): Promise<void> {
-        if (wired.transport === "http") {
-          await wired.client.post("/items", item);
-          return;
-        }
-        const data = JSON.parse(readFileSync(localFile, "utf8"));
-        data.items.push(item);
-        writeFileSync(localFile, JSON.stringify(data));
-      },
-    };
-  }
-
-  const cloudEnv = {
-    HASNA_DEMO_API_URL: "", // filled in test (dynamic port)
-    HASNA_DEMO_API_KEY: EXPECTED_KEY,
-  };
-
-  test("flip OFF (local): reads the local file, writes land locally", async () => {
-    const store = makeStore({});
-    expect(store.wired.transport).toBe("sqlite");
-    const before = await store.list();
-    expect(before).toEqual([{ id: "local-1", text: "from local file" }]);
-    await store.add({ id: "local-2", text: "local write" });
-    const after = await store.list();
-    expect(after.map((i) => i.id)).toEqual(["local-1", "local-2"]);
-    // Nothing leaked to the cloud store.
-    expect(cloudStore.size).toBe(0);
-  });
-
-  test("flip ON (cloud): read hits cloud, write LANDS in cloud DB, not local", async () => {
-    // Seed cloud so a read is provably from the server, not the local file.
-    cloudStore.set("cloud-1", { id: "cloud-1", text: "from cloud server" });
-    const env = { ...cloudEnv, HASNA_DEMO_API_URL: baseUrl };
-    const store = makeStore(env);
-    expect(store.wired.transport).toBe("http");
-    expect(store.wired.resolution.baseUrl).toBe(`${baseUrl}/v1`);
-
-    const read = await store.list();
-    expect(read).toEqual([{ id: "cloud-1", text: "from cloud server" }]); // NOT the local-file items
-
-    await store.add({ id: "cloud-2", text: "cloud write" });
-    // Write landed in the SERVER store...
-    expect(cloudStore.has("cloud-2")).toBe(true);
-    // ...and the local file is untouched (still just local-1 + local-2 from prior test).
-    const localItems = JSON.parse(readFileSync(localFile, "utf8")).items as Item[];
-    expect(localItems.map((i) => i.id)).toEqual(["local-1", "local-2"]);
-    // The API key was actually sent on the wire.
-    expect(seenAuth).toContain(EXPECTED_KEY);
-  });
-
-  test("flip BACK OFF (unset): instantly reverts to the untouched local original", async () => {
-    const store = makeStore({});
-    expect(store.wired.transport).toBe("sqlite");
-    const items = await store.list();
-    // Exactly the local writes; zero cloud contamination.
-    expect(items.map((i) => i.id)).toEqual(["local-1", "local-2"]);
-  });
-
-  test("wrong/absent key is rejected by the server (auth is enforced)", async () => {
-    const bad = createHasnaHttpTransport({ name: "demo", baseUrl: `${baseUrl}/v1`, apiKey: "wrong" });
-    await expect(bad.get("/items")).rejects.toThrow(/401/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Credential provider chain at the seam.
-//
-// The measured failure: a shell started before a key rotation holds the stale
-// `HASNA_<NAME>_API_KEY` for its whole life. Every one of these tests would
-// pass trivially if the seam kept reading the credential out of the process
-// env, so each asserts the DISK value specifically.
-// ---------------------------------------------------------------------------
-
-describe("credential resolution at the seam", () => {
-  const credHomes: string[] = [];
-
-  function credHome(): string {
-    const home = mkdtempSync(join(tmpdir(), "hasna-seam-"));
-    credHomes.push(home);
-    return home;
-  }
-
-  function writeKeyFile(home: string, app: string, key: string): string {
-    const dir = join(home, ".hasna", "fleet-env");
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${app}.env`);
-    writeFileSync(path, `HASNA_${app.toUpperCase()}_API_KEY=${key}\n`);
-    return path;
-  }
-
-  afterEach(() => {
-    __resetCredentialDeprecationNotices();
-    while (credHomes.length > 0) rmSync(credHomes.pop()!, { recursive: true, force: true });
-  });
-
-  test("a stale env key loses to the credential on disk", () => {
-    const home = credHome();
-    const diskPath = writeKeyFile(home, "todos", "fresh-disk-key");
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-      HASNA_TODOS_API_KEY: "stale-revoked-env-key",
+      retry: false,
     });
-
-    expect(r.transport).toBe("http");
-    expect(r.apiKeyTier).toBe("fleet-env");
-    expect(r.apiKeySource).toBe(diskPath);
-  });
-
-  test("the built client actually SENDS the disk key, not the stale env key", async () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "fresh-disk-key");
-    const seen: string[] = [];
-
-    const wired = createClientTransport(
-      "todos",
-      {
-        HOME: home,
-        HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-        HASNA_TODOS_API_KEY: "stale-revoked-env-key",
-      },
-      {
-        fetchImpl: async (_url, init) => {
-          seen.push(String((init?.headers as Record<string, string>)["x-api-key"]));
-          return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-        },
-      },
-    );
-
     expect(wired.transport).toBe("http");
-    await wired.client!.get("/items");
-    expect(seen).toEqual(["fresh-disk-key"]);
-  });
-
-  test("a rotation mid-process is picked up WITHOUT rebuilding the client", async () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "key-before-rotation");
-    const seen: string[] = [];
-
-    const wired = createClientTransport(
-      "todos",
-      {
-        HOME: home,
-        HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-      },
-      {
-        fetchImpl: async (_url, init) => {
-          seen.push(String((init?.headers as Record<string, string>)["x-api-key"]));
-          return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-        },
-      },
-    );
-
-    await wired.client!.get("/items");
-    writeKeyFile(home, "todos", "key-after-rotation");
-    await wired.client!.get("/items");
-
-    expect(seen).toEqual(["key-before-rotation", "key-after-rotation"]);
-  });
-
-  test("retries inside ONE request never change identity mid-request", async () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "key-at-request-start");
-    const seen: string[] = [];
-    let attempt = 0;
-
-    const client = createHasnaHttpTransport({
-      name: "todos",
-      baseUrl: "https://todos.your-deployment.example/v1",
-      apiKey: () =>
-        resolveCredential("todos", { HOME: home }) ?? (() => { throw new Error("no credential"); })(),
-      sleepImpl: async () => {},
-      fetchImpl: async (_url, init) => {
-        seen.push(String((init?.headers as Record<string, string>)["x-api-key"]));
-        attempt += 1;
-        // The credential rotates on disk BETWEEN the two attempts of one request.
-        writeKeyFile(home, "todos", "key-rotated-mid-request");
-        if (attempt === 1) return new Response("", { status: 503 });
-        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-      },
-    });
-
-    await client.get("/items");
-
-    expect(seen).toHaveLength(2);
-    expect(seen[0]).toBe("key-at-request-start");
-    expect(seen[1]).toBe("key-at-request-start");
-  });
-
-  test("a 401 on a legacy-env key names the source and blames the stale shell", async () => {
-    const home = credHome();
-    const client = createHasnaHttpTransport({
-      name: "todos",
-      baseUrl: "https://todos.your-deployment.example/v1",
-      apiKey: () =>
-        resolveCredential(
-          "todos",
-          { HOME: home, HASNA_TODOS_API_KEY: "stale-revoked-env-key" },
-          { onDeprecation: () => {} },
-        )!,
-      fetchImpl: async () => new Response("", { status: 401 }),
-    });
-
-    let caught: unknown;
-    try {
-      await client.get("/items");
-    } catch (error) {
-      caught = error;
-    }
-
-    const message = (caught as Error).message;
-    expect(message).toContain("HASNA_TODOS_API_KEY");
-    expect(message).toMatch(/stale shell/i);
-    expect(message).not.toContain("stale-revoked-env-key");
-  });
-
-  test("a 401 on a deliberate override says the identity was NOT substituted", async () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "a-perfectly-valid-disk-key");
-    const client = createHasnaHttpTransport({
-      name: "todos",
-      baseUrl: "https://todos.your-deployment.example/v1",
-      apiKey: () =>
-        resolveCredential("todos", { HOME: home, HASNA_TODOS_API_KEY_OVERRIDE: "revoked-override" })!,
-      fetchImpl: async () => new Response("", { status: 401 }),
-    });
-
-    let caught: unknown;
-    try {
-      await client.get("/items");
-    } catch (error) {
-      caught = error;
-    }
-
-    const message = (caught as Error).message;
-    expect(message).toContain("HASNA_TODOS_API_KEY_OVERRIDE");
-    expect(message).toMatch(/not.*(substitut|replac|fall)/i);
-    expect(message).not.toContain("a-perfectly-valid-disk-key");
-    expect(message).not.toContain("revoked-override");
-  });
-
-  test("a 401 is never retried EVEN when a caller lists it as retryable", async () => {
-    // 401 is not in the default retry list, so a test that merely sends a 401
-    // would pass with or without the auth-terminal guard. The guard only earns
-    // its place against a caller that explicitly asks for 401 to be retried —
-    // which is the configuration that would otherwise re-send a revoked key.
-    const home = credHome();
-    writeKeyFile(home, "todos", "revoked-disk-key");
-    let calls = 0;
-    const client = createHasnaHttpTransport({
-      name: "todos",
-      baseUrl: "https://todos.your-deployment.example/v1",
-      apiKey: () => resolveCredential("todos", { HOME: home })!,
-      sleepImpl: async () => {},
-      retry: { retries: 3, retryStatuses: [401, 403] },
-      fetchImpl: async () => {
-        calls += 1;
-        return new Response("", { status: 401 });
-      },
-    });
-
-    await expect(client.get("/items")).rejects.toThrow(/401/);
-    expect(calls).toBe(1);
-  });
-
-  test("a 403 is likewise terminal when a caller lists it as retryable", async () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "forbidden-disk-key");
-    let calls = 0;
-    const client = createHasnaHttpTransport({
-      name: "todos",
-      baseUrl: "https://todos.your-deployment.example/v1",
-      apiKey: () => resolveCredential("todos", { HOME: home })!,
-      sleepImpl: async () => {},
-      retry: { retries: 3, retryStatuses: [401, 403] },
-      fetchImpl: async () => {
-        calls += 1;
-        return new Response("", { status: 403 });
-      },
-    });
-
-    await expect(client.get("/items")).rejects.toThrow(/403/);
-    expect(calls).toBe(1);
-  });
-
-  test("BOUNDARY: a credential on disk never flips a sqlite client to http", () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "disk-key");
-
-    const r = resolveClientTransport("todos", { HOME: home });
-
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(false);
-  });
-
-  test("BOUNDARY: a disk credential without an API URL cannot select HTTP", () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "disk-key");
-
-    const r = resolveClientTransport("todos", { HOME: home });
-
-    expect(r.transport).toBe("sqlite");
-  });
-
-  // -------------------------------------------------------------------------
-  // CURRENT CONTRACT: transport is selected by connection configuration.
-  // An API URL plus a credential selects HTTP. With no URL the client is local
-  // SQLite, and server data-backend settings never participate.
-  // -------------------------------------------------------------------------
-
-  test("URL in env + credential file on disk selects HTTP", () => {
-    const home = credHome();
-    const diskPath = writeKeyFile(home, "todos", "disk-key");
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    });
-
-    expect(r.transport).toBe("http");
-    expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
-    expect(r.apiKeyTier).toBe("fleet-env");
-    expect(r.apiKeySource).toBe(diskPath);
-    expect(r.misconfigured).toBe(false);
-    expect(JSON.stringify(r)).not.toContain("disk-key");
-  });
-
-  test("URL and key in env select HTTP", () => {
-    const home = credHome();
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-      HASNA_TODOS_API_KEY: "env-key-must-not-flip",
-    });
-
-    expect(r.transport).toBe("http");
-    expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
-    expect(r.baseUrl).toBe("https://todos.your-deployment.example/v1");
-    expect(r.misconfigured).toBe(false);
-    expect(r.apiKeyPresent).toBe(true);
-    expect(JSON.stringify(r)).not.toContain("env-key-must-not-flip");
-  });
-
-  test("API URL plus disk credential is the positive HTTP route", () => {
-    const home = credHome();
-    const diskPath = writeKeyFile(home, "todos", "disk-key");
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    });
-
-    expect(r.transport).toBe("http");
-    expect(r.apiKeyTier).toBe("fleet-env");
-    expect(r.apiKeySource).toBe(diskPath);
-  });
-
-  test("API URL with NO env key resolves from disk", () => {
-    const home = credHome();
-    const diskPath = writeKeyFile(home, "todos", "disk-key");
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    });
-
-    expect(r.transport).toBe("http");
-    expect(r.apiKeySource).toBe(diskPath);
-    expect(r.misconfigured).toBe(false);
-  });
-
-  test("API URL with neither disk nor env key fails closed to sqlite + misconfigured", () => {
-    const home = credHome();
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    });
-
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(true);
-  });
-
-  test("an explicit apiKey argument outranks both the disk and the env", async () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "disk-key");
-    const seen: string[] = [];
-
-    const wired = createClientTransport(
-      "todos",
-      {
-        HOME: home,
-        HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-        HASNA_TODOS_API_KEY: "env-key",
-      },
-      {
-        credentials: { apiKey: "flag-key" },
-        fetchImpl: async (_url, init) => {
-          seen.push(String((init?.headers as Record<string, string>)["x-api-key"]));
-          return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-        },
-      },
-    );
-
-    await wired.client!.get("/items");
-    expect(seen).toEqual(["flag-key"]);
-  });
-
-  test("the resolution never carries the key value", () => {
-    const home = credHome();
-    writeKeyFile(home, "todos", "super-secret-disk-key");
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://todos.your-deployment.example",
-    });
-
-    expect(JSON.stringify(r)).not.toContain("super-secret-disk-key");
+    await wired.client.get("/items");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe("https://todos.example.test/v1/items");
+    expect(requests[0]?.headers.get("x-api-key")).toBe("test-key");
   });
 });
 
-// ---------------------------------------------------------------------------
-// The fleet app-config file as a URL TIER (todos f8642ed2).
-//
-// MEASURED DEFECT, station01, reproduced on main @992902b with no shell at all:
-//
-//   resolveClientTransport("todos", { HOME: <home with a complete config file> })
-//   => { transport: "sqlite", transportSource: "default", baseUrl: null,
-//        apiUrlSource: null, apiKeyPresent: false, misconfigured: FALSE, warning: NULL }
-//
-// while ~/.hasna/cloud/todos.env held HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY.
-// POSITIVE CONTROL from the same run: adding the URL to the env returned
-// transport "http" with apiKeySource = that same file path. So the seam already
-// OPENED the file and read the key out of it, then discarded the API URL sitting
-// one line away and answered from the local SQLite store at misconfigured:false.
-//
-// The consequence is the one this module exists to forbid: not an empty result
-// and not an error, but a CONFIDENT WRONG ANSWER. Four surfaces hit it — a
-// coding agent's Bash tool, loop-spawned shells, agent shells, cron — because
-// all four are non-interactive and ~/.hasna/cloud/*.env was only ever sourced
-// from an operator's interactive shell rc. A fleet coordinator read a channel
-// frozen twelve days earlier, at exit 0, and judged live agents dead.
-//
-// THE FIX IS A TIER, NOT AN INFERENCE. A local->network transition stays
-// EXPLICITLY SIGNALLED: an API URL written into the fleet config file is an
-// operator writing it down, exactly as symmetrical to the credential tier that
-// already reads the same file. What stays banned is treating the mere existence
-// of a file, or a key alone, as intent.
-// ---------------------------------------------------------------------------
-describe("the fleet app-config file supplies the API URL, not just the key", () => {
-  const cfgHomes: string[] = [];
-
-  function cfgHome(): string {
-    const home = mkdtempSync(join(tmpdir(), "hasna-cfg-"));
-    cfgHomes.push(home);
-    return home;
-  }
-
-  /** Write the PRIMARY fleet-env layer, `~/.hasna/fleet-env/<app>.env`. */
-  function writeCloudEnv(home: string, app: string, body: string): string {
-    const dir = join(home, ".hasna", "fleet-env");
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${app}.env`);
-    writeFileSync(path, body);
-    return path;
-  }
-
-  /** Write the config tier under its final name, `~/.config/hasna/<app>.env`. */
-  function writeConfigEnv(home: string, app: string, body: string): string {
-    const dir = join(home, ".config", "hasna");
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${app}.env`);
-    writeFileSync(path, body);
-    return path;
-  }
-
-  afterEach(() => {
-    __resetCredentialDeprecationNotices();
-    while (cfgHomes.length > 0) rmSync(cfgHomes.pop()!, { recursive: true, force: true });
-  });
-
-  // THE DEFECT ITSELF. An env carrying nothing but HOME is what every
-  // non-interactive shell on this fleet actually has.
-  test("a shell with NOTHING but HOME reaches the server when the config file says so", () => {
-    const home = cfgHome();
-    const path = writeCloudEnv(
-      home,
-      "todos",
-      "HASNA_TODOS_API_URL=https://todos.example.invalid\n" +
-        "HASNA_TODOS_API_KEY=dummy_config_value\n",
+describe("HTTP transport security and request behavior", () => {
+  test("appends encoded query values without changing the authority", () => {
+    expect(appendQuery("/items", { q: "a b", page: 2, active: true, omitted: null })).toBe(
+      "/items?q=a+b&page=2&active=true",
     );
-
-    const r = resolveClientTransport("todos", { HOME: home });
-
-    expect(r.transport).toBe("http");
-    expect(r.baseUrl).toBe("https://todos.example.invalid/v1");
-    // The source names the FILE, so an operator can see which tier decided.
-    expect(r.apiUrlSource).toBe(path);
-    expect(r.transportSource).toBe(path);
-    expect(r.apiKeyPresent).toBe(true);
-    expect(r.misconfigured).toBe(false);
   });
 
-  // NEGATIVE CONTROL for the test above: the identical call with no config file
-  // must still be sqlite. Without this, a resolver that returned "http"
-  // unconditionally would pass the defect test.
-  test("the same call with no config file on disk is still local sqlite", () => {
-    const home = cfgHome();
-    const r = resolveClientTransport("todos", { HOME: home });
-    expect(r.transport).toBe("sqlite");
-    expect(r.transportSource).toBe("default");
-    expect(r.misconfigured).toBe(false);
-  });
-
-  // The field shapes that exist in the live files.
-  test("the field shapes parse: `export ` prefix and quoted values", () => {
-    const home = cfgHome();
-    writeCloudEnv(
-      home,
-      "knowledge",
-      "# fleet config\n" +
-        'export HASNA_KNOWLEDGE_API_URL="https://knowledge.example.invalid"\n' +
-        "export HASNA_KNOWLEDGE_API_KEY='dummy_config_value'\n",
-    );
-
-    const r = resolveClientTransport("knowledge", { HOME: home });
-
-    expect(r.transport).toBe("http");
-    expect(r.baseUrl).toBe("https://knowledge.example.invalid/v1");
-  });
-
-  // NO OVER-REACH. The disk tier fills what the env leaves absent, never outranks it.
-  test("a URL in the env beats the URL on disk", () => {
-    const home = cfgHome();
-    writeCloudEnv(
-      home,
-      "todos",
-      "HASNA_TODOS_API_URL=https://disk.example.invalid\nHASNA_TODOS_API_KEY=dummy_config_value\n",
-    );
-
-    const r = resolveClientTransport("todos", {
-      HOME: home,
-      HASNA_TODOS_API_URL: "https://env.example.invalid",
+  test("never follows cross-authority redirects", async () => {
+    const seen: string[] = [];
+    const transport = createHasnaHttpTransport({
+      name: "todos",
+      baseUrl: "https://todos.example.test/v1",
+      apiKey: "key",
+      fetchImpl: async (input) => {
+        seen.push(String(input));
+        return new Response(null, { status: 302, headers: { location: "https://evil.test/steal" } });
+      },
+      retry: false,
     });
-
-    expect(r.baseUrl).toBe("https://env.example.invalid/v1");
-    expect(r.apiUrlSource).toBe("HASNA_TODOS_API_URL");
+    await expect(transport.get("/items")).rejects.toBeInstanceOf(HasnaHttpError);
+    expect(seen).toEqual(["https://todos.example.test/v1/items"]);
   });
 
-  test("the second disk layer answers when the first has no URL", () => {
-    const home = cfgHome();
-    writeCloudEnv(home, "todos", "HASNA_TODOS_API_KEY=dummy_config_value\n");
-    const second = writeConfigEnv(home, "todos", "HASNA_TODOS_API_URL=https://second.example.invalid\n");
-
-    const r = resolveClientTransport("todos", { HOME: home });
-
-    expect(r.transport).toBe("http");
-    expect(r.apiUrlSource).toBe(second);
+  test("401 and 403 are terminal even when generic retry is enabled", async () => {
+    for (const status of [401, 403]) {
+      let calls = 0;
+      const transport = createHasnaHttpTransport({
+        name: "todos",
+        baseUrl: "https://todos.example.test/v1",
+        apiKey: "key",
+        fetchImpl: async () => {
+          calls += 1;
+          return Response.json({ error: "denied" }, { status });
+        },
+        retry: { retries: 3, retryStatuses: [status], baseDelayMs: 1, maxDelayMs: 1 },
+        sleepImpl: async () => {},
+      });
+      await expect(transport.get("/items")).rejects.toBeInstanceOf(HasnaHttpError);
+      expect(calls).toBe(1);
+    }
   });
 
-  // FAIL LOUDLY. This is the half of the defect that the URL tier does not fix
-  // by itself: a config file the library could not USE must surface, never
-  // quietly answer from the local store.
-  test("a URL on disk with no resolvable credential is misconfigured, not a silent local read", () => {
-    const home = cfgHome();
-    writeCloudEnv(home, "todos", "HASNA_TODOS_API_URL=https://todos.example.invalid\n");
+  test("auth failures discard echoed credentials from every diagnostic surface", async () => {
+    const key = "fixture-auth-response-echo-key";
+    for (const status of [401, 403]) {
+      const transport = createHasnaHttpTransport({
+        name: "todos",
+        baseUrl: "https://todos.example.test/v1",
+        apiKey: key,
+        retry: false,
+        fetchImpl: async () => Response.json({ error: "denied", echoed: { credential: key } }, { status }),
+      });
 
-    const r = resolveClientTransport("todos", { HOME: home });
-
-    expect(r.misconfigured).toBe(true);
-    expect(r.warning).toBeTruthy();
-    expect(r.apiKeyPresent).toBe(false);
-    // The warning must name the file it consulted, and never a key value.
-    expect(r.warning!).toContain(join(home, ".hasna", "fleet-env", "todos.env"));
+      let thrown: unknown;
+      try {
+        await transport.get("/items");
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(HasnaHttpError);
+      const authError = thrown as HasnaHttpError;
+      expect(authError.body).toBeUndefined();
+      expect(Object.keys(authError)).not.toContain("body");
+      expect(JSON.stringify(authError)).not.toContain(key);
+      expect(JSON.stringify({ ...authError })).not.toContain(key);
+      expect(Bun.inspect(authError)).not.toContain(key);
+      expect(authError.message).not.toContain(key);
+      expect(authError.stack).not.toContain(key);
+    }
   });
 
-  test("an unusable URL on disk is misconfigured rather than silently ignored", () => {
-    const home = cfgHome();
-    writeCloudEnv(
-      home,
-      "todos",
-      "HASNA_TODOS_API_URL=not-an-absolute-url\nHASNA_TODOS_API_KEY=dummy_config_value\n",
-    );
-
-    const r = resolveClientTransport("todos", { HOME: home });
-
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(true);
-    expect(r.warning).toBeTruthy();
-  });
-
-  // A retired mode key is not part of the selection contract anywhere: a live
-  // fleet file or environment may still carry a stale HASNA_<APP>_STORAGE_MODE
-  // line, and the resolver must simply never read it. Selection is the env
-  // contract only — HASNA_<APP>_API_URL plus a resolved credential for HTTP.
-  test("a retired mode key is inert in the file and in the env", () => {
-    const home = cfgHome();
-    writeCloudEnv(
-      home,
-      "todos",
-      "HASNA_TODOS_STORAGE_MODE=postgres\n" +
-        "HASNA_TODOS_API_URL=https://todos.example.invalid\n" +
-        "HASNA_TODOS_API_KEY=dummy_config_value\n",
-    );
-
-    // On disk: ignored.
-    const r = resolveClientTransport("todos", { HOME: home });
-    expect(r.transport).toBe("http");
-
-    // In the env: also ignored; the URL and key still select HTTP.
-    const r2 = resolveClientTransport("todos", { HOME: home, HASNA_TODOS_STORAGE_MODE: "postgres" });
-    expect(r2.transport).toBe("http");
-  });
-
-  // The credential must not leak into the routing tier through the new reader.
-  test("the config tier never exposes the key value through a source field", () => {
-    const home = cfgHome();
-    writeCloudEnv(
-      home,
-      "todos",
-      "HASNA_TODOS_API_URL=https://todos.example.invalid\nHASNA_TODOS_API_KEY=dummy_config_value\n",
-    );
-
-    const r = resolveClientTransport("todos", { HOME: home });
-
-    expect(JSON.stringify(r)).not.toContain("dummy_config_value");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// a8c08df1 — transport selection is explicit configuration, never pointer
-// presence. The rows below lock the two directions: explicit configuration
-// selects the right transport, and unset/blank pointer variables never
-// silently flip it. Regression for the presence-inference defect class: a
-// fleet app-config pointer on disk must not silently override an explicit
-// blank in the environment, and a disk-supplied flip must never be silent.
-// ---------------------------------------------------------------------------
-describe("transport selection is explicit configuration, never pointer presence", () => {
-  const homes: string[] = [];
-
-  function home(): string {
-    const h = mkdtempSync(join(tmpdir(), "hasna-ctm-"));
-    homes.push(h);
-    return h;
-  }
-
-  function writeUrlFile(h: string, app: string, url: string): string {
-    const dir = join(h, ".hasna", "fleet-env");
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${app}.env`);
-    writeFileSync(
-      path,
-      `HASNA_${app.toUpperCase()}_API_URL=${url}\nHASNA_${app.toUpperCase()}_API_KEY=${app}-disk-key\n`,
-    );
-    return path;
-  }
-
-  afterEach(() => {
-    __resetCredentialDeprecationNotices();
-    while (homes.length > 0) rmSync(homes.pop()!, { recursive: true, force: true });
-  });
-
-  test("a DEFINED-BLANK API URL is an explicit local choice and wins over the disk pointer", () => {
-    const h = home();
-    const diskPath = writeUrlFile(h, "todos", "https://todos.example.com");
-
-    const r = resolveClientTransport("todos", {
-      HOME: h,
-      HASNA_TODOS_API_URL: "   ",
+  test("retries a transient GET without changing credentials mid-request", async () => {
+    let calls = 0;
+    const keys: string[] = [];
+    const transport = createHasnaHttpTransport({
+      name: "todos",
+      baseUrl: "https://todos.example.test/v1",
+      apiKey: () => ({
+        apiKey: `key-${++calls}`,
+        tier: "argument",
+        source: "test",
+        deliberate: true,
+        deprecated: false,
+        diskCandidates: [],
+        warning: null,
+      }),
+      fetchImpl: async (_input, init) => {
+        keys.push(new Headers(init?.headers).get("x-api-key") ?? "");
+        return keys.length === 1 ? Response.json({}, { status: 503 }) : Response.json({ ok: true });
+      },
+      retry: { retries: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      sleepImpl: async () => {},
     });
-
-    // The explicit blank must select local and MUST NOT be filled in from the
-    // disk pointer: presence of a pointer never overrides an explicit opinion.
-    expect(r.transport).toBe("sqlite");
-    expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
-    expect(r.misconfigured).toBe(false);
-    // The override must not be silent: the operator learns the disk pointer
-    // existed and was not selected.
-    expect(r.warning).toContain(diskPath);
-    expect(r.warning).toContain("HASNA_TODOS_API_URL");
-  });
-
-  test("a disk-supplied server URL is never silent about having flipped the transport", () => {
-    const h = home();
-    const diskPath = writeUrlFile(h, "todos", "https://todos.example.com");
-
-    const r = resolveClientTransport("todos", { HOME: h });
-
-    expect(r.transport).toBe("http");
-    expect(r.transportSource).toBe(diskPath);
-    expect(r.misconfigured).toBe(false);
-    // "no silent inference": the resolution names the file that decided.
-    expect(r.warning).not.toBeNull();
-    expect(r.warning).toContain(diskPath);
-  });
-
-  test("explicit URL+key in env selects http even when a disk pointer exists", () => {
-    const h = home();
-    writeUrlFile(h, "todos", "https://disk-would-win.example.com");
-
-    const r = resolveClientTransport("todos", {
-      HOME: h,
-      HASNA_TODOS_API_URL: "https://env-wins.example.com",
-      HASNA_TODOS_API_KEY: "env-key",
-    });
-
-    expect(r.transport).toBe("http");
-    expect(r.baseUrl).toBe("https://env-wins.example.com/v1");
-    expect(r.transportSource).toBe("HASNA_TODOS_API_URL");
-  });
-
-  test("a value-bearing alias URL wins over a blank canonical key", () => {
-    const h = home();
-    writeUrlFile(h, "todos", "https://disk.example.com");
-
-    const r = resolveClientTransport("todos", {
-      HOME: h,
-      HASNA_TODOS_API_URL: "",
-      TODOS_API_URL: "https://alias.example.com",
-      TODOS_API_KEY: "alias-key",
-    });
-
-    expect(r.transport).toBe("http");
-    expect(r.baseUrl).toBe("https://alias.example.com/v1");
-    expect(r.transportSource).toBe("TODOS_API_URL");
-  });
-
-  test("blank URL with no disk pointer stays local without a warning", () => {
-    const r = resolveClientTransport("todos", { HASNA_TODOS_API_URL: "" });
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(false);
-    expect(r.warning).toBeNull();
-  });
-
-  test("unset URL and no disk pointer stays local (documented default)", () => {
-    const r = resolveClientTransport("todos", {});
-    expect(r.transport).toBe("sqlite");
-    expect(r.transportSource).toBe("default");
-    expect(r.misconfigured).toBe(false);
+    expect(await transport.get<{ ok: boolean }>("/items")).toEqual({ ok: true });
+    expect(keys).toEqual(["key-1", "key-1"]);
+    expect(calls).toBe(1);
   });
 });

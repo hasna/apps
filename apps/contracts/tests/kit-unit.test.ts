@@ -19,17 +19,15 @@ import type { TypedQueryClient } from "../src/kit/templates/query";
 // --- backend.ts ----------------------------------------------------------
 
 describe("kit server backend resolution", () => {
-  test("exposes exactly sqlite|postgresql", () => {
-    expect(SERVER_DATA_BACKENDS).toEqual(["sqlite", "postgresql"]);
+  test("exposes exactly postgresql", () => {
+    expect(SERVER_DATA_BACKENDS).toEqual(["postgresql"]);
   });
 
   test("database URL presence selects postgresql", () => {
     const keys = serverDataBackendEnvKeys("todos");
     expect(keys.databaseUrlKeys[0]).toBe("HASNA_TODOS_DATABASE_URL");
 
-    const def = resolveServerDataBackend("todos", {});
-    expect(def.backend).toBe("sqlite");
-    expect(def.source).toBe("default");
+    expect(() => resolveServerDataBackend("todos", {})).toThrow(/DATABASE_URL.*required/);
 
     const aliasEnv = resolveServerDataBackend("todos", {
       TODOS_DATABASE_URL: "postgres://fixture.invalid/todos",
@@ -41,9 +39,7 @@ describe("kit server backend resolution", () => {
 
   test("legacy mode variables are inert; DATABASE_URL is the only selector", () => {
     for (const value of ["cloud", "", "   "]) {
-      expect(resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: value }).backend).toBe(
-        "sqlite",
-      );
+      expect(() => resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: value })).toThrow(/DATABASE_URL/);
       expect(
         resolveServerDataBackend("todos", {
           HASNA_TODOS_STORAGE_MODE: value,
@@ -54,7 +50,7 @@ describe("kit server backend resolution", () => {
   });
 
   test("resolveDatabaseUrl honors alias but never logs value", () => {
-    expect(resolveDatabaseUrl("todos", {})).toBeNull();
+    expect(() => resolveDatabaseUrl("todos", {})).toThrow(/DATABASE_URL.*required/);
     expect(resolveDatabaseUrl("todos", { TODOS_DATABASE_URL: "postgres://user@h/db" })).toBe(
       "postgres://user@h/db",
     );

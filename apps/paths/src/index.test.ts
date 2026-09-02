@@ -22,7 +22,7 @@ import {
 } from "./index";
 
 function opts(partial: Partial<PathsOptions> = {}): PathsOptions {
-  return { app: "todos", platform: "linux", home: "/home/user", ...partial };
+  return { app: "todos", platform: "linux", home: "/home/user", env: {}, ...partial };
 }
 
 const MAC: Partial<PathsOptions> = { platform: "darwin", home: "/Users/user" };

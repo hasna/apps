@@ -1,5 +1,11 @@
 # @hasna/contracts
 
+Public app data access follows one canonical boundary: authenticated HTTPS to
+the app service, backed by authoritative server-side PostgreSQL. Missing or
+invalid URL/credential/database configuration fails closed; clients never
+select SQLite or another local data path and never accept database DSNs.
+See `docs/CANONICAL_DATA_CLIENT_CONTRACT.md`.
+
 Shared schemas, TypeScript types, validators, fixtures, and CLI checks for Hasna
 open-source agent infrastructure.
 
@@ -32,9 +38,9 @@ bun add @hasna/contracts
 ## State and paths
 
 This package currently owns no persistent user state and does not create a
-global directory during installation or validation. `~/.hasna/contracts` is
-reserved as the only package-global root if state is added later. Legacy global
-dotdirs are not read.
+global directory during installation or validation. Future non-authoritative
+configuration, state, and cache must use their respective XDG roots. Legacy
+global dotdirs are not automatic client inputs.
 
 Project metadata and vendored-kit manifests remain project-local. See
 [State layout](docs/STATE_LAYOUT.md) for the audited path inventory and
@@ -477,8 +483,8 @@ Seam](docs/AUTH_RBAC_VERIFIER_CONTRACT.md#identity-seam-offline-eddsa-fleet-toke
 **Client env vars (HTTP transport to a server):**
 
 - `HASNA_<APP>_API_URL` + `HASNA_<APP>_API_KEY` — the per-app URL and a
-  credential select HTTP. Without an API URL the client uses local SQLite; a
-  URL without a credential fails closed rather than reading the wrong dataset.
+  credential are both required. Missing either fails closed; public clients
+  have no SQLite or local-data selection.
   The URL
   always wins and is normalized to `/v1`. Explicit URLs require canonical ASCII
   authorities without credentials, controls, IDN/punycode, query strings, or

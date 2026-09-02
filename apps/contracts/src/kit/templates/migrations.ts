@@ -18,6 +18,74 @@ import { createHash } from "node:crypto";
 import type { TypedQueryClient } from "./query.js";
 import { ownProp, ownString } from "./own.js";
 
+const TRANSACTION_CONTROL_STATEMENT =
+  /^(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION|SET\s+(?:SESSION\s+CHARACTERISTICS\s+AS\s+)?TRANSACTION)\b/i;
+
+/** Strip comments and quoted bodies before inspecting statement structure. */
+function stripSqlBodies(sql: string): string {
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i]!;
+    const next = sql[i + 1];
+    if (ch === "-" && next === "-") {
+      while (i < sql.length && sql[i] !== "\n") { out += " "; i++; }
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      let depth = 1;
+      out += "  "; i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === "/" && sql[i + 1] === "*") { depth++; out += "  "; i += 2; }
+        else if (sql[i] === "*" && sql[i + 1] === "/") { depth--; out += "  "; i += 2; }
+        else { out += " "; i++; }
+      }
+      continue;
+    }
+    if (ch === "$") {
+      const match = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
+      if (match) {
+        const tag = match[0];
+        out += " ".repeat(tag.length);
+        i += tag.length;
+        const end = sql.indexOf(tag, i);
+        if (end === -1) { out += " ".repeat(sql.length - i); i = sql.length; }
+        else { out += " ".repeat(end - i + tag.length); i = end + tag.length; }
+        continue;
+      }
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      const escaped = quote === "'" && /[eE]/.test(sql[i - 1] ?? "") && !/[A-Za-z0-9_$]/.test(sql[i - 2] ?? "");
+      out += " ";
+      i++;
+      while (i < sql.length) {
+        if (escaped && sql[i] === "\\") { out += "  "; i += 2; continue; }
+        if (sql[i] === quote) {
+          if (sql[i + 1] === quote) { out += "  "; i += 2; continue; }
+          out += " "; i++; break;
+        }
+        out += " "; i++;
+      }
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+function assertNoTransactionControl(migration: Migration): void {
+  for (const statement of stripSqlBodies(migration.sql).split(";")) {
+    if (TRANSACTION_CONTROL_STATEMENT.test(statement.trim())) {
+      throw new Error(
+        `Migration '${migration.id}' contains a transaction-control statement; ` +
+          "rewrite it as plain DDL so the ledger can apply and record it atomically.",
+      );
+    }
+  }
+}
+
 /** Default ledger table name. Override per app if a legacy name exists. */
 export const DEFAULT_MIGRATION_LEDGER_TABLE = "schema_migrations";
 
@@ -179,6 +247,8 @@ export class MigrationLedger {
     // OWN-property read: a prototype-supplied `dryRun` would turn every
     // `migrate()` call into a no-op that still reports a plan.
     const dryRun = ownProp<unknown>(opts, "dryRun") === true;
+    // Refuse before creating or reading the ledger, for dry-run and apply.
+    for (const migration of this.migrations) assertNoTransactionControl(migration);
     await this.ensureLedger();
     const applied = await this.readApplied();
     const plan = this.buildPlan(applied);

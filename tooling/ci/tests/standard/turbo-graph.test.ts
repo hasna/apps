@@ -34,10 +34,11 @@
  * This test is the two-sided gate for that shape:
  *   RED  — the graph is cyclic again and turbo refuses to construct it
  *          (rc != 0), or the secrets -> contracts build edge returns or
- *          disappears, or @hasna/secrets moves back into contracts'
+ *          disagrees with the installed workspace/registry target, or @hasna/secrets moves back into contracts'
  *          dependencies (the cycle edge);
  *   GREEN — the graph constructs (rc 0) with secrets#build waiting on
- *          contracts#build while contracts#build waits on nothing.
+ *          contracts#build only when it resolves that workspace; an older
+ *          registry pin needs no workspace build. The reverse peer edge is absent.
  */
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -93,7 +94,7 @@ describe("turbo task graph", () => {
     expect(graph.rc, `turbo rc=${graph.rc}\n${graph.stderr}`).toBe(0);
   });
 
-  test("secrets#build depends on contracts#build, but contracts#build does not depend on secrets#build", () => {
+  test("secrets#build follows its resolved Contracts target without a reverse peer edge", () => {
     const graph = turboBuildGraph();
     expect(graph.rc, `turbo rc=${graph.rc}\n${graph.stderr}`).toBe(0);
 
@@ -102,10 +103,13 @@ describe("turbo task graph", () => {
     expect(contractsBuild, "task @hasna/contracts#build must exist in the dry-run graph").toBeDefined();
     expect(secretsBuild, "task @hasna/secrets#build must exist in the dry-run graph").toBeDefined();
 
-    // The preserved direction: secrets' build-time use of @hasna/contracts
-    // (static import bundled into dist) keeps its ^build edge, so contracts
-    // builds first and its dist + declarations exist.
-    expect(secretsBuild).toContain("@hasna/contracts#build");
+    // A registry pin outside the workspace version (e.g. 0.14.2 vs 1.0.0)
+    // consumes the registry artifact, not this checkout's breaking release.
+    // Only an actual workspace resolution should create a workspace build edge.
+    const resolvedAuth = fs.realpathSync(Bun.resolveSync("@hasna/contracts/auth", path.join(APPS_DIR, "secrets")));
+    const workspaceContracts = fs.realpathSync(path.join(APPS_DIR, "contracts"));
+    const usesWorkspace = resolvedAuth.startsWith(workspaceContracts + path.sep);
+    expect(secretsBuild!.includes("@hasna/contracts#build")).toBe(usesWorkspace);
     // The removed direction: contracts' runtime use of @hasna/secrets is a
     // peerDependency, which turbo 2.5.4 does not traverse — no package-graph
     // cycle, and contracts' build (which deliberately never resolves sibling

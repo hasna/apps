@@ -1,6 +1,6 @@
 import type { Env } from "../env-token.js";
 /** Which link of the chain supplied the credential. */
-export type CredentialTier = "argument" | "override" | "pointer" | "profile" | "disk" | "fleet-env" | "legacy-cloud" | "config" | "config-legacy" | "legacy-env";
+export type CredentialTier = "argument" | "override" | "pointer" | "profile" | "disk" | "config" | "legacy-env";
 export interface ResolvedCredential {
     /**
      * The secret.
@@ -20,7 +20,7 @@ export interface ResolvedCredential {
     readonly source: string;
     /** True for tiers an operator sets on purpose. These never fall through. */
     readonly deliberate: boolean;
-    /** True when it came from a deprecated legacy tier (legacy-env, legacy-cloud, config-legacy). */
+    /** True when it came from the deprecated process-environment tier. */
     readonly deprecated: boolean;
     /**
      * When tier === "pointer", the vault ITEM KEY to resolve through the
@@ -64,40 +64,30 @@ export declare class CredentialResolutionError extends Error {
     readonly attempted: readonly string[];
     constructor(appName: string, message: string, attempted: readonly string[]);
 }
-/**
- * The explicit removal deadline for the deprecated credential tiers
- * (legacy-cloud `~/.hasna/cloud/<app>.env` and the config `-cloud.env` alias).
- *
- * Kept in code so the deprecation notice and the docs name the SAME date. After
- * this date the deprecated sources are no longer consulted; the migration that
- * lands the removal is tracked separately, this constant is the date it is
- * measured against.
- */
-export declare const LEGACY_CLOUD_REMOVAL_DEADLINE = "2026-10-01";
+/** An existing credential/config file is unsafe and is never treated as absent. */
+export declare class CredentialFileUnsafeError extends Error {
+    readonly path: string;
+    constructor(path: string, reason: string);
+}
 /** One on-disk credential source: its absolute path, its tier, and whether it is deprecated. */
 export interface DiskCredentialSource {
     path: string;
     tier: CredentialTier;
-    /** True for the legacy-cloud and config `-cloud.env` sources — NOISY, removal-deadline bound. */
+    /** Retained in the public shape; canonical XDG sources are never deprecated. */
     deprecated: boolean;
 }
 /**
  * All on-disk credential sources for an app, in precedence order.
  *
- * Four layers exist, and the first entry wins. Returns an empty list when there
- * is no HOME to anchor them, or when the app name is not safe to place in a
- * path. The deprecated layers are consulted (loudly) until
- * {@link LEGACY_CLOUD_REMOVAL_DEADLINE}; they are not dropped so an existing
- * install keeps working while the fleet migrates.
+ * Exactly one XDG layer exists. Returns an empty list when there is no HOME to
+ * anchor the default, or when the app name is not safe to place in a path.
  */
 export declare function credentialDiskSourceList(name: string, env: Env, profile?: string | null): DiskCredentialSource[];
 /**
  * The disk files that may hold an app's credential, in precedence order.
  *
- * Four layers exist in the field, and the first entry wins. Returns an empty
- * list when there is no HOME to anchor them, or when the app name is not safe
- * to place in a path. Exported so callers and error messages can name the exact
- * paths consulted.
+ * Exactly one XDG layer exists. Exported so callers and error messages can name
+ * the exact path consulted.
  */
 export declare function credentialDiskSources(name: string, env: Env): string[];
 /** A non-secret config value read off disk, with the file that supplied it. */
@@ -108,18 +98,17 @@ export interface AppConfigDiskHit {
     value: string;
     /** Absolute path of the file that supplied it, so a diagnostic can name it. */
     path: string;
+    /** The key was explicitly declared but blank or malformed. */
+    unusable?: boolean;
 }
 /**
  * Read a NON-SECRET config value from the fleet app-config file on disk.
  *
  * This is the tier that closes the gap the credential chain left open: the same
  * file already supplies the API key, and every other field in it was discarded.
- * A non-interactive shell — a coding agent's Bash tool, a loop-spawned `/bin/sh`,
- * cron — inherits none of the fleet environment, so before this existed the
- * client answered from its local SQLite store at `misconfigured: false` while a
- * complete, usable server config sat on disk one line away from the key it did
- * read. That is a confident wrong answer, which is the single failure mode this
- * module exists to prevent.
+ * A non-interactive shell may inherit no service environment, so this source
+ * keeps the authority and credential together without introducing a local-data
+ * fallback.
  *
  * Precedence is file-major, then the caller's key order within a file: the first
  * disk layer that can answer wins, and inside it the caller's first key wins

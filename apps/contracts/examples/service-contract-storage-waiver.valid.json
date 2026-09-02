@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.8.0",
-  "description": "SQLite-only local CLI declaring an explicit, time-boxed PostgreSQL waiver.",
+  "description": "PostgreSQL-authoritative CLI retaining an explicit legacy SQLite import capability.",
   "bins": [
     "factory",
     "factory-mcp"
@@ -29,24 +29,13 @@
     }
   ],
   "storage": {
-    "backend": "sqlite",
+    "backend": "postgresql",
     "engines": [
-      "sqlite"
+      "sqlite",
+      "postgresql"
     ],
     "envPrefix": "HASNA_FACTORY_",
     "aliasEnvPrefix": "FACTORY_",
     "sqlitePath": "~/.hasna/factory/factory.db"
-  },
-  "metadata": {
-    "conformance": {
-      "waivedStorageEngines": [
-        {
-          "engine": "postgresql",
-          "reason": "Single-operator local CLI; PostgreSQL adoption is tracked through the vendored storage kit.",
-          "reviewedBy": "platform-storage",
-          "expiresAt": "2027-01-01T00:00:00.000Z"
-        }
-      ]
-    }
   }
 }

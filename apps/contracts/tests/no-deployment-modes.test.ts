@@ -197,14 +197,14 @@ describe("JSON Schema copies reject the field structurally", () => {
   }
 });
 
-describe("server data backend is sqlite|postgresql", () => {
+describe("server data backend is authoritative postgresql", () => {
   test("server backend matches the engine vocabulary", () => {
-    expect(SERVER_DATA_BACKENDS).toEqual(["sqlite", "postgresql"]);
+    expect(SERVER_DATA_BACKENDS).toEqual(["postgresql"]);
     expect(STORAGE_ENGINES).toEqual(["sqlite", "postgresql"]);
   });
 
   test("DATABASE_URL is the only server backend selector", () => {
-    expect(resolveServerDataBackend("demo", {}).backend).toBe("sqlite");
+    expect(() => resolveServerDataBackend("demo", {})).toThrow(/DATABASE_URL/);
     expect(resolveServerDataBackend("demo", {
       HASNA_DEMO_DATABASE_URL: "postgres://user@host/db",
     }).backend).toBe("postgresql");
@@ -212,16 +212,14 @@ describe("server data backend is sqlite|postgresql", () => {
 
   test("retired server mode variables are inert; DATABASE_URL is the only selector", () => {
     for (const word of ["", "   ", "sqlite", "postgres", ...REMOVED_MODE_WORDS]) {
-      expect(resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: word }).backend).toBe(
-        "sqlite",
-      );
+      expect(() => resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: word })).toThrow(/DATABASE_URL/);
       expect(
         resolveServerDataBackend("demo", {
           HASNA_DEMO_STORAGE_MODE: word,
           HASNA_DEMO_DATABASE_URL: "postgres://user@host/db",
         }).backend,
       ).toBe("postgresql");
-      expect(resolveServerDataBackend("demo", { HASNA_DEMO_MODE: word }).backend).toBe("sqlite");
+      expect(() => resolveServerDataBackend("demo", { HASNA_DEMO_MODE: word })).toThrow(/DATABASE_URL/);
     }
   });
 
@@ -241,13 +239,10 @@ describe("server data backend is sqlite|postgresql", () => {
   });
 });
 
-describe("client seam is sqlite|http, never placement words", () => {
+describe("client seam is authenticated HTTP only, never placement words", () => {
   test("removed mode words in the client env are inert", () => {
     for (const word of ["", "   ", "local", "cloud", "self_hosted", "self-hosted", "remote", "hybrid"]) {
-      expect(() => resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: word })).not.toThrow();
-      expect(resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: word }).transport).toBe(
-        "sqlite",
-      );
+      expect(() => resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: word })).toThrow(/API_URL/);
     }
   });
 
@@ -262,18 +257,14 @@ describe("client seam is sqlite|http, never placement words", () => {
   });
 
   test("a server DATABASE_URL never makes the client open PostgreSQL", () => {
-    const resolved = resolveClientTransport("demo", {
+    expect(() => resolveClientTransport("demo", {
       HASNA_DEMO_DATABASE_URL: "postgres://user@host/db",
-    });
-    expect(resolved.transport).toBe("sqlite");
-    expect(resolved.baseUrl).toBeNull();
+    })).toThrow(/API_URL/);
   });
 
   test("retired client mode variables never select HTTP by themselves", () => {
     for (const value of ["sqlite", "postgres"]) {
-      expect(resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: value }).transport).toBe(
-        "sqlite",
-      );
+      expect(() => resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: value })).toThrow(/API_URL/);
       const withUrl = resolveClientTransport("demo", {
         HASNA_DEMO_STORAGE_MODE: value,
         HASNA_DEMO_API_URL: "https://demo.example.com",

@@ -1,6 +1,6 @@
 import { type Env } from "../env-token.js";
 import { type CredentialChainOptions, type CredentialTier, type ResolvedCredential } from "./credentials.js";
-export { LEGACY_CLOUD_REMOVAL_DEADLINE, appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, explicitCredential, resolveCredential, __resetCredentialDeprecationNotices, } from "./credentials.js";
+export { appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, explicitCredential, resolveCredential, __resetCredentialDeprecationNotices, } from "./credentials.js";
 export type { AppConfigDiskHit, CredentialChainOptions, CredentialTier, DiskCredentialSource, ResolvedCredential, } from "./credentials.js";
 export { clientTransportEnvKeys, credentialOverrideEnvKey, credentialPointerEnvKey, CREDENTIAL_PROFILE_ENV_KEY, } from "./env-keys.js";
 export type { ClientTransportEnvKeys } from "./env-keys.js";
@@ -26,20 +26,24 @@ export declare function defaultCloudBaseUrl(name: string, env?: Env): string;
  * rejected rather than silently normalized.
  */
 export declare function toV1BaseUrl(apiUrl: string): string;
-export declare const CLIENT_TRANSPORTS: readonly ["sqlite", "http"];
+export declare const CLIENT_TRANSPORTS: readonly ["http"];
 export type ClientTransportKind = (typeof CLIENT_TRANSPORTS)[number];
+/** A client authority or credential declaration cannot be used safely. */
+export declare class ClientTransportConfigurationError extends Error {
+    readonly appName: string;
+    readonly sources: readonly string[];
+    constructor(appName: string, message: string, sources?: readonly string[]);
+}
 export interface ClientTransportResolution {
     /** Where the client should read/write from. */
     transport: ClientTransportKind;
     /**
-     * What selected the transport: an API URL env key NAME, the absolute PATH of
-     * the fleet app-config file that supplied the URL, `"default"` for local
-     * SQLite with a silent environment, or the env key NAME of a DEFINED-but-blank
-     * URL that explicitly selected local.
+     * What selected the transport: an API URL env key NAME or the absolute PATH
+     * of the XDG app-config file that supplied the URL.
      */
     transportSource: string;
-    /** `<origin>/v1` base for the server API when transport is http, else null. */
-    baseUrl: string | null;
+    /** `<origin>/v1` base for the server API. */
+    baseUrl: string;
     /**
      * WHERE the API URL/domain came from: an env key NAME, an absolute file PATH,
      * `"default"` (neutral placeholder), or null.
@@ -51,19 +55,16 @@ export interface ClientTransportResolution {
      * WHERE the API key came from: an env key NAME or an absolute file path.
      * Never the value.
      *
-     * On local SQLite this reports only whether the legacy env key is set, since
-     * a client reading its own file resolves no credential at all. On HTTP it
-     * names the tier of the provider chain that supplied the key.
+     * Names the tier of the provider chain that supplied the key.
      */
     apiKeySource: string | null;
     /**
-     * Which tier of the credential chain supplied the key, or null on the
-     * local SQLite / when no credential resolved. See {@link CredentialTier}.
+     * Which tier of the credential chain supplied the key.
      */
-    apiKeyTier: CredentialTier | null;
+    apiKeyTier: CredentialTier;
     /**
-     * True when an API URL requests HTTP but the connection is incomplete.
-     * Callers SHOULD treat this as an error rather than reading stale local data.
+     * Kept for diagnostic shape compatibility. A successful resolution is never
+     * misconfigured; invalid configurations throw before a value is returned.
      */
     misconfigured: boolean;
     /** Human-readable warning, or null. Never contains secret values. */
@@ -74,20 +75,8 @@ export interface ResolveClientTransportOptions {
     credentials?: CredentialChainOptions;
 }
 /**
- * Resolve how a client should reach an app's data given the environment.
- *
- * An explicit API URL requests HTTP. It is read from the environment first and,
- * when the environment is silent, from the fleet app-config file on disk — the
- * same file the credential tier already reads. The credential resolves at CALL
- * TIME through {@link resolveCredential}: argument, deliberate override/profile,
- * disk, then the deprecated legacy env variable. With no API URL in either tier
- * the client stays on local SQLite and never consults credential files.
- *
- * The disk tier is a FALLBACK and never an override: an API URL exported in the
- * environment always wins over the file. It exists because a non-interactive
- * shell inherits no fleet environment, and the honest answer for one is the
- * config its operator actually wrote down — not a silent local-store read at
- * `misconfigured: false`.
+ * Resolve the sole authenticated service transport without exposing its
+ * credential value. Invalid or incomplete configuration throws.
  */
 export declare function resolveClientTransport(name: string, env?: Env, options?: ResolveClientTransportOptions): ClientTransportResolution;
 /** Thrown when a cloud HTTP request returns a non-2xx status, including redirects. */
@@ -184,34 +173,19 @@ export interface HasnaHttpTransport {
 /** Append query params to a `/v1`-relative path (no-op when empty). */
 export declare function appendQuery(path: string, query?: QueryParams): string;
 /**
- * Build an authenticated HTTP transport for an app's cloud `/v1` API. Sends the
- * API key on every request as BOTH `x-api-key` and `Authorization: Bearer`
- * (serve apps accept either), returns parsed JSON, times out, and retries
- * transient failures with exponential backoff + jitter. Never logs the key.
- * Redirects are never followed: every 3xx response fails closed at the validated
- * base origin so credentials and request bodies cannot cross an authority
- * boundary through runtime-specific redirect behavior.
- *
- * Retry safety: idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS) are always
- * retried on transient failure; POST/PATCH are retried ONLY when an
- * `Idempotency-Key` is supplied, so replays can't create duplicates.
+ * Build an authenticated HTTP transport from a static authority and a
+ * per-request credential provider.
  */
 export declare function createHasnaHttpTransport(options: HasnaHttpTransportOptions): HasnaHttpTransport;
 /**
- * Convenience: resolve transport from env and, when http, build the HTTP
- * client in one call. Returns `{ transport: 'sqlite', resolution }` for the
- * local file, or `{ transport: 'http', client, resolution }` for server data.
- * Throws if the config is `misconfigured` (server data requested but unusable)
- * so callers can't drift onto local data by accident.
+ * Resolve the sole public client transport and build it. Missing, blank,
+ * conflicting, or invalid authority/credential configuration throws; there is
+ * no local-data return branch.
  */
 export declare function createClientTransport(name: string, env?: Env, overrides?: Partial<Pick<HasnaHttpTransportOptions, "fetchImpl" | "headers" | "timeoutMs" | "retry" | "sleepImpl">> & {
     /** Tier-1 credential inputs, e.g. from `--api-key` / `--profile` flags. */
     credentials?: CredentialChainOptions;
 }): {
-    transport: "sqlite";
-    client: null;
-    resolution: ClientTransportResolution;
-} | {
     transport: "http";
     client: HasnaHttpTransport;
     resolution: ClientTransportResolution;

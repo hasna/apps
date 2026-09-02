@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
-  appendFileSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -20,11 +19,11 @@ import { CONTRACTS_PACKAGE_VERSION } from "../src/schemas.js";
 import { scanNoCloudTarget } from "../src/no-cloud.js";
 
 const root = join(import.meta.dir, "..");
-// The version the wave (#717) bumped the package to; the three version
+// The canonical-client major release version; the three version
 // surfaces (package.json, hasna.contract.json kitVersion, the
 // CONTRACTS_PACKAGE_VERSION constant) must all carry it. The version-integrity
 // gate (tests/version-integrity.test.ts) enforces the agreement.
-const expectedUnreleasedVersion = "0.14.2";
+const expectedUnreleasedVersion = "1.0.0";
 const forbiddenInternalDomains = [["hasna", "xyz"].join(".")];
 
 function commandText(bytes: Uint8Array): string {
@@ -568,29 +567,29 @@ describe("published package hostname and provenance boundary", () => {
 
   test("raw-member scan catches an encoded duplicate that extraction overwrites", () => {
     const fixtureRoot = join(temporaryRoot, "duplicate-member-negative-control");
-    const first = join(fixtureRoot, "first", "package");
-    const second = join(fixtureRoot, "second", "package");
     const extracted = join(fixtureRoot, "extracted");
     const archive = join(fixtureRoot, "duplicate.tar");
-    mkdirSync(first, { recursive: true });
-    mkdirSync(second, { recursive: true });
-    mkdirSync(extracted);
+    mkdirSync(extracted, { recursive: true });
 
     const encoded = Buffer.from(forbiddenInternalDomains[0]!).toString("base64");
-    writeFileSync(join(first, "duplicate.txt"), encoded);
-    writeFileSync(join(second, "duplicate.txt"), "clean replacement");
-    run(["tar", "-cf", archive, "-C", join(fixtureRoot, "first"), "package/duplicate.txt"]);
-    run(["tar", "-rf", archive, "-C", join(fixtureRoot, "second"), "package/duplicate.txt"]);
+    // Define the raw member order ourselves: BSD tar may insert PAX/AppleDouble
+    // metadata before a file. Extraction still uses the host tar, so the actual
+    // last-member-wins behavior (and the raw scanner's need to catch it) remains
+    // covered without depending on one host's archive-creation defaults.
+    writeTarFixture(archive, [
+      { path: "package/duplicate.txt", data: Buffer.from(encoded) },
+      { path: "package/duplicate.txt", data: Buffer.from("clean replacement") },
+    ]);
     run(["tar", "-xf", archive, "-C", extracted]);
 
+    expect(readFileSync(join(extracted, "package/duplicate.txt"), "utf8")).toBe("clean replacement");
     expect(findForbiddenInternalDomains(extracted, ["."])).toEqual([]);
     const duplicateMembers = readRawTarMembers(archive).filter(
       (member) => member.path === "package/duplicate.txt",
     );
     expect(duplicateMembers).toHaveLength(2);
-    const findings = findForbiddenRawTarMembers(archive);
-    expect(findings).toHaveLength(1);
-    expect(findings[0]).toContain("#1:package/duplicate.txt");
+    expect(duplicateMembers.map((member) => commandText(member.data))).toEqual([encoded, "clean replacement"]);
+    expect(findForbiddenRawTarMembers(archive)).toEqual(["#1:package/duplicate.txt"]);
   });
 
   test("raw-member scan inspects encoded symlink targets", () => {
@@ -668,15 +667,17 @@ describe("published package hostname and provenance boundary", () => {
 
   test("raw-member scan permits benign post-zero bytes after scanning them", () => {
     const fixtureRoot = join(temporaryRoot, "trailing-tar-negative-control");
-    const firstRoot = join(fixtureRoot, "first");
     const firstArchive = join(fixtureRoot, "first.tar");
-    mkdirSync(firstRoot, { recursive: true });
-    writeFileSync(join(firstRoot, "first.txt"), "first");
-    run(["tar", "-cf", firstArchive, "-C", firstRoot, "first.txt"]);
-    appendFileSync(firstArchive, "benign post-zero metadata");
+    mkdirSync(fixtureRoot, { recursive: true });
+    const trailer = Buffer.from("benign post-zero metadata");
+    writeTarFixture(firstArchive, [{ path: "first.txt", data: Buffer.from("first") }], trailer);
 
     expect(findForbiddenRawTarMembers(firstArchive)).toEqual([]);
-    expect(readRawTarMembers(firstArchive)).toHaveLength(1);
+    const raw = readRawTarArchive(firstArchive);
+    expect(raw.members).toHaveLength(1);
+    expect(raw.members[0]?.path).toBe("first.txt");
+    expect(commandText(raw.members[0]!.data)).toBe("first");
+    expect(Buffer.from(raw.postEndBytes)).toEqual(Buffer.concat([Buffer.alloc(1024), trailer]));
   });
 
   test("raw-member scan rejects encoded forbidden data in post-zero bytes", () => {

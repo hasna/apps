@@ -54,7 +54,10 @@ describe("@hasna/contracts state layout", () => {
     if (!existsSync(policyPath)) return;
 
     const policy = readFileSync(policyPath, "utf8");
-    expect(policy).toContain("~/.hasna/contracts");
+    expect(policy).toContain("$XDG_CONFIG_HOME/hasna/contracts");
+    expect(policy).toContain("$XDG_STATE_HOME/hasna/contracts");
+    expect(policy).toContain("$XDG_CACHE_HOME/hasna/contracts");
+    expect(policy).not.toContain("~/.hasna/contracts");
     for (const legacyPath of legacyGlobalPaths) {
       expect(policy).toContain(legacyPath);
     }

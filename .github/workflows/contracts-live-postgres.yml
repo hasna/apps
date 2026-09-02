@@ -1,0 +1,55 @@
+name: contracts live PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - 'apps/contracts/**'
+      - 'bun.lock'
+      - '.github/workflows/contracts-live-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/contracts/**'
+      - 'bun.lock'
+      - '.github/workflows/contracts-live-postgres.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contracts-live-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: contracts_ci
+          # Disposable runner-local test database, never an external service.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d contracts_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Exercise real PostgreSQL migrations and API-key lifecycle
+        working-directory: apps/contracts
+        env:
+          KIT_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/contracts_ci
+        run: |
+          set -euo pipefail
+          bun -e 'const u = new URL(process.env.KIT_TEST_DATABASE_URL); if (u.hostname !== "127.0.0.1" || u.pathname !== "/contracts_ci") throw new Error("Refusing a non-isolated integration database");'
+          bun test tests/kit-live-pg.test.ts tests/auth.test.ts --timeout 120000 2>&1 | tee "$RUNNER_TEMP/contracts-live-postgres.log"
+          if grep -q '[(]skip[)]' "$RUNNER_TEMP/contracts-live-postgres.log"; then
+            echo "Live PostgreSQL gate refused skipped tests"
+            exit 1
+          fi

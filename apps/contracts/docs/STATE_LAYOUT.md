@@ -4,11 +4,13 @@
 persistent user state. Installing or running its validation commands does not
 create a home directory.
 
-If the package gains user-level state in the future, its only canonical global
-root is:
+If the package gains non-authoritative user-level state in the future, it must
+use the matching XDG kind (and its standard default):
 
 ```text
-~/.hasna/contracts
+$XDG_CONFIG_HOME/hasna/contracts   (~/.config/hasna/contracts)
+$XDG_STATE_HOME/hasna/contracts    (~/.local/state/hasna/contracts)
+$XDG_CACHE_HOME/hasna/contracts    (~/.cache/hasna/contracts)
 ```
 
 The legacy roots `~/.contracts` and `~/.open-contracts` are not operational read
@@ -20,7 +22,7 @@ before manual removal rather than treated as `@hasna/contracts` data.
 ## Intentional project-local paths
 
 These paths remain relative to the consuming project or target repository. They
-must not be redirected into `~/.hasna/contracts`.
+must not be redirected into a package-global root.
 
 | Path | Owner and purpose |
 | --- | --- |
@@ -36,22 +38,17 @@ in the no-cloud scanner as a forbidden legacy runtime path.
 ## Credential resolution paths (read, never owned)
 
 `@hasna/contracts` does not own these directories, but its credential resolver
-reads them in precedence order (see CONTRACT.md §3a):
+reads only the owner-safe XDG app config (see CONTRACT.md §3a):
 
 ```text
-~/.hasna/fleet-env/<name>.env        PRIMARY — re-read on every call
-~/.hasna/cloud/<name>.env            legacy-cloud fallback — NOISY, deprecated,
-                                     removed after 2026-10-01
-~/.config/hasna/<name>.env           config tier (final name; the `-cloud`
-                                     suffix was retired)
-~/.config/hasna/<name>-cloud.env     config legacy alias — NOISY, deprecated,
-                                     removed after 2026-10-01
+$XDG_CONFIG_HOME/hasna/<name>.env    (default ~/.config/hasna/<name>.env)
 ```
 
-A deprecated-source winner reports its granular tier in `apiKeyTier`
-(`legacy-cloud` / `config-legacy`) with `deprecated: true`, so a diagnostic can
-name the source. `@hasna/contracts` never writes, copies, moves, or deletes any
-of these files.
+Files must be regular, current-user-owned, and mode 0400 or 0600; unsafe files
+fail closed. Legacy `~/.hasna/**` and `*-cloud.env` files are not consulted.
+`@hasna/contracts` never writes, copies, moves, or deletes these files.
+Explicit legacy migration tooling may preserve/import old data, but ordinary
+clients never use it as an authoritative dataset.
 
 The repository ignores `.hasna/` so local project metadata is not accidentally
 committed. The generated storage-kit manifest is outside that ignored directory
