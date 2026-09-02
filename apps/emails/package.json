@@ -47,7 +47,6 @@
     "dist",
     "dashboard/index.html",
     "dashboard/open-source.html",
-    "scripts/ensure-private-data-dir.mjs",
     "LICENSE",
     "README.md"
   ],
@@ -74,8 +73,7 @@
     "prepublishOnly": "bun scripts/prepublish-local-test.mjs && bun run build && bun run no-cloud:pack && bun run pack:identity && bun run contracts:conformance && contracts no-cloud-scan .",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "bun ./scripts/ensure-private-data-dir.mjs"
+    "dev:serve": "bun run src/server/index.ts"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

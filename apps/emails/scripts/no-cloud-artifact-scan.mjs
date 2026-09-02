@@ -2,9 +2,10 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, relative } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hostedControlPlaneFindings, isSkippableBinary, requiredPackedEntries } from "./no-cloud-scan-lib.mjs";
+import { assertSafePackagePath, packNpmArtifact } from "./npm-pack.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -35,14 +36,9 @@ mkdirSync(extractDir);
 // `--ignore-scripts` is required, not an oversight: `prepack` is what invokes this
 // script, so letting it run would recurse. It also means nothing in the pack step
 // builds `dist/` — which is exactly why the manifest assertions below exist.
-const tarName = "emails-package.tgz";
-execFileSync("bun", ["pm", "pack", "--ignore-scripts", "--filename", join(packDir, tarName), "--quiet"], {
-  cwd: root,
-  stdio: "ignore",
-});
-const tarball = join(packDir, tarName);
-
 try {
+  const tarball = packNpmArtifact(root, packDir);
+  const tarName = basename(tarball);
   execFileSync("tar", ["-xzf", tarball, "-C", extractDir], { stdio: "ignore" });
   const packageDir = join(extractDir, "package");
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
@@ -59,6 +55,7 @@ try {
 
   const problems = [];
   for (const entry of required) {
+    assertSafePackagePath(`package/${entry}`);
     const path = join(packageDir, entry);
     if (!existsSync(path)) {
       problems.push(`${entry}: missing`);
