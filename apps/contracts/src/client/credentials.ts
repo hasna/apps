@@ -699,6 +699,32 @@ function defaultDeprecationSink(message: string): void {
   }
 }
 
+/** @internal Snapshot only this client's configuration, without executing getters. */
+export function snapshotClientEnvironment(name: string, env: Env): Env {
+  const keys = clientTransportEnvKeys(name);
+  const snapshot: Env = Object.create(null);
+  for (const key of [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey(name),
+    credentialPointerEnvKey(name),
+    CREDENTIAL_PROFILE_ENV_KEY,
+    "HOME",
+    "XDG_CONFIG_HOME",
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(env, key);
+    if (!descriptor) continue;
+    if (!("value" in descriptor)) {
+      throw new CredentialResolutionError(name, `${key} is accessor-backed; client configuration requires own data properties.`, [key]);
+    }
+    if (descriptor.value !== undefined && typeof descriptor.value !== "string") {
+      throw new CredentialResolutionError(name, `${key} must be a string data property.`, [key]);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
+
 /**
  * Resolve an app's API key through the provider chain, at call time.
  *
@@ -713,6 +739,7 @@ export function resolveCredential(
   env: Env,
   options: CredentialChainOptions = {},
 ): ResolvedCredential | null {
+  env = snapshotClientEnvironment(name, env);
   const { apiKeyKeys } = clientTransportEnvKeys(name);
   const diskPaths = credentialDiskSources(name, env);
 

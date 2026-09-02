@@ -119,7 +119,7 @@ describe("canonical public client", () => {
   test("binds authority and credential when rotation lands between their reads", async () => {
     let authority = "https://old.example.test";
     let key = "old-key";
-    let rotateDuringCredentialRead = false;
+    const rotateDuringCredentialRead = true;
     const env: Record<string, string> = {};
     Object.defineProperties(env, {
       HASNA_DEMO_API_URL: { enumerable: true, get: () => authority },
@@ -136,16 +136,17 @@ describe("canonical public client", () => {
     });
 
     let calls = 0;
-    const wired = createClientTransport("demo", env, {
+    expect(() => createClientTransport("demo", env, {
       fetchImpl: async () => {
         calls++;
         return Response.json({});
       },
       retry: false,
-    });
-    rotateDuringCredentialRead = true;
-
-    await expect(wired.client.get("/items")).rejects.toThrow(/changed while a request was being prepared/);
+    })).toThrow(/accessor-backed/);
+    // Accessor-backed configuration is refused before either getter can run,
+    // which is stricter than detecting its rotation only at request time.
+    expect(authority).toBe("https://old.example.test");
+    expect(key).toBe("old-key");
     expect(calls).toBe(0);
   });
 });

@@ -326,7 +326,33 @@ function defaultDeprecationSink(message) {
 `);
   }
 }
+function snapshotClientEnvironment(name, env) {
+  const keys = clientTransportEnvKeys(name);
+  const snapshot = Object.create(null);
+  for (const key of [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey(name),
+    credentialPointerEnvKey(name),
+    CREDENTIAL_PROFILE_ENV_KEY,
+    "HOME",
+    "XDG_CONFIG_HOME"
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(env, key);
+    if (!descriptor)
+      continue;
+    if (!("value" in descriptor)) {
+      throw new CredentialResolutionError(name, `${key} is accessor-backed; client configuration requires own data properties.`, [key]);
+    }
+    if (descriptor.value !== undefined && typeof descriptor.value !== "string") {
+      throw new CredentialResolutionError(name, `${key} must be a string data property.`, [key]);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
 function resolveCredential(name, env, options = {}) {
+  env = snapshotClientEnvironment(name, env);
   const { apiKeyKeys } = clientTransportEnvKeys(name);
   const diskPaths = credentialDiskSources(name, env);
   if (options.apiKey !== undefined) {
@@ -701,6 +727,7 @@ class ClientTransportConfigurationError extends Error {
   }
 }
 function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
+  env = snapshotClientEnvironment(name, env);
   const keys = clientTransportEnvKeys(name);
   const definedUrlEntries = keys.apiUrlKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, raw: String(env[key]) }));
   const blankUrl = definedUrlEntries.find((entry) => entry.raw.trim().length === 0);

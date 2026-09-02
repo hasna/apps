@@ -17,6 +17,7 @@ import {
   completePointerCredential,
   explicitCredential,
   resolveCredential,
+  snapshotClientEnvironment,
   validateAndSealResolvedCredential,
   type CredentialChainOptions,
   type CredentialTier,
@@ -391,6 +392,7 @@ function resolveClientTransportSnapshot(
   env: Env = process.env,
   options: ResolveClientTransportOptions = {},
 ): ResolvedClientTransportSnapshot {
+  env = snapshotClientEnvironment(name, env);
   const keys = clientTransportEnvKeys(name);
   const definedUrlEntries = keys.apiUrlKeys
     .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
