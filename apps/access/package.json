@@ -43,8 +43,7 @@
     "smoke:package": "bun run src/release/package-smoke.ts",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8887",
-    "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "node -e \"const os=require('os'),fs=require('fs'),p=require('path');const APP='access',SUB=['config','data','exports','backups','logs','tmp'];const legacy=p.join(os.homedir(),'.hasna',APP);const mk=b=>{for(const d of ['',...SUB])fs.mkdirSync(p.join(b,d),{recursive:true})};(async()=>{let root=legacy;try{const paths=await import('@hasna/paths');const resolved=paths.dataDir({app:APP});const adopted=!!(process.env.HASNA_DATA_HOME&&process.env.HASNA_DATA_HOME.trim())||fs.existsSync(p.join(resolved,APP+'.db'));root=process.env.HASNA_ACCESS_HOME||process.env.ACCESS_HOME||(adopted?resolved:legacy)}catch(e){}try{mk(root)}catch(e){}})()\""
+    "dev:serve": "bun run src/server/index.ts"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

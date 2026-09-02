@@ -39,11 +39,13 @@ copied.
 This is **not whole-package migration completion** and is not publishable as such.
 
 - Root library exports retain synchronous legacy service/database access.
-- MCP remains unchanged, including its legacy signed-token authentication/store.
+- HTTP MCP retains its legacy signed-token authentication/store. The stdio domain
+  follow-up below migrates only the 43 domain tools, not the whole MCP graph.
 - MCP agent registration, heartbeat and focus remain process-local.
 - MCP feedback still acknowledges without a delivery backend.
 - MCP storage push/pull/sync remain audited no-op legacy implementations.
-- Postinstall and legacy XDG-adoption behavior are unchanged.
+- The stdio follow-up removes the inline postinstall directory-creation hook;
+  legacy runtime XDG-adoption behavior remains unchanged.
 - The existing live PostgreSQL gate exercises the old generic cloud probe, not
   this new domain path; live domain proof remains outstanding and unrun.
 
@@ -115,3 +117,89 @@ standalone installs pass. The rebuilt package contains 201 scanned entries with
 zero artifact findings/skips/unreadables. Root standards/publish-guard are rerun
 with the same restricted PATH and no task filing; their published-validator and
 unrelated declaration blockers remain separate from the repaired core behavior.
+
+## Stdio domain follow-up — still NO_GO for the full package
+
+- Owner: `/root/access_stdio_domain_migration`; registered commit trailer `fixer`.
+- Verified PR #1494 head/base for this delta:
+  `1d6534e92961e5f3e38056842e58e1142ed90498` (PR target remains `main`).
+- Branch: `codex/fixer/2026-09-02-access-stdio-domain`.
+- Worktree: `/Users/hasna/Workspace/50-repositories/_worktrees/hasna/apps/access-stdio-domain`.
+- Canonical reference and existing Access implementation/review worktrees were
+  not edited. No overlapping open Access PR or branch/path collision was found.
+
+Stdio now constructs a validated, snapshotted `AccessClient` before connecting,
+and injects it into all 43 domain callbacks. Dispatch is awaited. The nine tool
+definition files keep their schemas, names and operation mappings. Profiles
+remain 18/37/51 total tools (10/29/43 domain tools plus eight always-on tools).
+Write confirmation is required and its MCP-only fields are stripped before HTTPS.
+There is no fallback to the local registry when the stdio client fails.
+
+HTTP MCP continues calling `buildServer(context)`, which does not create or
+receive a process-owner HTTPS executor. No opaque or Access-issued HTTP caller
+token is forwarded to the API, and no generic introspection contract was inferred
+from `token.verify`. The caller-context HTTP transport/authentication source is
+unchanged. An isolated HTTP test uses an authenticated `auditor` fixture and proves
+a denied write triggers zero process-key HTTPS requests. This is separation proof,
+**not** acceptance of the legacy HTTP authorization implementation.
+
+The new non-2xx adapter accepts only source-defined error codes with matching HTTP
+statuses, a string message and an optional string suggestion (the core's gate
+errors omit suggestion). It replaces all remote text with fixed local diagnostics,
+preserves the HTTP status in the message and the domain code in MCP envelopes,
+bounds parsing to 16 KiB and one second, cancels the body reader and clears the
+deadline on every path. Malformed, oversized, stalled and unknown envelopes yield
+the existing generic HTTP-status error; they never echo raw response data.
+
+Only the actual inline package.json postinstall hook was removed. The obsolete
+unreferenced `scripts/postinstall.ts` and existing user data were not removed.
+`scripts/check-install-state.ts` packs with prepack disabled (the known native
+conformance blocker remains), then performs a real npm consumer install with
+lifecycle scripts enabled and empty npmrc files. It checks all three bins, root
+and SDK artifacts, SDK imports, and fail-closed stdio startup in a fresh HOME/XDG
+and an explicit temporary legacy DB guard. Bun's own transpiler cache is directed
+to a separate test-owned location. This check is not release approval.
+
+Remaining acceptance gaps include the root compatibility surface (extra metadata,
+null clearing and status setters), HTTP MCP caller authentication, standard
+agent/focus/feedback APIs, authenticated storage status/admin migration APIs, the
+new core live-PostgreSQL gate and published shared Contracts adoption. The eight
+standard/storage tools remain intact and local/legacy: the MCP bundle still
+contains the legacy SQLite graph. Storage status can open a local store;
+push/pull/sync remain audited no-op implementations. Whole-MCP HTTP-only claims
+would therefore be false.
+
+Legacy auth also normalizes an empty opaque-credential role list to `integration`
+(read/write); explicit read-only scopes are additive and do not cap that role.
+This is an explicit unchanged HTTP/root security blocker. During an initial
+unisolated test, that behavior created a fixture in the default legacy database;
+the incident was reported to the coordinator, the database/sidecars were preserved,
+and all later runs were moved to fresh task-owned HOME/XDG and database overrides
+before imports. The detailed local incident record is outside the package.
+
+Verification evidence and native gate outcomes for this follow-up are retained
+under `/tmp/access-stdio-verification.8uOpGi`:
+
+- Native full suite: **202 pass, 2 fail** across 204 tests. Both failures are the
+  unchanged old Contracts validator rejecting the accurate PostgreSQL-only
+  manifest. Merged Contracts source is not a published version; pins are unchanged.
+- All 43 HTTPS-to-PostgreSQL-engine operations pass. Stdio tool mapping, schemas,
+  async results/errors, optional metadata/arrays/versions, profile totals,
+  confirmation/no-dispatch and HTTP separation checks pass.
+- Never-ending and slow error-body regressions failed before the deadline fix;
+  both now fall back and cancel in approximately one second.
+- Package typecheck/build pass. The isolated real npm install and all entrypoint
+  checks pass with lifecycle scripts enabled and zero implicit home/XDG/DB state.
+- Packed artifact: 203 scanned entries, no findings, skips or unreadables.
+- Root names/dependency-direction/manifest gates pass. The broader root `check`
+  was stopped at publish-guard after discovering other packages' prepack/build
+  lifecycles. Access's native prepack failed its known conformance tests;
+  unrelated failures include attachments' `mapfile` and connectors'
+  missing `vite`. It is **incomplete**, not passing. No unrelated tracked changes
+  resulted. Later root checks in that chain were not run.
+- No live PostgreSQL service, cloud deployment, whole-package acceptance or
+  publication was performed. No native prepack/release gate passed.
+
+No merge, deployment, migration,
+credential change or npm publication is authorized for this worker. The exact
+committed delta must receive independent review before any coordinated push.

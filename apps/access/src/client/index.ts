@@ -1,8 +1,10 @@
 import { resolveClientConfig, type ClientEnv } from "./config.js";
 import { CORE_ROUTES, type CoreOperation } from "./routes.js";
+import { readAccessHttpError } from "./errors.js";
 
 export { CORE_ROUTES, type CoreOperation } from "./routes.js";
 export { httpsBaseUrl } from "./config.js";
+export { AccessHttpError } from "./errors.js";
 
 /** Snapshot authority and credential together; neither appears in diagnostics. */
 export class AccessClient {
@@ -48,7 +50,7 @@ export class AccessClient {
     } catch {
       throw new Error("Access HTTPS request failed; no local fallback was attempted.");
     }
-    if (!response.ok) throw new Error(`Access HTTPS request failed (HTTP ${response.status}).`);
+    if (!response.ok) throw await readAccessHttpError(response);
     try { return await response.json(); } catch { throw new Error("Access API returned invalid JSON."); }
   }
 }
