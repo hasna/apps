@@ -12,6 +12,7 @@ import {
 import { mintApiKey, parseApiKey, verifyApiKeyToken } from "../src/auth/keys";
 import { verifyApiKey, type AuthAuditEvent } from "../src/auth/middleware";
 import { ApiKeyStore, apiKeyMigrations, type AuthQueryClient, type Row } from "../src/auth/store";
+import { tamperApiKeySignature } from "./helpers/tamper-api-key-signature";
 
 const SIGNING = "test-signing-secret-not-a-real-credential-000";
 
@@ -351,7 +352,7 @@ describe("tenanted API keys", () => {
         nowMs: () => LEGACY_NOW_MS,
         audit: (event) => void events.push(event),
       });
-      const decision = await verifier.authenticate({ "x-api-key": `${LEGACY_TOKEN.slice(0, -4)}AAAA` });
+      const decision = await verifier.authenticate({ "x-api-key": tamperApiKeySignature(LEGACY_TOKEN) });
       expect(decision.ok).toBe(false);
       expect(events[0]?.reason).toBe("bad_signature");
       expect(events[0]?.tid).toBeNull();
@@ -432,7 +433,7 @@ describe("tenant enforcement in verifyApiKeyToken", () => {
   });
 
   test("a pre-signature failure attributes NOTHING — an unverified token is not evidence", () => {
-    const forged = `${tenanted("rival-corp").token.slice(0, -4)}AAAA`;
+    const forged = tamperApiKeySignature(tenanted("rival-corp").token);
     const result = verifyApiKeyToken(forged, {
       signingSecret: SIGNING,
       expectedApp: "todos",

@@ -37,7 +37,6 @@
     "dev:cli": "bun run src/cli/index.ts",
     "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test",
-    "postinstall": "mkdir -p $HOME/.hasna/draw 2>/dev/null || true",
     "scan:artifact": "bun scripts/scan-artifact.ts"
   },
   "keywords": [
