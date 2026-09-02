@@ -1,5 +1,11 @@
 import { isAbsolute } from 'node:path';
 
+export function npmPackCommand(destination) {
+  // An outer `npm pack --dry-run` exposes npm_config_dry_run to prepack.
+  // This inner pack must still materialize the exact archive for the scanner.
+  return ['npm', 'pack', '--json', '--pack-destination', destination, '--ignore-scripts', '--dry-run=false'];
+}
+
 export function packedFilename(output) {
   const packed = JSON.parse(output);
   if (!Array.isArray(packed) || packed.length !== 1 || typeof packed[0]?.filename !== 'string') {
