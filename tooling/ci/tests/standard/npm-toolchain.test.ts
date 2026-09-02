@@ -7,7 +7,13 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dir, "../../../..");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
 const jobNames = ["gates", "test-suites", "build-test", "verify-generated", "publish-guard"];
-const provision = 'set -euo pipefail\nnpm install --global npm@11.19.0 --ignore-scripts\ntest "$(npm --version)" = "11.19.0"';
+const provision = [
+  'set -euo pipefail',
+  'npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"',
+  'npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts',
+  'test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"',
+  'echo "$npm_prefix/bin" >> "$GITHUB_PATH"',
+].join("\n");
 type Step = { name?: string; uses?: string; run?: string; with?: Record<string, string | number>; if?: unknown; "continue-on-error"?: unknown };
 type Workflow = { jobs: Record<string, { steps: Step[] }> };
 
@@ -20,7 +26,7 @@ function violations(source: string): string[] {
     const installIndex = steps.findIndex((step) => step.name === "Install");
     const npmStep = steps[npmIndex];
     if (npmIndex < 0 || npmIndex >= installIndex || npmStep?.run?.trim() !== provision || npmStep.if !== undefined || npmStep["continue-on-error"] !== undefined) {
-      problems.push(`${name}: require the unconditional pinned npm install and exact version check before Install`);
+      problems.push(`${name}: require a job-local pinned npm install, explicit version check and PATH propagation before Install`);
     }
   }
   return problems;
@@ -35,10 +41,17 @@ describe("standard-adherence: npm artifact toolchain", () => {
   test("the toolchain gate detects missing, wrong, unverified, late, or bypassable installs", () => {
     expect(violations(ci.replaceAll("Install npm for artifact gates", "Missing npm pin"))).toHaveLength(5);
     expect(violations(ci.replaceAll("npm@11.19.0", "npm@10.9.8"))).toHaveLength(5);
-    expect(violations(ci.replaceAll('test "$(npm --version)" = "11.19.0"', "npm --version"))).toHaveLength(5);
+    expect(violations(ci.replaceAll('test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"', "npm --version"))).toHaveLength(5);
     expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install\n        run: bun install\n\n      - name: Install npm for artifact gates"))).toHaveLength(5);
     expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install npm for artifact gates\n        if: false"))).toHaveLength(5);
     expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install npm for artifact gates\n        continue-on-error: true"))).toHaveLength(5);
+  });
+
+  test("the toolchain gate requires a private runner prefix, explicit executable and later-step PATH", () => {
+    expect(violations(ci.replaceAll('--prefix "$npm_prefix" ', ""))).toHaveLength(5);
+    expect(violations(ci.replaceAll('${RUNNER_TEMP}/npm-toolchain.XXXXXX', '/usr/local/npm-toolchain.XXXXXX'))).toHaveLength(5);
+    expect(violations(ci.replaceAll('"$npm_prefix/bin/npm" --version', 'npm --version'))).toHaveLength(5);
+    expect(violations(ci.replaceAll('echo "$npm_prefix/bin" >> "$GITHUB_PATH"', 'echo "$npm_prefix/bin"'))).toHaveLength(5);
   });
 
   test("Bun, frozen-lockfile and ordered prepare gates remain in every job", () => {
