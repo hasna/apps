@@ -25,6 +25,10 @@ bun add @hasna/sheets
 The React editor needs the peer deps `react`, `react-dom`, and
 `react-spreadsheet`; XLSX import/export needs the optional `exceljs`.
 
+Installing the library creates no implicit home or XDG directory. The SDK works
+in memory and the CLI reads/writes caller-selected files or stdout. The separate
+browser demo retains its localStorage workbook persistence.
+
 ## SDK (headless, `.`)
 
 ```ts
@@ -119,6 +123,12 @@ import a CSV. Build it with `bun run build:dashboard`; the output ships in
 `dashboard/dist`.
 
 ## Development
+
+Release artifact checks require npm >=11 on PATH (verified with 11.19.0), because
+older npm can run `prepare` despite `--ignore-scripts`. The prepack build is
+followed by a scan of one actual npm archive in a private temporary directory;
+inherited dry-run settings cannot turn the scan into a missing-file success.
+Build the dashboard with `build:all` before packaging its advertised assets.
 
 ```bash
 bun install

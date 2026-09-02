@@ -467,11 +467,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
-    member: "sheets",
-    cause: "manifest_valid: unrecognized 'exports' key at root; library-repo storage shape drift.",
-    task: "todos d766ac9c (contracts task — sheets)",
-  },
-  {
     member: "slides",
     cause: "surface_matrix: no supported cli surface declared; library-class cli waivers are not permitted by the kit and slides ships no CLI bin (package.json bin is empty; the SDK is the consumer surface). Declared cli deferred truthfully in the manifest. published_artifact_gate fixed (scan:artifact wired into prepack).",
     task: "todos ccc2e931 (contracts task — slides)",

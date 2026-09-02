@@ -20,6 +20,11 @@ bun add @hasna/slides
 bun add react react-dom
 ```
 
+Installing the published library creates no implicit home or XDG directory.
+The SDK operates in memory; callers choose where to save exported JSON or HTML.
+Source-checkout installs still bootstrap dashboard dependencies when
+`dashboard/package.json` is present; that guarded development behavior is unchanged.
+
 ## Headless SDK
 
 ```ts
@@ -147,6 +152,12 @@ See [`docs/sdk.md`](./docs/sdk.md), [`docs/react.md`](./docs/react.md), and
 [`docs/export.md`](./docs/export.md) for details.
 
 ## Status
+
+Release artifact checks require npm >=11 on PATH (verified with 11.19.0), because
+older npm can run `prepare` despite `--ignore-scripts`. The library prepack build
+is followed by a scan of one actual npm archive in a private temporary directory,
+including when an outer pack uses dry-run. Run `bun run build` before packaging
+to include the advertised dashboard assets as well.
 
 Functional v1: headless deck SDK, Markdown authoring, JSON serialization,
 standalone HTML export, and the React reveal.js viewer.

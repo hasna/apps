@@ -12,7 +12,9 @@ type ExcelJSModule = typeof import("exceljs");
 
 async function loadExcelJS(): Promise<ExcelJSModule> {
   try {
-    return await import("exceljs");
+    const imported = await import("exceljs");
+    // Bun exposes CommonJS named exports; Node exposes ExcelJS under default.
+    return typeof imported.Workbook === "function" ? imported : imported.default;
   } catch {
     throw new Error(
       "XLSX support requires the optional 'exceljs' dependency. Install it with: bun add exceljs",

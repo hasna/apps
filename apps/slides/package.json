@@ -35,8 +35,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:dashboard": "cd dashboard && bun run dev",
-    "postinstall": "mkdir -p $HOME/.hasna/slides 2>/dev/null || true; if test -f dashboard/package.json; then cd dashboard && bun install --frozen-lockfile; fi",
-    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/slides-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan slides-artifact-scan.tgz; rc=$?; rm -f \"$PWD/slides-artifact-scan.tgz\"; exit $rc"
+    "postinstall": "if test -f dashboard/package.json; then cd dashboard && bun install --frozen-lockfile; fi",
+    "scan:artifact": "bun scripts/scan-artifact.ts"
   },
   "keywords": [
     "slides",
@@ -85,6 +85,7 @@
     }
   },
   "devDependencies": {
+    "@hasna/contracts": "0.11.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "19.2.4",
     "bun-types": "latest",

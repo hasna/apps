@@ -40,9 +40,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
-    "prepack": "bun run build",
+    "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test",
-    "postinstall": "mkdir -p $HOME/.hasna/sheets 2>/dev/null || true"
+    "scan:artifact": "bun scripts/scan-artifact.ts"
   },
   "keywords": [
     "spreadsheet",
@@ -91,6 +91,7 @@
     "react-spreadsheet": { "optional": true }
   },
   "devDependencies": {
+    "@hasna/contracts": "0.11.1",
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.5",
     "bun-types": "latest",

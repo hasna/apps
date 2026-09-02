@@ -35,6 +35,11 @@
           "reason": "Headless workbook library; MCP execution belongs to consuming applications."
         }
       ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }
