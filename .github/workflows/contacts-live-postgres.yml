@@ -27,7 +27,7 @@ jobs:
           POSTGRES_DB: contacts_ci
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5432:5432
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d contacts_ci"
           --health-interval 5s
@@ -43,8 +43,15 @@ jobs:
       - name: Prove the required gate refuses a missing database
         working-directory: apps/contacts
         run: |
-          if env -u HASNA_CONTACTS_TEST_DATABASE_URL CONTACTS_REQUIRE_LIVE_POSTGRES=1 bun test src/server/postgres-live.test.ts; then
+          set -euo pipefail
+          if env -u HASNA_CONTACTS_TEST_DATABASE_URL CONTACTS_REQUIRE_LIVE_POSTGRES=1 bun test src/server/postgres-live.test.ts > "$RUNNER_TEMP/contacts-missing-database.log" 2>&1; then
             echo "Required PostgreSQL gate incorrectly accepted a missing database"
+            exit 1
+          fi
+          grep -q 'HASNA_CONTACTS_TEST_DATABASE_URL must point at a throwaway PostgreSQL database' "$RUNNER_TEMP/contacts-missing-database.log"
+          grep -Eq '^[[:space:]]*2 fail$' "$RUNNER_TEMP/contacts-missing-database.log"
+          if grep -q '[(]skip[)]' "$RUNNER_TEMP/contacts-missing-database.log"; then
+            echo "Required PostgreSQL gate incorrectly skipped a missing database"
             exit 1
           fi
       - name: Exercise the actual schema and production PostgreSQL store
@@ -54,8 +61,10 @@ jobs:
           CONTACTS_REQUIRE_LIVE_POSTGRES: '1'
         run: |
           set -euo pipefail
-          bun -e 'const u = new URL(process.env.HASNA_CONTACTS_TEST_DATABASE_URL); if (u.hostname !== "127.0.0.1" || u.pathname !== "/contacts_ci") throw new Error("Refusing a non-isolated integration database");'
+          bun -e 'const u = new URL(process.env.HASNA_CONTACTS_TEST_DATABASE_URL); if (u.protocol !== "postgres:" || u.hostname !== "127.0.0.1" || u.port !== "5432" || u.pathname !== "/contacts_ci" || u.username !== "postgres" || u.password || u.search || u.hash) throw new Error("Refusing a non-isolated integration database");'
           bun test src/server/postgres-live.test.ts --timeout 120000 2>&1 | tee "$RUNNER_TEMP/contacts-live-postgres.log"
+          grep -Eq '^[[:space:]]*2 pass$' "$RUNNER_TEMP/contacts-live-postgres.log"
+          grep -Eq '^[[:space:]]*0 fail$' "$RUNNER_TEMP/contacts-live-postgres.log"
           if grep -q '[(]skip[)]' "$RUNNER_TEMP/contacts-live-postgres.log"; then
             echo "Live PostgreSQL gate refused skipped tests"
             exit 1
