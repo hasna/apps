@@ -1,79 +1,42 @@
 #!/usr/bin/env bun
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const legacyProduct = ["MAIL", "ERY"].join("");
-const legacyKeys = [
-  [legacyProduct, "MODE"],
-  ["HASNA", legacyProduct, "MODE"],
-  [legacyProduct, "STORAGE", "MODE"],
-  ["HASNA", legacyProduct, "STORAGE", "MODE"],
-  [legacyProduct, "API", "URL"],
-  [legacyProduct, "API", "KEY"],
-  [legacyProduct, ["CLO", "UD"].join(""), "API", "URL"],
-  [legacyProduct, ["CLO", "UD"].join(""), "TOKEN"],
-  ["HASNA", legacyProduct, "API", "URL"],
-  ["HASNA", legacyProduct, "API", "KEY"],
-  ["HASNA", legacyProduct, "ENV", "FILE"],
-  ["EMAILS", "STORAGE", "MODE"],
-  ["HASNA", "EMAILS", "STORAGE", "MODE"],
-  // The hosted Emails API env the client reads (src/lib/client-env.ts,
-  // src/store-resolution.ts). EMAILS_SELF_HOSTED_URL and
-  // EMAILS_CLIENT_ENV_SECRET are the keys that turn "a local database AND an
-  // API" into the deliberate both-configured hard boot error, so any machine
-  // carrying them saw every prepublish gate fail (O15-00516). The credential
-  // keys are scrubbed too: with the URL gone they are inert, but a local-test
-  // environment must not carry a live operator credential at all.
-  ["EMAILS", "SELF", "HOSTED", "URL"],
-  ["EMAILS", "CLIENT", "ENV", "SECRET"],
-  ["EMAILS", "SELF", "HOSTED", "API", "KEY"],
-  ["EMAILS", "SESSION", "TOKEN"],
-  ["EMAILS", "IDP", "TOKEN"],
-  // The canonical DB-path key (src/db/database.ts getDbPath() checks
-  // HASNA_EMAILS_DB_PATH BEFORE the EMAILS_DB_PATH=:memory: forced below), so an
-  // inherited value would silently select an operator database and the suite
-  // would run against it (release-review P1, publish-all lane 248f6ed8).
-  ["HASNA", "EMAILS", "DB", "PATH"],
-  // The resolver (XDG) path variables that became authoritative in 1.4.10
-  // (src/paths.ts): an inherited value would move the local-test suite's
-  // effective data root to operator data despite the temp HOME and the
-  // EMAILS_DB_PATH=:memory: store override (release-review P1, publish-all
-  // lane 248f6ed8).
-  ["HASNA", "DATA", "HOME"],
-  ["HASNA", "EMAILS", "HOME"],
-  ["EMAILS", "HOME"],
-  ["XDG", "DATA", "HOME"],
-];
+// Fixtures select their own explicit service/store settings. Never inherit an
+// operator endpoint, identity, provider credential, database or runtime preload.
+const executionKeys = ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "CI", "NO_COLOR", "FORCE_COLOR"];
 
-const scrubbedKeys = legacyKeys.map((parts) => parts.join("_"));
-
-/**
- * The environment the prepublish local-test suite runs in: the process env with
- * a fresh HOME, the local store forced, and every hosted/legacy client env key
- * scrubbed. Exported so the regression test
- * (scripts/prepublish-local-test.test.ts) can assert the scrub without
- * spawning a test suite.
- */
-export function buildPrepublishTestEnv(
-  processEnv = process.env,
-  home = process.env.HOME,
-) {
-  const env = { ...processEnv, HOME: home, EMAILS_MODE: "local", EMAILS_DB_PATH: ":memory:" };
-  for (const key of scrubbedKeys) delete env[key];
-  return env;
+export function buildPrepublishTestEnv(processEnv = process.env, home) {
+  if (typeof home !== "string" || !isAbsolute(home)) throw new Error("An absolute isolated test home is required");
+  const env = {};
+  for (const key of executionKeys) if (processEnv[key] !== undefined) env[key] = processEnv[key];
+  return {
+    ...env,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(home, "config"),
+    XDG_DATA_HOME: join(home, "data"),
+    XDG_CACHE_HOME: join(home, "cache"),
+    XDG_STATE_HOME: join(home, "state"),
+    TMPDIR: join(home, "tmp"),
+    TEMP: join(home, "tmp"),
+    TMP: join(home, "tmp"),
+    npm_config_userconfig: join(home, ".npmrc"),
+    AWS_EC2_METADATA_DISABLED: "true",
+    TZ: "UTC",
+  };
 }
 
 if (import.meta.main) {
-  const tmpHome = mkdtempSync(join(tmpdir(), "emails-prepublish-"));
+  const testHome = mkdtempSync(join(tmpdir(), "emails-prepublish-"));
   try {
-    const result = spawnSync("bun", ["test"], {
-      stdio: "inherit",
-      env: buildPrepublishTestEnv(process.env, tmpHome),
-    });
+    const env = buildPrepublishTestEnv(process.env, testHome);
+    for (const name of ["config", "data", "cache", "state", "tmp"]) mkdirSync(join(testHome, name));
+    const result = spawnSync(process.execPath, ["test", ...process.argv.slice(2)], { stdio: "inherit", env });
     process.exitCode = result.status ?? 1;
   } finally {
-    rmSync(tmpHome, { recursive: true, force: true });
+    rmSync(testHome, { recursive: true, force: true });
   }
 }
