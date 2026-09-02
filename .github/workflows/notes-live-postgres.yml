@@ -61,5 +61,11 @@ jobs:
         run: |
           set -euo pipefail
           bun -e 'const u = new URL(process.env.NOTES_TEST_DATABASE_URL); if (u.protocol !== "postgres:" || u.hostname !== "127.0.0.1" || u.port !== "5432" || u.pathname !== "/notes_ci" || u.username !== "postgres" || u.password || u.search || u.hash) throw new Error("Refusing a non-isolated integration database");'
-          bun run test:pg 2>&1 | tee "$RUNNER_TEMP/notes-live-postgres.log"
+          # The dev-auth probe emits a disposable OTP. Keep its raw output out
+          # of public CI logs; assert the result without echoing credentials.
+          if ! bun run test:pg > "$RUNNER_TEMP/notes-live-postgres.log" 2>&1; then
+            echo "Notes live PostgreSQL gate failed"
+            exit 1
+          fi
           grep -Fq '[pg-test-gate] PASS: 6 live PostgreSQL checks' "$RUNNER_TEMP/notes-live-postgres.log"
+          echo "Notes live PostgreSQL gate passed all six checks"
