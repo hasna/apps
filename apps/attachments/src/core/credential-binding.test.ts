@@ -1,35 +1,38 @@
 import { afterEach, expect, test } from "bun:test";
 import { resolveAttachmentsV1 } from "./cloud-v1";
 import { withServiceAuth } from "./todos";
+import { resolveClientConfig } from "./client-config";
 
 const originalEnv = process.env;
 afterEach(() => { process.env = originalEnv; });
 const base = "https://attachments.example.test";
 
-for (const operation of ["list", "download"] as const) {
-  test(`${operation}: reentrant authority change cannot dispatch the new key to the old URL`, async () => {
-    let armed = false;
-    let calls = 0;
-    const env: NodeJS.ProcessEnv = { HASNA_ATTACHMENTS_API_URL: base };
-    Object.defineProperty(env, "HASNA_ATTACHMENTS_API_KEY", { get() {
-      if (armed) { env.HASNA_ATTACHMENTS_API_URL = "https://other.example.test"; return "other-key"; }
-      return "initial-key";
-    } });
-    const { store } = resolveAttachmentsV1(env, { fetchImpl: async () => { calls++; return new Response(null, { status: 503 }); } });
-    armed = true;
-    await expect(operation === "list" ? store.list() : store.download("id", undefined)).rejects.toThrow();
-    expect(calls).toBe(0);
-  });
+test("inherited authority accessors are ignored without invocation", () => {
+  let reads = 0;
+  const prototype = Object.defineProperty({}, "HASNA_ATTACHMENTS_API_URL", { get() { reads++; return base; } });
+  const env = Object.assign(Object.create(prototype), { HASNA_ATTACHMENTS_API_KEY: "key" });
+  expect(() => resolveClientConfig(env)).toThrow();
+  expect(reads).toBe(0);
+});
 
-  test(`${operation}: a key changing during resolution cannot dispatch`, async () => {
-    let armed = false;
+test("own undefined aliases work; non-string aliases are not coerced", () => {
+  const env: NodeJS.ProcessEnv = { HASNA_ATTACHMENTS_API_URL: base, HASNA_ATTACHMENTS_API_KEY: "key", ATTACHMENTS_API_KEY: undefined };
+  expect(resolveClientConfig(env).key).toBe("key");
+  let coerced = false;
+  Object.defineProperty(env, "ATTACHMENTS_API_KEY", { value: { toString() { coerced = true; return "key"; } } });
+  expect(() => resolveClientConfig(env)).toThrow();
+  expect(coerced).toBe(false);
+});
+
+for (const operation of ["list", "download"] as const) {
+  for (const name of ["HASNA_ATTACHMENTS_API_URL", "ATTACHMENTS_API_URL", "HASNA_ATTACHMENTS_API_KEY", "ATTACHMENTS_API_KEY"]) test(`${operation}: ${name} accessor is never invoked or dispatched`, async () => {
     let reads = 0;
     let calls = 0;
-    const env: NodeJS.ProcessEnv = { HASNA_ATTACHMENTS_API_URL: base };
-    Object.defineProperty(env, "HASNA_ATTACHMENTS_API_KEY", { get() { return armed ? `key-${++reads}` : "initial-key"; } });
+    const env: NodeJS.ProcessEnv = { HASNA_ATTACHMENTS_API_URL: base, HASNA_ATTACHMENTS_API_KEY: "initial-key" };
     const { store } = resolveAttachmentsV1(env, { fetchImpl: async () => { calls++; return new Response(null, { status: 503 }); } });
-    armed = true;
+    Object.defineProperty(env, name, { get() { reads++; env.HASNA_ATTACHMENTS_API_URL = "https://other.example.test"; return "other-key"; } });
     await expect(operation === "list" ? store.list() : store.download("id", undefined)).rejects.toThrow();
+    expect(reads).toBe(0);
     expect(calls).toBe(0);
   });
 
@@ -49,13 +52,15 @@ for (const operation of ["list", "download"] as const) {
 }
 
 for (const service of ["TODOS", "SESSIONS"] as const) {
-  test(`${service}: reentrant configuration is refused before fetch`, () => {
-    const env: NodeJS.ProcessEnv = { [`HASNA_${service}_API_URL`]: base };
-    Object.defineProperty(env, `HASNA_${service}_API_KEY`, { get() { env[`HASNA_${service}_API_URL`] = "https://other.example.test"; return "other-key"; } });
+  for (const name of [`HASNA_${service}_API_URL`, `${service}_API_URL`, `HASNA_${service}_API_KEY`, `${service}_API_KEY`]) test(`${service}: ${name} accessor is never invoked before fetch`, () => {
+    let reads = 0;
+    const env: NodeJS.ProcessEnv = { [`HASNA_${service}_API_URL`]: base, [`HASNA_${service}_API_KEY`]: "initial-key" };
+    Object.defineProperty(env, name, { get() { reads++; env[`HASNA_${service}_API_URL`] = "https://other.example.test"; return "other-key"; } });
     process.env = env;
     let calls = 0;
     const dispatch = (_url: string, _init: RequestInit) => { calls++; };
     expect(() => dispatch(`${base}/api/items`, withServiceAuth(service, `${base}/api/items`))).toThrow();
+    expect(reads).toBe(0);
     expect(calls).toBe(0);
   });
   test(`${service}: stable same-authority rotation retains the API route and auth`, () => {

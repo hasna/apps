@@ -1,13 +1,14 @@
-import { resolveStableClientConfig, validateClientConfig } from "./client-config";
+import { snapshotClientEnvironment, validateClientConfig } from "./client-config";
 
-export function serviceConfig(service: "TODOS" | "SESSIONS", env: NodeJS.ProcessEnv = process.env) {
+export function serviceConfig(service: "TODOS" | "SESSIONS", input: NodeJS.ProcessEnv = process.env) {
+  const env = snapshotClientEnvironment(input, [`HASNA_${service}_API_URL`, `${service}_API_URL`, `HASNA_${service}_API_KEY`, `${service}_API_KEY`]);
   const read = (suffix: string) => {
     const keys = [`HASNA_${service}_${suffix}`, `${service}_${suffix}`];
     const values = keys.map(k => env[k]).filter((v): v is string => v !== undefined);
     if (!values.length || values.some(v => !v.trim()) || new Set(values).size !== 1) throw new Error(`Missing, blank, or conflicting ${service} ${suffix} configuration.`);
     return values[0]!;
   };
-  return resolveStableClientConfig(() => validateClientConfig(read("API_URL"), read("API_KEY")));
+  return validateClientConfig(read("API_URL"), read("API_KEY"));
 }
 
 export function withServiceAuth(service: "TODOS" | "SESSIONS", requestUrl?: string | URL, init?: RequestInit): RequestInit {

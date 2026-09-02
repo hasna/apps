@@ -98,10 +98,12 @@ was reading the pair, and download dispatched the new key to the old URL.
 No network request or output-file write occurred in the probe. Ordinary
 `process.env` reads have no intervening await, so this is specifically an
 accessor/reentrant supplied-environment case, not a claim that normal key
-rotation always races. The follow-up app-owned fix reads and compares two
-complete pairs before returning credentials in Attachments and Todos/Sessions.
-Ten regressions prove mismatched pairs dispatch nothing while stable between-call
-rotation still works for JSON, binary and both integrations. This is a synchronous
+rotation always races. The follow-up app-owned fix snapshots relevant own data
+descriptors once and rejects accessors without invoking them, including aliases,
+in Attachments and Todos/Sessions. Twenty-two regressions prove zero getter calls and
+zero dispatch while stable between-call rotation still works for JSON, binary
+and both integrations. Repeated getter reads are not accepted as stability proof.
+This is a synchronous
 environment fix, not a claim that unpublished pointer-provider adoption is done.
 
 The adapter must obtain two equal authority/credential snapshots, resolve any
