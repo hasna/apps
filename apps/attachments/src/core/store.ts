@@ -1,10 +1,8 @@
 import { basename } from "path";
-import type { Attachment } from "./db";
-import type { UploadOptions } from "./upload";
-import type { DownloadResult } from "./download";
+import type { Attachment, UploadOptions, DownloadResult } from "./client-types";
 import { resolveAttachmentsV1, type AttachmentsV1Store, type V1UploadOptions } from "./cloud-v1";
 
-export type { UploadOptions } from "./upload";
+export type { UploadOptions } from "./client-types";
 
 /** Result of a link read / regeneration. `expires_at` is a unix ms timestamp. */
 export interface LinkResult {

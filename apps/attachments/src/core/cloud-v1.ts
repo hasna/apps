@@ -4,7 +4,7 @@ import { basename, join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { lookup as mimeLookup } from "mime-types";
-import type { Attachment } from "./db";
+import type { Attachment } from "./client-types";
 import { resolveClientConfig } from "./client-config";
 
 
