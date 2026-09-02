@@ -23,6 +23,7 @@ import {
   type Row,
 } from "../src/auth/store";
 import { verifyApiKey, expressApiKey, honoApiKey, extractToken, type AuthAuditEvent } from "../src/auth/middleware";
+import { tamperApiKeySignature } from "./helpers/tamper-api-key-signature";
 
 const SIGNING = "test-signing-secret-not-a-real-credential-000";
 
@@ -98,9 +99,10 @@ describe("api key mint + verify", () => {
 
   test("rejects a tampered signature and a wrong signing secret", () => {
     const minted = mintApiKey({ app: "todos", scopes: ["todos:read"], signingSecret: SIGNING });
-    const tampered = minted.token.slice(0, -2) + (minted.token.endsWith("aa") ? "bb" : "aa");
+    const tampered = tamperApiKeySignature(minted.token);
     const r1 = verifyApiKeyToken(tampered, { signingSecret: SIGNING });
     expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.reason).toBe("bad_signature");
     const r2 = verifyApiKeyToken(minted.token, { signingSecret: "a-different-secret-16bytes+more" });
     expect(r2.ok).toBe(false);
     if (!r2.ok) expect(r2.reason).toBe("bad_signature");
