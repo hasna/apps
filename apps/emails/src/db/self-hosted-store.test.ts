@@ -445,6 +445,7 @@ describe("Emails self-hosted client resolver", () => {
     const stdin = readFileSync(capture.stdinPath, "utf8");
     expect(stdin).toContain('url = "https://emails.example/health"');
     expect(stdin).not.toContain("/v1/health");
+    expect(stdin).toContain('header = "Authorization: Bearer test-key"');
   });
 
   test("root readiness probe validates a declared 503 response and returns only its safe projection", () => {
@@ -507,9 +508,38 @@ describe("Emails self-hosted client resolver", () => {
     const first = readFileSync(capture.stdinForCall(1), "utf8");
     const second = readFileSync(capture.stdinForCall(2), "utf8");
     expect(first).toContain("session-token-placeholder");
+    expect(first).toContain('header = "Authorization: Bearer session-token-placeholder"');
     expect(first).not.toContain("api-key-placeholder");
     expect(second).toContain("api-key-placeholder");
+    expect(second).toContain('header = "Authorization: Bearer api-key-placeholder"');
     expect(second).not.toContain("session-token-placeholder");
+  });
+
+  test.each([false, true])("root probe never escalates an IdP rejection to an API key (session first: %j)", (sessionFirst) => {
+    configureClient("https://emails.example", "api-key-placeholder");
+    if (sessionFirst) process.env[EMAILS_SESSION_TOKEN_ENV] = "session-token-placeholder";
+    process.env["EMAILS_IDP_TOKEN"] = "idp-token-placeholder";
+    const rejected = {
+      status: 401,
+      body: JSON.stringify({ error: "session is invalid or expired", reason: "reauthenticate" }),
+    };
+    const capture = installFakeCurlSessionFallback(rejected, rejected);
+
+    // This synthetic transport challenge is not a new public health contract:
+    // an unhandled 401 must still fail strict response validation.
+    expect(() => selfHostedProbe("/health")).toThrow(SelfHostedWireResponseError);
+    const calls = sessionFirst ? ["1", "2"] : ["1"];
+    expect(readFileSync(capture.callsPath, "utf8").trim().split(/\r?\n/)).toEqual(calls);
+    const idpCall = readFileSync(capture.stdinForCall(calls.length), "utf8");
+    expect(idpCall).toContain('header = "Authorization: Bearer idp-token-placeholder"');
+    expect(idpCall).not.toContain("api-key-placeholder");
+    expect(idpCall).not.toContain("session-token-placeholder");
+    if (sessionFirst) {
+      const sessionCall = readFileSync(capture.stdinForCall(1), "utf8");
+      expect(sessionCall).toContain('header = "Authorization: Bearer session-token-placeholder"');
+      expect(sessionCall).not.toContain("idp-token-placeholder");
+      expect(sessionCall).not.toContain("api-key-placeholder");
+    }
   });
 
   test("generic get and delete validate a declared 404 before returning absence", () => {
