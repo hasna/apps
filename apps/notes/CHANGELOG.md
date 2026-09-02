@@ -1,5 +1,14 @@
 # @hasna/notes
 
+## 0.5.0
+
+### Minor Changes
+
+- **Breaking (pre-1.0):** CLI, MCP, SDK and package-root operations require an authenticated HTTPS Notes service. Missing credentials and client database URLs fail closed; local Markdown/SQLite CRUD and automatic local fallback are removed. Both authenticated fetch paths reject redirects. Pure Markdown formatting remains available through `@hasna/notes/compat/markdown-format`.
+- The server requires PostgreSQL and a server-only database URL. SQLite defaults and retired storage flags are removed. This package release does not deploy a service or import existing records.
+- Maintenance paths use the XDG-native resolver. Legacy data is never selected, moved or copied implicitly; explicit fingerprint-bound copy-only migration preserves source files and rejects conflicts, symlinks and receipt replacement.
+- Verify the production PostgreSQL schema, OTP/API-key authentication and note write/read round-trip in isolated CI, including a missing-configuration negative control. The separate PersonalNotes product and existing `personalnotes/v1` wire dialect remain unchanged.
+
 ## 0.4.2
 
 ### Patch Changes

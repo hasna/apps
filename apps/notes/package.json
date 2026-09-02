@@ -1,6 +1,6 @@
 {
   "name": "@hasna/notes",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Authenticated HTTPS notes CLI, MCP server, SDK, and PostgreSQL-backed notes server.",
   "type": "module",
   "bin": {

@@ -1,6 +1,11 @@
 ---
-"@hasna/notes": minor
+"@hasna/notes": none
 ---
+
+Applied release record: the following pre-1.0 minor change is already versioned
+as 0.5.0 in this branch. Keep this record for the reviewed main-based version
+diff without scheduling another bump. Publication and compatible Contracts
+dependency adoption remain separate release gates.
 
 BREAKING (pre-1.0 minor, following this package's existing release convention):
 Notes CLI, MCP, SDK and package-root imports now require an authenticated HTTPS
