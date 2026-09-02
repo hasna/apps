@@ -36,6 +36,10 @@ React is an optional peer dependency; install it only if you use `@hasna/draw/re
 bun add react react-dom
 ```
 
+Installing this library creates no application directories in HOME or XDG roots.
+The CLI writes only the board file you supply; omitting the file in `draw create`
+prints the board to stdout. Reads and exports do not create an implicit store.
+
 ## Headless SDK
 
 ```ts
@@ -112,6 +116,12 @@ draw stats board.json                        # counts by kind / color / state
 ```
 
 ## Development
+
+Release packing requires npm >=11 (tested with 11.19.0); older npm versions can run
+`prepare` even with `--ignore-scripts`. `prepack` builds before scanning the
+actual npm archive. When invoking `scan:artifact` directly, run `bun run build`
+first. The scanner disables lifecycle recursion and overrides inherited dry-run
+configuration so the checked archive always exists.
 
 ```bash
 bun install

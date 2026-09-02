@@ -32,6 +32,9 @@ React is an optional peer dependency; install it only if you use `@hasna/docs/re
 bun add react react-dom
 ```
 
+Installing this library creates no application directories in HOME or XDG roots.
+The CLI reads only the input file you supply and writes its results to stdout.
+
 ## Headless SDK
 
 ```ts
@@ -105,6 +108,12 @@ docs stats notes.md                 # word / character / reading-time stats
 ```
 
 ## Development
+
+Release packing requires npm >=11 (tested with 11.19.0); older npm versions can run
+`prepare` even with `--ignore-scripts`. `prepack` builds before scanning the
+actual npm archive. When invoking `scan:artifact` directly, run `bun run build`
+first. The scanner disables lifecycle recursion and overrides inherited dry-run
+configuration so the checked archive always exists.
 
 ```bash
 bun install
