@@ -65,7 +65,8 @@
   "storage": {
     "backend": "postgresql",
     "engines": [
-      "postgresql"
+      "postgresql",
+      "sqlite"
     ],
     "envPrefix": "HASNA_ACCESS_",
     "aliasEnvPrefix": "ACCESS_",

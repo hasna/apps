@@ -72,12 +72,12 @@ Pinned Bun: `1.3.14`; system Bun was not replaced.
   packages have unrelated missing-declaration/build failures; those were not fixed.
 - Staged secret scanner and its positive/negative self-tests pass.
 
-Native conformance remains intentionally blocked by the pinned published
-`@hasna/contracts@0.14.2`: it rejects a PostgreSQL-only service unless a local
-SQLite/JSON engine is declared. The two native conformance assertions fail for
-that reason; the functional tests pass. The exact reviewed but **unpublished**
-Contracts commit `2b15c73f949729a001d5dc88509650f61e58ee41` validates the accurate
-PG-only manifest. No false local-engine declaration, invented version, or
+Pinned published `@hasna/contracts@0.14.2` requires a service to declare
+postgresql alongside a local SQLite/JSON engine, so the manifest keeps the
+sqlite engine entry while the retained legacy surfaces (root library, MCP,
+compatibility code) genuinely still reach SQLite. A PG-only manifest validates
+only against the exact reviewed but **unpublished** Contracts commit
+`2b15c73f949729a001d5dc88509650f61e58ee41`; no invented version or
 unpublished dependency adoption was introduced.
 
 Verification logs are retained under `/tmp/access-canonical-verification.1xiD2z`.
