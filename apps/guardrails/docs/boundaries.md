@@ -26,10 +26,15 @@ that is required at decision time.
 
 ## Relationship To Routing And Runtime Tools
 
-`@hasna/gateway` and `@hasna/router` own provider catalogs, routing, credentials,
-budgets, provider attempts, and HTTP surfaces. Guardrails can evaluate routing
-requests before model selection or after a candidate is selected, especially for
-cost, data policy, region, or provider warnings.
+The api.hasna.com gateway (`@hasna-internal/gateway`, Cloudflare Worker
+`hasna-api-gateway` in hasna-internal/internal-apps `apps/gateway`) fronts
+fleet-app HTTP routes (`https://api.hasna.com/<app>/...` →
+`https://<app>.hasna.xyz/...`); it does not own provider catalogs, credentials,
+or budgets. The former LLM-routing packages `@hasna/gateway` and `@hasna/router`
+were deleted in the 2026-09-03 owner wave and are not republished;
+model-routing policy evaluation stays available through the guardrails SDK
+helper (`modelRoutingGuardrailInput()`, see integrations.md) for any future
+routing runtime.
 
 `@hasna/dispatch` owns its execution and delivery
 mechanics. Guardrails should be called before command execution, prompt
