@@ -40,16 +40,15 @@ Use `openTerminalCommandGuardrailInput()` before command execution. The starter
 policy approval-gates destructive commands and denies remote-content-to-shell
 patterns.
 
-## @hasna/gateway (retired) → api.hasna.com gateway
+## @hasna/gateway (retired) → gateway edge
 
 Use `modelRoutingGuardrailInput()` before routing or after candidate selection.
 The starter policy warns on high per-token prices. The npm package that owned
 provider eligibility, credentials, budgets, and request execution
 (`@hasna/gateway`) was deleted in the 2026-09-03 owner wave and is not
 republished; edge HTTP transit for the fleet now runs through the api.hasna.com
-Cloudflare gateway (`@hasna-internal/gateway`, source in
-hasna-internal/internal-apps `apps/gateway`), which does not participate in
-model routing.
+Cloudflare gateway (Worker `hasna-api-gateway`, source now maintained in the
+private internal monorepo), which does not participate in model routing.
 
 ## Browser And Computer Use
 
