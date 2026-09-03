@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { OPERATIONS } from "../src/services/registry.js";
+import { OPERATIONS, runOperation } from "../src/services/registry.js";
 import { getIdentity } from "../src/services/identities.js";
 import { getAccessRequest } from "../src/services/access-requests.js";
 import { buildApp } from "../src/server/app.js";
@@ -23,7 +22,6 @@ import { cleanupTestDatabase, useTestDatabase } from "./helpers/database.js";
  * boundary and runs as system against the authoritative SQLite store (§CLI).
  */
 
-const cwd = process.cwd();
 const TOKEN = ["parity", "scoped", "token"].join("-");
 let dbPath: string;
 
@@ -70,22 +68,20 @@ function captureRequestHandlers(ctx?: AuthorizationContext): Map<string, Handler
   return handlers;
 }
 
-function cli<T>(args: string[]): T {
-  const out = execFileSync("bun", ["run", "src/cli/index.tsx", "--json", ...args], {
-    cwd,
-    env: { ...process.env, HASNA_ACCESS_DB_PATH: dbPath, ACCESS_API_TOKEN: TOKEN },
-    encoding: "utf8",
-  });
-  return JSON.parse(out) as T;
+// Legacy service/MCP compatibility fixture, not the migrated public CLI.
+// The canonical HTTPS/PG boundary is covered by core-domain-postgres.test.ts.
+function legacyFixture<T>(args: string[]): T {
+  const input: Record<string, unknown> = {};
+  for (let i = 2; i < args.length; i += 2) input[args[i]!.slice(2).replaceAll("-", "_")] = args[i + 1];
+  return runOperation(`${args[0]}.${args[1]}`, input) as T;
 }
 
-function cliError(args: string[]): Record<string, unknown> {
-  try {
-    cli(args);
-  } catch (error) {
-    return JSON.parse(String((error as { stdout?: Buffer | string }).stdout ?? "").trim());
+function legacyFixtureError(args: string[]): Record<string, unknown> {
+  try { legacyFixture(args); } catch (error) {
+    const value = error as { code: string; message: string; constructor: { suggestion?: string } };
+    return { code: value.code, message: value.message, suggestion: value.constructor.suggestion ?? "", error: value.message };
   }
-  throw new Error("Expected CLI command to fail.");
+  throw new Error("Expected legacy fixture operation to fail.");
 }
 
 function parseMcp<T>(result: { content: Array<{ type: string; text: string }> }): T {
@@ -119,9 +115,9 @@ describe("interface parity", () => {
     }
   });
 
-  it("service, CLI, REST, and MCP return an equivalent identity read UNDER ONE SCOPED CREDENTIAL", async () => {
+  it("legacy service, REST, and MCP return an equivalent identity read UNDER ONE SCOPED CREDENTIAL", async () => {
     const entityId = randomUUID();
-    const created = cli<{ id: string }>(["identity", "create", "--entity-id", entityId, "--kind", "agent", "--name", "parity-bot"]);
+    const created = legacyFixture<{ id: string }>(["identity", "create", "--entity-id", entityId, "--kind", "agent", "--name", "parity-bot"]);
     resetDatabase();
 
     // Same scoped, non-bypass credential threaded through every network surface.
@@ -130,7 +126,7 @@ describe("interface parity", () => {
     expect(scoped.entity_ids).toEqual([entityId]);
 
     const serviceRead = getIdentity(created.id);
-    const cliRead = cli<Record<string, unknown>>(["identity", "get", "--id", created.id]);
+    const fixtureRead = legacyFixture<Record<string, unknown>>(["identity", "get", "--id", created.id]);
 
     const app = buildApp();
     const restResponse = await app.request(`/v1/identities/${created.id}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -139,15 +135,15 @@ describe("interface parity", () => {
 
     const mcpRead = parseMcp<Record<string, unknown>>(await captureIdentityHandlers(scoped).get("get_identity")!({ id: created.id }));
 
-    expect(cliRead).toEqual(serviceRead as unknown as Record<string, unknown>);
+    expect(fixtureRead).toEqual(serviceRead as unknown as Record<string, unknown>);
     expect(restRead).toEqual(serviceRead as unknown as Record<string, unknown>);
     expect(mcpRead).toEqual(serviceRead as unknown as Record<string, unknown>);
   });
 
-  it("service, CLI, REST, and MCP return an equivalent provisioned access request read with secret_ref only", async () => {
+  it("legacy service, REST, and MCP return an equivalent provisioned access request read with secret_ref only", async () => {
     const entityId = randomUUID();
-    const identity = cli<{ id: string }>(["identity", "create", "--entity-id", entityId, "--kind", "agent", "--name", "request-bot"]);
-    const created = cli<{ id: string }>([
+    const identity = legacyFixture<{ id: string }>(["identity", "create", "--entity-id", entityId, "--kind", "agent", "--name", "request-bot"]);
+    const created = legacyFixture<{ id: string }>([
       "request",
       "create",
       "--identity-id",
@@ -159,8 +155,8 @@ describe("interface parity", () => {
       "--resource-ref",
       "npm:@hasna/access",
     ]);
-    cli<Record<string, unknown>>(["request", "approve", "--id", created.id, "--approved-by", "parity"]);
-    const provisioned = cli<Record<string, unknown>>([
+    legacyFixture<Record<string, unknown>>(["request", "approve", "--id", created.id, "--approved-by", "parity"]);
+    const provisioned = legacyFixture<Record<string, unknown>>([
       "request",
       "provision",
       "--id",
@@ -177,7 +173,7 @@ describe("interface parity", () => {
     const scoped = contextFor();
 
     const serviceRead = getAccessRequest(created.id);
-    const cliRead = cli<Record<string, unknown>>(["request", "get", "--id", created.id]);
+    const fixtureRead = legacyFixture<Record<string, unknown>>(["request", "get", "--id", created.id]);
 
     const app = buildApp();
     const restResponse = await app.request(`/v1/requests/${created.id}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -186,14 +182,14 @@ describe("interface parity", () => {
 
     const mcpRead = parseMcp<Record<string, unknown>>(await captureRequestHandlers(scoped).get("get_request")!({ id: created.id }));
 
-    expect(cliRead).toEqual(serviceRead as unknown as Record<string, unknown>);
+    expect(fixtureRead).toEqual(serviceRead as unknown as Record<string, unknown>);
     expect(restRead).toEqual(serviceRead as unknown as Record<string, unknown>);
     expect(mcpRead).toEqual(serviceRead as unknown as Record<string, unknown>);
     expect(JSON.stringify(restRead)).not.toContain("secret_value");
     expect(JSON.stringify(mcpRead)).not.toContain("secret_value");
   });
 
-  it("service, CLI, REST, and MCP expose equivalent error metadata (NOT_FOUND, under a scoped credential)", async () => {
+  it("legacy service, REST, and MCP expose equivalent error metadata (NOT_FOUND, under a scoped credential)", async () => {
     const missing = "00000000-0000-4000-8000-000000000000";
     const expected = {
       code: "IDENTITY_NOT_FOUND",
@@ -206,7 +202,7 @@ describe("interface parity", () => {
     configureScopedCredential([randomUUID()]);
     const scoped = contextFor();
 
-    const cliErr = cliError(["identity", "get", "--id", missing]);
+    const fixtureErr = legacyFixtureError(["identity", "get", "--id", missing]);
 
     const app = buildApp();
     const restResponse = await app.request(`/v1/identities/${missing}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -217,12 +213,12 @@ describe("interface parity", () => {
 
     expect(restErr).toEqual(expected);
     expect(mcpErr).toEqual(expected);
-    expect(cliErr).toEqual({ ...expected, error: expected.message });
+    expect(fixtureErr).toEqual({ ...expected, error: expected.message });
   });
 
   it("an UNSCOPED non-bypass credential is denied on BOTH network surfaces (deny-by-default lock-in)", async () => {
     const entityId = randomUUID();
-    const created = cli<{ id: string }>(["identity", "create", "--entity-id", entityId, "--kind", "agent", "--name", "locked"]);
+    const created = legacyFixture<{ id: string }>(["identity", "create", "--entity-id", entityId, "--kind", "agent", "--name", "locked"]);
     resetDatabase();
 
     // Same token, but scoped to NO entity — a valid read scope must NOT grant reach.
@@ -246,7 +242,7 @@ describe("interface parity", () => {
 
   it("a WRONG-ENTITY non-bypass credential is denied on BOTH network surfaces (knowing an id grants nothing)", async () => {
     const entityA = randomUUID();
-    const created = cli<{ id: string }>(["identity", "create", "--entity-id", entityA, "--kind", "agent", "--name", "walled"]);
+    const created = legacyFixture<{ id: string }>(["identity", "create", "--entity-id", entityA, "--kind", "agent", "--name", "walled"]);
     resetDatabase();
 
     // Same valid read scope, but scoped to a DIFFERENT entity — resolving entity A's

@@ -335,7 +335,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
  * ([P5] Standardize typed ./sdk exports + embedding contracts); entries
  * here reference it. */
 export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "access", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "attachments", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },

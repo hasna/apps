@@ -157,7 +157,7 @@ export function registerNamespaces(program: Command): void {
       for (const spec of op.options) sub.option(spec.flag);
       sub.option("--json", "Output JSON");
       sub.action((opts: Record<string, unknown>) => {
-        runAndEmit(op.op, buildInput(op, opts));
+        return runAndEmit(op.op, buildInput(op, opts));
       });
       nsCommand.addCommand(sub);
     }
