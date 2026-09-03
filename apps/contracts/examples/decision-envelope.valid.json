@@ -15,7 +15,7 @@
     {
       "kind": "model",
       "id": "model_gpt_5_4",
-      "sourcePackage": "@hasna/models",
+      "sourcePackage": "@hasna-internal/models",
       "externalId": "gpt-5.4"
     }
   ],
