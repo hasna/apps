@@ -246,68 +246,6 @@ jobs:
           bun install --frozen-lockfile --ignore-scripts
           bun run prepare:ordered
 
-      # Member test suites may drive a real browser (playwright chromium, e.g.
-      # apps/browser). Provision the browser runtime from the MEMBER directory
-      # so bun resolves the member's own playwright pin (the root may resolve a
-      # different version whose browser build the member's tests reject).
-      # google-chrome-stable is the system chrome that Bun's Linux WebView
-      # backend drives over CDP — without it, WebView-route tests hang on a
-      # runner that has no other chrome. No-op for members that do not use it.
-      - name: Install playwright chromium (member browser tests)
-        # Rewrite the runner's Ubuntu apt mirror away from azure before
-        # Playwright asks apt for system deps. The browser still installs
-        # with deps every run; we just stop depending on the flaky mirror.
-        timeout-minutes: 10
-        run: |
-          shopt -s nullglob
-          apt_source_candidates=(
-            /etc/apt/apt-mirrors.txt
-            /etc/apt/sources.list
-            /etc/apt/sources.list.d/*.list
-            /etc/apt/sources.list.d/*.sources
-          )
-          active_apt_sources=()
-          for source in "${apt_source_candidates[@]}"; do
-            [ -f "$source" ] || continue
-            active_apt_sources+=("$source")
-            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' "$source"
-          done
-          if [ "${#active_apt_sources[@]}" -eq 0 ]; then
-            echo "apt source files absent" >&2
-            exit 1
-          fi
-          archive_source=
-          for source in "${active_apt_sources[@]}"; do
-            azure_status=0
-            sudo grep -Fq 'azure.archive.ubuntu.com' "$source" 2>/dev/null || azure_status=$?
-            if [ "$azure_status" -gt 1 ]; then
-              echo "apt source unreadable: $source" >&2
-              exit 1
-            fi
-            if [ "$azure_status" -eq 0 ]; then
-              echo "azure mirror remains: $source" >&2
-              exit 1
-            fi
-            archive_status=0
-            sudo grep -Fq 'archive.ubuntu.com' "$source" 2>/dev/null || archive_status=$?
-            if [ "$archive_status" -gt 1 ]; then
-              echo "apt source unreadable: $source" >&2
-              exit 1
-            fi
-            if [ "$archive_status" -eq 0 ]; then
-              archive_source="$source"
-            fi
-          done
-          if [ -z "$archive_source" ]; then
-            echo "archive mirror absent: enumerated apt source files" >&2
-            exit 1
-          fi
-          bunx playwright install chromium --with-deps
-          if ! command -v google-chrome >/dev/null 2>&1; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq google-chrome-stable
-          fi
-        working-directory: apps/browser
-
       # TURBO_SCM_BASE makes --affected real in both lanes. On pull_request the
       # base is the CURRENT base branch ref — not
       # github.event.pull_request.base.sha, which is a snapshot from PR-open

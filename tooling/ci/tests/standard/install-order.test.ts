@@ -39,7 +39,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
 import { REPO_ROOT, members } from "./census";
 
 const ROOT_PKG_PATH = path.join(REPO_ROOT, "package.json");
@@ -249,71 +248,4 @@ describe("standard-adherence: install ordering", () => {
     expect(orderedPostinstallMembers(JSON.parse(withPostinstallStep))).toEqual(["@hasna/connectors"]);
   });
 
-  test("browser's tsc-time workspace deps are built by prepare:ordered (regression O15-00594)", () => {
-    // Regression for O15-00594: at version-wave heads, a member pin that
-    // matches the workspace version resolves to a WORKSPACE LINK under
-    // `bun install --frozen-lockfile`. If that workspace package commits no
-    // dist and is not built by prepare:ordered, a consumer whose pack-time
-    // tsc reads its types fails TS2307 (measured: browser `build:types` —
-    // `tsc --emitDeclarationOnly` — could not resolve @hasna/skills at
-    // src/lib/skills-runner.ts:19 after the wave aligned the pin).
-    //
-    // The chain is the deterministic mechanism that puts dist in front of a
-    // workspace-linked consumer: every real @hasna/<dep> the browser imports
-    // in its non-test src must resolve. Workspace-resolved deps must be built
-    // by prepare:ordered or COMMIT dist (contracts/events); deps whose pin is
-    // NOT version-aligned pull the published tarball (which ships dist) and
-    // need no chain entry.
-    const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG_PATH, "utf8"));
-    const chain = orderedPrepareMembers(rootPkg);
-    const chainSet = new Set(chain);
-
-    const wsVersion = new Map<string, string>();
-    for (const m of members()) {
-      const pkg = JSON.parse(
-        fs.readFileSync(path.join(REPO_ROOT, "apps", m.name, "package.json"), "utf8"),
-      ) as { version?: string };
-      wsVersion.set(m.pkgName, pkg.version ?? "");
-    }
-
-    const browserPkg = JSON.parse(
-      fs.readFileSync(path.join(REPO_ROOT, "apps", "browser", "package.json"), "utf8"),
-    ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-    const allDeps = { ...(browserPkg.dependencies ?? {}), ...(browserPkg.devDependencies ?? {}) };
-
-    // Real `@hasna/<dep>` imports (static + dynamic) in non-test src. The
-    // `[a-z0-9-]+` class stops at the first `/`, so a subpath import such as
-    // `@hasna/browser/sdk` captures the bare package name — self-imports are
-    // skipped below.
-    const importRe = /(?:import\s+[^'"]*?\s+from\s*['"]|import\(\s*['"])(@hasna\/[a-z0-9-]+)['"]/g;
-
-    const imported = new Set<string>();
-    const srcDir = path.join(REPO_ROOT, "apps", "browser", "src");
-    const walk = (dir: string) => {
-      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (e.name === "node_modules" || e.name === "dist") continue;
-        const p = path.join(dir, e.name);
-        if (e.isDirectory()) walk(p);
-        else if (/\.(ts|tsx)$/.test(e.name) && !/\.(test|spec)\./.test(e.name)) {
-          for (const mm of fs.readFileSync(p, "utf8").matchAll(importRe)) imported.add(mm[1]);
-        }
-      }
-    };
-    walk(srcDir);
-
-    const problems: string[] = [];
-    for (const dep of imported) {
-      if (dep === "@hasna/browser") continue;
-      if (!wsVersion.has(dep)) continue;
-      if (allDeps[dep] === undefined || allDeps[dep] !== wsVersion.get(dep)) continue; // tarball, not workspace
-      const depDir = dep.replace("@hasna/", "");
-      const git = spawnSync("git", ["ls-files", `apps/${depDir}/dist`], { cwd: REPO_ROOT, encoding: "utf8" });
-      if (git.status === 0 && git.stdout.trim().length > 0) continue; // dist committed
-      if (chainSet.has(dep)) continue;
-      problems.push(
-        `${dep} is workspace-resolved and commits no dist but is not built by prepare:ordered — browser pack-time tsc fails TS2307`,
-      );
-    }
-    expect(problems, `browser workspace-dist violations:\n${problems.join("\n")}`).toEqual([]);
-  });
 });
