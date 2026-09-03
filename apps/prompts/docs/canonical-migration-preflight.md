@@ -72,5 +72,33 @@ does not invent a released version or generated provenance.
 - No live database, cloud operation, real credential access, push, PR write,
   merge, publication or deployment occurred. No todos were filed (NOT FILED).
 
+## Fixer re-verification (2026-09-03, rebased onto origin/main 85c3dee35)
+
+- Rebased cleanly (prior base 5d2fcfb02; no apps/prompts changes on main in
+  between, so no conflicts). Re-verified against the current Contracts
+  resolver (merge 29222c5; fixes 41fc753 own-data snapshot, 7ab022d request
+  binding + auth-body discard, 22572ae canonical authenticated clients):
+  this prototype now snapshots own-data without invoking getters and rejects
+  accessor-backed keys, matching 41fc753; it remains constructor-scoped
+  (explicit pair, reconstruct to rotate) rather than the Contracts
+  per-request provider chain — a prototype boundary, not a rotation story.
+- New client tests: 6 passed, 0 failed (boundary + accessor + snapshot +
+  authority normalization + get/create/update/delete error paths +
+  pagination bounds + invalid JSON). Package typecheck: passed.
+- Full suite from apps/prompts: 447 passed, 4 failed — the same 4
+  pre-existing macOS path failures (repro: `cd apps/prompts && bun test`;
+  running `bun test apps/prompts` from the repo root instead yields ~34
+  spurious CLI failures because CLI tests spawn `bun run src/cli/index.tsx`
+  relative to cwd). Three assume Linux XDG locations on macOS; one compares
+  `/var` against canonical `/private/var`. Unrelated to this change (this
+  branch touches only the 3 new prototype files).
+- `apps/prompts/dist/canonical-client.d.ts(.map)` build leftovers are
+  git-ignored (`apps/prompts/.gitignore: dist/`) and untracked — left in
+  place, not committed.
+- Prototype status: new client stays UNEXPORTED from src/index.ts (no public
+  entry point changed). PR #265's two-backend contract is not the target and
+  is not adopted here; broad migration (withdrawing SQLite/local
+  capabilities) needs product/API approval before any export or migration.
+
 The worktree and uncommitted preparation are retained. Nothing is ready for
 publication or acceptance as a migrated package.

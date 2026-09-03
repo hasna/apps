@@ -29,6 +29,13 @@ function credential(value: string | undefined): string {
   if (!value || value !== value.trim() || /[\s\x00-\x1f\x7f]/.test(value)) {
     throw new Error('prompts requires a nonblank usable HASNA_PROMPTS_API_KEY');
   }
+  // Prototype-only floor: reject trivial values that cannot be real keys.
+  // Production credential validation (header-safety, vault-pointer shape) lives
+  // in the reviewed Contracts resolver (commits 22572ae, 7ab022d, 41fc753);
+  // this prototype is explicit-only and unexported pending product direction.
+  if (value.length < 8) {
+    throw new Error('prompts requires a nonblank usable HASNA_PROMPTS_API_KEY');
+  }
   return value;
 }
 
@@ -45,15 +52,39 @@ function authority(value: string | undefined): string {
 
 function resolve(options: PromptsClientOptions): { baseUrl: string; apiKey: string } {
   const env = options.env ?? process.env;
-  for (const key of retired) if (env[key] !== undefined) throw new Error(`prompts: unset retired ${key}; configure authenticated HTTPS instead`);
+  // Own-data snapshot: never invoke getters on the env object. An
+  // accessor-backed key throws instead of being read, per Contracts 41fc753.
+  const own = (key: string): string | undefined => {
+    const descriptor = Object.getOwnPropertyDescriptor(env, key);
+    if (!descriptor) return undefined;
+    if (!('value' in descriptor)) throw new Error(`prompts: ${key} is accessor-backed; client configuration requires own data properties`);
+    if (descriptor.value !== undefined && typeof descriptor.value !== 'string') {
+      throw new Error(`prompts: ${key} must be a string data property`);
+    }
+    return descriptor.value as string | undefined;
+  };
+  for (const key of retired) if (own(key) !== undefined) throw new Error(`prompts: unset retired ${key}; configure authenticated HTTPS instead`);
   // Read each mutable source exactly once, then validate and retain that same pair.
-  const rawUrl = env.HASNA_PROMPTS_API_URL;
-  // hasna-credential-seam-waiver: Explicit-only constructor snapshots URL and key together; no credential fallback or retry. Reconstruct the client to rotate this pair. Reviewed Contracts HTTPS resolver is not yet published.
-  const rawKey = env.HASNA_PROMPTS_API_KEY;
-  const aliasUrl = env.PROMPTS_API_URL;
-  // hasna-credential-seam-waiver: Presence is rejected, never resolved as a credential; canonical explicit-only API keys are the sole supported source.
-  const aliasKey = env.PROMPTS_API_KEY;
-  if (aliasUrl !== undefined || aliasKey !== undefined) throw new Error('prompts: legacy API aliases are unsupported; use HASNA_PROMPTS_API_URL and HASNA_PROMPTS_API_KEY');
+  const rawUrl = own('HASNA_PROMPTS_API_URL');
+  // hasna-credential-seam-waiver (requires independent review before any
+  // migration use): explicit-only constructor snapshots URL and key together as
+  // one immutable pair; no fallback, no retry, no per-request re-read. A
+  // long-lived process picks up rotation ONLY by constructing a new client.
+  // This differs deliberately from the Contracts per-request provider chain
+  // (22572ae/7ab022d); it is a prototype boundary, not a rotation story.
+  // Prototype-only: no disk/vault tiers, no deprecation tiers. The reviewed
+  // Contracts HTTPS resolver is not yet published, so this file must not be
+  // treated as the migration target without product/API approval.
+  const rawKey = own('HASNA_PROMPTS_API_KEY');
+  // hasna-credential-seam-waiver (requires independent review before any
+  // migration use): legacy aliases are rejected on PRESENCE without ever
+  // binding the legacy value to a local — the descriptor check below reads no
+  // credential into a retained variable, so a legacy PROMPTS_API_KEY value
+  // cannot linger in this closure. Canonical HASNA_PROMPTS_* keys are the sole
+  // supported source; rejection is the whole handling.
+  const legacyKeyDescriptor = Object.getOwnPropertyDescriptor(env, 'PROMPTS_API_KEY');
+  if (legacyKeyDescriptor && !('value' in legacyKeyDescriptor)) throw new Error('prompts: PROMPTS_API_KEY is accessor-backed; client configuration requires own data properties');
+  if (own('PROMPTS_API_URL') !== undefined || (legacyKeyDescriptor !== undefined && (legacyKeyDescriptor as PropertyDescriptor).value !== undefined)) throw new Error('prompts: legacy API aliases are unsupported; use HASNA_PROMPTS_API_URL and HASNA_PROMPTS_API_KEY');
   const explicitUrl = options.apiUrl;
   const explicitKey = options.apiKey;
   if ((explicitUrl !== undefined) !== (explicitKey !== undefined)) throw new Error('prompts: explicit apiUrl and apiKey must be provided together');
