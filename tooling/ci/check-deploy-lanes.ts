@@ -67,7 +67,6 @@ import { parseYaml, asMap, asArray, asText } from "./yaml.ts";
  */
 const UNPORTED_NESTED_DEPLOY_LANES = new Set([
   "attachments",
-  "sessions",
 ]);
 
 /**
