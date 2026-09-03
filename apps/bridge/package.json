@@ -63,7 +63,6 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^13.1.0",
     "zod": "^3.25.76"

@@ -3,7 +3,7 @@
 
 // src/cli/index.ts
 import { readFileSync as readFileSync2 } from "fs";
-import { dirname, join as join7 } from "path";
+import { dirname, join as join6 } from "path";
 import { fileURLToPath } from "url";
 
 // src/index.ts
@@ -110,87 +110,80 @@ function channelMatchesEvent(channel, event) {
 import { chmod, mkdir, readFile, rename, writeFile } from "fs/promises";
 import { Buffer as Buffer2 } from "buffer";
 import { existsSync as existsSync2 } from "fs";
-import { join as join3 } from "path";
+import { join as join2 } from "path";
 
 // src/app-home.ts
 import { existsSync } from "fs";
-import { homedir as homedir2 } from "os";
-import { join as join2, resolve } from "path";
-
-// ../../node_modules/.bun/@hasna+paths@0.1.0/node_modules/@hasna/paths/dist/index.js
 import { homedir } from "os";
-import { join } from "path";
-var KIND_ENV = {
+import { join, resolve } from "path";
+import { homedir as pathsResolverHomedir } from "os";
+import { join as pathsResolverJoin } from "path";
+var PATHS_RESOLVER_KIND_ENV = {
   config: "HASNA_CONFIG_HOME",
   data: "HASNA_DATA_HOME",
   state: "HASNA_STATE_HOME",
   cache: "HASNA_CACHE_HOME"
 };
-var APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-function assertApp(app) {
+var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function pathsResolverAssertApp(app) {
   if (typeof app !== "string" || app.length === 0) {
     throw new TypeError("paths: app must be a non-empty string");
   }
-  if (!APP_SLUG_RE.test(app)) {
+  if (!PATHS_RESOLVER_APP_SLUG_RE.test(app)) {
     throw new TypeError(`paths: invalid app slug "${app}" \u2014 expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`);
   }
 }
-function envOf(options) {
-  return options.env ?? process.env;
+function pathsResolverAssertKind(kind) {
+  if (!Object.keys(PATHS_RESOLVER_KIND_ENV).includes(kind)) {
+    throw new TypeError(`paths: invalid path kind "${kind}" \u2014 expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`);
+  }
 }
-function envValue(options, kind) {
-  const value = envOf(options)[KIND_ENV[kind]];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-function isMacOS(platform) {
-  return platform === "darwin";
-}
-function baseDir(kind, options) {
-  const override = envValue(options, kind);
-  if (override)
+function pathsResolverBaseDir(kind, options) {
+  pathsResolverAssertKind(kind);
+  const env = options.env ?? process.env;
+  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
+  if (typeof override === "string" && override.length > 0)
     return override;
-  const home = options.home ?? homedir();
+  const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
-  if (isMacOS(platform)) {
+  if (platform === "darwin") {
     switch (kind) {
       case "config":
       case "data":
-        return join(home, "Library", "Application Support", "Hasna");
+        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
       case "cache":
-        return join(home, "Library", "Caches", "Hasna");
+        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
       case "state":
-        return join(home, "Library", "Logs", "Hasna");
+        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
     }
   }
   switch (kind) {
     case "config":
-      return join(home, ".config", "hasna");
+      return pathsResolverJoin(home, ".config", "hasna");
     case "data":
-      return join(home, ".local", "share", "hasna");
+      return pathsResolverJoin(home, ".local", "share", "hasna");
     case "state":
-      return join(home, ".local", "state", "hasna");
+      return pathsResolverJoin(home, ".local", "state", "hasna");
     case "cache":
-      return join(home, ".cache", "hasna");
+      return pathsResolverJoin(home, ".cache", "hasna");
   }
 }
-function resolvePath(kind, options) {
-  assertApp(options.app);
-  const appSegment = options.internal === true ? join("internal", options.app) : options.app;
-  return join(baseDir(kind, options), appSegment);
+function pathsResolverResolve(kind, options) {
+  pathsResolverAssertApp(options.app);
+  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
+  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
 }
 function dataDir(options) {
-  return resolvePath("data", options);
+  return pathsResolverResolve("data", options);
 }
-
-// src/app-home.ts
 var HASNA_EVENTS_DIR_ENV = "HASNA_EVENTS_DIR";
 var HASNA_EVENTS_HOME_ENV = "HASNA_EVENTS_HOME";
 var EVENTS_STORE_SENTINEL_FILE = "events.json";
 function effectiveHome() {
-  return process.env["HOME"] || process.env["USERPROFILE"] || homedir2();
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
 }
 function legacyHomeDir() {
-  return join2(effectiveHome(), ".hasna", "events");
+  return join(effectiveHome(), ".hasna", "events");
 }
 function resolverHome() {
   return dataDir({ app: "events", home: effectiveHome() || undefined });
@@ -199,7 +192,7 @@ function adoptResolverHome(resolved, env = process.env) {
   const dataOverride = env.HASNA_DATA_HOME;
   if (typeof dataOverride === "string" && dataOverride.trim().length > 0)
     return true;
-  return existsSync(join2(resolved, EVENTS_STORE_SENTINEL_FILE));
+  return existsSync(join(resolved, EVENTS_STORE_SENTINEL_FILE));
 }
 function exactEventsHome() {
   const dir = process.env[HASNA_EVENTS_DIR_ENV];
@@ -242,9 +235,9 @@ class JsonEventsStore {
   constructor(dataDir2 = getEventsDataDir()) {
     this.dataDir = dataDir2;
     this.runtime = localJsonRuntime(dataDir2);
-    this.channelsPath = join3(dataDir2, "channels.json");
-    this.eventsPath = join3(dataDir2, "events.json");
-    this.deliveriesPath = join3(dataDir2, "deliveries.json");
+    this.channelsPath = join2(dataDir2, "channels.json");
+    this.eventsPath = join2(dataDir2, "events.json");
+    this.deliveriesPath = join2(dataDir2, "deliveries.json");
   }
   async init() {
     await mkdir(this.dataDir, { recursive: true, mode: 448 });
@@ -512,7 +505,7 @@ async function getEventsStatus(dataDir2) {
   };
 }
 function statusFile(dataDir2, fileName, records) {
-  const path = join3(dataDir2, fileName);
+  const path = join2(dataDir2, fileName);
   return { path, exists: existsSync2(path), records };
 }
 
@@ -1414,7 +1407,7 @@ import {
   unlinkSync,
   writeFileSync
 } from "fs";
-import { basename, join as join4 } from "path";
+import { basename, join as join3 } from "path";
 var DURABLE_SCHEMA_VERSION = 1;
 var MAX_RETRY_ATTEMPTS = 1000;
 var MAX_RETRY_DELAY_MS = 365 * 24 * 60 * 60 * 1000;
@@ -1557,7 +1550,7 @@ class DurableEventsBroker {
     if (!options.dataDir)
       throw new Error("DurableEventsBroker requires dataDir");
     this.dataDir = options.dataDir;
-    this.databasePath = join4(options.dataDir, options.databaseName ?? "events.sqlite");
+    this.databasePath = join3(options.dataDir, options.databaseName ?? "events.sqlite");
     this.now = options.now ?? (() => new Date);
     this.transportOptions = {
       fetchImpl: options.fetchImpl,
@@ -1701,14 +1694,14 @@ class DurableEventsBroker {
     return summary;
   }
   importSpool(options = {}) {
-    const inboxDir = join4(this.dataDir, "spool", "inbox");
+    const inboxDir = join3(this.dataDir, "spool", "inbox");
     if (!existsSync3(inboxDir))
       return { scanned: 0, imported: 0, deduped: 0, queued: 0, quarantined: 0 };
     const limit = normalizePositiveInteger(options.limit, 100, "limit");
     const names = readdirSync(inboxDir).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).sort().slice(0, limit);
     const result = { scanned: names.length, imported: 0, deduped: 0, queued: 0, quarantined: 0 };
     for (const name of names) {
-      const path = join4(inboxDir, name);
+      const path = join3(inboxDir, name);
       let event;
       try {
         event = parseSpoolEnvelope(readFileSync(path, "utf8"));
@@ -2180,22 +2173,22 @@ function syncDirectory(path) {
   }
 }
 function quarantineSpoolRecord(dataDir2, path, reason) {
-  const spoolDir = join4(dataDir2, "spool");
-  const quarantineDir = join4(spoolDir, "quarantine");
+  const spoolDir = join3(dataDir2, "spool");
+  const quarantineDir = join3(spoolDir, "quarantine");
   mkdirSync(quarantineDir, { recursive: true, mode: 448 });
   chmodSync(spoolDir, 448);
   chmodSync(quarantineDir, 448);
   const name = basename(path);
   const base = name.replace(/\.json$/, "");
   const suffix = `${Date.now()}-${randomUUID3().slice(0, 8)}`;
-  const destination = join4(quarantineDir, `${base}.${suffix}.json`);
+  const destination = join3(quarantineDir, `${base}.${suffix}.json`);
   renameSync(path, destination);
   const metadata = {
     quarantinedAt: new Date().toISOString(),
     originalName: name,
     reason
   };
-  writeFileSync(join4(quarantineDir, `${base}.${suffix}.meta.json`), `${JSON.stringify(metadata, null, 2)}
+  writeFileSync(join3(quarantineDir, `${base}.${suffix}.meta.json`), `${JSON.stringify(metadata, null, 2)}
 `, { mode: 384 });
   syncDirectory(quarantineDir);
 }
@@ -2210,7 +2203,7 @@ function spoolFileName(event) {
 // src/durable-worker.ts
 import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, watch } from "fs";
 import { randomUUID as randomUUID5 } from "crypto";
-import { join as join6 } from "path";
+import { join as join5 } from "path";
 
 // src/durable-spool.ts
 import { createHash as createHash2, randomUUID as randomUUID4 } from "crypto";
@@ -2224,7 +2217,7 @@ import {
   stat,
   unlink
 } from "fs/promises";
-import { join as join5 } from "path";
+import { join as join4 } from "path";
 class DurableEventSpool {
   dataDir;
   inboxDir;
@@ -2232,13 +2225,13 @@ class DurableEventSpool {
     if (!options.dataDir)
       throw new Error("DurableEventSpool requires dataDir");
     this.dataDir = options.dataDir;
-    this.inboxDir = join5(options.dataDir, "spool", "inbox");
+    this.inboxDir = join4(options.dataDir, "spool", "inbox");
   }
   async enqueue(input) {
     const event = redactSensitiveKeys(createSpoolEvent(input));
     await this.ensureInbox();
     const finalPath = this.pathFor(event);
-    const tempPath = join5(this.inboxDir, `.tmp-${process.pid}-${randomUUID4()}`);
+    const tempPath = join4(this.inboxDir, `.tmp-${process.pid}-${randomUUID4()}`);
     const handle = await open(tempPath, "wx", 384);
     try {
       await handle.writeFile(`${JSON.stringify(event)}
@@ -2271,7 +2264,7 @@ class DurableEventSpool {
     const result = { recovered: 0, deduped: 0, cleaned: 0 };
     const names = (await readdir(this.inboxDir)).filter((name) => name.startsWith(".tmp-")).sort();
     for (const name of names) {
-      const tempPath = join5(this.inboxDir, name);
+      const tempPath = join4(this.inboxDir, name);
       const details = await stat(tempPath).catch(() => {
         return;
       });
@@ -2309,7 +2302,7 @@ class DurableEventSpool {
   pathFor(event) {
     const identity = event.dedupeKey ?? event.id;
     const digest = createHash2("sha256").update(identity, "utf8").digest("hex");
-    return join5(this.inboxDir, `${digest}.json`);
+    return join4(this.inboxDir, `${digest}.json`);
   }
   async assertSameIdentity(path, event) {
     const existing = parseEnvelope(await readFile2(path, "utf8"));
@@ -2318,7 +2311,7 @@ class DurableEventSpool {
       throw new Error("Durable spool identity collision");
   }
   async ensureInbox() {
-    const spoolDir = join5(this.dataDir, "spool");
+    const spoolDir = join4(this.dataDir, "spool");
     await mkdir2(this.inboxDir, { recursive: true, mode: 448 });
     await chmod2(this.dataDir, 448);
     await chmod2(spoolDir, 448);
@@ -2386,7 +2379,7 @@ async function runDurableWorker(options) {
   const spool = new DurableEventSpool({ dataDir: options.broker.dataDir });
   const inboxDir = spool.inboxDir;
   mkdirSync2(inboxDir, { recursive: true, mode: 448 });
-  chmodSync2(join6(options.broker.dataDir, "spool"), 448);
+  chmodSync2(join5(options.broker.dataDir, "spool"), 448);
   chmodSync2(inboxDir, 448);
   const totals = {
     workerId,
@@ -2615,7 +2608,7 @@ function parseMatcherExpression(value, label) {
 // src/cli/index.ts
 function version() {
   try {
-    const packagePath = join7(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+    const packagePath = join6(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
     return JSON.parse(readFileSync2(packagePath, "utf-8")).version ?? "0.0.0";
   } catch {
     return "0.0.0";

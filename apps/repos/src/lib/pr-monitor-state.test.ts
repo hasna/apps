@@ -270,7 +270,7 @@ describe("pr-monitor state accessors", () => {
       expect(DEFAULT_PRUNE_OLDER_THAN_DAYS).toBe(30);
       seedPullRequest({ owner: "hasna", repo: "apps", number: 903, state: "merged" });
       upsertWatchState(observe({ owner: "hasna", repo: "apps", number: 903, seenAt: "2026-06-01 00:00:00" }));
-      const result = pruneWatchState();
+      const result = pruneWatchState({ now: "2026-08-18 00:00:00" });
       expect(result.pruned).toBe(1);
     });
 

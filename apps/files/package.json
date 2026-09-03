@@ -1,7 +1,7 @@
 {
   "name": "@hasna/files",
   "version": "0.3.18",
-  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
+  "description": "Agent-first file management \u2014 index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -90,7 +90,6 @@
     "@aws-sdk/s3-request-presigner": "^3.1009.0",
     "@hasna/connectors": "1.4.3",
     "@hasna/events": "0.1.16",
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@noble/hashes": "^1.7.2",
     "chalk": "^5.4.1",

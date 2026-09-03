@@ -124,7 +124,6 @@
     "@aws-sdk/client-secrets-manager": "^3.1083.0",
     "@hasna/contracts": "0.14.2",
     "@hasna/events": "^0.1.16",
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "2.9.1",
     "ai": "6.0.204",

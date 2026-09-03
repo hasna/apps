@@ -1,7 +1,7 @@
 {
   "name": "@hasna/servers",
   "version": "0.1.25",
-  "description": "Server management for AI coding agents — CLI + MCP server",
+  "description": "Server management for AI coding agents \u2014 CLI + MCP server",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -60,7 +60,6 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@hasna/events": "0.1.3",
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

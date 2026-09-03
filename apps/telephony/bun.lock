@@ -7,7 +7,6 @@
       "dependencies": {
         "@hasna/contracts": "0.10.6",
         "@hasna/events": "^0.1.6",
-        "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "commander": "^13.1.0",
         "pg": "^8.13.1",

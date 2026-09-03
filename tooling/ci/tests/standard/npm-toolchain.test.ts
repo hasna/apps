@@ -63,9 +63,4 @@ describe("standard-adherence: npm artifact toolchain", () => {
       expect(install?.run).toContain("bun run prepare:ordered");
     }
   });
-
-  test("the release-tool prerequisite does not restrict Paths consumers", () => {
-    const manifest = JSON.parse(readFileSync(resolve(root, "apps/paths/package.json"), "utf8"));
-    expect(manifest.engines.npm).toBeUndefined();
-  });
 });

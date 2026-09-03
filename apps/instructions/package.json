@@ -1,7 +1,7 @@
 {
   "name": "@hasna/instructions",
   "version": "0.5.6",
-  "description": "AI coding agent instruction & configuration manager — store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK + Dashboard.",
+  "description": "AI coding agent instruction & configuration manager \u2014 store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -78,7 +78,6 @@
   "dependencies": {
     "@hasna/contracts": "0.14.2",
     "@hasna/events": "^0.1.16",
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
