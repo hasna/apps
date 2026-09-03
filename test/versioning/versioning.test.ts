@@ -83,14 +83,16 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // ledger: a hand-written constant in source, not a release-lane artifact. So the
 // EXEMPTION MECHANISM is kept — but it now carries no entries.
 //
-// Re-measured 2026-08-23, and both records are dead: apps/catalog/src/version.ts
-// exports VERSION "0.2.1" against package version 0.2.1 (aligned, no longer fires),
-// and apps/treasury/src/version.ts exports `APP_VERSION = pkg.version` — derived, not
+// Re-measured 2026-08-23, and both records were already dead: apps/catalog/src/version.ts
+// exported VERSION "0.2.1" against package version 0.2.1 (aligned, no longer fired), and
+// apps/treasury/src/version.ts exports `APP_VERSION = pkg.version` — derived, not
 // a literal, so readStaticRuntimeVersions (which requires a same-line string literal)
-// yields nothing for it and it cannot fire at all. An exemption that no longer
-// matches its subject is a hole, not a record: it would silently pass exactly the
-// catalog 0.2.0/0.1.0 drift it was written to document if that recurred. Empty is the
-// honest state; a genuine future exemption is one line plus its measurement.
+// yields nothing for it and it cannot fire at all. apps/catalog was deleted from this
+// repo 2026-09-03 (issue #1530), so the catalog side cannot recur in this tree either.
+// An exemption that no longer matches its subject is a hole, not a record: it would
+// silently pass exactly the catalog 0.2.0/0.1.0 drift it was written to document if
+// that recurred. Empty is the honest state; a genuine future exemption is one line plus
+// its measurement.
 const KNOWN_RUNTIME_MISMATCHES = new Map<string, { packageVersion: string; runtimeVersion: string }>([]);
 
 // The npm-parity keyspace is a REPORTING lane (f05fe292 design, option (a)): registry
