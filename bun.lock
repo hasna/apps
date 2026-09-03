@@ -1201,39 +1201,6 @@
         "typescript": "^5.7.3",
       },
     },
-    "apps/tickets": {
-      "name": "@hasna/tickets",
-      "version": "0.1.24",
-      "bin": {
-        "tickets": "dist/cli/index.js",
-        "tickets-mcp": "dist/mcp/index.js",
-        "tickets-serve": "dist/server/index.js",
-      },
-      "dependencies": {
-        "@aws-sdk/client-s3": "^3.700.0",
-        "@aws-sdk/client-sesv2": "^3.700.0",
-        "@hasna/events": "0.1.11",
-        "@hasna/paths": "0.1.0",
-        "@modelcontextprotocol/sdk": "^1.12.1",
-        "chalk": "^5.4.1",
-        "commander": "^13.1.0",
-        "hono": "4.13.3",
-        "ink": "^5.2.0",
-        "mailparser": "^3.7.1",
-        "nodemailer": "9.0.5",
-        "react": "^18.3.1",
-        "resend": "^4.0.0",
-        "zod": "^3.24.2",
-      },
-      "devDependencies": {
-        "@types/bun": "1.3.14",
-        "@types/mailparser": "^3.4.4",
-        "@types/nodemailer": "^6.4.17",
-        "@types/react": "^18.3.18",
-        "bun-types": "1.3.14",
-        "typescript": "^5.7.3",
-      },
-    },
     "apps/todos": {
       "name": "@hasna/todos",
       "version": "0.15.52",
@@ -1726,8 +1693,6 @@
 
     "@hasna/telephony": ["@hasna/telephony@workspace:apps/telephony"],
 
-    "@hasna/tickets": ["@hasna/tickets@workspace:apps/tickets"],
-
     "@hasna/todos": ["@hasna/todos@workspace:apps/todos"],
 
     "@hasna/ui": ["@hasna/ui@workspace:apps/ui"],
@@ -2155,8 +2120,6 @@
     "@types/node": ["@types/node@26.2.0", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-5IviulTZeRNp2vAJ514cc/HUlY5nZ9fCbq9DMyC52BrhFZACo3nI0R7qBxhQmo/d27NFe96ur/b7Wwxklda+kg=="],
 
     "@types/node-cron": ["@types/node-cron@3.0.11", "", {}, "sha512-0ikrnug3/IyneSHqCBeslAhlK2aBfYek1fGo4bP4QnZPmiqSGRK+Oy7ZMisLWkesffJvQ1cqAcBnJC+8+nxIAg=="],
-
-    "@types/nodemailer": ["@types/nodemailer@6.4.24", "", { "dependencies": { "@types/node": "*" } }, "sha512-Ww4u0rT9wQNXh4JiQaIwx3QWdcOFXzOjQA2zc+jtFYNmQiT4mIUqcDin51bDFdkzKubFnQCZNK7FIHlPKQ/q9w=="],
 
     "@types/pg": ["@types/pg@8.23.1", "", { "dependencies": { "@types/node": "*", "pg-protocol": "*", "pg-types": "^2.2.0" } }, "sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A=="],
 
@@ -3591,16 +3554,6 @@
     "@hasna/telephony/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
     "@hasna/telephony/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
-    "@hasna/tickets/@hasna/events": ["@hasna/events@0.1.11", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-X36W9TB8mKxtS5UeW1n2IlvW6nPUcoYCQWNMMV+/JM4YNzlnnk1FRm8Aay02tt1LjQOGICCHF3hz/l//EHEe+Q=="],
-
-    "@hasna/tickets/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
-
-    "@hasna/tickets/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
-
-    "@hasna/tickets/resend": ["resend@4.8.0", "", { "dependencies": { "@react-email/render": "1.1.2" } }, "sha512-R8eBOFQDO6dzRTDmaMEdpqrkmgSjPpVXt4nGfWsZdYOet0kqra0xgbvTES6HmCriZEXbmGk3e0DiGIaLFTFSHA=="],
-
-    "@hasna/tickets/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/todos/@hasna/contracts": ["@hasna/contracts@0.14.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-JqSpwofTbqQGzFyaQvwpr+rhIVwBQTriW3BWdsOgpgD+BfSSBLr4R6OHQImjzQlilwsHo0U6doA7y8GuicfJ9w=="],
 
