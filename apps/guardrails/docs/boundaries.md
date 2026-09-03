@@ -26,14 +26,14 @@ that is required at decision time.
 
 ## Relationship To Routing And Runtime Tools
 
-`@hasna/gateway` owns provider catalogs, routing, credentials,
+`@hasna/gateway` and `@hasna/router` own provider catalogs, routing, credentials,
 budgets, provider attempts, and HTTP surfaces. Guardrails can evaluate routing
 requests before model selection or after a candidate is selected, especially for
 cost, data policy, region, or provider warnings.
 
-`@hasna/dispatch` and `@hasna/mcps` own their execution and
-delivery mechanics. Guardrails should be called before command execution,
-prompt delivery, and MCP tool invocation. The decision output is intentionally
+`@hasna/dispatch` owns its execution and delivery
+mechanics. Guardrails should be called before command execution, prompt
+delivery, and MCP tool invocation. The decision output is intentionally
 portable so each tool can decide how to display warnings, collect approvals, or
 block execution.
 

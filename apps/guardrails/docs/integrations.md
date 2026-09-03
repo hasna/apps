@@ -34,11 +34,11 @@ Use `openDispatchPromptGuardrailInput()` before prompt delivery. A dispatch
 caller should block on `deny`, ask for approval on `approval_required`, display
 warnings on `warn`, and use redacted audit fields when `redact` is returned.
 
-## @hasna/mcps
+## @hasna/terminal
 
-Use `openMcpsToolCallGuardrailInput()` before tool calls or local stdio server
-registration. Transport, server id, tool name, and arguments are included in the
-policy input.
+Use `openTerminalCommandGuardrailInput()` before command execution. The starter
+policy approval-gates destructive commands and denies remote-content-to-shell
+patterns.
 
 ## @hasna/gateway
 

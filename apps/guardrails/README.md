@@ -101,7 +101,7 @@ run commands, call MCP tools, route models, or scan repositories.
 - `actions` defines executable action contracts and previews.
 - `shield` owns security scanning and vulnerability/secret exposure
   workflows.
-- `terminal`, `dispatch`, `mcps`, `gateway`, and
+- `terminal`, `dispatch`, `gateway`, and
   `router` own their runtime mechanics and can call this package before
   execution.
 
