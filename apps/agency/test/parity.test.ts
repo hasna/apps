@@ -56,16 +56,16 @@ describe("CLI verb surface (documented 16-verb surface)", () => {
     }
   });
 
-  test("description banner carries the 45-package count", () => {
+  test("description banner carries the 44-package count", () => {
     const res = runCli(["--help"]);
-    expect(res.stdout).toContain("45 @hasna/*");
+    expect(res.stdout).toContain("44 @hasna/*");
   });
 });
 
-describe("embedded registry (stale-by-design 45-entry list)", () => {
-  test("REGISTRY length is 45", () => {
-    expect(PACKAGE_COUNT).toBe(45);
-    expect(REGISTRY.length).toBe(45);
+describe("embedded registry (stale-by-design 44-entry list)", () => {
+  test("REGISTRY length is 44", () => {
+    expect(PACKAGE_COUNT).toBe(44);
+    expect(REGISTRY.length).toBe(44);
   });
 
   test("key packages are present", () => {
