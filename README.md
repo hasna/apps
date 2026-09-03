@@ -26,9 +26,7 @@ tooling/ci/            CI gate scripts (secret scan, name conformance, publish g
 Member packages live under `apps/` — one directory per public `@hasna/<name>`
 package with the four surfaces (CLI, MCP server bin, `-serve` server bin,
 `./sdk` import) as a target standard — not every member ships all four today
-(25 of 75). Recorded case: `apps/agency` (reconstructed from the
-published @hasna/agency@0.3.1 bundle, row 91a7b09d) ships the CLI bin only —
-the artifact never shipped the other surfaces.
+(25 of 75).
 
 Retired umbrella: the `@hasna/cli` package (bin `hasna`, deprecated on npm)
 is retired and has no source in this repo — do not deploy or advertise it

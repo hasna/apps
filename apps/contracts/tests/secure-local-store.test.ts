@@ -25,7 +25,6 @@ describe("secure local-store declarative contract", () => {
       "knowledge",
       "projects",
       "browser",
-      "terminal",
       "logs",
       "loops"
     ]) {

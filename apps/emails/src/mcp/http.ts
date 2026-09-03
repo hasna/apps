@@ -1,5 +1,4 @@
-import { healthPayload } from "@hasna/mcp-harness";
-import { handleMcpHttpRequest as harnessHandleMcpHttpRequest } from "@hasna/mcp-harness/bun";
+import { handleMcpHttpRequest as harnessHandleMcpHttpRequest, healthPayload } from "./harness.js";
 import {
   assertUsableToken,
   MCP_HTTP_TOKEN_ENV,
@@ -20,10 +19,11 @@ export {
   type McpHttpGuard,
 } from "./http-auth.js";
 
-// emails MCP HTTP transport — hand-wired onto `@hasna/mcp-harness` (the
-// hand-rolled `WebStandardStreamableHTTPServerTransport` wiring + health
-// payload shape are now shared). `./server.js` stays a dynamic import so
-// `--help`/`--version` and the health check never pull in the full tool graph.
+// emails MCP HTTP transport — hand-wired onto the vendored harness
+// (./harness.ts; the hand-rolled `WebStandardStreamableHTTPServerTransport`
+// wiring + health payload shape are now in-tree). `./server.js` stays a
+// dynamic import so `--help`/`--version` and the health check never pull in
+// the full tool graph.
 //
 // Every request passes an authorization + DNS-rebinding guard first (see
 // `./http-auth.ts`): `/mcp` requires `Authorization: Bearer <token>` matching

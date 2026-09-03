@@ -38,19 +38,6 @@ public-estate imports are tracked by the import wave (todos `28ac4516`).
    (`<name>` bin), an MCP server bin, a `-serve` server bin, and an `./sdk`
    importable module. Name must match the directory (`apps/<name>` ↔
    `@hasna/<name>`), kebab-case, enforced by the CI name-conformance gate.
-   **Recorded deviation:** `apps/agency` ships the CLI bin only — the
-   published `@hasna/agency@0.3.1` (the artifact this member reconstructs,
-   row 91a7b09d) never shipped MCP/serve/sdk surfaces, so the reconstructed
-   tree ships what the original shipped. Same scope as the manifest-missing
-   exception in the standard census.
-   **Recorded deviation:** `apps/terminal` ships the CLI surface only — the
-   `t` and `terminal` bins (the artifact this member reconstructs, imported
-   at `4ca50b3b6` from the standalone-repo era, last published 4.3.19 and
-   fully unpublished 2026-08-15) never shipped separate MCP/`-serve`/`./sdk`
-   surfaces; the MCP server is reached through the `terminal mcp serve`
-   subcommand and `terminal install`, not as a separate bin. The
-   reconstructed tree ships what the original shipped. Same scope as the
-   `apps/agency` deviation.
 5. **Publish guard.** Publishing is per-package `npm publish` from the package
    directory with the vault token `hasna/npm/live/publish-token` via
    `secrets exec` + a temp npmrc referencing `NODE_AUTH_TOKEN`. Never `bun

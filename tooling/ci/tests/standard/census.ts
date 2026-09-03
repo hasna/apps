@@ -17,7 +17,7 @@
  * provenance, not as a procedure): measured 2026-08-14 against
  * origin/main @ ce470e4ad; refreshed by the integrator lane at the
  * ci/test-suites merge ref (2026-08-14) for the imports that landed after
- * that base — connectors (#80), shield (#74), terminal (#88). Refreshed
+ * that base — connectors (#80), shield (#74). Refreshed
  * again 2026-08-14 by the ci/test-suites iterate-to-green fixer at the
  * fresh merge of current main (a7d60a96, todos import #105): files (#90)
  * gained hasna.contract.json (contracts conformance + kitVersion records
@@ -106,6 +106,10 @@
  * for hasna-internal/internal-apps as @hasna-internal/datasets (destination
  * PR hasna-internal/internal-apps#509), so the member no longer exists here
  * and its recorded exceptions are stale under the two-sided contract.
+ * 2026-09-03 (router delete): the router MCP, SERVER and SDK exception entries
+ * DELETED — apps/router left the public tree entirely (npm registry 404 for
+ * @hasna/router), so the member no longer exists here and its recorded
+ * exceptions are stale under the two-sided contract.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -287,12 +291,9 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
   { member: "orgs", reason: "Registry-shaped; no MCP surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no MCP surface." },
-  { member: "router", reason: "Gateway-shaped; no MCP surface." },
   { member: "sheets", reason: "Library-shaped (spreadsheet format); no MCP surface." },
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no MCP surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (bash sentinel/bun-wrapper/battery, SC-00062); no MCP surface." },
   { member: "ui", reason: "Legacy ui.sh mirror; single `ui` bin, no MCP surface." },
 ];
 
@@ -300,10 +301,8 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
 export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "CLI-only member; no server surface." },
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
-  { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
-  { member: "catalog", reason: "Local read model; the HTTP read API is a documented local dev convenience bound to loopback (README 'Security and deployment scope'), not a supported service surface — the manifest declares the api surface deferred with that reason." },
   { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
   { member: "docs", reason: "Docs renderer; no server surface." },
   { member: "draw", reason: "Library-shaped; no server surface." },
@@ -314,17 +313,13 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "orgs", reason: "Registry-shaped; no server surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no server surface." },
   { member: "releases", reason: "CLI-only member; no server surface." },
-  { member: "router", reason: "Gateway-shaped; no server surface." },
   { member: "servers", reason: "CLI-only member (server lifecycle tooling); no server surface." },
   { member: "sheets", reason: "Library-shaped; no server surface." },
   { member: "skills", reason: "CLI-only member (skill corpus tooling); no server surface." },
   { member: "slides", reason: "Library-shaped; no server surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "statusline", reason: "CLI-only member; no server surface." },
-  { member: "styles", reason: "Library-shaped (style tokens); no server surface." },
   { member: "tables", reason: "Library-shaped; no server surface." },
   { member: "tai", reason: "Client-shaped; no server surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no server surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (host-local concurrency guard); no server surface." },
   { member: "ui", reason: "Legacy ui.sh mirror; no server surface." },
 ];
 
@@ -336,38 +331,29 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "attachments", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "banking", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "brains", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "catalog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "controls", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "crawl", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "connectors", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #80 after the original census." },
   { member: "docs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "holdings", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "mcps", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "router", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "sheets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "styles", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
-  { member: "test-guard", reason: "SDK lane (c7ce8b75); bash-only guard ships no importable Node SDK export (see the member's CONTRACTS_EXCEPTIONS entry)." },
   { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "ui", reason: "Legacy ui.sh mirror; SDK lane (c7ce8b75)." },
 ];
@@ -384,9 +370,9 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
 ];
 
 /** hasna.contract.json must exist for every publishable member. Members
- * measured without one (25 — 24 at the original census, connectors +
- * terminal added by the integrator lane for imports #80/#88, hooks removed
- * when #102 added its manifest on 2026-08-14) — each recorded with the
+ * measured without one (24 — 23 at the original census, connectors added by
+ * the integrator lane for import #80, hooks removed when #102 added its
+ * manifest on 2026-08-14; terminal deleted 2026-09-03) — each recorded with the
  * manifest lane pointer (aggregate task; see README). */
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -395,12 +381,9 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "statusline", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "styles", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "tai", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "tickets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "connectors", reason: "No hasna.contract.json; imported by #80 after the original census; manifest lane (todos 41208cbe)." },
-  { member: "terminal", reason: "No hasna.contract.json; imported by #88 after the original census; manifest lane (todos 41208cbe)." },
-  { member: "agency", reason: "No hasna.contract.json; source reconstructed from the published 0.3.1 bundle (row 91a7b09d) — CLI-only member; manifest lane (todos 41208cbe)." },
 ];
 
 /** Contracts conformance exceptions — members whose manifest does not pass
@@ -473,19 +456,9 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos daaa2841 (contracts task — tables)",
   },
   {
-    member: "shield",
-    cause: "surface_matrix/service_api_topology: api and sdk surfaces declared deferred truthfully (shield-serve has no GET /ready, GET /version, /v1 base, or /openapi.json), so no supported API surface exists; the kit requires one for a service-capable cli-with-store. storage.engines postgresql is validator-forced (kit refuses the waiver for service-capable cli-with-store) and disclosed in metadata.conformance.notes. Mode vocabulary removed from src/db/database.ts and README.",
-    task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
-  },
-  {
     member: "todos",
     cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
-  },
-  {
-    member: "test-guard",
-    cause: "surface_matrix: missing supported surface declarations or eligible waivers: sdk (library-class sdk waivers are not permitted by the kit; the bash-only guard ships no importable Node SDK export — sdk declared deferred truthfully). All other checks pass: manifest_valid, bins_allowlisted, bins_match_package, surface_bindings, published_artifact_gate (prepack reaches scan:artifact), public_manifest_safety, hosting_story, credential_seam_compliance, no_cloud_guard (sentinel.sh no longer references the retired .hasna/cloud runtime config).",
-    task: "todos 940070c4-4fdf-4796-8a70-6f63d135f714 (successor conformance lane); SDK surface: SDK lane todos c7ce8b75-3d4e-4376-854c-875cd20c605b",
   },
 ];
 
@@ -517,11 +490,9 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
   { member: "instructions", kitVersion: "0.13.1", pinned: "0.14.0" },
   { member: "knowledge", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "machines", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "messages", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "prompts", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "secrets", kitVersion: "0.13.3", pinned: "^0.14.0" },
-  { member: "testers", kitVersion: "0.13.4", pinned: "^0.14.0" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —
@@ -529,12 +500,10 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
  * manifest's kitVersion (or latest). */
 export const NO_VALIDATOR_PIN: string[] = [
   "bridge",
-  "catalog",
   "changelog",
   "computers",
   "context",
   "contracts",
-  "crawl",
   "docs",
   "draw",
   "guardrails",
@@ -545,7 +514,6 @@ export const NO_VALIDATOR_PIN: string[] = [
   "sheets",
   "slides",
   "tables",
-  "test-guard",
   "releases",
   "ui",
 ];

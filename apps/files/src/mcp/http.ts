@@ -1,19 +1,19 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  type McpHttpServerHandle,
   isHttpMode,
   isStdioMode,
   resolveMcpHttpPort as harnessResolveMcpHttpPort,
-  type McpHttpServerHandle,
-} from "@hasna/mcp-harness";
-import { startMcpHttpServer as harnessStartMcpHttpServer } from "@hasna/mcp-harness/node";
+  startMcpHttpServer as harnessStartMcpHttpServer,
+} from "./harness.js";
 import { DEFAULT_MCP_HTTP_PORT } from "./options.js";
 
 /**
- * open-files MCP transport/port boilerplate — now a thin shim over
- * `@hasna/mcp-harness`. The public API (names, signatures, health shape) is
- * preserved so `mcp/index.ts` and the tests are unchanged; only the hand-rolled
- * `node:http` + `StreamableHTTPServerTransport` server, port parsing, and health
- * helpers were removed in favor of the shared harness.
+ * open-files MCP transport/port boilerplate — now a thin shim over the
+ * vendored harness (./harness.ts). The public API (names, signatures, health
+ * shape) is preserved so `mcp/index.ts` and the tests are unchanged; only the
+ * hand-rolled `node:http` + `StreamableHTTPServerTransport` server, port
+ * parsing, and health helpers were removed in favor of the in-tree harness.
  */
 
 export const MCP_HTTP_SERVICE_NAME = "files";

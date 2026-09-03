@@ -9,7 +9,6 @@ import { REPOSITORY_ROOT } from "./helpers";
  * The finding claimed the ROOT bun.lock "resolves versions outside declared
  * ranges for the 8 apps with no own lockfile", citing:
  *   apps/statusline "@modelcontextprotocol/sdk": "1.12.1"  vs "@modelcontextprotocol/sdk@1.30.0"
- *   apps/testers    "pg": "8.21.0"                          vs "pg@8.23.0"
  *   apps/agency     "commander": "^12"                      vs "commander@13.1.0"
  *
  * The cited "resolutions" are the lockfile's HOISTED top-level entries. In a
@@ -21,7 +20,6 @@ import { REPOSITORY_ROOT } from "./helpers";
  *   `bun install --lockfile-only` (bun 1.3.14 = packageManager): zero diff.
  *   `bun install --frozen-lockfile` at the root: rc=0 (2478 packages).
  *   apps/statusline/node_modules/@modelcontextprotocol/sdk/package.json: 1.12.1
- *   apps/testers/node_modules/pg/package.json:                          8.21.0
  *   apps/agency/node_modules/commander/package.json:                   12.1.0
  *   `bun tooling/ci/check-frozen-locks.ts`: green.
  *
@@ -270,17 +268,15 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     }
   });
 
-  test("the members without an own lockfile are the finding's 7", () => {
-    // telephony gained a hermetic bun.lock in #1432 (O15-04773); the expected
-    // list tracks main's committed lockfile state.
+  test("the members without an own lockfile are the finding's 3", () => {
+    // telephony gained a hermetic bun.lock in #1432 (O15-04773); agency,
+    // consolidations, test-guard and testers left the tree (deletions +
+    // hasna-internal move) — the expected list tracks main's committed
+    // lockfile state.
     expect(noOwnLockMembers(root)).toEqual([
-      "agency",
       "connectors",
-      "consolidations",
       "paths",
       "statusline",
-      "test-guard",
-      "testers",
     ]);
   });
 
@@ -291,21 +287,7 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     expect(satisfiesRange("1.12.1", versionOf(resolved!.spec)!)).toBe(true);
   });
 
-  test("apps/testers resolves pg@8.21.0 inside its declared range", () => {
-    const entries = lock.packages ?? {};
-    const resolved = resolvedSpecFor(entries, "@hasna/testers", "pg");
-    expect(resolved?.spec).toBe("pg@8.21.0");
-    expect(satisfiesRange("8.21.0", versionOf(resolved!.spec)!)).toBe(true);
-  });
-
-  test("apps/agency resolves commander@12.1.0 inside its declared ^12 range", () => {
-    const entries = lock.packages ?? {};
-    const resolved = resolvedSpecFor(entries, "@hasna/agency", "commander");
-    expect(resolved?.spec).toBe("commander@12.1.0");
-    expect(satisfiesRange("^12", versionOf(resolved!.spec)!)).toBe(true);
-  });
-
-  test("every member without an own lockfile resolves every declared dep inside its declared range", () => {
+test("every member without an own lockfile resolves every declared dep inside its declared range", () => {
     const violations = checkDrift(root, lock);
     expect(
       violations.length === 0,

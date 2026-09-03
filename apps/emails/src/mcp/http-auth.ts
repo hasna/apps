@@ -14,8 +14,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
  *
  * The MCP SDK's own `allowedHosts`/`enableDnsRebindingProtection` transport
  * options are deprecated in favour of "external middleware", and are not
- * reachable through `@hasna/mcp-harness` anyway — so the checks live here, in
- * front of the harness handler.
+ * reachable through the vendored harness handler anyway — so the checks live
+ * here, in front of the harness handler.
  */
 
 export const MCP_HTTP_TOKEN_ENV = "EMAILS_MCP_HTTP_TOKEN";

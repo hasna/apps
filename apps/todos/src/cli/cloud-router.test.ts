@@ -343,13 +343,49 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
     "https://todos.example?route=v1",
     "https://todos.example#v1",
     "https://todos.example/api/v1",
-    "https://todos.example/custom",
+    "https://api.hasna.com/todos/v1/v1",
+    "https://todos.example/a/b/v1",
+    "https://todos.example/v1/tasks",
     "http://todos.example",
   ])("rejects ambiguous or credential-unsafe authority URL %s", (apiUrl) => {
     expect(() => getTodosCloudClient({
       HASNA_TODOS_API_URL: apiUrl,
       HASNA_TODOS_API_KEY: "fixture-key",
     })).toThrow("REMOTE_API_URL_INVALID");
+  });
+
+  test.each([
+    ["https://api.hasna.com/todos/v1", "https://api.hasna.com/todos/v1"],
+    ["https://api.hasna.com/todos", "https://api.hasna.com/todos/v1"],
+    ["https://api.hasna.com/todos/v1/", "https://api.hasna.com/todos/v1"],
+    ["https://todos.hasna.xyz", "https://todos.hasna.xyz/v1"],
+    ["https://todos.hasna.xyz/v1", "https://todos.hasna.xyz/v1"],
+    ["https://api.hasna.com/todos/", "https://api.hasna.com/todos/v1"],
+    ["https://custom-gateway.example/todos", "https://custom-gateway.example/todos/v1"],
+  ])("accepts the gateway base URL %s and routes at the exact /v1 root %s", (apiUrl, expectedV1Base) => {
+    const status = getTodosRemoteAuthorityConfigStatus({
+      HASNA_TODOS_API_URL: apiUrl,
+      HASNA_TODOS_API_KEY: "fixture-key",
+    });
+    expect(status).toMatchObject({ ok: true, v1_base_url: expectedV1Base });
+    const client = getTodosCloudClient({
+      HASNA_TODOS_API_URL: apiUrl,
+      HASNA_TODOS_API_KEY: "fixture-key",
+    });
+    expect(client!.baseUrl).toBe(expectedV1Base);
+  });
+
+  test("routes requests through the gateway path prefix without dropping or doubling it", async () => {
+    const calls = installFetch(() => ({ body: { projects: [], count: 0 } }));
+    const client = getTodosCloudClient({
+      HASNA_TODOS_API_URL: "https://api.hasna.com/todos/v1",
+      HASNA_TODOS_API_KEY: "fixture-key",
+    })!;
+    await cloudListProjects(client);
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://api.hasna.com/todos/v1/projects",
+    ]);
+    expect(calls[0]!.headers["authorization"]).toBe("Bearer fixture-key");
   });
 
   test("accepts exact /v1 and loopback HTTP without duplicating the route prefix", () => {

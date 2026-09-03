@@ -1,7 +1,0 @@
-{
-  "lockfileVersion": 1,
-  "packages": {
-    "axios": ["axios@1.14.1", "", {}, "sha512-h///fixture-axios"],
-    "chalk": ["chalk@5.4.1", "", {}, "sha512-fixture-chalk"],
-  },
-}

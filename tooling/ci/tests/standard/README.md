@@ -67,12 +67,11 @@ Filed 2026-08-14 in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`
   the iterate-to-green fixer when #97's manifest landed) — per-member
   tasks. `machines` (`6ab8775b`) was REMOVED 2026-08-15: #124 bumped
   `@hasna/contracts` to 0.10.6 and its manifest now validates clean.
-- 25 members without `hasna.contract.json` (24 at the original census plus
-  `connectors` and `terminal`, added by the integrator lane for imports
-  #80/#88, minus `hooks`, whose manifest landed in #102) — one aggregate
+- 24 members without `hasna.contract.json` (23 at the original census plus
+  `connectors`, added by the integrator lane for import #80, minus `hooks`,
+  whose manifest landed in #102; terminal deleted 2026-09-03) — one aggregate
   task (`41208cbe`) enumerating them.
-- Members missing `-mcp` / `-serve` bins (including `terminal`, added by
-  the integrator lane for import #88) — one aggregate task (`35e136f2`)
+- Members missing `-mcp` / `-serve` bins — one aggregate task (`35e136f2`)
   enumerating them.
 - `apps/computers` flaky test timeout — BUG task `1a8b922c`.
 - The `./sdk` WARNs are owned by the standing P5 lane

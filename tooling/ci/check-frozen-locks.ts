@@ -97,8 +97,6 @@
  *                 the economy O15-00629 pattern. The vendored storage-kit is
  *                 already regenerated at 0.14.1 in the same PR; only the
  *                 registry-resolved lockfile entry is pending.
- *   testers     — @hasna/browser@0.5.28 rc=1. Inert for RULE 2 as well: no
- *                 `apps/testers/bun.lock` is tracked (only its dashboard's).
  *   browser     — NOT justified by an unresolvable pin any more, and this entry
  *                 must not be read as a justification. Every direct pin in its
  *                 manifest resolves rc=0 as of this measurement
@@ -137,8 +135,9 @@
  *   at image-build time, which O15-04773 measured breaking the telephony
  *   build (TS2589 in src/mcp/server.ts once bun 1.4.0 nested zod@4.4.3 under
  *   @modelcontextprotocol/sdk@1.30.0 while the source passed zod-3 schemas).
- *   The escape now names testers only (I38-00566), which still deliberately
- *   resolves from the manifest.
+ *   The former escape (testers, I38-00566, globbed COPY resolving from the
+ *   manifest) was retired with the member when apps/testers left this tree
+ *   for hasna-internal (2026-09-03).
  *
  * RULE 5 — MEMBER MANIFEST VERSION BEHIND THE PUBLISHED LATEST (O15-00772).
  *   A member whose OWN manifest version is BELOW the npm-published latest is
@@ -188,7 +187,6 @@ const UNRESOLVABLE_PINS = new Set<string>([
   "automations",
   "browser",
   "economy",
-  "testers",
 ]);
 
 /**
@@ -626,9 +624,11 @@ function lockfileResolves(packages: Record<string, unknown>, name: string, spec:
  * (its `zod: ^3.25 || ^4.0` range) while the source passed zod-3 schemas,
  * and `tsc --emitDeclarationOnly` died with TS2589 — the deploy failed at
  * ANY sha. DOCKERFILE_LOCKFILE_ESCAPES names the members deliberately
- * allowed to resolve from the manifest (testers, I38-00566).
+ * allowed to resolve from the manifest. The former escape (testers,
+ * I38-00566) was retired with the member when apps/testers left this tree
+ * for hasna-internal (2026-09-03); the set is empty.
  */
-const DOCKERFILE_LOCKFILE_ESCAPES = new Set(["testers"]);
+const DOCKERFILE_LOCKFILE_ESCAPES = new Set<string>();
 function checkDockerfileLockfiles(root: string): string[] {
   const problems: string[] = [];
   for (const member of memberDirs(root)) {
@@ -776,18 +776,6 @@ async function selfTest(): Promise<void> {
       throw new Error(`glob no-lockfile control failed — globbed bun.lock* COPY without member lockfile not reported: ${r4Glob.join("; ")}`);
     }
     fs.rmSync(path.join(dir, "apps", "beta", "Dockerfile"), { force: true });
-    // Sanctioned escape (testers, I38-00566): globbed COPY, no lockfile — silent.
-    fs.mkdirSync(path.join(dir, "apps", "testers"), { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, "apps", "testers", "package.json"),
-      JSON.stringify({ name: "@hasna/testers", version: "0.0.1", dependencies: {}, devDependencies: {} }),
-    );
-    fs.writeFileSync(path.join(dir, "apps", "testers", "Dockerfile"), "COPY package.json bun.lock* ./\n");
-    const r4Escape = (await runCheck(dir, offlineProbe)).problems;
-    if (r4Escape.some((p) => p.includes("apps/testers/Dockerfile"))) {
-      throw new Error(`escape control failed — sanctioned testers escape reported: ${r4Escape.join("; ")}`);
-    }
-    fs.rmSync(path.join(dir, "apps", "testers"), { recursive: true, force: true });
     fs.writeFileSync(path.join(dir, "apps", "alpha", "Dockerfile"), "COPY package.json bun.lock* ./\n");
     const r4Present = (await runCheck(dir, offlineProbe)).problems;
     if (r4Present.some((p) => p.includes("apps/alpha/Dockerfile"))) {

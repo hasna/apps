@@ -34,23 +34,17 @@ Use `openDispatchPromptGuardrailInput()` before prompt delivery. A dispatch
 caller should block on `deny`, ask for approval on `approval_required`, display
 warnings on `warn`, and use redacted audit fields when `redact` is returned.
 
-## @hasna/terminal
-
-Use `openTerminalCommandGuardrailInput()` before command execution. The starter
-policy approval-gates destructive commands and denies remote-content-to-shell
-patterns.
-
 ## @hasna/mcps
 
 Use `openMcpsToolCallGuardrailInput()` before tool calls or local stdio server
 registration. Transport, server id, tool name, and arguments are included in the
 policy input.
 
-## @hasna/gateway And @hasna/router
+## @hasna/gateway
 
 Use `modelRoutingGuardrailInput()` before routing or after candidate selection.
-The starter policy warns on high per-token prices. Gateway/router packages
-still own provider eligibility, credentials, budgets, and request execution.
+The starter policy warns on high per-token prices. The gateway package owns
+provider eligibility, credentials, budgets, and request execution.
 
 ## Browser And Computer Use
 
