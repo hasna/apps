@@ -1,9 +1,0 @@
-# hasna station template v1 — aggregate test controller base unit.
-# Machine-derived limits are owned by the package-managed
-# hasna-tests.slice.d/50-workstation-test-profile.conf drop-in.
-[Unit]
-Description=Aggregate controller for admitted local test scopes
-
-[Slice]
-MemoryAccounting=yes
-TasksAccounting=yes
