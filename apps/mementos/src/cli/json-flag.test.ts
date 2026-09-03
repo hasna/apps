@@ -55,7 +55,6 @@ describe("--json flag is honored by all listed subcommands", () => {
     { name: "session list", args: ["session", "list", "--json"], humanMarker: "No session jobs found." },
     { name: "profile list", args: ["profile", "list", "--json"], humanMarker: "No profiles yet" },
     { name: "auto-memory status", args: ["auto-memory", "status", "--json"], humanMarker: "Auto-Memory Status" },
-    { name: "brains model get", args: ["brains", "model", "get", "--json"], humanMarker: "Active model:" },
     { name: "get-focus", args: ["get-focus", "--agent", "json-test-agent", "--json"], humanMarker: "No focus set." },
   ];
 
@@ -68,14 +67,6 @@ describe("--json flag is honored by all listed subcommands", () => {
       expect(() => JSON.parse(stdout)).not.toThrow();
     });
   }
-
-  test("brains model (default action) also honors --json", async () => {
-    const { stdout, exitCode } = await runCli("brains", "model", "--json");
-    expect(exitCode).toBe(0);
-    expect(stdout).not.toContain("Active model:");
-    const parsed = JSON.parse(stdout) as { activeModel?: string };
-    expect(typeof parsed.activeModel).toBe("string");
-  });
 
   test("without --json, human text is still emitted", async () => {
     const { stdout } = await runCli("hooks", "list");

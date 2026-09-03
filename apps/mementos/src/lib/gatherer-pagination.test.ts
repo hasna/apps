@@ -1,5 +1,5 @@
-// Regression test (BUG 2796806b remediation cycle one): the brains training-
-// data gatherer must assemble the FULL active population in api mode, even
+// Regression test (BUG 2796806b remediation cycle one): the training-data
+// gatherer must assemble the FULL active population in api mode, even
 // though the server caps single responses at 1000 rows. Before the fix it
 // called `listMemories({status:"active"})` with no limit, which silently
 // returned exactly one capped page under the bounded-page contract.

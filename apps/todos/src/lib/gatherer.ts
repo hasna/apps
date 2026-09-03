@@ -1,5 +1,6 @@
 // Training data gatherer for @hasna/todos
-// Used by open-brains to collect fine-tuning examples from task data
+// Collects fine-tuning examples from task data (protocol consumed by the
+// brains package, which moved to hasna-internal)
 
 import type { Task } from "../types/index.js";
 import { listTasks } from "../db/tasks.js";

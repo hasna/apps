@@ -18,7 +18,7 @@ import { registerAllCommands } from "./register-all.js";
 // It builds the tree through `registerAllCommands` — the SAME function
 // `index.tsx` uses — because re-listing the groups here was itself a hole: the
 // hand-written list covered 11 groups while the CLI wired 15 sources, leaving
-// `init`, `project-panel`, `brains`, `events` and `webhooks` unwalked. Seven live
+// `init`, `project-panel`, `events` and `webhooks` unwalked. Seven live
 // `-j` collisions sat in that blind spot while this guard reported clean.
 function buildProgram(): Command {
   const program = new Command();
@@ -120,7 +120,7 @@ describe("global option short flags", () => {
 
   test("the traversal reaches nested subcommands, not just the top level", () => {
     // Guards against a false clean verdict from never descending. `mementos
-    // brains`/`project` style groups nest their options one level down.
+    // project`-style groups nest their options one level down.
     const program = new Command();
     program.name("mementos");
     applyGlobalOptions(program);

@@ -163,7 +163,6 @@ agent-workflow-<name>  -- process knowledge
 | **@hasna/attachments** | Store attachment IDs as memory values |
 | **@hasna/conversations** | `update_agent(active_project_id)` → mementos as agent registry |
 | **@hasna/instructions** | `memory_inject()` for context; config decisions as `fact` memories |
-| **@hasna/brains** | `GET /api/memories?scope=shared&min_importance=6` for training data |
 
 ## Common Patterns
 

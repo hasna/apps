@@ -2685,7 +2685,6 @@ program
       { name: "@hasna/emails", bin: "emails", mcp: "emails-mcp" },
       { name: "@hasna/recordings", bin: "recordings", mcp: "recordings-mcp" },
       { name: "@hasna/assistants", bin: "assistants", mcp: "assistants-mcp" },
-      { name: "@hasna/brains", bin: "brains", mcp: "brains-mcp" },
     ];
 
     console.log(chalk.bold("@hasna/instructions bootstrap") + chalk.dim(` — installing ${packages.length} ecosystem packages\n`));

@@ -12,7 +12,7 @@ The default data directory is `~/.hasna/economy/` and the SQLite database is `~/
 | `ECONOMY_MACHINE_ID` | Machine identifier; otherwise Economy uses the normalized hostname. |
 | `ECONOMY_TAG` | Fallback attribution tag on locally written sessions/requests. |
 
-`economy config` reads and writes `config.json`. The defaults are `port=3456`, `default-period=today`, `auto-sync=true`, `sync-interval=30`, `alert-thresholds=[5,10,25,50,100]`, and `webhook-url=null`. At present, `webhook-url` drives budget notifications and `activeModel` drives `economy brains`; the other stored values are compatibility/settings metadata. Binary ports, periods, and watch intervals still come from command options or the environment described below.
+`economy config` reads and writes `config.json`. The defaults are `port=3456`, `default-period=today`, `auto-sync=true`, `sync-interval=30`, `alert-thresholds=[5,10,25,50,100]`, and `webhook-url=null`. At present, `webhook-url` drives budget notifications and `activeModel` records the selected model used by AI analysis; the other stored values are compatibility/settings metadata. Binary ports, periods, and watch intervals still come from command options or the environment described below.
 
 ## Account attribution
 

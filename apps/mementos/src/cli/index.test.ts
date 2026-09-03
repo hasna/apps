@@ -146,7 +146,7 @@ describe("CLI", () => {
   test("completions bash lists every real top-level subcommand", async () => {
     // Regression: the completion script used to carry a hand-maintained command
     // string that drifted from the real CLI, omitting ~22 registered subcommands
-    // (entity, relation, graph, storage, brains, events, hooks, etc.). The list
+    // (entity, relation, graph, storage, events, hooks, etc.). The list
     // is now derived from commander, so it must stay in sync with `--help`.
     const help = await runCli("--help");
     const commandSection = help.stdout.slice(help.stdout.indexOf("Commands:"));
@@ -170,7 +170,7 @@ describe("CLI", () => {
     expect(missing).toEqual([]);
 
     // Spot-check subcommands that were specifically missing before the fix.
-    for (const cmd of ["entity", "relation", "graph", "storage", "brains", "events", "hooks", "auto-memory", "consolidate", "reflect", "when-to-use", "chain", "heartbeat", "project-panel", "tool-events", "synthesized-profile"]) {
+    for (const cmd of ["entity", "relation", "graph", "storage", "events", "hooks", "auto-memory", "consolidate", "reflect", "when-to-use", "chain", "heartbeat", "project-panel", "tool-events", "synthesized-profile"]) {
       expect(completionCommands.has(cmd)).toBe(true);
     }
   });

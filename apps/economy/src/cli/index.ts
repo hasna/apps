@@ -2,7 +2,6 @@
 import { Command } from 'commander'
 import { registerEventsCommands } from '@hasna/events/commander'
 import chalk from 'chalk'
-import { registerBrainsCommand } from './brains.js'
 import { registerTodosCommand } from './commands/todos.js'
 import { registerExtendedCommands, registerFleetCommands } from './commands/extras.js'
 import { registerBriefCommand } from './commands/brief.js'
@@ -1561,9 +1560,6 @@ billingCmd
     console.log()
   })
 
-// ── brains ─────────────────────────────────────────────────────────────────────
-
-registerBrainsCommand(program)
 registerTodosCommand(program)
 registerBriefCommand(program, { beforeRead: () => autoSync({ dedupe: false }) })
 registerExtendedCommands(program)

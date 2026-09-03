@@ -14,7 +14,6 @@ import { registerSystemCommands } from "./commands/system.js";
 import { registerStorageCommands } from "./commands/storage.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerConsolidationCommands } from "./commands/consolidation.js";
-import { makeBrainsCommand } from "./brains.js";
 
 /**
  * Attach EVERY command group to `program`, in the order the CLI presents them.
@@ -25,7 +24,7 @@ import { makeBrainsCommand } from "./brains.js";
  * one that ships.
  *
  * That drift was real: the guard originally re-listed 11 groups by hand while
- * the CLI wired 15 sources, leaving `init`, `project-panel`, `brains` and the
+ * the CLI wired 15 sources, leaving `init`, `project-panel` and the
  * `@hasna/events` groups (`events`, `webhooks`) unwalked. Seven live `-j`
  * collisions sat in that blind spot while the guard reported clean. Adding a
  * command group here is now the only step required for it to be covered.
@@ -44,7 +43,6 @@ export function registerAllCommands(program: Command): Command {
   registerSystemCommands(program);
   registerStorageCommands(program);
   registerConsolidationCommands(program);
-  program.addCommand(makeBrainsCommand());
   registerEventsCommands(program, { source: "mementos" });
   return program;
 }

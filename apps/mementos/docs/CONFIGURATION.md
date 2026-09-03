@@ -49,7 +49,7 @@ directory is copied to the new location before resolving the default database.
 | `~/.hasna/mementos/storage/config.json` | PostgreSQL connection fallback fields |
 | `~/.hasna/mementos/profiles/*.db` | Named profile database files |
 | `~/.hasna/mementos/backups/*.db` | CLI backups |
-| `~/.hasna/mementos/training/*.jsonl` | `brains gather` output |
+| `~/.hasna/mementos/training/` | Reserved training-data output dir (fine-tuning protocol; consuming package moved to hasna-internal) |
 | `~/.hasna/mementos/agents/<name>/` | Legacy agent sync files |
 | `~/.open-sessions-registry.db` | Active-session registry used by `sessions` |
 

@@ -58,8 +58,9 @@ applyGlobalOptions(program);
 // Commander writes the error text before calling this hook, so messages are
 // unaffected; only the status changes. Install it on every node after the full
 // tree is registered: `.command()` copies inherited settings, but addCommand()
-// deliberately does not. A separately constructed tree such as `brains` would
-// otherwise keep Commander's default exit 1 on both its root and descendants.
+// deliberately does not. A separately constructed group attached with
+// addCommand() would otherwise keep Commander's default exit 1 on both its
+// root and descendants.
 function applyExitCodeContract(command: Command): void {
   command.exitOverride((err) => {
     process.exit(resolveExitCode(err));

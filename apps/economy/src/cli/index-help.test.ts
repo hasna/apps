@@ -256,46 +256,6 @@ describe('economy CLI help', () => {
   })
 })
 
-describe('economy brains CLI', () => {
-  test('gather reports no examples and does not write output for an empty database', async () => {
-    const outputRoot = mkdtempSync(join(tmpdir(), 'economy-cli-brains-output-'))
-    tempRoots.push(outputRoot)
-    const outputPath = join(outputRoot, 'training.jsonl')
-
-    const result = await runCli(['brains', 'gather', '--limit', '10', '--output', outputPath])
-
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('No training examples found')
-    expect(result.stdout).toContain('Run: economy sync')
-    expect(result.stderr).toBe('')
-    expect(existsSync(outputPath)).toBe(false)
-  })
-
-  test('model set and clear honor HASNA_ECONOMY_CONFIG_PATH', async () => {
-    const configRoot = mkdtempSync(join(tmpdir(), 'economy-cli-model-config-'))
-    tempRoots.push(configRoot)
-    const configPath = join(configRoot, 'nested', 'config.json')
-    const env = { HASNA_ECONOMY_CONFIG_PATH: configPath }
-
-    let result = await runCli(['brains', 'model', 'set', 'ft:gpt-4o-mini:economy'], env)
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Active model set to: ft:gpt-4o-mini:economy')
-    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toMatchObject({
-      activeModel: 'ft:gpt-4o-mini:economy',
-    })
-
-    result = await runCli(['brains', 'model'], env)
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Active model:')
-    expect(result.stdout).toContain('ft:gpt-4o-mini:economy')
-
-    result = await runCli(['brains', 'model', 'clear'], env)
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Active model cleared')
-    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).not.toHaveProperty('activeModel')
-  })
-})
-
 describe('economy CLI mutation validation', () => {
   test('budget set rejects invalid numeric and period values', async () => {
     let result = await runCli(['budget', 'set', '--limit', 'not-a-number'])

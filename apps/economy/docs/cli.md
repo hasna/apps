@@ -71,7 +71,6 @@ Human output for high-cardinality commands is intentionally capped. Use the comm
 | `economy mcp` | Print Claude Code, Codex, and Gemini MCP configuration; select one or use `--all`. |
 | `economy completion <shell>` | Print completion for `bash`, `zsh`, or `fish`. |
 | `economy menubar` | `install [--force]`, `start`, `stop`, or `uninstall` the macOS Economy Bar app. |
-| `economy brains` | `gather`, `train`, `model [set|clear]`, and `status`. Fine-tuning requires the optional `@hasna/brains` package; gathering does not. |
 | `economy events`, `economy webhooks` | Event emit/list/replay and event-subscription commands supplied by `@hasna/events`; use the nested `--help` for options. |
 | `economy todos` | Display the bundled Economy roadmap, filter tasks, or show a task ID. This is project planning data, not live service status. |
 
