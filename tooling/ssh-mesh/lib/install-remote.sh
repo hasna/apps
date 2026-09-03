@@ -16,23 +16,26 @@ fi
 mv "$tmp" authorized_keys
 chmod 600 authorized_keys
 
-# ssh config: one fleet block, pointing at the per-station key
+# ssh config: replace any previous STATION MESH block, then write the fleet
+# block with the canonical per-OS user map. Order matters: User overrides
+# come BEFORE the generic stanza (first-match wins per option).
 touch config; chmod 600 config
-if grep -q '# BEGIN STATION MESH' config && ! grep -q 'IdentityFile ~/.ssh/id_ed25519_fleet' config; then
-  grep -v '# BEGIN STATION MESH' config > c.tmp && mv c.tmp config
-fi
-if ! grep -q 'IdentityFile ~/.ssh/id_ed25519_fleet' config; then
-  printf '\n# BEGIN STATION MESH\n' >> config
-  cat <<'CFG' >> config
+awk '/# BEGIN STATION MESH/{flag=1} !flag{print} /# END STATION MESH/{flag=0}' config > c.tmp && mv c.tmp config
+cat <<'CFG' >> config
+# BEGIN STATION MESH
+Host station06 station07 station08 station09 station10 station11 station12 station13 station14 station15 station16
+  User andreihasna
+
+Host station01 station02 station03 station04 station05 station17 station18 station19 station20 station21 station22
+  User hasna
+
 Host station01 station02 station03 station04 station05 station06 station07 station08 station09 station10 station11 station12 station13 station14 station15 station16 station17 station18 station19 station20 station21 station22
   HostName %h.taild59be2.ts.net
-  User hasna
   IdentitiesOnly yes
   IdentityFile ~/.ssh/id_ed25519_fleet
   StrictHostKeyChecking accept-new
+# END STATION MESH
 CFG
-  printf '# END STATION MESH\n' >> config
-fi
 sed -i.bak 's/id_ed25519_station_mesh/id_ed25519_fleet/g' config
 
 rm -f id_ed25519_station_mesh id_ed25519_station_mesh.pub

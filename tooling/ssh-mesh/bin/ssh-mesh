@@ -36,24 +36,28 @@ ssl_b64() { openssl base64 -A; }
 install_b64() { CA_PUB="$CA_PUB" perl -pe 's/__CA_PUB__/$ENV{CA_PUB}/g' "$LIB/install-remote.sh" | ssl_b64; }
 
 pgw() { if [ "$1" -le 4 ]; then printf '%s' "$PW14"; else printf '%s' "$PWFL"; fi; }
+# macOS stations 06-16 log in as andreihasna; Linux/other stations use hasna.
+user_for() { case "$1" in 06|07|08|09|10|11|12|13|14|15|16) echo andreihasna;; *) echo hasna;; esac; }
 
 sshcmd() { # <nn> <mode:key|pw> <remote-command...>
   local nn="$1" mode="$2"; shift 2
-  local host="station$nn.taild59be2.ts.net"
+  local host="station$nn.taild59be2.ts.net" u
+  u="$(user_for "$nn")"
   if [ "$mode" = pw ]; then
-    PW="$(pgw "$nn")" expect "$LIB/pwssh.exp" hasna "$host" "$*" 2>&1
+    PW="$(pgw "$nn")" expect "$LIB/pwssh.exp" "$u" "$host" "$*" 2>&1
   else
-    SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 hasna@"$host" "$*" 2>&1
+    SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh -o BatchMode=yes -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ed25519_fleet" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$u@$host" "$*" 2>&1
   fi
 }
 
 scpcmd() { # <nn> <mode> <src> <dst>
   local nn="$1" mode="$2" src="$3" dst="$4"
-  local host="station$nn.taild59be2.ts.net"
+  local host="station$nn.taild59be2.ts.net" u
+  u="$(user_for "$nn")"
   if [ "$mode" = pw ]; then
-    PW="$(pgw "$nn")" expect "$LIB/pwscp.exp" hasna "$host" "$src" "$dst" 2>&1
+    PW="$(pgw "$nn")" expect "$LIB/pwscp.exp" "$u" "$host" "$src" "$dst" 2>&1
   else
-    SSH_AUTH_SOCK="$SSH_AUTH_SOCK" scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$src" "hasna@$host:$dst" 2>&1
+    SSH_AUTH_SOCK="$SSH_AUTH_SOCK" scp -o BatchMode=yes -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ed25519_fleet" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$src" "$u@$host:$dst" 2>&1
   fi
 }
 
@@ -85,7 +89,7 @@ sign() { # <nn>
   serial="$(( $(date +%s) * 10 + 10#$nn ))"
   pub="$PUBS/station$nn.pub"
   [ -f "$pub" ] || { echo "NO-PUB station$nn (run genpub first)"; return 1; }
-  ssh-keygen -s "$CA" -I "station$nn-2026-09" -n hasna -z "$serial" -V -2w:+90d "$pub" >/dev/null 2>&1 || { echo "SIGN-FAIL station$nn"; return 1; }
+  ssh-keygen -s "$CA" -I "station$nn-2026-09" -n hasna,andreihasna -z "$serial" -V -2w:+90d "$pub" >/dev/null 2>&1 || { echo "SIGN-FAIL station$nn"; return 1; }
   chmod 600 "$PUBS/station$nn-cert.pub" 2>/dev/null
   echo "station$nn signed serial=$serial"
 }
@@ -115,7 +119,7 @@ provision_local() { # control host itself (station03)
   cd ~/.ssh || return 1
   [ -f id_ed25519_fleet ] || { ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_fleet -N "" -C "station03-fleet-2026-09" >/dev/null 2>&1; chmod 600 id_ed25519_fleet; }
   serial="$(( $(date +%s) * 10 + 3 ))"
-  ssh-keygen -s "$CA" -I "station03-2026-09" -n hasna -z "$serial" -V -2w:+90d ~/.ssh/id_ed25519_fleet.pub >/dev/null 2>&1
+  ssh-keygen -s "$CA" -I "station03-2026-09" -n hasna,andreihasna -z "$serial" -V -2w:+90d ~/.ssh/id_ed25519_fleet.pub >/dev/null 2>&1
   rm -f ~/.ssh/id_ed25519_fleet.pub-cert.pub
   chmod 600 ~/.ssh/id_ed25519_fleet-cert.pub
   cp id_ed25519_fleet.pub "$PUBS/station03.pub"
@@ -147,6 +151,36 @@ renew_all() {
       echo "skip station$n (no stored pub)"
     fi
   done
+}
+
+trust() { # <nn> — root install of TrustedUserCAKeys via password bootstrap
+  # (sudo password piped via expect; any pty echo scrubbed from output).
+  local nn="$1" pw u host out b64
+  b64="$(ssl_b64 < "$LIB/trust-root-remote.sh")"
+  pw="$(pgw "$nn")"
+  [ -n "$pw" ] || { echo "trust $nn: missing password (set PW14/PWFL)"; return 1; }
+  u="$(user_for "$nn")"; host="station$nn.taild59be2.ts.net"
+  out="$(PW="$pw" expect "$LIB/pwssh.exp" "$u" "$host" "echo $b64 | openssl base64 -d -A > /tmp/ssh-mesh-trust.sh && sudo -S -p 'password: ' bash /tmp/ssh-mesh-trust.sh '$CA_PUB'; rc=\$?; rm -f /tmp/ssh-mesh-trust.sh; exit \$rc" 2>&1 | grep -Fvx "$pw")"
+  if echo "$out" | grep -q TRUST-OK; then
+    echo "TRUSTED station$nn"
+  elif echo "$out" | grep -q SSHD-CONFIG-INVALID; then
+    echo "TRUST-FAIL station$nn (config invalid): $(echo "$out" | tail -c 300)"
+    return 1
+  elif echo "$out" | grep -qiE "incorrect|try again"; then
+    echo "TRUST-FAIL station$nn (sudo password rejected): $(echo "$out" | tail -c 200)"
+  elif [ -z "$out" ]; then
+    echo "TRUSTED? station$nn (session dropped on reload — will verify)"
+  else
+    echo "TRUST-UNCLEAR station$nn: $(echo "$out" | tail -c 300)"
+  fi
+}
+
+trust_local() { # station03 itself (macOS Remote Login)
+  local pw out
+  pw="$(pgw 03)"
+  [ -n "$pw" ] || { echo "trust-local: missing PW14"; return 1; }
+  b64="$(ssl_b64 < "$LIB/trust-root-remote.sh")"
+  printf '%s\n' "$pw" | sudo -S -p '' sh -c "echo $b64 | openssl base64 -d -A | bash -s '$CA_PUB'" 2>&1 | tail -n 3
 }
 
 revoke() { # <nn> — instant revoke: @revoked deny line on the host, cert dropped
@@ -186,7 +220,9 @@ case "$cmd" in
   provision-all) provision_all ;;
   renew-all) renew_all ;;
   revoke) revoke "$@" ;;
+  trust) trust "$@" ;;
+  trust-local) trust_local ;;
   status) status ;;
   verify) verify ;;
-  *) echo "usage: $0 genpub|sign|ship <nn> [key|pw] | provision <nn> [key|pw] | provision-local | provision-all | renew-all | revoke <nn> | status | verify"; exit 64 ;;
+  *) echo "usage: $0 genpub|sign|ship <nn> [key|pw] | provision <nn> [key|pw] | provision-local | provision-all | renew-all | revoke <nn> | trust <nn> | trust-local | status | verify"; exit 64 ;;
 esac
