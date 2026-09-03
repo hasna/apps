@@ -27,7 +27,7 @@ bin.
 | `secrets` | `@hasna/secrets@0.1.33` | `secrets`, `secrets-mcp`, `secrets-serve` | `deferred` for hosted raw-value access | Hosted service surfaces must declare secret-reference and lease semantics, local-only reveal exclusions, audit gates, and tests proving HTTP/MCP never returns raw secret values. |
 | `servers` | `@hasna/servers@0.1.21` | `servers`, `servers-mcp` | `deferred` | Define lifecycle locks, operation ids, job-scoped auth, command/env redaction, and registered-server boundaries before `servers-serve`. |
 | `uptime` | `@hasna/uptime@0.1.69` | `uptime`, `uptime-mcp` | `deferred` pending standard bin | Existing `serve` command should either publish `uptime-serve` or declare `serve: unsupported`; contract needs probe storage readiness and redacted status gates. |
-| `gateway` | retired 2026-09-03 (public `@hasna/gateway@0.1.3` deleted by owner; edge API gateway runs as Cloudflare Worker `hasna-api-gateway` at `api.hasna.com`, source in hasna-internal/internal-apps `apps/gateway`, `@hasna-internal/gateway`) | none (no npm bins) | `not-applicable` (no npm service surface) | The npm package is deleted and not republished; the api.hasna.com edge is a Cloudflare Worker fronting fleet-app origins (`https://<app>.hasna.xyz`), with no `*-serve` bin to declare. |
+| `gateway` | retired 2026-09-03 (public `@hasna/gateway@0.1.3` deleted by owner; the edge API gateway is the Cloudflare Worker `hasna-api-gateway`, sourced in hasna-internal/internal-apps `apps/gateway` as `@hasna-internal/gateway`) | none (no npm bins) | `not-applicable` (no npm service surface) | The npm package is deleted and not republished; the edge is a Cloudflare Worker fronting fleet-app origins, with no `*-serve` bin to declare. |
 | `monitor` | `@hasna/monitor@0.1.24` | `monitor`, `monitor-mcp`, `monitor-server`, `monitor-web` | `supported with alias decision` | Either add `monitor-serve` as an alias or declare `monitor-server` as the canonical exception; service surface must include health/readiness/version and redacted machine metadata. |
 
 ## Contract fields to use
@@ -57,7 +57,7 @@ Use `hasna.service_contract.v1` with:
 1. Apply this contract to `domains`, `machines`, and `monitor`
    first because they already expose service/server bins.
 2. The `gateway` row is retired (2026-09-03): the public package was deleted
-   and the api.hasna.com edge is a Cloudflare Worker in hasna-internal — no
+   and the edge gateway is a Cloudflare Worker in hasna-internal — no
    `gateway-serve` will be declared.
 3. Keep `secrets` hosted service deferred until raw-value reveal is
    strictly local-only and network surfaces return refs/leases only.
