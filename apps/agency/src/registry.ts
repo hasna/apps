@@ -132,16 +132,6 @@ export const REGISTRY: PackageEntry[] = [
     dataDir: "conversations",
   },
   {
-    name: "crawl",
-    npm: "@hasna/crawl",
-    description: "AI-powered web crawler — self-hosted Firecrawl alternative",
-    bins: { cli: "crawl", mcp: "crawl-mcp", serve: "crawl-serve" },
-    hasDb: true,
-    hasMcp: true,
-    hasHttp: true,
-    dataDir: "crawl",
-  },
-  {
     name: "deployment",
     npm: "@hasna/deployment",
     description: "General-purpose deployment orchestration for AI agents",
