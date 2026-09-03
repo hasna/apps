@@ -36,7 +36,7 @@ The open CLI remote route uses only these canonical settings:
 
 | Setting | Purpose |
 | --- | --- |
-| `HASNA_TODOS_API_URL` | Todos authority root, or the same root ending in `/v1`. |
+| `HASNA_TODOS_API_URL` | Todos authority root, the same root ending in `/v1`, or the fleet gateway form `https://api.hasna.com/todos[/v1]`. |
 | `HASNA_TODOS_API_KEY` | API key supplied to the authority as a bearer credential. |
 
 Both must be set to select the HTTP authority. URL set without KEY (or KEY set
@@ -44,9 +44,12 @@ without URL) is a hard error — the CLI never falls back to the on-box SQLite
 store from a partial cloud configuration.
 
 The URL must use HTTPS, except for loopback development authorities. Userinfo,
-query strings, fragments, redirects, `/api/v1`, and non-root custom paths are
-rejected. The CLI does not infer an authority from `TODOS_URL`, does not use a
-private SaaS route, and does not send the bearer credential across redirects.
+query strings, fragments, redirects, `/api/v1`, and other non-`<app>[//v1]`
+paths are rejected. The gateway form `https://api.hasna.com/<app>` is accepted
+and `/v1` is appended (the gateway strips the `<app>` segment and forwards to
+the `https://<app>.hasna.xyz` origin); `<app>/v1` is used verbatim. The CLI
+does not infer an authority from `TODOS_URL`, does not use a private SaaS
+route, and does not send the bearer credential across redirects.
 
 Remote selection is fail-closed. A missing URL or key, conflicting mode
 selectors, an incompatible collection route, authentication failure, timeout,
