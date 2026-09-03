@@ -65,12 +65,11 @@
   "storage": {
     "backend": "postgresql",
     "engines": [
-      "sqlite",
-      "postgresql"
+      "postgresql",
+      "sqlite"
     ],
     "envPrefix": "HASNA_ACCESS_",
     "aliasEnvPrefix": "ACCESS_",
-    "sqlitePath": "~/.hasna/access/access.db",
     "pgTestGate": {
       "envVar": "ACCESS_TEST_DATABASE_URL",
       "command": "bun scripts/pg-test-gate.mjs"
@@ -80,7 +79,7 @@
     "canonicalMigration": {
       "status": "partial",
       "completedSurfaces": ["cli", "./sdk", "http-api"],
-      "remainingSurfaces": ["root-library", "mcp", "postinstall", "legacy-xdg-adoption", "live-postgresql-domain-proof"]
+      "remainingSurfaces": ["root-library", "mcp", "postinstall", "legacy-xdg-adoption"]
     },
     "release": {
       "artifactScan": {

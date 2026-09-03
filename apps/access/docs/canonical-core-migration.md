@@ -30,9 +30,13 @@ SQLite fallback.
 
 Server startup validates authentication, signing posture and PostgreSQL/schema
 availability before binding. Schema changes require explicit `--migrate`; that
-command was not run against any live database. Tests use an in-memory PostgreSQL
-engine only. Existing SQLite data and compatibility code were not deleted or
-copied.
+command was not run against any live database. Tests default to an in-memory
+PostgreSQL engine, with an explicit live option: setting
+`ACCESS_TEST_DATABASE_URL` (the same test-only variable the live gate uses) runs
+the identical 43-operation domain path against a real PostgreSQL server through
+the production pool constructor, which itself enforces `sslmode=verify-full` and
+`PGSSLROOTCERT`. The live domain proof below used that option. Existing SQLite
+data and compatibility code were not deleted or copied.
 
 ## Explicit remaining gaps
 
@@ -44,8 +48,21 @@ This is **not whole-package migration completion** and is not publishable as suc
 - MCP feedback still acknowledges without a delivery backend.
 - MCP storage push/pull/sync remain audited no-op legacy implementations.
 - Postinstall and legacy XDG-adoption behavior are unchanged.
-- The existing live PostgreSQL gate exercises the old generic cloud probe, not
-  this new domain path; live domain proof remains outstanding and unrun.
+- **Resolved: live PostgreSQL domain proof** (2026-09-03). The 43-operation
+  core-domain path — `migrateCoreSchema`, per-operation transactions with the
+  `pg_advisory_xact_lock(1935762275)` serialization, the audit append-only
+  trigger, whole-operation rollback, and every HTTPS-to-PostgreSQL operation —
+  ran green against real PostgreSQL 16.15 over TLS with `sslmode=verify-full`
+  and a CA-verifiable server certificate (self-signed test CA via
+  `PGSSLROOTCERT`, SAN `localhost` + `127.0.0.1`). The proof used the app's own
+  production pool constructor (`createCorePool`) — the same validation and
+  connection path `access-serve` uses — driven by the test-only
+  `ACCESS_TEST_DATABASE_URL` variable, so the domain test remains hermetic
+  (in-memory engine) unless a DSN is explicitly pointed at a throwaway store.
+  1 pass / 0 fail (14 expect() calls, ~190 ms), plus the legacy cloud gate
+  (`test:postgres`) passing against the same server. Container was destroyed
+  after evidence capture. The `live-postgresql-domain-proof` remaining surface
+  in `hasna.contract.json` was removed; the legacy gate lives on unchanged.
 
 An HTTP MCP proxy cannot safely substitute process-owner credentials for a caller.
 No remote identity-introspection or feedback protocol was invented, and no
@@ -72,12 +89,12 @@ Pinned Bun: `1.3.14`; system Bun was not replaced.
   packages have unrelated missing-declaration/build failures; those were not fixed.
 - Staged secret scanner and its positive/negative self-tests pass.
 
-Native conformance remains intentionally blocked by the pinned published
-`@hasna/contracts@0.14.2`: it rejects a PostgreSQL-only service unless a local
-SQLite/JSON engine is declared. The two native conformance assertions fail for
-that reason; the functional tests pass. The exact reviewed but **unpublished**
-Contracts commit `2b15c73f949729a001d5dc88509650f61e58ee41` validates the accurate
-PG-only manifest. No false local-engine declaration, invented version, or
+Pinned published `@hasna/contracts@0.14.2` requires a service to declare
+postgresql alongside a local SQLite/JSON engine, so the manifest keeps the
+sqlite engine entry while the retained legacy surfaces (root library, MCP,
+compatibility code) genuinely still reach SQLite. A PG-only manifest validates
+only against the exact reviewed but **unpublished** Contracts commit
+`2b15c73f949729a001d5dc88509650f61e58ee41`; no invented version or
 unpublished dependency adoption was introduced.
 
 Verification logs are retained under `/tmp/access-canonical-verification.1xiD2z`.
