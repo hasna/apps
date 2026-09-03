@@ -276,7 +276,6 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     expect(noOwnLockMembers(root)).toEqual([
       "agency",
       "connectors",
-      "consolidations",
       "paths",
       "statusline",
       "testers",
