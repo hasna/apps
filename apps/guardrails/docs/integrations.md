@@ -46,11 +46,11 @@ Use `openMcpsToolCallGuardrailInput()` before tool calls or local stdio server
 registration. Transport, server id, tool name, and arguments are included in the
 policy input.
 
-## @hasna/gateway And @hasna/router
+## @hasna/gateway
 
 Use `modelRoutingGuardrailInput()` before routing or after candidate selection.
-The starter policy warns on high per-token prices. Gateway/router packages
-still own provider eligibility, credentials, budgets, and request execution.
+The starter policy warns on high per-token prices. The gateway package owns
+provider eligibility, credentials, budgets, and request execution.
 
 ## Browser And Computer Use
 
