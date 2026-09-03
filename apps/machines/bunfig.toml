@@ -1,4 +1,0 @@
-[test]
-# Run before test modules import package code so ambient operator paths cannot
-# route the suite into live machine state. See test/setup.ts.
-preload = ["./test/setup.ts"]

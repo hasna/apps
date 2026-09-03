@@ -86,8 +86,5 @@
     "postinstall": "node postinstall.js"
   },
   "type": "module",
-  "types": "dist/index.d.ts",
-  "optionalDependencies": {
-    "@hasna/machines": "^0.2.37"
-  }
+  "types": "dist/index.d.ts"
 }
