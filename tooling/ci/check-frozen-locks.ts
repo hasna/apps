@@ -97,19 +97,6 @@
  *                 the economy O15-00629 pattern. The vendored storage-kit is
  *                 already regenerated at 0.14.1 in the same PR; only the
  *                 registry-resolved lockfile entry is pending.
- *   browser     — NOT justified by an unresolvable pin any more, and this entry
- *                 must not be read as a justification. Every direct pin in its
- *                 manifest resolves rc=0 as of this measurement
- *                 (@hasna/connectors@1.4.2, @hasna/conversations@0.7.5,
- *                 @hasna/events@0.1.3, @hasna/mementos@0.14.86,
- *                 @hasna/secrets@0.3.4, @hasna/sessions@0.12.19,
- *                 @hasna/skills@0.1.41, @hasna/todos@0.15.46), so its 6 RULE 2
- *                 hits ARE regenerable and the gate is vacuous for this member
- *                 while the entry stands. It is held only because regenerating
- *                 apps/browser/bun.lock moves six dependency majors into that
- *                 member's Docker deploy lane — a materially larger change than
- *                 this one, owed its own reviewed lane. Drop this entry in that
- *                 change, not by publishing anything.
  *
  * `projects` LEFT this set on 2026-08-23, and the reason is the shape to copy.
  * All five of its pins resolve rc=0 (@hasna/contracts@0.13.4,
@@ -185,7 +172,6 @@ import * as path from "node:path";
 /** Apps skipped by RULE 2 — see the EXCEPTIONS block in the header for each. */
 const UNRESOLVABLE_PINS = new Set<string>([
   "automations",
-  "browser",
   "economy",
 ]);
 

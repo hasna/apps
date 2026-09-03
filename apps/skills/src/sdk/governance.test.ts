@@ -430,7 +430,11 @@ describe("governance outputs: privacy, redaction, size limits, TTLs, deletion re
 describe("governance spend: ceilings at admission, reservations, reconciliation", () => {
   test("NEGATIVE 5: admission refuses when the org's monthly ceiling is exhausted", async () => {
     const governance = new MemoryGovernanceStore();
-    governance.seedRuns([{ orgId: "org_a", costCents: 4900, status: "succeeded", createdAt: "2026-08-01T00:00:00.000Z" }]);
+    // Calendar-proof seed (2026-09-03 repair): the spend window is the CURRENT
+    // month, so a hardcoded month frozen at authoring time (2026-08-01) drops
+    // out of the window after the rollover and the admission stops rejecting.
+    const currentMonthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
+    governance.seedRuns([{ orgId: "org_a", costCents: 4900, status: "succeeded", createdAt: currentMonthStart }]);
     const spend = createSpendService({ governanceStore: governance, ceilings: { ...DEFAULT_SPEND_CEILINGS, monthlyTotalCents: 5000, concurrency: 10 } });
     await expect(spend.admit({ principal: principalA, slug: "audio-transcript-pack", estimatedCents: 200 })).rejects.toMatchObject({
       code: GOVERNANCE_ERROR_CODES.RUN_BUDGET_EXHAUSTED,
