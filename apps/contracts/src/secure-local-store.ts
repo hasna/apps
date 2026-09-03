@@ -262,36 +262,6 @@ export const DEFAULT_SECURE_LOCAL_STORE_POLICY: SecureLocalStorePolicy = SecureL
       ]
     },
     {
-      storeId: "terminal",
-      packageName: "@hasna/terminal",
-      displayName: "Terminal",
-      root: ".hasna",
-      relativePath: "terminal",
-      sqliteDatabaseGlobs: ["sessions.db"],
-      sensitiveFileGlobs: ["sessions.db", "sessions.db-wal", "sessions.db-shm", "exports/**/*"],
-      backupGlobs: ["backups/**/*"],
-      exportGlobs: ["exports/**/*"],
-      retentionAdapters: [
-        retentionAdapter(
-          "terminal-sessions",
-          "Terminal sessions and interactions need active session exclusion plus command-output redaction before retention.",
-          30,
-          ["backup", "export", "session", "log"],
-          ["backups/**/*", "exports/**/*", "sessions/**/*"],
-          [
-            {
-              id: "terminal-active-sessions",
-              source: "sqlite",
-              table: "sessions",
-              column: "id",
-              description: "Exclude active terminal session records and any linked interaction artifacts."
-            }
-          ],
-          { safeWhen: "exclusive_access", operations: ["wal_checkpoint_truncate", "optimize"] }
-        )
-      ]
-    },
-    {
       storeId: "logs",
       packageName: "@hasna/logs",
       displayName: "Logs",

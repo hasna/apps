@@ -31,7 +31,7 @@ budgets, provider attempts, and HTTP surfaces. Guardrails can evaluate routing
 requests before model selection or after a candidate is selected, especially for
 cost, data policy, region, or provider warnings.
 
-`@hasna/terminal`, `@hasna/dispatch`, and `@hasna/mcps` own their execution and
+`@hasna/dispatch` and `@hasna/mcps` own their execution and
 delivery mechanics. Guardrails should be called before command execution,
 prompt delivery, and MCP tool invocation. The decision output is intentionally
 portable so each tool can decide how to display warnings, collect approvals, or

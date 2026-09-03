@@ -17,7 +17,7 @@
  * provenance, not as a procedure): measured 2026-08-14 against
  * origin/main @ ce470e4ad; refreshed by the integrator lane at the
  * ci/test-suites merge ref (2026-08-14) for the imports that landed after
- * that base — connectors (#80), shield (#74), terminal (#88). Refreshed
+ * that base — connectors (#80), shield (#74). Refreshed
  * again 2026-08-14 by the ci/test-suites iterate-to-green fixer at the
  * fresh merge of current main (a7d60a96, todos import #105): files (#90)
  * gained hasna.contract.json (contracts conformance + kitVersion records
@@ -295,7 +295,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "sheets", reason: "Library-shaped (spreadsheet format); no MCP surface." },
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no MCP surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
   { member: "ui", reason: "Legacy ui.sh mirror; single `ui` bin, no MCP surface." },
 ];
 
@@ -324,7 +323,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "styles", reason: "Library-shaped (style tokens); no server surface." },
   { member: "tables", reason: "Library-shaped; no server surface." },
   { member: "tai", reason: "Client-shaped; no server surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no server surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
   { member: "ui", reason: "Legacy ui.sh mirror; no server surface." },
 ];
 
@@ -361,7 +359,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "styles", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
   { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "ui", reason: "Legacy ui.sh mirror; SDK lane (c7ce8b75)." },
 ];
@@ -378,9 +375,9 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
 ];
 
 /** hasna.contract.json must exist for every publishable member. Members
- * measured without one (25 — 24 at the original census, connectors +
- * terminal added by the integrator lane for imports #80/#88, hooks removed
- * when #102 added its manifest on 2026-08-14) — each recorded with the
+ * measured without one (24 — 23 at the original census, connectors added by
+ * the integrator lane for import #80, hooks removed when #102 added its
+ * manifest on 2026-08-14; terminal deleted 2026-09-03) — each recorded with the
  * manifest lane pointer (aggregate task; see README). */
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -393,7 +390,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "tai", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "tickets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "connectors", reason: "No hasna.contract.json; imported by #80 after the original census; manifest lane (todos 41208cbe)." },
-  { member: "terminal", reason: "No hasna.contract.json; imported by #88 after the original census; manifest lane (todos 41208cbe)." },
 ];
 
 /** Contracts conformance exceptions — members whose manifest does not pass
