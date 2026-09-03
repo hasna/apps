@@ -7,7 +7,6 @@
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.234",
         "@cursor/sdk": "^1.0.28",
-        "@hasna/paths": "0.1.0",
         "@openai/codex-sdk": "0.147.0",
         "commander": "^13.1.0",
       },
@@ -100,9 +99,8 @@
     "@cursor/sdk-win32-x64": ["@cursor/sdk-win32-x64@1.0.28", "", { "os": "win32", "cpu": "x64", "bin": { "rg": "bin/rg.exe" } }, "sha512-+9G30RcR+cDkQxiyFBfrNWSBkZJc19G9L7+bTl9PdiBI7FPCu1vCCdP4BBvntdCkFS9LwEX3iJyWJqEreFjNQg=="],
 
     "@fastify/busboy": ["@fastify/busboy@2.1.1", "", {}, "sha512-vBZP4NlzfOlerQTnba4aqZoMhE/a9HY7HRqoOPaETQcSQuWEIyZMHGfVu6w9wGtGK5fED5qRs2DteVCjOH60sA=="],
-    "@hasna/contracts": ["@hasna/contracts@0.14.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-JqSpwofTbqQGzFyaQvwpr+rhIVwBQTriW3BWdsOgpgD+BfSSBLr4R6OHQImjzQlilwsHo0U6doA7y8GuicfJ9w=="],
 
-    "@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
+    "@hasna/contracts": ["@hasna/contracts@0.14.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-JqSpwofTbqQGzFyaQvwpr+rhIVwBQTriW3BWdsOgpgD+BfSSBLr4R6OHQImjzQlilwsHo0U6doA7y8GuicfJ9w=="],
 
     "@hasna/events": ["@hasna/events@0.1.16", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-HX66T8JljVOoE/Li8WKLUFVozg0GIdZmgBalScfBFW5Vru4IcVSTNs07TmYH3kIJUe5tylItTqwzc02nvjqbfw=="],
 

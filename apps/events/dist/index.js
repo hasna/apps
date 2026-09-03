@@ -100,87 +100,80 @@ function channelMatchesEvent(channel, event) {
 import { chmod, mkdir, readFile, rename, writeFile } from "fs/promises";
 import { Buffer as Buffer2 } from "buffer";
 import { existsSync as existsSync2 } from "fs";
-import { join as join3 } from "path";
+import { join as join2 } from "path";
 
 // src/app-home.ts
 import { existsSync } from "fs";
-import { homedir as homedir2 } from "os";
-import { join as join2, resolve } from "path";
-
-// ../../node_modules/.bun/@hasna+paths@0.1.0/node_modules/@hasna/paths/dist/index.js
 import { homedir } from "os";
-import { join } from "path";
-var KIND_ENV = {
+import { join, resolve } from "path";
+import { homedir as pathsResolverHomedir } from "os";
+import { join as pathsResolverJoin } from "path";
+var PATHS_RESOLVER_KIND_ENV = {
   config: "HASNA_CONFIG_HOME",
   data: "HASNA_DATA_HOME",
   state: "HASNA_STATE_HOME",
   cache: "HASNA_CACHE_HOME"
 };
-var APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-function assertApp(app) {
+var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function pathsResolverAssertApp(app) {
   if (typeof app !== "string" || app.length === 0) {
     throw new TypeError("paths: app must be a non-empty string");
   }
-  if (!APP_SLUG_RE.test(app)) {
+  if (!PATHS_RESOLVER_APP_SLUG_RE.test(app)) {
     throw new TypeError(`paths: invalid app slug "${app}" \u2014 expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`);
   }
 }
-function envOf(options) {
-  return options.env ?? process.env;
+function pathsResolverAssertKind(kind) {
+  if (!Object.keys(PATHS_RESOLVER_KIND_ENV).includes(kind)) {
+    throw new TypeError(`paths: invalid path kind "${kind}" \u2014 expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`);
+  }
 }
-function envValue(options, kind) {
-  const value = envOf(options)[KIND_ENV[kind]];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-function isMacOS(platform) {
-  return platform === "darwin";
-}
-function baseDir(kind, options) {
-  const override = envValue(options, kind);
-  if (override)
+function pathsResolverBaseDir(kind, options) {
+  pathsResolverAssertKind(kind);
+  const env = options.env ?? process.env;
+  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
+  if (typeof override === "string" && override.length > 0)
     return override;
-  const home = options.home ?? homedir();
+  const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
-  if (isMacOS(platform)) {
+  if (platform === "darwin") {
     switch (kind) {
       case "config":
       case "data":
-        return join(home, "Library", "Application Support", "Hasna");
+        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
       case "cache":
-        return join(home, "Library", "Caches", "Hasna");
+        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
       case "state":
-        return join(home, "Library", "Logs", "Hasna");
+        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
     }
   }
   switch (kind) {
     case "config":
-      return join(home, ".config", "hasna");
+      return pathsResolverJoin(home, ".config", "hasna");
     case "data":
-      return join(home, ".local", "share", "hasna");
+      return pathsResolverJoin(home, ".local", "share", "hasna");
     case "state":
-      return join(home, ".local", "state", "hasna");
+      return pathsResolverJoin(home, ".local", "state", "hasna");
     case "cache":
-      return join(home, ".cache", "hasna");
+      return pathsResolverJoin(home, ".cache", "hasna");
   }
 }
-function resolvePath(kind, options) {
-  assertApp(options.app);
-  const appSegment = options.internal === true ? join("internal", options.app) : options.app;
-  return join(baseDir(kind, options), appSegment);
+function pathsResolverResolve(kind, options) {
+  pathsResolverAssertApp(options.app);
+  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
+  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
 }
 function dataDir(options) {
-  return resolvePath("data", options);
+  return pathsResolverResolve("data", options);
 }
-
-// src/app-home.ts
 var HASNA_EVENTS_DIR_ENV = "HASNA_EVENTS_DIR";
 var HASNA_EVENTS_HOME_ENV = "HASNA_EVENTS_HOME";
 var EVENTS_STORE_SENTINEL_FILE = "events.json";
 function effectiveHome() {
-  return process.env["HOME"] || process.env["USERPROFILE"] || homedir2();
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
 }
 function legacyHomeDir() {
-  return join2(effectiveHome(), ".hasna", "events");
+  return join(effectiveHome(), ".hasna", "events");
 }
 function resolverHome() {
   return dataDir({ app: "events", home: effectiveHome() || undefined });
@@ -189,7 +182,7 @@ function adoptResolverHome(resolved, env = process.env) {
   const dataOverride = env.HASNA_DATA_HOME;
   if (typeof dataOverride === "string" && dataOverride.trim().length > 0)
     return true;
-  return existsSync(join2(resolved, EVENTS_STORE_SENTINEL_FILE));
+  return existsSync(join(resolved, EVENTS_STORE_SENTINEL_FILE));
 }
 function exactEventsHome() {
   const dir = process.env[HASNA_EVENTS_DIR_ENV];
@@ -232,9 +225,9 @@ class JsonEventsStore {
   constructor(dataDir2 = getEventsDataDir()) {
     this.dataDir = dataDir2;
     this.runtime = localJsonRuntime(dataDir2);
-    this.channelsPath = join3(dataDir2, "channels.json");
-    this.eventsPath = join3(dataDir2, "events.json");
-    this.deliveriesPath = join3(dataDir2, "deliveries.json");
+    this.channelsPath = join2(dataDir2, "channels.json");
+    this.eventsPath = join2(dataDir2, "events.json");
+    this.deliveriesPath = join2(dataDir2, "deliveries.json");
   }
   async init() {
     await mkdir(this.dataDir, { recursive: true, mode: 448 });
@@ -502,7 +495,7 @@ async function getEventsStatus(dataDir2) {
   };
 }
 function statusFile(dataDir2, fileName, records) {
-  const path = join3(dataDir2, fileName);
+  const path = join2(dataDir2, fileName);
   return { path, exists: existsSync2(path), records };
 }
 

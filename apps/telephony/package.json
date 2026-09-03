@@ -1,7 +1,7 @@
 {
   "name": "@hasna/telephony",
   "version": "0.2.10",
-  "description": "Telephony platform for AI agents — SMS, WhatsApp, voice calls, TTS/STT, real-time streaming",
+  "description": "Telephony platform for AI agents \u2014 SMS, WhatsApp, voice calls, TTS/STT, real-time streaming",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -80,7 +80,6 @@
   "dependencies": {
     "@hasna/contracts": "0.10.6",
     "@hasna/events": "^0.1.6",
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "commander": "^13.1.0",
     "pg": "^8.13.1",

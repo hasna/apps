@@ -5,7 +5,6 @@
     "": {
       "name": "@hasna/dispatch",
       "dependencies": {
-        "@hasna/paths": "0.1.0",
         "@modelcontextprotocol/sdk": "^1.26.0",
         "chalk": "^5.6.2",
         "commander": "^13.1.0",
@@ -59,8 +58,6 @@
     "@hasna/contracts": ["@hasna/contracts@0.14.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-JqSpwofTbqQGzFyaQvwpr+rhIVwBQTriW3BWdsOgpgD+BfSSBLr4R6OHQImjzQlilwsHo0U6doA7y8GuicfJ9w=="],
 
     "@hasna/events": ["@hasna/events@0.1.16", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-HX66T8JljVOoE/Li8WKLUFVozg0GIdZmgBalScfBFW5Vru4IcVSTNs07TmYH3kIJUe5tylItTqwzc02nvjqbfw=="],
-
-    "@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/secrets": ["@hasna/secrets@0.3.0", "", { "dependencies": { "@aws-sdk/client-secrets-manager": "^3.1008.0", "@aws-sdk/credential-providers": "^3.1008.0", "@hasna/events": "^0.1.13", "@modelcontextprotocol/sdk": "^1.27.1", "@smithy/core": "^3.25.1", "commander": "^13.1.0", "pg": "^8.20.0" }, "bin": { "secrets": "dist/index.js", "secrets-mcp": "dist/mcp-server.js", "secrets-serve": "dist/server/index.js" } }, "sha512-JSKHmoyx1+8He2wr1N1Hj91OtMggmVzL+W5ehbQE/QzqpTauciwhNrOf1LkrOnoIkAA4DYXDYD2Vd0BDvy0Jbg=="],
 

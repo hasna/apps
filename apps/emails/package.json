@@ -1,7 +1,7 @@
 {
   "name": "@hasna/emails",
   "version": "1.4.10",
-  "description": "Emails — local SQLite and self-hosted email management CLI, MCP server, and library",
+  "description": "Emails \u2014 local SQLite and self-hosted email management CLI, MCP server, and library",
   "keywords": [
     "email",
     "smtp",
@@ -103,7 +103,6 @@
     "@hasna/contracts": "0.13.4",
     "@hasna/domains": "0.0.44",
     "@hasna/events": "^0.1.16",
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.4.1",
     "chalk": "^5.4.1",

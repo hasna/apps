@@ -74,8 +74,5 @@
     "@types/node": "^22.13.4",
     "typescript": "^5.7.3",
     "@hasna/contracts": "0.11.1"
-  },
-  "dependencies": {
-    "@hasna/paths": "0.1.0"
   }
 }

@@ -72,7 +72,6 @@
   "dependencies": {
     "@hasna/contracts": "0.10.6",
     "@hasna/events": "0.1.16",
-    "@hasna/paths": "0.1.0",
     "hono": "4.13.3",
     "pg": "^8.16.3"
   },

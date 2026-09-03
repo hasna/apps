@@ -1,3 +1,12 @@
+export type PathKind = "config" | "data" | "state" | "cache";
+export interface PathsResolverOptions {
+    app: string;
+    internal?: boolean;
+    platform?: string;
+    home?: string;
+    env?: Record<string, string | undefined>;
+}
+export declare function dataDir(options: PathsResolverOptions): string;
 /** Env var names for the exact-app data-home overrides (preserved, highest precedence). */
 export declare const HASNA_EVENTS_DIR_ENV = "HASNA_EVENTS_DIR";
 export declare const HASNA_EVENTS_HOME_ENV = "HASNA_EVENTS_HOME";

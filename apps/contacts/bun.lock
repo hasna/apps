@@ -7,7 +7,6 @@
       "dependencies": {
         "@hasna/contracts": "^0.5.1",
         "@hasna/events": "^0.1.6",
-        "@hasna/paths": "^0.2.2",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
         "ink": "^5.2.0",
@@ -143,7 +142,7 @@
 
     "@hasna/events": ["@hasna/events@0.1.17", "", { "dependencies": { "@hasna/paths": "0.1.0", "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-iKFB1uGdyCN2ODOhz6JdO4/qLLzJ/JjYUSF6yxbLQUQz/eSHTs9t3tQiOAPLYPr4sZgMNdSgfDbCGE9O9vA9Kg=="],
 
-    "@hasna/paths": ["@hasna/paths@0.2.2", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-gAlwQyt1PLCyprrXG+7YqbRsKWvmLmYZ3L0ggQlCLS4xkd/6+Iasxc3TmE3ZAXZk/6rsQ7Ag8INIu2Qz83Hy/g=="],
+    "@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hono/node-server": ["@hono/node-server@2.1.1", "", { "peerDependencies": { "hono": "^4" } }, "sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg=="],
 
@@ -800,8 +799,6 @@
     "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
-
-    "@hasna/events/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.3", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.3", "tslib": "^2.4.0" }, "bundled": true }, "sha512-zLpS5asjEb7lq8jYLq37N6XKaE41DIexlY1rF/z4/tIl3wo13Sqm28fRyfIsKZD+NZ8mM5RoKkpW/rBcuoSZSg=="],
 

@@ -93,7 +93,6 @@
     "@ai-sdk/openai-compatible": "^2.0.48",
     "@hasna/contracts": "0.10.6",
     "@hasna/events": "0.1.6",
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "ai": "^6.0.199",
     "chalk": "^5.4.1",

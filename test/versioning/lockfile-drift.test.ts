@@ -268,14 +268,13 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     }
   });
 
-  test("the members without an own lockfile are the finding's 3", () => {
+  test("the members without an own lockfile are the finding's 2", () => {
     // telephony gained a hermetic bun.lock in #1432 (O15-04773); agency,
-    // consolidations, test-guard and testers left the tree (deletions +
-    // hasna-internal move) — the expected list tracks main's committed
-    // lockfile state.
+    // consolidations, test-guard, testers and paths left the tree (deletions +
+    // hasna-internal move + @hasna/paths deletion, hasna/apps#1535) — the
+    // expected list tracks main's committed lockfile state.
     expect(noOwnLockMembers(root)).toEqual([
       "connectors",
-      "paths",
       "statusline",
     ]);
   });

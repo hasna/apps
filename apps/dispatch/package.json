@@ -8,7 +8,6 @@
   },
   "main": "dist/index.js",
   "dependencies": {
-    "@hasna/paths": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.6.2",
     "commander": "^13.1.0",
@@ -42,7 +41,7 @@
   "bugs": {
     "url": "https://github.com/hasna/dispatch/issues"
   },
-  "description": "Dispatch prompts to coding agents in tmux windows — reliable auto-submit, long-prompt support, delivery confirmation, scheduled + cross-machine dispatch. CLI + MCP + SDK + daemon.",
+  "description": "Dispatch prompts to coding agents in tmux windows \u2014 reliable auto-submit, long-prompt support, delivery confirmation, scheduled + cross-machine dispatch. CLI + MCP + SDK + daemon.",
   "engines": {
     "bun": ">=1.0.0"
   },
