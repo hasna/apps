@@ -1825,16 +1825,6 @@
         "typescript": "^5.9.3",
       },
     },
-    "apps/test-guard": {
-      "name": "@hasna/test-guard",
-      "version": "0.0.4",
-      "bin": {
-        "test-guard": "sentinel.sh",
-      },
-      "dependencies": {
-        "@hasna/paths": "0.1.0",
-      },
-    },
     "apps/testers": {
       "name": "@hasna/testers",
       "version": "0.0.110",
@@ -2527,8 +2517,6 @@
     "@hasna/telephony": ["@hasna/telephony@workspace:apps/telephony"],
 
     "@hasna/terminal": ["@hasna/terminal@workspace:apps/terminal"],
-
-    "@hasna/test-guard": ["@hasna/test-guard@workspace:apps/test-guard"],
 
     "@hasna/testers": ["@hasna/testers@workspace:apps/testers"],
 
@@ -5151,8 +5139,6 @@
     "@hasna/terminal/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/terminal/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
-    "@hasna/test-guard/@hasna/paths": ["@hasna/paths@0.1.0", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-ZBoj/h8zJ5t0JRMp19SfbiACdIsEi952UXmK7QwvIcsD4OhN4dONuuDslw+FE80rM1PVApdhMzoaHp+XEW189Q=="],
 
     "@hasna/testers/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.52.0", "", { "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-d4c+fg+xy9e46c8+YnrrgIQR45CZlAi7PwdzIfDXDM6ACxEZli1/fxhURsq30ZpMZy6LvSkr41jGq5aF5TD7rQ=="],
 

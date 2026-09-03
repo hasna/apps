@@ -296,7 +296,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
   { member: "terminal", reason: "CLI-only member (terminal tooling); no MCP surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (bash sentinel/bun-wrapper/battery, SC-00062); no MCP surface." },
   { member: "ui", reason: "Legacy ui.sh mirror; single `ui` bin, no MCP surface." },
 ];
 
@@ -327,7 +326,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "tables", reason: "Library-shaped; no server surface." },
   { member: "tai", reason: "Client-shaped; no server surface." },
   { member: "terminal", reason: "CLI-only member (terminal tooling); no server surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (host-local concurrency guard); no server surface." },
   { member: "ui", reason: "Legacy ui.sh mirror; no server surface." },
 ];
 
@@ -369,7 +367,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
-  { member: "test-guard", reason: "SDK lane (c7ce8b75); bash-only guard ships no importable Node SDK export (see the member's CONTRACTS_EXCEPTIONS entry)." },
   { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "ui", reason: "Legacy ui.sh mirror; SDK lane (c7ce8b75)." },
 ];
@@ -484,11 +481,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
   },
-  {
-    member: "test-guard",
-    cause: "surface_matrix: missing supported surface declarations or eligible waivers: sdk (library-class sdk waivers are not permitted by the kit; the bash-only guard ships no importable Node SDK export — sdk declared deferred truthfully). All other checks pass: manifest_valid, bins_allowlisted, bins_match_package, surface_bindings, published_artifact_gate (prepack reaches scan:artifact), public_manifest_safety, hosting_story, credential_seam_compliance, no_cloud_guard (sentinel.sh no longer references the retired .hasna/cloud runtime config).",
-    task: "todos 940070c4-4fdf-4796-8a70-6f63d135f714 (successor conformance lane); SDK surface: SDK lane todos c7ce8b75-3d4e-4376-854c-875cd20c605b",
-  },
 ];
 
 /** kitVersion must match the member's pinned @hasna/contracts version
@@ -546,7 +538,6 @@ export const NO_VALIDATOR_PIN: string[] = [
   "sheets",
   "slides",
   "tables",
-  "test-guard",
   "releases",
   "ui",
 ];
