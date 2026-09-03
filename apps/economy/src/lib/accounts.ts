@@ -1,5 +1,5 @@
-import { appliedProfileName, resolveStore } from '@hasna/accounts'
-import type { AccountsStore, Profile as AccountsProfile, ToolDef as AccountsTool } from '@hasna/accounts'
+import { appliedProfileName, resolveStore } from './accounts-store.js'
+import type { AccountsStore, Profile as AccountsProfile, ToolDef as AccountsTool } from './accounts-store.js'
 import type { Agent } from './agents.js'
 
 export interface AccountAttribution {

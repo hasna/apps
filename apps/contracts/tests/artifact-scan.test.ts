@@ -1067,7 +1067,7 @@ describe("fixes that had no regression coverage", () => {
   });
 
   test("IPv4 is read from VALUES only — not from SVG path data in a bundle", () => {
-    // `@hasna/tables` failed on 26 coordinate pairs in a minified Vite bundle.
+    // A table-grid app (since moved to hasna-internal) failed on 26 coordinate pairs in a minified Vite bundle.
     // The comment claiming a dotted quad "cannot be confused with code" was
     // measurably false, and every app shipping an icon set would have hit it.
     // Real path data: coordinate runs delimited by spaces, which is what makes
