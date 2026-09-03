@@ -3,8 +3,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
 // Scan first-party source and hand-authored manifests only. The `dist`
-// bundle is deliberately self-contained (it vendors @hasna/contracts &
-// @hasna/mcp-harness), and those dependencies legitimately carry the
+// bundle is deliberately self-contained (it vendors @hasna/contracts and the
+// in-tree mcp harness module), and those dependencies legitimately carry the
 // retired-marker strings inside their own no-cloud validators/schemas —
 // scanning the bundled output would flag a dependency's internal identifiers,
 // not any first-party coupling. The guard here is that OUR code and manifests
