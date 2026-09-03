@@ -193,11 +193,12 @@ describe("standard-adherence: contracts conformance", () => {
       const apps = path.join(root, "apps");
       fs.mkdirSync(path.join(apps, "good"), { recursive: true });
       fs.mkdirSync(path.join(apps, "bad"), { recursive: true });
-      // The good fixture is access, validated at the current
-      // @hasna/contracts version (0.11.1). The whole app tree is copied (minus
+      // The good fixture is mementos (the former fixture access was deleted
+      // in the retire-access wave), validated at @hasna/contracts 0.11.1 —
+      // measured passing 2026-09-03. The whole app tree is copied (minus
       // node_modules and dist) because the conformance surface_bindings check
       // resolves SDK export targets against the source tree.
-      fs.cpSync(path.join(APPS_DIR, "access"), path.join(apps, "good"), {
+      fs.cpSync(path.join(APPS_DIR, "mementos"), path.join(apps, "good"), {
         recursive: true,
         filter: (src) =>
           !src.includes(`${path.sep}node_modules${path.sep}`) &&
