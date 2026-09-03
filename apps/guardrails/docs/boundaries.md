@@ -26,7 +26,7 @@ that is required at decision time.
 
 ## Relationship To Routing And Runtime Tools
 
-`@hasna/gateway` and `@hasna/router` own provider catalogs, routing, credentials,
+`@hasna/gateway` owns provider catalogs, routing, credentials,
 budgets, provider attempts, and HTTP surfaces. Guardrails can evaluate routing
 requests before model selection or after a candidate is selected, especially for
 cost, data policy, region, or provider warnings.

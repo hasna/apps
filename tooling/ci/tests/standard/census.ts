@@ -106,6 +106,10 @@
  * for hasna-internal/internal-apps as @hasna-internal/datasets (destination
  * PR hasna-internal/internal-apps#509), so the member no longer exists here
  * and its recorded exceptions are stale under the two-sided contract.
+ * 2026-09-03 (router delete): the router MCP, SERVER and SDK exception entries
+ * DELETED — apps/router left the public tree entirely (npm registry 404 for
+ * @hasna/router), so the member no longer exists here and its recorded
+ * exceptions are stale under the two-sided contract.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -288,7 +292,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "models", reason: "Library-shaped (model metadata); no MCP surface." },
   { member: "orgs", reason: "Registry-shaped; no MCP surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no MCP surface." },
-  { member: "router", reason: "Gateway-shaped; no MCP surface." },
   { member: "sheets", reason: "Library-shaped (spreadsheet format); no MCP surface." },
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
@@ -315,7 +318,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "orgs", reason: "Registry-shaped; no server surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no server surface." },
   { member: "releases", reason: "CLI-only member; no server surface." },
-  { member: "router", reason: "Gateway-shaped; no server surface." },
   { member: "servers", reason: "CLI-only member (server lifecycle tooling); no server surface." },
   { member: "sheets", reason: "Library-shaped; no server surface." },
   { member: "skills", reason: "CLI-only member (skill corpus tooling); no server surface." },
@@ -358,7 +360,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "router", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "sheets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
