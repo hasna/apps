@@ -11,3 +11,4 @@ sdk/node_modules/
 sdk/dist/
 menubar/.build/
 menubar/.swiftpm/
+Library/

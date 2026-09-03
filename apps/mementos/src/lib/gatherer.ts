@@ -1,5 +1,6 @@
 // Training data gatherer for @hasna/mementos
-// Used by open-brains to collect fine-tuning examples from memory data
+// Collects fine-tuning examples from memory data (protocol consumed by the
+// brains package, which moved to hasna-internal)
 
 import type { Memory } from "../types/index.js";
 import { listMemoriesBounded } from "../db/memories.js";

@@ -593,7 +593,7 @@ export {
 export { logTaskChange, getTaskHistory, getRecentActivity, getRecap } from "./db/audit.js";
 export type { RecapSummary } from "./db/audit.js";
 
-// Training data gatherer (for @hasna/brains fine-tuning integration)
+// Training data gatherer (fine-tuning protocol integration; source app moved to hasna-internal)
 export { gatherTrainingData } from "./lib/gatherer.js";
 
 // Model config (active fine-tuned model ID)

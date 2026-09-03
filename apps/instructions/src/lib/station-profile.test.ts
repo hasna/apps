@@ -40,7 +40,7 @@ function fixtureMachine(overrides: Partial<StationProfileMachine> = {}): Station
 function fixturePackages(overrides: Partial<StationProfilePackages> = {}): StationProfilePackages {
   return {
     scopes: [
-      { scope: "@hasna", names: ["access", "accounts", "actions", "agency", "agent-registry", "alumia", "analytics", "announce", "assistants", "attachments", "automations", "banking", "brains"] },
+      { scope: "@hasna", names: ["access", "accounts", "actions", "agency", "agent-registry", "alumia", "analytics", "announce", "assistants", "attachments", "automations", "banking"] },
       { scope: "@hasna-internal", names: ["business-engines", "payroll", "social", "subscriptions", "takumi"] },
       { scope: "@hasnaxyz", names: ["agent-claude", "agent-codex", "agent-gemini", "agent-opencode", "agent-pi", "backup", "deployment", "factory", "iapp-accounting", "iappcodex", "iappcodex-linux-arm64", "infinity"] },
       { scope: "@hasnastudio", names: ["alumia"] },

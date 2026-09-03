@@ -274,14 +274,9 @@ mcp --claude|--codex|--gemini|--all [--uninstall]
 completions bash|zsh|fish
 tool-events [tool_name] [--limit <n>] [--offset <n>] [--cursor <n>] [--project-id <id>]
 tool-insights <tool_name> [--project-id <id>] [--limit <n>]
-
-brains gather [--limit <n>] [--since <date>] [--output <dir>] [--json]
-brains train [--base-model <model>] [--provider openai|thinker-labs]
-  [--dataset <path>] [--name <name>] [--json]
-brains model [get|set <modelId>|clear]
 ```
 
-`brains train` requires the optional `@hasna/brains` package. `init` configures
+`init` configures
 Claude MCP, a stop hook, and macOS launchd auto-start where supported. Because
 the MCP binary now defaults to HTTP, stdio host configurations should invoke
 `mementos-mcp --stdio`; see the [MCP reference](MCP.md).

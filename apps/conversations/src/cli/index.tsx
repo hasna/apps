@@ -7,7 +7,6 @@ import React from "react";
 import { resolveIdentity, IdentityError } from "../lib/identity.js";
 import { isCloudStore } from "../lib/store/index.js";
 import { App } from "./components/App.js";
-import { registerBrainsCommand } from "./brains.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
 import { registerAttachmentCommands } from "./commands/attachments.js";
 import { registerChannelCommands } from "./commands/channels.js";
@@ -93,9 +92,6 @@ program
       exec(`open http://localhost:${server.port}`);
     }
   });
-
-// ---- brains ----
-registerBrainsCommand(program);
 
 // ---- events-drain: Conversations→Events source outbox worker (local path) ----
 program

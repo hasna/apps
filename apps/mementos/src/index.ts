@@ -331,7 +331,7 @@ export {
 // Recall tracking
 export { incrementRecallCount } from "./db/memories.js";
 
-// Training data gatherer (for @hasna/brains fine-tuning integration)
+// Training data gatherer (fine-tuning protocol integration; source app moved to hasna-internal)
 export { gatherTrainingData } from "./lib/gatherer.js";
 
 // Model config (active fine-tuned model ID)

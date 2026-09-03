@@ -1,7 +1,7 @@
 import { readMessages } from "./messages.js";
 import { listSessions } from "./sessions.js";
 
-// Define inline to avoid circular dependency with @hasna/brains
+// Define inline to avoid a hard dependency on the (now internal) brains package
 type GatherTrainingDataFn = (options?: { limit?: number; since?: Date }) => Promise<{
   source: string;
   examples: Array<{ messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> }>;

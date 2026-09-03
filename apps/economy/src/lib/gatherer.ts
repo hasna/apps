@@ -1,10 +1,11 @@
 // Training data gatherer for @hasna/economy
-// Exports gatherTrainingData() conforming to GatherResult interface from @hasna/brains
+// Exports gatherTrainingData() conforming to the GatherResult interface used by the brains fine-tuning protocol
+// (mirrors GatherResult / GatherTrainingDataFn without requiring the package as a hard dependency)
 
 import { getStore } from './store/index.js'
 
-// Inline type definition — mirrors GatherResult / GatherTrainingDataFn from @hasna/brains
-// (avoids requiring @hasna/brains as a hard dependency)
+// Inline type definition — mirrors the GatherResult / GatherTrainingDataFn shape
+// (avoids a hard dependency on the package)
 
 interface TrainingMessage {
   role: 'system' | 'user' | 'assistant'
