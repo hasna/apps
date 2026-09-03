@@ -79,7 +79,7 @@
     "canonicalMigration": {
       "status": "partial",
       "completedSurfaces": ["cli", "./sdk", "http-api"],
-      "remainingSurfaces": ["root-library", "mcp", "postinstall", "legacy-xdg-adoption", "live-postgresql-domain-proof"]
+      "remainingSurfaces": ["root-library", "mcp", "postinstall", "legacy-xdg-adoption"]
     },
     "release": {
       "artifactScan": {

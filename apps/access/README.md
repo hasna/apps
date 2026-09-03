@@ -32,8 +32,11 @@ Do not publish this partial lane as a completed fleet migration.
 Core domain rules were extracted asynchronously into `src/server/core-domain`
 while retaining legacy services for those compatibility surfaces. The extraction
 script records the transformation; PostgreSQL-engine tests exercise all 43
-operations through the authenticated HTTP boundary. The engine is in-memory and
-test-only; production accepts only `pg` connections, never an embedded backend.
+operations through the authenticated HTTP boundary. By default that engine is
+in-memory and test-only; setting `ACCESS_TEST_DATABASE_URL` reruns the identical
+domain path against a real PostgreSQL server through the production `pg` pool
+constructor (`sslmode=verify-full`, `PGSSLROOTCERT`). Production accepts only
+`pg` connections, never an embedded backend.
 
 `access` is the scalable access gate for Hasna agents and services. Agents
 request access, API keys, provider credentials, MCP scopes, and short-lived
