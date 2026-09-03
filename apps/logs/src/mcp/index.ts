@@ -2,7 +2,7 @@
 import {
   type AgentEventsClient,
   registerAgentTools,
-} from "@hasna/agent-registry";
+} from "./agent-registry.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -38,9 +38,11 @@ exitIfMetadataRequest({
 // tiers through the unified Store.
 const telemetryStore = localStoreIfAvailable();
 
-// register_agent / heartbeat / set_focus / list_agents are the canonical
-// @hasna/agent-registry implementation (persistent SQLite-backed registry)
-// rather than a hand-rolled in-memory Map. `send_feedback` stays local (see
+// register_agent / heartbeat / set_focus / list_agents are the canonical,
+// persistent agent-lifecycle tools (SQLite-backed registry) — implemented
+// locally in src/mcp/agent-registry.ts since the @hasna/agent-registry
+// package was deleted (hasna/apps#1529) rather than a hand-rolled in-memory
+// Map. `send_feedback` stays local (see
 // below) since it persists into logs' own `feedback` table with a category
 // enum. Lifecycle activity is still mirrored into logs' own durable event
 // store via `agentRegistryEvents` below, preserving prior self-telemetry.
@@ -1494,15 +1496,15 @@ export function buildServer(): McpServer {
   }
 
   // --- Agent Tools ---
-  // register_agent / heartbeat / set_focus / list_agents via the shared,
-  // persistent @hasna/agent-registry (replaces the hand-rolled in-memory
-  // Map). `send_feedback` stays local below since it persists into logs'
+  // register_agent / heartbeat / set_focus / list_agents via the local,
+  // persistent SQLite-backed registry in src/mcp/agent-registry.ts (inlined
+  // from the deleted @hasna/agent-registry package, hasna/apps#1529).
+  // `send_feedback` stays local below since it persists into logs'
   // own `feedback` table with a category enum. Lifecycle activity is
   // mirrored into logs' own durable event store via `agentRegistryEvents`.
   registerAgentTools(server, {
     service: "logs",
     events: agentRegistryEvents,
-    includeFeedback: false,
   });
 
   return server;

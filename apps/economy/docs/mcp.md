@@ -56,7 +56,7 @@ Management and estimation:
 - `list_subscriptions`, `set_subscription`, `remove_subscription`
 - `sync`, `send_feedback`
 
-Shared agent-registry tools:
+Shared agent lifecycle tools:
 
 - `register_agent`, `heartbeat`, `set_focus`, `list_agents`
 

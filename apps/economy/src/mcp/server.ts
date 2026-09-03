@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { registerAgentTools } from '@hasna/agent-registry'
+import { registerAgentTools } from './agent-registry.js'
 import { z } from 'zod'
 import { openDatabase, getMachineId } from '../db/database.js'
 import { syncAll } from '../lib/sync-all.js'
@@ -842,11 +842,13 @@ server.tool(
 )
 
 // register_agent, heartbeat, set_focus, and list_agents are the canonical
-// @hasna/agent-registry implementation (persistent, shared across services)
-// rather than a hand-rolled in-memory Map. economy's own send_feedback (below)
+// agent-lifecycle tools (persistent SQLite-backed registry) — implemented
+// locally in ./agent-registry.ts since the @hasna/agent-registry package was
+// deleted (hasna/apps#1529) rather than a hand-rolled in-memory Map. economy's
+// own send_feedback (below)
 // routes through the Store (local feedback table or POST /v1/feedback) so it
 // carries the category enum and never bypasses the cloud in self_hosted mode.
-registerAgentTools(server, { includeFeedback: false })
+registerAgentTools(server, { service: 'economy' })
 
 server.tool(
   'send_feedback',

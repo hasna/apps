@@ -40,7 +40,7 @@ function fixtureMachine(overrides: Partial<StationProfileMachine> = {}): Station
 function fixturePackages(overrides: Partial<StationProfilePackages> = {}): StationProfilePackages {
   return {
     scopes: [
-      { scope: "@hasna", names: ["access", "accounts", "actions", "agency", "agent-registry", "alumia", "analytics", "announce", "assistants", "attachments", "automations", "banking"] },
+{ scope: "@hasna", names: ["access", "accounts", "actions", "agency", "alumia", "analytics", "announce", "assistants", "attachments", "automations", "banking"] },
       { scope: "@hasna-internal", names: ["business-engines", "payroll", "social", "subscriptions", "takumi"] },
       { scope: "@hasnaxyz", names: ["agent-claude", "agent-codex", "agent-gemini", "agent-opencode", "agent-pi", "backup", "deployment", "factory", "iapp-accounting", "iappcodex", "iappcodex-linux-arm64", "infinity"] },
       { scope: "@hasnastudio", names: ["alumia"] },
@@ -63,7 +63,7 @@ describe("station profile block", () => {
     expect(block).toContain("home: /home/hasna");
     expect(block).toContain("Workspace: /home/hasna/workspace");
     expect(block).toContain("Status: online");
-    expect(block).toContain("@hasna/* 13");
+    expect(block).toContain("@hasna/* 11");
     expect(block).toContain("@hasna-internal/* 5 (business-engines, payroll, social, subscriptions, takumi)");
     // Small non-primary scopes show their names; large ones degrade to counts.
     expect(block).toContain("@hasnastudio/* 1 (alumia)");
