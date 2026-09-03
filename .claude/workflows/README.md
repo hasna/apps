@@ -82,7 +82,6 @@ them. The class is owned by the durable lane, not by the instance:
 | app moves to internal-apps (`*-to-internal-wf.js`, bulk moves) | move-app-to-internal |
 | successor lanes (`*-successor-wf.js`) | task-drain re-dispatch |
 | loops runtime fixes (`loops-*-fix-wf.js`) | task-drain + deploy-apps |
-| test-guard machinery (`testguard-*`, `test-guard-*`) | owning test-guard domain |
 
 A one-off that recurs a second time becomes a task for the owning lane, per
 the four-artefacts doctrine (rule + taxonomy + workflow + abstraction).
