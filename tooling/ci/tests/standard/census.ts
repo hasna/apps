@@ -120,13 +120,6 @@
  * `<name>-serve` bin and an `./sdk` export (the last three WARN, P5-census
  * exceptions below). The SDK WARNs are owned by the standing P5 lane
  * (todos c7ce8b75-3d4e-4376-854c-875cd20c605b).
- * 2026-09-03 (access retire, owner directive hasna/apps#1520): apps/access was
- * removed from the public tree entirely (@hasna/access is 404 on npm; its
- * deletion PR is the chore(access) retire wave). No registry entries existed
- * for access in this census (its SDK exception had been deleted upstream
- * after the member gained `./sdk` in PR #1510), so no entry removal was
- * needed — noted here for provenance, same record-keeping as the datasets
- * note above.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -296,6 +289,7 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "events", reason: "Library-shaped (embedded event envelopes/channels); MCP execution belongs to the consumer applications — manifest declares the mcp waiver." },
   { member: "guardrails", reason: "Library-shaped (guardrail policies); no MCP surface." },
   { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
+  { member: "models", reason: "Library-shaped (model metadata); no MCP surface." },
   { member: "orgs", reason: "Registry-shaped; no MCP surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no MCP surface." },
   { member: "sheets", reason: "Library-shaped (spreadsheet format); no MCP surface." },
@@ -315,7 +309,7 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "draw", reason: "Library-shaped; no server surface." },
   { member: "events", reason: "Library-shaped (embedded event envelopes/channels); no server surface — manifest declares the api waiver, ships no serve bin." },
   { member: "guardrails", reason: "Library-shaped; no server surface." },
-  { member: "mcps", reason: "CLI-only member (MCP registry tooling); no server surface." },
+  { member: "models", reason: "Library-shaped; no server surface." },
   { member: "monitor", reason: "CLI+MCP member (system monitoring); no server surface. Imported by #97 after the original census; aggregate task (todos 35e136f2)." },
   { member: "orgs", reason: "Registry-shaped; no server surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no server surface." },
@@ -338,10 +332,11 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "attachments", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
+  { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "brains", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "crawl", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
+  { member: "controls", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "connectors", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #80 after the original census." },
   { member: "docs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -349,7 +344,7 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "mcps", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
+  { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
