@@ -736,10 +736,10 @@ describe("no-cloud gate: dependency edges from bun.lock", () => {
     // there — dev edge and production edge alike. A clean-room install of logs'
     // own lockfile has no @hasna/cloud on disk.
     const text = lock({
-      workspaces: { "": { name: "@hasna/logs", devDependencies: { "@hasna/agent-registry": "file:../open-agent-registry" } } },
+      workspaces: { "": { name: "@hasna/logs", devDependencies: { wrapper: "file:../open-wrapper" } } },
       packages: {
-        "@hasna/agent-registry": ["@hasna/agent-registry@file:../open-agent-registry", { dependencies: { pg: "^8" }, devDependencies: { [RETIRED]: "file:../open-cloud" } }],
-        [`@hasna/agent-registry/${RETIRED}`]: [`${RETIRED}@file:../open-cloud`, {}],
+        wrapper: ["wrapper@file:../open-wrapper", { dependencies: { pg: "^8" }, devDependencies: { [RETIRED]: "file:../open-cloud" } }],
+        [`wrapper/${RETIRED}`]: [`${RETIRED}@file:../open-cloud`, {}],
       },
     });
     expect(lockfileEdges(text, [RETIRED, "open-cloud"])).toEqual([]);

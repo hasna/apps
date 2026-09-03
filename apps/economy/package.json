@@ -77,10 +77,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@hasna/agent-registry": "^0.1.0",
     "@hasna/contracts": "0.13.4",
     "@hasna/events": "^0.1.16",
-    
     "@hasna/paths": "0.1.0",
     "@hasna/projects": "1.0.0",
     "@modelcontextprotocol/sdk": "^1.12.1",

@@ -36,9 +36,6 @@ importers:
       '@biomejs/biome':
         specifier: ^1.9.4
         version: 1.9.4
-      '@hasna/agent-registry':
-        specifier: file:../open-agent-registry
-        version: file:../open-agent-registry(@hasna/events@0.1.13)(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(zod@3.25.76)
       '@hasna/contracts':
         specifier: file:../open-contracts
         version: file:../open-contracts
@@ -129,18 +126,6 @@ packages:
 
   '@dabh/diagnostics@2.0.8':
     resolution: {integrity: sha512-R4MSXTVnuMzGD7bzHdW2ZhhdPC/igELENcq5IjEverBvq5hn1SXCWcsi6eSsdWP0/Ur+SItRRjAktmdoX/8R/Q==}
-
-  '@hasna/agent-registry@file:../open-agent-registry':
-    resolution: {directory: ../open-agent-registry, type: directory}
-    engines: {bun: '>=1.0.0'}
-    hasBin: true
-    peerDependencies:
-      '@hasna/events': ^0.1.13
-      '@modelcontextprotocol/sdk': ^1.12.1
-      zod: ^3.24.2
-    peerDependenciesMeta:
-      '@hasna/events':
-        optional: true
 
   '@hasna/contracts@file:../open-contracts':
     resolution: {directory: ../open-contracts, type: directory}
@@ -837,16 +822,6 @@ snapshots:
       '@so-ric/colorspace': 1.1.6
       enabled: 2.0.0
       kuler: 2.0.0
-
-  '@hasna/agent-registry@file:../open-agent-registry(@hasna/events@0.1.13)(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(zod@3.25.76)':
-    dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
-      pg: 8.22.0
-      zod: 3.25.76
-    optionalDependencies:
-      '@hasna/events': 0.1.13
-    transitivePeerDependencies:
-      - pg-native
 
   '@hasna/contracts@file:../open-contracts':
     dependencies:
