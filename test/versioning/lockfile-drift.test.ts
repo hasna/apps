@@ -271,10 +271,10 @@ describe("lockfile drift — members without own lockfile resolve inside declare
   });
 
   test("the members without an own lockfile are the finding's 6", () => {
-    // telephony gained a hermetic bun.lock in #1432 (O15-04773); the expected
-    // list tracks main's committed lockfile state.
+    // telephony gained a hermetic bun.lock in #1432 (O15-04773); agency was
+    // deleted entirely (hasna/apps#1541) — the expected list tracks main's
+    // committed lockfile state.
     expect(noOwnLockMembers(root)).toEqual([
-      "agency",
       "connectors",
       "paths",
       "statusline",
@@ -294,13 +294,6 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     const resolved = resolvedSpecFor(entries, "@hasna/testers", "pg");
     expect(resolved?.spec).toBe("pg@8.21.0");
     expect(satisfiesRange("8.21.0", versionOf(resolved!.spec)!)).toBe(true);
-  });
-
-  test("apps/agency resolves commander@12.1.0 inside its declared ^12 range", () => {
-    const entries = lock.packages ?? {};
-    const resolved = resolvedSpecFor(entries, "@hasna/agency", "commander");
-    expect(resolved?.spec).toBe("commander@12.1.0");
-    expect(satisfiesRange("^12", versionOf(resolved!.spec)!)).toBe(true);
   });
 
   test("every member without an own lockfile resolves every declared dep inside its declared range", () => {
