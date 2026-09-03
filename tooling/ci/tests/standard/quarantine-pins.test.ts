@@ -28,8 +28,8 @@
  *
  * FINDING SCOPE: the HARD assertion runs against the member(s) this finding
  * fixes (context, dep-context-1). The 2026-08-25 AI-SDK wave also admits
- * quarantine-window versions through knowledge, mementos, tai, projects and
- * testers manifests — each is its own audit finding with its own fix lane,
+ * quarantine-window versions through knowledge, mementos, tai and projects
+ * manifests — each is its own audit finding with its own fix lane,
  * so those members are reported in the tree-wide census below but not
  * asserted. A lane lands by adding its member to FINDING_SCOPE.
  *

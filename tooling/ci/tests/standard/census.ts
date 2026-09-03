@@ -350,7 +350,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "mcps", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -510,7 +509,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "messages", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "prompts", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "secrets", kitVersion: "0.13.3", pinned: "^0.14.0" },
-  { member: "testers", kitVersion: "0.13.4", pinned: "^0.14.0" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —

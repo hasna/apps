@@ -1033,7 +1033,7 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
   contract({
     id: "tester_issue_report",
     name: "Tester Issue Report",
-    description: "Generic issue report payload emitted by @hasna/testers or compatible test runners for conversion into local tasks.",
+    description: "Generic issue report payload emitted by the testers QA CLI or compatible test runners for conversion into local tasks.",
     surfaces: ["cli", "sdk"],
     stability: "stable",
     required: {
