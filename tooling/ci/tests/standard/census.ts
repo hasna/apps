@@ -351,7 +351,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "ui", reason: "Legacy ui.sh mirror; SDK lane (c7ce8b75)." },
 ];
 
@@ -367,18 +366,17 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
 ];
 
 /** hasna.contract.json must exist for every publishable member. Members
- * measured without one (23 — 23 at the original census, connectors added by
+ * measured without one (22 — 23 at the original census, connectors added by
  * the integrator lane for import #80, hooks removed when #102 added its
- * manifest on 2026-08-14; terminal deleted 2026-09-03; browser moved to
- * hasna-internal 2026-09-03) — each recorded with the manifest lane pointer
- * (aggregate task; see README). */
+ * manifest on 2026-08-14; terminal deleted 2026-09-03; browser + tickets
+ * moved to hasna-internal 2026-09-03) — each recorded with the manifest lane
+ * pointer (aggregate task; see README). */
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "statusline", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "tai", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "tickets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "connectors", reason: "No hasna.contract.json; imported by #80 after the original census; manifest lane (todos 41208cbe)." },
 ];
 
