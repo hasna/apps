@@ -105,11 +105,12 @@ function runSelfTest(): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "check-manifests-self-test-"));
   try {
     const apps = path.join(root, "apps");
-    // Negative arm (must stay silent): a conforming member. apps/access is the
-    // same known-good fixture the standard suite's own self-test uses —
-    // validated at the current @hasna/contracts version (0.11.1).
+    // Negative arm (must stay silent): a conforming member. apps/mementos is
+    // the same known-good fixture the standard suite's own self-test uses —
+    // validated at @hasna/contracts 0.11.1 (measured 2026-09-03; the former
+    // fixture apps/access was deleted in the retire-access wave).
     fs.mkdirSync(path.join(apps, "good"), { recursive: true });
-    fs.cpSync(path.join(APPS_DIR, "access"), path.join(apps, "good"), {
+    fs.cpSync(path.join(APPS_DIR, "mementos"), path.join(apps, "good"), {
       recursive: true,
       filter: (src) =>
         !src.includes(`${path.sep}node_modules${path.sep}`) &&
@@ -131,7 +132,7 @@ function runSelfTest(): void {
     }
     // Stale-exception arm: a RECORDED exception whose member now passes must
     // be refused (two-sided registry contract, same as the suite).
-    const staleEntry: ManifestGateEntry = { member: [...CONTRACTS_EXCEPTION_MEMBERS][0] ?? "access", version: "0.11.1", status: "ok", detail: [] };
+    const staleEntry: ManifestGateEntry = { member: [...CONTRACTS_EXCEPTION_MEMBERS][0] ?? "none", version: "0.11.1", status: "ok", detail: [] };
     if (CONTRACTS_EXCEPTION_MEMBERS.size > 0 && refuseReasons([staleEntry]).length === 0) {
       throw new Error("self-test stale-exception arm failed: a recorded exception whose member passes must be refused");
     }
