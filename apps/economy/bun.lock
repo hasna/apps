@@ -5,7 +5,6 @@
     "": {
       "name": "@hasna/economy",
       "dependencies": {
-        "@hasna/accounts": "0.2.23",
         "@hasna/agent-registry": "^0.1.0",
         "@hasna/contracts": "0.13.4",
         "@hasna/events": "^0.1.16",
@@ -79,8 +78,6 @@
     "@aws-sdk/xml-builder": ["@aws-sdk/xml-builder@3.972.40", "", { "dependencies": { "@smithy/types": "^4.17.2", "tslib": "^2.6.2" } }, "sha512-wlFmCIGUlwF4zx/kncw+bmxTQh1HeSJq4mYV/V5cZUSJadDP3kXvGW8Rn21cimj/7y9ju+47oYWXi97vF7czaA=="],
 
     "@aws/lambda-invoke-store": ["@aws/lambda-invoke-store@0.3.0", "", {}, "sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ=="],
-
-    "@hasna/accounts": ["@hasna/accounts@0.2.23", "", { "dependencies": { "@hasna/contracts": "0.5.2", "@hasna/events": "^0.1.7", "chalk": "^5.4.1", "commander": "^13.1.0", "pg": "^8.13.1", "zod": "^3.24.2" }, "bin": { "accounts": "dist/cli.js", "accounts-mcp": "dist/mcp.js", "accounts-serve": "dist/server/index.js", "accounts-migrate": "dist/server/migrate.js" } }, "sha512-E+geg18ATPV0d/uvJ5dIvtMJPSyJXUrtBpv23egmaA3E4gmzqAleKAazo6wuM6VpRitjkOzaUWO5r3D3FY8ZaA=="],
 
     "@hasna/agent-registry": ["@hasna/agent-registry@0.1.0", "", { "dependencies": { "pg": "^8.13.3" }, "peerDependencies": { "@hasna/events": "^0.1.13", "@modelcontextprotocol/sdk": "^1.12.1", "zod": "^3.24.2" }, "optionalPeers": ["@hasna/events"], "bin": { "agent-registry": "dist/cli/index.js" } }, "sha512-BIcb2f3ufChZQQLBF7QOP8+EIWCcLkBdVJd8X9SocyLAnrNcPDCzrxicu3ld+e99rSPMv8W38hEQqGPpHvGHFg=="],
 
@@ -491,10 +488,6 @@
     "@ai-sdk/openai-compatible/@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@4.0.47", "", { "dependencies": { "@ai-sdk/provider": "3.0.15", "@standard-schema/spec": "^1.1.0", "eventsource-parser": "^3.0.8", "undici": "^6.28.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-w+fHOfCcX17LVhTmJwwi4Bj27CRqfqyszAZ2Dt4fNd8aH9KHVoeqoV6HwWmP6NlBrG5rGSaKx3Nw8u45bx2uxQ=="],
 
     "@ai-sdk/provider-utils/eventsource-parser": ["eventsource-parser@3.1.0", "", {}, "sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg=="],
-
-    "@hasna/accounts/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
-
-    "@hasna/accounts/pg": ["pg@8.20.0", "", { "dependencies": { "pg-connection-string": "^2.12.0", "pg-pool": "^3.13.0", "pg-protocol": "^1.13.0", "pg-types": "2.2.0", "pgpass": "1.0.5" }, "optionalDependencies": { "pg-cloudflare": "^1.3.0" }, "peerDependencies": { "pg-native": ">=3.0.1" }, "optionalPeers": ["pg-native"] }, "sha512-ldhMxz2r8fl/6QkXnBD3CR9/xg694oT6DZQ2s6c/RI28OjtSOpxnPrUCGOBJ46RCUxcWdx3p6kw/xnDHjKvaRA=="],
 
     "@hasna/agent-registry/pg": ["pg@8.20.0", "", { "dependencies": { "pg-connection-string": "^2.12.0", "pg-pool": "^3.13.0", "pg-protocol": "^1.13.0", "pg-types": "2.2.0", "pgpass": "1.0.5" }, "optionalDependencies": { "pg-cloudflare": "^1.3.0" }, "peerDependencies": { "pg-native": ">=3.0.1" }, "optionalPeers": ["pg-native"] }, "sha512-ldhMxz2r8fl/6QkXnBD3CR9/xg694oT6DZQ2s6c/RI28OjtSOpxnPrUCGOBJ46RCUxcWdx3p6kw/xnDHjKvaRA=="],
 
