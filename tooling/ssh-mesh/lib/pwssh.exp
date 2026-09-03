@@ -1,0 +1,24 @@
+#!/usr/bin/env expect -f
+# Password-based ssh, used only for the initial bootstrap of stations that do
+# not yet accept our keys. Password arrives in env PW (injected per-invocation),
+# never on disk or in logs.
+set timeout 90
+set user [lindex $argv 0]
+set host [lindex $argv 1]
+set cmd [lindex $argv 2]
+set pass $env(PW)
+spawn ssh -o StrictHostKeyChecking=accept-new \
+          -o PreferredAuthentications=password,keyboard-interactive \
+          -o PubkeyAuthentication=no \
+          -o NumberOfPasswordPrompts=2 \
+          -o ConnectTimeout=15 \
+          -o ServerAliveInterval=5 \
+          $user@$host $cmd
+expect {
+  -re "(?i)password.*:" { send -- "$pass\r"; exp_continue }
+  -re "(?i)yes/no.*:" { send -- "yes\r"; exp_continue }
+  timeout { puts "EXPECT-TIMEOUT"; exit 124 }
+  eof
+}
+catch wait result
+if {[llength $result] >= 4} { exit [lindex $result 3] } else { exit 1 }

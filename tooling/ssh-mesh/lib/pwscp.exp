@@ -1,0 +1,22 @@
+#!/usr/bin/env expect -f
+# Password-based scp, bootstrap-only. Password arrives in env PW.
+set timeout 120
+set user [lindex $argv 0]
+set host [lindex $argv 1]
+set src [lindex $argv 2]
+set dst [lindex $argv 3]
+set pass $env(PW)
+spawn scp -o StrictHostKeyChecking=accept-new \
+          -o PreferredAuthentications=password,keyboard-interactive \
+          -o PubkeyAuthentication=no \
+          -o NumberOfPasswordPrompts=2 \
+          -o ConnectTimeout=15 \
+          $src $user@$host:$dst
+expect {
+  -re "(?i)password.*:" { send -- "$pass\r"; exp_continue }
+  -re "(?i)yes/no.*:" { send -- "yes\r"; exp_continue }
+  timeout { puts "EXPECT-TIMEOUT"; exit 124 }
+  eof
+}
+catch wait result
+if {[llength $result] >= 4} { exit [lindex $result 3] } else { exit 1 }

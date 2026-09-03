@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# hasna-dirs — guard for the ~/.hasna namespace.
+#
+# Rule: top-level directories under ~/.hasna are RESERVED for registered fleet
+# app names (see apps.list). Anything else is a violation.
+#
+# Commands:
+#   check    scan ~/.hasna, print KNOWN vs VIOLATION, exit 1 on violation
+#   guard    check + append violations to ~/Library/Logs/hasna-dirs.log
+#            (used by the com.hasna.dirs.guard LaunchAgent, every 10 min)
+#   create   <app>  create a directory ONLY for a registered app name
+#   whitelist      print the app whitelist
+#   refresh        hint for regenerating apps.list from the fleet repos
+set -uo pipefail
+SELF="$0"
+if [ -L "$SELF" ]; then
+  target="$(readlink "$SELF")"
+  case "$target" in
+    /*) SELF="$target" ;;
+    *) SELF="$(cd "$(dirname "$SELF")" && pwd)/$target" ;;
+  esac
+fi
+D="$(cd "$(dirname "$SELF")/.." && pwd)"
+LIST="$D/apps.list"
+HOME_DIR="${HASNA_HOME:-$HOME/.hasna}"
+LOG="$HOME/Library/Logs/hasna-dirs.log"
+# Pre-convention directories that predate this guard. Triage and retire them
+# over time; the guard only flags NEW names.
+KNOWN_LEGACY="agent-registry api-gateway computer draw iapp-profiling internalapps machines testers"
+
+whitelist() { grep -v '^#' "$LIST" | sed '/^[[:space:]]*$/d'; }
+
+check() {
+  local rc=0 apps leg d name out
+  [ -f "$LIST" ] || { echo "hasna-dirs: whitelist missing: $LIST" >&2; return 2; }
+  apps="$(whitelist)"
+  leg="$(printf '%s\n' $KNOWN_LEGACY)"
+  for d in "$HOME_DIR"/*; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    case "$name" in .*) continue;; esac
+    if echo "$apps" | grep -qx "$name"; then
+      echo "OK $name"
+    elif echo "$leg" | grep -qx "$name"; then
+      echo "KNOWN $name"
+    else
+      echo "VIOLATION $name"
+      rc=1
+    fi
+  done
+  return $rc
+}
+
+guard() {
+  local out rc
+  out="$(check 2>&1)"; rc=$?
+  if [ $rc -ne 0 ]; then
+    printf '\n---- %s ----\n%s\n' "$(date +%FT%T)" "$out" >> "$LOG"
+  fi
+  printf '%s\n' "$out"
+  return $rc
+}
+
+create() {
+  local app="${1:-}"
+  [ -n "$app" ] || { echo "usage: $0 create <app>"; return 64; }
+  if whitelist | grep -qx "$app"; then
+    mkdir -p "$HOME_DIR/$app"
+    echo "created $HOME_DIR/$app"
+  else
+    echo "REFUSED: '$app' is not a registered app name (see $LIST)" >&2
+    return 1
+  fi
+}
+
+refresh() { cat <<'EOF'
+regenerate the whitelist from the fleet repos on a station that has them:
+
+  { ls  ~/Workspace/50-repositories/hasna/apps/apps | grep -v README
+    jq -r '.entries[].packageName' \
+       ~/Workspace/50-repositories/hasna-internal/internal-apps/internal-apps.registry.json \
+       | sed 's|^@[^/]*/||'
+    find ~/Workspace/50-repositories/hasna-products -maxdepth 2 -name package.json \
+         -not -path '*/node_modules/*' -exec grep -h '"name"' {} \;
+  } | sed -E 's/.*"name": *"@?[a-z-]*\/([a-z0-9-]+)".*/'"'"'\1'"'"'/' | sort -u > apps.list
+
+then review the diff in the repo and commit.
+EOF
+}
+
+case "${1:-}" in
+  check) check ;;
+  guard) guard ;;
+  create) create "${2:-}" ;;
+  whitelist) whitelist ;;
+  refresh) refresh ;;
+  *) echo "usage: $0 check|guard|create <app>|whitelist|refresh"; exit 64 ;;
+esac

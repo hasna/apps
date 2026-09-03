@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# ssh-mesh — Hasna fleet SSH access management (SSH CA model).
+#
+# Model:
+#   * Every station owns its private key (~/.ssh/id_ed25519_fleet), generated
+#     ON the station and never copied elsewhere.
+#   * A fleet CA (private key only on the control host station03:
+#     ~/.ssh/hasna_fleet_ca, vault backup hasna/fleet/ssh/ca/private-key)
+#     signs short-lived (90d) user certificates for each station's key.
+#   * Every host's authorized_keys contains exactly one trust line:
+#         @cert-authority <ca.pub> hasna-fleet-ca
+#   * Renewal: ./ssh-mesh renew-all  (must run before certs expire)
+#   * Revocation: ./ssh-mesh revoke <nn>  (adds @revoked deny line + drops
+#     the station's cert; expiry is enforced by OpenSSH in any case)
+#
+# Env (bootstrap-only, never printed): PW14 = stations 01-04 passwords,
+# PWFL = stations 05-22 passwords.
+set -uo pipefail
+SELF="$0"
+if [ -L "$SELF" ]; then
+  target="$(readlink "$SELF")"
+  case "$target" in
+    /*) SELF="$target" ;;
+    *) SELF="$(cd "$(dirname "$SELF")" && pwd)/$target" ;;
+  esac
+fi
+D="$(cd "$(dirname "$SELF")/.." && pwd)"
+LIB="$D/lib"
+CA="$HOME/.ssh/hasna_fleet_ca"
+CA_PUB="$(cat "$CA.pub")"
+PUBS="$HOME/.ssh/fleet-pubkeys"; mkdir -p "$PUBS"; chmod 700 "$PUBS"
+SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/var/run/com.apple.launchd.XGqvSZM4D0/Listeners}"
+PW14="${PW14:-}"; PWFL="${PWFL:-}"
+
+ssl_b64() { openssl base64 -A; }
+install_b64() { CA_PUB="$CA_PUB" perl -pe 's/__CA_PUB__/$ENV{CA_PUB}/g' "$LIB/install-remote.sh" | ssl_b64; }
+
+pgw() { if [ "$1" -le 4 ]; then printf '%s' "$PW14"; else printf '%s' "$PWFL"; fi; }
+
+sshcmd() { # <nn> <mode:key|pw> <remote-command...>
+  local nn="$1" mode="$2"; shift 2
+  local host="station$nn.taild59be2.ts.net"
+  if [ "$mode" = pw ]; then
+    PW="$(pgw "$nn")" expect "$LIB/pwssh.exp" hasna "$host" "$*" 2>&1
+  else
+    SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 hasna@"$host" "$*" 2>&1
+  fi
+}
+
+scpcmd() { # <nn> <mode> <src> <dst>
+  local nn="$1" mode="$2" src="$3" dst="$4"
+  local host="station$nn.taild59be2.ts.net"
+  if [ "$mode" = pw ]; then
+    PW="$(pgw "$nn")" expect "$LIB/pwscp.exp" hasna "$host" "$src" "$dst" 2>&1
+  else
+    SSH_AUTH_SOCK="$SSH_AUTH_SOCK" scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$src" "hasna@$host:$dst" 2>&1
+  fi
+}
+
+run_script() { # <nn> <mode> <script-file> [args...]
+  local nn="$1" mode="$2" script="$3"; shift 3
+  sshcmd "$nn" "$mode" "echo $(ssl_b64 < "$script") | openssl base64 -d -A | bash -s $*"
+}
+
+pick_mode() { # <nn> -> key | pw
+  if sshcmd "$1" key "true" >/dev/null 2>&1; then echo key; else echo pw; fi
+}
+
+genpub() { # <nn> <mode>
+  local nn="$1" mode="$2" out pub comment
+  out="$(run_script "$nn" "$mode" "$LIB/genpub-remote.sh" "$nn")"
+  pub="$(echo "$out" | grep '^ssh-ed25519' | tail -n1)"
+  if [ -n "$pub" ]; then
+    comment="$(echo "$pub" | awk '{print $3}')"
+    echo "$pub" > "$PUBS/station$nn.pub"
+    echo "station$nn pub saved ($comment)"
+  else
+    echo "GENPUB-FAIL station$nn (mode=$mode): $(echo "$out" | tail -c 300)"
+    return 1
+  fi
+}
+
+sign() { # <nn>
+  local nn="$1" serial pub
+  serial="$(( $(date +%s) * 10 + 10#$nn ))"
+  pub="$PUBS/station$nn.pub"
+  [ -f "$pub" ] || { echo "NO-PUB station$nn (run genpub first)"; return 1; }
+  ssh-keygen -s "$CA" -I "station$nn-2026-09" -n hasna -z "$serial" -V -2w:+90d "$pub" >/dev/null 2>&1 || { echo "SIGN-FAIL station$nn"; return 1; }
+  chmod 600 "$PUBS/station$nn-cert.pub" 2>/dev/null
+  echo "station$nn signed serial=$serial"
+}
+
+ship() { # <nn> <mode>
+  local nn="$1" mode="$2" cert out
+  cert="$PUBS/station$nn-cert.pub"
+  [ -f "$cert" ] || { echo "NO-CERT station$nn (run sign first)"; return 1; }
+  scpcmd "$nn" "$mode" "$cert" ".ssh/id_ed25519_fleet-cert.pub" >/dev/null 2>&1 || { echo "SCP-FAIL station$nn"; return 1; }
+  out="$(sshcmd "$nn" "$mode" "echo $(install_b64) | openssl base64 -d -A | bash")"
+  if echo "$out" | tail -n1 | grep -q CA-INSTALL-OK; then
+    echo "station$nn CA-installed"
+  else
+    echo "INSTALL-FAIL station$nn (mode=$mode): $(echo "$out" | tail -c 250)"
+    return 1
+  fi
+}
+
+provision() { # <nn> [key|pw]
+  local nn="$1" mode="${2:-auto}"
+  [ "$mode" = auto ] && mode="$(pick_mode "$nn")"
+  genpub "$nn" "$mode" && sign "$nn" && ship "$nn" "$mode" \
+    && echo "PROVISIONED station$nn (mode=$mode)"
+}
+
+provision_local() { # control host itself (station03)
+  cd ~/.ssh || return 1
+  [ -f id_ed25519_fleet ] || { ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_fleet -N "" -C "station03-fleet-2026-09" >/dev/null 2>&1; chmod 600 id_ed25519_fleet; }
+  serial="$(( $(date +%s) * 10 + 3 ))"
+  ssh-keygen -s "$CA" -I "station03-2026-09" -n hasna -z "$serial" -V -2w:+90d ~/.ssh/id_ed25519_fleet.pub >/dev/null 2>&1
+  rm -f ~/.ssh/id_ed25519_fleet.pub-cert.pub
+  chmod 600 ~/.ssh/id_ed25519_fleet-cert.pub
+  cp id_ed25519_fleet.pub "$PUBS/station03.pub"
+  cp id_ed25519_fleet-cert.pub "$PUBS/station03-cert.pub"
+  { echo "@cert-authority $CA_PUB hasna-fleet-ca"; grep -v 'station-mesh-access' authorized_keys 2>/dev/null | grep -v '^@cert-authority'; } > /tmp/ssh-mesh-ak.$$ && mv /tmp/ssh-mesh-ak.$$ authorized_keys
+  chmod 600 authorized_keys
+  sed -i.bak 's/id_ed25519_station_mesh/id_ed25519_fleet/g' config 2>/dev/null || true
+  rm -f ~/.ssh/id_ed25519_station_mesh ~/.ssh/id_ed25519_station_mesh.pub
+  echo "LOCAL-PROVISIONED station03"
+}
+
+provision_all() { # 01 02 03 04 06-16 17-20 (05/22 offline, 21 iOS, auto-skip)
+  provision_local
+  for n in 01 02 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 22; do
+    if [ -f "$PUBS/station$n.pub" ]; then
+      sign "$n" && ship "$n" key && echo "refreshed station$n"
+    else
+      provision "$n" auto && echo "OK station$n" || echo "SKIP station$n"
+    fi
+  done
+}
+
+renew_all() {
+  for n in 01 02 03 04 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do
+    if [ "$n" = 03 ]; then provision_local
+    elif [ -f "$PUBS/station$n.pub" ]; then
+      sign "$n" && ship "$n" key && echo "renewed station$n"
+    else
+      echo "skip station$n (no stored pub)"
+    fi
+  done
+}
+
+revoke() { # <nn> — instant revoke: @revoked deny line on the host, cert dropped
+  local nn="$1" mode out deny
+  local key; key="$(cat "$PUBS/station$n.pub" 2>/dev/null || true)"
+  [ -n "$key" ] || { echo "station$nn not in store"; return 1; }
+  rm -f "$PUBS/station$nn.pub" "$PUBS/station$nn-cert.pub"
+  mode="$(pick_mode "$nn")"
+  if [ "$mode" = pw ] && [ -z "$(pgw "$nn")" ]; then echo "REVOKE-STAGED station$nn (host unreachable, store cleaned)"; return 0; fi
+  out="$(sshcmd "$nn" "$mode" "tmp=\$(mktemp); { echo '@revoked $key'; grep -v '^@revoked' ~/.ssh/authorized_keys; } > \$tmp && mv \$tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && rm -f ~/.ssh/id_ed25519_fleet-cert.pub && echo REVOKED")"
+  echo "$out" | tail -n1 | grep -q REVOKED && echo "REVOKED station$nn" || { echo "REVOKE-FAIL station$nn: $(echo "$out" | tail -c 200)"; return 1; }
+}
+
+status() { # cert inventory from the local key store
+  local f
+  for f in "$PUBS"/station*-cert.pub; do
+    [ -f "$f" ] || continue
+    nn="$(basename "$f" | sed 's/station\([0-9]*\)-cert\.pub/\1/')"
+    info="$(ssh-keygen -L -f "$f" 2>/dev/null | awk -F': ' '/Serial|Valid/{gsub(/^ +/,""); printf "%s; ", $0}')"
+    printf 'station%s %s\n' "$nn" "$info"
+  done
+}
+
+verify() { # from this host (control host)
+  local n r
+  for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do
+    r="$(ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_fleet -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "station$n" hostname 2>/dev/null)"
+    printf 'station03 -> station%s : %s\n' "$n" "${r:-UNREACHABLE}"
+  done
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  genpub|sign|ship) "$cmd" "$@" ;;
+  provision) provision "$@" ;;
+  provision-local) provision_local ;;
+  provision-all) provision_all ;;
+  renew-all) renew_all ;;
+  revoke) revoke "$@" ;;
+  status) status ;;
+  verify) verify ;;
+  *) echo "usage: $0 genpub|sign|ship <nn> [key|pw] | provision <nn> [key|pw] | provision-local | provision-all | renew-all | revoke <nn> | status | verify"; exit 64 ;;
+esac
