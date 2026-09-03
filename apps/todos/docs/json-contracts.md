@@ -379,7 +379,7 @@ tasks, linked inbox evidence, source-metadata matches that were skipped,
 duplicate candidates, warnings, and follow-up local commands.
 
 `tester_issue_report` is the stable input payload for `testers.issue_report.v1`
-reports emitted by `@hasna/testers` or compatible local test runners. It carries
+reports emitted by the testers QA CLI or compatible local test runners. It carries
 issue kind, severity, optional tester fingerprint, run/scenario/source metadata,
 target URL or selector metadata, failure details, labels, and evidence
 references.
