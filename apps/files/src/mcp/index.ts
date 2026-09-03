@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { makeCapabilityGuard } from "@hasna/mcp-harness";
+import { makeCapabilityGuard } from "./harness.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
@@ -93,8 +93,9 @@ const DESCRIBE_PREVIEW_MAX_BYTES = 256 * 1024;
 const DEFAULT_MCP_IMPORT_BYTES = 100 * 1024 * 1024;
 const MAX_MCP_IMPORT_BYTES = 2 * 1024 * 1024 * 1024;
 
-// Capability gating is delegated to `@hasna/mcp-harness`. The "OPEN_FILES" env
-// prefix reproduces the historical enablement rules exactly:
+// Capability gating is delegated to the vendored harness module
+// (./harness.ts). The "OPEN_FILES" env prefix reproduces the historical
+// enablement rules exactly:
 //   OPEN_FILES_MCP_ALLOW_ALL / OPEN_FILES_ALLOW_ALL /
 //   OPEN_FILES_ALLOW_<CAP> / OPEN_FILES_MCP_ALLOW_<CAP>.
 const mcpCapabilityGuard = makeCapabilityGuard({

@@ -105,7 +105,6 @@
   },
   "devDependencies": {
     "@hasna/contracts": "0.14.2",
-    "@hasna/mcp-harness": "^0.1.0",
     "@types/mime-types": "^2.1.4",
     "@types/pg": "^8.11.11",
     "@types/react": "^18.3.20",

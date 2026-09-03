@@ -1,10 +1,10 @@
 import {
+  handleMcpHttpRequest as harnessHandleMcpHttpRequest,
   healthPayload,
   isHttpMode as harnessIsHttpMode,
   isStdioMode as harnessIsStdioMode,
   resolveMcpHttpPort as harnessResolveMcpHttpPort,
-} from '@hasna/mcp-harness'
-import { handleMcpHttpRequest as harnessHandleMcpHttpRequest } from '@hasna/mcp-harness/bun'
+} from './harness.js'
 import { buildServer, DEFAULT_MCP_HTTP_PORT, MCP_NAME } from './server.js'
 
 // Port is owned by server.ts (co-located with the tool/server definitions);
@@ -12,7 +12,7 @@ import { buildServer, DEFAULT_MCP_HTTP_PORT, MCP_NAME } from './server.js'
 export { DEFAULT_MCP_HTTP_PORT, MCP_NAME }
 
 // Bun's default HTTP idle timeout (10s) is too short for long-lived MCP
-// Streamable HTTP requests. @hasna/mcp-harness's startBunHttpServer doesn't
+// Streamable HTTP requests. The vendored startBunHttpServer doesn't
 // expose an idleTimeout knob, so this transport is hand-wired directly on
 // Bun.serve (below) instead of delegating to the harness's Bun server starter.
 export const MCP_HTTP_IDLE_TIMEOUT_SECONDS = 0
