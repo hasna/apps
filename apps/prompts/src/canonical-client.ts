@@ -77,11 +77,11 @@ function resolve(options: PromptsClientOptions): { baseUrl: string; apiKey: stri
   // treated as the migration target without product/API approval.
   const rawKey = own('HASNA_PROMPTS_API_KEY');
   // hasna-credential-seam-waiver (requires independent review before any
-  // migration use): legacy aliases are rejected on PRESENCE without ever
-  // binding the legacy value to a local — the descriptor check below reads no
-  // credential into a retained variable, so a legacy PROMPTS_API_KEY value
-  // cannot linger in this closure. Canonical HASNA_PROMPTS_* keys are the sole
-  // supported source; rejection is the whole handling.
+  // migration use): legacy aliases are rejected on PRESENCE — the descriptor
+  // below retains the legacy value transiently in a function-scoped local
+  // until the throw, then discards it; it is never copied into the closure or
+  // frozen client surface. Canonical HASNA_PROMPTS_* keys are the sole
+  // supported source; rejection is the whole handling. Prototype-only.
   const legacyKeyDescriptor = Object.getOwnPropertyDescriptor(env, 'PROMPTS_API_KEY');
   if (legacyKeyDescriptor && !('value' in legacyKeyDescriptor)) throw new Error('prompts: PROMPTS_API_KEY is accessor-backed; client configuration requires own data properties');
   if (own('PROMPTS_API_URL') !== undefined || (legacyKeyDescriptor !== undefined && (legacyKeyDescriptor as PropertyDescriptor).value !== undefined)) throw new Error('prompts: legacy API aliases are unsupported; use HASNA_PROMPTS_API_URL and HASNA_PROMPTS_API_KEY');
