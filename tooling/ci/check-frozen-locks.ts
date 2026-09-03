@@ -29,7 +29,7 @@
  *   `bun install --frozen-lockfile` fires on dependency-range drift (the wave
  *   class) while TOLERATING name drift (apps/ui's lockfile records
  *   `@hasnaxyz/ui-local` vs manifest `@hasna/ui` — lane passes) and missing
- *   devDependencies (apps/billing, apps/router, apps/skills and others carry
+ *   devDependencies (apps/router, apps/skills and others carry
  *   manifest devDeps the lockfile root entry does not record — lane passes).
  *   So RULE 2 compares dependencies only, exactly as strict as the lane.
  *
