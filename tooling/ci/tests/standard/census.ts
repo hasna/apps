@@ -301,7 +301,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
 export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "CLI-only member; no server surface." },
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
-  { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
   { member: "catalog", reason: "Local read model; the HTTP read API is a documented local dev convenience bound to loopback (README 'Security and deployment scope'), not a supported service surface — the manifest declares the api surface deferred with that reason." },
@@ -338,7 +337,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "attachments", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "banking", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "brains", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
