@@ -261,8 +261,8 @@ describe("hasna/apps versioning integrity", () => {
     // correct then), and the registry advance to 0.13.4 was never picked up by
     // calendar's next release — the reported defect (row 2ce5505f, T-00097).
     // Members two or more versions behind are deliberate per-release registry pins
-    // (the frozen-locks gate's EXCEPTIONS rationale, e.g. actions 0.11.1, billing
-    // 0.9.0), NOT this class; a `^`/`~` range resolves forward on the registry and
+    // (the frozen-locks gate's EXCEPTIONS rationale, e.g. actions 0.11.1),
+    // NOT this class; a `^`/`~` range resolves forward on the registry and
     // is not this class either.
     const contracts = membersByName.get("@hasna/contracts");
     expect(contracts, "@hasna/contracts is a member of this tree").toBeDefined();

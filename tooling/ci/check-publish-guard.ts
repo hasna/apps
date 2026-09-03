@@ -16,14 +16,14 @@
  *
  * `npm pack --dry-run --json` runs the package's `prepack` script BEFORE it
  * writes the JSON, and npm forwards the prepack script's stdout to our stdout.
- * A member with a chatty prepack (billing: `bun run verify && bun run
+ * A member with a chatty prepack (e.g. `bun run verify && bun run
  * scan:artifact`) produces 612 lines / 14118 bytes of prepack logs followed by
  * the JSON document — so `JSON.parse` on the raw stdout FAILS
  * ("Unexpected token 'b'"). `--silent` does NOT suppress the prepack stdout
  * (measured: identical failure). The previous guard swallowed that failure and
  * returned an empty entry list, reporting "0 tarball entries, 0 internal-infra
  * strings" for every chatty-prepack member while exiting 0 — a vacuous pass
- * (measured on billing, datasets, draw, models, releases, sheets, tables;
+ * (measured on datasets, draw, models, releases, sheets, tables;
  * only the four members with silent prepacks were actually scanned).
  *
  * The JSON document is always the LAST thing npm writes (prepack runs first),
