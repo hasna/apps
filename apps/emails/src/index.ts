@@ -484,6 +484,11 @@ export { log, setLogLevel } from "./lib/logger.js";
 export { colorStatus, colorDnsStatus, truncate, formatDate } from "./lib/format.js";
 export { formatVerifyResult } from "./lib/email-verify-format.js";
 export type { VerifyResult } from "./lib/email-verify-format.js";
+// Storage-free SMTP receiver (loopback-only TCP adapter + session parser).
+// No circular import: imports only node:crypto, node:net, and the
+// dependency-free ./lib/inbound-mime.js (lazy mailparser); verified by tsc.
+export { createSmtpSession, listenSmtp, SMTP_MAX_MESSAGE_BYTES } from "./lib/smtp-receiver.js";
+export type { SmtpDelivery, SmtpReceiverError, SmtpReceiverOptions, SmtpSession } from "./lib/smtp-receiver.js";
 export {
   formatProviderHealth,
 } from "./lib/provider-health-format.js";
