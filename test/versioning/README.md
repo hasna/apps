@@ -11,7 +11,7 @@ default (a single `npm view` spawn carries a 5s fetch timeout of its own):
 
 ```sh
 VERSIONING_NPM_PARITY=1 bun test --timeout 300000 test/versioning
-VERSIONING_NPM_PARITY=1 VERSIONING_NPM_SAMPLE=@hasna/access bun test --timeout 300000 test/versioning
+VERSIONING_NPM_PARITY=1 VERSIONING_NPM_SAMPLE=@hasna/mementos bun test --timeout 300000 test/versioning
 ```
 
 Network failures produce an explicit `[SKIP versioning]` marker. Set

@@ -116,6 +116,13 @@
  * `<name>-serve` bin and an `./sdk` export (the last three WARN, P5-census
  * exceptions below). The SDK WARNs are owned by the standing P5 lane
  * (todos c7ce8b75-3d4e-4376-854c-875cd20c605b).
+ * 2026-09-03 (access retire, owner directive hasna/apps#1520): apps/access was
+ * removed from the public tree entirely (@hasna/access is 404 on npm; its
+ * deletion PR is the chore(access) retire wave). No registry entries existed
+ * for access in this census (its SDK exception had been deleted upstream
+ * after the member gained `./sdk` in PR #1510), so no entry removal was
+ * needed — noted here for provenance, same record-keeping as the datasets
+ * note above.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

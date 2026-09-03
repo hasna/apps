@@ -12,7 +12,8 @@
  * The generated member has no PostgreSQL code path yet; this gate proves the
  * CONNECTION (Bun.sql SELECT 1) against a real server. When the member
  * implements its own PostgreSQL backend, extend this gate to exercise that
- * code path the way apps/access/scripts/pg-test-gate.mjs does.
+ * code path the way a live member's pg-test-gate does (e.g.
+ * apps/mementos/scripts/pg-test-gate.ts).
  *
  *   Point __MEMBER_UPPER___TEST_DATABASE_URL at a throwaway test database:
  *   bun run test:postgres
