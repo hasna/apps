@@ -462,11 +462,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos daaa2841 (contracts task — tables)",
   },
   {
-    member: "shield",
-    cause: "surface_matrix/service_api_topology: api and sdk surfaces declared deferred truthfully (shield-serve has no GET /ready, GET /version, /v1 base, or /openapi.json), so no supported API surface exists; the kit requires one for a service-capable cli-with-store. storage.engines postgresql is validator-forced (kit refuses the waiver for service-capable cli-with-store) and disclosed in metadata.conformance.notes. Mode vocabulary removed from src/db/database.ts and README.",
-    task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
-  },
-  {
     member: "todos",
     cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
