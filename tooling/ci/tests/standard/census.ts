@@ -395,7 +395,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "tickets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "connectors", reason: "No hasna.contract.json; imported by #80 after the original census; manifest lane (todos 41208cbe)." },
   { member: "terminal", reason: "No hasna.contract.json; imported by #88 after the original census; manifest lane (todos 41208cbe)." },
-  { member: "agency", reason: "No hasna.contract.json; source reconstructed from the published 0.3.1 bundle (row 91a7b09d) — CLI-only member; manifest lane (todos 41208cbe)." },
 ];
 
 /** Contracts conformance exceptions — members whose manifest does not pass
