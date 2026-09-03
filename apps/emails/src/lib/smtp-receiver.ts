@@ -1,3 +1,27 @@
+// Storage-free SMTP receiver: session parser + bounded loopback TCP adapter.
+//
+// SCOPE (receiver-only): this module ships the SMTP wire parser and a TCP
+// adapter that acknowledges (250) only after the caller's authoritative
+// `persist()` resolves with a non-empty durable receipt id. It does NOT wire
+// any durable remote persistence itself — the caller provides `persist()`.
+// Follow-up: wire a minimal remote-store `persist()` implementation; until
+// then the PR title/body must read "receiver-only", not "durable remote
+// persistence".
+//
+// SECURITY (loopback-only): `listenSmtp` defaults to 127.0.0.1. Do not bind
+// 0.0.0.0 without an authenticating proxy/firewall in front. There is no
+// STARTTLS/AUTH/TLS in this receiver by design; both return 500 (documented
+// below) so clients fail closed rather than sending credentials in cleartext
+// to a listener that cannot upgrade.
+//
+// LIMITS (documented behaviour, not oversights):
+// - MAIL FROM only accepts `SIZE=`; other ESMTP params (BODY=8BITMIME,
+//   SMTPUTF8, …) are rejected with 501. Accept-and-ignore is a follow-up.
+// - Oversize (declared SIZE= or accumulated bytes) answers 552 then closes
+//   the session (does not continue) to bound memory against pipelined abuse;
+//   the client must reconnect. 552-continue is a follow-up.
+// - No per-DATA deadline; only a 120s idle socket timeout. Per-message
+//   deadline is a follow-up.
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type Socket } from "node:net";
 import { parseInboundMime, type NormalizedInboundEmail } from "./inbound-mime.js";
@@ -18,11 +42,24 @@ export interface SmtpDelivery {
   rawSha256: string;
 }
 
+export interface SmtpReceiverError {
+  /** Which stage failed. Never carries message bodies, envelopes, or credentials. */
+  stage: "parse" | "persist" | "connection";
+  /** The SMTP reply already queued for the client (e.g. "451 …"). */
+  reply: string;
+  error: unknown;
+}
+
 export interface SmtpReceiverOptions {
   /** Resolves only after the authoritative store confirms durable persistence. */
   persist(delivery: SmtpDelivery): Promise<{ id: string }>;
   /** May lower, never increase, the advertised and enforced wire limit. */
   maxMessageBytes?: number;
+  /**
+   * Metric/error hook (no bodies/envelopes/credentials are passed).
+   * Wire to a counter (e.g. `smtp_receiver_errors_total{stage}`); never log payloads here.
+   */
+  onError?: (event: SmtpReceiverError) => void;
 }
 
 export interface SmtpSession {
@@ -41,6 +78,13 @@ function boundedMessageBytes(value = SMTP_MAX_MESSAGE_BYTES): number {
 /** No persistence, filesystem, provider, or authentication configuration is implicit. */
 export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
   const maxBytes = boundedMessageBytes(options.maxMessageBytes);
+  const notify = (stage: SmtpReceiverError["stage"], reply: string, error: unknown): void => {
+    try {
+      options.onError?.({ stage, reply, error });
+    } catch {
+      // Metric hooks must never break the SMTP session.
+    }
+  };
   let closed = false;
   let busy = false;
   let greeting = false;
@@ -75,8 +119,10 @@ export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
         let message: NormalizedInboundEmail;
         try {
           message = await parseInboundMime(data);
-        } catch {
-          responses.push("554 5.6.0 Message format rejected\r\n");
+        } catch (error) {
+          const reply = "554 5.6.0 Message format rejected\r\n";
+          notify("parse", reply, error);
+          responses.push(reply);
           return;
         }
         try {
@@ -90,9 +136,11 @@ export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
           });
           if (!receipt || typeof receipt.id !== "string" || !receipt.id.trim()) throw new Error("missing durable receipt");
           responses.push("250 2.0.0 Message stored\r\n");
-        } catch {
+        } catch (error) {
           // Never report success or echo a remote error, credential, or message body.
-          responses.push("451 4.3.0 Message persistence failed; retry later\r\n");
+          const reply = "451 4.3.0 Message persistence failed; retry later\r\n";
+          notify("persist", reply, error);
+          responses.push(reply);
         }
       } else {
         const unstuffed = bytes[0] === 46 ? bytes.subarray(1) : bytes;
@@ -110,6 +158,7 @@ export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
       responses.push(`250-emails\r\n250 SIZE ${maxBytes}\r\n`);
     } else if (/^MAIL FROM:/i.test(command)) {
       if (!greeting) { responses.push("503 5.5.1 Send EHLO first\r\n"); return; }
+      // Only SIZE= is accepted; BODY=8BITMIME/SMTPUTF8/etc. are 501 by design (see header).
       const match = /^MAIL FROM:<([^<>\r\n]*)>(?: SIZE=(\d+))?$/i.exec(command);
       if (!match || match[1]!.length > 254 || (match[1] && !match[1].includes("@"))) {
         responses.push("501 5.5.4 Invalid reverse path or parameters\r\n"); return;
@@ -142,6 +191,9 @@ export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
       reset();
       closed = true;
       responses.push("221 2.0.0 Bye\r\n");
+    } else if (/^(?:STARTTLS|AUTH)(?:\s|$)/i.test(command)) {
+      // No TLS/auth in this loopback-only receiver by design; fail closed with 500.
+      responses.push("500 5.5.2 Command not recognized\r\n");
     } else {
       responses.push("500 5.5.2 Command not recognized\r\n");
     }
@@ -166,6 +218,8 @@ export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
             tooLarge(responses); break;
           }
           if (pending.byteLength + piece.byteLength > MAX_LINE_BYTES + (collecting ? 1 : 0)) {
+            // Command lines cap at 1000 bytes excl. CRLF; DATA wire lines allow one
+            // extra byte for the dot-stuffing indicator stripped before accounting.
             responses.push("500 5.5.2 SMTP line exceeds the limit\r\n");
             closed = true; reset(); break;
           }
@@ -186,12 +240,18 @@ export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
   };
 }
 
-/** Bounded TCP adapter; no socket opens until this function is explicitly called. */
+/** Bounded TCP adapter; no socket opens until this function is explicitly called.
+ * Loopback-only by default (127.0.0.1); binding 0.0.0.0 requires an
+ * authenticating proxy/firewall. Idle socket timeout is 120s; there is no
+ * per-DATA deadline (follow-up). */
 export async function listenSmtp(options: SmtpReceiverOptions & { port: number; hostname?: string }): Promise<{ port: number; stop(): Promise<void> }> {
   if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new TypeError("Invalid SMTP port");
   boundedMessageBytes(options.maxMessageBytes);
   const sockets = new Set<Socket>();
   const server = createServer((socket) => {
+    // server.maxConnections (set below) is the backstop; this app-level check
+    // keeps the 421 reply instead of a silent drop. Single-threaded accept
+    // means no race between the check and `sockets.add`.
     if (sockets.size >= MAX_CONNECTIONS) { socket.end("421 4.3.2 Too many connections\r\n"); return; }
     sockets.add(socket);
     const session = createSmtpSession(options);
@@ -199,19 +259,27 @@ export async function listenSmtp(options: SmtpReceiverOptions & { port: number; 
     socket.on("error", () => socket.destroy());
     socket.on("close", () => sockets.delete(socket));
     socket.write("220 emails ESMTP ready\r\n");
-    socket.on("data", async (data) => {
+    socket.on("data", async (data: Buffer) => {
       socket.pause();
       try {
-        const replies = await session.receive(data);
+        const replies = await session.receive(data as Uint8Array);
         if (socket.destroyed) return;
         for (const reply of replies) socket.write(reply);
         if (session.closed) socket.end();
         else socket.resume();
-      } catch {
+      } catch (error) {
+        // Metric hook only — never include bytes/envelopes/credentials.
+        try {
+          options.onError?.({ stage: "connection", reply: "451 4.3.0 Receiver failed; retry later\r\n", error });
+        } catch {
+          // Metric hooks must never break the socket path.
+        }
         socket.end("451 4.3.0 Receiver failed; retry later\r\n");
       }
     });
   });
+  // Kernel-level backstop for the app-level 421 check above.
+  server.maxConnections = MAX_CONNECTIONS;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.port, options.hostname ?? "127.0.0.1", () => { server.off("error", reject); resolve(); });

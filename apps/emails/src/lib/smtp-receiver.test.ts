@@ -137,6 +137,70 @@ describe("storage-free SMTP transaction", () => {
     expect(await session.receive(Buffer.from(message + ".\r\n"))).toEqual(["552 5.3.4 Message exceeds the size limit\r\n"]);
     expect(calls).toBe(0);
   });
+
+  test("requires EHLO before MAIL, caps recipients, and answers RSET/NOOP", async () => {
+    const session = createSmtpSession({ persist: async () => receipt });
+    expect(await session.receive(Buffer.from("MAIL FROM:<a@example.test>\r\n"))).toEqual([
+      "503 5.5.1 Send EHLO first\r\n",
+    ]);
+    expect(await session.receive(Buffer.from("EHLO fixture.test\r\n"))).toEqual([
+      expect.stringContaining("250-emails"),
+    ]);
+    expect(await session.receive(Buffer.from("NOOP\r\n"))).toEqual(["250 2.0.0 OK\r\n"]);
+    await session.receive(Buffer.from("MAIL FROM:<a@example.test>\r\n"));
+    for (let i = 0; i < 100; i++) {
+      const replies = await session.receive(Buffer.from(`RCPT TO:<u${i}@example.test>\r\n`));
+      expect(replies).toEqual(["250 2.1.5 Recipient accepted\r\n"]);
+    }
+    expect(await session.receive(Buffer.from("RCPT TO:<overflow@example.test>\r\n"))).toEqual([
+      "452 4.5.3 Too many recipients\r\n",
+    ]);
+    expect(await session.receive(Buffer.from("RSET\r\n"))).toEqual(["250 2.0.0 Reset\r\n"]);
+    expect(await session.receive(Buffer.from("DATA\r\n"))).toEqual(["503 5.5.1 MAIL and RCPT required\r\n"]);
+  });
+
+  test("rejects STARTTLS/AUTH with 500 and BODY=8BITMIME with 501 (documented, loopback-only)", async () => {
+    const session = createSmtpSession({ persist: async () => receipt });
+    await session.receive(Buffer.from("EHLO fixture.test\r\n"));
+    expect(await session.receive(Buffer.from("STARTTLS\r\n"))).toEqual(["500 5.5.2 Command not recognized\r\n"]);
+    expect(await session.receive(Buffer.from("AUTH PLAIN abc\r\n"))).toEqual(["500 5.5.2 Command not recognized\r\n"]);
+    expect(await session.receive(Buffer.from("MAIL FROM:<a@example.test> BODY=8BITMIME\r\n"))).toEqual([
+      "501 5.5.4 Invalid reverse path or parameters\r\n",
+    ]);
+  });
+
+  test("stores empty DATA, keeps transactions distinct, and reports persist failures via onError without bodies", async () => {
+    const deliveries: SmtpDelivery[] = [];
+    const errors: Array<{ stage: string; reply: string; error: unknown }> = [];
+    let fail = true;
+    const session = createSmtpSession({
+      persist: async (d) => {
+        deliveries.push(d);
+        if (fail) throw new Error("remote-store-down");
+        return receipt;
+      },
+      onError: (e) => {
+        errors.push(e);
+      },
+    });
+    await session.receive(Buffer.from(preamble));
+    expect(await session.receive(Buffer.from(".\r\n"))).toEqual([
+      "451 4.3.0 Message persistence failed; retry later\r\n",
+    ]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.stage).toBe("persist");
+    // Hook payload must not carry bodies/envelopes: only stage/reply/error.
+    expect(Object.keys(errors[0]!).sort()).toEqual(["error", "reply", "stage"]);
+    expect(JSON.stringify(errors[0])).not.toContain("First line");
+    fail = false;
+    await session.receive(Buffer.from(preamble));
+    expect(await session.receive(Buffer.from(raw + ".\r\n"))).toEqual(["250 2.0.0 Message stored\r\n"]);
+    // Second transaction on the same session stays distinct.
+    await session.receive(Buffer.from(preamble));
+    expect(await session.receive(Buffer.from(raw + ".\r\n"))).toEqual(["250 2.0.0 Message stored\r\n"]);
+    expect(deliveries).toHaveLength(3);
+    expect(new Set(deliveries.map((d) => d.transactionId)).size).toBe(3);
+  });
 });
 
 test("real synthetic loopback SMTP socket returns success only for a durable receipt", async () => {
