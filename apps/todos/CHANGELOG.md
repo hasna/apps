@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.52
+
+### Patch Changes
+
+- Accept a path-prefixed remote API base URL in the CLI cloud router (fixes #1512): the fleet is fronted by the `api.hasna.com` gateway, which addresses every app as `https://api.hasna.com/<app>/v1`, and every other fleet CLI accepts `HASNA_<APP>_API_URL=https://api.hasna.com/<app>` and appends `/v1` itself — todos was the only CLI that refused both forms with `REMOTE_API_URL_INVALID`. `normalizeRemoteAuthorityUrl` now accepts the authority root, the exact `/v1` root, the bare gateway form `<app>` (appending `/v1`), and `<app>/v1` (used verbatim, with the path prefix preserved through the status object and the contracts client so requests hit `https://api.hasna.com/todos/v1/...`, never a dropped or doubled `/v1`). The generic `/api/v1` shape, deeper paths, double-`/v1` paths, userinfo, query/fragment, and plaintext HTTP on non-loopback hosts all stay rejected. Regression tests cover the gateway URL forms plus the request-level route through the prefix.
+
 ## 0.15.51
 
 ### Patch Changes

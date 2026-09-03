@@ -228,9 +228,25 @@ function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
       "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must not contain a query or fragment; local SQLite fallback is disabled",
     );
   }
-  if (url.pathname !== "/" && url.pathname !== "/v1" && url.pathname !== "/v1/") {
+  const path = url.pathname.replace(/\/+$/, "");
+  // The fleet gateway addresses every app as https://api.hasna.com/<app>/v1
+  // (the gateway worker strips the /<app> segment and forwards to the app
+  // origin), and every other fleet CLI accepts the bare gateway URL
+  // https://api.hasna.com/<app> and appends /v1 itself. Accept the authority
+  // root, the exact /v1 root, the bare <app> root, and <app>/v1 — and keep
+  // rejecting the generic /api/v1 shape this error message has always named,
+  // any deeper path the gateway cannot address, and any path that would
+  // double the /v1 suffix.
+  const segments = path.split("/").filter(Boolean);
+  const reservedGatewaySegments = new Set(["api", "v1"]);
+  const isRoot = path === "";
+  const isV1Root = segments.length === 1 && segments[0] === "v1";
+  const isAppRoot = segments.length === 1 && !reservedGatewaySegments.has(segments[0]!.toLowerCase());
+  const isAppV1Root =
+    segments.length === 2 && segments[1] === "v1" && !reservedGatewaySegments.has(segments[0]!.toLowerCase());
+  if (!isRoot && !isV1Root && !isAppRoot && !isAppV1Root) {
     throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an authority root or end in /v1, not /api/v1 or another path; " +
+      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an authority root, /v1, or <app>[/v1], not /api/v1 or another path; " +
         "local SQLite fallback is disabled",
     );
   }
@@ -241,7 +257,13 @@ function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
       "REMOTE_API_URL_INVALID: plaintext HTTP is allowed only for loopback Todos authorities; local SQLite fallback is disabled",
     );
   }
-  return url.origin;
+  // Return the canonical authority root WITHOUT the /v1 suffix: the status
+  // object appends `/v1` and the contracts client re-appends it, so a gateway
+  // path prefix must survive normalization or the requests would lose it
+  // (https://api.hasna.com/todos/v1 normalizes to https://api.hasna.com/todos,
+  // and then back to …/todos/v1 downstream — never to …/v1).
+  const rootPath = isV1Root || isAppV1Root ? path.slice(0, -"/v1".length) : path;
+  return rootPath ? `${url.origin}${rootPath}` : url.origin;
 }
 
 export function getTodosRemoteAuthorityConfigStatus(
