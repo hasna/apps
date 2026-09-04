@@ -17,6 +17,7 @@ import {
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
+import { env } from "../lib/env.js";
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -99,7 +100,7 @@ export function checkAuth(
 /** Simple in-memory rate limiter — tracks requests per IP per window */
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX = Number.parseInt(process.env["TODOS_RATE_LIMIT_MAX"] || "120", 10); // requests per window
+const RATE_LIMIT_MAX = Number.parseInt(env.rateLimitMax() || "120", 10); // requests per window
 
 /**
  * Resolve the rate-limit bucket key for a request.
@@ -116,7 +117,7 @@ function resolveClientIp(
   req: Request,
   server: { requestIP(req: Request): { address: string } | null },
 ): string {
-  const trustProxy = process.env["TODOS_TRUST_PROXY"] === "1" || process.env["TODOS_TRUST_PROXY"] === "true";
+  const trustProxy = env.trustProxy() === "1" || env.trustProxy() === "true";
   if (trustProxy) {
     const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
       || req.headers.get("x-real-ip")?.trim();
@@ -191,7 +192,7 @@ export interface StartServerOptions {
 }
 
 export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
-  const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
+  const apiKey = options?.apiKey || env.apiKey() || null;
 
   // Initialize database
   const db = getDatabase();

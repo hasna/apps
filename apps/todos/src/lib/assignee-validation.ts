@@ -39,6 +39,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { normalizeAgentNameInput } from "./agent-name-normalize.js";
+import { env } from "../lib/env.js";
 
 /** The subset of an agent row this validator needs. */
 export interface KnownAgent {
@@ -188,7 +189,7 @@ export function describeAssigneeFilter(input: string, ctx: Pick<AssigneeContext,
  */
 export function defaultSeatRosterPath(): string {
   return (
-    process.env["TODOS_SEAT_ROSTER_PATH"] ||
+    env.seatRosterPath() ||
     join(homedir(), ".hasna", "identities", "hasna-seats.roster.json")
   );
 }

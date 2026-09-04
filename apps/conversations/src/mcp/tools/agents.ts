@@ -9,6 +9,7 @@ import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
 import { updateCachedAutoName, readPersistedIdentity, isSelfRename } from "../../lib/identity.js";
 import { identityFor } from "../identity.js";
+import { env } from "../../lib/env.js";
 import { normalizeAgentName } from "../../lib/presence.js";
 import { getSessionAgent, setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
@@ -37,7 +38,7 @@ export function registerAgentTools(
     const name = nameParam || agent_name || agent_id;
     if (!name) return { content: [{ type: "text", text: "Error: name is required" }], isError: true };
     // Auto-detect session_id from environment (set by agent-claude MCP subprocess)
-    const claudeSid = process.env.CONVERSATIONS_SESSION_ID || null;
+    const claudeSid = env.sessionId() || null;
     const session_id = manualSid || claudeSid || `${name}-${Date.now()}`;
     try {
       const result = await getStore().registerAgent(name, session_id, role, project_id);

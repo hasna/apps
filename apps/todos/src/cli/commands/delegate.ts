@@ -75,6 +75,7 @@ import { missingDelegationLineage, partialDelegationMessage } from "../../lib/de
 import { resolveValidatedAssignee } from "../assignee-guard.js";
 import { handleError, output, resolveTaskIdForCommand } from "../helpers.js";
 import type { Task } from "../../types/index.js";
+import { env } from "../../lib/env.js";
 
 type IdentityOutcome = "created" | "reused" | "skipped";
 
@@ -291,7 +292,7 @@ export function registerDelegateCommands(program: Command): void {
 
         // ── DRY RUN: report every effect, perform none ──────────────────────
         if (opts.dryRun) {
-          const previewChannel = opts.channel ?? process.env["TODOS_DELEGATE_NOTICE_CHANNEL"] ?? null;
+          const previewChannel = opts.channel ?? env.delegateNoticeChannel() ?? null;
           const preview = {
             dry_run: true,
             task: { id: task.id, short_id: task.short_id, title: task.title },
@@ -531,7 +532,7 @@ function postNotice(line: string, channel: string | null): { posted: boolean; ch
   // So the default is configuration instead: set TODOS_DELEGATE_NOTICE_CHANNEL
   // once per session and the verb stays a single call, which is the whole
   // property it is built on.
-  const resolved = channel || process.env["TODOS_DELEGATE_NOTICE_CHANNEL"] || null;
+  const resolved = channel || env.delegateNoticeChannel() || null;
   if (!resolved) {
     return {
       posted: false,
@@ -542,7 +543,7 @@ function postNotice(line: string, channel: string | null): { posted: boolean; ch
     };
   }
   channel = resolved;
-  const bin = process.env["TODOS_DELEGATE_NOTIFY_BIN"] || "conversations";
+  const bin = env.delegateNotifyBin() || "conversations";
   try {
     const proc = Bun.spawnSync([bin, "send", "--channel", channel, line], { stdout: "pipe", stderr: "pipe" });
     if (proc.exitCode !== 0) {

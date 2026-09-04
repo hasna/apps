@@ -19,6 +19,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createPollHealth, type PollHealthReporter } from "../lib/poll-health.js";
 import type { ConversationsStore } from "../lib/store/index.js";
 import { getStore } from "../lib/store/index.js";
+import { env } from "../lib/env.js";
 // Routed reads/writes: every read/write goes through the Store (local or cloud API).
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
@@ -112,11 +113,11 @@ export function setClaudeSessionId(server: McpServer, id: string): void {
 }
 
 export function getSessionAgent(server: McpServer): string | null {
-  return sessionFor(server).agentId || process.env.CONVERSATIONS_AGENT_ID || null;
+  return sessionFor(server).agentId || env.agentId() || null;
 }
 
 export function getClaudeSessionId(server: McpServer): string | null {
-  return sessionFor(server).claudeSessionId || process.env.CONVERSATIONS_SESSION_ID || null;
+  return sessionFor(server).claudeSessionId || env.sessionId() || null;
 }
 
 export function registerChannelBridge(

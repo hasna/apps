@@ -150,14 +150,14 @@ Every surface — CLI, MCP, `conversations-hook` — resolves who you are the sa
 way:
 
 1. an explicit `--from` / `from` argument,
-2. the `CONVERSATIONS_AGENT_ID` env var,
+2. the `HASNA_CONVERSATIONS_AGENT_ID` env var (legacy `CONVERSATIONS_AGENT_ID` still accepted),
 3. the agent that registered on this MCP connection (stdio only, see below),
-4. the identity registered for `CONVERSATIONS_SESSION_ID`, stored in a
+4. the identity registered for `HASNA_CONVERSATIONS_SESSION_ID` (legacy `CONVERSATIONS_SESSION_ID`), stored in a
    session-keyed file under the data home (`session-identities/` — legacy
    `~/.hasna/conversations/session-identities/`),
 5. this installation's identity, the data home's `agent-id` (legacy
    `~/.hasna/conversations/agent-id`) — **only when the process opts in with
-   `CONVERSATIONS_USE_MACHINE_IDENTITY=1`**.
+   `HASNA_CONVERSATIONS_USE_MACHINE_IDENTITY=1`** (legacy `CONVERSATIONS_USE_MACHINE_IDENTITY` still accepted).
 
 **There is no sixth rung. A session that declares nothing gets an error, not a
 name.** Resolution used to fall through to the machine-wide file for everyone,
@@ -173,7 +173,7 @@ process on the box, which is the defect this gate exists to prevent:
 
 ```bash
 # in the crontab line, the loop's env block, or the hook's wrapper — not ~/.zshrc
-CONVERSATIONS_USE_MACHINE_IDENTITY=1 conversations read --blocking
+HASNA_CONVERSATIONS_USE_MACHINE_IDENTITY=1 conversations read --blocking   # legacy CONVERSATIONS_USE_MACHINE_IDENTITY still accepted
 ```
 
 Anything else — in particular several agent seats sharing one machine — gives
@@ -181,12 +181,12 @@ each session its own identity, which is also what keeps per-agent inbox
 filtering and creator-vs-assignee matching meaningful:
 
 ```bash
-export CONVERSATIONS_AGENT_ID=agent-harness   # per seat, survives restarts
+export HASNA_CONVERSATIONS_AGENT_ID=agent-harness   # per seat, survives restarts; legacy CONVERSATIONS_AGENT_ID still accepted
 ```
 
 Runtimes that already carry a stable session id can bind it once without
 putting the agent name in every child process. `agents register` uses
-`CONVERSATIONS_SESSION_ID` as the presence session id and writes only that
+`HASNA_CONVERSATIONS_SESSION_ID` (legacy `CONVERSATIONS_SESSION_ID`) as the presence session id and writes only that
 session's hashed identity record. Another session id gets another file, so the
 two registrations can coexist and rebinding one cannot clobber the other:
 
@@ -289,7 +289,7 @@ The local HTTP server also exposes `/health` and `/mcp` when running.
 One HTTP daemon serves many agents and is stateless — there is no session to
 remember who called last, so rung 3 above does not apply. Agents sharing an HTTP
 daemon must pass `from` explicitly on every write, or run their own process with
-`CONVERSATIONS_AGENT_ID` set. This used to degrade into every caller resolving to
+`HASNA_CONVERSATIONS_AGENT_ID` set (legacy `CONVERSATIONS_AGENT_ID` still accepted). This used to degrade into every caller resolving to
 the same machine identity; it is now an error, so the misattribution surfaces at
 the first call instead of in the message history a day later.
 
@@ -334,8 +334,8 @@ under the `@hasna/conversations/sdk` export:
 ```ts
 import { ConversationsClient } from "@hasna/conversations/sdk";
 const client = new ConversationsClient({
-  baseUrl: process.env.CONVERSATIONS_API_URL!,
-  apiKey: process.env.CONVERSATIONS_API_KEY!,
+  baseUrl: process.env.HASNA_CONVERSATIONS_API_URL!,
+  apiKey: process.env.HASNA_CONVERSATIONS_API_KEY!,  // legacy CONVERSATIONS_API_URL/_API_KEY still accepted
 });
 await client.sendMessage({ from: "me", to: "you", content: "hi", channel: "deploys" });
 ```

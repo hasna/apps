@@ -1,4 +1,5 @@
 import type { Task } from "../types/index.js";
+import { env } from "../lib/env.js";
 
 export type McpDetail = "compact" | "full";
 
@@ -411,8 +412,8 @@ function addGroupTools(toolNames: Set<string>, groupName: string): boolean {
 
 export function shouldRegisterToolForProfile(
   name: string,
-  profileValue = process.env["TODOS_PROFILE"],
-  groupValue = process.env["TODOS_TOOL_GROUPS"],
+  profileValue = env.profile(),
+  groupValue = env.toolGroups(),
 ): boolean {
   const profileTokens = splitTokens(profileValue || "minimal");
   const groupTokens = splitTokens(groupValue);

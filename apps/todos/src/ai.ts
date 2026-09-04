@@ -499,8 +499,10 @@ export function resolveTodosAiCommandOptions(
   const cli = input.cli ?? {};
   const config = input.config ?? {};
   const env = input.env ?? {};
+  // HASNA_TODOS_AI_FORMAT is canonical; legacy TODOS_AI_FORMAT is the alias.
+  const envFormat = env["HASNA_TODOS_AI_FORMAT"] ?? env["TODOS_AI_FORMAT"];
   const format = parseEnum(
-    selectedString(cli.format, env["TODOS_AI_FORMAT"], config.format),
+    selectedString(cli.format, envFormat, config.format),
     TODOS_AI_FORMATS,
     "format",
     TODOS_AI_DEFAULTS.format,

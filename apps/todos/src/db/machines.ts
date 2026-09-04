@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { hostname as osHostname, platform as osPlatform, arch as osArch } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { env } from "../lib/env.js";
 
 export interface MachineTopologyOptions {
   hostname?: string;
@@ -99,7 +100,7 @@ function extractTopology(machine: Machine): MachineTopologyMetadata {
  */
 export function getOrCreateLocalMachine(db?: Database): Machine {
   const d = db || getDatabase();
-  const name = process.env["TODOS_MACHINE_NAME"] || osHostname();
+  const name = env.machineName() || osHostname();
   const host = osHostname();
   const plat = osPlatform();
 
@@ -212,7 +213,7 @@ export function updateMachineHeartbeat(
   db?: Database,
 ): Machine {
   const d = db || getDatabase();
-  const key = idOrName || process.env["TODOS_MACHINE_NAME"] || osHostname();
+  const key = idOrName || env.machineName() || osHostname();
   const row = d.query("SELECT * FROM machines WHERE id = ? OR name = ?").get(key, key) as MachineRow | null;
   if (!row) {
     return registerMachine(key, {

@@ -148,6 +148,7 @@ import {
   type WorkspaceLock,
   type WorkspaceStatus,
 } from "../../types/workspace.js";
+import { env } from "../../lib/env.js";
 
 const DEFAULT_LIST_LIMIT = 25;
 const DEFAULT_EVENT_LIMIT = 20;
@@ -167,7 +168,7 @@ function resolveCwdOption(opts: { cwd?: string }): string {
 }
 
 function wantsJson(opts?: { json?: boolean }): boolean {
-  return Boolean(opts?.json || process.env["PROJECTS_JSON"] || process.env["WORKSPACES_JSON"] || process.argv.includes("--json") || process.argv.includes("-j"));
+  return Boolean(opts?.json || env.json() || process.env["WORKSPACES_JSON"] || process.argv.includes("--json") || process.argv.includes("-j"));
 }
 
 function splitList(value: string | undefined): string[] {

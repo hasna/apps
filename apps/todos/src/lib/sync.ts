@@ -2,6 +2,7 @@ import type { SyncPrefer, SyncResult } from "./sync-types.js";
 import { pullFromClaudeTaskList, pushToClaudeTaskList, syncClaudeTaskList } from "./claude-tasks.js";
 import { pullFromAgentTaskList, pushToAgentTaskList, syncAgentTaskList } from "./agent-tasks.js";
 import { getSyncAgentsFromConfig } from "./config.js";
+import { env } from "../lib/env.js";
 
 export type SyncDirection = "push" | "pull" | "both";
 export interface SyncOptions {
@@ -18,9 +19,9 @@ function isClaudeAgent(agent: string): boolean {
 }
 
 export function defaultSyncAgents(): string[] {
-  const env = process.env["TODOS_SYNC_AGENTS"];
-  if (env) {
-    return env.split(",").map((a) => a.trim()).filter(Boolean);
+  const syncAgents = env.syncAgents();
+  if (syncAgents) {
+    return syncAgents.split(",").map((a) => a.trim()).filter(Boolean);
   }
   const fromConfig = getSyncAgentsFromConfig();
   if (fromConfig && fromConfig.length > 0) return fromConfig;

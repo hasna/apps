@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "crypto";
 import { join, dirname } from "path";
 import { getDataDir } from "./db.js";
 import { normalizeAgentName } from "./presence.js";
+import { env } from "./env.js";
 
 /**
  * Path of the installation-wide identity file.
@@ -18,7 +19,7 @@ function agentIdFile(): string {
 
 /** Return the stable session id declared by the caller, if it has one. */
 export function getDeclaredSessionId(): string | null {
-  const sessionId = process.env.CONVERSATIONS_SESSION_ID?.trim();
+  const sessionId = env.sessionId()?.trim();
   return sessionId || null;
 }
 
@@ -142,7 +143,7 @@ export class IdentityError extends Error {
  * caller may say so.
  */
 function machineIdentityAllowed(): boolean {
-  const raw = process.env.CONVERSATIONS_USE_MACHINE_IDENTITY?.trim().toLowerCase();
+  const raw = env.useMachineIdentity()?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
@@ -153,10 +154,10 @@ function identityNotSet(persisted: string | null): IdentityError {
   return new IdentityError(
     `No agent identity for this session. ${held}\n` +
       `Declare one of:\n` +
-      `  - CONVERSATIONS_AGENT_ID=<name>   per session (what a durable seat should set)\n` +
+      `  - HASNA_CONVERSATIONS_AGENT_ID=<name>   per session (what a durable seat should set; legacy CONVERSATIONS_AGENT_ID accepted)\n` +
       `  - --from <name>                   per invocation\n` +
-      `  - CONVERSATIONS_SESSION_ID=<id>   then run conversations agents register <name>\n` +
-      `  - CONVERSATIONS_USE_MACHINE_IDENTITY=1   only where this process owns the whole machine's identity`,
+      `  - HASNA_CONVERSATIONS_SESSION_ID=<id>   then run conversations agents register <name> (legacy CONVERSATIONS_SESSION_ID accepted)\n` +
+      `  - HASNA_CONVERSATIONS_USE_MACHINE_IDENTITY=1   only where this process owns the whole machine's identity (legacy CONVERSATIONS_USE_MACHINE_IDENTITY accepted)`,
   );
 }
 
@@ -217,7 +218,7 @@ export function getAutoName(): string {
 export function resolveIdentity(explicit?: string): string {
   const explicitValue = explicit?.trim();
   if (explicitValue) return explicitValue;
-  const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
+  const envValue = env.agentId()?.trim();
   if (envValue) return envValue;
   const sessionValue = readSessionIdentity();
   if (sessionValue) return sessionValue;
@@ -274,7 +275,7 @@ export function resolveIdentities(explicit?: string): string[] {
   const explicitList = parseIdentityList(explicit);
   if (explicitList.length > 0) return explicitList;
 
-  const envList = parseIdentityList(process.env.CONVERSATIONS_AGENT_ID);
+  const envList = parseIdentityList(env.agentId());
   if (envList.length > 0) return envList;
 
   const sessionIdentity = readSessionIdentity();
@@ -295,9 +296,9 @@ export function resolveIdentities(explicit?: string): string[] {
  */
 export function describeIdentitySource(explicit?: string): string {
   if (explicit?.trim()) return "explicit (--from flag)";
-  if (process.env.CONVERSATIONS_AGENT_ID?.trim()) return "env var (CONVERSATIONS_AGENT_ID)";
+  if (env.agentId()?.trim()) return "env var (HASNA_CONVERSATIONS_AGENT_ID, legacy CONVERSATIONS_AGENT_ID)";
   if (readSessionIdentity()) {
-    return "session identity file keyed by CONVERSATIONS_SESSION_ID";
+    return "session identity file keyed by HASNA_CONVERSATIONS_SESSION_ID (legacy CONVERSATIONS_SESSION_ID)";
   }
   return `machine identity file, opted in via CONVERSATIONS_USE_MACHINE_IDENTITY (${agentIdFile()})`;
 }
@@ -309,12 +310,12 @@ export function describeIdentitySource(explicit?: string): string {
 export function requireIdentity(explicit?: string): string {
   const explicitValue = explicit?.trim();
   if (explicitValue) return explicitValue;
-  const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
+  const envValue = env.agentId()?.trim();
   if (envValue) return envValue;
   const sessionValue = readSessionIdentity();
   if (sessionValue) return sessionValue;
   throw new Error(
-    "Agent identity required. Set CONVERSATIONS_AGENT_ID, bind CONVERSATIONS_SESSION_ID with agents register, or pass --from."
+    "Agent identity required. Set HASNA_CONVERSATIONS_AGENT_ID (legacy CONVERSATIONS_AGENT_ID), bind HASNA_CONVERSATIONS_SESSION_ID with agents register, or pass --from."
   );
 }
 

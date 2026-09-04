@@ -18,7 +18,7 @@ import { resolveIdentity } from "../lib/identity.js";
 import { printLine } from "../lib/stdout.js";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
-  printLine("conversations-hook: Claude Code PreToolUse hook for blocking messages.\n\nUsage: conversations-hook\n\nReads CONVERSATIONS_AGENT_ID to identify the agent. Exits 0 and stays silent\nwhen no identity is declared, since it runs before every tool call.\nOutputs blocking messages to stdout and exits 0.");
+  printLine("conversations-hook: Claude Code PreToolUse hook for blocking messages.\n\nUsage: conversations-hook\n\nReads HASNA_CONVERSATIONS_AGENT_ID (legacy CONVERSATIONS_AGENT_ID) to identify the agent. Exits 0 and stays silent\nwhen no identity is declared, since it runs before every tool call.\nOutputs blocking messages to stdout and exits 0.");
   process.exit(0);
 }
 

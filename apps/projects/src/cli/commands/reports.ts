@@ -4,9 +4,10 @@ import {
   serveProjectReports,
 } from "../../lib/project-reports-server.js";
 import { redactProjectValue } from "../../lib/redaction.js";
+import { env } from "../../lib/env.js";
 
 function wantsJson(options: { json?: boolean }): boolean {
-  return Boolean(options.json || process.env["PROJECTS_JSON"]);
+  return Boolean(options.json || env.json());
 }
 
 async function print(value: unknown, options: { json?: boolean }): Promise<void> {
@@ -107,7 +108,7 @@ export function registerReportsCommands(program: Command): void {
     .description("Serve reports for all registered projects from each project reports directory")
     .option("--host <host>", "Host to bind", "127.0.0.1")
     .option("--port <port>", "Port to bind")
-    .option("--token <token>", "Reports access token for non-loopback serving (or PROJECTS_REPORTS_TOKEN)")
+    .option("--token <token>", "Reports access token for non-loopback serving (or HASNA_PROJECTS_REPORTS_TOKEN; legacy PROJECTS_REPORTS_TOKEN)")
     .option("--trust-network", "Serve reports on a non-loopback host with explicit network trust", false)
     .option("-j, --json", "Print server info as JSON", false)
     .action(withJsonErrors(serveAction));

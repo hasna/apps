@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import type { MementosConfig, MemoryCategory, MemoryScope } from "../types";
 import { getDataRoot } from "./paths.js";
+import { env } from "../lib/env.js";
 
 // ============================================================================
 // Default configuration
@@ -126,17 +127,17 @@ export function loadConfig(): MementosConfig {
   ) as unknown as MementosConfig;
 
   // Environment variable overrides (highest priority)
-  const envScope = process.env["MEMENTOS_DEFAULT_SCOPE"];
+  const envScope = env.defaultScope();
   if (envScope && isValidScope(envScope)) {
     merged.default_scope = envScope;
   }
 
-  const envCategory = process.env["MEMENTOS_DEFAULT_CATEGORY"];
+  const envCategory = env.defaultCategory();
   if (envCategory && isValidCategory(envCategory)) {
     merged.default_category = envCategory;
   }
 
-  const envImportance = process.env["MEMENTOS_DEFAULT_IMPORTANCE"];
+  const envImportance = env.defaultImportance();
   if (envImportance) {
     const parsed = parseInt(envImportance, 10);
     if (!Number.isNaN(parsed) && parsed >= 1 && parsed <= 10) {

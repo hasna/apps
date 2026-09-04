@@ -5,6 +5,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { getTodosGlobalDir } from "./sync-utils.js";
+import { env } from "../lib/env.js";
 
 export const SANDBOX_PROFILE_VERSION = "todos.sandbox-profile.v1";
 
@@ -34,8 +35,9 @@ export interface SandboxCheckResult {
 }
 
 function getProfilesPath(): string {
-  if (process.env["TODOS_SANDBOX_PROFILES_PATH"]) {
-    return process.env["TODOS_SANDBOX_PROFILES_PATH"];
+  const profilesPath = env.sandboxProfilesPath();
+  if (profilesPath) {
+    return profilesPath;
   }
   const localDir = join(process.cwd(), ".todos");
   const local = join(localDir, "sandbox-profiles.json");

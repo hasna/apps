@@ -237,13 +237,24 @@ server.registerTool(
       // Auto-fill known agent context variables if agent ID is provided
       const autoFilled: Record<string, string> = {}
       if (agent) {
+        // Env-var naming standard (2026-08-24): HASNA_PROMPTS_* is canonical;
+        // the unprefixed names (TODOS_PROJECT_ID, PROJECT_ID, ORG_ID,
+        // SESSION_ID) are legacy context variables that could collide across
+        // apps — retained as fallback for one deprecation window.
+        const ctxVar = (canonical: string, ...legacy: string[]): string | undefined => {
+          for (const key of [canonical, ...legacy]) {
+            const value = process.env[key]
+            if (value) return value
+          }
+          return undefined
+        }
         // Known variables that can be auto-filled from agent context
         const CONTEXT_VARS: Record<string, () => string | undefined> = {
           agent_name: () => agent,
           agent_id: () => agent,
-          project_id: () => process.env.TODOS_PROJECT_ID || process.env.PROJECT_ID,
-          org_id: () => process.env.ORG_ID,
-          session_id: () => process.env.SESSION_ID,
+          project_id: () => ctxVar("HASNA_PROMPTS_PROJECT_ID", "TODOS_PROJECT_ID", "PROJECT_ID"),
+          org_id: () => ctxVar("HASNA_PROMPTS_ORG_ID", "ORG_ID"),
+          session_id: () => ctxVar("HASNA_PROMPTS_SESSION_ID", "SESSION_ID"),
           cwd: () => process.cwd(),
           date: () => new Date().toISOString().split('T')[0],
           datetime: () => new Date().toISOString(),

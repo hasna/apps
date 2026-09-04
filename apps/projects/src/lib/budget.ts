@@ -3,6 +3,7 @@ import { customAlphabet } from "nanoid";
 import { getDatabase, now } from "../db/database.js";
 import { recordWorkspaceEvent } from "../db/workspaces.js";
 import type { JsonObject } from "../types/workspace.js";
+import { env } from "../lib/env.js";
 
 const nanoid = customAlphabet(`0123456789${"abcdefghijklmnopqrstuvwxyz"}`, 12);
 
@@ -501,7 +502,7 @@ export function openRouterCostFromMetadata(providerMetadata: unknown): number | 
 }
 
 export function modelPricing(model: string): { inputUsdPerMillionTokens: number; outputUsdPerMillionTokens: number } | undefined {
-  const raw = process.env["PROJECTS_MODEL_PRICING_JSON"];
+  const raw = env.modelPricingJson();
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as Record<string, { inputUsdPerMillionTokens?: number; outputUsdPerMillionTokens?: number }>;
