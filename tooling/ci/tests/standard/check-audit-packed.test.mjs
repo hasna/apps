@@ -64,16 +64,21 @@ function runFixtureMember(extraDeps) {
   return result;
 }
 
+// The gate itself grants the probe 300s (spawnSync timeout below); the outer
+// bun-test budget must NOT be tighter, or the harness preempts the gate's own
+// semantics (a registry-backed pack → install → audit round trip on a loaded
+// worker outruns any small cap — the 5s default was timing out on both arms,
+// e.g. 2026-09-04 post-lockfix CI). Mirror the gate's 300s budget exactly.
 test("positive arm: clean shipped surface passes the packed audit (rc=0, no vulnerabilities)", () => {
   const result = runFixtureMember(undefined);
   expect(result.status).toBe(0);
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   expect(combined).toContain("No vulnerabilities found");
-});
+}, 300_000);
 
 test("negative arm: genuine advisory injected into the shipped surface fails the gate (rc=1, GHSA-3xgq-45jj-v275)", () => {
   const result = runFixtureMember("cross-spawn@5.1.0");
   expect(result.status).toBe(1);
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   expect(combined).toContain("GHSA-3xgq-45jj-v275");
-});
+}, 300_000);
