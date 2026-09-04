@@ -16,6 +16,7 @@
   "storage": {
     "backend": "postgresql",
     "engines": [
+      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_NOTES_",
