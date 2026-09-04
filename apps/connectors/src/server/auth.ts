@@ -716,7 +716,7 @@ export function getTokenExpiry(name: string): number | null {
 
 /**
  * List all profile names for a connector.
- * Reads ~/.hasna/connectors/{name}/profiles/ and legacy connect-{name} entries -
+ * Reads <connectors data root>/{name}/profiles/ and legacy connect-{name} entries -
  * both .json files (pattern 1) and subdirectories (pattern 2).
  */
 export function listProfiles(name: string): string[] {
@@ -752,7 +752,7 @@ export function listProfiles(name: string): string[] {
 
 /**
  * Switch the active profile for a connector.
- * Writes the profile name to ~/.hasna/connectors/{name}/current_profile
+ * Writes the profile name to <connectors data root>/{name}/current_profile
  */
 export function switchProfile(name: string, profile: string): void {
   name = normalizeConnectorName(name);
@@ -763,7 +763,7 @@ export function switchProfile(name: string, profile: string): void {
 
 /**
  * Delete a profile for a connector.
- * Removes the profile file or directory from ~/.hasna/connectors/{name}/profiles/.
+ * Removes the profile file or directory from <connectors data root>/{name}/profiles/.
  * Refuses to delete the "default" profile.
  * Returns true if deletion succeeded, false if profile not found or is "default".
  */

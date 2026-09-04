@@ -643,7 +643,7 @@ export function microphoneGrantInstruction(options: {
   }
   steps.push(
     "Confirm afterwards with 'recordings app status --json' — microphone_permission must read " +
-      "allowed, and a fresh line in ~/.hasna/recordings/Recordings.log must read " +
+      "allowed, and a fresh line in the recordings data root's Recordings.log must read " +
       "'RecordingEngine init; microphone=Microphone allowed'."
   );
   steps.push(

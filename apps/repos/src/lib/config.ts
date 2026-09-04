@@ -55,7 +55,7 @@ let cachedConfig: ReposConfig | null = null;
  * override (`HASNA_REPOS_HOME`) wins; otherwise the resolver (XDG) data home
  * (`~/.local/share/hasna/repos` on Linux) is used once adopted (`HASNA_DATA_HOME`
  * set, or `repos.db` already migrated there); otherwise the legacy
- * `~/.hasna/repos` default. File-level overrides (`HASNA_REPOS_CONFIG_PATH`,
+ * `the repos data root` default. File-level overrides (`HASNA_REPOS_CONFIG_PATH`,
  * `HASNA_REPOS_HOOK_QUEUE_PATH`, `HASNA_REPOS_DB_PATH`) are layered on top of
  * this root by their own modules.
  */

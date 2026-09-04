@@ -8,7 +8,7 @@ import { scanRepoPaths, scanRepos } from "./scanner";
 import { listRepos, listCommits, listBranches, listTags, listRemotes } from "../db/repos";
 
 // A temp dir, never a checkout-relative path: on the fleet this repo is developed
-// from checkouts under ~/.hasna/repos/worktrees/<repo>/<task>, and the derived-
+// from checkouts under the repos data root/worktrees/<repo>/<task>, and the derived-
 // checkout admission gate would refuse fixtures placed beneath that segment.
 // realpathSync so platforms where tmpdir() is a symlink (macOS /var -> /private/var)
 // compare equal to the realpaths the scanner records.

@@ -77,7 +77,7 @@ async function handleRegistrySync(options: {
 
 /**
  * `skills pull` — fetch skills from the configured instance into this machine's corpus
- * (~/.hasna/skills/installed/<name>/). Registered here beside `registry sync` because both
+ * (<skills data root>/installed/<name>/). Registered here beside `registry sync` because both
  * are the "instance <-> local registry" surface. Once a skill is in the corpus,
  * loadRegistry() shows it to `skills list --all` and the MCP `list_skills` with no further
  * step.
@@ -128,7 +128,7 @@ function printPullHuman(results: PulledSkillResult[]): void {
     }
   }
   const ok = results.filter((result) => result.success).length;
-  console.log(chalk.dim(`\n${ok}/${results.length} pulled into ~/.hasna/skills/installed`));
+  console.log(chalk.dim(`\n${ok}/${results.length} pulled into <skills data root>/installed`));
 }
 
 /**

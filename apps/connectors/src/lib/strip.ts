@@ -1,7 +1,7 @@
 /**
  * Global output stripping middleware.
  *
- * When strip is enabled in ~/.hasna/connectors/llm.json, every output surface
+ * When strip is enabled in the connectors data root's llm.json, every output surface
  * (MCP, REST, CLI) passes through maybeStrip() before returning to the caller.
  * This reduces token consumption for AI agents consuming connector output.
  *

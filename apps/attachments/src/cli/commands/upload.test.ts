@@ -58,7 +58,7 @@ const mockUploadFromUrl = mock(async (_url: string, _opts: unknown) => ({
 
 const testConfig = {
   s3: { bucket: "my-bucket", region: "us-east-1", accessKeyId: "AK" + "IATEST", secretAccessKey: "secret" },
-  storage: { backend: "s3" as const, localDir: "~/.hasna/attachments/test-objects", maxSizeBytes: 10 * 1024 * 1024 * 1024 },
+  storage: { backend: "s3" as const, localDir: "/tmp/attachments-test-objects", maxSizeBytes: 10 * 1024 * 1024 * 1024 },
   server: { port: 3459, host: "localhost", baseUrl: "http://localhost:3459", publicPath: "/a" },
   defaults: { expiry: "7d", linkType: "presigned" as const },
   client: { mode: "local" as const, apiBaseUrl: "", apiToken: "", apiTokenEnv: "ATTACHMENTS_API_TOKEN", preferInternal: false },

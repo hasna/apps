@@ -47,7 +47,7 @@ beforeEach(() => {
 });
 
 describe("loops home resolution — legacy default must never become invisible", () => {
-  it("keeps the legacy ~/.hasna/loops default until the XDG store exists or an override is set", () => {
+  it("keeps the legacy the loops data root default until the XDG store exists or an override is set", () => {
     expect(legacyHomeDir()).toBe(join(testHome, ".hasna", "loops"));
     // No overrides and no store migrated to the resolver home:
     // the effective data home MUST stay on the legacy layout.

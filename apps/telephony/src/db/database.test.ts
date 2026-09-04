@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("getDbPath", () => {
-  it("copies legacy home ~/.telephony state into ~/.hasna/telephony", () => {
+  it("copies legacy home ~/.telephony state into the telephony data root", () => {
     tempRoot = mkdtempSync(join(tmpdir(), "telephony-db-test-"));
     const home = join(tempRoot, "home");
     const cwd = join(tempRoot, "cwd");

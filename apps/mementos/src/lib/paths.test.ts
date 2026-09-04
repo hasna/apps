@@ -1,24 +1,25 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-
+import { join, resolve } from "node:path";
+import { dataDir } from "@hasna/contracts/paths";
+import { existsSync } from "node:fs";
 import {
-  adoptResolverDataRoot,
-  effectiveHome,
-  exactDataRoot,
-  getDataRoot,
   legacyDataRoot,
   resolverDataRoot,
+  getDataRoot,
+  effectiveHome,
 } from "./paths.js";
 
 const ENV_KEYS = [
   "HOME",
   "USERPROFILE",
-  "HASNA_MEMENTOS_HOME",
-  "MEMENTOS_HOME",
   "HASNA_DATA_HOME",
   "HASNA_CACHE_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_STATE_HOME",
+  "HASNA_MEMENTOS_HOME",
+  "MEMENTOS_HOME",
 ] as const;
 
 let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
@@ -27,119 +28,106 @@ const cleanups: string[] = [];
 
 afterEach(() => {
   for (const key of ENV_KEYS) {
-    if (key in saved) {
-      const value = saved[key];
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    const value = saved[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
   }
-  if (tempHome) {
+  saved = {};
+  for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (tempHome !== null) {
     rmSync(tempHome, { recursive: true, force: true });
     tempHome = null;
   }
-  for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Point $HOME at a fresh temp dir and clear every path-affecting override. */
 function isolateHome(): string {
-  for (const key of ENV_KEYS) saved[key] = process.env[key];
-  const home = mkdtempSync(join(tmpdir(), "mementos-data-root-"));
-  tempHome = home;
-  process.env.HOME = home;
+  if (tempHome !== null) throw new Error("isolateHome called twice without afterEach");
+  for (const key of ENV_KEYS) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+  tempHome = mkdtempSync(join(tmpdir(), "mementos-paths-"));
+  process.env.HOME = tempHome;
   delete process.env.USERPROFILE;
-  delete process.env.HASNA_MEMENTOS_HOME;
-  delete process.env.MEMENTOS_HOME;
-  delete process.env.HASNA_DATA_HOME;
-  delete process.env.HASNA_CACHE_HOME;
-  return home;
+  return tempHome;
 }
 
-describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
-  test("resolver data dir follows @hasna/paths under a fake HOME", () => {
+describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #1668)", () => {
+  test("home resolves HOME first", () => {
     const home = isolateHome();
-    expect(resolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "mementos"));
-    expect(legacyDataRoot()).toBe(join(home, ".hasna", "mementos"));
     expect(effectiveHome()).toBe(home);
   });
 
-  test("legacy ~/.hasna/mementos stays the effective root until adopted", () => {
+  test("the resolver data root is the contracts resolver root for this machine", () => {
     const home = isolateHome();
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(join(home, ".hasna", "mementos"));
+    expect(resolverDataRoot()).toBe(dataDir({ app: "mementos", home, env: process.env }));
   });
 
-  test("HASNA_DATA_HOME adopts the resolver (XDG) data root", () => {
+  test("on macOS the resolver (and therefore the effective) root is the mementos data root", () => {
+    const home = isolateHome();
+    const mac = dataDir({ app: "mementos", home, platform: "darwin", env: process.env });
+    expect(mac).toBe(join(home, ".hasna", "mementos"));
+    expect(resolverDataRoot()).toBe(mac);
+    expect(getDataRoot()).toBe(mac);
+  });
+
+  test("on Linux the resolver root is the XDG data root", () => {
+    const home = isolateHome();
+    expect(dataDir({ app: "mementos", home, platform: "linux", env: process.env })).toBe(
+      join(home, ".local", "share", "hasna", "mementos"),
+    );
+  });
+
+  test("the effective root is the resolver root", () => {
+    const home = isolateHome();
+    expect(getDataRoot()).toBe(dataDir({ app: "mementos", home, env: process.env }));
+  });
+
+  test("HASNA_DATA_HOME kind override moves the data root (app segment kept)", () => {
     isolateHome();
     const base = mkdtempSync(join(tmpdir(), "mementos-data-home-")); cleanups.push(base);
     process.env.HASNA_DATA_HOME = base;
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(true);
     expect(getDataRoot()).toBe(join(base, "mementos"));
   });
 
-  test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
-    const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "mementos");
-    mkdirSync(xdg, { recursive: true });
-    writeFileSync(join(xdg, "mementos.db"), "existing-migrated-store");
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(true);
-    expect(getDataRoot()).toBe(xdg);
-  });
-
-  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data root", () => {
+  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
     const home = isolateHome();
     const cache = mkdtempSync(join(tmpdir(), "mementos-cache-home-")); cleanups.push(cache);
     process.env.HASNA_CACHE_HOME = cache;
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(join(home, ".hasna", "mementos"));
+    expect(getDataRoot()).toBe(dataDir({ app: "mementos", home, env: process.env }));
   });
 
-  test("an empty HASNA_DATA_HOME is treated as unset", () => {
+  test("the pre-ruling legacy root is spelled under the mementos data root", () => {
     const home = isolateHome();
-    process.env.HASNA_DATA_HOME = "";
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(join(home, ".hasna", "mementos"));
+    expect(legacyDataRoot()).toBe(join(home, ".hasna", "mementos"));
   });
+});
 
-  test("exact-app overrides win over both roots, in priority order", () => {
+describe("exact-app overrides and store layering", () => {
+  test("exact-app overrides win over the resolver root, in priority order", () => {
     isolateHome();
-    const override = mkdtempSync(join(tmpdir(), "mementos-exact-")); cleanups.push(override);
-    const base = mkdtempSync(join(tmpdir(), "mementos-data-home2-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base; // would adopt the XDG root, but the override must win
-    process.env.HASNA_MEMENTOS_HOME = override;
-    expect(exactDataRoot()).toBe(override);
-    expect(getDataRoot()).toBe(override);
-  });
-
-  test("the MEMENTOS_HOME override also wins over the default", () => {
-    const home = isolateHome();
-    const legacyOverride = mkdtempSync(join(tmpdir(), "mementos-home-")); cleanups.push(legacyOverride);
-    process.env.MEMENTOS_HOME = legacyOverride;
-    expect(exactDataRoot()).toBe(legacyOverride);
-    expect(getDataRoot()).toBe(legacyOverride);
-  });
-
-  test("an empty exact-app override is treated as unset and does not shadow a secondary", () => {
-    const home = isolateHome();
-    const secondary = mkdtempSync(join(tmpdir(), "mementos-secondary-")); cleanups.push(secondary);
-    process.env.HASNA_MEMENTOS_HOME = "";
+    const primary = mkdtempSync(join(tmpdir(), "mementos-hasna-home-")); cleanups.push(primary);
+    const secondary = mkdtempSync(join(tmpdir(), "mementos-home-")); cleanups.push(secondary);
+    process.env.HASNA_MEMENTOS_HOME = primary;
     process.env.MEMENTOS_HOME = secondary;
-    expect(exactDataRoot()).toBe(secondary);
+    expect(getDataRoot()).toBe(primary);
+    delete process.env.HASNA_MEMENTOS_HOME;
     expect(getDataRoot()).toBe(secondary);
   });
 
-  test("a blank primary does not shadow a valid secondary", () => {
-    const home = isolateHome();
-    const secondary = mkdtempSync(join(tmpdir(), "mementos-secondary2-")); cleanups.push(secondary);
-    process.env.HASNA_MEMENTOS_HOME = "   ";
+  test("an empty exact-app override is treated as unset and does not shadow a secondary", () => {
+    isolateHome();
+    const secondary = mkdtempSync(join(tmpdir(), "mementos-home2-")); cleanups.push(secondary);
+    process.env.HASNA_MEMENTOS_HOME = "";
     process.env.MEMENTOS_HOME = secondary;
-    expect(exactDataRoot()).toBe(secondary);
     expect(getDataRoot()).toBe(secondary);
   });
 
   test("default resolution never creates either home", () => {
     const home = isolateHome();
-    getDataRoot();
     expect(existsSync(join(home, ".hasna", "mementos"))).toBe(false);
     expect(existsSync(join(home, ".local", "share", "hasna", "mementos"))).toBe(false);
+    expect(getDataRoot()).toBe(dataDir({ app: "mementos", home, env: process.env }));
   });
+
 });

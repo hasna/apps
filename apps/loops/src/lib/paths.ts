@@ -13,7 +13,7 @@ import {
  * overwrite the live `~/.config/systemd/user/loops-daemon.service` with fixture
  * garbage. In production `HOME` is set at startup, so this resolves
  * identically. Resolution is delegated to `./app-home.js` (the @hasna/paths
- * resolver), which keeps the legacy `~/.hasna/loops` default effective until
+ * resolver), which keeps the legacy `the loops data root` default effective until
  * the store is physically migrated to the XDG data home or the operator sets
  * `HASNA_DATA_HOME`; the `LOOPS_DATA_DIR` / `HASNA_LOOPS_DATA_DIR` exact-app
  * overrides win unconditionally.

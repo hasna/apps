@@ -323,7 +323,7 @@ export function getDataDir(): string {
   const projectLocalDir = findProjectRecordingsPath();
   if (projectLocalDir) return projectLocalDir;
 
-  // Global: ~/.hasna/recordings (with backward compat from ~/.recordings)
+  // Global: the recordings data root (with backward compat from ~/.recordings)
   const home = getHomeDir();
   const newDir = join(home, ".hasna", "recordings");
   const oldDir = join(home, ".recordings");

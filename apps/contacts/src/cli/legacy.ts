@@ -4,7 +4,7 @@ import fs, { constants, closeSync, existsSync, fstatSync, lstatSync, readSync, r
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import chalk from "chalk";
-import { dataDir } from "../db/paths.js";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 
 interface LegacyCandidate {
   path: string;
@@ -22,7 +22,7 @@ function home(env: NodeJS.ProcessEnv = process.env): string {
 export function legacyDatabaseCandidates(env: NodeJS.ProcessEnv = process.env): LegacyCandidate[] {
   const base = home(env);
   const paths = [
-    { source: "xdg" as const, path: join(dataDir({ app: "contacts", home: base, env }), "contacts.db") },
+    { source: "xdg" as const, path: join(resolverDataDir({ app: "contacts", home: base, env }), "contacts.db") },
     { source: "legacy-hasna" as const, path: join(base, ".hasna", "contacts", "contacts.db") },
     { source: "ancient" as const, path: join(base, ".contacts", "contacts.db") },
   ];

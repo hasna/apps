@@ -108,7 +108,7 @@ function seedLease(branch: string, status: string, taskId = "task-x"): void {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     `lease-${branch}`, String(repoId), "/tmp/nowhere/hasna-apps", "test-machine",
-    `/home/u/.hasna/repos/worktrees/apps/${branch}`, branch, "main", MAIN,
+    join("/home/u", ".hasna", "repos", "worktrees", "apps", branch), branch, "main", MAIN,
     taskId, "run-x", "worktree", "{}", "remove", status,
     "2026-08-18T08:00:00Z", "2026-08-18T08:00:00Z", "2026-08-18T08:00:00Z",
   );

@@ -3,7 +3,7 @@
   "name": "events",
   "class": "library",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "1.0.0",
   "description": "Shared event envelopes, local channels, replay, and delivery transports for Hasna open-source apps. Library class: SDK exports are the primary surface and the local `events` CLI is the operator seam. The default compatibility store remains user-owned JSON; opt-in durable delivery uses a Node-safe filesystem spool plus a Bun SQLite outbox under the same caller-selected data directory. The package provisions no remote infrastructure.",
   "bins": [
     "events"

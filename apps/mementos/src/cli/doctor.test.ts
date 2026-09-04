@@ -18,7 +18,7 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 const CLI_ENV = isolatedStoreEnv(DB_PATH, {
   // save attributes agent-source writes to the writing agent (MEMENTOS_AGENT
   // when --agent is omitted); declare the identity so the seed save resolves
-  // on CI, which has no ~/.hasna/conversations/agent-id.
+  // on CI, which has no the conversations data root/agent-id.
   extra: { MEMENTOS_AGENT: "e2e-test-agent" },
 });
 

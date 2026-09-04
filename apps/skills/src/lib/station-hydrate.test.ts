@@ -48,7 +48,7 @@ function tempDir(prefix: string): string {
 /**
  * A temp corpus-cache pair: the corpus cache is <base>/skills (so the
  * hydration manifest lands at <base>/hydration-<station>.json, mirroring the
- * real ~/.hasna/skills layout) and cleanup removes <base>.
+ * real the skills data root layout) and cleanup removes <base>.
  */
 function tempCache(): { base: string; skills: string } {
   const base = tempDir("hydrate-cache-");

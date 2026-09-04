@@ -38,15 +38,15 @@ function seedHome(homes: string, homeRelative: string, content: string): void {
 
 function buildHomes(): string {
   const homes = tempDir("snapshot-homes-");
-  // skills store (~/.hasna/skills/skills): one portable skill with two files.
-  seedHome(homes, ".hasna/skills/skills/demo-skill/SKILL.md", CONTENT_MD);
-  seedHome(homes, ".hasna/skills/skills/demo-skill/skill.json", "{\"name\":\"demo-skill\"}\n");
+  // skills store (<skills data root>/skills): one portable skill with two files.
+  seedHome(homes, join(".hasna", "skills", "skills", "demo-skill", "SKILL.md"), CONTENT_MD);
+  seedHome(homes, join(".hasna", "skills", "skills", "demo-skill", "skill.json"), "{\"name\":\"demo-skill\"}\n");
   // non-portable + excluded content that must never reach the snapshot.
-  seedHome(homes, ".hasna/skills/skills/demo-skill/.env", "SECRET=1\n");
-  seedHome(homes, ".hasna/skills/skills/demo-skill/node_modules/pkg/index.js", "// drop\n");
-  seedHome(homes, ".hasna/skills/skills/demo-skill/README.md", "// not portable\n");
-  // custom store (~/.hasna/skills/custom).
-  seedHome(homes, ".hasna/skills/custom/priv-skill/SKILL.md", CONTENT_MD);
+  seedHome(homes, join(".hasna", "skills", "skills", "demo-skill", ".env"), "SECRET=1\n");
+  seedHome(homes, join(".hasna", "skills", "skills", "demo-skill", "node_modules", "pkg", "index.js"), "// drop\n");
+  seedHome(homes, join(".hasna", "skills", "skills", "demo-skill", "README.md"), "// not portable\n");
+  // custom store (<skills data root>/custom).
+  seedHome(homes, join(".hasna", "skills", "custom", "priv-skill", "SKILL.md"), CONTENT_MD);
   // an agent home (~/.claude/skills) with a portable subdir file.
   seedHome(homes, ".claude/skills/claude-skill/SKILL.md", CONTENT_MD);
   seedHome(homes, ".claude/skills/claude-skill/scripts/run.sh", "#!/usr/bin/env bash\n");
@@ -143,7 +143,7 @@ describe("station snapshot (port of fleet-resources sync-skills.mjs v3)", () => 
       const poisoned = join(repo, "resources", "station-test", "skills", "skills", "demo-skill", "SKILL.md");
       writeFileSync(poisoned, "different content\n");
       // A new portable file that a partial writer would have written.
-      seedHome(homes, ".hasna/skills/custom/priv-skill/scripts/new.sh", "#!/usr/bin/env bash\n");
+      seedHome(homes, join(".hasna", "skills", "custom", "priv-skill", "scripts", "new.sh"), "#!/usr/bin/env bash\n");
 
       let thrown: StationSnapshotError | null = null;
       try {

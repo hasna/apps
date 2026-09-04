@@ -86,17 +86,14 @@
  *                 this entry previously cited (@hasna/conversations@0.7.5,
  *                 @hasna/mementos@0.14.86, @hasna/todos@0.15.46) are all
  *                 published as of this measurement.
- *   domains     — @hasna/contracts@0.14.1 rc=1 until the contracts release lane
- *                 publishes it (added 2026-08-25 by the publish-all-contracts
- *                 lane, PR #1176). The domains manifest pin was bumped by
- *                 Version Packages #1168 while the lockfile could not follow:
- *                 measured standalone regen (`bun install --lockfile-only` in a
- *                 dir with no workspace parent) rc=1 "No version matching
- *                 '0.14.1' found for specifier '@hasna/contracts'". The lockfile
- *                 regenerates in the change that follows the 0.14.1 publish —
- *                 the economy O15-00629 pattern. The vendored storage-kit is
- *                 already regenerated at 0.14.1 in the same PR; only the
- *                 registry-resolved lockfile entry is pending.
+ *   domains     — LEFT this set on 2026-09-05 with the #1668 paths wave landing:
+ *                 the wave repinned domains (and every other wave member) to
+ *                 @hasna/contracts@1.0.0 and regenerated the app lockfiles in
+ *                 the same change, so the @hasna/contracts@0.14.1 entry
+ *                 recorded here (2026-08-25, publish-all-contracts PR #1176) —
+ *                 and the entire wave set added 2026-09-04 — no longer apply.
+ *                 The 0.14.1 pin's lockfile entry never did resolve from the
+ *                 registry; the 1.0.0 repin swept it.
  *
  * `projects` LEFT this set on 2026-08-23, and the reason is the shape to copy.
  * All five of its pins resolve rc=0 (@hasna/contracts@0.13.4,

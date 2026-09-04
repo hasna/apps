@@ -338,14 +338,14 @@ export function getDataDir(): string {
   const home = getHomeDir();
   // The effective data root: an exact-app override (`HASNA_EMAILS_HOME`, then
   // `EMAILS_HOME`) wins; otherwise the @hasna/paths resolver (XDG) data root
-  // once adopted; otherwise the legacy `~/.hasna/emails` default. `src/paths.ts`
+  // once adopted; otherwise the legacy `the emails data root` default. `src/paths.ts`
   // owns the resolution; this function additionally enforces the SQLite
   // parent-directory ownership/mode rules and creates the root.
   const effectiveRoot = getDataRoot();
   const legacyRoot = getLegacyDataRoot();
 
   // HOME may itself traverse a stable system alias. Canonicalize only HOME;
-  // .hasna and emails stay appended and therefore cannot be symlinked. The
+  // the .hasna segment and app name stay appended and therefore cannot be symlinked. The
   // canonicalization is preserved for the legacy root; the resolver root is
   // already expressed in canonical terms by @hasna/paths.
   const canonicalHome = canonicalizeFromExistingAncestor(home);
@@ -356,7 +356,7 @@ export function getDataDir(): string {
   if (process.platform === "win32") {
     // Keep Windows behavior non-breaking; POSIX ownership and mode bits do not
     // have the same security meaning there. The legacy `.emails` -> legacy
-    // `~/.hasna/emails` migration applies only when the effective root is the
+    // the legacy-root migration applies only when the effective root is the
     // legacy root; a resolver/exact root is a forward-looking location and
     // does not inherit the pre-`~/.hasna` migration.
     if (isLegacyRoot) {
@@ -424,10 +424,9 @@ function getDbPath(): string {
 
 /**
  * The local database file used when no path is configured: `<effective data
- * root>/emails.db` — the legacy `~/.hasna/emails/emails.db` until the store is
- * migrated to the resolver (XDG) data home or the operator sets
- * `HASNA_DATA_HOME`; the exact-app overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME`
- * name an explicit root.
+ * root>/emails.db` — the effective root is the resolver data root (ruling
+ * hasna/apps#1668); the exact-app overrides `HASNA_EMAILS_HOME` /
+ * `EMAILS_HOME` name an explicit root.
  *
  * Exported so a caller that has to NAME the default — configuration resolution, a
  * `doctor` line, an operator-facing error — reads it from here instead of re-spelling

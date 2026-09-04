@@ -45,10 +45,10 @@ const SQLITE_EXTENSIONS = [".db", ".sqlite", ".sqlite3", ".db3"];
 /**
  * Absolute path of the default SQLite database.
  *
- * PR #50 moved the *skill corpus* into ~/.hasna/skills/installed/ and left app data at
+ * PR #50 moved the *skill corpus* into <skills data root>/installed/ and left app data at
  * the app root, matching every sibling Hasna app (mementos keeps mementos.db beside
  * agents/, accounts keeps accounts.json beside profiles/). The server database is app
- * data, so it belongs at the root - ~/.hasna/skills/server.db - and explicitly NOT
+ * data, so it belongs at the root - <skills data root>/server.db - and explicitly NOT
  * inside installed/, which now holds exactly one thing: installed skills.
  *
  * Resolved through getDataDir() rather than composed from $HOME so that

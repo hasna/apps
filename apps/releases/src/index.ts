@@ -1,6 +1,5 @@
 export { VERSION } from "./version.js";
 export {
-  DEFAULT_DATA_DIR,
   eventsDataDir,
   ledgerDbPath,
   outboxPath,

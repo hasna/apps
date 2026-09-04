@@ -4,7 +4,7 @@
 //
 // getDatabase(), called with no explicit dbPath argument and no DB_PATH env
 // key set, silently opens whatever getDbPath() resolves to. Under `bun test`
-// that is $HOME/.hasna/mementos/mementos.db — the real, shared, on-disk
+// that is the mementos data root's mementos.db — the real, shared, on-disk
 // memory store (34MB+ of real rows on the machine this was found on) — with
 // no error and no signal to the caller that anything unusual happened.
 //

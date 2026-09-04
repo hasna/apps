@@ -9,8 +9,8 @@ import { getDbPath } from "./config.js";
 
 // ============================================================================
 // Legacy home-level ~/.mementos must not be auto-selected as the active DB.
-// It may be copied to ~/.hasna/mementos during migration, but canonical global
-// operation should resolve to ~/.hasna/mementos/mementos.db.
+// It may be copied to the mementos data root during migration, but canonical global
+// operation should resolve to the mementos data root/mementos.db.
 // ============================================================================
 
 const HOME_MEMENTOS_DB = join(homedir(), ".mementos", "mementos.db");
@@ -29,7 +29,7 @@ describe("getDbPath - ignores legacy home .mementos during automatic discovery",
     delete process.env["MEMENTOS_PROFILE"];
   });
 
-  test("falls back to ~/.hasna/mementos when ~/.mementos/mementos.db exists", () => {
+  test("falls back to the mementos data root when ~/.mementos/mementos.db exists", () => {
     if (!existsSync(HOME_MEMENTOS_DB)) {
       // If the file doesn't exist on this machine, skip gracefully
       expect(true).toBe(true);

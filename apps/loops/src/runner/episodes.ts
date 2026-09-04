@@ -177,7 +177,7 @@ export interface RunnerEpisodeRecorder {
 }
 
 export interface RunnerEpisodeRecorderOptions {
-  /** Defaults to the package data dir (resolved through @hasna/paths, `LOOPS_DATA_DIR` or `~/.hasna/loops` until the XDG home is adopted). */
+  /** Defaults to the loops data dir (resolved through the paths resolver, `LOOPS_DATA_DIR` honored). */
   dataDir?: string;
   statePath?: string;
   outboxPath?: string;

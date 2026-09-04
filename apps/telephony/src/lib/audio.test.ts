@@ -8,7 +8,7 @@ import { getAudioDir, saveAudio } from "./audio.js";
 // nested segments (or an absolute path) used to fail because the parent dir was
 // never created. saveAudio must mkdir the parent and honor absolute paths.
 // NOTE: the audio dir is derived from the effective telephony data root
-// (src/paths.ts — @hasna/paths once adopted, legacy ~/.hasna/telephony/audio
+// (src/paths.ts — @hasna/paths once adopted, legacy the telephony data root/audio
 // otherwise) on first use, so these assert on returned paths + existence and
 // clean up whatever they create.
 

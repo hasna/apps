@@ -5,7 +5,7 @@
     "": {
       "name": "@hasna/notes",
       "dependencies": {
-        "@hasna/contracts": "0.10.6",
+        "@hasna/contracts": "1.0.0",
         "@hasna/events": "0.1.16",
         "hono": "4.13.3",
         "pg": "^8.16.3",
@@ -23,6 +23,7 @@
         "notes-server": "./index.mjs",
       },
       "dependencies": {
+        "@hasna/contracts": "1.0.0",
         "hono": "4.13.3",
       },
     },
@@ -66,7 +67,7 @@
 
     "@electric-sql/pglite": ["@electric-sql/pglite@0.5.4", "", {}, "sha512-yYZUyyXrHU7tPlCjwZQJ6hIG9DscdCCn7Uk0mYKwC1FeHX286AbcmFveMiRBEak8e9iPupjsoVImN3yJZVed2g=="],
 
-    "@hasna/contracts": ["@hasna/contracts@0.10.6", "", { "dependencies": { "@hasna/secrets": "^0.2.22", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-lHGwSjCAJof2868o3xAHbWbq8WR675MNQMnRVaRPHvX0LeSLsEWfV5nqE4KjhDJfDRhXhiSo4pmvI03AW4cMnQ=="],
+    "@hasna/contracts": ["@hasna/contracts@1.0.0", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-hukCDEK9uyjYzd8f+CcexvurVqpO2mWXfPLw8htHTGGNxr5LVo0UNa8WuI+akeMdM/hq24NP5TOW3/F7GBqGWg=="],
 
     "@hasna/events": ["@hasna/events@0.1.16", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-HX66T8JljVOoE/Li8WKLUFVozg0GIdZmgBalScfBFW5Vru4IcVSTNs07TmYH3kIJUe5tylItTqwzc02nvjqbfw=="],
 

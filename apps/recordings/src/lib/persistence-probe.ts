@@ -20,7 +20,7 @@ import type { RecordingsConfig } from "../types/index.js";
  * theoretical: on an affected fleet Mac those two variables are set in the
  * LAUNCHD USER SESSION, so every process in the session inherits them — the GUI
  * app, its CLI helper, and any ssh shell alike. Writes go to the API while
- * ~/.hasna/recordings/recordings.db sits frozen at the row count it held when the
+ * the recordings data root's recordings.db sits frozen at the row count it held when the
  * machine last read from that file, and the live store has since grown well past
  * it. Two separate audits read the stale SQLite file and concluded that recording
  * had stopped persisting. It had not; they were looking at the wrong store.

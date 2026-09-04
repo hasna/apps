@@ -2,7 +2,7 @@
  * Provider-agnostic LLM client for the connectors monorepo.
  *
  * Supports: cerebras, groq, openai, anthropic
- * Config stored at: ~/.hasna/connectors/llm.json
+ * Config stored at: <connectors data root>/llm.json
  *
  * Cerebras and Groq are OpenAI-compatible (same SDK, different base URLs).
  * Anthropic has its own API format.

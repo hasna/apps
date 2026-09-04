@@ -58,7 +58,7 @@ describe("clearActiveModel", () => {
 });
 
 describe("model config path", () => {
-  it("writes active model config to ~/.hasna/todos even when legacy ~/.todos exists", () => {
+  it("writes active model config to the todos data root even when legacy ~/.todos exists", () => {
     const legacyDir = join(testHomeDir, ".todos");
     const legacyConfigPath = join(legacyDir, "config.json");
     mkdirSync(legacyDir, { recursive: true });

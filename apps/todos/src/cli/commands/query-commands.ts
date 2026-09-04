@@ -1864,7 +1864,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .option("--project <id>", "Filter to project")
     .option("--limit <n>", "Max tasks to show", "20")
-    .option("--source-root <path>", "Read-only source root to scan for .hasna/todos/todos.db (repeatable)", collectOption, [])
+    .option("--source-root <path>", "Read-only source root to scan for the project-relative todos store (repeatable)", collectOption, [])
     .option("--source-store <path>", "Read-only todos SQLite store path to scan (repeatable)", collectOption, [])
     .option("--include <pattern>", "Include source repo/store paths matching substring or glob (repeatable or comma-separated)", collectOption, [])
     .option("--exclude <pattern>", "Exclude source repo/store paths matching substring or glob (repeatable or comma-separated)", collectOption, [])

@@ -93,7 +93,7 @@ const LEGACY_CUSTOM_DIRNAME = "custom";
  *      created by hand is not the corpus)
  *   3. `getDataDir()`         - <app folder>/installed (pre-migration corpus,
  *      with the legacy auto-copy migration), where the app folder is
- *      $HASNA_SKILLS_DIR, else ~/.hasna/skills
+ *      $HASNA_SKILLS_DIR, else the skills data root
  *
  * The app folder holds app data (config.json, skills.db, auth.json); the corpus
  * is a named subfolder of it, matching every sibling Hasna app. One variable
@@ -151,7 +151,7 @@ function migrateLegacySkillLayout(appDir: string, installed: string): void {
       if (entry.startsWith(".") || entry === INSTALLED_SKILLS_DIRNAME) continue;
       const path = join(appDir, entry);
       if (entry === LEGACY_CUSTOM_DIRNAME) {
-        // The other half of the same mess: ~/.hasna/skills/custom/<name>/.
+        // The other half of the same mess: <skills data root>/custom/<name>/.
         if (!safeIsDirectory(path)) continue;
         try {
           for (const nested of readdirSync(path)) {

@@ -11,8 +11,8 @@ export const TODO_SYNC_FINGERPRINT_KEY = "todos_sync_fingerprint";
 // shell does, and only unquoted at the start of a word — so `join("~", ...)`
 // yields a RELATIVE path and every write lands under whatever the process cwd
 // happens to be. With HOME unset that silently scattered the global store into
-// the working directory: the suite left a literal `~/.hasna/todos/` folder
-// inside this repository, and the stray `~/.hasna/todos/config.json` it
+// the working directory: the suite left a literal `the todos data root/` folder
+// inside this repository, and the stray `the todos data root/config.json` it
 // produced is what failed the 0.15.0 publish (run 30822824396, "1 change
 // found"). Worse than the failed release, a user or daemon running with no
 // HOME (cron, systemd, a container) got a DIFFERENT task database per cwd
@@ -29,7 +29,7 @@ export const HOME = getHomeDir();
 /**
  * The effective (global) todos data dir, resolved through @hasna/paths
  * (XDG / macOS home layout): the resolver data home once adopted, otherwise
- * the legacy `~/.hasna/todos` default. File-level store overrides
+ * the legacy `the todos data root` default. File-level store overrides
  * (`HASNA_TODOS_DB_PATH` / `TODOS_DB_PATH`) are layered on top by the store
  * layers and always win regardless.
  */

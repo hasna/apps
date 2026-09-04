@@ -55,6 +55,7 @@
     "@aws-sdk/client-cloudwatch": "^3.600.0",
     "@aws-sdk/client-ec2": "^3.600.0",
     "@aws-sdk/client-ssm": "^3.1017.0",
+    "@hasna/contracts": "1.0.0",
     "@hasna/events": "^0.1.16",
     "@hasna/files": "0.3.16",
     "@hasna/hooks": "^0.7.0",

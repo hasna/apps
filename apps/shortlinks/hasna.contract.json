@@ -3,7 +3,7 @@
   "name": "shortlinks",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.13.1",
+  "kitVersion": "1.0.0",
   "description": "Open-source shortlink manager for custom domains, click tracking, and Cloudflare/Postgres runtime support, with a CLI, MCP server, REST API (shortlinks-serve), and a generated SDK. The server data backend (sqlite | postgresql) is selected by the DATABASE_URL environment contract; clients use on-box SQLite or the hosted /v1 API.",
   "bins": [
     "shortlinks",

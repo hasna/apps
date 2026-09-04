@@ -1,13 +1,13 @@
 /**
  * Canonical data root regression tests for open-domains.
  *
- * Fleet law: app data lives at ~/.hasna/<app>/. The default data root for this
- * package is ~/.hasna/domains (SQLite db + config.json). These tests pin:
+ * Fleet law (ruling hasna/apps#1668): one resolver in @hasna/contracts; the default data root for this
+ * package is the domains data root (SQLite db + config.json). These tests pin:
  *
- *   1. the DEFAULT db path resolves to $HOME/.hasna/domains/domains.db;
+ *   1. the DEFAULT db path resolves to the resolver data root's domains.db;
  *   2. env overrides (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH / DOMAINS_DIR)
  *      still win over the default;
- *   3. the DEFAULT config path resolves to $HOME/.hasna/domains/config.json;
+ *   3. the DEFAULT config path resolves to the resolver data root's config.json;
  *   4. env overrides for config (DOMAINS_CONFIG_PATH / DOMAINS_CONFIG_DIR)
  *      still win;
  *   5. one-time migration from the previous XDG defaults
@@ -31,10 +31,18 @@ import {
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 import { getDbPath, migrateLegacyDataDir } from "./database.js";
 import { getConfigPath, loadConfig, migrateLegacyConfig, saveConfig } from "../lib/config.js";
+
+/**
+ * The resolver-derived canonical root for an env (matching the code under
+ * test), used so the assertions hold on every platform.
+ */
+function canonical(env: Record<string, string | undefined>, ...parts: string[]): string {
+  return join(resolverDataDir({ app: "domains", home: env.HOME!, env }), ...parts);
+}
 import {
-  adoptResolverHome,
   appHome,
   exactAppOverride,
   getDefaultConfigPath,
@@ -67,10 +75,10 @@ function rmHome(env: FakeEnv): void {
 }
 
 describe("canonical db root", () => {
-  test("default db path resolves to $HOME/.hasna/domains/domains.db", () => {
+  test("default db path resolves to the resolver data root db", () => {
     const env = fakeHomeEnv();
     try {
-      expect(getDbPath(env)).toBe(join(env.HOME, ".hasna", "domains", "domains.db"));
+      expect(getDbPath(env)).toBe(canonical(env, "domains.db"));
     } finally {
       rmHome(env);
     }
@@ -114,10 +122,10 @@ describe("canonical db root", () => {
 });
 
 describe("canonical config root", () => {
-  test("default config path resolves to $HOME/.hasna/domains/config.json", () => {
+  test("default config path resolves to the resolver data root config", () => {
     const env = fakeHomeEnv();
     try {
-      expect(getConfigPath(env)).toBe(join(env.HOME, ".hasna", "domains", "config.json"));
+      expect(getConfigPath(env)).toBe(canonical(env, "config.json"));
     } finally {
       rmHome(env);
     }
@@ -145,8 +153,8 @@ describe("canonical config root", () => {
     const env = fakeHomeEnv();
     try {
       saveConfig({ default_registrar: "godaddy" }, env);
-      const canonical = join(env.HOME, ".hasna", "domains", "config.json");
-      expect(existsSync(canonical)).toBe(true);
+      const canonicalConfigPath = canonical(env, "config.json");
+      expect(existsSync(canonicalConfigPath)).toBe(true);
       expect(loadConfig(env).default_registrar).toBe("godaddy");
     } finally {
       rmHome(env);
@@ -164,7 +172,7 @@ describe("one-time migration from the previous XDG default", () => {
       const payload = Buffer.from("migrate-me-domain-db");
       writeFileSync(oldDb, payload);
 
-      const canonicalDb = join(env.HOME, ".hasna", "domains", "domains.db");
+      const canonicalDb = canonical(env, "domains.db");
       expect(existsSync(canonicalDb)).toBe(false);
 
       migrateLegacyDataDir(env);
@@ -176,7 +184,7 @@ describe("one-time migration from the previous XDG default", () => {
       // Source is never deleted.
       expect(existsSync(oldDb)).toBe(true);
       // Receipt recorded.
-      expect(existsSync(join(env.HOME, ".hasna", "domains", ".migrated-from-xdg.receipt.json"))).toBe(true);
+      expect(existsSync(canonical(env, ".migrated-from-xdg.receipt.json"))).toBe(true);
     } finally {
       rmHome(env);
     }
@@ -191,7 +199,7 @@ describe("one-time migration from the previous XDG default", () => {
       writeFileSync(oldDb, "data-v1");
 
       migrateLegacyDataDir(env);
-      const canonicalDb = join(env.HOME, ".hasna", "domains", "domains.db");
+      const canonicalDb = canonical(env, "domains.db");
       const before = readFileSync(canonicalDb);
 
       migrateLegacyDataDir(env);
@@ -204,7 +212,7 @@ describe("one-time migration from the previous XDG default", () => {
   test("never overwrites existing canonical data", () => {
     const env = fakeHomeEnv();
     try {
-      const canonicalDir = join(env.HOME, ".hasna", "domains");
+      const canonicalDir = canonical(env);
       mkdirSync(canonicalDir, { recursive: true });
       writeFileSync(join(canonicalDir, "domains.db"), "canonical-wins");
 
@@ -231,8 +239,8 @@ describe("one-time migration from the previous XDG default", () => {
       expect(report.dryRun).toBe(true);
       expect(report.wouldCopy).toContain("domains.db");
       expect(report.copied).toEqual([]);
-      expect(existsSync(join(env.HOME, ".hasna", "domains"))).toBe(false);
-      expect(existsSync(join(env.HOME, ".hasna", "domains", "domains.db"))).toBe(false);
+      expect(existsSync(canonical(env))).toBe(false);
+      expect(existsSync(canonical(env, "domains.db"))).toBe(false);
     } finally {
       rmHome(env);
     }
@@ -250,7 +258,7 @@ describe("one-time migration from the previous XDG default", () => {
       expect(report.dryRun).toBe(true);
       expect(report.wouldCopy).toBe(true);
       expect(report.copied).toBe(false);
-      expect(existsSync(join(env.HOME, ".hasna", "domains", "config.json"))).toBe(false);
+      expect(existsSync(canonical(env, "config.json"))).toBe(false);
     } finally {
       rmHome(env);
     }
@@ -263,7 +271,7 @@ describe("one-time migration from the previous XDG default", () => {
       mkdirSync(oldDir, { recursive: true });
       writeFileSync(join(oldDir, "config.json"), JSON.stringify({ default_registrar: "namecheap" }));
 
-      const canonicalConfig = join(env.HOME, ".hasna", "domains", "config.json");
+      const canonicalConfig = canonical(env, "config.json");
       expect(existsSync(canonicalConfig)).toBe(false);
 
       // loadConfig with a fake env triggers the one-time config migration.
@@ -280,7 +288,7 @@ describe("one-time migration from the previous XDG default", () => {
     const env = fakeHomeEnv();
     try {
       migrateLegacyDataDir(env);
-      expect(existsSync(join(env.HOME, ".hasna", "domains"))).toBe(false);
+      expect(existsSync(canonical(env))).toBe(false);
     } finally {
       rmHome(env);
     }
@@ -288,17 +296,17 @@ describe("one-time migration from the previous XDG default", () => {
 });
 
 describe("@hasna/paths resolver adoption — legacy default must never become invisible", () => {
-  test("legacy ~/.hasna/domains default stays until the XDG store exists or HASNA_DATA_HOME is set", () => {
+  test("legacy the domains data root default stays until the XDG store exists or HASNA_DATA_HOME is set", () => {
     const env = fakeHomeEnv();
     try {
-      expect(legacyHomeDir(env)).toBe(join(env.HOME, ".hasna", "domains"));
+      expect(legacyHomeDir(env)).toBe(canonical(env));
       // No HASNA_*_HOME overrides and no store migrated to the resolver home:
       // the effective home, db path and config path MUST stay on the legacy layout.
-      expect(appHome(env)).toBe(join(env.HOME, ".hasna", "domains"));
-      expect(getDefaultDbPath(env)).toBe(join(env.HOME, ".hasna", "domains", "domains.db"));
-      expect(getDbPath(env)).toBe(join(env.HOME, ".hasna", "domains", "domains.db"));
-      expect(getDefaultConfigPath(env)).toBe(join(env.HOME, ".hasna", "domains", "config.json"));
-      expect(getConfigPath(env)).toBe(join(env.HOME, ".hasna", "domains", "config.json"));
+      expect(appHome(env)).toBe(canonical(env));
+      expect(getDefaultDbPath(env)).toBe(canonical(env, "domains.db"));
+      expect(getDbPath(env)).toBe(canonical(env, "domains.db"));
+      expect(getDefaultConfigPath(env)).toBe(canonical(env, "config.json"));
+      expect(getConfigPath(env)).toBe(canonical(env, "config.json"));
     } finally {
       rmHome(env);
     }
@@ -338,33 +346,27 @@ describe("@hasna/paths resolver adoption — legacy default must never become in
     }
   });
 
-  test("adoptResolverHome is true only for the data-kind override or a migrated store", () => {
+  test("non-data kind overrides never move the data root; the data-kind override does", () => {
     const env = fakeHomeEnv();
-    const resolved = join(env.HOME, ".local", "share", "hasna", "domains");
     try {
-      // No override, no store -> legacy default stays.
-      expect(adoptResolverHome(resolved, env)).toBe(false);
-      // Non-data HASNA_*_HOME kinds alone must NOT move the data home.
-      expect(adoptResolverHome(resolved, { ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(false);
-      expect(adoptResolverHome(resolved, { ...env, HASNA_CONFIG_HOME: "/tmp/config" })).toBe(false);
-      // Data-kind override adopts even before a store exists.
-      expect(adoptResolverHome(resolved, { ...env, HASNA_DATA_HOME: "/tmp/data" })).toBe(true);
-      // A migrated store at the resolver home adopts without any override.
-      mkdirSync(resolved, { recursive: true });
-      writeFileSync(join(resolved, "domains.db"), "");
-      expect(adoptResolverHome(resolved, env)).toBe(true);
-      expect(adoptResolverHome(resolved, { ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(true);
+      expect(appHome({ ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(canonical(env));
+      expect(appHome({ ...env, HASNA_CONFIG_HOME: "/tmp/config" })).toBe(canonical(env));
+      expect(getDbPath({ ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(canonical(env, "domains.db"));
+      const dataEnv = { ...env, HASNA_DATA_HOME: "/tmp/data" };
+      expect(resolverHome(dataEnv)).toBe(join("/tmp/data", "domains"));
+      expect(appHome(dataEnv)).toBe(join("/tmp/data", "domains"));
     } finally {
       rmHome(env);
     }
   });
 
-  test("a migrated store at the resolver home adopts it for the db and config paths", () => {
+  test("a store at the resolver home is served there (no adoption gate — the resolver root IS the convention)", () => {
     const env = fakeHomeEnv();
     try {
-      const resolved = join(env.HOME, ".local", "share", "hasna", "domains");
+      const resolved = canonical(env);
       mkdirSync(resolved, { recursive: true });
       writeFileSync(join(resolved, "domains.db"), "");
+      expect(resolverHome(env)).toBe(resolved);
       expect(appHome(env)).toBe(resolved);
       expect(getDbPath(env)).toBe(join(resolved, "domains.db"));
       expect(getConfigPath(env)).toBe(join(resolved, "config.json"));

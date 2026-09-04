@@ -3,7 +3,7 @@ import { runnerEnvPath } from "../lib/paths.js";
 
 /**
  * The per-station runner configuration surface, read from a single mode-600
- * file (`~/.hasna/loops/runner.env`, honoring LOOPS_DATA_DIR). The control
+ * file (the loops data dir's runner.env, honoring LOOPS_DATA_DIR). The control
  * plane URL and key are credentials; the machine id and claim scope are the
  * runner's deployment identity. All four live in the file so that a package
  * update (version bump + service restart) never touches per-station config.

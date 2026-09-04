@@ -11,6 +11,7 @@ import {
   runCli,
   runCliInCwd,
 } from "./cli.test-utils";
+import { skillsDataRootForHome } from "../lib/app-home";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -703,7 +704,7 @@ describe("CLI runtime and misc commands", () => {
         expect(stderr).toBe("");
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({ saved: true, category: "bug" });
-        expect(data.path).toContain(".hasna/skills/skills.db");
+        expect(data.path).toContain(join(skillsDataRootForHome(tmpDir), "skills.db"));
         expect(existsSync(data.path)).toBe(true);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });

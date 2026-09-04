@@ -3,7 +3,7 @@
   "name": "changelog",
   "class": "library",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "1.0.0",
   "description": "Reusable changelog collection, generation, publishing, CLI, API, SDK, and MCP server for Hasna-coded apps.",
   "hosting": [
     "user-hosted"

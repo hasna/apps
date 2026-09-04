@@ -5,7 +5,6 @@ export type { FeedbackClientOptions, FetchLike } from "./client.js";
 export { collectBrowserFeedbackContext } from "./browser.js";
 export type { BrowserFeedbackContextOptions } from "./browser.js";
 export {
-  DEFAULT_DATA_DIR,
   DEFAULT_FEEDBACK_FILE,
   DEFAULT_SQLITE_FILE,
   ENV_PREFIX,

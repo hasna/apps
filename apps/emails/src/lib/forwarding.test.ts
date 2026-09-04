@@ -31,7 +31,7 @@
 // that may only fall, so the isolation is the defence and this paragraph is the record.
 //
 // `HOME` IS REDIRECTED IN EVERY CASE, and that is a safety property rather than tidiness. When
-// no database path is configured, the database layer resolves `~/.hasna/emails/emails.db` and
+// no database path is configured, the database layer resolves `the emails data root/emails.db` and
 // CREATES it. A case that asserts a refusal for an API-configured installation must not be
 // able to touch a developer's real mailbox on the way to failing.
 

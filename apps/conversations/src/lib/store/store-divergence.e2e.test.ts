@@ -30,7 +30,7 @@ let cloudUrl: string;
 
 /**
  * Run the probe with a pristine env. `HOME` is redirected into a sandbox so the
- * local store can never resolve to the real ~/.hasna/conversations database, and
+ * local store can never resolve to the real the conversations data root database, and
  * every store variable is explicitly cleared before the case sets its own.
  */
 async function probe(mode: string, arg: string, env: Record<string, string>) {

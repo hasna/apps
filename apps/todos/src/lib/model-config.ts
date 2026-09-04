@@ -1,6 +1,6 @@
 // Model configuration for @hasna/todos
 // Reads/writes config.json in the effective todos data home (getTodosGlobalDir:
-// the @hasna/paths XDG data home once adopted, otherwise ~/.hasna/todos) to
+// the @hasna/paths XDG data home once adopted, otherwise the todos data root) to
 // store the active fine-tuned model ID.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

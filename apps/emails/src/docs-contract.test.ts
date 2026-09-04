@@ -8,7 +8,7 @@ describe("agent documentation contract", () => {
   it("keeps AGENTS.md aligned with current agent-facing surfaces", () => {
     const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
 
-    expect(agents).toContain("~/.hasna/emails/emails.db");
+    expect(agents).toContain("the emails data root/emails.db");
     expect(agents).toContain("HASNA_EMAILS_DB_PATH");
     expect(agents).toContain("100+ MCP tools");
     expect(agents).toContain("prepare_inbox");

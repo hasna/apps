@@ -1114,7 +1114,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         if (!bucket && !opts.source) {
           handleError(new Error(
             "No S3 bucket: pass --bucket, --source, or set EMAILS_INBOUND_S3_BUCKET "
-            + "(equivalently, edit inbound_s3_bucket in ~/.hasna/emails/config.json).",
+            + "(equivalently, edit inbound_s3_bucket in the emails config file at the data root).",
           ));
           return;
         }

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getDb } from "../db/database.js";
@@ -1072,7 +1073,7 @@ export function buildDependencyRefresh(options: DependencyRefreshOptions): Depen
 
 export function buildWorkspaceWorktreeHygiene(options: WorkspaceWorktreeHygieneOptions = {}): WorkspaceWorktreeHygieneResult {
   const roots = options.roots?.length ? options.roots : [`${process.env["HOME"] || "/home/hasna"}/workspace/hasna/opensource`];
-  const worktreeRoot = options.worktreeRoot ?? `${process.env["HOME"] || "/home/hasna"}/.hasna/loops/worktrees`;
+  const worktreeRoot = options.worktreeRoot ?? join(resolverDataDir({ app: "loops", home: process.env["HOME"] || "/home/hasna" }), "worktrees");
   const runner = options.runner ?? spawnCommand;
   const timeoutMs = normalizePositiveInteger(options.timeoutMs, 20_000);
   const staleDays = normalizePositiveInteger(options.staleDays, 7);

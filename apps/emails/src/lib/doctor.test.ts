@@ -650,7 +650,7 @@ describe("runDiagnostics and the facts the seam does not carry", () => {
     // hardens the data directory before reading — and it throws when that cannot be done.
     // Unguarded, that replaced the ENTIRE diagnosis, including the checks that had already
     // succeeded, with a stack trace: in the one command an operator runs to find out what is
-    // broken. Here `~/.hasna` is a FILE, so creating `~/.hasna/emails` under it fails.
+    // broken. Here `~/.hasna` is a FILE, so creating `the emails data root` under it fails.
     writeFileSync(join(tempHome, ".hasna"), "not a directory");
 
     const checks = await runDiagnostics({ _store: realStore() });

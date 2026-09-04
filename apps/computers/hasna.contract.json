@@ -3,7 +3,7 @@
   "name": "computers",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "1.0.0",
   "description": "Durable lifetime computers for AI employees: controller API, CLI, MCP and SDK surfaces over user-owned SQLite or PostgreSQL storage.",
   "hosting": [
     "user-hosted"

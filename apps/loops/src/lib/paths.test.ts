@@ -47,7 +47,7 @@ describe("paths", () => {
     }
   });
 
-  test("defaults to ~/.hasna/loops without creating anything", () => {
+  test("defaults to the loops data root without creating anything", () => {
     // Isolated env: no exact-app override and no data-kind override, so the
     // legacy default stays effective regardless of machine state.
     withCleanEnv(() => {

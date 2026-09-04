@@ -43,7 +43,7 @@ function seedHome(homes: string, homeRelative: string, content: string): void {
 
 function buildHomes(): string {
   const homes = tempDir("cli-snapshot-homes-");
-  seedHome(homes, ".hasna/skills/skills/demo-skill/SKILL.md", CONTENT_MD);
+  seedHome(homes, join(".hasna", "skills", "skills", "demo-skill", "SKILL.md"), CONTENT_MD);
   return homes;
 }
 

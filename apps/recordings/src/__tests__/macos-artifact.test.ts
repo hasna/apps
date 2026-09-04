@@ -122,7 +122,7 @@ function fixture(): {
       ],
     },
     external_state: {
-      paths: ["~/.hasna/recordings"],
+      paths: ["the recordings data root"],
       classification: "user-private",
       rollback: "database-preserving-transactional-restore",
     },

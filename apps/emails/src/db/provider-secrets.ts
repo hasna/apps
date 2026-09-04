@@ -149,11 +149,11 @@ function configuredKeyringPath(env: NodeJS.ProcessEnv): string | null {
 
 /**
  * The canonical default keyring location: inside the app data root, resolved
- * through @hasna/paths (XDG/macOS home layout). The legacy
- * ~/.hasna/emails/open-emails-provider-credentials.keyring.json stays the
- * effective location until the store is migrated to the resolver data home or
- * the operator sets the data-kind override `HASNA_DATA_HOME`; the exact-app
- * overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
+ * through the paths resolver (ruling hasna/apps#1668): <data root>/
+ * open-emails-provider-credentials.keyring.json — the resolver root on macOS
+ * is the historical `the emails data root` layout, on Linux the XDG data root.
+ * The exact-app overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an
+ * explicit root.
  */
 export function defaultProviderSecretsKeyringPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(getDataRoot(env), "open-emails-provider-credentials.keyring.json");
@@ -163,7 +163,7 @@ export function defaultProviderSecretsKeyringPath(env: NodeJS.ProcessEnv = proce
  * The keyring paths the package previously defaulted to, in the order they are
  * migrated from. Both sit outside the app data root, which is why they are
  * legacy: ${XDG_CONFIG_HOME}/open-emails-secrets/... and
- * ~/.hasna/secrets/open-emails-provider-credentials.keyring.json.
+ * <legacy secrets root>/open-emails-provider-credentials.keyring.json.
  */
 export function legacyProviderSecretsKeyringPaths(env: NodeJS.ProcessEnv = process.env): string[] {
   const paths: string[] = [];

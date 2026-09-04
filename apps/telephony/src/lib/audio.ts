@@ -8,7 +8,7 @@ export function getAudioDir(): string {
   if (AUDIO_DIR === null) {
     // The audio dir lives under the effective telephony data root (resolved
     // via @hasna/paths once the XDG data home is adopted; legacy
-    // ~/.hasna/telephony/audio otherwise).
+    // the telephony data root's audio dir otherwise).
     AUDIO_DIR = join(getDataRoot(), "audio");
   }
   mkdirSync(AUDIO_DIR, { recursive: true });

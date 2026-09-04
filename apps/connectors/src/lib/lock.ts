@@ -7,7 +7,7 @@
  *
  * Strategy: atomic O_EXCL file creation as the lock primitive (works on all
  * platforms including macOS). Lock files live at:
- *   ~/.hasna/connectors/{name}/.write.lock
+ *   <connectors data root>/{name}/.write.lock
  *
  * Callers that cannot acquire the lock within the timeout receive a LockTimeoutError.
  */

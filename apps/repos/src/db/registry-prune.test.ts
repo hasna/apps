@@ -198,7 +198,7 @@ describe("pruneRegistryRows refuses by default", () => {
     let error: RegistryPruneError | null = null;
     try {
       pruneRegistryRows(
-        { ...confirmations("/home/someone/.hasna/repos/repos.db", plan.plan_hash) },
+        { ...confirmations(join("/home/someone", ".hasna", "repos", "repos.db"), plan.plan_hash) },
         { db, databasePath: dbPath },
       );
     } catch (caught) { error = caught as RegistryPruneError; }

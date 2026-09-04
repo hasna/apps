@@ -157,7 +157,7 @@ export function homePathFor(
     // The skills corpus homes live under the skills app data root, resolved
     // through @hasna/paths with the same gated legacy adoption the runtime uses
     // (app-home.skillsDataRootForHome): the XDG data home once the store has
-    // migrated there, else the legacy ~/.hasna/skills.
+    // migrated there, else the legacy the skills data root.
     return join(skillsDataRootForHome(home), definition.name);
   }
   if (definition.agent === "opencode") {

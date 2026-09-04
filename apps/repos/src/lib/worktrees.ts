@@ -3,7 +3,7 @@
  *
  * ## Why this is a verb and not a convention
  *
- * The layout `~/.hasna/repos/worktrees/<repo-name>/<worktree-name>` has been
+ * The layout `<repos data root>/worktrees/<repo-name>/<worktree-name>` has been
  * ratified in the non-overridable rules and in knowledge `k_mrj32xhu_efxkxl`
  * for weeks. Measured on this station on 2026-07-28: 444 entries sit directly
  * at the root, mixing correct `<repo>/<name>` pairs with flat task-named
@@ -22,7 +22,7 @@
  *
  * `iapp-factory`'s `addWorktree` opened by force-removing whatever occupied the
  * target path — `git worktree remove --force`, then `prune`, then
- * `rmSync(recursive, force)` — against a root of `~/.hasna/repos/worktrees`.
+ * `rmSync(recursive, force)` — against the repos worktrees root.
  * A caller-side `isPathInside` guard was added later (task `75eb20c6`), in one
  * caller. Every future caller re-derives that guard or forgets it.
  *

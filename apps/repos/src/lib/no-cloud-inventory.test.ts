@@ -180,25 +180,25 @@ describe("no-cloud inventory", () => {
       // pre-fix neither matched isCanonicalCheckoutPath, so the SHORTER scratch path won
       // the [tier, score, pathLength, path] tie-break and the real clones checkout
       // ranked as a duplicate of it.
-      expect(report.repos.find((entry) => entry.path === ".hasna/repos/clones/hasna/apps")).toMatchObject({
+      expect(report.repos.find((entry) => entry.path === join(".hasna", "repos", "clones", "hasna", "apps"))).toMatchObject({
         repo_key: "hasna/apps",
         routing: "canonical",
-        canonical_path: ".hasna/repos/clones/hasna/apps",
+        canonical_path: join(".hasna", "repos", "clones", "hasna", "apps"),
         duplicate_of: null,
       });
       expect(report.repos.find((entry) => entry.path === ".local/share/hasna/repos/clones/hasna/apps")).toMatchObject({
         repo_key: "hasna/apps",
         routing: "duplicate",
-        canonical_path: ".hasna/repos/clones/hasna/apps",
-        duplicate_of: ".hasna/repos/clones/hasna/apps",
+        canonical_path: join(".hasna", "repos", "clones", "hasna", "apps"),
+        duplicate_of: join(".hasna", "repos", "clones", "hasna", "apps"),
       });
       expect(report.repos.find((entry) => entry.path === "scratch/hasna/apps")).toMatchObject({
         repo_key: "hasna/apps",
         routing: "duplicate",
         routeable: false,
         route_blocked_reason: "duplicate-checkout",
-        canonical_path: ".hasna/repos/clones/hasna/apps",
-        duplicate_of: ".hasna/repos/clones/hasna/apps",
+        canonical_path: join(".hasna", "repos", "clones", "hasna", "apps"),
+        duplicate_of: join(".hasna", "repos", "clones", "hasna", "apps"),
       });
     });
   });
@@ -798,7 +798,7 @@ describe("enclosing-repository detection", () => {
       // `auxiliaryPathReason` regexes the operator's TMPDIR for
       // compact|improve|review|feature|worktree|codex|goal — and a TMPDIR containing
       // any of those words (`.../pr34-35-adversarial-review`, or anything under
-      // `~/.hasna/repos/worktrees/`) made this assertion fail for a reason that has
+      // `the repos data root/worktrees/`) made this assertion fail for a reason that has
       // nothing to do with what the test is about. `nested-git-checkout` is still
       // what an unfixed `main` returns here, so this keeps the discriminating power
       // without re-importing the environment dependence the fix removes.

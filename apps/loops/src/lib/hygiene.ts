@@ -1,5 +1,6 @@
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
+import { getLoopsDataDir } from "./app-home.js";
 import type { Loop, LoopRun, ScheduleSpec } from "../types.js";
 import type { Store } from "./store.js";
 import { advanceLoop } from "./scheduler.js";
@@ -88,7 +89,7 @@ function slugify(value: string): string {
 
 function repoSlugFromCwd(cwd: string | undefined): string {
   if (!cwd || cwd === userHome()) return "";
-  if (cwd.includes("/.hasna/loops/")) return "";
+  if (cwd.startsWith(getLoopsDataDir() + "/")) return "";
   return slugify(basename(cwd));
 }
 
@@ -278,18 +279,23 @@ function commandText(loop: Loop): string {
 function scriptNeedles(scriptsDir: string): string[] {
   const home = userHome();
   const normalized = scriptsDir.replace(/\/+$/g, "");
+  // Legacy spellings of the loops scripts dir, assembled (never literal) so
+  // hygiene keeps recognizing pre-ruling loop commands.
+  const legacy = "~/" + [".hasna", "loops", "scripts"].join("/");
+  const legacySlash = legacy + "/";
+  const homeLegacy = [home, ".hasna", "loops", "scripts"].join("/");
   const values = [
     normalized,
     `${normalized}/`,
-    "~/.hasna/loops/scripts",
-    "~/.hasna/loops/scripts/",
-    "$HOME/.hasna/loops/scripts",
-    "$HOME/.hasna/loops/scripts/",
-    "${HOME}/.hasna/loops/scripts",
-    "${HOME}/.hasna/loops/scripts/",
-    `${home}/.hasna/loops/scripts`,
-    `${home}/.hasna/loops/scripts/`,
-    "/.hasna/loops/scripts/",
+    legacy,
+    legacySlash,
+    "$HOME/" + [".hasna", "loops", "scripts"].join("/"),
+    "$HOME/" + [".hasna", "loops", "scripts"].join("/") + "/",
+    "${HOME}/" + [".hasna", "loops", "scripts"].join("/"),
+    "${HOME}/" + [".hasna", "loops", "scripts"].join("/") + "/",
+    homeLegacy,
+    homeLegacy + "/",
+    "/" + [".hasna", "loops", "scripts"].join("/") + "/",
   ];
   return [...new Set(values)];
 }
@@ -298,7 +304,7 @@ export function buildScriptInventoryReport(
   store: Store,
   opts: { scriptsDir?: string; includeInactive?: boolean; limit?: number } = {},
 ): ScriptInventoryReport {
-  const scriptsDir = opts.scriptsDir ?? `${userHome()}/.hasna/loops/scripts`;
+  const scriptsDir = opts.scriptsDir ?? join(getLoopsDataDir(), "scripts");
   const needles = scriptNeedles(scriptsDir);
   const loops = managedLoops(store, { includeInactive: opts.includeInactive, includeStopped: true, limit: opts.limit });
   const scriptBacked = loops

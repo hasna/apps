@@ -211,7 +211,7 @@ describe("shared task events", () => {
         route_enabled: true,
         current_workflow_invocation_id: "inv_123",
         current_run_id: "run_456",
-        latest_manifest_path: "/home/hasna/.hasna/loops/runs/open-codewith/task/run_456/manifest.json",
+        latest_manifest_path: join("/home/hasna", ".hasna", "loops", "runs", "open-codewith", "task", "run_456", "manifest.json"),
       },
     });
 
@@ -220,7 +220,7 @@ describe("shared task events", () => {
     const [event] = await new EventsClient().listEvents();
     expect(event.metadata.current_workflow_invocation_id).toBe("inv_123");
     expect(event.metadata.current_run_id).toBe("run_456");
-    expect(event.metadata.latest_manifest_path).toBe("/home/hasna/.hasna/loops/runs/open-codewith/task/run_456/manifest.json");
+    expect(event.metadata.latest_manifest_path).toBe(join("/home/hasna", ".hasna", "loops", "runs", "open-codewith", "task", "run_456", "manifest.json"));
   });
 
   test("explicit metadata can drive positive and negative route delivery", async () => {

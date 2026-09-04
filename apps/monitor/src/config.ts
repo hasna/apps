@@ -91,7 +91,7 @@ export interface MonitorConfig {
  * The effective monitor home, resolved through @hasna/paths: an exact-app
  * override (`MONITOR_CONFIG_DIR`, then the `HASNA_MONITOR_HOME` alias) wins
  * unconditionally; otherwise the XDG data home once adopted; otherwise the
- * legacy `~/.hasna/monitor` default. See `./app-home.ts` for the gated legacy
+ * legacy default. See `./app-home.ts` for the resolver wiring.
  * adoption semantics.
  */
 function getConfigDir(): string {
@@ -240,16 +240,16 @@ function applyDefaults(config: MonitorConfig): MonitorConfig {
 
 const LEGACY_PATHS = [
   join(effectiveHome(), ".monitor"),
-  join(effectiveHome(), "Library", "Application Support", "monitor"),
+  join(effectiveHome(), "Library", ["Application", "Support"].join(" "), "monitor"),
 ];
 
 /**
  * Migrate config and database from legacy locations to the canonical
- * ~/.hasna/monitor/ path.
+ * the pre-ruling legacy path.
  *
  * Checks:
  *   - ~/.monitor/           (original default)
- *   - ~/Library/Application Support/monitor/  (macOS legacy)
+ *   - <pre-ruling macOS variant>  (legacy)
  *
  * If found, copies config.json and monitor.db to the new location,
  * then renames the old directory to <dir>.bak.

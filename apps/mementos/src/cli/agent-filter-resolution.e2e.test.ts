@@ -46,7 +46,7 @@ function testEnv(): Record<string, string> {
     // save now attributes agent-source writes to the writing agent, resolved
     // from MEMENTOS_AGENT when --agent is omitted; the harness declares the
     // identity so the positive control resolves on CI, which has no
-    // ~/.hasna/conversations/agent-id.
+    // the conversations data root/agent-id.
     extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "e2e-test-agent" },
   });
 }

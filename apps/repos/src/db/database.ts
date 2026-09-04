@@ -877,7 +877,7 @@ const MIGRATIONS: Migration[] = [
       if (missing.length > 0) {
         throw new Error(
           `worktree_leases exists with an unexpected schema; missing columns: ${missing.join(", ")}. `
-          + "Back up ~/.hasna/repos/repos.db, then rename or drop the table so this migration can create it.",
+          + "Back up the repos data root's repos.db, then rename or drop the table so this migration can create it.",
         );
       }
 

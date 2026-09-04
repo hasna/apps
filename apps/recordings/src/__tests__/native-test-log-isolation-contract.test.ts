@@ -8,7 +8,7 @@ const SWIFT_TESTS = "src/native/Recordings/RecordingsTests";
 
 /**
  * Types in `RecordingsLib` whose no-argument construction resolves the live user's home and
- * writes under `~/.hasna/recordings`. Constructing one bare inside the Swift suite writes to
+ * writes under `the recordings data root`. Constructing one bare inside the Swift suite writes to
  * the operator's real data, so each must be built with an explicit injected location.
  *
  * This rule is enforced here, in TypeScript, rather than in the Swift suite that it describes,

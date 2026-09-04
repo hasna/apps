@@ -67,7 +67,7 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     expect(getHomeDir()).toBe(home);
   });
 
-  test("legacy ~/.hasna/conversations stays the effective root until adopted", () => {
+  test("legacy the conversations data root stays the effective root until adopted", () => {
     const home = isolateHome();
     expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
     expect(getDataDir()).toBe(getLegacyDataRoot());

@@ -3,7 +3,7 @@
   "name": "todos",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "1.0.0",
   "description": "Universal task management for AI coding agents. CLI + MCP + HTTP API (todos-serve) + generated SDK. One data-backend switch, two arms: the server stores in the local SQLite file by default, or in PostgreSQL when HASNA_TODOS_DATABASE_URL is set (serving the authenticated /v1 API per Amendment A1, API-key auth via @hasna/contracts). The client connects to its local SQLite file or to the /v1 authority over HTTP; it never opens Postgres directly.",
   "bins": [
     "todos",

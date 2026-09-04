@@ -884,7 +884,7 @@ export async function startServer(requestedPort: number, options?: { strict?: bo
             "warning",
             "OAuth Not Available",
             `No OAuth client credentials found for <span class="connector">${name}</span>.`,
-            `Run <code>connectors auth ${name}</code> or add credentials at <code>~/.hasna/connectors/${name}/credentials.json</code>`
+            `Run <code>connectors auth ${name}</code> or add credentials at <code>${getConnectorsHome()}/${name}/credentials.json</code>`
           ));
         }
 

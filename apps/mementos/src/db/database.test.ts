@@ -292,7 +292,7 @@ function restoreRootEnv(saved: Partial<Record<(typeof ROOT_ENV_KEYS)[number], st
 }
 
 describe("getDbPath — store resolution follows the adopted data root", () => {
-  test("legacy ~/.hasna/mementos stays the store path until the resolver root is adopted", () => {
+  test("legacy the mementos data root stays the store path until the resolver root is adopted", () => {
     const saved = saveRootEnv();
     clearRootEnv();
     const origCwd = process.cwd();

@@ -25,14 +25,14 @@ import {
 // per-agent memory accounting was unenforced at write time.
 //
 // The fix resolves the writing identity at save time when `--agent` is omitted
-// (MEMENTOS_AGENT, then the fleet identity surface ~/.hasna/conversations/
+// (MEMENTOS_AGENT, then the fleet identity surface the conversations data root/
 // agent-id), registers it on first use, and REFUSES an agent-source save that
 // has no resolvable identity at all — an unattributed agent claim is
 // unrecoverable afterwards (the columns are NULL whether the caller was
 // unidentified or none existed).
 //
 // Each child env pins the identity sources explicitly, so a machine whose
-// operator shell exports MEMENTOS_AGENT (or whose real ~/.hasna/conversations/
+// operator shell exports MEMENTOS_AGENT (or whose real the conversations data root/
 // agent-id file exists) cannot leak into the assertions.
 // ============================================================================
 
@@ -139,7 +139,7 @@ describe("save: agent-source writes carry the writing agent identity", () => {
     expect(row!.created_by_agent).toBe(saved.agent_id);
   });
 
-  test("FAILING: ~/.hasna/conversations/agent-id (the fleet identity surface) is the fallback", async () => {
+  test("FAILING: the conversations data root/agent-id (the fleet identity surface) is the fallback", async () => {
     const env = testEnv({ HOME: FIXTURE_HOME });
     delete env["MEMENTOS_AGENT"];
 

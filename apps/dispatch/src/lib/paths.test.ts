@@ -1,30 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-
+import { join, resolve } from "node:path";
+import { dataDir } from "@hasna/contracts/paths";
+import { artifactsDir, daemonLogPath, daemonPidLockPath, daemonStatePath, dataDir as dispatchDataDir, dbPath, pidFilePath } from "./paths.js";
 import {
-  adoptResolverDataDir,
-  artifactsDir,
-  daemonLogPath,
-  daemonPidLockPath,
-  daemonStatePath,
-  dataDir,
-  dbPath,
-  getDataDir,
-  getExactDataDir,
-  getHomeDir,
   getLegacyDataDir,
   getResolverDataDir,
-  pidFilePath,
+  getDataDir,
+  getHomeDir,
 } from "./paths.js";
 
 const ENV_KEYS = [
   "HOME",
   "USERPROFILE",
-  "DISPATCH_DATA_DIR",
   "HASNA_DATA_HOME",
   "HASNA_CACHE_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_STATE_HOME",
+  "DISPATCH_DATA_DIR",
 ] as const;
 
 let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
@@ -33,103 +27,98 @@ const cleanups: string[] = [];
 
 afterEach(() => {
   for (const key of ENV_KEYS) {
-    if (key in saved) {
-      const value = saved[key];
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    const value = saved[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
   }
-  if (tempHome) {
+  saved = {};
+  for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (tempHome !== null) {
     rmSync(tempHome, { recursive: true, force: true });
     tempHome = null;
   }
-  for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Point $HOME at a fresh temp dir and clear every path-affecting override. */
 function isolateHome(): string {
-  for (const key of ENV_KEYS) saved[key] = process.env[key];
-  const home = mkdtempSync(join(tmpdir(), "dispatch-data-root-"));
-  tempHome = home;
-  process.env.HOME = home;
+  if (tempHome !== null) throw new Error("isolateHome called twice without afterEach");
+  for (const key of ENV_KEYS) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+  tempHome = mkdtempSync(join(tmpdir(), "dispatch-paths-"));
+  process.env.HOME = tempHome;
   delete process.env.USERPROFILE;
-  delete process.env.DISPATCH_DATA_DIR;
-  delete process.env.HASNA_DATA_HOME;
-  delete process.env.HASNA_CACHE_HOME;
-  return home;
+  return tempHome;
 }
 
-describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
-  test("resolver data dir follows @hasna/paths under a fake HOME", () => {
+describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #1668)", () => {
+  test("home resolves HOME first", () => {
     const home = isolateHome();
-    expect(getResolverDataDir()).toBe(join(home, ".local", "share", "hasna", "dispatch"));
-    expect(getLegacyDataDir()).toBe(join(home, ".hasna", "dispatch"));
     expect(getHomeDir()).toBe(home);
   });
 
-  test("legacy ~/.hasna/dispatch stays the effective dir until adopted", () => {
+  test("the resolver data root is the contracts resolver root for this machine", () => {
     const home = isolateHome();
-    expect(adoptResolverDataDir(getResolverDataDir())).toBe(false);
-    expect(getDataDir()).toBe(join(home, ".hasna", "dispatch"));
-    expect(dbPath()).toBe(join(home, ".hasna", "dispatch", "dispatch.db"));
-    expect(dataDir()).toBe(getDataDir());
+    expect(getResolverDataDir()).toBe(dataDir({ app: "dispatch", home, env: process.env }));
   });
 
-  test("HASNA_DATA_HOME adopts the resolver (XDG) data dir", () => {
+  test("on macOS the resolver (and therefore the effective) root is the dispatch data root", () => {
+    const home = isolateHome();
+    const mac = dataDir({ app: "dispatch", home, platform: "darwin", env: process.env });
+    expect(mac).toBe(join(home, ".hasna", "dispatch"));
+    expect(getResolverDataDir()).toBe(mac);
+    expect(getDataDir()).toBe(mac);
+  });
+
+  test("on Linux the resolver root is the XDG data root", () => {
+    const home = isolateHome();
+    expect(dataDir({ app: "dispatch", home, platform: "linux", env: process.env })).toBe(
+      join(home, ".local", "share", "hasna", "dispatch"),
+    );
+  });
+
+  test("the effective root is the resolver root", () => {
+    const home = isolateHome();
+    expect(getDataDir()).toBe(dataDir({ app: "dispatch", home, env: process.env }));
+  });
+
+  test("HASNA_DATA_HOME kind override moves the data root (app segment kept)", () => {
     isolateHome();
     const base = mkdtempSync(join(tmpdir(), "dispatch-data-home-")); cleanups.push(base);
     process.env.HASNA_DATA_HOME = base;
-    expect(adoptResolverDataDir(getResolverDataDir())).toBe(true);
     expect(getDataDir()).toBe(join(base, "dispatch"));
-    expect(dbPath()).toBe(join(base, "dispatch", "dispatch.db"));
   });
 
-  test("an existing store at the resolver data dir adopts it even without HASNA_DATA_HOME", () => {
-    const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "dispatch");
-    mkdirSync(xdg, { recursive: true });
-    writeFileSync(join(xdg, "dispatch.db"), "existing-migrated-store");
-    expect(adoptResolverDataDir(getResolverDataDir())).toBe(true);
-    expect(getDataDir()).toBe(xdg);
-  });
-
-  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data dir", () => {
+  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
     const home = isolateHome();
     const cache = mkdtempSync(join(tmpdir(), "dispatch-cache-home-")); cleanups.push(cache);
     process.env.HASNA_CACHE_HOME = cache;
-    expect(adoptResolverDataDir(getResolverDataDir())).toBe(false);
-    expect(getDataDir()).toBe(join(home, ".hasna", "dispatch"));
+    expect(getDataDir()).toBe(dataDir({ app: "dispatch", home, env: process.env }));
   });
 
-  test("DISPATCH_DATA_DIR exact override wins over both roots", () => {
+  test("the pre-ruling legacy root is spelled under the dispatch data root", () => {
+    const home = isolateHome();
+    expect(getLegacyDataDir()).toBe(join(home, ".hasna", "dispatch"));
+  });
+});
+
+describe("exact-app overrides and store layering", () => {
+  test("DISPATCH_DATA_DIR exact override wins over the resolver root", () => {
     isolateHome();
-    const override = mkdtempSync(join(tmpdir(), "dispatch-exact-")); cleanups.push(override);
-    const base = mkdtempSync(join(tmpdir(), "dispatch-data-home2-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base; // would adopt the XDG root, but the override must win
+    const override = mkdtempSync(join(tmpdir(), "dispatch-data-dir-")); cleanups.push(override);
     process.env.DISPATCH_DATA_DIR = override;
-    expect(getExactDataDir()).toBe(override);
-    expect(getDataDir()).toBe(override);
-    expect(dbPath()).toBe(join(override, "dispatch.db"));
+    expect(getDataDir()).toBe(resolve(override.trim()));
+    expect(dbPath()).toBe(join(resolve(override.trim()), "dispatch.db"));
   });
 
-  test("an empty exact-app override is treated as unset", () => {
+  test("root data directory alias returns the effective data dir", () => {
     const home = isolateHome();
-    process.env.DISPATCH_DATA_DIR = "";
-    expect(getExactDataDir()).toBeUndefined();
-    expect(getDataDir()).toBe(join(home, ".hasna", "dispatch"));
+    expect(dispatchDataDir()).toBe(getDataDir());
   });
 
-  test("default run never creates the resolver (XDG) data dir", () => {
+  test("daemon side files follow the effective data dir", () => {
     const home = isolateHome();
-    // getDataDir() is a pure resolver: it must not create either home.
-    getDataDir();
-    expect(existsSync(join(home, ".hasna", "dispatch"))).toBe(false);
-    expect(existsSync(join(home, ".local", "share", "hasna", "dispatch"))).toBe(false);
-  });
-
-  test("every sub-path resolves under the effective data dir", () => {
-    const home = isolateHome();
-    const root = getDataDir();
+    const root = dataDir({ app: "dispatch", home, env: process.env });
     expect(dbPath()).toBe(join(root, "dispatch.db"));
     expect(pidFilePath()).toBe(join(root, "daemon.pid"));
     expect(daemonLogPath()).toBe(join(root, "daemon.log"));
@@ -137,4 +126,5 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     expect(daemonPidLockPath()).toBe(join(root, "daemon.pid.lock"));
     expect(artifactsDir()).toBe(join(root, "artifacts"));
   });
+
 });

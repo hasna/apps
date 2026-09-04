@@ -56,8 +56,8 @@ describe("cross-checkout de-duplication", () => {
     // stores its own copy of PR #415.
     const paths = [
       "/home/user/workspace/codewith",
-      "/home/user/.hasna/repos/worktrees/codewith/a",
-      "/home/user/.hasna/repos/worktrees/codewith/b",
+      join("/home/user", ".hasna", "repos", "worktrees", "codewith", "a"),
+      join("/home/user", ".hasna", "repos", "worktrees", "codewith", "b"),
     ];
     for (const path of paths) {
       const repo = upsertRepo({ path, name: path.split("/").pop()!, org: "hasna", remote_url: "github.com/hasna/codewith" });
@@ -76,8 +76,8 @@ describe("cross-checkout de-duplication", () => {
     // explicit rank term the final `id DESC` tiebreak always selects one —
     // pointing callers at another task's working directory.
     const primary = upsertRepo({ path: "/home/u/workspace/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
-    const wtA = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/codewith/task-a", name: "task-a", org: "hasna", remote_url: "github.com/hasna/codewith" });
-    const wtB = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/station01/codewith/task-b", name: "task-b", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const wtA = upsertRepo({ path: join("/home/u", ".hasna", "repos", "worktrees", "codewith", "task-a"), name: "task-a", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const wtB = upsertRepo({ path: join("/home/u", ".hasna", "repos", "worktrees", "station01", "codewith", "task-b"), name: "task-b", org: "hasna", remote_url: "github.com/hasna/codewith" });
     const shm = upsertRepo({ path: "/dev/shm/build-20260710/repos/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
     // Identical timestamps, exactly as one fan-out sync writes them.
     for (const id of [primary.id, wtA.id, wtB.id, shm.id]) {
@@ -135,12 +135,12 @@ describe("cross-checkout de-duplication", () => {
   });
 
   it("falls back to a worktree only when no primary clone holds the PR", () => {
-    const wt = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/codewith/only", name: "only", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const wt = upsertRepo({ path: join("/home/u", ".hasna", "repos", "worktrees", "codewith", "only"), name: "only", org: "hasna", remote_url: "github.com/hasna/codewith" });
     bulkInsertPullRequests([pr({ repo_id: wt.id, number: 7 })]);
 
     const rows = listPullRequestsWithRepo({ state: "open" });
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.repo_path).toBe("/home/u/.hasna/repos/worktrees/codewith/only");
+    expect(rows[0]!.repo_path).toBe(join("/home/u", ".hasna", "repos", "worktrees", "codewith", "only"));
   });
 
   it("resolves an equal-timestamp state disagreement the same way regardless of which copy is a worktree", () => {
@@ -175,7 +175,7 @@ describe("cross-checkout de-duplication", () => {
     // Path preference ranks below freshness: a stale primary must not beat a
     // worktree that actually saw the merge.
     const primary = upsertRepo({ path: "/home/u/workspace/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
-    const wt = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/codewith/fresh", name: "fresh", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const wt = upsertRepo({ path: join("/home/u", ".hasna", "repos", "worktrees", "codewith", "fresh"), name: "fresh", org: "hasna", remote_url: "github.com/hasna/codewith" });
     bulkInsertPullRequests([
       pr({ repo_id: primary.id, number: 8, state: "open", updated_at: "2026-07-01T00:00:00Z" }),
       pr({ repo_id: wt.id, number: 8, state: "merged", merged_at: "2026-07-20T00:00:00Z", updated_at: "2026-07-20T00:00:00Z" }),
@@ -409,7 +409,7 @@ describe("deterministic repo targeting", () => {
   });
 
   it("prefers the real checkout over worktree copies of the same remote", () => {
-    upsertRepo({ path: "/home/u/.hasna/repos/worktrees/codewith/a", name: "a", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    upsertRepo({ path: join("/home/u", ".hasna", "repos", "worktrees", "codewith", "a"), name: "a", org: "hasna", remote_url: "github.com/hasna/codewith" });
     upsertRepo({ path: "/home/u/workspace/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
     upsertRepo({ path: "/dev/shm/build/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
 
@@ -463,15 +463,15 @@ describe("a foreign clone is never the answer for a remote (todos c0ac7e9b)", ()
     // repo's object store — it is another view of the same clone, not a stale
     // copy of it — so beating a hollow primary is correct and must keep working.
     upsertRepo({ path: "/w/open-thing", name: "open-thing", org: "hasna", remote_url: "github.com/hasna/thing" });
-    upsertRepo({ path: "/home/u/.hasna/repos/worktrees/thing/pr1", name: "pr1", org: "hasna", remote_url: "github.com/hasna/thing" });
+    upsertRepo({ path: join("/home/u", ".hasna", "repos", "worktrees", "thing", "pr1"), name: "pr1", org: "hasna", remote_url: "github.com/hasna/thing" });
 
     expect(getRepoByRemote("hasna/thing", hollowCanonicalLiveWorktree)!.path)
-      .toBe("/home/u/.hasna/repos/worktrees/thing/pr1");
+      .toBe(join("/home/u", ".hasna", "repos", "worktrees", "thing", "pr1"));
   });
 
   it("still resolves a healthy canonical checkout past both a worktree and a mirror", () => {
     upsertRepo({ path: "/w/loops", name: "loops", org: "hasna", remote_url: "github.com/hasna/loops" });
-    upsertRepo({ path: "/home/u/.hasna/repos/worktrees/loops/pr1", name: "pr1", org: "hasna", remote_url: "github.com/hasna/loops" });
+    upsertRepo({ path: join("/home/u", ".hasna", "repos", "worktrees", "loops", "pr1"), name: "pr1", org: "hasna", remote_url: "github.com/hasna/loops" });
     upsertRepo({ path: "/w/_factory_src/loops", name: "loops", org: "hasna", remote_url: "github.com/hasna/loops" });
 
     expect(getRepoByRemote("hasna/loops", { isUsableCheckout: () => true })!.path).toBe("/w/loops");
@@ -499,8 +499,8 @@ describe("a foreign clone is never the answer for a remote (todos c0ac7e9b)", ()
     expect(isForeignCheckoutPath("/home/u/workspace/hasna/opensource/_factory_src/loops")).toBe(true);
     expect(isForeignCheckoutPath("/DEV/SHM/build/codewith")).toBe(true);
     // A worktree is derived but NOT foreign — that gap is the whole fix.
-    expect(isForeignCheckoutPath("/home/u/.hasna/repos/worktrees/codewith/a")).toBe(false);
-    expect(isDerivedCheckoutPath("/home/u/.hasna/repos/worktrees/codewith/a")).toBe(true);
+    expect(isForeignCheckoutPath(join("/home/u", ".hasna", "repos", "worktrees", "codewith", "a"))).toBe(false);
+    expect(isDerivedCheckoutPath(join("/home/u", ".hasna", "repos", "worktrees", "codewith", "a"))).toBe(true);
     expect(isForeignCheckoutPath("/home/u/workspace/codewith")).toBe(false);
     expect(isForeignCheckoutPath("/home/u/workspace/_factory_srcish/loops")).toBe(false);
   });

@@ -12,7 +12,7 @@ function baseConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConf
     },
     storage: {
       backend: "local",
-      localDir: "~/.hasna/attachments/objects",
+      localDir: "/tmp/attachments-objects",
       maxSizeBytes: 10 * 1024 * 1024 * 1024,
     },
     server: {

@@ -1,203 +1,62 @@
 /**
- * App-home resolution for @hasna/hooks — routes the local data root through
- * the @hasna/paths resolver (XDG / macOS home layout) with gated legacy
- * adoption.
- *
- * The XDG home migration (hotfixes plan 0f49f56a, task P3.3) moves the store
- * from `~/.hasna/hooks` toward `~/.local/share/hasna/hooks` on Linux and
- * `~/Library/Application Support/Hasna/hooks` on macOS. Nothing moves on disk
- * in this phase — the resolver root is adopted only when the operator has
- * deliberately opted in (`HASNA_DATA_HOME`) or the store has already been
- * physically migrated there, so a live store at the legacy home never becomes
- * invisible on upgrade.
+ * hooks data-root resolution — thin app wrapper over the single paths
+ * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
+ * platform placement (`the hooks data root` on macOS, XDG data root on Linux)
+ * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
+ * layers the hooks-specific exact-app override on top.
  */
-
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-// --- Local path resolver -------------------------------------------------
-// @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
-import { homedir as pathsResolverHomedir } from "node:os";
-import { join as pathsResolverJoin } from "node:path";
-
-export type PathKind = "config" | "data" | "state" | "cache";
-
-const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
-};
-
-export interface PathsResolverOptions {
-  app: string;
-  internal?: boolean;
-  platform?: string;
-  home?: string;
-  env?: Record<string, string | undefined>;
-}
-
-const PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function pathsResolverAssertApp(app: string): void {
-  if (typeof app !== "string" || app.length === 0) {
-    throw new TypeError("paths: app must be a non-empty string");
-  }
-  if (!PATHS_RESOLVER_APP_SLUG_RE.test(app)) {
-    throw new TypeError(
-      `paths: invalid app slug "${app}" — expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`,
-    );
-  }
-}
-
-function pathsResolverAssertKind(kind: PathKind): void {
-  if (!(Object.keys(PATHS_RESOLVER_KIND_ENV) as string[]).includes(kind)) {
-    throw new TypeError(
-      `paths: invalid path kind "${kind}" — expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`,
-    );
-  }
-}
-
-function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertKind(kind);
-  const env: Record<string, string | undefined> = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
-  if (typeof override === "string" && override.length > 0) return override;
-  const home = options.home ?? pathsResolverHomedir();
-  const platform = options.platform ?? process.platform;
-  if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
-  }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
-}
-
-function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertApp(options.app);
-  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
-export function dataDir(options: PathsResolverOptions): string {
-  return pathsResolverResolve("data", options);
-}
-
-/** The store DB file whose presence at a root marks it as the live store. */
-const STORE_MARKER = "hooks.db";
+import { resolve } from "node:path";
+import { join } from "node:path";
+import { dataDir as resolverDataDir, effectiveHome as resolveEffectiveHome } from "@hasna/contracts/paths";
 
 /** Resolve the user's home directory: $HOME, then $USERPROFILE, then the OS user database. */
-export function getHomeDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.HOME || env.USERPROFILE || homedir();
+export const getHomeDir = resolveEffectiveHome;
+
+/**
+ * The resolver hooks data root: kind overrides honored,
+ * `the hooks data root` on macOS, `~/.local/share/hasna/hooks` on Linux.
+ */
+export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return resolverDataDir({ app: "hooks", home: getHomeDir(env), env, });
 }
 
 /**
- * The @hasna/paths-resolved (XDG / macOS layout) data root for hooks: the
- * forward-looking home the XDG migration moves the store toward. The home
- * override mirrors the pre-existing $HOME-first resolution so the resolver
- * follows the same home the legacy path does.
+ * The pre-ruling legacy root (`the hooks data root`). On macOS this equals the
+ * resolver root; elsewhere it is kept only for historical-data migration.
  */
-export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return dataDir({ app: "hooks", home: getHomeDir(env), env });
-}
-
-/** The legacy (pre-XDG) data root: ~/.hasna/hooks */
 export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(getHomeDir(env), ".hasna", "hooks");
 }
 
-/**
- * Whether the resolver (XDG) data root should be adopted as the effective data
- * root. The resolver root is adopted only when the operator has set
- * `HASNA_DATA_HOME` (the data-kind override — a deliberate opt-in to the XDG
- * layout) or the store has already been physically migrated there (`hooks.db`
- * exists). A machine that only redirects another kind (e.g. cache to tmpfs)
- * must NOT have its data home moved, and a live store at the legacy home must
- * never become invisible on upgrade.
- */
-export function adoptResolverDataRoot(
-  resolved: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const dataOverride = env.HASNA_DATA_HOME;
-  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
-  return existsSync(join(resolved, STORE_MARKER));
-}
-
-/**
- * The granular data-dir override root, when set: `HASNA_HOOKS_DATA_DIR`, then
- * `HOOKS_DATA_DIR`. This preserves the pre-existing exact-data-dir override
- * behavior verbatim (first-nonblank; a set-but-empty value falls through).
- */
 export function getExplicitDataDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const dir = env.HASNA_HOOKS_DATA_DIR ?? env.HOOKS_DATA_DIR;
   if (typeof dir === "string" && dir.trim().length > 0) return dir.trim();
   return undefined;
 }
-
-/**
- * The exact-app override root, when set: `HASNA_HOOKS_HOME`, then `HOOKS_HOME`.
- * First-nonblank selection: a set-but-whitespace override must not suppress a
- * valid fallback (the same `?.trim() ||` semantics the emails lane settled as
- * release-review P1).
- */
 export function getExactDataRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const dir = env.HASNA_HOOKS_HOME?.trim() || env.HOOKS_HOME?.trim();
   if (dir) return resolve(dir);
   return undefined;
 }
-
-/**
- * The effective data root for hooks. Precedence: the granular data-dir
- * override (`HASNA_HOOKS_DATA_DIR`/`HOOKS_DATA_DIR`) wins; then the exact-app
- * override (`HASNA_HOOKS_HOME`/`HOOKS_HOME`); then the resolver (XDG) data
- * root once adopted; then the legacy `~/.hasna/hooks` default — a live store
- * never becomes invisible on upgrade. Store/lock/config paths are layered on
- * top of this by their own overrides, so an explicit path always wins
- * regardless.
- */
-export function getEffectiveDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = getExplicitDataDir(env);
-  if (explicit) return explicit;
-  const exact = getExactDataRoot(env);
-  if (exact) return exact;
-  const resolved = getResolverDataRoot(env);
-  return adoptResolverDataRoot(resolved, env) ? resolve(resolved) : getLegacyDataRoot(env);
-}
-
-/**
- * The SQLite store path surfaced by help/status surfaces (e.g. `hooks log`,
- * registry hook descriptions). The explicit `HASNA_HOOKS_DB_PATH` /
- * `HOOKS_DB_PATH` override wins; otherwise `hooks.db` under the effective data
- * root. A status surface must never hardcode the legacy literal — the store can
- * live at the resolver home once adopted.
- */
-export function getReportedDbPath(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = getExplicitDbPath(env);
-  if (explicit) return explicit;
-  return join(getEffectiveDataRoot(env), "hooks.db");
-}
-
-/** The explicit DB-path override, when set: `HASNA_HOOKS_DB_PATH`, then `HOOKS_DB_PATH`. */
 function getExplicitDbPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const db = env.HASNA_HOOKS_DB_PATH ?? env.HOOKS_DB_PATH;
   if (typeof db === "string" && db.trim().length > 0) return db.trim();
   return undefined;
+}
+
+/**
+ * The effective hooks data root: an exact-app override wins
+ * unconditionally; otherwise the resolver data root (ruling #1668 — the
+ * resolver root IS the convention on every platform).
+ */
+export function getEffectiveDataRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const exact = getExplicitDataDir(env);
+  if (exact) return exact;
+  return resolve(getResolverDataRoot(env));
+}
+
+export function getReportedDbPath(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = getExplicitDbPath(env);
+  if (explicit) return explicit;
+  return join(getEffectiveDataRoot(env), "hooks.db");
 }

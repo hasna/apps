@@ -1,6 +1,8 @@
 import { afterEach, describe, mock, test, expect } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
+import { homedir } from "node:os";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 import { connectorsHome } from "./paths.js";
 import {
   getConnectorCliPath,
@@ -218,7 +220,7 @@ describe("Runner", () => {
       expect(result.success).toBe(true);
       const data = JSON.parse(result.stdout);
       expect(data.profile).toBeDefined();
-      expect(data.configDir).toContain(".hasna/connectors/stripe");
+      expect(data.configDir).toContain(resolverDataDir({ app: "connectors", home: homedir() }));
     });
 
     test("runs imessage internal runtime for message send", async () => {
