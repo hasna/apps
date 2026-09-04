@@ -133,3 +133,47 @@ All three are fixed in this follow-up; tenant enforcement is NOT fixed.
 Events integration, explicit db-migrate and legacy data remain untouched.
 Tenant semantics, unpublished shared Contracts and package-wide gaps still
 block release/deployment approval. This follow-up requires exact-commit review.
+
+## Reserved-name envelope repair (2026-09-02)
+
+- Owner: calendar_tenant_repair; registered commit trailer: fixer.
+- Verified base: current PR #1489 head
+  `fbb860631e0e94173103e5a664a07e06013ee2ee`; no Calendar implementation overlap
+  beyond that draft. PR #459 remains separate manifest/artifact work.
+- Branch: `codex/fixer/2026-09-02-calendar-tenant-envelope-repair`.
+- Worktree: `/Users/hasna/Workspace/50-repositories/_worktrees/hasna/apps/calendar-tenant-envelope-repair`.
+  The canonical clone and prior agents' worktrees were not edited.
+- Exact-head reproduction confirmed genuine event search/conflict envelopes
+  already worked. The remaining bug was applying their reserved path names to
+  every resource and method: org slugs and agent names `search`/`conflicts`
+  failed normal read/heartbeat validation; writes named `conflicts` also used
+  the wrong envelope. Special shapes now apply only to event GET operations.
+- Regression-first new suite: `1 pass / 3 fail` before the fix. Afterward,
+  the focused new, SDK and review suites report `11 pass / 0 fail`,
+  `271 expect() calls`. Coverage includes domain and SDK org/agent names,
+  heartbeat, update/delete/absence, empty/nonempty genuine event queries,
+  malformed shapes, prefixed/unprefixed paths and all 33 generated SDK verbs.
+- Bun 1.3.14 frozen install with scripts disabled, typecheck and build pass.
+  Uncached affected build against the exact PR base: `1 successful, 1 total`,
+  with only `@hasna/calendar` in scope.
+  The install's sole tracked side effect (Contracts CLI executable mode) was
+  restored to its exact prior mode; no unrelated tracked diff remains.
+- Full Calendar result: `243 pass / 12 skip / 3 fail`, `985 expect() calls`.
+  The same three unmodified legacy path cases fail: home database discovery
+  and two `/var` versus `/private/var` path comparisons. Twelve real-PostgreSQL
+  cases remain unconfigured; the two passing tenancy exposure characterizations
+  are evidence of unsafe behavior, NOT passing tenant-isolation gates.
+- Root names and dependency direction pass. Manifests report `54/74` conform,
+  `20 recorded exceptions`, `0 refusal(s)`; the released validator still rejects
+  Calendar's PostgreSQL-only manifest. Root check was stopped with exit 143
+  after unrelated Attachments `mapfile` and Connectors `vite` prepack failures.
+  Calendar's individual dry-run scan reached `76 tarball entries, 76 contents
+  scanned, 0 internal-infra strings`; the aggregate check did not pass.
+- No tenant/authentication/query/schema behavior changed. Shared source requires
+  issuer-tenant-to-service-org resolution but supplies no Calendar provisioning,
+  global-agent, membership or administrative policy. See `TENANCY-GAP.md` for
+  the exact evidence and proposed owner contract choices. No mapping was guessed.
+
+No merge, publication, deployment, cloud change, data migration or station02
+operation was performed. Independent exact-commit review is required before
+pushing this follow-up; package-wide release blockers remain unchanged.
