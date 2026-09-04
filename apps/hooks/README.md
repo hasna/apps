@@ -187,7 +187,7 @@ the data layer, so it is no longer expressed as one.
 
 ## Runtime model
 
-This package is an npm CLI, MCP server, and static dashboard package. Installing
+This package is an npm CLI and MCP server. Installing
 and running hooks needs nothing deployed anywhere — the SQLite backend is the
 default and requires no server.
 
