@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily, upsertUsageSnapshot, upsertCostCenter } from '../db/database.js'
-import { createHandler, createServerFetch, startServer } from './serve.js'
+import { createHandler, startServer } from './serve.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
@@ -1067,62 +1067,18 @@ describe('REST API server', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
   })
 
-  it('serves dashboard assets, SPA fallback, and blocks path traversal', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'economy-dashboard-static-'))
-    roots.push(root)
-    const dashboardDir = join(root, 'dist')
-    mkdirSync(join(dashboardDir, 'assets'), { recursive: true })
-    writeFileSync(join(dashboardDir, 'index.html'), '<html>dashboard shell</html>')
-    writeFileSync(join(dashboardDir, 'assets', 'app.js'), 'console.log("asset")')
-    writeFileSync(join(root, 'secret.txt'), 'should not leak')
+  it('returns 404 for unknown non-API routes', async () => {
+    const root = new Request('http://localhost:3456/')
+    expect((await handler(root)).status).toBe(404)
 
-    const fetch = createServerFetch(async request => {
-      return new Response(JSON.stringify({ error: new URL(request.url).pathname }), { status: 404 })
-    }, dashboardDir)
-
-    let response = await fetch(new Request('http://localhost:3456/'))
-    expect(response.status).toBe(200)
-    expect(await response.text()).toContain('dashboard shell')
-
-    response = await fetch(new Request('http://localhost:3456/assets/app.js'))
-    expect(response.status).toBe(200)
-    expect(await response.text()).toContain('asset')
-
-    response = await fetch(new Request('http://localhost:3456/settings/budgets'))
-    expect(response.status).toBe(200)
-    expect(await response.text()).toContain('dashboard shell')
-
-    response = await fetch(new Request('http://localhost:3456/%2e%2e%2fsecret.txt'))
-    expect(response.status).toBe(200)
-    expect(await response.text()).not.toContain('should not leak')
-
-    response = await fetch(new Request('http://localhost:3456/%E0%A4%A'))
-    expect(response.status).toBe(200)
-    expect(await response.text()).toContain('dashboard shell')
-  })
-
-  it('delegates non-API routes to the API handler when dashboard assets are missing', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'economy-missing-dashboard-'))
-    roots.push(root)
-    const fetch = createServerFetch(async request => {
-      return new Response(JSON.stringify({ path: new URL(request.url).pathname }), {
-        status: 418,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }, join(root, 'missing-dashboard'))
-
-    const response = await fetch(new Request('http://localhost:3456/settings/budgets'))
-
-    expect(response.status).toBe(418)
-    expect(await response.json()).toEqual({ path: '/settings/budgets' })
+    const settings = await handler(new Request('http://localhost:3456/settings/budgets'))
+    expect(settings.status).toBe(404)
+    expect((await settings.json() as Record<string, unknown>)['error']).toBeDefined()
   })
 
   it('startServer returns a stoppable server bound to all interfaces', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'economy-start-server-'))
-    roots.push(root)
     const server = startServer(0, {
       db,
-      dashboardDir: join(root, 'missing-dashboard'),
       log: () => {},
     })
 

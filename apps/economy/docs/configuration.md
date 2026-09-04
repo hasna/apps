@@ -60,8 +60,6 @@ economy-serve --port 3456
 
 Without a local token, the current server defaults to `0.0.0.0` and API routes are unauthenticated. Set a token and an intentional bind address before exposing a local-mode server to another host.
 
-The server serves `dashboard/dist` and falls back to its `index.html` for non-API paths when those assets exist.
-
 ## Self-hosted server
 
 The server backend follows the database URL alone — `postgresql` when one of these is set, `sqlite` when none is:

@@ -18,9 +18,6 @@ jobs:
           bun-version: 1.3.13
       - name: Install root dependencies
         run: bun install
-      - name: Install dashboard dependencies
-        working-directory: dashboard
-        run: bun install
       - name: Install SDK dependencies
         working-directory: sdk
         run: bun install
@@ -33,12 +30,6 @@ jobs:
         run: |
           bun run typecheck
           bun test
-      - name: Dashboard lint
-        working-directory: dashboard
-        run: bun run lint
-      - name: Dashboard test
-        working-directory: dashboard
-        run: bun test
       - name: Build
         run: bun run build
       - name: SDK build

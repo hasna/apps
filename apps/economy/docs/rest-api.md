@@ -2,7 +2,7 @@
 
 Start the service with `economy-serve` or `economy serve`. The default local origin is `http://127.0.0.1:3456`; the bind behavior is detailed in [configuration](configuration.md#rest-server).
 
-The canonical application prefix is `/v1`. Equivalent `/api` routes remain available for the bundled dashboard and older clients. Successful application responses use:
+The canonical application prefix is `/v1`. Equivalent `/api` routes remain available for older clients. Successful application responses use:
 
 ```json
 { "data": {}, "meta": {} }

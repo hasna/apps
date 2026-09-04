@@ -36,8 +36,6 @@ import { queryBillingDiff } from '../lib/billing-diff.js'
 import { queryUsageSnapshots } from '../db/database.js'
 import { isAuthorizedRequest } from '../lib/serve-auth.js'
 import { randomUUID } from 'crypto'
-import { existsSync } from 'fs'
-import { resolve, sep } from 'path'
 import { getServeBindHost } from '../lib/serve-auth.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { isPostgresBackend, resolveEconomyServerBackend, openCloudDatabase, resolveSigningSecret, createCloudPool, authClientFromPool } from '../db/cloud.js'
@@ -83,11 +81,9 @@ const APP = 'economy'
 const ECONOMY_WRITE_SCOPE = `${APP}:write`
 const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
 const SYNC_SOURCES = ['all', ...AGENTS, 'loops'] as const
-const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
 
 interface StartServerOptions {
   db?: Database
-  dashboardDir?: string
   hostname?: string
   log?: (message: string) => void
 }
@@ -149,49 +145,6 @@ function requiredScopesForRequest(method: string, path: string): readonly string
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-}
-
-function dashboardPath(root: string, pathname: string): string | null {
-  let decoded: string
-  try {
-    decoded = decodeURIComponent(pathname)
-  } catch {
-    return null
-  }
-
-  const relativePath = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '')
-  const rootPath = resolve(root)
-  const filePath = resolve(rootPath, relativePath)
-  return filePath === rootPath || filePath.startsWith(rootPath + sep) ? filePath : null
-}
-
-const FOUNDATION_PATHS = new Set(['/health', '/healthz', '/ready', '/readyz', '/version', '/openapi.json'])
-
-export function createServerFetch(apiHandler: (req: Request) => Promise<Response>, dashboardDir = DEFAULT_DASHBOARD_DIR) {
-  return async function fetch(req: Request): Promise<Response> {
-    const url = new URL(req.url)
-
-    // API routes (legacy /api, versioned /v1, and the foundation probes)
-    if (url.pathname.startsWith('/api') || url.pathname.startsWith('/v1') || FOUNDATION_PATHS.has(url.pathname)) {
-      return apiHandler(req)
-    }
-
-    // Serve dashboard static files
-    if (existsSync(dashboardDir)) {
-      const filePath = dashboardPath(dashboardDir, url.pathname)
-      if (filePath && existsSync(filePath)) {
-        return new Response(Bun.file(filePath))
-      }
-
-      // SPA fallback — return index.html for any unmatched path
-      const indexPath = dashboardPath(dashboardDir, '/')
-      if (indexPath && existsSync(indexPath)) {
-        return new Response(Bun.file(indexPath))
-      }
-    }
-
-    return apiHandler(req)
-  }
 }
 
 /** Apply ?fields=f1,f2 filtering — reduces response size by 50-89% */
@@ -257,7 +210,7 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
       return err('Unauthorized', 401)
     }
 
-    // Legacy health alias (kept for the SPA/dashboard; foundation probe above)
+    // Legacy health alias (kept for older clients; foundation probe above)
     if (path === '/health') return ok({ status: 'ok', ts: new Date().toISOString() })
 
     // Summary
@@ -795,7 +748,7 @@ export function startServer(port = 3456, options: StartServerOptions = {}): Retu
   const server = Bun.serve({
     port,
     hostname,
-    fetch: createServerFetch(apiHandler, options.dashboardDir),
+    fetch: apiHandler,
   })
   const address = `http://${hostname === '0.0.0.0' ? 'localhost' : hostname}:${server.port}`
   log(`economy-serve listening on ${address}`)

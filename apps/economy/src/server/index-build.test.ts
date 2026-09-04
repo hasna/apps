@@ -6,10 +6,10 @@ import { join } from 'path'
 const repoRoot = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 
 describe('economy-serve build artifact', () => {
-  test('publishes built dashboard assets used by the server', () => {
+  test('no longer ships the bundled dashboard assets', () => {
     const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as { files?: string[] }
 
-    expect(manifest.files).toContain('dashboard/dist')
+    expect(manifest.files).not.toContain('dashboard/dist')
   })
 
   test('preserves the bun shebang in the built entrypoint', async () => {

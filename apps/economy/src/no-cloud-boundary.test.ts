@@ -60,7 +60,7 @@ const SOURCE_EXTENSIONS = /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/
  */
 function scanRoots(): string[] {
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as { files?: string[] }
-  const roots = new Set<string>([...(pkg.files ?? []), 'src', 'scripts', 'sdk', 'dashboard/src'])
+  const roots = new Set<string>([...(pkg.files ?? []), 'src', 'scripts', 'sdk'])
   return [...roots]
     .map((entry) => join(repoRoot, entry.replace(/\/+$/, '')))
     .filter((path) => existsSync(path) && statSync(path).isDirectory())

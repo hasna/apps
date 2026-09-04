@@ -5,8 +5,6 @@ dist/
 *.db-shm
 *.db-wal
 .takumi/
-dashboard/node_modules/
-dashboard/dist/
 sdk/node_modules/
 sdk/dist/
 menubar/.build/

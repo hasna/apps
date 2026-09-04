@@ -20,5 +20,5 @@
     "types": ["bun-types"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "dashboard", "sdk", "menubar"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "sdk", "menubar"]
 }
