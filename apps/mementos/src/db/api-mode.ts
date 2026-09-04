@@ -57,24 +57,24 @@ export const API_URL_ENV_KEYS = ["HASNA_MEMENTOS_API_URL", "MEMENTOS_API_URL"] a
 export const API_KEY_ENV_KEYS = ["HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_KEY"] as const;
 export const DATABASE_URL_ENV_KEYS = ["HASNA_MEMENTOS_DATABASE_URL", "MEMENTOS_DATABASE_URL"] as const;
 
-function firstEnv(keys: readonly string[]): string | undefined {
+function firstEnv(keys: readonly string[], env: NodeJS.ProcessEnv = process.env): string | undefined {
   for (const k of keys) {
-    const v = process.env[k]?.trim();
+    const v = env[k]?.trim();
     if (v) return v;
   }
   return undefined;
 }
 
 /** The env key that supplied a value, or `null`. Never returns the value. */
-function firstEnvKey(keys: readonly string[]): string | null {
+function firstEnvKey(keys: readonly string[], env: NodeJS.ProcessEnv = process.env): string | null {
   for (const k of keys) {
-    if (process.env[k]?.trim()) return k;
+    if (env[k]?.trim()) return k;
   }
   return null;
 }
 
-function hasDatabaseUrl(): boolean {
-  return Boolean(firstEnv(DATABASE_URL_ENV_KEYS));
+function hasDatabaseUrl(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(firstEnv(DATABASE_URL_ENV_KEYS, env));
 }
 
 /**
@@ -225,7 +225,12 @@ export class MementosStoreConfigError extends Error {
  *     on a client is forbidden and is tracked separately in database.ts.
  *  3. Both API URL and API key present -> API mode.
  *  4. Exactly ONE of them present -> ERROR naming the missing variable.
- *  5. Neither present -> LOCAL. The documented single-operator default.
+ *  5. Neither present -> no transport selected. This used to resolve to LOCAL
+ *     (the "documented single-operator default"); since the 2026-09-04 fail-closed
+ *     ruling a client that needs the store REFUSES instead — an explicit
+ *     DB_PATH (step 1) is now the only way into the on-box SQLite store, and
+ *     `assertClientStoreConfigured()` (below) enforces that at every entry point
+ *     that would otherwise open the default local file.
  *
  * Never reads, logs, or embeds a credential value — only variable NAMES.
  */
@@ -237,11 +242,11 @@ export function assertUnambiguousStoreEnv(env: NodeJS.ProcessEnv = process.env):
   // 1. Explicit local path: unambiguous, so there is no error to raise. The
   // SELECTION itself happens in getApiConfig(); this return only skips the
   // half-configured check below, which would otherwise fire on a stray API URL.
-  if (firstEnvKey(DB_PATH_ENV_KEYS)) return;
-  if (hasDatabaseUrl()) return; // 2. unchanged DSN behaviour
+  if (firstEnvKey(DB_PATH_ENV_KEYS, env)) return;
+  if (hasDatabaseUrl(env)) return; // 2. unchanged DSN behaviour
 
-  const urlKey = firstEnvKey(API_URL_ENV_KEYS);
-  const keyKey = firstEnvKey(API_KEY_ENV_KEYS);
+  const urlKey = firstEnvKey(API_URL_ENV_KEYS, env);
+  const keyKey = firstEnvKey(API_KEY_ENV_KEYS, env);
 
   if (urlKey && !keyKey) {
     throw new MementosStoreConfigError(
@@ -259,6 +264,51 @@ export function assertUnambiguousStoreEnv(env: NodeJS.ProcessEnv = process.env):
         `use the on-box SQLite store, unset ${keyKey} or set ${DB_PATH_ENV_KEYS[0]} explicitly.`,
     );
   }
+}
+
+/**
+ * FAIL-CLOSED store gate (owner ruling 2026-09-04, fleet fail-closed wave).
+ *
+ * The transport rules above answer "which store is configured?" and treat
+ * "none" as a question, not an answer: `isApiMode()` returns false and
+ * `getApiConfig()` returns null, and every domain call site reads that as
+ * "open the local store". That was the defect: a fleet CLI run WITHOUT its API
+ * env (`HASNA_MEMENTOS_API_URL` + `HASNA_MEMENTOS_API_KEY`, aliases
+ * `MEMENTOS_API_URL` / `MEMENTOS_API_KEY`) silently opened the default on-box
+ * SQLite store (~/.hasna/mementos/mementos.db), served it as if it were the
+ * memory store, and exited 0 — a false green against a different dataset.
+ *
+ * This function is the guard every store-access entry point calls BEFORE it
+ * may open the default local file (CLI command startup, `getDatabase()`
+ * default-path fallthrough, ...). It throws unless one of these is true:
+ *
+ *   - the retired storage-mode ratchet / half-an-API-pair errors above apply
+ *     first (assertUnambiguousStoreEnv), or
+ *   - an explicit SQLite path is set (`HASNA_MEMENTOS_DB_PATH` /
+ *     `MEMENTOS_DB_PATH`) — the documented EXPLICIT LOCAL OPT-IN, or
+ *   - a client DSN is present (its own server-only guard already fails closed
+ *     in getDatabase; the DSN tier is untouched here), or
+ *   - BOTH API URL and API key are present (fleet API mode).
+ *
+ * Anything else — no API env, no opt-in — is a REFUSAL, never a local default.
+ * Never reads, logs, or embeds a credential value — only variable NAMES.
+ */
+export function assertClientStoreConfigured(env: NodeJS.ProcessEnv = process.env): void {
+  // Retired storage-mode vars, an explicit local path, a DSN, and a half API
+  // pair are all handled by the ambiguity resolver (steps 0–2 return early,
+  // step 4 throws). Only the unconfigured case reaches the refusal below.
+  assertUnambiguousStoreEnv(env);
+  if (firstEnvKey(DB_PATH_ENV_KEYS, env)) return; // explicit local opt-in
+  if (hasDatabaseUrl(env)) return; // client DSN — fails closed in its own guard
+  if (firstEnv(API_URL_ENV_KEYS, env) && firstEnv(API_KEY_ENV_KEYS, env)) return; // fleet API mode
+  throw new MementosStoreConfigError(
+    "mementos is not configured to reach any memory store, and will NOT fall back to the " +
+      "on-box SQLite store (~/.hasna/mementos/mementos.db). Set " +
+      `${API_URL_ENV_KEYS[0]} and ${API_KEY_ENV_KEYS[0]} (aliases ` +
+      `${API_URL_ENV_KEYS[1]} and ${API_KEY_ENV_KEYS[1]} are accepted) to use the fleet memory ` +
+      `API, or opt into an explicit local SQLite file with ${DB_PATH_ENV_KEYS[0]} / ` +
+      `${DB_PATH_ENV_KEYS[1]}.`,
+  );
 }
 
 export function getApiConfig(): ApiConfig | null {

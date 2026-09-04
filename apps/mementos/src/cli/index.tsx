@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import chalk from "chalk";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { assertClientStoreConfigured } from "../db/api-mode.js";
 import { getDatabase } from "../db/database.js";
 import { getPrimaryMachineStartupWarning } from "../db/machines.js";
 import { skipsStartupDbAccess } from "./startup-side-effects.js";
@@ -75,6 +77,19 @@ program.hook("preAction", (_thisCommand, actionCommand) => {
   // Diagnostic commands opt out: opening the database here would create and
   // migrate the very file a side-effect-free probe only means to report on.
   if (skipsStartupDbAccess(actionCommand)) return;
+  // FAIL-CLOSED (owner ruling 2026-09-04, fleet fail-closed wave): a command
+  // that may touch the store must never silently run against the default
+  // on-box SQLite file. With no fleet API env (HASNA_MEMENTOS_API_URL +
+  // HASNA_MEMENTOS_API_KEY, aliases accepted) and no explicit DB_PATH there is
+  // no store to serve: exit non-zero naming the required env, and create
+  // nothing. `storage mode` opts out above so the operator can still ask which
+  // store the environment selects.
+  try {
+    assertClientStoreConfigured();
+  } catch (error) {
+    console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+    process.exit(1);
+  }
   if (startupWarningShown) return;
   startupWarningShown = true;
   try {

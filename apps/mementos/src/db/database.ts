@@ -5,7 +5,7 @@ import {
   getStorageConnectionString,
   isServerContext,
 } from "../storage.js";
-import { DB_PATH_ENV_KEYS, isApiMode } from "./api-mode.js";
+import { assertClientStoreConfigured, DB_PATH_ENV_KEYS, isApiMode } from "./api-mode.js";
 import { existsSync, mkdirSync, cpSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { MIGRATIONS } from "./migrations.js";
@@ -206,6 +206,18 @@ export function getDatabase(dbPath?: string): Database {
             "store (todos 57b8b8c5)."
         );
       }
+    }
+    // ── FAIL-CLOSED store gate (owner ruling 2026-09-04) ───────────────────
+    // Reaching the DEFAULT local path means: no explicit dbPath argument, no
+    // DB_PATH env key, no API pair, no client DSN. Until this ruling that
+    // configuration silently served ~/.hasna/mementos/mementos.db and exited 0 —
+    // a fleet CLI with no API env answered from a different, usually stale,
+    // dataset with a false green. A client process must never open the default
+    // on-box store without an explicit opt-in (DB_PATH). Server processes are
+    // exempt (they select their own backend) and test processes never get past
+    // the unpinned-test-open guard above.
+    if (process.env["NODE_ENV"] !== "test" && !isServerContext()) {
+      assertClientStoreConfigured();
     }
   }
 
