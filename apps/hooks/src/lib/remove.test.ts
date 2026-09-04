@@ -192,7 +192,8 @@ describe("uninstallHook — custom/registry/bundled/nonexistent (QA-1 BUG-A / QA
     expect(after).toContain("[[hooks.PreToolUse]]");
   });
 
-  test("store dir that cannot be removed keeps trust records intact (fail-closed, no fail-open)", () => {
+  // PRISTINE-MAIN PROBE 2026-09-04 (SA-issue-batch-B16): comment-only edit to force hooks tests on unmodified code.
+test("store dir that cannot be removed keeps trust records intact (fail-closed, no fail-open)", () => {
     const { dir } = writeCustomHookFixture("rm-frozen", "1.0.0");
     setPinnedHook("rm-frozen", { version: "1.0.0", sha256: "e".repeat(64), source: "custom" });
     const db = getDb();
