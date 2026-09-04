@@ -178,15 +178,34 @@ describe('probeKnowledgeAuth — live probe decoding', () => {
     }
   });
 
-  test('key without a hosted API transport: nothing is sent anywhere', async () => {
+  test('key under the explicit on-box opt-in: nothing is sent anywhere', async () => {
     const stub = startStub(200, { items: [], total: 0 });
     try {
+      // knowledgeTestEnv inherits the suite-wide HASNA_KNOWLEDGE_LOCAL=1
+      // opt-in (tests/preload.ts), so the client is on-box by explicit choice
+      // and a key must not be sent.
       const probe = await probeKnowledgeAuth(
         knowledgeTestEnv({ HASNA_KNOWLEDGE_API_KEY: REVOKED_SHAPE_KEY, NODE_ENV: 'test' }),
       );
       expect(probe).toMatchObject({ probed: false, verified: false, status: null, reason: null });
       // The principal is still surfaced so the operator sees WHICH key is inert.
       expect(probe.principal).toEqual({ kid: MINTED_KID, app: 'knowledge', agent: MINTED_AGENT, tid: MINTED_TID });
+      expect(stub.seen).toEqual([]);
+    } finally {
+      stub.stop();
+    }
+  });
+
+  test('a key with no hosted API config and no explicit on-box opt-in fails closed', async () => {
+    const stub = startStub(200, { items: [], total: 0 });
+    try {
+      // No process.env spread: neither HASNA_KNOWLEDGE_API_URL/KEY nor the
+      // suite's HASNA_KNOWLEDGE_LOCAL opt-in is present, so the transport
+      // resolver refuses and the probe surfaces the actionable env error
+      // instead of claiming anything was probed or served.
+      await expect(
+        probeKnowledgeAuth({ HASNA_KNOWLEDGE_API_KEY: REVOKED_SHAPE_KEY, NODE_ENV: 'test' }),
+      ).rejects.toThrow(/no hosted API configuration.*HASNA_KNOWLEDGE_API_URL.*HASNA_KNOWLEDGE_LOCAL/s);
       expect(stub.seen).toEqual([]);
     } finally {
       stub.stop();

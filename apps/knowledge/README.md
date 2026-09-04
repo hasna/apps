@@ -756,8 +756,10 @@ every path and the loaded config.
 knowledge transport [--json]
 ```
 Report whether this process uses the on-box SQLite store or the HTTP `/v1` API.
-`HASNA_KNOWLEDGE_API_URL` plus `HASNA_KNOWLEDGE_API_KEY` selects HTTP. Without
-the canonical API URL, the client uses SQLite. The unprefixed URL alias is not
+`HASNA_KNOWLEDGE_API_URL` plus `HASNA_KNOWLEDGE_API_KEY` selects HTTP.
+Without hosted API configuration, the CLI FAILS CLOSED rather than silently
+serving the on-box store: the on-box SQLite store is used only under the
+explicit opt-in `HASNA_KNOWLEDGE_LOCAL=1`. The unprefixed URL alias is not
 recognized.
 
 The command reads the environment only: no store is opened, no config file is

@@ -9,8 +9,11 @@
  *                        @hasna/contracts client transport.
  *
  * HASNA_KNOWLEDGE_API_URL plus HASNA_KNOWLEDGE_API_KEY selects the HTTP
- * transport; without the canonical URL the client stays on-box. An explicit
- * `--store` path override always pins to the on-box transport.
+ * transport. The on-box transport is NEVER the no-config default: without the
+ * canonical URL the resolver requires the explicit HASNA_KNOWLEDGE_LOCAL=1
+ * opt-in, and an explicit `--store` path override always pins to the on-box
+ * transport. With no hosted config and no explicit on-box choice the process
+ * fails closed (see client-transport.ts).
  *
  * EVERY knowledge-item CLI command routes through this Store. No item command
  * touches the JSON file or the HTTP client directly — that is the split-brain

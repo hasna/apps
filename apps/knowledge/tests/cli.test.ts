@@ -4075,7 +4075,7 @@ describe('Knowledge CLI transport selection', () => {
 
   function runCliWithCleanRoute(args: string[], env: Record<string, string>) {
     const inherited = { ...process.env } as Record<string, string>;
-    for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS]) {
+    for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS, 'HASNA_KNOWLEDGE_LOCAL']) {
       delete inherited[key];
     }
     return Bun.spawnSync(['bun', CLI, ...args], {
@@ -4102,10 +4102,34 @@ describe('Knowledge CLI transport selection', () => {
     expect(JSON.parse(decode(result.stdout))).toMatchObject({ ok: true, transport: 'http' });
   });
 
-  test('canonical API URL absent selects SQLite and exits zero', () => {
-    const result = runCliWithCleanRoute(['transport', '--json'], sandboxHome());
+  test('canonical API URL absent fails closed: non-zero, actionable error, no on-box store created', () => {
+    const home = mkdtempSync(join(tmpdir(), 'knowledge-transport-'));
+    const homeEnv = { HOME: home, USERPROFILE: home };
+    const result = runCliWithCleanRoute(['list', '--limit', '1', '--json'], homeEnv);
+    expect(result.exitCode).not.toBe(0);
+    // The fail-closed error names the required hosted env pair and the opt-in.
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).toContain('HASNA_KNOWLEDGE_API_URL');
+    expect(combined).toContain('HASNA_KNOWLEDGE_API_KEY');
+    expect(combined).toContain('HASNA_KNOWLEDGE_LOCAL');
+    // No false-green fallback notice may accompany the rejection.
+    expect(combined).not.toContain('knowledge-local-fallback');
+    // And no on-box store file was created under the sandbox home.
+    expect(existsSync(join(home, '.hasna', 'knowledge'))).toBe(false);
+  });
+
+  test('explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in selects SQLite and exits zero', () => {
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_LOCAL: '1',
+    });
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(decode(result.stdout))).toMatchObject({ ok: true, transport: 'sqlite' });
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({
+      ok: true,
+      transport: 'sqlite',
+      source: 'HASNA_KNOWLEDGE_LOCAL',
+      local_opt_in_present: true,
+    });
   });
 
   test('retired selector fails loudly and names both replacements', () => {

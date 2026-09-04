@@ -10,6 +10,7 @@ import { usesKnowledgeHttpTransport, KnowledgeVersionConflictError } from './htt
 import { diffEntries, formatEntryDiff, redactEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
+  KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_API_URL_ENV_KEYS,
   assertNoRetiredKnowledgeStorageSelector,
   resolveKnowledgeClientTransport,
@@ -601,9 +602,9 @@ function printCommandHelp(command: string): void {
   if (command === 'project-resources') { console.log('Usage: knowledge project-resources <project-id> [--kind <project|collection|item|taxonomy>]... [--limit <n>] [--cursor <cursor>] [--all] [--json]'); return; }
   if (command === 'project-resource') { console.log('Usage: knowledge project-resource <project-id> <project|collection|item|taxonomy> <resource-id> [--json]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
-  if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API.\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} presence selects HTTP and requires ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}.\n  Reads environment names and presence only; it never prints credential values.`); return; }
+  if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API.\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} plus ${KNOWLEDGE_API_KEY_ENV_KEYS[0]} selects HTTP; the on-box store is served only under the explicit opt-in HASNA_KNOWLEDGE_LOCAL=1.\n  With neither, the CLI fails closed instead of serving local data.\n  Reads environment names and presence only; it never prints credential values.`); return; }
   if (command === 'guarded') { console.log('Usage:\n  knowledge guarded capabilities [--json]\n  knowledge guarded execute-descriptor --ipc [--json]\n\n  execute-descriptor is an internal package-owned worker. Private requests and results use the\n  runtime-owned child-process IPC channel, never argv, stdin, environment variables, files, stdout,\n  or stderr. Direct shell invocation has no IPC channel and fails closed. Use the exported opaque-\n  descriptor helpers rather than invoking this worker directly from a shell.'); return; }
-  if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing is controlled only by HASNA_KNOWLEDGE_API_URL presence.'); return; }
+  if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing: HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY selects the server API; the on-box store requires HASNA_KNOWLEDGE_LOCAL=1. With neither, the CLI fails closed.'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|migrate-project-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]\n       migrate-project-path moves <cwd>/.hasna/knowledge into ~/.hasna/knowledge/projects/<key> (canonical); dry-run by default'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--verbose] [--json]'); return; }
@@ -670,9 +671,9 @@ function compactObjectFallback(data: unknown): string {
  */
 function formatTransport(report: KnowledgeClientTransportReport): string {
   const target = report.transport === 'http' ? 'HTTP /v1 API' : 'on-box SQLite';
-  const chose = report.source === 'default'
-    ? 'HASNA_KNOWLEDGE_API_URL is absent'
-    : 'selected by HASNA_KNOWLEDGE_API_URL presence';
+  const chose = report.source === KNOWLEDGE_API_URL_ENV
+    ? 'selected by HASNA_KNOWLEDGE_API_URL presence'
+    : 'selected by explicit on-box opt-in HASNA_KNOWLEDGE_LOCAL=1';
   const lines = [`Knowledge transport: ${report.transport} (${target})`, `  ${chose}`];
   if (report.network_guard_active) {
     lines.push('  Outbound guard: ACTIVE (NODE_ENV=test) — non-loopback requests are refused.');
@@ -1159,9 +1160,11 @@ async function run(argv: string[]): Promise<void> {
     }
   }
   // Single knowledge-item Store abstraction. The canonical API URL and key
-  // select the server HTTP API; without the URL the on-box JSON store is used.
-  // An explicit --store override pins to the on-box store. Every item command
-  // below routes through `itemStore` — never the JSON file or HTTP client directly.
+  // select the server HTTP API; the on-box store is served only under the
+  // explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in or an explicit --store override.
+  // With no hosted config and no explicit on-box choice this resolution
+  // throws and the CLI exits non-zero (fail closed). Every item command below
+  // routes through `itemStore` — never the JSON file or HTTP client directly.
   const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
 
   // Natural-language shorthand: when invoked as the `knowledge` bin, a prompt is

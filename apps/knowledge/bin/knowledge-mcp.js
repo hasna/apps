@@ -4683,7 +4683,7 @@ function assertOutboundRequestAllowed(input, env = process.env) {
   }
   if (isLoopbackHostname(url.hostname))
     return;
-  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process selected the HTTP API under test, which means a " + "read or write was about to leave the machine and reach the live store. Unset HASNA_KNOWLEDGE_API_URL " + "to use the on-box store, or point it at 127.0.0.1 for a hermetic test.", { scheme: url.protocol.replace(":", ""), port: url.port });
+  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process selected the HTTP API under test, which means a " + "read or write was about to leave the machine and reach the live store. Set " + "HASNA_KNOWLEDGE_LOCAL=1 to select the on-box store under test, or point HASNA_KNOWLEDGE_API_URL " + "at 127.0.0.1 for a hermetic test.", { scheme: url.protocol.replace(":", ""), port: url.port });
 }
 var REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 var MAX_GUARDED_REDIRECTS = 5;
@@ -4733,6 +4733,7 @@ var KNOWLEDGE_APP_SLUG = "knowledge";
 var KNOWLEDGE_API_URL_ENV = "HASNA_KNOWLEDGE_API_URL";
 var KNOWLEDGE_API_KEY_ENV = "HASNA_KNOWLEDGE_API_KEY";
 var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
+var KNOWLEDGE_LOCAL_ENV = "HASNA_KNOWLEDGE_LOCAL";
 var KNOWLEDGE_API_URL_ENV_KEYS = [KNOWLEDGE_API_URL_ENV];
 var KNOWLEDGE_API_KEY_ENV_KEYS = [KNOWLEDGE_API_KEY_ENV];
 var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
@@ -4758,7 +4759,7 @@ class RetiredKnowledgeStorageSelectorError extends Error {
   envKey;
   code = "retired_knowledge_storage_selector";
   constructor(envKey) {
-    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients select the HTTP API when ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} are set; ` + `without ${KNOWLEDGE_API_URL_ENV} they use local SQLite. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients select the HTTP API when ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} are set, ` + `or the on-box store under the explicit opt-in ${KNOWLEDGE_LOCAL_ENV}=1; ` + `with neither, they fail closed. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
     this.envKey = envKey;
     this.name = "RetiredKnowledgeStorageSelectorError";
   }
@@ -4768,36 +4769,23 @@ function assertNoRetiredKnowledgeStorageSelector(env = process.env) {
   if (retired)
     throw new RetiredKnowledgeStorageSelectorError(retired);
 }
-var knowledgeLocalFallbackNoticeEmitted = false;
-function emitKnowledgeLocalFallbackNotice(env) {
-  if (knowledgeLocalFallbackNoticeEmitted)
-    return;
-  knowledgeLocalFallbackNoticeEmitted = true;
-  const notice = {
-    event: "knowledge-local-fallback",
-    transport: "sqlite",
-    source: "default",
-    apiUrlPresent: isPresent(env, KNOWLEDGE_API_URL_ENV),
-    apiKeyPresent: isPresent(env, KNOWLEDGE_API_KEY_ENV),
-    notice: `No hosted API config (${KNOWLEDGE_API_URL_ENV} + ${KNOWLEDGE_API_KEY_ENV}) is present; ` + "using local SQLite. Hosted knowledge is NOT visible in this output."
-  };
-  console.error(JSON.stringify(notice));
-}
 function resolveKnowledgeClientTransport(env = process.env) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const apiUrlPresent = isPresent(env, KNOWLEDGE_API_URL_ENV);
   const apiKeyPresent = isPresent(env, KNOWLEDGE_API_KEY_ENV);
+  const localOptInPresent = isPresent(env, KNOWLEDGE_LOCAL_ENV);
   if (apiUrlPresent && !apiKeyPresent) {
-    throw new Error(`knowledge: ${KNOWLEDGE_API_URL_ENV} selects the HTTP API, but ${KNOWLEDGE_API_KEY_ENV} is missing. ` + `Set ${KNOWLEDGE_API_KEY_ENV}, or unset ${KNOWLEDGE_API_URL_ENV} to use local SQLite.`);
+    throw new Error(`knowledge: ${KNOWLEDGE_API_URL_ENV} selects the HTTP API, but ${KNOWLEDGE_API_KEY_ENV} is missing. ` + `Set ${KNOWLEDGE_API_KEY_ENV}, or unset ${KNOWLEDGE_API_URL_ENV} and set ${KNOWLEDGE_LOCAL_ENV}=1 ` + `to explicitly use the on-box store.`);
   }
-  if (!apiUrlPresent) {
-    emitKnowledgeLocalFallbackNotice(env);
+  if (!apiUrlPresent && !localOptInPresent) {
+    throw new Error(`knowledge: no hosted API configuration and no explicit on-box choice. ` + `Set ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} to use the server API, ` + `or set ${KNOWLEDGE_LOCAL_ENV}=1 to explicitly use the on-box store. ` + `Refusing to serve the on-box store without an explicit choice.`);
   }
   return {
     transport: apiUrlPresent ? "http" : "sqlite",
-    source: apiUrlPresent ? KNOWLEDGE_API_URL_ENV : "default",
+    source: apiUrlPresent ? KNOWLEDGE_API_URL_ENV : KNOWLEDGE_LOCAL_ENV,
     api_url_present: apiUrlPresent,
     api_key_present: apiKeyPresent,
+    local_opt_in_present: localOptInPresent,
     network_guard_active: isNetworkGuardActive(env)
   };
 }

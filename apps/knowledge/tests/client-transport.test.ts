@@ -2,8 +2,8 @@ import { describe, expect, spyOn, test } from 'bun:test';
 import {
   KNOWLEDGE_API_KEY_ENV,
   KNOWLEDGE_API_URL_ENV,
+  KNOWLEDGE_LOCAL_ENV,
   RetiredKnowledgeStorageSelectorError,
-  resetKnowledgeLocalFallbackNotice,
   resolveKnowledgeClientTransport,
 } from '../src/client-transport';
 
@@ -17,39 +17,96 @@ describe('Knowledge client transport', () => {
       source: KNOWLEDGE_API_URL_ENV,
       api_url_present: true,
       api_key_present: true,
+      local_opt_in_present: false,
     });
   });
 
-  test('canonical API URL absent selects on-box SQLite', () => {
-    expect(resolveKnowledgeClientTransport({})).toMatchObject({
-      transport: 'sqlite',
-      source: 'default',
-      api_url_present: false,
-    });
-  });
-
-  test('unprefixed URL alias does not select HTTP', () => {
+  test('the local opt-in never downgrades a live hosted configuration to on-box', () => {
+    // Owner directive 2026-09-04 fail-closed semantics: a stray
+    // HASNA_KNOWLEDGE_LOCAL in the operator shell must not silently send reads
+    // to the on-box store while HASNA_KNOWLEDGE_API_URL + KEY are exported —
+    // that silent downgrade is the incident class (715712) this module closes.
     expect(resolveKnowledgeClientTransport({
+      [KNOWLEDGE_API_URL_ENV]: 'https://knowledge.example.test',
+      [KNOWLEDGE_API_KEY_ENV]: 'test-only-key',
+      [KNOWLEDGE_LOCAL_ENV]: '1',
+    })).toMatchObject({
+      transport: 'http',
+      source: KNOWLEDGE_API_URL_ENV,
+      local_opt_in_present: true,
+    });
+  });
+
+  test('no hosted API config and no explicit on-box opt-in fails closed', () => {
+    expect(() => resolveKnowledgeClientTransport({})).toThrow(
+      new RegExp(`knowledge: no hosted API configuration.*${KNOWLEDGE_API_URL_ENV}.*${KNOWLEDGE_API_KEY_ENV}.*${KNOWLEDGE_LOCAL_ENV}=1`, 's'),
+    );
+  });
+
+  test('the explicit local opt-in alone selects the on-box store, silently', () => {
+    // Explicit on-box choice: transport reports sqlite with the opt-in env as
+    // the source — and no knowledge-local-fallback notice is ever emitted
+    // (that event only ever announced an UNAUTHORIZED fallback, which no
+    // longer exists as a behavior).
+    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(resolveKnowledgeClientTransport({
+        [KNOWLEDGE_LOCAL_ENV]: '1',
+      })).toMatchObject({
+        transport: 'sqlite',
+        source: KNOWLEDGE_LOCAL_ENV,
+        api_url_present: false,
+        local_opt_in_present: true,
+      });
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test('a blank local opt-in does not authorize the on-box store', () => {
+    expect(() => resolveKnowledgeClientTransport({
+      [KNOWLEDGE_LOCAL_ENV]: ' ',
+    })).toThrow(/HASNA_KNOWLEDGE_LOCAL/);
+  });
+
+  test('unprefixed URL alias does not configure HTTP and still fails closed', () => {
+    // KNOWLEDGE_API_URL (no prefix) is not a supported selector. Without the
+    // canonical URL and without the explicit opt-in the process must fail
+    // closed rather than drift to an unconfigured on-box read.
+    expect(() => resolveKnowledgeClientTransport({
       KNOWLEDGE_API_URL: 'https://knowledge.example.test',
       [KNOWLEDGE_API_KEY_ENV]: 'test-only-key',
-    })).toMatchObject({
-      transport: 'sqlite',
-      source: 'default',
-    });
+    })).toThrow(/HASNA_KNOWLEDGE_API_URL/);
   });
 
-  test('inherited environment properties cannot select HTTP', () => {
+  test('inherited environment properties cannot select HTTP and still fail closed', () => {
     const env = Object.create({
       HASNA_KNOWLEDGE_API_URL: 'https://inherited.example.test',
       HASNA_KNOWLEDGE_API_KEY: 'inherited-key',
     }) as NodeJS.ProcessEnv;
-    expect(resolveKnowledgeClientTransport(env).transport).toBe('sqlite');
+    expect(() => resolveKnowledgeClientTransport(env)).toThrow(/HASNA_KNOWLEDGE_API_URL/);
   });
 
   test('canonical URL without key fails closed', () => {
     expect(() => resolveKnowledgeClientTransport({
       [KNOWLEDGE_API_URL_ENV]: 'https://knowledge.example.test',
-    })).toThrow(/HASNA_KNOWLEDGE_API_KEY.*unset HASNA_KNOWLEDGE_API_URL/s);
+    })).toThrow(/HASNA_KNOWLEDGE_API_KEY.*HASNA_KNOWLEDGE_LOCAL=1/s);
+  });
+
+  test('no configuration emits no local-fallback notice and never a false green', () => {
+    // Regression for incident 715712's first mitigation: the old resolver
+    // served the on-box store at exit 0 and printed a one-line
+    // knowledge-local-fallback notice on stderr. A notice-and-continue is
+    // still a false green to anything checking the exit code, so the default
+    // branch is now a throw and the event name must not reappear in stderr.
+    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => resolveKnowledgeClientTransport({})).toThrow(/no hosted API configuration/);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   test('retired selector fails loudly even when blank', () => {
@@ -64,62 +121,6 @@ describe('Knowledge client transport', () => {
         expect(String(error)).toMatch(/HASNA_KNOWLEDGE_DATABASE_URL/);
         expect(String(error)).not.toContain(value || 'value-was-blank');
       }
-    }
-  });
-});
-
-describe('local-fallback notice (incident 715712)', () => {
-  // Regression: a harness session-env re-provision dropped
-  // HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY and the CLI silently
-  // served the on-box store at rc=0 — items appeared gone. Before serving
-  // local on the default branch, the resolver must emit one machine-readable
-  // stderr notice naming the mode switch (the same family as the merged
-  // secrets fix, PR #681 / incident 715558).
-
-  test('default branch emits one stderr notice naming HASNA_KNOWLEDGE_API_URL before serving local', () => {
-    resetKnowledgeLocalFallbackNotice();
-    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      const report = resolveKnowledgeClientTransport({});
-      expect(report).toMatchObject({ transport: 'sqlite', source: 'default' });
-      expect(errSpy).toHaveBeenCalledTimes(1);
-      const notice = JSON.parse(errSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
-      expect(notice.event).toBe('knowledge-local-fallback');
-      expect(notice.notice).toContain(KNOWLEDGE_API_URL_ENV);
-      expect(notice.notice).toContain('local SQLite');
-      expect(notice.apiUrlPresent).toBe(false);
-      // Once-only per process: repeated local resolutions stay silent.
-      resolveKnowledgeClientTransport({});
-      expect(errSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      errSpy.mockRestore();
-    }
-  });
-
-  test('http selection emits no fallback notice', () => {
-    resetKnowledgeLocalFallbackNotice();
-    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      resolveKnowledgeClientTransport({
-        [KNOWLEDGE_API_URL_ENV]: 'https://knowledge.example.test',
-        [KNOWLEDGE_API_KEY_ENV]: 'test-only-key',
-      });
-      expect(errSpy).not.toHaveBeenCalled();
-    } finally {
-      errSpy.mockRestore();
-    }
-  });
-
-  test('URL without key still fails closed and emits no notice', () => {
-    resetKnowledgeLocalFallbackNotice();
-    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      expect(() => resolveKnowledgeClientTransport({
-        [KNOWLEDGE_API_URL_ENV]: 'https://knowledge.example.test',
-      })).toThrow(/HASNA_KNOWLEDGE_API_KEY/);
-      expect(errSpy).not.toHaveBeenCalled();
-    } finally {
-      errSpy.mockRestore();
     }
   });
 });
