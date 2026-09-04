@@ -9,6 +9,7 @@ import {
 } from './client-transport';
 import { resolveKnowledgeHttpStore } from './http-store';
 import { getDataHome } from './paths';
+import { gatewayApiV1Root } from './api-display-url';
 
 export interface KnowledgeAuthConfig {
   api_key: string;
@@ -173,7 +174,11 @@ export function knowledgeAuthStatus(
     authenticated: Boolean(key.apiKey),
     configured: Boolean(key.apiKey),
     source: key.source,
-    api_url: apiUrl,
+    // The auth-status `api_url` is a DISPLAY value: it reports the resolved
+    // `/v1` root for the api.hasna.com gateway form, never the bare base or
+    // origin alone (issue #1588). Legacy/self-hosted origins keep their
+    // existing normalized base.
+    api_url: gatewayApiV1Root(apiUrl) ?? apiUrl,
     auth_path: knowledgeAuthPath(env),
     email: key.source === 'file' ? auth?.email ?? null : null,
     org_id: key.source === 'file' ? auth?.org_id ?? null : null,

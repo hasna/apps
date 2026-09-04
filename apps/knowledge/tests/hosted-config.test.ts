@@ -164,4 +164,16 @@ describe('API environment and server contracts', () => {
       api_url: 'https://canonical.example.com',
     });
   });
+
+  test('reports the resolved /v1 authority for the api.hasna.com gateway form (issue #1588)', () => {
+    expect(knowledgeAuthStatus({
+      HASNA_KNOWLEDGE_API_URL: 'https://api.hasna.com/knowledge',
+      HASNA_KNOWLEDGE_API_KEY: 'present-but-never-emitted',
+      HASNA_KNOWLEDGE_AUTH_DIR: join(mkdtempSync(join(tmpdir(), 'ok-hosted-gateway-')), 'auth'),
+    })).toMatchObject({
+      authenticated: true,
+      source: 'env',
+      api_url: 'https://api.hasna.com/knowledge/v1',
+    });
+  });
 });

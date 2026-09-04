@@ -10,6 +10,7 @@
 // returned, or embedded in any value produced here.
 
 import type { HasnaStorageClient } from "./contracts-client/index.js";
+import { gatewayApiV1Root } from "../api-display-url.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
 import { computeCounts, matchVaultItemsForUrl } from "./local.js";
 
@@ -367,7 +368,13 @@ export class ApiStore implements Store {
   }
 
   describe(): StoreDescriptor {
-    // transport.baseUrl is `<origin>/v1`; report the origin only (never the key).
+    // transport.baseUrl is `<origin>/v1`. The gateway form
+    // (`https://api.hasna.com/secrets`) must be reported as the resolved
+    // `.../v1` authority, never the bare origin — the origin alone no longer
+    // identifies the app behind the shared gateway (issue #1588). Legacy and
+    // self-hosted endpoints keep reporting the origin only (never the key).
+    const resolved = gatewayApiV1Root(this.transport.baseUrl);
+    if (resolved) return { mode: "api", location: resolved };
     let location = this.transport.baseUrl;
     try {
       location = new URL(this.transport.baseUrl).origin;

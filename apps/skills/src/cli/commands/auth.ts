@@ -2,6 +2,8 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
+import { resolveApiUrl } from "../../lib/api-url.js";
+import { gatewayApiV1Root } from "../../lib/api-url.js";
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -184,10 +186,21 @@ function authIdentityPayload(
   const orgId = stringField(organization?.id) ?? cached?.orgId;
   const role = stringField(user?.role);
 
+  // The whoami payload announces the configured API authority too, so an
+  // operator can tell which service the credential talks to at a glance. The
+  // api.hasna.com gateway form is shown as its resolved `/v1` root; every
+  // other origin is shown redacted (credentials are stripped) and unchanged
+  // (issue #1588).
+  const configuredApiUrl = resolveApiUrl();
+  const apiUrl = typeof configuredApiUrl === "string"
+    ? (gatewayApiV1Root(configuredApiUrl) ?? configuredApiUrl)
+    : undefined;
+
   return {
     status: "authenticated",
     authSource,
     ...(offline ? { offline: true } : {}),
+    ...(apiUrl ? { api_url: apiUrl } : {}),
     ...(email ? { email } : {}),
     ...(orgSlug ? { organization: orgSlug } : {}),
     ...(orgName ? { organizationName: orgName } : {}),
@@ -202,6 +215,7 @@ function printWhoami(payload: Record<string, unknown>): void {
   if (payload.organization) console.log(chalk.bold("Org:    ") + payload.organization);
   if (payload.role) console.log(chalk.bold("Role:   ") + payload.role);
   if (payload.organizationName) console.log(chalk.bold("Name:   ") + payload.organizationName);
+  if (payload.api_url) console.log(chalk.bold("API:    ") + payload.api_url);
   if (payload.authSource === "env") console.log(chalk.dim("Auth:   SKILLS_API_KEY"));
   if (payload.offline) console.log(chalk.dim("(offline — showing cached info)"));
 }
