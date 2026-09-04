@@ -17,7 +17,7 @@ var __export = (target, all) => {
 // src/todos/common.ts
 import { createHash } from "crypto";
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -77,7 +77,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -591,7 +591,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -665,7 +665,7 @@ function formatError(error, _mapper) {
   return fieldErrors;
 }
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -714,7 +714,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   } : { success: true, data: result.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -772,7 +772,7 @@ var _null = /null/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -1156,7 +1156,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -1194,14 +1194,14 @@ class Doc {
   }
 }
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 0,
   patch: 0
 };
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -2275,7 +2275,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -2392,7 +2392,7 @@ function en_default() {
     localeError: error()
   };
 }
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 
@@ -2442,7 +2442,7 @@ function registry() {
   return new $ZodRegistry;
 }
 var globalRegistry = /* @__PURE__ */ registry();
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -2866,7 +2866,7 @@ function _refine(Class2, fn, _params) {
   });
   return schema;
 }
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -2907,7 +2907,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -2936,13 +2936,13 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   inst.def = def;
@@ -3504,7 +3504,7 @@ function superRefine(fn) {
   });
   return ch;
 }
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
 config(en_default());
 
 // src/todos/common.ts
@@ -3576,7 +3576,7 @@ function sha256TodosText(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
   void: () => voidType,
@@ -3688,7 +3688,7 @@ __export(exports_external, {
   BRAND: () => BRAND
 });
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {};
@@ -3819,7 +3819,7 @@ var getParsedType2 = (data) => {
   }
 };
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -3938,7 +3938,7 @@ ZodError2.create = (issues) => {
   return error2;
 };
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
 var errorMap = (issue2, _ctx) => {
   let message;
   switch (issue2.code) {
@@ -4041,7 +4041,7 @@ var errorMap = (issue2, _ctx) => {
 };
 var en_default2 = errorMap;
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default2;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -4049,7 +4049,7 @@ function setErrorMap(map) {
 function getErrorMap() {
   return overrideErrorMap;
 }
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -4155,14 +4155,14 @@ var isAborted = (x) => x.status === "aborted";
 var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../../../../../Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
 class ParseInputLazyPath {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -9171,7 +9171,7 @@ function createDeploymentEnvelopeSchema(primitives) {
 
 // src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "1.0.0";
+var CONTRACTS_PACKAGE_VERSION = "1.0.1";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",

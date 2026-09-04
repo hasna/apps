@@ -19,11 +19,11 @@ import { CONTRACTS_PACKAGE_VERSION } from "../src/schemas.js";
 import { scanNoCloudTarget } from "../src/no-cloud.js";
 
 const root = join(import.meta.dir, "..");
-// The canonical-client major release version; the three version
+// The pending (not yet published) release version; the three version
 // surfaces (package.json, hasna.contract.json kitVersion, the
 // CONTRACTS_PACKAGE_VERSION constant) must all carry it. The version-integrity
 // gate (tests/version-integrity.test.ts) enforces the agreement.
-const expectedUnreleasedVersion = "1.0.0";
+const expectedUnreleasedVersion = "1.0.1";
 const forbiddenInternalDomains = [["hasna", "xyz"].join(".")];
 
 function commandText(bytes: Uint8Array): string {

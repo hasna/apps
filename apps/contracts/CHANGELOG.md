@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.0.1
+
+### Patch Changes
+
+- cfd72cb: Fail-closed blank backend env and secure credential-file reads (todos a71e18ce):
+
+  - A DEFINED-but-blank `HASNA_<NAME>_DATABASE_URL` / `<NAME>_DATABASE_URL`
+    (empty, whitespace, quoted whitespace) now throws instead of silently
+    selecting the local sqlite store; conflicting canonical/short aliases are
+    rejected rather than silently first-wins.
+  - Credential and app-config files must be owner-only regular files: exact
+    `0400`/`0600` on the full mode bits (setuid/setgid/sticky variants refused),
+    no symlinks (`O_NOFOLLOW`), owned by the current uid, size-capped, and
+    stable across the read (fd identity plus a second content proof). An
+    existing-but-unsafe file is refused loudly, never treated as absent.
+  - A deliberately blank explicit `apiKey`/`profile` argument fails closed
+    instead of falling through to a lower credential tier.
+  - Client transport resolves endpoint and credential coherently from one disk
+    read; env-vs-disk authority conflicts and same-file alias conflicts are
+    misconfigured, and a long-lived client refuses to send a rotated credential
+    to a retired authority (fails closed on authority change; same-authority key
+    rotation still heals).
+  - The migration ledger statically refuses transaction-control statements
+    (migration-id-only diagnostic) before any SQL runs.
+  - The test-only deprecation-reset seam is removed from the public transport
+    surface.
+
+- a5555f3: Credential resolver follows the 2026-09-04 home-layout ruling (#1668, #1690) and
+  the same-day owner directive on Keychain reads and URL defaults:
+
+  - The disk tier is `~/.hasna/<app>/config/credentials` (profile variant
+    `credentials-<profile>`). `HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME`
+    replaces the config root (`<HASNA_CONFIG_HOME>/<app>/credentials`); both
+    follow XDG semantics (absolute only, blank is unset). `XDG_CONFIG_HOME` and
+    `~/.config/hasna/` are no longer consulted; `~/.hasna/fleet-env/`,
+    `~/.hasna/cloud/` and `*-cloud.env` stay retired. The 0400/0600 mode check,
+    ownership, read-coherence and unsafe-file refusals are unchanged.
+  - New darwin-only `keychain` tier between the env pointers and the disk file:
+    reads `hasna.credentials.<app>.api-key` (and `.api-url` for the authority)
+    for account `HASNA_STATION`, else the short hostname, else `USER`, via
+    `security find-generic-password … -w` spawned by argv (no shell), fresh per
+    call. A missing item falls through; any other failure is terminal; values are
+    never logged. Ambient (live `process.env`) unless a runner is injected
+    (`credentials.keychain.run`, which tests use) or `enabled` is set.
+  - `HASNA_<NAME>_API_KEY` is a legitimate `env` tier below disk: the deprecation
+    notice, its registry, `onDeprecation`, `__resetCredentialDeprecationNotices`
+    and the `deprecated` field are removed; tier names `legacy-env` / `config`
+    become `env` / `disk`.
+  - With a credential from any tier and no configured URL, the base URL defaults
+    to the fleet gateway `https://api.hasna.com/<app>` (`apiUrlSource` and
+    `transportSource` report `"default"`); `HASNA_<NAME>_API_URL`, the Keychain
+    `api-url` item and the credentials file override it and must agree.
+
 ## 1.0.0
 
 ### Major Changes
@@ -22,7 +75,6 @@
 - 2a65f40: P1 fleet-env credential migration (todos 85c176bc): the client credential resolver's disk tier now reads `~/.hasna/fleet-env/<name>.env` FIRST, with the legacy `~/.hasna/cloud/<name>.env` and config `-cloud.env` alias as NOISY deprecated fallbacks (removal deadline 2026-10-01), a new deliberate `HASNA_<APP>_API_KEY_REF` vault-pointer tier with TERMINAL failure semantics, and a refusal of vault-path-shaped literals in the literal API-key tiers. Config tier final filename is `~/.config/hasna/<name>.env`.
 
 ## 0.14.1
-
 
 ### Patch Changes
 
