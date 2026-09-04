@@ -52,7 +52,23 @@ export function registerDoctorCommand(program: Command): void {
       // API (self-hosted cloud) mode: opening a local SQLite file would trip the
       // split-brain guard, so run a cloud-aware health path against the API
       // instead of the local-DB checks below.
-      if (isApiMode()) {
+      //
+      // A malformed endpoint makes this throw (hasna/apps#1601: the base URL is
+      // validated rather than concatenated blind). Diagnosing that endpoint is
+      // precisely what an operator ran `doctor` for, so report it as a failed
+      // check instead of letting a stack trace escape. The thrown message is
+      // already credential-free by construction — it names the defect class,
+      // never the offending URL.
+      let apiMode: boolean;
+      try {
+        apiMode = isApiMode();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        checks.push({ name: "API endpoint", status: "fail", detail });
+        outputDoctorResults(globalOpts, checks);
+        process.exit(1);
+      }
+      if (apiMode) {
         await runCloudDoctor(globalOpts, checks);
         return;
       }

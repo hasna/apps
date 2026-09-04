@@ -40,6 +40,7 @@ import { join } from "node:path";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
+import { resolveMementosApiBase } from "../sdk/index.js";
 
 export interface ApiConfig {
   baseUrl: string; // normalized, includes the /v1 (or /api) prefix, no trailing slash
@@ -170,11 +171,27 @@ function assertRequestAllowedUnderTest(baseUrl: string): void {
   );
 }
 
-/** Normalize a configured base URL to always carry a `/v1` (or `/api`) prefix. */
+/**
+ * Normalize a configured base URL to always carry a `/v1` (or `/api`) prefix.
+ *
+ * Delegates to the SDK resolver so the CLI transport and `@hasna/mementos/sdk`
+ * cannot drift apart. That matters for more than tidiness: this function used
+ * to be a bare string concatenation with NO validation, so a base carrying a
+ * query, fragment, userinfo or a non-http(s) scheme was pasted straight into
+ * the request URL — `https://api.hasna.com/mementos?debug=1` became
+ * `https://api.hasna.com/mementos?debug=1/v1/memories`, where the intended
+ * path is silently query data and the request lands on the wrong route, and
+ * `https://user:pass@…` carried operator credentials into every printed
+ * endpoint line. The SDK half was hardened in hasna/apps#1763; this is the
+ * same defect on the path the `mementos` CLI actually takes (hasna/apps#1601).
+ *
+ * Invalid input now throws rather than resolving to a wrong-but-plausible URL:
+ * a misconfigured endpoint must fail closed, exactly like a half-configured
+ * credential pair does in {@link assertUnambiguousStoreEnv}.
+ */
 function normalizeBase(raw: string): string {
-  let base = raw.trim().replace(/\/+$/, "");
-  if (/\/(v1|api)$/.test(base)) return base;
-  return `${base}/v1`;
+  const { baseUrl, prefix } = resolveMementosApiBase(raw);
+  return `${baseUrl}${prefix}`;
 }
 
 /** Resolve the API client config from env, or `null` when not configured. */

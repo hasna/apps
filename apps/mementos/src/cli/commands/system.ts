@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { makeHandleError } from "../helpers.js";
 import { registerDoctorCommand } from "./system-doctor.js";
+import { registerStatusCommand } from "./system-status.js";
 import { registerConfigCommand } from "./system-config.js";
 import { registerProfileCommand } from "./system-profile.js";
 import { registerAutoMemoryCommand } from "./system-auto-memory.js";
@@ -20,6 +21,7 @@ export function registerSystemCommands(program: Command): void {
 
   // Register extracted command groups
   registerDoctorCommand(program);
+  registerStatusCommand(program);
   registerConfigCommand(program);
   registerProfileCommand(program);
   registerAutoMemoryCommand(program);
