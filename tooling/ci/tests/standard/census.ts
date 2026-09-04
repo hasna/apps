@@ -283,9 +283,7 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "draw", reason: "Library-shaped (canvas/design tokens); no MCP surface." },
   { member: "events", reason: "Library-shaped (embedded event envelopes/channels); MCP execution belongs to the consumer applications — manifest declares the mcp waiver." },
   { member: "guardrails", reason: "Library-shaped (guardrail policies); no MCP surface." },
-  { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
   { member: "models", reason: "Library-shaped (model metadata); no MCP surface." },
-  { member: "orgs", reason: "Registry-shaped; no MCP surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no MCP surface." },
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
@@ -299,14 +297,12 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
-  { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
   { member: "docs", reason: "Docs renderer; no server surface." },
   { member: "draw", reason: "Library-shaped; no server surface." },
   { member: "events", reason: "Library-shaped (embedded event envelopes/channels); no server surface — manifest declares the api waiver, ships no serve bin." },
   { member: "guardrails", reason: "Library-shaped; no server surface." },
   { member: "models", reason: "Library-shaped; no server surface." },
   { member: "monitor", reason: "CLI+MCP member (system monitoring); no server surface. Imported by #97 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "orgs", reason: "Registry-shaped; no server surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no server surface." },
   { member: "releases", reason: "CLI-only member; no server surface." },
   { member: "servers", reason: "CLI-only member (server lifecycle tooling); no server surface." },
@@ -334,11 +330,9 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "docs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -463,22 +457,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
  * describe, so the claim moves only with the manifest rewrite their
  * CONTRACTS_EXCEPTIONS remediation tasks own. */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
-  { member: "files", kitVersion: "0.4.2", pinned: "0.14.0" },
-  { member: "todos", kitVersion: "0.11.1", pinned: "0.14.0" },
-  { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
-  { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
-  { member: "hooks", kitVersion: "0.8.4", pinned: "0.14.0" },
   // Version wave 2026-08-24 (c4622d9094) pinned 26 members to contracts
   // 0.14.0 without rewriting their hasna.contract.json kitVersion; each
   // member's conformance passes at its declared kit, so the claim moves only
   // with the manifest rewrite its CONTRACTS_EXCEPTIONS remediation task owns.
-  { member: "conversations", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
   { member: "instructions", kitVersion: "0.13.1", pinned: "0.14.0" },
-  { member: "knowledge", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "messages", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "prompts", kitVersion: "0.13.4", pinned: "0.14.0" },
-  { member: "secrets", kitVersion: "0.13.3", pinned: "^0.14.0" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —
