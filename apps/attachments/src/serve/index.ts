@@ -172,7 +172,11 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-if (import.meta.main) main().catch((_err) => {
-  console.error("[attachments-serve] fatal: startup failed; verify PostgreSQL, object storage and signing configuration.");
+if (import.meta.main) main().catch((error) => {
+  // Surface the underlying cause (e.g. the missing HASNA_ATTACHMENTS_DATABASE_URL
+  // or signing-key env) so startup failures are actionable; the values are
+  // never part of these messages.
+  const detail = error instanceof Error && error.message ? ` ${error.message}` : "";
+  console.error(`[attachments-serve] fatal: startup failed; verify PostgreSQL, object storage and signing configuration.${detail}`);
   process.exit(1);
 });
