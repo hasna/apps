@@ -32,6 +32,15 @@ program
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
+  // self_hosted/cloud (API) mode: the reads that follow already come straight
+  // from the shared API's GET routes, so there is no local store to flush
+  // before answering. The /v1/ingest push belongs to the explicit `economy
+  // sync` verb only; running it from a read-only verb both walks every on-box
+  // provider file for nothing and turns a hosted ingest fault into a failed
+  // read (every read 500s when the hosted /ingest endpoint is down). Skip the
+  // ingest entirely on reads in API mode. (#1585)
+  if (isCloudStore()) return
+
   // Staleness gate: the full ingest walks every on-box provider file (the
   // claude corpus alone can hold tens of thousands of session jsonl files),
   // which takes minutes on a grown machine — every read-only verb would hang
@@ -40,16 +49,6 @@ async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: bool
   // `economy sync` verb always runs the full ingest.
   if (!autoSyncDue(undefined, process.env)) return
 
-  // self_hosted/cloud mode: ingest this machine's on-box provider files into
-  // the shared API first; the reads that follow come straight from the cloud.
-  if (isCloudStore()) {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await syncAllToCloud(cloud, opts)
-      markAutoSync(undefined, process.env)
-    }
-    return
-  }
   const db = openDatabase()
   ensurePricingSeeded(db)
   await syncAll(db, opts)
