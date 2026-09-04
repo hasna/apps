@@ -14,6 +14,11 @@ import {
   resolveMemoryId,
   type GlobalOpts,
 } from "../helpers.js";
+import {
+  redactCredentialKey,
+  redactMemoryForOutput,
+  redactVersionForOutput,
+} from "../../lib/redact.js";
 
 export function registerViewCommands(program: Command): void {
   const handleError = makeHandleError(program);
@@ -42,10 +47,17 @@ export function registerViewCommands(program: Command): void {
 
         touchMemory(memory.id);
 
+        // Read-path redaction (todos e12c7659): the write path redacts
+        // value/summary but never the KEY, so a credential-shaped key stored
+        // by any write path reaches stdout verbatim on this read. Project the
+        // display copy once, before the format branch, so JSON and human both
+        // emit value-safe text while coordination metadata survives.
+        const safe = redactMemoryForOutput(memory);
+
         if (globalOpts.json) {
-          outputJson(memory);
+          outputJson(safe);
         } else {
-          console.log(formatMemoryDetail(memory));
+          console.log(formatMemoryDetail(safe));
         }
       } catch (e) {
         handleError(e);
@@ -81,9 +93,13 @@ export function registerViewCommands(program: Command): void {
         });
 
         if (globalOpts.json) {
-          outputJson(updated);
+          // Read-path redaction (todos e12c7659): updateMemory returns the raw
+          // stored row, which can carry a credential-shaped key (and stored
+          // free-text) verbatim. Project the receipt through the same
+          // read-path redaction the other verbs use.
+          outputJson(redactMemoryForOutput(updated));
         } else {
-          console.log(chalk.green(`Pinned: ${updated.key} (${updated.id.slice(0, 8)})`));
+          console.log(chalk.green(`Pinned: ${redactCredentialKey(updated.key)} (${updated.id.slice(0, 8)})`));
         }
       } catch (e) {
         handleError(e);
@@ -119,9 +135,11 @@ export function registerViewCommands(program: Command): void {
         });
 
         if (globalOpts.json) {
-          outputJson(updated);
+          // Read-path redaction (todos e12c7659): same as `pin` — the echoed
+          // stored row must not carry a credential-shaped key verbatim.
+          outputJson(redactMemoryForOutput(updated));
         } else {
-          console.log(chalk.green(`Unpinned: ${updated.key} (${updated.id.slice(0, 8)})`));
+          console.log(chalk.green(`Unpinned: ${redactCredentialKey(updated.key)} (${updated.id.slice(0, 8)})`));
         }
       } catch (e) {
         handleError(e);
@@ -146,9 +164,11 @@ export function registerViewCommands(program: Command): void {
         }
         updateMemory(memory.id, { status: "archived", version: memory.version });
         if (globalOpts.json) {
-          outputJson({ archived: true, id: memory.id, key: memory.key });
+          // Read-path redaction (todos e12c7659): the stored key can be
+          // credential-shaped; redact the echoed receipt like the other verbs.
+          outputJson({ archived: true, id: memory.id, key: redactCredentialKey(memory.key) });
         } else {
-          console.log(chalk.green(`✓ Archived: ${chalk.bold(memory.key)} (${memory.id.slice(0, 8)})`));
+          console.log(chalk.green(`✓ Archived: ${chalk.bold(redactCredentialKey(memory.key))} (${memory.id.slice(0, 8)})`));
         }
       } catch (e) {
         console.error(chalk.red(`archive failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -173,16 +193,22 @@ export function registerViewCommands(program: Command): void {
           process.exit(1);
         }
         const versions = getMemoryVersions(memory.id);
+        // Read-path redaction (todos e12c7659): the version history is a read
+        // surface; redact the echoed key AND every version's free-text
+        // (value, summary, tags, when_to_use) the same way show does — version
+        // TAGS are storable raw and were previously emitted verbatim.
+        const safeKey = redactCredentialKey(memory.key);
+        const safeVersions = versions.map(redactVersionForOutput);
         if (globalOpts.json) {
-          outputJson({ memory: { id: memory.id, key: memory.key, current_version: memory.version }, versions });
+          outputJson({ memory: { id: memory.id, key: safeKey, current_version: memory.version }, versions: safeVersions });
           return;
         }
-        console.log(chalk.bold(`\nVersion history: ${memory.key} (current: v${memory.version})\n`));
-        if (versions.length === 0) {
+        console.log(chalk.bold(`\nVersion history: ${safeKey} (current: v${memory.version})\n`));
+        if (safeVersions.length === 0) {
           console.log(chalk.dim("  No previous versions."));
           return;
         }
-        for (const v of versions) {
+        for (const v of safeVersions) {
           console.log(`  ${chalk.cyan(`v${v.version}`)} ${chalk.dim(v.created_at.slice(0, 16))} scope=${v.scope} imp=${v.importance}`);
           console.log(`    ${v.value.slice(0, 120)}${v.value.length > 120 ? "..." : ""}`);
         }

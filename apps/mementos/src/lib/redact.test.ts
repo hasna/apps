@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { redactSecrets, containsSecrets, redactMemoryForOutput } from "./redact.js";
+import { redactSecrets, containsSecrets, redactMemoryForOutput, redactTextFragment, redactSearchResultForOutput } from "./redact.js";
 import type { Memory } from "../types/index.js";
 
 const REDACTED = "[REDACTED]";
@@ -340,5 +340,59 @@ describe("redactMemoryForOutput", () => {
     expect(out.agent_id).toBe("agent-chief-knowledge");
     expect(out.tags).toEqual(["coordination"]);
     expect(out.created_at).toBe(input.created_at);
+  });
+
+  it("redacts credential-shaped TAGS (tags are storable raw via save --tags)", () => {
+    const NPM_TOKEN = "npm_" + "a".repeat(36);
+    const out = redactMemoryForOutput(
+      makeMemory({ tags: [`tag-${NPM_TOKEN}`, "coordination", "knowledge"] }),
+    );
+    expect(out.tags.join(",")).not.toContain(NPM_TOKEN);
+    expect(out.tags.join(",")).toContain("coordination");
+    expect(out.tags.join(",")).toContain("knowledge");
+  });
+});
+
+// redactSearchResultForOutput / redactTextFragment — the search read path
+// (todos e12c7659). A search result's HIGHLIGHT SNIPPETS are derived from the
+// same memory text as the key/value, so a query that matches inside a
+// credential-shaped key yields a snippet carrying the whole key — redacting
+// the memory alone is not enough for the search verb.
+// ============================================================================
+
+describe("redactTextFragment", () => {
+  const NPM_TOKEN = "npm_" + "a".repeat(36);
+
+  it("redacts a credential-shaped token inside a text fragment", () => {
+    expect(redactTextFragment(`prefix ${NPM_TOKEN} suffix`)).not.toContain(NPM_TOKEN);
+  });
+
+  it("preserves ordinary text", () => {
+    expect(redactTextFragment("ordinary snippet text")).toBe("ordinary snippet text");
+  });
+});
+
+describe("redactSearchResultForOutput", () => {
+  const NPM_TOKEN = "npm_" + "a".repeat(36);
+
+  it("redacts the result memory and every highlight snippet, keeping score/match_type", () => {
+    const result = {
+      memory: makeMemory({ id: "m-res", key: NPM_TOKEN }),
+      score: 1.5,
+      match_type: "exact" as const,
+      highlights: [
+        { field: "key" as const, snippet: `…${NPM_TOKEN}…` },
+        { field: "value" as const, snippet: "ordinary value" },
+      ],
+    };
+    const out = redactSearchResultForOutput(result);
+    expect(out.memory.key).not.toContain(NPM_TOKEN);
+    expect(out.highlights![0]!.snippet).not.toContain(NPM_TOKEN);
+    // The snippet that never held a token is untouched.
+    expect(out.highlights![1]!.snippet).toBe("ordinary value");
+    // Coordination metadata survives.
+    expect(out.score).toBe(1.5);
+    expect(out.match_type).toBe("exact");
+    expect(out.memory.id).toBe("m-res");
   });
 });
