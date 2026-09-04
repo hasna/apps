@@ -100,4 +100,11 @@ export const PG_MIGRATIONS: string[] = [
    ALTER TABLE recording_idempotency
      ADD CONSTRAINT recording_idempotency_recording_id_fkey
      FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE SET NULL`,
+
+  // Migration 19: S3 audio object linkage (uploaded-at-creation via the
+  // artifact kit). audio_path stays as local provenance; these columns carry
+  // the durable object reference when a bucket is configured.
+  `ALTER TABLE recordings ADD COLUMN IF NOT EXISTS audio_object_key TEXT`,
+  `ALTER TABLE recordings ADD COLUMN IF NOT EXISTS audio_sha256 TEXT`,
+  `ALTER TABLE recordings ADD COLUMN IF NOT EXISTS audio_bytes BIGINT`,
 ];

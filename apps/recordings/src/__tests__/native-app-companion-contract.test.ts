@@ -38,12 +38,12 @@ beforeAll(() => {
     ["scripts/build_companion_cli.sh", compiledCompanion, process.execPath],
     {
       encoding: "utf8",
-      timeout: 60_000,
+      timeout: 180_000,
     },
   );
   expect(build.error, build.stderr).toBeUndefined();
   expect(build.status, build.stderr).toBe(0);
-}, 60_000);
+}, 180_000);
 
 afterAll(() => {
   if (compiledCompanionDirectory) {

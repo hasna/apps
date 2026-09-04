@@ -92,6 +92,15 @@ export const MIGRATIONS = [
   `
   ALTER TABLE agents ADD COLUMN active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
   `,
+
+  // Migration 5: S3 audio object linkage (uploaded-at-creation via the
+  // artifact kit). audio_path stays as local provenance; these columns carry
+  // the durable object reference when a bucket is configured.
+  `
+  ALTER TABLE recordings ADD COLUMN audio_object_key TEXT;
+  ALTER TABLE recordings ADD COLUMN audio_sha256 TEXT;
+  ALTER TABLE recordings ADD COLUMN audio_bytes INTEGER;
+  `,
 ];
 
 /**
@@ -171,6 +180,9 @@ function repairSchemaDrift(db: Database): void {
   ensureColumn(db, "recordings", "task_list_id", "TEXT");
   ensureColumn(db, "recordings", "machine_id", "TEXT");
   ensureColumn(db, "recordings", "metadata", "TEXT DEFAULT '{}'");
+  ensureColumn(db, "recordings", "audio_object_key", "TEXT");
+  ensureColumn(db, "recordings", "audio_sha256", "TEXT");
+  ensureColumn(db, "recordings", "audio_bytes", "INTEGER");
   ensureColumn(
     db,
     "agents",

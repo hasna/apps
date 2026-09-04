@@ -58,6 +58,9 @@ function parseRecording(row: Record<string, unknown>): Recording {
   return {
     id: row["id"] as string,
     audio_path: (row["audio_path"] as string) || null,
+    audio_object_key: (row["audio_object_key"] as string) || null,
+    audio_sha256: (row["audio_sha256"] as string) || null,
+    audio_bytes: Number(row["audio_bytes"] ?? 0) || null,
     raw_text: row["raw_text"] as string,
     processed_text: (row["processed_text"] as string) || null,
     processing_mode: (row["processing_mode"] as Recording["processing_mode"]) || "raw",
@@ -171,11 +174,14 @@ export async function createRecording(
     }
 
     const insertResult = await transaction.run(
-    `INSERT INTO recordings (id, audio_path, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, project_id, session_id, goal, role, task_list_id, machine_id, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO recordings (id, audio_path, audio_object_key, audio_sha256, audio_bytes, raw_text, processed_text, processing_mode, model_used, enhancement_model, duration_ms, language, tags, agent_id, project_id, session_id, goal, role, task_list_id, machine_id, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`,
     id,
     input.audio_path || null,
+    input.audio_object_key || null,
+    input.audio_sha256 || null,
+    input.audio_bytes || null,
     input.raw_text,
     input.processed_text || null,
     input.processing_mode || "raw",

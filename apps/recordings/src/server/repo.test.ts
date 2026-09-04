@@ -75,8 +75,11 @@ function makeFakePg() {
         recordingTags.push({ recording_id: params[0], tag: params[1] });
       } else if (/^\s*insert\s+into\s+recordings/i.test(sql)) {
         // Enforce the FK the same way Postgres would: reject a dangling agent_id.
-        const agentId = params[10];
-        const projectId = params[11];
+        // Param positions track the repo INSERT column order (id, audio_path,
+        // audio_object_key, audio_sha256, audio_bytes, raw_text, ..., agent_id,
+        // project_id, ...).
+        const agentId = params[13];
+        const projectId = params[14];
         if (agentId != null && !agents.some((a) => a["id"] === agentId)) {
           throw new Error(`insert or update on table "recordings" violates foreign key constraint "recordings_agent_id_fkey"`);
         }
@@ -89,7 +92,7 @@ function makeFakePg() {
         }
         recordings.push({
           id: params[0],
-          raw_text: params[2],
+          raw_text: params[5],
           agent_id: agentId,
           project_id: projectId,
           created_at: new Date().toISOString(),

@@ -36,6 +36,11 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { recordingCreateIdentity } from "./lib/recording-create-identity.js";
 import { withLocalStoreReaderLease } from "./lib/install-maintenance.js";
+import {
+  AudioArtifactStorage,
+  resolveAudioArtifactStorage,
+  uploadAudioAtCreation,
+} from "./lib/audio-artifact-storage.js";
 
 export const APP = "recordings";
 
@@ -111,9 +116,22 @@ const localStore: Store = {
   mode: "sqlite",
   baseUrl: null,
   async createRecording(input, idempotencyKey) {
-    return withLocalStoreReaderLease(() =>
-      recordingsDb.createRecording(input, undefined, idempotencyKey)
-    );
+    return withLocalStoreReaderLease(async () => {
+      const recording = recordingsDb.createRecording(input, undefined, idempotencyKey);
+      if (!recording.audio_path) return recording;
+      const uploaded = await uploadAudioAtCreation(
+        recording.id,
+        recording.audio_path,
+        localArtifactStorageFor(),
+      );
+      if (!uploaded) return recording;
+      return recordingsDb.updateRecordingAudio(
+        recording.id,
+        uploaded.objectKey,
+        uploaded.sha256,
+        uploaded.bytes,
+      ) ?? recording;
+    });
   },
   async getRecording(id) {
     return withLocalStoreReaderLease(() => recordingsDb.getRecording(id));
@@ -376,6 +394,25 @@ export async function countStoreRecordings(
 }
 
 let cached: Store | null = null;
+
+// Test seam: an explicit artifact storage that wins over env resolution for
+// the LocalStore upload-at-creation path. Mirrors __resetStore's contract —
+// tests that inject a storage must reset it in afterEach.
+let localArtifactStorageOverride: AudioArtifactStorage | null | undefined;
+
+function localArtifactStorageFor(): AudioArtifactStorage {
+  return localArtifactStorageOverride ?? resolveAudioArtifactStorage();
+}
+
+/** Test helper: force the LocalStore's artifact kit (e.g. an in-memory bucket). */
+export function __setLocalArtifactStorage(storage: AudioArtifactStorage | null): void {
+  localArtifactStorageOverride = storage;
+}
+
+/** Test helper: clear the artifact-storage override. */
+export function __resetLocalArtifactStorage(): void {
+  localArtifactStorageOverride = undefined;
+}
 
 /**
  * Resolve the active Store from the environment. Cached per-process after first

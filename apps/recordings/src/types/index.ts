@@ -3,6 +3,12 @@
 export interface Recording {
   id: string;
   audio_path: string | null;
+  /** Object key of the uploaded audio in the configured artifact bucket, when the upload happened. */
+  audio_object_key: string | null;
+  /** Lowercase hex sha-256 of the uploaded audio bytes; content-addressed storage identity. */
+  audio_sha256: string | null;
+  /** Byte size of the uploaded audio object. */
+  audio_bytes: number | null;
   raw_text: string;
   processed_text: string | null;
   processing_mode: ProcessingMode;
@@ -28,6 +34,9 @@ export interface CreateRecordingInput {
   /** Stable caller-owned identity for retrying one logical recording create. */
   id?: string;
   audio_path?: string;
+  audio_object_key?: string;
+  audio_sha256?: string;
+  audio_bytes?: number;
   raw_text: string;
   processed_text?: string;
   processing_mode?: ProcessingMode;
@@ -108,6 +117,12 @@ export interface RecordingsConfig {
   db_path: string;
   audio_dir: string;
   max_recording_seconds: number; // Maximum recording duration in seconds (default: 1800 = 30 minutes)
+  /** Artifact bucket for uploaded audio (HASNA_RECORDINGS_S3_BUCKET / RECORDINGS_S3_BUCKET). Empty = local-only. */
+  s3_bucket: string;
+  /** Object-key prefix inside the bucket; defaults to "recordings" when the bucket is set. */
+  s3_prefix: string;
+  /** AWS region for the S3 client; defaults to AWS_REGION, then us-east-1. */
+  s3_region: string;
   config_warnings?: string[];
 }
 

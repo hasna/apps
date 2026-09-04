@@ -49,6 +49,9 @@ export const DEFAULT_CONFIG: RecordingsConfig = {
   db_path: "",
   audio_dir: "",
   max_recording_seconds: 1800,
+  s3_bucket: "",
+  s3_prefix: "",
+  s3_region: "",
   config_warnings: [],
 };
 
@@ -147,6 +150,24 @@ export function loadConfig(configPath?: string): RecordingsConfig {
   }
   if (process.env.RECORDINGS_AUDIO_DIR) {
     config.audio_dir = process.env.RECORDINGS_AUDIO_DIR;
+  }
+  // Artifact bucket for uploaded audio. HASNA_* is the hosted-service env
+  // naming; the plain RECORDINGS_* fallback keeps the app-side convention of
+  // the other RECORDINGS_* knobs. Empty string = local-only (current behaviour).
+  if (process.env.HASNA_RECORDINGS_S3_BUCKET) {
+    config.s3_bucket = process.env.HASNA_RECORDINGS_S3_BUCKET;
+  } else if (process.env.RECORDINGS_S3_BUCKET) {
+    config.s3_bucket = process.env.RECORDINGS_S3_BUCKET;
+  }
+  if (process.env.HASNA_RECORDINGS_S3_PREFIX) {
+    config.s3_prefix = process.env.HASNA_RECORDINGS_S3_PREFIX;
+  } else if (process.env.RECORDINGS_S3_PREFIX) {
+    config.s3_prefix = process.env.RECORDINGS_S3_PREFIX;
+  }
+  if (process.env.RECORDINGS_S3_REGION) {
+    config.s3_region = process.env.RECORDINGS_S3_REGION;
+  } else if (process.env.AWS_REGION) {
+    config.s3_region = process.env.AWS_REGION;
   }
   if (process.env.RECORDINGS_MAX_SECONDS) {
     config.max_recording_seconds = parseInt(
