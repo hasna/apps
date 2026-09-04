@@ -252,6 +252,42 @@ run "dormant_by_default" {
 
   assert {
     condition = (
+      jsondecode(aws_ecs_task_definition.worker.container_definitions)[0].healthCheck.command[0] == "CMD" &&
+      jsondecode(aws_ecs_task_definition.worker.container_definitions)[0].healthCheck.command[1] == "/usr/local/bin/bun" &&
+      jsondecode(aws_ecs_task_definition.worker.container_definitions)[0].healthCheck.command[2] == "-e" &&
+      strcontains(jsondecode(aws_ecs_task_definition.worker.container_definitions)[0].healthCheck.command[3], "/ready")
+    )
+    error_message = "The ingest worker health check must probe its progress endpoint with image-native Bun."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, want in {
+        EMAILS_WORKER_HEALTH_PORT             = tostring(var.worker_health_port)
+        EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS = tostring(var.ingest_queue_age_alarm_threshold_seconds)
+        EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS  = tostring(var.ingest_queue_age_poll_seconds)
+        } : lookup({
+          for entry in jsondecode(aws_ecs_task_definition.worker.container_definitions)[0].environment : entry.name => entry.value
+      }, key, "") == want
+    ])
+    error_message = "The worker task must wire the progress-liveness and queue-age settings from the deployment module's variables."
+  }
+
+  assert {
+    condition = (
+      aws_sqs_queue.inbound.message_retention_seconds == 1209600 &&
+      aws_sqs_queue.inbound_dlq.message_retention_seconds == 1209600
+    )
+    error_message = "The inbound queue and its DLQ must retain messages for the 14-day SQS maximum so a wedged worker never costs mail."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.inbound_age.threshold == var.ingest_queue_age_alarm_threshold_seconds
+    error_message = "The inbound queue-age alarm must use the configured ingest queue-age threshold."
+  }
+
+  assert {
+    condition = (
       aws_ecs_service.api.deployment_minimum_healthy_percent == 100 &&
       !aws_ecs_service.api.deployment_circuit_breaker[0].rollback &&
       !aws_ecs_service.worker.deployment_circuit_breaker[0].rollback

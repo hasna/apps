@@ -374,20 +374,26 @@ export function shouldDeleteIngestResult(result: IngestResult): boolean {
   return result.status === "ingested" || result.status === "duplicate" || result.status === "quarantined";
 }
 
-// ── Progress-based liveness (incident 2026-08-31) ─────────────────────────────
+// ── Progress-based liveness + queue-age alarm (incident 2026-08-31) ─────────
 // The ingest worker is a headless long-poll loop with no HTTP surface, so a
 // wedged poll (a connection that silently stops answering instead of erroring)
-// left the ECS task RUNNING but useless for days. Two guards close that gap:
+// left the ECS task RUNNING but useless for days. Three guards close that gap:
 //  1. every ReceiveMessage is bounded by a deadline, so a dead connection
 //     becomes an ordinary error (logged + retried with backoff) instead of a
 //     hang;
 //  2. a tiny health endpoint reports whether a receive/ack cycle completed
-//     recently, so ECS container health checks replace a task whose loop
-//     stopped making progress — no matter where inside the batch it wedged
-//     (S3/DB calls included).
+//     recently — failing while the queue is non-empty — so ECS container
+//     health checks replace a task whose loop stopped making progress, no
+//     matter where inside the batch it wedged (S3/DB calls included);
+//  3. a queue-age sampling pass reads ApproximateAgeOfOldestMessage on a
+//     schedule — independently of the poll loop, so it stays honest when the
+//     loop stalls — and emits an alarm event when the oldest queued message
+//     crosses its threshold, so a stalled drain is loud within minutes.
 export const INGEST_RECEIVE_DEADLINE_MS = 35_000; // > WaitTimeSeconds (20 s) + margin
 export const INGEST_PROGRESS_STALE_DEFAULT_MS = 5 * 60_000;
 export const INGEST_HEALTH_PORT_DEFAULT = 9487;
+export const INGEST_QUEUE_AGE_DEFAULT_ALARM_SECONDS = 15 * 60;
+export const INGEST_QUEUE_AGE_DEFAULT_POLL_SECONDS = 60;
 
 /** Port for the progress-liveness endpoint; 0 disables the endpoint. */
 export function parseIngestHealthPort(raw: string | undefined): number {
@@ -403,6 +409,20 @@ export function parseIngestProgressStaleMs(raw: string | undefined): number {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : INGEST_PROGRESS_STALE_DEFAULT_MS;
 }
 
+/** Oldest-message age (seconds) that emits the queue-age alarm event. */
+export function parseIngestQueueAgeAlarmSeconds(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return INGEST_QUEUE_AGE_DEFAULT_ALARM_SECONDS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : INGEST_QUEUE_AGE_DEFAULT_ALARM_SECONDS;
+}
+
+/** Cadence (seconds) of the queue-age sampling pass. */
+export function parseIngestQueueAgePollSeconds(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return INGEST_QUEUE_AGE_DEFAULT_POLL_SECONDS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : INGEST_QUEUE_AGE_DEFAULT_POLL_SECONDS;
+}
+
 export interface IngestHealthServer {
   /** Base URL of the health endpoint, including the bound port. */
   url: string;
@@ -410,27 +430,245 @@ export interface IngestHealthServer {
 }
 
 /**
- * Serves GET /ready on 127.0.0.1:<port> for the ingest worker's own ECS
- * container health check. 200 while a receive/ack cycle completed within
- * `staleMs`, 503 once progress went stale (the wedged-loop signal). Never
- * exposes anything but the trinary ok/stale/not-found answer.
+ * Shared, testable picture of ingest progress and queue state. The poll loop
+ * and the queue-age sampling pass both write here; the health endpoints only
+ * read, through the closures below.
+ */
+export interface IngestWorkerStatus {
+  startedAtMs: number;
+  /** Completion time of the last full receive→process→ack/delete loop pass. */
+  lastCycleMs: number | null;
+  /** Completion time of the last loop pass that returned at least one message. */
+  lastNonEmptyCycleMs: number | null;
+  cycles: number;
+  counts: { ingested: number; duplicate: number; quarantined: number; error: number };
+  /** Completion time of the last successful SQS queue-attributes sample. */
+  lastQueueSampleMs: number | null;
+  /** SQS ApproximateNumberOfMessagesVisible at the last sample. */
+  queueVisible: number | null;
+  /** SQS ApproximateAgeOfOldestMessage at the last sample. */
+  oldestMessageAgeSeconds: number | null;
+  queueSampleFailures: number;
+}
+
+export function createIngestWorkerStatus(nowMs = Date.now()): IngestWorkerStatus {
+  return {
+    startedAtMs: nowMs,
+    lastCycleMs: null,
+    lastNonEmptyCycleMs: null,
+    cycles: 0,
+    counts: { ingested: 0, duplicate: 0, quarantined: 0, error: 0 },
+    lastQueueSampleMs: null,
+    queueVisible: null,
+    oldestMessageAgeSeconds: null,
+    queueSampleFailures: 0,
+  };
+}
+
+export type IngestLivenessReason =
+  | "starting"
+  | "current"
+  | "stale"
+  | "stale_with_work"
+  | "stale_idle"
+  | "queue_state_unknown";
+
+export interface IngestLivenessDecision {
+  ok: boolean;
+  reason: IngestLivenessReason;
+  /** Seconds since the last completed receive cycle, null before the first. */
+  progressAgeSeconds: number | null;
+  /** Seconds since the last queue-attributes sample, when one exists. */
+  queueStateAgeSeconds: number | null;
+}
+
+export interface IngestLivenessOptions {
+  /** Max ms without a completed receive cycle while the queue is non-empty. */
+  staleMs: number;
+  /** Completion time (ms) of the last completed receive cycle; 0 = none yet. */
+  lastProgressAt: () => number;
+  /**
+   * Queue-state provider. Absent ⇒ progress-only liveness (stale always
+   * fails). Present ⇒ the queue-age sampling pass keeps it fresh even when the
+   * poll loop stalls, so a stale loop over a provably empty queue stays
+   * healthy (there is no work it is failing to do) and the queue itself is
+   * guarded by the age alarm. When the queue state cannot be proven fresh the
+   * loop fails closed: a stalled loop over an unobserved queue is precisely the
+   * incident this guard exists for.
+   */
+  queueState?: {
+    lastSampleAt: () => number | null;
+    visible: () => number | null;
+    sampleStaleAfterMs: number;
+  };
+}
+
+/**
+ * Progress-based health decision, per the incident's acceptance: the process
+ * being up is not enough — the probe must fail when the poll loop has not
+ * completed a receive/ack cycle for the threshold while the queue is
+ * non-empty, so ECS replaces the task.
+ */
+export function evaluateIngestLiveness(
+  options: IngestLivenessOptions,
+  nowMs = Date.now(),
+): IngestLivenessDecision {
+  const lastProgressAt = options.lastProgressAt();
+  if (lastProgressAt <= 0) {
+    return { ok: false, reason: "starting", progressAgeSeconds: null, queueStateAgeSeconds: null };
+  }
+  const progressAgeSeconds = Math.max(0, Math.floor((nowMs - lastProgressAt) / 1000));
+  if (nowMs - lastProgressAt <= options.staleMs) {
+    return { ok: true, reason: "current", progressAgeSeconds, queueStateAgeSeconds: null };
+  }
+  if (!options.queueState) {
+    return { ok: false, reason: "stale", progressAgeSeconds, queueStateAgeSeconds: null };
+  }
+  const lastSampleAt = options.queueState.lastSampleAt();
+  if (lastSampleAt === null) {
+    return { ok: false, reason: "queue_state_unknown", progressAgeSeconds, queueStateAgeSeconds: null };
+  }
+  const queueStateAgeSeconds = Math.max(0, Math.floor((nowMs - lastSampleAt) / 1000));
+  if (nowMs - lastSampleAt > options.queueState.sampleStaleAfterMs) {
+    return { ok: false, reason: "queue_state_unknown", progressAgeSeconds, queueStateAgeSeconds };
+  }
+  const visible = options.queueState.visible();
+  if (visible !== null && visible > 0) {
+    return { ok: false, reason: "stale_with_work", progressAgeSeconds, queueStateAgeSeconds };
+  }
+  return { ok: true, reason: "stale_idle", progressAgeSeconds, queueStateAgeSeconds };
+}
+
+/** One scheduled pass over the queue: sample age/visibility and alarm on age. */
+export function shouldEmitQueueAgeAlarm(
+  ageSeconds: number | null,
+  thresholdSeconds: number,
+): boolean {
+  return ageSeconds !== null && ageSeconds >= thresholdSeconds;
+}
+
+/** Stable, grep-able event line for the queue-age alarm hook. */
+export function formatQueueAgeAlarmEvent(event: {
+  ageSeconds: number;
+  thresholdSeconds: number;
+  visible: number | null;
+}): string {
+  return (
+    `[ingest] queue-age-alarm event=queue_age_exceeded ` +
+    `age_seconds=${event.ageSeconds} threshold_seconds=${event.thresholdSeconds} ` +
+    `visible=${event.visible ?? -1}`
+  );
+}
+
+export interface QueueAgeSamplerDeps {
+  fetchAttributes: () => Promise<Record<string, string>>;
+}
+
+/**
+ * One queue-age sample. Updates the shared status so the health probes always
+ * see the freshest known queue state, and emits the alarm event when the
+ * oldest queued message is at or beyond the threshold. A failed fetch is
+ * recorded and retried by the caller on the next pass — never thrown.
+ */
+export async function sampleQueueAgeOnce(
+  deps: QueueAgeSamplerDeps,
+  status: IngestWorkerStatus,
+  thresholdSeconds: number,
+  emit: (line: string) => void = (line) => console.error(line),
+  nowMs = Date.now(),
+): Promise<void> {
+  let attributes: Record<string, string>;
+  try {
+    attributes = await deps.fetchAttributes();
+  } catch (err) {
+    status.queueSampleFailures += 1;
+    emit(`[ingest] queue-age poll failed: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  const age = Number(attributes["ApproximateAgeOfOldestMessage"] ?? "0");
+  const visible = Number(attributes["ApproximateNumberOfMessagesVisible"] ?? "0");
+  status.oldestMessageAgeSeconds = Number.isFinite(age) ? age : 0;
+  status.queueVisible = Number.isFinite(visible) ? visible : 0;
+  status.lastQueueSampleMs = nowMs;
+  if (shouldEmitQueueAgeAlarm(status.oldestMessageAgeSeconds, thresholdSeconds)) {
+    emit(formatQueueAgeAlarmEvent({
+      ageSeconds: status.oldestMessageAgeSeconds,
+      thresholdSeconds,
+      visible: status.queueVisible,
+    }));
+  }
+}
+
+/** JSON body served from /health — diagnostics only, never credentials. */
+export function ingestProgressBody(
+  options: IngestLivenessOptions & {
+    status?: IngestWorkerStatus;
+    queueAgeAlarmThresholdSeconds?: number;
+  },
+  decision: IngestLivenessDecision,
+): Record<string, unknown> {
+  return {
+    ok: decision.ok,
+    service: "ingest-worker",
+    status: decision.reason,
+    progress: {
+      last_cycle_age_seconds: decision.progressAgeSeconds,
+      cycles: options.status?.cycles ?? null,
+      ...(options.status?.counts ?? {}),
+    },
+    queue: {
+      visible: options.status?.queueVisible ?? null,
+      oldest_age_seconds: options.status?.oldestMessageAgeSeconds ?? null,
+      sample_age_seconds: decision.queueStateAgeSeconds,
+    },
+    thresholds: {
+      liveness_ms: options.staleMs,
+      queue_sample_stale_ms: options.queueState?.sampleStaleAfterMs ?? null,
+      queue_age_alarm_seconds: options.queueAgeAlarmThresholdSeconds ?? null,
+    },
+  };
+}
+
+/**
+ * Serves GET /ready AND GET /health on 127.0.0.1:<port> for the ingest
+ * worker's own ECS container health check and for operators:
+ *   /ready  — the trinary answer (200 "ok" | 503 "stale") that the ECS health
+ *             check probes; queue-aware when the sampling pass is wired in.
+ *   /health — JSON diagnostics: progress age, queue state, thresholds.
+ * Never exposes anything beyond that; loopback-only.
  */
 export function startIngestProgressHealthServer(options: {
   port: number;
   staleMs: number;
   lastProgressAt: () => number;
+  status?: IngestWorkerStatus;
+  queueState?: IngestLivenessOptions["queueState"];
+  queueAgeAlarmThresholdSeconds?: number;
 }): IngestHealthServer {
   const server = Bun.serve({
     port: options.port,
     hostname: "127.0.0.1",
     fetch(req) {
-      const path = new URL(req.url).pathname;
-      if (path !== "/ready") return new Response("not found", { status: 404 });
-      const fresh = Date.now() - options.lastProgressAt() <= options.staleMs;
-      return new Response(fresh ? "ok" : "stale", {
-        status: fresh ? 200 : 503,
-        headers: { "Content-Type": "text/plain" },
-      });
+      const url = new URL(req.url);
+      const livenessOptions: IngestLivenessOptions = {
+        staleMs: options.staleMs,
+        lastProgressAt: options.lastProgressAt,
+        queueState: options.queueState,
+      };
+      if (url.pathname === "/ready" && req.method === "GET") {
+        const decision = evaluateIngestLiveness(livenessOptions, Date.now());
+        return new Response(decision.ok ? "ok" : "stale", {
+          status: decision.ok ? 200 : 503,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+      if (url.pathname === "/health" && req.method === "GET") {
+        const decision = evaluateIngestLiveness(livenessOptions, Date.now());
+        return Response.json(ingestProgressBody(options, decision), {
+          status: decision.ok ? 200 : 503,
+        });
+      }
+      return new Response("not found", { status: 404 });
     },
   });
   return { url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
@@ -446,6 +684,8 @@ export function startIngestProgressHealthServer(options: {
  *   EMAILS_DATABASE_URL        (required) — self-hosted Postgres DSN
  *   EMAILS_WORKER_HEALTH_PORT  progress-liveness endpoint port (default 9487; 0 disables)
  *   EMAILS_WORKER_PROGRESS_STALE_MS — ms without a completed receive/ack cycle before /ready 503s
+ *   EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS — oldest-message age (s) that emits the queue-age alarm event (default 900)
+ *   EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS — queue-age sampling cadence in seconds (default 60)
  */
 export async function runIngestWorker(options: WorkerOptions = {}): Promise<void> {
   const region = options.region ?? process.env["AWS_REGION"] ?? "us-east-1";
@@ -472,7 +712,7 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
   await assertServingRoleCannotBypassRls(client);
   const store = new EmailsSelfHostedStore(client);
 
-  const [{ SQSClient, ReceiveMessageCommand, DeleteMessageCommand }, { S3Client, GetObjectCommand }] =
+  const [{ SQSClient, ReceiveMessageCommand, DeleteMessageCommand, GetQueueAttributesCommand }, { S3Client, GetObjectCommand }] =
     await Promise.all([import("@aws-sdk/client-sqs"), import("@aws-sdk/client-s3")]);
   const sqs = new SQSClient({ region });
   const s3 = new S3Client({ region });
@@ -500,27 +740,80 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
   process.on("SIGTERM", () => stop("SIGTERM"));
   process.on("SIGINT", () => stop("SIGINT"));
 
-  const counts = { ingested: 0, duplicate: 0, quarantined: 0, error: 0 };
+  const status = createIngestWorkerStatus();
+  const counts = status.counts;
   let lastReport = Date.now();
 
-  // Progress-based liveness: the long-poll receive is deadline-bounded (a dead
-  // connection must error, not hang) and a local health endpoint reports
-  // whether the loop is still completing receive/ack cycles, so ECS can
-  // replace a wedged task.
+  // Progress-based liveness + queue-age alarm: the long-poll receive is
+  // deadline-bounded (a dead connection must error, not hang) and a local
+  // health endpoint reports whether the loop is still completing receive/ack
+  // cycles — failing once progress goes stale while the queue is non-empty —
+  // so ECS can replace a wedged task. The queue-age sampling pass below keeps
+  // the /ready decision honest about queue state even when the loop stalls,
+  // and emits the alarm event for the deployment-side queue-age alarm to
+  // route (the CloudWatch alarm on the SQS metric is provisioned by the
+  // deployment module, not by this worker).
   const healthPort = parseIngestHealthPort(process.env["EMAILS_WORKER_HEALTH_PORT"]);
   const progressStaleMs = parseIngestProgressStaleMs(process.env["EMAILS_WORKER_PROGRESS_STALE_MS"]);
-  let lastProgressAt = Date.now();
+  const queueAgeAlarmSeconds = parseIngestQueueAgeAlarmSeconds(
+    process.env["EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS"],
+  );
+  const queueAgePollSeconds = parseIngestQueueAgePollSeconds(
+    process.env["EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS"],
+  );
+  // The health probe fails closed when the queue-attributes sample is older
+  // than this: a stalled loop with no proof the queue is empty is the incident
+  // this guard exists for.
+  const queueSampleStaleAfterMs = Math.max(queueAgePollSeconds * 3, 180) * 1000;
   let health: IngestHealthServer | null = null;
   if (healthPort > 0) {
     health = startIngestProgressHealthServer({
       port: healthPort,
       staleMs: progressStaleMs,
-      lastProgressAt: () => lastProgressAt,
+      lastProgressAt: () => status.lastCycleMs ?? 0,
+      status,
+      queueState: {
+        lastSampleAt: () => status.lastQueueSampleMs,
+        visible: () => status.queueVisible,
+        sampleStaleAfterMs: queueSampleStaleAfterMs,
+      },
+      queueAgeAlarmThresholdSeconds: queueAgeAlarmSeconds,
     });
-    console.log(`[ingest] progress liveness: ${health.url}/ready (stale after ${progressStaleMs} ms)`);
+    console.log(
+      `[ingest] progress liveness: ${health.url}/ready (stale after ${progressStaleMs} ms; ` +
+        `queue-age alarm at ${queueAgeAlarmSeconds} s, sampled every ${queueAgePollSeconds} s)`,
+    );
   } else {
-    console.log("[ingest] progress liveness: disabled (EMAILS_WORKER_HEALTH_PORT is 0)");
+    console.log(
+      `[ingest] progress liveness: disabled (EMAILS_WORKER_HEALTH_PORT is 0); ` +
+        `queue-age alarm at ${queueAgeAlarmSeconds} s, sampled every ${queueAgePollSeconds} s`,
+    );
   }
+
+  const fetchQueueAttributes = async (): Promise<Record<string, string>> => {
+    // The SDK's QueueAttributeName union omits ApproximateAgeOfOldestMessage
+    // even though SQS supports it (a known SDK gap); the two literals we need
+    // are cast through the type deliberately.
+    const attributeNames: import("@aws-sdk/client-sqs").QueueAttributeName[] = [
+      "ApproximateAgeOfOldestMessage",
+      "ApproximateNumberOfMessagesVisible",
+    ] as unknown as import("@aws-sdk/client-sqs").QueueAttributeName[];
+    const out = await sqs.send(new GetQueueAttributesCommand({
+      QueueUrl: configuredQueueUrl,
+      AttributeNames: attributeNames,
+    }));
+    return out.Attributes ?? {};
+  };
+  // Independent sampling pass: it keeps queue-state knowledge fresh even when
+  // the poll loop itself is wedged, and it is the scheduled pass that emits
+  // the queue-age alarm event.
+  void runIngestQueueAgeSampler({
+    fetchAttributes: fetchQueueAttributes,
+    status,
+    thresholdSeconds: queueAgeAlarmSeconds,
+    pollSeconds: queueAgePollSeconds,
+    isRunning: () => running,
+  });
 
   console.log(
     `[ingest] starting: queue=${configuredQueueUrl.split("/").pop()} region=${region} ` +
@@ -548,7 +841,9 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
     // A completed receive cycle is progress even with zero messages: it proves
     // the poll loop is alive (the wedge the 2026-08-31 incident saw stops
     // right here, with the task still 'healthy').
-    lastProgressAt = Date.now();
+    status.lastCycleMs = Date.now();
+    status.cycles += 1;
+    if (messages.length > 0) status.lastNonEmptyCycleMs = status.lastCycleMs;
 
     for (const m of messages) {
       if (!running) break;
@@ -588,6 +883,30 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
   );
   if (health) health.stop();
   await closeSelfHostedPool();
+}
+
+/**
+ * Scheduled queue-age pass. Samples once per tick, and on each failure logs
+ * and retries at the next tick; never crashes the worker.
+ */
+async function runIngestQueueAgeSampler(args: {
+  fetchAttributes: () => Promise<Record<string, string>>;
+  status: IngestWorkerStatus;
+  thresholdSeconds: number;
+  pollSeconds: number;
+  isRunning: () => boolean;
+}): Promise<void> {
+  const { fetchAttributes, status, thresholdSeconds, pollSeconds, isRunning } = args;
+  while (isRunning()) {
+    try {
+      await sampleQueueAgeOnce({ fetchAttributes }, status, thresholdSeconds);
+    } catch (err) {
+      console.error(`[ingest] queue-age pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    for (let waited = 0; waited < pollSeconds && isRunning(); waited += 1) {
+      await sleep(1000);
+    }
+  }
 }
 
 interface BackfillOptions {

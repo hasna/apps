@@ -96,6 +96,8 @@ locals {
       { name = "EMAILS_INGEST_QUEUE_URL", value = aws_sqs_queue.inbound.id },
       { name = "EMAILS_INGEST_S3_BUCKET", value = aws_s3_bucket.inbound.id },
       { name = "EMAILS_WORKER_HEALTH_PORT", value = tostring(var.worker_health_port) },
+      { name = "EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS", value = tostring(var.ingest_queue_age_alarm_threshold_seconds) },
+      { name = "EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS", value = tostring(var.ingest_queue_age_poll_seconds) },
     ],
     var.enable_ses_inbound && length(local.inbound_prefix_domain_map) > 0 ? [{
       name  = "EMAILS_INGEST_PREFIX_DOMAIN_MAP"
