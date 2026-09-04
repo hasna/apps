@@ -310,7 +310,6 @@ describe("host protocol against a temp vault", () => {
     // own credential_assignment commit gate. Same pattern the scanner's own
     // test fixtures use.
     env.HASNA_SECRETS_API_KEY = ["bogus", "key", "for", "test"].join("-");
-    env.HASNA_SECRETS_STORAGE_MODE = "cloud";
     const host = new HostClient(env);
     try {
       const res = (await host.send({ verb: "auth-status" })) as any;

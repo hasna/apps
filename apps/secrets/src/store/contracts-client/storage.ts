@@ -1,6 +1,6 @@
 // HTTP storage client for the Hasna Service Contract v1.
 //
-// This is the piece that makes `mode=self_hosted` real for a client. It sits on
+// This is the piece that makes the API transport real for a client. It sits on
 // top of `createHasnaHttpTransport` and implements the generic resource CRUD
 // vocabulary every Hasna serve app exposes under `/v1`:
 //
@@ -11,9 +11,10 @@
 //   delete -> DELETE /v1/<resource>/<id>       -> void       (204/404 => ok)
 //
 // An app's storage resolver selects this client when the client-flip contract
-// resolves to `cloud-http` (mode=cloud/self_hosted AND API_URL+API_KEY set), and
-// falls through to the local store otherwise. See `resolveClientTransport` /
-// `createClientTransport` in ./transport.ts.
+// resolves to `cloud-http` (API_URL + API_KEY pair present — deployment modes
+// no longer exist, so there is no mode to select), and falls through to the
+// local store otherwise. See `resolveClientTransport` / `createClientTransport`
+// in ./transport.ts.
 //
 // Guarantees carried up from the transport: JSON in/out, per-request timeout,
 // retries with exponential backoff + jitter for transient failures, and
@@ -23,7 +24,7 @@
 // SAFETY: never logs, returns, or embeds the API key. The key lives only inside
 // the transport it wraps.
 
-import type { Env } from "./mode.js";
+import type { Env } from "./transport.js";
 import {
   createClientTransport,
   HasnaHttpError,
@@ -212,12 +213,12 @@ export type ResolveStorageClientResult =
 
 /**
  * The one call an app's storage resolver makes. Reads the client-flip env for
- * `name`; when it resolves to `cloud-http` (mode=cloud/self_hosted + API_URL +
- * API_KEY), returns a ready {@link HasnaStorageClient}. Otherwise returns
+ * `name`; when it resolves to `cloud-http` (API_URL + API_KEY pair present),
+ * returns a ready {@link HasnaStorageClient}. Otherwise returns
  * `{ transport: 'local', client: null, resolution }` so the app uses its local
  * store with the transport decision visible (why local was selected).
- * Throws if cloud was requested but is misconfigured (so callers never silently
- * read the wrong dataset).
+ * Throws if the flip is half-applied or misconfigured (so callers never
+ * silently read the wrong dataset).
  */
 export function resolveStorageClient(
   name: string,
@@ -230,7 +231,7 @@ export function resolveStorageClient(
       transport: "cloud-http",
       client: createHasnaStorageClient(name, wired.client),
       // The full resolution travels with the client so a caller can see WHY this
-      // transport was chosen (mode source, present keys) — never dropped.
+      // transport was chosen (present keys, sources) — never dropped.
       resolution: wired.resolution,
     };
   }

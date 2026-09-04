@@ -3,14 +3,6 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  DEPRECATED_STORAGE_MODE_ALIASES,
-  normalizeStorageMode,
-  envToken,
-  storageEnvKeys,
-  resolveStorageMode,
-  resolveDatabaseUrl,
-} from "../src/generated/storage-kit/mode.js";
-import {
   sslModeFromConnectionString,
   resolveTlsConfig,
 } from "../src/generated/storage-kit/tls.js";
@@ -27,7 +19,12 @@ import {
   MigrationLedger,
 } from "../src/generated/storage-kit/migrations.js";
 import { checkHealth, checkReady } from "../src/generated/storage-kit/health.js";
-import { createCloudPoolFromEnv, createPgPool } from "../src/generated/storage-kit/pool.js";
+import {
+  assertNoRetiredStorageMode,
+  createCloudPoolFromEnv,
+  createPgPool,
+  resolveDatabaseUrl,
+} from "../src/generated/storage-kit/pool.js";
 
 const tempFiles: string[] = [];
 
@@ -35,53 +32,39 @@ afterEach(() => {
   for (const file of tempFiles.splice(0)) rmSync(file, { force: true });
 });
 
-describe("generated storage mode contract", () => {
-  it("normalizes canonical modes, deprecated aliases, and invalid values", () => {
-    expect(normalizeStorageMode(" LOCAL ")).toEqual({ mode: "local", deprecatedAlias: null });
-    expect(normalizeStorageMode("cloud")).toEqual({ mode: "cloud", deprecatedAlias: null });
-    for (const alias of DEPRECATED_STORAGE_MODE_ALIASES) {
-      expect(normalizeStorageMode(alias.replace("_", "-"))).toEqual({
-        mode: "cloud",
-        deprecatedAlias: alias,
-      });
+describe("generated storage kit — retired mode contract", () => {
+  it("rejects every retired storage-mode variable as a hard error", () => {
+    for (const key of [
+      "HASNA_MY_APP_STORAGE_MODE",
+      "HASNA_MY_APP_MODE",
+      "MY_APP_STORAGE_MODE",
+      "MY_APP_MODE",
+    ] as const) {
+      expect(() => assertNoRetiredStorageMode("my-app", { [key]: "cloud" })).toThrow(
+        new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} was removed`),
+      );
     }
-    expect(() => normalizeStorageMode("offline")).toThrow("Unknown storage mode");
+    // No legacy key set: silent.
+    expect(() => assertNoRetiredStorageMode("my-app", {})).not.toThrow();
+    expect(() =>
+      assertNoRetiredStorageMode("my-app", { HASNA_MY_APP_DATABASE_URL: "postgres://x/db" }),
+    ).not.toThrow();
   });
 
-  it("builds env keys and resolves canonical, alias, default, and warning paths", () => {
-    expect(envToken("my-app")).toBe("MY_APP");
-    expect(storageEnvKeys("my-app")).toEqual({
-      modeKeys: ["HASNA_MY_APP_STORAGE_MODE", "MY_APP_STORAGE_MODE"],
-      databaseUrlKeys: ["HASNA_MY_APP_DATABASE_URL", "MY_APP_DATABASE_URL"],
+  it("resolves the database URL from canonical, alias, and shared keys", () => {
+    expect(resolveDatabaseUrl("my-app", {})).toEqual({ value: null, source: null });
+    expect(resolveDatabaseUrl("my-app", { HASNA_MY_APP_DATABASE_URL: " postgres://canonical " })).toEqual({
+      value: "postgres://canonical",
+      source: "HASNA_MY_APP_DATABASE_URL",
     });
-
-    expect(resolveStorageMode("my-app", {})).toEqual({
-      mode: "local",
-      source: "default",
-      deprecatedAlias: null,
-      databaseUrlPresent: false,
-      databaseUrlSource: null,
-      warning: null,
+    expect(resolveDatabaseUrl("my-app", { MY_APP_DATABASE_URL: "postgres://alias" })).toEqual({
+      value: "postgres://alias",
+      source: "MY_APP_DATABASE_URL",
     });
-
-    const canonical = resolveStorageMode("my-app", {
-      HASNA_MY_APP_STORAGE_MODE: "cloud",
-      HASNA_MY_APP_DATABASE_URL: " postgres://canonical ",
+    expect(resolveDatabaseUrl("my-app", { DATABASE_URL: "postgres://shared" })).toEqual({
+      value: "postgres://shared",
+      source: "DATABASE_URL",
     });
-    expect(canonical.mode).toBe("cloud");
-    expect(canonical.databaseUrlSource).toBe("HASNA_MY_APP_DATABASE_URL");
-    expect(canonical.warning).toBeNull();
-    expect(resolveDatabaseUrl("my-app", { HASNA_MY_APP_DATABASE_URL: " postgres://canonical " })).toBe(
-      "postgres://canonical",
-    );
-    expect(resolveDatabaseUrl("my-app", {})).toBeNull();
-
-    const alias = resolveStorageMode("my-app", { MY_APP_STORAGE_MODE: "self-hosted" });
-    expect(alias.mode).toBe("cloud");
-    expect(alias.deprecatedAlias).toBe("self_hosted");
-    expect(alias.warning).toContain("Deprecated storage mode");
-    expect(alias.warning).toContain("needs HASNA_MY_APP_DATABASE_URL");
-    expect(alias.warning).toContain("Using alias env");
   });
 });
 
@@ -296,15 +279,14 @@ describe("generated Postgres pool factory", () => {
     await plain.end();
   });
 
-  it("requires cloud mode and a URL, then returns a closable query client", async () => {
-    expect(() => createCloudPoolFromEnv("demo", { env: {} })).toThrow("requires demo storage mode 'cloud'");
-    expect(() => createCloudPoolFromEnv("demo", { env: { HASNA_DEMO_STORAGE_MODE: "cloud" } })).toThrow(
-      "needs a database URL",
-    );
+  it("requires a database URL, rejects retired mode variables, and returns a closable query client", async () => {
+    expect(() => createCloudPoolFromEnv("demo", { env: {} })).toThrow("needs a database URL");
+    expect(() =>
+      createCloudPoolFromEnv("demo", { env: { HASNA_DEMO_STORAGE_MODE: "cloud" } }),
+    ).toThrow("HASNA_DEMO_STORAGE_MODE was removed");
 
     const result = createCloudPoolFromEnv("demo", {
       env: {
-        HASNA_DEMO_STORAGE_MODE: "cloud",
         DEMO_DATABASE_URL: "postgres://user:pass@127.0.0.1/db",
       },
       max: 2,

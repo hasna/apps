@@ -763,8 +763,9 @@ KMS envelope-encryption mode.
 A test process cannot reach a real vault. This is enforced by the code, not by
 convention, because convention already failed: the suite wrote fixtures into a
 hosted production vault on four separate runs, because a machine's shell
-environment exports `HASNA_SECRETS_STORAGE_MODE` / `_API_URL` / `_API_KEY` and
-`getStore()` reads them.
+environment exports `HASNA_SECRETS_API_URL` / `_API_KEY` (and, before the
+deployment-modes removal, a `HASNA_SECRETS_STORAGE_MODE` that is now a hard
+error) and `getStore()` reads them.
 
 ```bash
 bun test
@@ -831,7 +832,6 @@ injected via `HASNA_SECRETS_MASTER_KEY` — the service fails closed without it.
 
 ```bash
 # migrate the cloud database (one-shot), then serve
-export HASNA_SECRETS_STORAGE_MODE=cloud
 export HASNA_SECRETS_DATABASE_URL=postgres://...          # or DATABASE_URL
 export HASNA_SECRETS_API_SIGNING_KEY=$(openssl rand -hex 32)
 export HASNA_SECRETS_MASTER_KEY=$(openssl rand -base64 32)

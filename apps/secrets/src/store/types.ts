@@ -8,17 +8,17 @@
 //     @hasna/paths dataDir({app:"secrets"}) with gated legacy adoption —
 //     ~/.hasna/secrets/vault.db until the store is migrated to the XDG data
 //     home; see src/data-dir.ts).
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
-//     key. Delegates to the vendored @hasna/contracts storage client.
+//   • ApiStore   — the HTTP API at `<API_URL>/v1` with a bearer key. Delegates
+//     to the vendored @hasna/contracts storage client.
 //
 // `getStore()` (./index.ts) resolves which transport to use from the client-flip
-// env (HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY / HASNA_SECRETS_STORAGE_MODE).
-// Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
-// directly — that was the split-brain bug this module eliminates.
+// env (HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY). Callers NEVER branch on
+// mode themselves and NEVER touch sqlite or fetch directly — that was the
+// split-brain bug this module eliminates.
 //
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
-// key differ, and that distinction is server-side tenancy. `local` is
-// first-class and fully functional.
+// Retired storage-mode variables (HASNA_SECRETS_STORAGE_MODE and friends) are a
+// hard error, never a selector: deployment modes no longer exist, and the
+// transport follows the URL + key pair alone.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced by an implementation.

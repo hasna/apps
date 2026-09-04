@@ -5,7 +5,8 @@
 // and destroyed two production secrets when a fixture key name drifted onto a real
 // one. The mechanism was not exotic: `getStore()` resolves its transport from the
 // ambient process environment, and a fleet machine's environment carries
-// HASNA_SECRETS_STORAGE_MODE + HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY. Tests
+// HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY (plus, historically, a retired
+// HASNA_SECRETS_STORAGE_MODE that is now a hard error). Tests
 // set OPEN_SECRETS_DB — which only ever steered LocalStore — and were then trusted
 // by convention to stay local. Anything reaching src/env.ts or src/aws.ts, both of
 // which call `getStore()` internally, went to production instead.

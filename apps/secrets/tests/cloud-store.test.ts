@@ -84,7 +84,7 @@ afterEach(() => {
 });
 
 describe("cloud environment bridge", () => {
-  it("maps ECS env without overwriting canonical or alias values", () => {
+  it("maps ECS env without overwriting canonical or alias values — and never synthesises a storage mode", () => {
     expect(APP_NAME).toBe("secrets");
     expect(DEFAULT_PORT).toBe(8080);
     const env = {
@@ -94,9 +94,12 @@ describe("cloud environment bridge", () => {
     bootstrapCloudEnv(env);
     expect(env).toMatchObject({
       HASNA_SECRETS_DATABASE_URL: "postgres://ecs",
-      HASNA_SECRETS_STORAGE_MODE: "cloud",
       HASNA_SECRETS_API_SIGNING_KEY: "ecs-signing",
     });
+    // Deployment modes no longer exist: the bridge must NOT write a retired
+    // storage-mode variable into the environment.
+    expect(env.HASNA_SECRETS_STORAGE_MODE).toBeUndefined();
+    expect(env.SECRETS_STORAGE_MODE).toBeUndefined();
 
     const configured = {
       DATABASE_URL: "postgres://ignored",
@@ -107,7 +110,10 @@ describe("cloud environment bridge", () => {
     } as NodeJS.ProcessEnv;
     bootstrapCloudEnv(configured);
     expect(configured.HASNA_SECRETS_DATABASE_URL).toBe("postgres://canonical");
+    // A pre-existing retired variable is left untouched (the kit/db resolver
+    // rejects it as a hard error downstream; the bridge never repairs it).
     expect(configured.HASNA_SECRETS_STORAGE_MODE).toBeUndefined();
+    expect(configured.SECRETS_STORAGE_MODE).toBe("local");
     expect(configured.HASNA_SECRETS_API_SIGNING_KEY).toBe("canonical-signing");
   });
 

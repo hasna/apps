@@ -2,14 +2,14 @@
 //
 // `getStore()` reads the client-flip env and returns the correct transport:
 //
-//   • HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY  (and/or
-//     HASNA_SECRETS_STORAGE_MODE=cloud|self_hosted)  => ApiStore (HTTP /v1 + key)
+//   • HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY  => ApiStore (HTTP /v1 + key)
 //   • otherwise                                        => LocalStore (sqlite)
 //
 // This is the ONE place that decides transport. No CLI command, MCP tool, or SDK
-// method branches on mode; they all call methods on the resolved Store. If cloud
-// mode is requested but misconfigured (e.g. URL set, key missing) the vendored
-// resolver throws instead of silently reading local data.
+// method branches on mode; they all call methods on the resolved Store. Retired
+// `HASNA_SECRETS_STORAGE_MODE`-family variables are a hard error (deployment
+// modes no longer exist), and a half-applied flip (e.g. URL set, key missing)
+// makes the vendored resolver throw instead of silently reading local data.
 
 import { resolveStorageClient, type ClientTransportResolution } from "./contracts-client/index.js";
 import { ApiStore } from "./api.js";

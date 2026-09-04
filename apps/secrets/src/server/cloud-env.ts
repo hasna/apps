@@ -3,12 +3,14 @@
  * @hasna/contracts storage kit + auth conventions.
  *
  * The hasna-app Terraform module injects a fixed set of container env/secrets:
- *   PORT, HASNA_APP_NAME, HASNA_APP_MODE, AWS_REGION            (env)
+ *   PORT, HASNA_APP_NAME, AWS_REGION                           (env)
  *   DATABASE_URL, API_KEY_SIGNING_SECRET                        (secrets)
  *
- * The storage kit resolves DSN/mode from HASNA_SECRETS_DATABASE_URL /
- * HASNA_SECRETS_STORAGE_MODE, and the auth middleware wants the signing secret.
- * This module maps the injected names onto the canonical ones exactly once.
+ * The storage kit resolves the backend from DATABASE_URL alone (deployment
+ * modes no longer exist — a retired `HASNA_SECRETS_STORAGE_MODE` variable is
+ * a hard error, so it is never synthesised here), and the auth middleware
+ * wants the signing secret. This module maps the injected names onto the
+ * canonical ones exactly once.
  */
 
 export const APP_NAME = "secrets";
@@ -19,10 +21,6 @@ export function bootstrapCloudEnv(env: NodeJS.ProcessEnv = process.env): void {
   // DSN: DATABASE_URL -> HASNA_SECRETS_DATABASE_URL
   if (!env.HASNA_SECRETS_DATABASE_URL && !env.SECRETS_DATABASE_URL && env.DATABASE_URL) {
     env.HASNA_SECRETS_DATABASE_URL = env.DATABASE_URL;
-  }
-  // The deployed serve is always cloud (PURE REMOTE, Amendment A1).
-  if (!env.HASNA_SECRETS_STORAGE_MODE && !env.SECRETS_STORAGE_MODE) {
-    env.HASNA_SECRETS_STORAGE_MODE = "cloud";
   }
   // Signing secret: API_KEY_SIGNING_SECRET -> HASNA_SECRETS_API_SIGNING_KEY
   if (!env.HASNA_SECRETS_API_SIGNING_KEY && env.API_KEY_SIGNING_SECRET) {
