@@ -389,7 +389,7 @@ export function registerCommands(program: Command): void {
 
       if (summary.errors > 0 || summary.warnings > 0) {
         console.log(chalk.dim("\n  Run 'connectors auth <name>' to configure individual connectors."));
-        console.log(chalk.dim("  Run 'connectors serve' to manage auth via the dashboard.\n"));
+        console.log(chalk.dim("  Run 'connectors serve' to manage auth via the local API server.\n"));
       } else {
         console.log(chalk.green("\n  All connectors are healthy!\n"));
       }

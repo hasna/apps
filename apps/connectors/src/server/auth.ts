@@ -1,5 +1,5 @@
 /**
- * Auth status detection and token management for the dashboard server.
+ * Auth status detection and token management for the local auth server.
  * Reads connector CLAUDE.md files to determine auth type, checks profile
  * directories for stored credentials, and handles token operations.
  */

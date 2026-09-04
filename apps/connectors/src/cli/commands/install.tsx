@@ -241,7 +241,7 @@ export function registerCommands(program: Command): void {
         console.log(chalk.bold("\nNext steps:"));
         console.log(chalk.dim(`  1. Run:     `) + `connectors run ${succeeded[0]} --help`);
         console.log(chalk.dim(`  2. Set key: `) + `connectors docs ${succeeded[0]}` + chalk.dim(` (see env vars and auth flow)`));
-        console.log(chalk.dim(`  3. Explore: `) + `connectors serve` + chalk.dim(` (dashboard for auth and profiles)`));
+        console.log(chalk.dim(`  3. Explore: `) + `connectors serve` + chalk.dim(` (local OAuth + API server)`));
       }
       process.exit(results.every((r) => r.success) ? 0 : 1);
     });

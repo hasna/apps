@@ -8,9 +8,9 @@ Thanks for helping improve the connectors. Please follow these guidelines so we 
 # Clone and install
 git clone https://github.com/hasna/connectors.git
 cd connectors
-bun install              # Installs all deps (dashboard deps via postinstall)
+bun install              # Installs all deps
 
-# Build everything (dashboard + CLI + MCP + serve)
+# Build everything (CLI + MCP + API/OAuth serve + library)
 bun run build
 
 # Run CLI in development

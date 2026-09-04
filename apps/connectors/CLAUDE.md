@@ -9,15 +9,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **CLI** (`src/cli/index.tsx`) — Commander + Ink interactive terminal UI
 - **Library** (`src/index.ts`) — Programmatic API for registry, install, search
 - **MCP Server** (`src/mcp/index.ts`) — Model Context Protocol server for AI agents
-- **Dashboard** (`src/server/serve.ts` + `dashboard/`) — Bun HTTP server serving a Vite/React/shadcn UI
 
 ## Commands
 
 ```bash
-bun install              # Install all deps (dashboard deps auto-install via postinstall)
+bun install              # Install all deps
 bun run dev              # Run CLI from source
-bun run build            # Build everything: dashboard, CLI, MCP, serve, .d.ts declarations
-bun run build:dashboard  # Build dashboard only
+bun run build            # Build everything: CLI, MCP, API+OAuth serve, library, .d.ts declarations
 bun run typecheck        # tsc --noEmit
 bun run check:package-secrets  # Block tracked .npmrc literal auth tokens
 bun test                 # Run all 216 tests (6 test files)
@@ -27,7 +25,7 @@ npm publish              # Runs prepublishOnly (test + build), then publishes
 
 ## Architecture
 
-**Build pipeline:** `bun run build` chains: dashboard Vite build → bun build for 4 targets (CLI, MCP, serve, library) → `tsc --emitDeclarationOnly` for `.d.ts` files. CLI externals ink/react/chalk/conf (loaded at runtime).
+**Build pipeline:** `bun run build` chains bun build for 4 targets (CLI, MCP, serve, library) → `tsc --emitDeclarationOnly` for `.d.ts` files. CLI externals ink/react/chalk/conf (loaded at runtime).
 
 **Connector registry** (`src/lib/registry.ts`): Static array of 62 `ConnectorMeta` entries with `CATEGORIES` as `const` union type. Versions loaded lazily from each connector's `package.json`.
 
@@ -35,7 +33,7 @@ npm publish              # Runs prepublishOnly (test + build), then publishes
 
 **Auth system** (`src/server/auth.ts`): Reads connector CLAUDE.md files to detect auth type (oauth/bearer/apikey). Manages profiles at `~/.connectors/connect-{name}/`. Two profile file patterns: `profiles/default.json` (flat) and `profiles/default/config.json` + `tokens.json` (directory). OAuth is Google-only currently (hardcoded endpoints + scopes map). CSRF state tokens stored in-memory.
 
-**Dashboard server** (`src/server/serve.ts`): Bun.serve() with route matching via regex. Serves Vite-built SPA from `dashboard/dist/` with fallback to `index.html`. API routes return JSON, static files served by MIME type. Dashboard React app at `dashboard/src/app.tsx` uses @tanstack/react-table.
+**Local API + OAuth server** (`src/server/serve.ts`): Bun.serve() with route matching, JSON API routes in `/api`, OAuth start/callback pages, MCP HTTP handling, and 404 JSON for unknown non-API routes.
 
 **Interactive CLI** (`src/cli/components/`): Ink (React for terminals) components. `App.tsx` manages view state machine: main → browse/search → connectors → installing → done. `ConnectorSelect` and `SearchView` share similar table rendering with scroll virtualization.
 
@@ -70,7 +68,7 @@ Do NOT add these connectors:
 
 **Other:** connect-clickbank, connect-escrow, connect-farfetch, connect-browseruse
 
-## Dashboard API Routes
+## API Routes
 
 | Route | Method | Purpose |
 |-------|--------|---------|
@@ -101,4 +99,4 @@ npm publish
 bun install -g @hasna/connectors@<version>
 ```
 
-The npm package includes `bin/`, `dist/`, `dashboard/dist/`, and `connectors/`.
+The npm package includes `bin/`, `dist/`, and `connectors/`.

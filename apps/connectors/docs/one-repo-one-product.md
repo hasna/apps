@@ -14,7 +14,7 @@
 - Add shared runtime behavior under `src/core/`.
 - Register new internal definitions in the core registry instead of relying on CLI help parsing.
 - Treat `connectors install` as project enablement, not source copying.
-- Keep CLI, MCP, REST, and dashboard hints aligned with `connectors run <name> ...` and the shared auth home.
+- Keep CLI, MCP, REST, and local server hints aligned with `connectors run <name> ...` and the shared auth home.
 
 ## Compatibility Rules
 

@@ -241,7 +241,7 @@ export function registerCommands(program: Command): void {
           return;
         }
 
-        // Start a temporary dashboard server and open OAuth URL
+        // Start a temporary local server and open the OAuth URL
         console.log(chalk.yellow("OAuth connectors require browser-based authentication."));
         console.log();
 
@@ -273,7 +273,7 @@ export function registerCommands(program: Command): void {
               await fetch(`http://localhost:${port}/api/connectors`);
             } catch {
               console.log(chalk.red(`OAuth server failed to start on port ${port}. Is the port already in use?`));
-              console.log(chalk.dim("Free the port and try again, or use 'connectors serve' for the full dashboard."));
+              console.log(chalk.dim("Free the port and try again, or use 'connectors serve' for the OAuth flow."));
               process.exit(1);
               return;
             }
@@ -327,7 +327,7 @@ export function registerCommands(program: Command): void {
           console.log(chalk.dim(`Starting temporary server on port ${port}...`));
           // startServer registers its own SIGINT handler and calls process.exit
           // strict: true ensures we fail if port is busy (OAuth requires exact port match)
-          await startServer(port, { open: false, strict: true });
+          await startServer(port, { strict: true });
 
           console.log(chalk.bold(`\nOpen this URL to authenticate:\n`));
           console.log(`  ${chalk.cyan(oauthUrl)}\n`);
@@ -347,7 +347,7 @@ export function registerCommands(program: Command): void {
           await new Promise<void>(() => {});
         } catch (err) {
           console.log(chalk.red(`Failed to start OAuth flow: ${err}`));
-          console.log(chalk.dim("Try 'connectors serve' to use the full dashboard instead."));
+          console.log(chalk.dim("Try 'connectors serve' for the OAuth flow instead."));
           process.exit(1);
         }
         return;
@@ -542,7 +542,7 @@ export function registerCommands(program: Command): void {
       console.log(`  ${chalk.cyan("connectors list")}              ${chalk.dim(`— browse all ${CONNECTORS.length} connectors`)}`);
       console.log(`  ${chalk.cyan("connectors setup <name> --key <key>")}  ${chalk.dim("— set up a connector")}`);
       console.log(`  ${chalk.cyan("connectors ops <name>")}         ${chalk.dim("— see what a connector can do")}`);
-      console.log(`  ${chalk.cyan("connectors serve")}              ${chalk.dim("— open the auth dashboard")}`);
+      console.log(`  ${chalk.cyan("connectors serve")}              ${chalk.dim("— run the local API + OAuth server")}`);
       console.log();
 
       process.exit(0);

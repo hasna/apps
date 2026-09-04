@@ -54,7 +54,7 @@ describe("server management routes", () => {
   beforeAll(async () => {
     process.env.HOME = TEST_HOME;
     serverPort = 50000 + Math.floor(Math.random() * 10000);
-    serverPort = await startServer(serverPort, { open: false });
+    serverPort = await startServer(serverPort);
     baseUrl = `http://localhost:${serverPort}`;
   });
 

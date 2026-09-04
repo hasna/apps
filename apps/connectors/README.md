@@ -18,7 +18,7 @@ bun install -g @hasna/connectors
 - connectors stay inside this repo and package
 - projects enable the connectors they want through `.connectors/manifest.json`
 - credentials live in the connectors data home (resolved through `@hasna/paths`; `~/.hasna/connectors/` until the XDG data home is adopted)
-- CLI, MCP, REST, and the dashboard all use the same connector registry
+- CLI, MCP, REST, and the local API/OAuth server all use the same connector registry
 
 ## CLI
 

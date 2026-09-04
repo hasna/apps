@@ -1,7 +1,6 @@
 /**
- * Reusable server starter for the connector auth dashboard.
+ * Reusable local API + OAuth server for connector auth.
  * Used by both the CLI `serve` command and the standalone `connectors-serve` binary.
- * Serves the Vite-built React/shadcn dashboard from dashboard/dist/.
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -14,8 +13,7 @@ import { createWorkflow, listWorkflows, getWorkflowByName, deleteWorkflow } from
 import { triggerJob } from "../lib/scheduler.js";
 import { runWorkflow } from "../lib/workflow-runner.js";
 import { getDatabase, getConnectorsHome } from "../db/database.js";
-import { join, dirname, extname, basename, relative, resolve, sep } from "path";
-import { fileURLToPath } from "url";
+import { join, basename } from "path";
 import {
   CONNECTORS,
   getConnector,
@@ -77,49 +75,6 @@ interface ConnectorWithAuth {
   installed: boolean;
   auth: AuthStatus | null;
 }
-
-// Resolve the dashboard dist directory — check multiple locations
-function resolveDashboardDir(): string {
-  const candidates: string[] = [];
-
-  // Relative to the script file (works for both source and built)
-  try {
-    const scriptDir = dirname(fileURLToPath(import.meta.url));
-    candidates.push(join(scriptDir, "..", "dashboard", "dist"));
-    candidates.push(join(scriptDir, "..", "..", "dashboard", "dist"));
-  } catch {
-    // import.meta.url may not resolve in all contexts
-  }
-
-  // Relative to the main script (process.argv[1])
-  if (process.argv[1]) {
-    const mainDir = dirname(process.argv[1]);
-    candidates.push(join(mainDir, "..", "dashboard", "dist"));
-    candidates.push(join(mainDir, "..", "..", "dashboard", "dist"));
-  }
-
-  // Relative to cwd (most reliable for local use)
-  candidates.push(join(process.cwd(), "dashboard", "dist"));
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return join(process.cwd(), "dashboard", "dist");
-}
-
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-};
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -214,20 +169,9 @@ function oauthPage(type: "success" | "error" | "warning", title: string, message
   </body></html>`;
 }
 
-function serveStaticFile(filePath: string): Response | null {
-  if (!existsSync(filePath)) return null;
-
-  const ext = extname(filePath);
-  const contentType = MIME_TYPES[ext] || "application/octet-stream";
-
-  return new Response(Bun.file(filePath), {
-    headers: { "Content-Type": contentType },
-  });
-}
 
 export interface ServeOptions {
   port: number;
-  open?: boolean;
 }
 
 async function findAvailablePort(preferred: number, strict = false): Promise<number> {
@@ -255,21 +199,9 @@ async function findAvailablePort(preferred: number, strict = false): Promise<num
   throw new Error(`No available port found in range ${preferred}-${preferred + 99}`);
 }
 
-export async function startServer(requestedPort: number, options?: { open?: boolean; strict?: boolean }): Promise<number> {
-  const shouldOpen = options?.open ?? true;
+export async function startServer(requestedPort: number, options?: { strict?: boolean }): Promise<number> {
   const strict = options?.strict ?? false;
   loadConnectorVersions();
-
-  const dashboardDir = resolveDashboardDir();
-  const dashboardExists = existsSync(dashboardDir);
-
-  if (!dashboardExists) {
-    console.error(`\nDashboard not found at: ${dashboardDir}`);
-    console.error(`Run this to build it:\n`);
-    console.error(`  cd dashboard && bun install && bun run build\n`);
-    console.error(`Or from the project root:\n`);
-    console.error(`  bun run build:dashboard\n`);
-  }
 
   const port = await findAvailablePort(requestedPort, strict);
   if (port !== requestedPort) {
@@ -976,7 +908,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
             "error",
             "Invalid State",
             "CSRF validation failed. The OAuth state parameter is missing or invalid.",
-            "Please try again from the dashboard."
+            "Please try again."
           ));
         }
 
@@ -1022,25 +954,6 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         });
       }
 
-      // ── Static Files (Vite dashboard) ──
-      if (dashboardExists && (method === "GET" || method === "HEAD")) {
-        // Try to serve exact file (e.g., /assets/index-abc123.js)
-        // Containment: never resolve outside dashboardDir (same contract as
-        // mcps serve resolveStaticPath).
-        if (path !== "/") {
-          const filePath = join(dashboardDir, path);
-          const rel = relative(dashboardDir, resolve(filePath));
-          if (!rel.startsWith("..") && !rel.includes(`..${sep}`) && rel !== "") {
-            const res = serveStaticFile(filePath);
-            if (res) return res;
-          }
-        }
-
-        // SPA fallback: serve index.html for all other GET routes
-        const indexPath = join(dashboardDir, "index.html");
-        const res = serveStaticFile(indexPath);
-        if (res) return res;
-      }
 
       return json({ error: "Not found" }, 404, port);
     },
@@ -1060,19 +973,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
   startScheduler(getDatabase());
 
   const url = `http://localhost:${port}`;
-  console.log(`Connectors Dashboard running at ${url}`);
-
-  if (shouldOpen) {
-    try {
-      const { openBrowser } = await import("../lib/open-browser.js");
-      const opened = await openBrowser(url);
-      if (!opened.ok) {
-        console.log(`If the browser did not open, visit ${url} manually.`);
-      }
-    } catch {
-      // Silently ignore if we can't open browser
-    }
-  }
+  console.log(`Connectors API + OAuth server running at ${url}`);
 
   return port;
 }

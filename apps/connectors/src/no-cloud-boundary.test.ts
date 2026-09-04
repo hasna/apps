@@ -19,8 +19,8 @@ import { fileURLToPath } from "node:url";
 const FORBIDDEN_PACKAGE = "@hasna/cloud";
 
 /**
- * The shipped tree includes the bundled output in `bin/`, `dist/` and
- * `dashboard/dist/` alongside the vendored `connectors/` tree, so a full sweep
+ * The shipped tree includes the bundled output in `bin/` and `dist/`
+ * alongside the vendored `connectors/` tree, so a full sweep
  * covers ~14.5k files and ~71MB. Every specifier the regex can match contains
  * the package name verbatim, so searching the raw bytes first is an exact
  * prefilter rather than an approximation: only files that mention the package
