@@ -48,7 +48,7 @@ describe("cloud migration command", () => {
     expect(apiKeysEnsured).toBe(true);
   });
 
-  test("a migration-17 database applies only migration 18 before validation", async () => {
+  test("a migration-18 database applies only the new migrations before validation", async () => {
     const executed: string[] = [];
     const recorded: number[] = [];
     const pg = {
@@ -56,12 +56,12 @@ describe("cloud migration command", () => {
         if (/insert into _pg_migrations/i.test(sql)) recorded.push(version!);
         return { changes: 1 };
       },
-      async all() { return Array.from({ length: 18 }, (_, version) => ({ version })); },
+      async all() { return Array.from({ length: 19 }, (_, version) => ({ version })); },
       async exec(sql: string) { executed.push(sql); },
     } as unknown as PgAdapterAsync;
     await applyRecordedCloudMigrations(pg, async () => {});
-    expect(executed).toEqual([PG_MIGRATIONS[18]!]);
-    expect(recorded).toEqual([18]);
+    expect(executed).toEqual(PG_MIGRATIONS.slice(19));
+    expect(recorded).toEqual([19, 20, 21]);
   });
 });
 

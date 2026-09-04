@@ -4,13 +4,13 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: Recordings V1 API 0.3.13
 
-export interface Recording { "id"?: string; "audio_path"?: string | null; "raw_text"?: string; "processed_text"?: string | null; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string | null; "duration_ms"?: number; "language"?: string | null; "tags"?: Array<string>; "agent_id"?: string | null; "project_id"?: string | null; "session_id"?: string | null; "goal"?: string | null; "role"?: string | null; "task_list_id"?: string | null; "machine_id"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string }
+export interface Recording { "id"?: string; "audio_path"?: string | null; "audio_object_key"?: string | null; "audio_sha256"?: string | null; "audio_bytes"?: number | null; "raw_text"?: string; "processed_text"?: string | null; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string | null; "duration_ms"?: number; "language"?: string | null; "tags"?: Array<string>; "agent_id"?: string | null; "project_id"?: string | null; "session_id"?: string | null; "goal"?: string | null; "role"?: string | null; "task_list_id"?: string | null; "machine_id"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string }
 
 export interface Agent { "id"?: string; "name"?: string; "description"?: string | null; "role"?: string; "metadata"?: Record<string, unknown>; "created_at"?: string; "last_seen_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "created_at"?: string; "updated_at"?: string }
 
-export interface CreateRecordingInput { "id"?: string; "raw_text": string; "audio_path"?: string; "processed_text"?: string; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string; "duration_ms"?: number; "language"?: string; "tags"?: Array<string>; "agent_id"?: string; "project_id"?: string; "session_id"?: string; "goal"?: string; "role"?: string; "task_list_id"?: string; "machine_id"?: string; "metadata"?: Record<string, unknown> }
+export interface CreateRecordingInput { "id"?: string; "raw_text": string; "audio_path"?: string; "audio_object_key"?: string; "audio_sha256"?: string; "audio_bytes"?: number; "processed_text"?: string; "processing_mode"?: "raw" | "enhanced"; "model_used"?: string; "enhancement_model"?: string; "duration_ms"?: number; "language"?: string; "tags"?: Array<string>; "agent_id"?: string; "project_id"?: string; "session_id"?: string; "goal"?: string; "role"?: string; "task_list_id"?: string; "machine_id"?: string; "metadata"?: Record<string, unknown> }
 
 export interface RegisterAgentInput { "name": string; "description"?: string; "role"?: string }
 

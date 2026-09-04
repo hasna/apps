@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Minor Changes
+
+- feat(recordings): upload audio at creation to an S3 bucket via the artifact kit (hasna/apps#1645). When `HASNA_RECORDINGS_S3_BUCKET` (or `RECORDINGS_S3_BUCKET`) is set, `recordings record`/`transcribe` places the audio as a content-addressed object `recordings/<recording_id>/<sha256>.<ext>` and stores `audio_object_key`/`audio_sha256`/`audio_bytes` on the row; without it, behaviour is unchanged (local `audio_path` provenance only). Upload failures fail soft — the recording is still saved. Bucket/task-role provisioning is infra-side and documented on the issue.
+
 ## 0.3.13
 
 ### Patch Changes

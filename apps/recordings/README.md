@@ -585,6 +585,28 @@ bundle is only as verified as the last macOS build.
 
 Data is stored in `~/.hasna/recordings/`.
 
+## Audio artifact upload (S3 via the artifact kit)
+
+On `recordings record` / `recordings transcribe`, the audio is uploaded at
+creation as a content-addressed object and the row records
+`audio_object_key`, `audio_sha256` and `audio_bytes` (the local `audio_path`
+stays as provenance). Without configuration, nothing changes: audio remains
+local-only.
+
+Environment:
+
+- `HASNA_RECORDINGS_S3_BUCKET` (fallback `RECORDINGS_S3_BUCKET`) — the bucket
+  to upload into; unset/empty keeps the historical local-only behaviour.
+- `HASNA_RECORDINGS_S3_PREFIX` (fallback `RECORDINGS_S3_PREFIX`) — object-key
+  prefix inside the bucket; defaults to `recordings`, so keys look like
+  `recordings/<recording_id>/<sha256>.<ext>`.
+- `RECORDINGS_S3_REGION` (fallback `AWS_REGION`, then `us-east-1`) — the
+  region for the S3 client. Credentials are never read by the app: the AWS SDK
+  resolves them from the ambient environment or instance role at send time.
+
+Upload failures never lose a recording: the row is still created and the
+warning is logged, matching the fail-soft contract of the app-side fix.
+
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)

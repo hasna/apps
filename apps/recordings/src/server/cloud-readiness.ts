@@ -14,6 +14,8 @@ const REQUIRED_COLUMNS: Readonly<Record<string, ColumnSpec>> = {
   },
   recordings: {
     id: ["text", false], audio_path: ["text", true], raw_text: ["text", false],
+    audio_object_key: ["text", true], audio_sha256: ["text", true],
+    audio_bytes: ["bigint", true],
     processed_text: ["text", true], processing_mode: ["text", false],
     model_used: ["text", false], enhancement_model: ["text", true],
     duration_ms: ["integer", true], language: ["text", true], tags: ["text", true],

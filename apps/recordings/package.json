@@ -34,10 +34,10 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && bun run build:cli && bun run build:mcp && bun run build:serve && bun run build:lib && tsc --emitDeclarationOnly --outDir dist",
-    "build:cli": "bun build src/cli/index.ts --target=bun --outfile=dist/cli/index.js --external=commander --external=chalk --external=openai",
-    "build:mcp": "bun build src/mcp/index.ts --target=bun --outfile=dist/mcp/index.js --external=@modelcontextprotocol/sdk --external=openai",
-    "build:serve": "bun build src/server/index.ts --target=bun --outfile=dist/server/index.js --external=@modelcontextprotocol/sdk --external=@hasna/contracts --external=openai --external=pg",
-    "build:lib": "bun build src/index.ts src/storage.ts src/sdk/index.ts --target=bun --outdir=dist --external=openai",
+    "build:cli": "bun build src/cli/index.ts --target=bun --outfile=dist/cli/index.js --external=commander --external=chalk --external=openai --external=@aws-sdk/client-s3",
+    "build:mcp": "bun build src/mcp/index.ts --target=bun --outfile=dist/mcp/index.js --external=@modelcontextprotocol/sdk --external=openai --external=@aws-sdk/client-s3",
+    "build:serve": "bun build src/server/index.ts --target=bun --outfile=dist/server/index.js --external=@modelcontextprotocol/sdk --external=@hasna/contracts --external=openai --external=pg --external=@aws-sdk/client-s3",
+    "build:lib": "bun build src/index.ts src/storage.ts src/sdk/index.ts --target=bun --outdir=dist --external=openai --external=@aws-sdk/client-s3",
     "build:native-fs-guard": "/bin/bash scripts/build_native_fs_guard.sh",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "migrate": "bun run scripts/migrate.ts",
@@ -84,6 +84,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1007.0",
     "@hasna/contracts": "0.14.2",
     "@hasna/events": "0.1.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
