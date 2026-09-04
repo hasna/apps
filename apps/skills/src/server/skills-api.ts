@@ -89,11 +89,18 @@ export function publishedSkillMeta(record: ServerSkillRecord): SkillMeta {
   };
 }
 
-export function publishedPayload(record: ServerSkillRecord): Record<string, unknown> {
+/**
+ * SkillMeta shape for a published row, plus a payload-level "alreadyPublished" flag:
+ * true when the accepted publish found the version already recorded with the same
+ * digest (an idempotent re-push), so the CLI can distinguish "published as X" from
+ * "already published as X" (hasna/apps#1671).
+ */
+export function publishedPayload(record: ServerSkillRecord, opts: { alreadyPublished?: boolean } = {}): Record<string, unknown> {
   return {
     ...publishedSkillMeta(record),
     slug: record.slug,
     publishedSource: record.source,
+    ...(opts.alreadyPublished ? { alreadyPublished: true } : {}),
     // The row's SKILL.md rides in the metadata so a client can recompute the
     // content-addressed revision id and prove the declared revision identifies what it
     // received (todos d061fcda). Without it the client cannot recompute and must refuse.
@@ -468,7 +475,7 @@ export async function storePublishedSkill(
   principal: ApiPrincipal,
   parsed: ParsedPublish,
   expectedRevisionId?: string,
-): Promise<ServerSkillRecord> {
+): Promise<{ record: ServerSkillRecord; alreadyPublished: boolean }> {
   const current = await store.getSkill(principal, parsed.input.slug);
   const superseded = current?.bundleSha256;
   let input: PublishSkillInput = {
@@ -557,7 +564,7 @@ export async function storePublishedSkill(
       await artifactStorage.putVersionObjects(principal.orgId, input.slug, input.version!, parsed.bundleBytes, versionManifest, input.bundle.contentType);
     } catch (error) {
       // The row is committed and the content-addressed object serves reads; only the
-      // browsable copy is missing. Say so rather than pretend - and because an identical
+      // browsable copy is missing. Say so rather than pretend — and because an identical
       // re-publish rewrites the objects, retrying the same push is what repairs it.
       throw new SkillRequestError(
         502,
@@ -566,7 +573,11 @@ export async function storePublishedSkill(
       );
     }
   }
-  return record;
+  // `alreadyPublished` is the server's word that this accepted publish found the version
+  // already recorded with the same digest — an idempotent re-push, not a fresh one. The
+  // client reports the distinction instead of claiming a publish that did not happen
+  // (hasna/apps#1671).
+  return { record, alreadyPublished: existingVersion !== null };
 }
 
 /**

@@ -115,10 +115,7 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
     ?? frontmatter?.description
     ?? stringValue(pkg?.description)
     ?? `${name} skill`;
-  const version = stringField(jsonManifest, "version")
-    ?? frontmatter?.version
-    ?? stringValue(pkg?.version)
-    ?? PORTABLE_SKILL_DEFAULT_VERSION;
+  const version = readDeclaredSkillVersion(skillPath) ?? PORTABLE_SKILL_DEFAULT_VERSION;
   const kind = parseSkillKind(stringField(jsonManifest, "kind") ?? frontmatter?.kind);
   const commands = parseManifestCommands(jsonManifest)
     ?? (kind === "instruction" ? [] : inferPackageCommands(pkg, name))
@@ -144,6 +141,24 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
 export function parseSkillKind(value: string | undefined): SkillKind | undefined {
   if (value === "executable" || value === "instruction") return value;
   return undefined;
+}
+
+/**
+ * The version a skill EXPLICITLY declares, or undefined when none of the sources do:
+ * skill.json first, then the SKILL.md frontmatter, then package.json.
+ *
+ * Distinct from `readPortableSkillManifest().version`, which falls back to
+ * PORTABLE_SKILL_DEFAULT_VERSION: callers that must not invent a version (publishing,
+ * version pinning) use this and refuse when it is undefined.
+ */
+export function readDeclaredSkillVersion(skillPath: string): string | undefined {
+  const skillJsonPath = join(skillPath, "skill.json");
+  const skillMdPath = join(skillPath, "SKILL.md");
+  const pkgPath = join(skillPath, "package.json");
+  const jsonManifest = existsSync(skillJsonPath) ? readJsonObject(skillJsonPath) : undefined;
+  const frontmatter = existsSync(skillMdPath) ? parseSkillFrontmatter(readFileSync(skillMdPath, "utf-8")) ?? undefined : undefined;
+  const pkg = existsSync(pkgPath) ? readJsonObject(pkgPath) as PackageJson : undefined;
+  return stringField(jsonManifest, "version") ?? frontmatter?.version ?? stringValue(pkg?.version);
 }
 
 export function createInstructionManifest(name: string, options: { description: string }): PortableSkillManifest {

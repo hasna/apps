@@ -112,3 +112,72 @@ describe("pullSkills name@version proofs", () => {
     }
   });
 });
+
+describe("the purged guard accepts an exact-version digest proof (hasna/apps#1671)", () => {
+  const v1 = makeSource("1.0.0");
+
+  test("a bare pull answers purged, not a silent swap, when the slug was purged after an exact-version install", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-pull-version-root-"));
+    // Serves the exact version's bundle, but answers 404 to a BARE pull: the published
+    // row's tombstone window expired and the slug is purged from the instance.
+    const client: SkillPullClient = {
+      async listSkills() { return []; },
+      async getSkill() { return { kind: "executable", version: "1.0.0" }; },
+      async getSkillVersion() { return { bundleSha256: v1.packed.sha256 }; },
+      async getSkillMd() { return MD; },
+      async getBundle(_slug: string, version?: string) {
+        if (version === "1.0.0") {
+          return new Response(v1.packed.bytes.buffer as ArrayBuffer, { headers: { [BUNDLE_DIGEST_HEADER]: v1.packed.sha256, "X-Skill-Version": "1.0.0" } });
+        }
+        return new Response(null, { status: 404 });
+      },
+    };
+    try {
+      const exact = await pullSkills({ names: ["versioned-skill@1.0.0"], rootDir: root, client });
+      expect(exact.results[0]).toMatchObject({ success: true, version: "1.0.0" });
+      const markerAfterExact = JSON.parse(readFileSync(join(root, "versioned-skill", PULL_MARKER_FILE), "utf-8")) as { revisionId?: string; contentHash?: string };
+      // A historic version has no revision of its own: the digest is the recorded proof.
+      expect(markerAfterExact.revisionId).toBeUndefined();
+      expect(markerAfterExact.contentHash).toBe(v1.packed.sha256);
+
+      const bare = await pullSkills({ names: ["versioned-skill"], rootDir: root, client });
+      expect(bare.results[0]).toMatchObject({ success: true, purged: true, removed: false });
+      // The exact-version install is untouched: no bundled lookalike was swapped in.
+      expect(readFileSync(join(root, "versioned-skill", "scripts", "run.ts"), "utf-8")).toBe("console.log('run 1.0.0')\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the metadata-only path also refuses to swap the bundled lookalike over a digest-marked install", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-pull-version-root-"));
+    // A bundle-less instance: getBundle is null, the metadata path serves the bundled
+    // skill's document, and the served row declares no revision (nothing to prove it is
+    // the same published skill the digest-marked install came from).
+    const client: SkillPullClient = {
+      async listSkills() { return []; },
+      async getSkill() { return { kind: "executable", version: "1.0.0" }; },
+      async getSkillVersion() { return { bundleSha256: v1.packed.sha256 }; },
+      async getSkillMd() { return MD; },
+      async getBundle(_slug: string, version?: string) {
+        if (version === "1.0.0") {
+          return new Response(v1.packed.bytes.buffer as ArrayBuffer, { headers: { [BUNDLE_DIGEST_HEADER]: v1.packed.sha256, "X-Skill-Version": "1.0.0" } });
+        }
+        return null;
+      },
+    };
+    try {
+      const exact = await pullSkills({ names: ["versioned-skill@1.0.0"], rootDir: root, client });
+      expect(exact.results[0]).toMatchObject({ success: true, version: "1.0.0", contentHash: v1.packed.sha256 });
+      const markerAfterExact = JSON.parse(readFileSync(join(root, "versioned-skill", PULL_MARKER_FILE), "utf-8")) as { revisionId?: string; contentHash?: string };
+      expect(markerAfterExact.revisionId).toBeUndefined();
+      expect(markerAfterExact.contentHash).toBe(v1.packed.sha256);
+
+      const bare = await pullSkills({ names: ["versioned-skill"], rootDir: root, client });
+      expect(bare.results[0]).toMatchObject({ success: true, purged: true, removed: false });
+      expect(readFileSync(join(root, "versioned-skill", "scripts", "run.ts"), "utf-8")).toBe("console.log('run 1.0.0')\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

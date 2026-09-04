@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
+import { computeContentHash } from "../../lib/skill-hash.js";
 import { unpackSkillBundle } from "../../lib/skill-bundle.js";
 import { createSkillsFetchHandler } from "../../server/app.js";
 import { MemorySkillsStore } from "../../server/store.js";
@@ -145,6 +146,72 @@ describe("skills push", () => {
         expect((await stranger.listSkills()).some((skill) => skill.name === "release-notes")).toBe(false);
         expect(await stranger.getSkill("release-notes")).toBeNull();
         expect((await stranger.downloadSkillBundle("release-notes")).status).toBe(404);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses a skill with no declared version instead of inventing 0.1.0 (hasna/apps#1671)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-push-noversion-"));
+    const skillDir = join(root, "undocumented");
+    try {
+      mkdirSync(join(skillDir, "src"), { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), "---\nname: undocumented\ndescription: No version anywhere\n---\n\n# Undocumented\n");
+      writeFileSync(join(skillDir, "AGENTS.md"), "# Agent Build Instructions\n");
+      writeFileSync(join(skillDir, "src", "index.ts"), "console.log('undocumented');\n");
+      // A package.json exists (the directory contract requires one) but carries no
+      // version either: the versionless shape is exactly what push must refuse.
+      writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: "undocumented", type: "module", bin: { "undocumented": "src/index.ts" } }, null, 2));
+      // A valid hasna.skill.v1 manifest WITHOUT a version anywhere: the strict contract
+      // passes (the manifest reader defaults the version — exactly the invention push
+      // must refuse) as long as the canonical content_hash is right.
+      const skillJson: Record<string, unknown> = {
+        $schema: "https://hasna.dev/schemas/skill.v1.json",
+        standard: "hasna.skill.v1",
+        name: "undocumented",
+        description: "No version anywhere",
+        category: "Content Generation",
+        tags: ["custom"],
+        inputs: [{ name: "args", type: "string[]", required: false }],
+        commands: [{ name: "undocumented", entry: "src/index.ts" }],
+        runtime: { runtime: "bun", entrypoint: "src/index.ts", timeout: 900, needs_network: false, env: [], sandbox: "readonly-fs", system_deps: [], artifacts: [] },
+        provenance: { source_commit: "unknown" },
+      };
+      writeFileSync(join(skillDir, "skill.json"), JSON.stringify(skillJson, null, 2));
+      const hash = computeContentHash(skillDir);
+      writeFileSync(join(skillDir, "skill.json"), JSON.stringify({ ...skillJson, provenance: { ...(skillJson.provenance as Record<string, unknown>), content_hash: hash } }, null, 2));
+
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(pushAuth, ctx.baseUrl);
+        let error: unknown = null;
+        try {
+          await pushSkill("undocumented", { rootDir: root, client });
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error).toBeInstanceOf(PushSkillError);
+        const message = (error as PushSkillError).message;
+        expect(message).toContain("declares no version");
+        expect(message).toContain("0.1.0");
+        const detail = (error as PushSkillError).detail?.join("\n") ?? "";
+        expect(detail).toContain("--version");
+        expect(detail).toContain("package.json");
+        // Nothing was published under an invented version.
+        expect((await client.listSkills()).some((skill) => skill.name === "undocumented")).toBe(false);
+        // Dry-run refuses too: the machine hears the problem before any real push.
+        let dryError: unknown = null;
+        try {
+          await pushSkill("undocumented", { rootDir: root, client, dryRun: true });
+        } catch (caught) {
+          dryError = caught;
+        }
+        expect(dryError).toBeInstanceOf(PushSkillError);
+        expect((dryError as PushSkillError).message).toContain("declares no version");
+        // An explicit --version is the escape hatch and publishes normally.
+        const forced = await pushSkill("undocumented", { rootDir: root, client, version: "3.0.0" });
+        expect(forced.published).toBe(true);
+        expect(forced.version).toBe("3.0.0");
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

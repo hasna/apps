@@ -218,6 +218,17 @@ export class ArtifactStorage {
    *   <prefix>/skills/<org>/<slug>/<version>/manifest.json
    * The content-addressed object under bundles/ stays the read path (dedupe); these keys
    * are the durable, browsable history and are never deleted by orphan collection.
+   *
+   * RETENTION (hasna/apps#1671): these objects accumulate without bound by design — every
+   * version keeps a full copy — so the bucket lifecycle is the retention story, not the
+   * store. The intended rule (operated in the bucket's lifecycle config, outside this
+   * repository): expire `<prefix>/skills/` objects older than N days per the slot policy,
+   * while `<prefix>/bundles/` (content-addressed, deduped across versions and slugs) is
+   * NEVER expired by lifecycle — only the reference-guarded delete path removes those,
+   * because one object can serve many versions. A busy org that pushes thousands of
+   * versions should pair the lifecycle rule with a documented cap on retained versions
+   * per slug (e.g. the newest K, pruned by a maintenance job that deletes the version row
+   * and its two objects together); row deletion alone would strand the objects.
    * Returns the placement recorded on the version row; in db mode nothing is written.
    */
   async putVersionObjects(

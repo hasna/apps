@@ -262,7 +262,6 @@ export class RemoteSkillsClient {
     return response;
   }
 
-  /** List the pins the instance holds for this principal. */
   /** Every published version of a slug, newest first (hasna/apps#1630). */
   async listSkillVersions(slug: string): Promise<RemoteSkillVersion[]> {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND"] });
@@ -280,6 +279,7 @@ export class RemoteSkillsClient {
     return (await response.json()) as RemoteSkillVersion;
   }
 
+  /** List the pins the instance holds for this principal. */
   async listPins(): Promise<RemotePin[]> {
     const response = await this.requestNewRoute("/api/v1/pins");
     return normalizePinList(await response.json());

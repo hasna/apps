@@ -238,10 +238,12 @@ async function pullOne(
     // 404 with a revision-marked local install: the published row's tombstone window has
     // expired and the slug is purged. The metadata fallback (if any) would serve a
     // DIFFERENT skill — the bundled one with the same name — so report the published
-    // slug as purged/absent rather than silently swapping the local install.
+    // slug as purged/absent rather than silently swapping the local install. Either
+    // proof marks a published install: the current revision id, or the recorded digest
+    // of an exact-version install (a historic version has no revision of its own).
     if (bundleResponse.status === 404) {
       const marker = readPullMarker(join(getPortableSkillsRoot(corpusOptions), slug));
-      if (marker && typeof marker.revisionId === "string" && marker.revisionId) {
+      if (isPublishedInstallMarker(marker)) {
         return { name: slug, success: true, purged: true, removed: false };
       }
     }
@@ -283,11 +285,11 @@ async function pullOne(
   }
 
   // Bundle-less instance, no declared revision on the served metadata: if the local
-  // copy is a revision-marked published install, the published row is gone (purged) and
-  // what the metadata serves is a different skill — report, do not swap.
+  // copy is a revision-marked or digest-marked published install, the published row is
+  // gone (purged) and what the metadata serves is a different skill — report, do not swap.
   if (!meta?.revisionId) {
     const marker = readPullMarker(join(getPortableSkillsRoot(corpusOptions), slug));
-    if (marker && typeof marker.revisionId === "string" && marker.revisionId) {
+    if (isPublishedInstallMarker(marker)) {
       return { name: slug, success: true, purged: true, removed: false };
     }
   }
@@ -403,6 +405,22 @@ function readPullMarker(dir: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Does a marker prove the entry was installed from a published instance row?
+ *
+ * Two proofs are accepted (hasna/apps#1671): the revision id a current pull records,
+ * or the content digest an exact-version pull records — a historic version has no
+ * revision of its own, so its digest is the proof that this directory came from the
+ * instance. Either marks the entry as a published install, which is what the purged
+ * guards must not silently swap for a bundled skill of the same name.
+ */
+function isPublishedInstallMarker(marker: Record<string, unknown> | null): boolean {
+  if (!marker) return false;
+  const revisionId = typeof marker.revisionId === "string" ? marker.revisionId : "";
+  const contentHash = typeof marker.contentHash === "string" ? marker.contentHash : "";
+  return revisionId.length > 0 || contentHash.length > 0;
 }
 
 function installVerifiedBundle(

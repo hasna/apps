@@ -244,8 +244,8 @@ async function handleApiV1(
     if (request.method === "POST" && !id) {
       const expectedRevisionId = parseIfMatch(request.headers.get("if-match"));
       const parsed = await parsePublishRequest(request, config);
-      const record = await storePublishedSkill(store, artifactStorage, principal, parsed, expectedRevisionId);
-      return json(publishedPayload(record), { status: 201, headers: { ETag: revisionEtag(record.revisionId) } });
+      const { record, alreadyPublished } = await storePublishedSkill(store, artifactStorage, principal, parsed, expectedRevisionId);
+      return json(publishedPayload(record, { alreadyPublished }), { status: 201, headers: { ETag: revisionEtag(record.revisionId) } });
     }
 
     if (request.method === "GET" && id && subresource === "skill.md") {
