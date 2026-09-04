@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getStore, isCloudStore, resetStore, ApiStore, LocalStore } from "./index.js";
+import {
+  getStore,
+  isCloudStore,
+  isLocalModeOptIn,
+  resetStore,
+  telephonyStoreMisconfiguredError,
+  ApiStore,
+  LocalStore,
+} from "./index.js";
 import { HasnaHttpError } from "@hasna/contracts";
 import type { Agent, AgentConflictError } from "../../types/index.js";
 
@@ -12,6 +20,8 @@ const CLIENT_ENV = [
   "HASNA_TELEPHONY_API_KEY",
   "TELEPHONY_API_URL",
   "TELEPHONY_API_KEY",
+  "HASNA_TELEPHONY_LOCAL",
+  "TELEPHONY_LOCAL",
 ];
 
 function clearEnv(): void {
@@ -22,12 +32,55 @@ function clearEnv(): void {
 afterEach(clearEnv);
 
 describe("telephony Store resolver", () => {
-  it("defaults to the LocalStore when nothing is set", () => {
+  // Fail-closed contract (owner directive 2026-09-04): a missing API env is
+  // NEVER a silent selection of the on-box SQLite store. Local mode is
+  // reachable only through the explicit HASNA_TELEPHONY_LOCAL=1 opt-in; with
+  // no API env and no opt-in, resolution throws an actionable error naming the
+  // required variables.
+  it("fails closed when nothing is set — never defaults to the LocalStore", () => {
     clearEnv();
-    const store = getStore();
+    expect(() => getStore()).toThrow(/HASNA_TELEPHONY_API_URL/);
+    expect(() => getStore()).toThrow(/HASNA_TELEPHONY_API_KEY/);
+    // The error names the explicit local opt-in instead of offering a silent
+    // fallback; nothing about it reads as a false-green local event.
+    expect(() => getStore()).toThrow(/HASNA_TELEPHONY_LOCAL=1/);
+    expect(() => isCloudStore()).toThrow();
+    expect(telephonyStoreMisconfiguredError().message).toMatch(/fails closed instead of silently serving the local SQLite store/);
+  });
+
+  it("selects the LocalStore ONLY under the explicit opt-in HASNA_TELEPHONY_LOCAL=1", () => {
+    clearEnv();
+    const env = { HASNA_TELEPHONY_LOCAL: "1" } as Record<string, string>;
+    const store = getStore(env);
     expect(store.transport).toBe("local");
     expect(store).toBeInstanceOf(LocalStore);
-    expect(isCloudStore()).toBe(false);
+    expect(isLocalModeOptIn(env)).toBe(true);
+    expect(isCloudStore(env)).toBe(false);
+  });
+
+  it("accepts the unprefixed TELEPHONY_LOCAL alias as the explicit opt-in", () => {
+    clearEnv();
+    const env = { TELEPHONY_LOCAL: "1" } as Record<string, string>;
+    expect(getStore(env).transport).toBe("local");
+    expect(isLocalModeOptIn(env)).toBe(true);
+  });
+
+  it("treats falsy opt-in spellings (0, false, no, off, blank) as absent — local mode stays closed", () => {
+    clearEnv();
+    for (const value of ["0", "false", "no", "off", ""]) {
+      const env = { HASNA_TELEPHONY_LOCAL: value } as Record<string, string>;
+      expect(isLocalModeOptIn(env)).toBe(false);
+      expect(() => getStore(env)).toThrow(/HASNA_TELEPHONY_API_URL/);
+    }
+  });
+
+  it("treats truthy opt-in spellings (1, true, yes) as opting in to local mode", () => {
+    clearEnv();
+    for (const value of ["1", "true", "yes", " 1 "]) {
+      const env = { HASNA_TELEPHONY_LOCAL: value } as Record<string, string>;
+      expect(isLocalModeOptIn(env)).toBe(true);
+      expect(getStore(env).transport).toBe("local");
+    }
   });
 
   it("routes to the ApiStore when both API URL and API key are set", () => {

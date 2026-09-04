@@ -2,10 +2,13 @@
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import pkg from "../../package.json";
-// The single Store abstraction: routes every read+write to the server's /v1 API
-// when HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY are set, otherwise to
-// the on-box SQLite store. No CLI command touches sqlite or fetch directly.
-// See ../lib/store/index.ts.
+// The single Store abstraction routes every read+write to the server's /v1 API
+// when HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY are set. Without the
+// API env the CLI FAILS CLOSED (owner directive 2026-09-04): a store-backed
+// command exits non-zero with an error naming the required env — the on-box
+// SQLite store is reachable only through the explicit opt-in
+// HASNA_TELEPHONY_LOCAL=1, never as a silent default. No CLI command touches
+// sqlite or fetch directly. See ../lib/store/index.ts.
 import { getStore } from "../lib/store/index.js";
 import { HasnaHttpError } from "@hasna/contracts";
 import { sendSms } from "../lib/sms.js";
@@ -534,6 +537,11 @@ program
   .description("Start REST API + webhook server")
   .option("--port <port>", "Port number", "19451")
   .action(async (opts) => {
+    // The local serve surface stores through the same resolver as every other
+    // command: without the fleet API env AND without the explicit local opt-in
+    // this fails closed with an actionable error instead of booting a server
+    // whose data routes would serve against a phantom local database.
+    getStore();
     process.env["TELEPHONY_PORT"] = opts.port;
     await import("../server/index.js");
   });

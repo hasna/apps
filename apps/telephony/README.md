@@ -83,9 +83,27 @@ with the configured Twilio auth token. Replayed MessageSid, CallSid, SmsSid, or
 RecordingSid values are rejected before inbound messages, calls, or webhook
 dispatch rows are written.
 
+## Fleet API vs local mode (fail closed)
+
+The CLI, MCP and SDK surfaces route data operations through the telephony HTTP
+API when `HASNA_TELEPHONY_API_URL` and `HASNA_TELEPHONY_API_KEY` are set
+(unprefixed `TELEPHONY_API_URL` / `TELEPHONY_API_KEY` aliases are accepted).
+Without that API env the client **fails closed**: a store-backed command exits
+non-zero with an actionable error naming the required variables. It never
+silently falls back to the on-box SQLite store.
+
+The on-box SQLite store is available only through the **explicit opt-in**
+
+```bash
+export HASNA_TELEPHONY_LOCAL=1   # alias: TELEPHONY_LOCAL=1
+```
+
+Local mode is never the default: no environment means no local database is
+opened or created, only the error above.
+
 ## Data Directory
 
-Telephony owns its local SQLite store directly. By default data is stored in
+In the explicit local mode (`HASNA_TELEPHONY_LOCAL=1`) telephony stores data in
 the effective telephony data home — the legacy `~/.hasna/telephony/` until the
 store is migrated to the `@hasna/paths`-resolved XDG data home
 (`~/.local/share/hasna/telephony` on Linux, `~/Library/Application

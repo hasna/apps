@@ -11,25 +11,35 @@ const repoRoot = new URL("../..", import.meta.url).pathname;
 const MCP_TRANSPORT_ENV_KEYS = new Set(["MCP_HTTP", "MCP_STDIO"]);
 
 /**
- * API-pair env keys the in-process MCP server would otherwise inherit from
- * the operator's shell. These tools must read the on-box store here; a developer
- * exporting HASNA_TELEPHONY_API_URL + an API key would otherwise route the
- * assertions at a live service, which is not what this file is testing.
+ * API-pair + local opt-in env keys the in-process MCP server would otherwise
+ * inherit from the operator's shell. These tools must read the on-box store
+ * here; a developer exporting HASNA_TELEPHONY_API_URL + an API key would
+ * otherwise route the assertions at a live service, which is not what this
+ * file is testing.
  */
 const CLIENT_FLIP_ENV_KEYS = [
   "HASNA_TELEPHONY_STORAGE_MODE",
   "HASNA_TELEPHONY_MODE",
   "HASNA_TELEPHONY_API_URL",
   "HASNA_TELEPHONY_API_KEY",
+  "HASNA_TELEPHONY_LOCAL",
   "TELEPHONY_STORAGE_MODE",
   "TELEPHONY_MODE",
   "TELEPHONY_API_URL",
   "TELEPHONY_API_KEY",
+  "TELEPHONY_LOCAL",
 ] as const;
 
+/**
+ * Force the on-box store for the process: scrub the client-flip env, then
+ * select local mode EXPLICITLY (HASNA_TELEPHONY_LOCAL=1) — the store resolver
+ * fails closed without the API env and without that opt-in (owner directive
+ * 2026-09-04); local SQLite is never the default.
+ */
 function withOnBoxStore(): () => void {
   const saved = new Map(CLIENT_FLIP_ENV_KEYS.map((key) => [key, process.env[key]]));
   for (const key of CLIENT_FLIP_ENV_KEYS) delete process.env[key];
+  process.env.HASNA_TELEPHONY_LOCAL = "1";
   resetStore();
   return () => {
     for (const [key, value] of saved) {
@@ -45,10 +55,15 @@ function envWith(overrides: Record<string, string>): Record<string, string> {
     ...Object.fromEntries(
       Object.entries(process.env).filter(
         (entry): entry is [string, string] =>
-          typeof entry[1] === "string" && !MCP_TRANSPORT_ENV_KEYS.has(entry[0]),
+          typeof entry[1] === "string" &&
+          !MCP_TRANSPORT_ENV_KEYS.has(entry[0]) &&
+          !(CLIENT_FLIP_ENV_KEYS as readonly string[]).includes(entry[0]),
       ),
     ),
     TELEPHONY_DB_PATH: ":memory:",
+    // The spawned server resolves its store from this child env: local mode is
+    // selected EXPLICITLY here (never by a missing API env alone).
+    HASNA_TELEPHONY_LOCAL: "1",
     ...overrides,
   };
 }
