@@ -2,9 +2,12 @@
  * ./sdk — the client surface of @hasna/messages.
  *
  * One transport resolver, two connections: the server HTTP API selected by
- * HASNA_MESSAGES_API_URL (+ HASNA_MESSAGES_API_KEY) or the on-box local
- * store (a local SQLite file). The client never opens Postgres directly —
- * the server (messages-serve) owns the SQLite/PostgreSQL backend.
+ * HASNA_MESSAGES_API_URL (+ HASNA_MESSAGES_API_KEY), or the on-box local
+ * store (a local SQLite file) — reachable ONLY through the explicit opt-in
+ * HASNA_MESSAGES_LOCAL=1. A missing API URL is never a silent local-data
+ * selection: the resolver fails closed with an error naming the required
+ * env. The client never opens Postgres directly — the server (messages-serve)
+ * owns the SQLite/PostgreSQL backend.
  *
  * messages-serve supports a trusted localhost mode with no API key
  * configured; the client therefore sends the key when one is present and the
@@ -28,11 +31,36 @@ export const MESSAGES_API_KEY_ENV = "HASNA_MESSAGES_API_KEY";
 export const MESSAGES_DATABASE_URL_ENV = "HASNA_MESSAGES_DATABASE_URL";
 export const MESSAGES_SQLITE_PATH_ENV = "HASNA_MESSAGES_SQLITE_PATH";
 
+/**
+ * Explicit local-mode opt-in. The client surfaces NEVER default to the on-box
+ * SQLite store when the fleet API env is missing; HASNA_MESSAGES_LOCAL=1 is
+ * the only way to select local mode. Value `1`/`true`/`yes` opts in; `0`,
+ * `false`, `no`, `off` and blank are all treated as absent.
+ */
+export const MESSAGES_LOCAL_MODE_ENV = "HASNA_MESSAGES_LOCAL";
+
 export const MESSAGES_CLIENT_TRANSPORTS = ["http", "local"] as const;
 export type MessagesClientTransport = (typeof MESSAGES_CLIENT_TRANSPORTS)[number];
 
 export function isPresent(env: Record<string, string | undefined>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(env, key) && (env[key] ?? "").trim().length > 0;
+}
+
+/** True when the explicit local-mode opt-in env is set to a truthy value. */
+export function isLocalModeOptIn(env: Record<string, string | undefined>): boolean {
+  const raw = env[MESSAGES_LOCAL_MODE_ENV];
+  if (raw === undefined) return false;
+  const value = raw.trim().toLowerCase();
+  return !(value === "" || value === "0" || value === "false" || value === "no" || value === "off");
+}
+
+/** The fail-closed error: actionable, names the required env and the opt-in. */
+export function messagesTransportMisconfiguredError(): Error {
+  return new Error(
+    `${MESSAGES_API_URL_ENV} is not set; refusing to fall back to a local store. ` +
+      `Set ${MESSAGES_API_URL_ENV} (and ${MESSAGES_API_KEY_ENV}) to reach the messages fleet API, ` +
+      `or set ${MESSAGES_LOCAL_MODE_ENV}=1 to explicitly run in local SQLite mode.`,
+  );
 }
 
 export interface MessagesClientTransportReport {
@@ -41,17 +69,23 @@ export interface MessagesClientTransportReport {
   apiKeyPresent: boolean;
 }
 
-/** Resolve the client connection. No URL -> local store; URL present -> HTTP.
+/**
+ * Resolve the client connection. `HASNA_MESSAGES_API_URL` present -> HTTP;
+ * absent but `HASNA_MESSAGES_LOCAL=1` (explicit opt-in) -> local store;
+ * absent both -> THROWS: a missing URL never silently selects local data.
  * The key is optional because messages-serve supports a trusted localhost
- * no-key mode; when the server requires a key it returns 401. */
+ * no-key mode; when the server requires a key it returns 401.
+ */
 export function resolveMessagesClientTransport(env: Record<string, string | undefined> = process.env): MessagesClientTransportReport {
   const apiUrlPresent = isPresent(env, MESSAGES_API_URL_ENV);
   const apiKeyPresent = isPresent(env, MESSAGES_API_KEY_ENV);
-  return {
-    transport: apiUrlPresent ? "http" : "local",
-    apiUrlPresent,
-    apiKeyPresent,
-  };
+  if (apiUrlPresent) {
+    return { transport: "http", apiUrlPresent, apiKeyPresent };
+  }
+  if (isLocalModeOptIn(env)) {
+    return { transport: "local", apiUrlPresent: false, apiKeyPresent };
+  }
+  throw messagesTransportMisconfiguredError();
 }
 
 export interface MessagesClientOptions {
@@ -170,7 +204,8 @@ export function createMessagesClient(env: Record<string, string | undefined> = p
 /**
  * Resolve the client store from the environment. `http` returns the HTTP
  * client; `local` returns a local MessagesService over a local SQLite store
- * (the on-box backend). Callers dispatch on `transport`.
+ * (the on-box backend) — selected only by the explicit HASNA_MESSAGES_LOCAL=1
+ * opt-in, never by a missing API URL. Callers dispatch on `transport`.
  */
 export function resolveMessagesClientStore(
   env: Record<string, string | undefined> = process.env,

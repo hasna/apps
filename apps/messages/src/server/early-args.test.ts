@@ -3,7 +3,10 @@
  * answer --version/--help before any transport or bind — the same class as
  * the recent hasna/apps control-surface fixes). messages-mcp --version/--help
  * must answer before the stdio framing loop; messages-serve --version/--help
- * must answer before resolveStore()/Bun.serve binds the port.
+ * must answer before resolveStore()/Bun.serve binds the port. Ordering after
+ * the early exits: the messages-mcp fail-closed gate (no HASNA_MESSAGES_API_URL,
+ * no HASNA_MESSAGES_LOCAL opt-in -> exit non-zero naming the env) runs before
+ * the stdio connect, never before --version/--help.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -61,6 +64,30 @@ describe("messages-mcp answers --version/--help without entering stdio", () => {
     expect(r.timedOut).toBe(false);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("messages-mcp");
+  });
+});
+
+describe("messages-mcp fails closed without the fleet API env", () => {
+  test("startup without HASNA_MESSAGES_API_URL and without the local opt-in exits non-zero and names the required env", async () => {
+    const r = await runEntry("src/mcp/index.ts", [], {
+      HASNA_MESSAGES_API_URL: "",
+      HASNA_MESSAGES_API_KEY: "",
+      HASNA_MESSAGES_LOCAL: "",
+    });
+    expect(r.timedOut).toBe(false); // it must exit, not sit in the stdio loop
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("HASNA_MESSAGES_API_URL");
+  });
+
+  test("--version still answers before the fail-closed gate", async () => {
+    const r = await runEntry("src/mcp/index.ts", ["--version"], {
+      HASNA_MESSAGES_API_URL: "",
+      HASNA_MESSAGES_API_KEY: "",
+      HASNA_MESSAGES_LOCAL: "",
+    });
+    expect(r.timedOut).toBe(false);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe(PKG_VERSION);
   });
 });
 

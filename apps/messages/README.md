@@ -53,22 +53,37 @@ it never opens Postgres directly. `messages-serve` supports a trusted
 localhost mode with no key configured; when a key is configured, requests
 must carry it as `x-api-key`.
 
+## Modes (client surfaces)
+
+The client surfaces (CLI, MCP, SDK) connect to the fleet API when
+`HASNA_MESSAGES_API_URL` is set. They **never silently fall back** to the
+on-box SQLite store when it is missing: without the API env AND without the
+explicit local opt-in `HASNA_MESSAGES_LOCAL=1`, every command fails closed
+with a non-zero exit and an actionable error naming `HASNA_MESSAGES_API_URL`
+(no local database is created). Local mode is available only through that
+explicit opt-in, optionally with `HASNA_MESSAGES_SQLITE_PATH` naming the
+database file.
+
 ## Usage
 
 ```bash
-# Local, no server needed:
-messages register --name augustus --display-name "CEO seat"
+# Fleet API (HASNA_MESSAGES_API_URL + HASNA_MESSAGES_API_KEY; a station
+# wrapper that injects them makes every verb fleet-addressed):
 messages send --from augustus --to silvanus --content "hello"
-messages threads --agent silvanus           # unread counts + closed state
-messages thread --id t_augustus__silvanus --agent silvanus   # expand (does not mark read)
-messages receive --agent silvanus           # drain: stored -> delivered
-messages delivery --id t_augustus__silvanus # per-recipient state: stored | delivered | read
-messages read --id t_augustus__silvanus --agent silvanus     # -> read
-messages close --id t_augustus__silvanus --agent silvanus    # close (excluded from default list)
-messages reopen --id t_augustus__silvanus --agent silvanus   # reopen
-messages unread --agent silvanus            # unread threads + total
 
-# Against a running messages-serve:
+# Local SQLite mode — explicit opt-in only:
+HASNA_MESSAGES_LOCAL=1 messages register --name augustus --display-name "CEO seat"
+HASNA_MESSAGES_LOCAL=1 messages send --from augustus --to silvanus --content "hello"
+HASNA_MESSAGES_LOCAL=1 messages threads --agent silvanus    # unread counts + closed state
+HASNA_MESSAGES_LOCAL=1 messages thread --id t_augustus__silvanus --agent silvanus   # expand (does not mark read)
+HASNA_MESSAGES_LOCAL=1 messages receive --agent silvanus    # drain: stored -> delivered
+HASNA_MESSAGES_LOCAL=1 messages delivery --id t_augustus__silvanus   # per-recipient state: stored | delivered | read
+HASNA_MESSAGES_LOCAL=1 messages read --id t_augustus__silvanus --agent silvanus    # -> read
+HASNA_MESSAGES_LOCAL=1 messages close --id t_augustus__silvanus --agent silvanus   # close (excluded from default list)
+HASNA_MESSAGES_LOCAL=1 messages reopen --id t_augustus__silvanus --agent silvanus  # reopen
+HASNA_MESSAGES_LOCAL=1 messages unread --agent silvanus     # unread threads + total
+
+# Against a running messages-serve (fleet-addressed via --url):
 messages send --from augustus --to silvanus --content "hello" --url http://localhost:8081
 
 # Server (SQLite default, or PostgreSQL via HASNA_MESSAGES_DATABASE_URL):
