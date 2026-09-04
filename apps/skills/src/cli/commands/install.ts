@@ -13,6 +13,8 @@ import {
   removeSkill,
   type InstallResult,
 } from "../../lib/installer.js";
+import { pinProjectSkill } from "../../lib/project-state.js";
+import { splitNameVersion } from "../../lib/pull.js";
 
 export function registerInstall(parent: Command) {
   parent
@@ -139,10 +141,16 @@ async function handlePin(skills: string[], options: any) {
   if (useRemote && !remoteRegistry) remoteRegistry = await loadRemoteRegistry();
   const remoteByName = new Map((remoteRegistry ?? []).map((skill) => [skill.name, skill]));
   for (let i = 0; i < total; i++) {
+    // `name@version` pins an exact published version (hasna/apps#1630); the pin record keeps it.
+    const { name: pinName, version: pinnedVersion } = splitNameVersion(skills[i]);
     if (total > 1 && !options.json) process.stdout.write(`[${i + 1}/${total}] Pinning ${skills[i]}...`);
     const result = useRemote
-      ? pinRemoteSkill(skills[i], remoteByName, options.overwrite)
-      : installSkill(skills[i], { overwrite: options.overwrite });
+      ? pinRemoteSkill(pinName, remoteByName, options.overwrite)
+      : installSkill(pinName, { overwrite: options.overwrite });
+    if (result.success && pinnedVersion) {
+      pinProjectSkill(pinName, { version: pinnedVersion, source: useRemote ? "remote" : "local" });
+      result.version = pinnedVersion;
+    }
     results.push(result);
     if (total > 1 && !options.json) console.log(result.success ? " done" : ` ${chalk.red("failed")}`);
   }

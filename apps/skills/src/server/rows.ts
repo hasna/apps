@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
 import type {
   BlobStorageKind,
+  ServerSkillVersion,
   ServerArtifact,
   ServerPin,
   ServerRunLog,
@@ -197,4 +198,19 @@ function safeParse(value: string): unknown {
 export function dateString(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+export function rowToSkillVersion(row: Record<string, unknown>): ServerSkillVersion {
+  return {
+    orgId: String(row.org_id),
+    slug: String(row.slug),
+    version: String(row.version),
+    bundleSha256: String(row.bundle_sha256),
+    bundleByteSize: Number(row.bundle_byte_size),
+    storageKind: String(row.storage_kind ?? "db") as BlobStorageKind,
+    ...(typeof row.storage_key === "string" ? { storageKey: row.storage_key } : {}),
+    manifest: parseJsonObject(row.manifest_json),
+    ...(typeof row.published_by_user_id === "string" ? { publishedByUserId: row.published_by_user_id } : {}),
+    createdAt: dateString(row.created_at),
+  };
 }

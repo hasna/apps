@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { Database } from "bun:sqlite";
 import { getDataDir } from "./config.js";
@@ -59,6 +59,16 @@ export function saveFeedback(input: FeedbackInput): FeedbackResult {
   if (!message) throw new Error("Feedback message is required");
 
   const category = input.category ?? "general";
+  // api mode (a Skills API URL + key is configured): never open a local database
+  // (hasna/apps#1613, #1632). Feedback is appended to a plain JSONL file the operator can
+  // forward; the SQLite store below is the OSS local mode only.
+  if (process.env.SKILLS_API_URL || process.env.HASNA_SKILLS_API_URL) {
+    const path = join(getDataDir(), "feedback.jsonl");
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    appendFileSync(path, JSON.stringify({ message, category, email: input.email ?? null, agent: input.agent ?? null, version: input.version ?? null, createdAt: new Date().toISOString() }) + "\n");
+    return { saved: true, category, path };
+  }
   const db = getFeedbackDb();
   try {
     db.run(

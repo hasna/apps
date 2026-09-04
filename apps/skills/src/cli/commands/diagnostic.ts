@@ -12,6 +12,7 @@ import { getSkill } from "../../lib/registry.js";
 import { getSkillRequirements, getSkillDependencyStatus } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
 import { censusHomeDrift } from "../../lib/home-census.js";
+import { resolveCorpusRoot } from "../../lib/home-migration.js";
 
 export function registerDiagnostic(parent: Command) {
   // Doctor
@@ -193,14 +194,16 @@ function handleWhoami(options: { json: boolean }) {
     if (exists) try { skillCount = readdirSync(agentSkillsPath).filter((f) => !f.startsWith(".") && statSync(join(agentSkillsPath, f)).isDirectory()).length; } catch {}
     agentConfigs.push({ agent, label: AGENT_LABELS[agent], path: agentSkillsPath, exists, skillCount });
   }
-  const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");
+  // The machine corpus (where pull writes and push reads), not the package's own
+  // node_modules folder, which is what this line reported before (hasna/apps#1632).
+  const skillsDir = resolveCorpusRoot();
   if (options.json) {
     console.log(JSON.stringify({ version: pkg.version, installedCount: installed.length, installed, agents: agentConfigs, skillsDir, cwd: process.cwd() }, null, 2));
     return;
   }
   console.log(chalk.bold(`\nskills v${pkg.version}\n`));
   console.log(`${chalk.dim("Working directory:")} ${process.cwd()}`);
-  console.log(`${chalk.dim("Skills directory:")}  ${skillsDir}`);
+  console.log(`${chalk.dim("Corpus directory:")}  ${skillsDir}`);
   console.log();
   if (!installed.length) console.log(chalk.dim("No pinned skills in current project"));
   else { console.log(chalk.bold(`Pinned skills (${installed.length}):`)); for (const name of installed) console.log(`  ${chalk.cyan(name)}`); }

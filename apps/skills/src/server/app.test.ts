@@ -53,7 +53,8 @@ function fixtureBundle(marker: string): { bytes: Uint8Array; sha256: string; ski
   }
 }
 
-function manifestFor(slug: string, marker: string, skillMd: string, sha256: string): Record<string, unknown> {
+// Versions are immutable (hasna/apps#1630): a republish with different bytes must name a new one.
+function manifestFor(slug: string, marker: string, skillMd: string, sha256: string, version = "1.2.3"): Record<string, unknown> {
   return {
     slug,
     displayName: `${marker} Runbook`,
@@ -61,7 +62,7 @@ function manifestFor(slug: string, marker: string, skillMd: string, sha256: stri
     category: "Development Tools",
     tags: ["ops", marker],
     kind: "executable",
-    version: "1.2.3",
+    version,
     source: "custom",
     skillMd,
     bundleSha256: sha256,
@@ -546,7 +547,7 @@ for (const backend of backends) {
         // Org B publishes the SAME slug with DIFFERENT bytes. Each org must read its own.
         const beta = fixtureBundle("beta");
         expect(beta.sha256).not.toBe(alpha.sha256);
-        expect((await orgB.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256), beta.bytes)).status).toBe(201);
+        expect((await orgB.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256, "1.2.4"), beta.bytes)).status).toBe(201);
 
         expect(await orgA.getSkill("team-runbook")).toMatchObject({ bundleSha256: alpha.sha256, description: "alpha deployment runbook" });
         expect(await orgB.getSkill("team-runbook")).toMatchObject({ bundleSha256: beta.sha256, description: "beta deployment runbook" });
@@ -778,16 +779,16 @@ for (const backend of backends) {
         const firstPayload = await first.json();
 
         // Same slug, different bytes, no If-Match: refused, never a silent overwrite.
-        const second = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256), beta.bytes);
+        const second = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256, "1.2.4"), beta.bytes);
         expect(second.status).toBe(409);
         expect(await second.json()).toMatchObject({ code: "REVISION_CONFLICT", slug: "team-runbook" });
 
         // A stale If-Match is refused identically.
-        const stale = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256), beta.bytes, "0".repeat(64));
+        const stale = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256, "1.2.4"), beta.bytes, "0".repeat(64));
         expect(stale.status).toBe(409);
 
         // A guarded publish with the current revision lands.
-        const guarded = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256), beta.bytes, firstPayload.revisionId);
+        const guarded = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256, "1.2.4"), beta.bytes, firstPayload.revisionId);
         expect(guarded.status).toBe(201);
 
         // The first publish's bytes were overwritten only by the guarded write: the

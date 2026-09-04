@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- Versioned, immutable skill artefacts (hasna/apps#1630, workspace-remote design; interface kept minimal for the shared kit in #1631). `skills push` now sends a version manifest beside the bundle (sha256 of the bundle and of every file, byte counts, provenance: machine, agent id, CLI version, git remote and sha when inside a repo, packed_at). The server records every `name@version` in a new `skills_versions` table (migration 0006) and, when an S3 bucket is configured, stores a version-addressed copy at `<prefix>/skills/<org>/<slug>/<version>/bundle.tar.gz` plus `manifest.json` next to the content-addressed object. A version is immutable: re-publishing the same `name@version` with the same digest is idempotent, with a different digest it is refused with `409 SKILL_VERSION_EXISTS` unless `skills push --force-new-version` is given, which publishes under the next patch version. Bundles referenced by a version are never garbage-collected by a later re-publish or purge. New routes `GET /api/v1/skills/:slug/versions`, `.../versions/:version`, `.../versions/:version/bundle` (sha256 verified before serving; `X-Skill-Version` header). Existing registry routes are unchanged.
+- `skills versions <name>` lists the published versions of a skill; `skills pull name@version` restores an exact version and verifies its checksum; `skills pin name@version` records the exact version in `.hasna/skills.json`.
+- The bundled corpus is seeded into the hosted registry on boot as `slug@<package version>` (idempotent; `HASNA_SKILLS_SEED_BUNDLED_CORPUS=0` disables it), so the registry and the bucket become the source of truth instead of the package's static skill directory.
+- Bundle format stays the existing deterministic gzipped ustar (`.tar.gz`, mtime 0, sorted entries) rather than switching to zstd, so digests of already-published bundles keep their identity.
+
+### Patch Changes
+
+- `skills setup-info` reports the machine corpus directory it actually reads (`resolveCorpusRoot()`), not the package's `node_modules` skill directory (hasna/apps#1632).
+- `skills feedback` in API mode (`SKILLS_API_URL` / `HASNA_SKILLS_API_URL` set) appends to `feedback.jsonl` in the data directory instead of opening a local SQLite database (hasna/apps#1613, #1632).
+
 ## 0.1.72
 
 ### Patch Changes

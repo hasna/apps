@@ -19,7 +19,8 @@ import { dirname, join } from "node:path";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { SQLITE_MEMORY_PATH } from "./database-url.js";
 import { resolveMigrationsDir } from "./migrations-dir.js";
-import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, runId } from "./rows.js";
+import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle,
+  rowToSkillVersion, runId } from "./rows.js";
 import type {
   ApiPrincipal,
   ClaimRunInput,
@@ -31,12 +32,13 @@ import type {
   ServerRunLog,
   ServerRunRecord,
   ServerSkillBundle,
+  ServerSkillVersion,
   ServerSkillRecord,
   SkillsProductStore,
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
-import { SkillRevisionConflictError, StaleLeaseGenerationError } from "./types.js";
+import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
 import { revisionIdOfRecord } from "../lib/revision.js";
 
 export interface SqliteStoreOptions {
@@ -526,6 +528,17 @@ export class SqliteSkillsStore implements SkillsProductStore {
         throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previousRevisionId);
       }
       const carriedSha = input.bundle?.sha256 ?? previousSha;
+      // Immutable versions (hasna/apps#1630), checked before any write.
+      if (input.version && carriedSha) {
+        const existingVersion = this.get(
+          "SELECT bundle_sha256 FROM skills_versions WHERE org_id = ? AND slug = ? AND version = ? LIMIT 1",
+          [orgId, input.slug, input.version],
+        );
+        const existingSha = typeof existingVersion?.bundle_sha256 === "string" ? existingVersion.bundle_sha256 : null;
+        if (existingSha && existingSha !== carriedSha) {
+          throw new SkillVersionExistsError(input.slug, input.version, existingSha, carriedSha);
+        }
+      }
       // The carried size travels with the carried digest into the revision hash: the row
       // keeps its old size on a metadata-only re-publish, and a client recomputing the
       // revision id from the payload (which carries both) must get the same value.
@@ -630,6 +643,24 @@ export class SqliteSkillsStore implements SkillsProductStore {
       }
       // Only when this publish actually replaced the bundle. `input.bundle` being
       // absent now means "unchanged", so there is nothing superseded to collect.
+      if (input.version && carriedSha) {
+        this.db.run(
+          `INSERT OR IGNORE INTO skills_versions (org_id, slug, version, bundle_sha256, bundle_byte_size, storage_kind, storage_key, manifest_json, published_by_user_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            orgId,
+            input.slug,
+            input.version,
+            carriedSha,
+            carriedSize ?? 0,
+            input.versionStorage?.storageKind ?? "db",
+            input.versionStorage?.storageKey ?? null,
+            JSON.stringify(input.versionManifest ?? {}),
+            input.principal.userId ?? null,
+            now,
+          ],
+        );
+      }
       if (previousSha && input.bundle && previousSha !== input.bundle.sha256) this.collectOrphanBundle(orgId, previousSha);
 
       // Keep the tag projection (migration 0005) in step with the upsert, in
@@ -763,6 +794,21 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return row ? rowToSkillBundle(row) : null;
   }
 
+  async listSkillVersions(principal: ApiPrincipal, slug: string): Promise<ServerSkillVersion[]> {
+    return this.all(
+      "SELECT * FROM skills_versions WHERE org_id = ? AND slug = ? ORDER BY created_at DESC, version DESC",
+      [principal.orgId, slug],
+    ).map(rowToSkillVersion);
+  }
+
+  async getSkillVersion(principal: ApiPrincipal, slug: string, version: string): Promise<ServerSkillVersion | null> {
+    const row = this.get(
+      "SELECT * FROM skills_versions WHERE org_id = ? AND slug = ? AND version = ? LIMIT 1",
+      [principal.orgId, slug, version],
+    );
+    return row ? rowToSkillVersion(row) : null;
+  }
+
   /*
    * Pins. Mirrors the Postgres twin statement for statement; the schema is
    * shared and the ON CONFLICT target is the composite primary key in both
@@ -852,6 +898,9 @@ export class SqliteSkillsStore implements SkillsProductStore {
   private collectOrphanBundle(orgId: string, sha256: string): void {
     const referenced = this.get(
       "SELECT 1 AS present FROM skills_registry WHERE org_id = ? AND bundle_sha256 = ? LIMIT 1",
+      [orgId, sha256],
+    ) ?? this.get(
+      "SELECT 1 AS present FROM skills_versions WHERE org_id = ? AND bundle_sha256 = ? LIMIT 1",
       [orgId, sha256],
     );
     if (referenced) return;

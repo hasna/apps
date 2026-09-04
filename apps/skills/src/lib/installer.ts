@@ -52,6 +52,8 @@ export interface InstallResult {
   path?: string;
   mode?: InstallMode;
   source?: InstallSource;
+  /** Exact published version when the caller asked for name@version (hasna/apps#1630). */
+  version?: string;
 }
 
 export interface InstallOptions {

@@ -186,7 +186,7 @@ console.log(JSON.stringify({ mode, tables }));
       // 0004 added skills_pins, and 0005 added skills_tags. The count is
       // asserted rather than ranged so that a migration silently failing to
       // apply is a failure here.
-      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 16 });
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 17 });
     }
   }, 60_000);
 

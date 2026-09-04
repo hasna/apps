@@ -69,7 +69,7 @@ export interface SkillPullClient {
    * `Response` is the natural transport type here: verification reads the
    * X-Skill-Bundle-Sha256 / X-Skill-Bundle-Signature headers off it.
    */
-  getBundle(slug: string): Promise<Response | null>;
+  getBundle(slug: string, version?: string): Promise<Response | null>;
 }
 
 export interface PullSkillsOptions extends PortableSkillOptions {
@@ -189,9 +189,12 @@ async function pullOne(
   corpusOptions: PortableSkillOptions,
   verify: { signingKey?: string },
 ): Promise<PulledSkillResult> {
+  // `name@version` pins the pull to one immutable published version (hasna/apps#1630);
+  // a bare name pulls whatever the instance currently serves.
+  const { name: bareName, version: requestedVersion } = splitNameVersion(rawName);
   let slug: string;
   try {
-    slug = normalizePortableSkillName(rawName);
+    slug = normalizePortableSkillName(bareName);
   } catch (error) {
     return { name: rawName, success: false, error: (error as Error).message };
   }
@@ -202,9 +205,18 @@ async function pullOne(
   // fallback for instances that serve no bundle, and cannot be verified by construction.
   let bundleResponse: Response | null;
   try {
-    bundleResponse = await client.getBundle(slug);
+    bundleResponse = await client.getBundle(slug, requestedVersion);
   } catch (error) {
     return { name: slug, success: false, error: `Failed to fetch '${slug}': ${(error as Error).message}` };
+  }
+  // An exact version either exists or it does not: the client reports a missing one as null
+  // (or a 404 from a stand-in), and there is no metadata fallback that could satisfy it.
+  if (requestedVersion && (!bundleResponse || bundleResponse.status === 404)) {
+    return {
+      name: rawName,
+      success: false,
+      error: `Version '${requestedVersion}' of '${slug}' is not published on the configured instance (run 'skills versions ${slug}' to list what exists).`,
+    };
   }
   if (bundleResponse && !bundleResponse.ok) {
     // 410 is the tombstone contract (todos d061fcda): the slug was deleted within the
@@ -388,7 +400,7 @@ function installVerifiedBundle(
     } catch (error) {
       throw new PullSkillError(`Bundle for '${slug}' could not be unpacked: ${(error as Error).message}`);
     }
-    const version = str(meta?.version) ?? versionFromEntries(entries) ?? "unknown";
+    const version = str(response.headers.get("X-Skill-Version")) ?? str(meta?.version) ?? versionFromEntries(entries) ?? "unknown";
     const sourceCommit = sourceCommitFromEntries(entries);
     // A declared revision must be PROVEN against the content actually received before it
     // is recorded: the id is content-addressed, so recomputing it over the served
@@ -677,4 +689,18 @@ function dedupe(values: string[]): string[] {
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Split `name@version` into its parts. A name without `@` pulls the current revision; an
+ * empty version (`name@`) is an error the caller reports. Scoped-looking names are not a
+ * concern here: skill slugs never start with `@`.
+ */
+export function splitNameVersion(raw: string): { name: string; version?: string } {
+  const trimmed = raw.trim();
+  const at = trimmed.indexOf("@");
+  if (at <= 0) return { name: trimmed };
+  const name = trimmed.slice(0, at);
+  const version = trimmed.slice(at + 1);
+  return version ? { name, version } : { name };
 }
