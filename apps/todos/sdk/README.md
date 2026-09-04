@@ -79,7 +79,7 @@ const tools = todosTools.map(t => ({
 ### Webhooks, Templates, Activity
 - `client.listWebhooks()` / `createWebhook()` / `deleteWebhook()`
 - `client.listTemplates()` / `createTemplate()` / `deleteTemplate()`
-- `client.stats()` — Dashboard statistics
+- `client.stats()` — Task statistics
 - `client.recentActivity()` — Audit log
 - `client.getTaskHistory(id, { limit, format })` — Task change history, compact and limited by default
 - `client.subscribeEvents(callback)` — Real-time SSE events

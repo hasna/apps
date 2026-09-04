@@ -334,7 +334,7 @@ async function main() {
   // only"), and MCP clients spawn it with no credential, so it keeps the
   // anonymous local plane — but ONLY on loopback, and only when no credential is
   // configured. Set TODOS_API_KEY (and send it from the client) to enforce auth.
-  await startServer(port, { open: false, host: "127.0.0.1", allowAnonymous: true });
+  await startServer(port, { host: "127.0.0.1", allowAnonymous: true });
   console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
 }
 

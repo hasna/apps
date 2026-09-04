@@ -19,7 +19,7 @@
  *  - `anonymous-loopback`  — explicitly opted in AND bound to loopback. Anonymous
  *                            requests are additionally required to come from a
  *                            loopback peer. This is the documented local-dev /
- *                            dashboard path, never reachable off-box.
+ *                            local API path, never reachable off-box.
  *
  * Anything else throws `AuthNotConfiguredError`: refusing to start beats
  * starting wide open.

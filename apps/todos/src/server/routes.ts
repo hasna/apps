@@ -1,5 +1,5 @@
 /**
- * HTTP route handlers for the Todos dashboard API.
+ * HTTP route handlers for the todos REST API.
  * All route logic is here — utility functions remain in serve.ts.
  */
 
@@ -35,7 +35,6 @@ import { listWebhooks, createWebhook, deleteWebhook } from "../db/webhooks.js";
 import { listTemplates, createTemplate, deleteTemplate } from "../db/templates.js";
 import { listComments, logProgress } from "../db/comments.js";
 import type { Task } from "../types/index.js";
-import { join, resolve, sep } from "path";
 
 function parseFieldsParam(url: URL): string[] | undefined {
   const fieldsParam = url.searchParams.get("fields");
@@ -100,10 +99,8 @@ import {
   json,
   taskToSummary,
   SECURITY_HEADERS,
-  MIME_TYPES,
-  serveStaticFile,
 } from "./serve.js";
-export { json, taskToSummary, SECURITY_HEADERS, MIME_TYPES, serveStaticFile };
+export { json, taskToSummary, SECURITY_HEADERS };
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -119,8 +116,6 @@ export interface RouteContext {
   sseClients: Set<ReadableStreamDefaultController>;
   filteredSseClients: Set<FilteredClient>;
   broadcastEvent: (event: { type: string; task_id?: string; action: string; agent_id?: string | null; project_id?: string | null }) => void;
-  dashboardExists: boolean;
-  dashboardDir: string;
   apiKey: string | null;
 }
 
@@ -149,7 +144,7 @@ export function handleSseEvents(_req: Request, url: URL, ctx: RouteContext): Res
       },
     });
   }
-  // Unfiltered dashboard SSE
+  // Unfiltered SSE
   const stream = new ReadableStream({
     start(controller) {
       ctx.sseClients.add(controller);
@@ -237,7 +232,7 @@ export function handleStats(_ctx: RouteContext, json: (data: unknown, status?: n
 }
 
 /**
- * Validate the `status` query param of the dashboard API against `TASK_STATUSES`.
+ * Validate the `status` query param of the todos REST API against `TASK_STATUSES`.
  *
  * Unvalidated it was cast straight into the `listTasks` filter, so
  * `?status=open` answered HTTP 200 with `[]` — the same silent empty result the
@@ -311,10 +306,10 @@ export async function handleCreateTask(req: Request, ctx: RouteContext, json: (d
       agent_id?: string; created_by?: string; assigned_to?: string;
     };
     if (!body.title) return json({ error: "Missing 'title'" }, 400);
-    // Authorship was dropped entirely on this route, so every task filed from the
-    // dashboard was unattributable regardless of what the caller sent. The
-    // dashboard has no API-key principal, so fall back to a literal marker rather
-    // than to null — "filed from the dashboard" is a real answer, and null is not.
+    // Authorship was dropped entirely on this route, so every task filed through
+    // it was unattributable regardless of what the caller sent. The API has no
+    // implicit caller principal, so fall back to a literal marker rather than to
+    // null — "filed via the local API" is a real answer, and null is not.
     const createdBy = body.created_by ?? body.agent_id ?? "dashboard";
     const task = createTask({
       title: body.title,
@@ -950,22 +945,4 @@ export function handleDeletePlan(id: string, _ctx: RouteContext, json: (data: un
   const deleted = deletePlan(id);
   if (!deleted) return json({ error: "Plan not found" }, 404);
   return json({ success: true });
-}
-
-export function handleStaticFiles(path: string, method: string, ctx: RouteContext, json: (data: unknown, status?: number) => Response, serveStaticFile: (filePath: string) => Response | null): Response | null {
-  if (!ctx.dashboardExists || (method !== "GET" && method !== "HEAD")) return null;
-  if (path !== "/") {
-    const filePath = join(ctx.dashboardDir, path);
-    const resolvedFile = resolve(filePath);
-    const resolvedBase = resolve(ctx.dashboardDir);
-    if (!resolvedFile.startsWith(resolvedBase + sep) && resolvedFile !== resolvedBase) {
-      return json({ error: "Forbidden" }, 403);
-    }
-    const res = serveStaticFile(filePath);
-    if (res) return res;
-  }
-  const indexPath = join(ctx.dashboardDir, "index.html");
-  const res = serveStaticFile(indexPath);
-  if (res) return res;
-  return null;
 }

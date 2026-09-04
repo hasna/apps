@@ -33,17 +33,15 @@ describe("todos MCP HTTP transport", () => {
     dbPath = join(tmpDir, "test.db");
     process.env["TODOS_DB_PATH"] = dbPath;
     process.env["TODOS_AUTO_PROJECT"] = "false";
-    process.env["TODOS_NO_OPEN"] = "true";
     // Mirrors `todos-mcp --http`: loopback-pinned transport, anonymous local plane
     // opted into explicitly (see src/mcp/index.ts).
-    await startServer(port, { open: false, host: "127.0.0.1", allowAnonymous: true });
+    await startServer(port, { host: "127.0.0.1", allowAnonymous: true });
   }, SERVER_HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     closeDatabase();
     delete process.env["TODOS_DB_PATH"];
     delete process.env["TODOS_AUTO_PROJECT"];
-    delete process.env["TODOS_NO_OPEN"];
     await rm(tmpDir, { recursive: true, force: true });
   }, SERVER_HOOK_TIMEOUT_MS);
 

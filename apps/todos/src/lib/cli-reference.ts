@@ -95,10 +95,10 @@ export const CLI_COMMAND_GROUPS: CliCommandGroup[] = [
   },
   {
     name: "dashboard",
-    description: "Terminal and web dashboards",
+    description: "Terminal dashboard and local server",
     commands: [
       { name: "dashboard", summary: "Live TUI dashboard", flags: ["--readonly", "--agent", "--refresh"], example: "todos dashboard --readonly" },
-      { name: "serve", summary: "Web dashboard + REST API", flags: ["--port"] },
+      { name: "serve", summary: "REST API + MCP server", flags: ["--port"] },
     ],
   },
   {

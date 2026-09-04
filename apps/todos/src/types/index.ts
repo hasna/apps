@@ -1660,7 +1660,7 @@ export interface ProgressEntry {
   created_at: string;
 }
 
-/** Dashboard statistics */
+/** Task statistics (total tasks, pending, completed, etc.) */
 export interface DashboardStats {
   total_tasks: number;
   pending: number;

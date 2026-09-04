@@ -5,7 +5,7 @@
  * A1 the serve process reads and writes the shared RDS Postgres DIRECTLY through
  * the repo-native Postgres storage adapter — there is NO local sync/cache in the
  * service. Everything here is lazy: nothing touches Postgres or crypto until the
- * first `/v1` (or `/ready`) request, so the local-first CLI/dashboard paths keep
+ * first `/v1` (or `/ready`) request, so the local-first CLI/HTTP paths keep
  * ZERO cloud dependencies.
  */
 import { verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";

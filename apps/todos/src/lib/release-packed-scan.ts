@@ -21,7 +21,6 @@ export interface PackedFileDescriptor {
 export function scanExtractedPackedFiles(
   packedFiles: readonly PackedFileDescriptor[],
   extractedRoot: string,
-  sourceLogo: Buffer,
 ): ReleaseGateFailure[] {
   const root = resolve(extractedRoot);
   const rootPrefix = `${root}${sep}`;
@@ -53,7 +52,7 @@ export function scanExtractedPackedFiles(
     if (isPackedTextContent(content)) {
       files.push({ path: archivePath, text: content.toString("utf8") });
     } else {
-      failures.push(...validatePackedBinaryFile(archivePath, content, sourceLogo));
+      failures.push(...validatePackedBinaryFile(archivePath));
       files.push({ path: archivePath, text: content.toString("latin1") });
     }
   }

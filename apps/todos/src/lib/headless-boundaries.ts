@@ -1,7 +1,8 @@
 /**
  * Headless agent-native boundary definitions for @hasna/todos.
- * OSS stays local-first: CLI/MCP/SDK are primary; the optional local dashboard
- * may mutate via localhost API only — never hosted auth or hosted platform APIs.
+ * OSS stays local-first: CLI/MCP/SDK are the primary surfaces; mutations
+ * through the local REST API are allowed from localhost only — never hosted
+ * auth or hosted platform APIs.
  */
 
 export const HEADLESS_BOUNDARY_VERSION = "todos.headless-boundary.v1";
@@ -13,7 +14,7 @@ export interface HeadlessBoundaryManifest {
   hosted_mutation: false;
   browser_mutations: "local_admin_only";
   primary_surfaces: ["cli", "mcp", "sdk"];
-  optional_surfaces: ["local_dashboard"];
+  optional_surfaces: [];
   local_api_only: true;
   forbidden_remote_hosts: string[];
   notes: string[];
@@ -91,13 +92,12 @@ export function getHeadlessBoundaryManifest(): HeadlessBoundaryManifest {
     hosted_mutation: false,
     browser_mutations: "local_admin_only",
     primary_surfaces: ["cli", "mcp", "sdk"],
-    optional_surfaces: ["local_dashboard"],
+    optional_surfaces: [],
     local_api_only: true,
     forbidden_remote_hosts: [...FORBIDDEN_HOSTED_HOSTS],
     notes: [
       "Use todos CLI or todos-mcp for agent workflows.",
       "todos serve exposes a local-only REST API on 127.0.0.1 — not a hosted SaaS.",
-      "Remote sync is explicit opt-in from CLI/MCP, never from the dashboard.",
     ],
   };
 }

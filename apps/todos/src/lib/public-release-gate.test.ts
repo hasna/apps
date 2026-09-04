@@ -67,8 +67,8 @@ const rootPackage: PackageJson = {
   exports: {
     ".": { import: "./dist/index.js" },
   },
-  files: ["dist", "dashboard/dist", "LICENSE", "README.md"],
-  workspaces: ["dashboard"],
+  files: ["dist", "LICENSE", "README.md"],
+  workspaces: ["ai"],
   publishConfig: { registry: "https://registry.npmjs.org", access: "public" },
   repository: { type: "git", url: "https://github.com/hasna/todos.git" },
   homepage: "https://github.com/hasna/todos",
@@ -333,7 +333,6 @@ describe("public release gate", () => {
         "package/dist/mcp/index.js",
         "package/dist/server/index.js",
         "package/dist/release-provenance.json",
-        "package/dashboard/dist/index.html",
       ]),
     ).toEqual([]);
 
@@ -438,7 +437,6 @@ describe("public release gate", () => {
       "package/dist/mcp/index.js",
       "package/dist/server/index.js",
       "package/dist/release-provenance.json",
-      "package/dashboard/dist/index.html",
     ];
     const failures = validatePackedPackageFiles(paths, packageJson);
     expect(failures.map((failure) => failure.message)).toContain("packed package must include package/dist/sdk/index.d.ts");
@@ -475,7 +473,7 @@ describe("public release gate", () => {
     expect(derivePackedPackageTargets(packageJson)).toEqual(expected);
     const packed = [
       "package/package.json", "package/README.md", "package/LICENSE", "package/dist/release-provenance.json",
-      "package/dashboard/dist/index.html", ...expected,
+      ...expected,
     ];
     expect(validatePackedPackageFiles(packed, packageJson)).toEqual([]);
     expect(validatePackedPackageFiles(packed, { ...packageJson, files: [...packageJson.files!, "vendor"] })
@@ -589,16 +587,14 @@ describe("public release gate", () => {
     ]);
   });
 
-  test("detects packed text by content and permits only signature-verified binary paths", () => {
+  test("detects packed text by content and rejects packed binary files", () => {
     expect(isPackedTextContent(Buffer.from("Apache License\nAWS_PRIVATE_MARKER\n"))).toBe(true);
     expect(isPackedTextContent(Buffer.from("{\"version\":3}\n"))).toBe(true);
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0xff, 0xd9]);
     expect(isPackedTextContent(jpeg)).toBe(false);
-    expect(validatePackedBinaryFile("package/dashboard/dist/logo.jpg", jpeg, jpeg)).toEqual([]);
-    expect(validatePackedBinaryFile("package/dashboard/dist/logo.jpg", jpeg, Buffer.from([...jpeg, 0]))
-      .map((failure) => failure.check)).toContain("pack-binary-source-match");
-    expect(validatePackedBinaryFile("package/dashboard/dist/logo.jpg", Buffer.from("not a jpeg"), jpeg)).not.toEqual([]);
-    expect(validatePackedBinaryFile("package/dist/native.node", Buffer.from([0x7f, 0x45, 0x4c, 0x46]), jpeg)).not.toEqual([]);
+    // The tarball ships no binaries — every packed binary file is rejected.
+    expect(validatePackedBinaryFile("package/dist/native.node"))
+      .toEqual([{ check: "pack-binary-allowlist", message: "packed binary file is not allowlisted: package/dist/native.node" }]);
   });
 
   test("scans multi-megabyte extracted package entries without subprocess truncation", () => {
@@ -607,8 +603,7 @@ describe("public release gate", () => {
       const entry = join(root, "package", "dist", "cli", "index.js");
       mkdirSync(join(root, "package", "dist", "cli"), { recursive: true });
       writeFileSync(entry, `${"x".repeat(2 * 1024 * 1024)}\nAWS_PRIVATE_MARKER\n`);
-      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0xff, 0xd9]);
-      const failures = scanExtractedPackedFiles([{ path: "dist/cli/index.js" }], root, jpeg);
+      const failures = scanExtractedPackedFiles([{ path: "dist/cli/index.js" }], root);
       expect(failures.map((failure) => failure.check)).toContain("public-text-boundary");
       expect(failures.map((failure) => failure.check)).not.toContain("pack-read");
     } finally {
@@ -651,7 +646,6 @@ describe("public release gate", () => {
       const scanFailures = scanExtractedPackedFiles(
         artifact!.files,
         payloadDir,
-        readFileSync(join(root, "dashboard", "public", "logo.jpg")),
       );
       expect(scanFailures).toEqual([]);
 

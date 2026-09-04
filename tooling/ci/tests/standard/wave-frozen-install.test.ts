@@ -46,7 +46,7 @@ const WAVE_APPS = ["loops", "messages", "projects", "recordings", "todos"];
 
 /** Sub-workspace manifests the member's own Dockerfile COPYs into the image. */
 const SUB_WORKSPACES: Record<string, string[]> = {
-  todos: ["dashboard", "ai"],
+  todos: ["ai"],
 };
 
 function stageMember(app: string, dest: string): void {

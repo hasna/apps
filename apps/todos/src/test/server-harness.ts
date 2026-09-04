@@ -19,7 +19,7 @@
  *     never unowned and never guessed.
  *  2. Polling for readiness encodes a guess about how slow a cold `bun run` is.
  *     The server already announces itself on stdout once the socket is accepting
- *     ("Todos Dashboard running at http://localhost:<port>"), which is both the
+ *     ("Todos HTTP server running at http://localhost:<port>"), which is both the
  *     port discovery channel and an exact readiness edge — so there is nothing
  *     to poll and no sleep to tune.
  *  3. A server that dies during startup (bad env, migration failure, auth posture
@@ -41,7 +41,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
  * whole as one small write terminated by the newline `console.log` appends, but
  * the anchor makes that a guarantee rather than a property of the buffer size.
  */
-const READY_LINE = /Todos Dashboard running at http:\/\/localhost:(\d+)\s/;
+const READY_LINE = /Todos HTTP server running at http:\/\/localhost:(\d+)\s/;
 
 /**
  * Time allowed for a cold `bun run src/server/index.ts` to reach its ready line.
@@ -131,11 +131,10 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
       // 0 = ask the kernel for a free ephemeral port. The child reports the real
       // one on stdout; nothing here guesses or reserves.
       "--port=0",
-      "--no-open",
       ...(options.args ?? []),
     ],
     cwd: REPO_ROOT,
-    env: localRoutingTestEnv({ TODOS_NO_OPEN: "true", ...options.env }),
+    env: localRoutingTestEnv({ ...options.env }),
     stdout: "pipe",
     stderr: "pipe",
   });

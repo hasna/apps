@@ -877,14 +877,15 @@ describe("GET /api/headless", () => {
   });
 });
 
-describe("Security: path traversal prevention", () => {
+describe("Security: unknown routes never serve static files", () => {
   it("should not serve /etc/passwd contents via path traversal", async () => {
-    // In test env, dashboard/dist doesn't exist so request falls through to API 404 ({"error":"Not found"})
-    // In prod with dashboard, path traversal guard returns 403
-    // Either way: traversal MUST NOT return /etc/passwd file contents
+    // The bundled web dashboard is gone; unknown non-API routes always 404 JSON.
+    // A traversal attempt MUST NOT return /etc/passwd file contents.
     const res = await api("GET", "/../../etc/passwd");
+    expect(res.status).toBe(404);
     const text = await res.text();
     expect(text).not.toContain("root:x:"); // not /etc/passwd content
     expect(text).not.toContain("/bin/bash"); // not /etc/passwd content
+    expect(JSON.parse(text)).toEqual({ error: "Not found" });
   });
 });

@@ -695,7 +695,7 @@ export class TodosClient {
     }
   }
 
-  /** Dashboard stats */
+  /** Task statistics */
   async getStats(): Promise<DashboardStats> {
     return this._get("/api/stats");
   }

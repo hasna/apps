@@ -69,7 +69,7 @@ function reserveFreePort(start: number): number {
 
 function spawnServer(port: number, env: Record<string, string | undefined>, extraArgs: string[] = []) {
   return Bun.spawn({
-    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open", ...extraArgs],
+    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, ...extraArgs],
     cwd: REPO_ROOT,
     env,
     stdout: "pipe",
@@ -101,7 +101,6 @@ describe("unconfigured server fails closed", () => {
     const proc = spawnServer(port, localRoutingTestEnv({
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
-      TODOS_NO_OPEN: "true",
     }));
 
     try {
@@ -133,7 +132,7 @@ describe("unconfigured server fails closed", () => {
     const dbPath = join(tmpDir, "anon-offbox.db");
     const proc = spawnServer(
       port,
-      localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
+      localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
       ["--allow-anonymous", "--host=0.0.0.0"],
     );
 

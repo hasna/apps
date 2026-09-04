@@ -78,7 +78,6 @@ Related hardening worth applying in the same revision (pre-existing, not fixed h
 | `todos-mcp --http` (loopback `127.0.0.1`) | anonymous | unchanged — the transport is loopback-pinned and opts in implicitly; set `TODOS_API_KEY` and send it from the client to enforce auth |
 | `todos serve` / `todos-serve`, no key, loopback | anonymous | **breaking** — add `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`), or mint a key with `todos api-keys create "<name>"` |
 | `todos serve --host 0.0.0.0`, no key | anonymous, off-box | **refuses to start** — set `TODOS_API_KEY` |
-| Local dashboard (`dashboard/dist`) | anonymous `/api/*` | the dashboard sends no key, so it needs `--allow-anonymous` (loopback) until it learns to send one |
 | Load-balancer / container health checks (`/ready`) | public | unchanged (pre-auth) |
 | Hosted `/mcp`, hosted `/api/*` | anonymous | `404 LOCAL_PLANE_DISABLED` unless `TODOS_API_KEY` is provisioned |
 

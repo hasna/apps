@@ -107,7 +107,6 @@ function main(): void {
   process.env["SOURCE_DATE_EPOCH"] = `${Math.floor(Date.parse(provenanceTimestamp) / 1000)}`;
   const packageJson = readJson<PackageJson>("package.json");
   const sdkPackageJson = readJson<PackageJson>("sdk/package.json");
-  const sourceLogo = readFileSync(join(root, "dashboard", "public", "logo.jpg"));
 
   failures.push(...validateRootPackageMetadata(packageJson));
   failures.push(...validateSdkPackageMetadata(sdkPackageJson));
@@ -151,7 +150,7 @@ function main(): void {
     failures.push(...validatePackedPackageFiles(pack.files.map((file) => `package/${file.path}`), packedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(packedPackageJson, packageJson));
     failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(tarball), packageJson, sourceIdentity));
-    failures.push(...scanExtractedPackedFiles(pack.files, firstPayloadDir, sourceLogo));
+    failures.push(...scanExtractedPackedFiles(pack.files, firstPayloadDir));
 
     runOrExit("bun", ["run", "build"]);
     writeReleaseProvenance(packageJson, sourceIdentity, provenanceTimestamp);
@@ -166,7 +165,7 @@ function main(): void {
     failures.push(...validatePackedPackageFiles(secondPack.files.map((file) => `package/${file.path}`), secondPackedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(secondPackedPackageJson, packageJson));
     failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(secondTarball), packageJson, sourceIdentity));
-    failures.push(...scanExtractedPackedFiles(secondPack.files, secondPayloadDir, sourceLogo));
+    failures.push(...scanExtractedPackedFiles(secondPack.files, secondPayloadDir));
 
     if (!args.has("--skip-install-smoke")) {
       installSmoke(tarball);
@@ -407,10 +406,10 @@ function expectServeStartup(command: string, env: NodeJS.ProcessEnv): void {
   // 1. FAIL CLOSED: with no credential the packed binary must refuse to start
   //    rather than publish an anonymous /api/* + /mcp plane.
   const denyPort = `${19600 + Math.floor(Math.random() * 1000)}`;
-  console.log(`$ timeout ${SERVE_PROBE_TIMEOUT_SECONDS} ${command} --port=${denyPort} --host 127.0.0.1 --no-open  # expect refusal`);
-  const denied = runCapture("timeout", [SERVE_PROBE_TIMEOUT_SECONDS, command, `--port=${denyPort}`, "--host", "127.0.0.1", "--no-open"], env);
+  console.log(`$ timeout ${SERVE_PROBE_TIMEOUT_SECONDS} ${command} --port=${denyPort} --host 127.0.0.1  # expect refusal`);
+  const denied = runCapture("timeout", [SERVE_PROBE_TIMEOUT_SECONDS, command, `--port=${denyPort}`, "--host", "127.0.0.1"], env);
   const deniedOutput = `${denied.stdout}\n${denied.stderr}`;
-  if (deniedOutput.includes("Todos Dashboard running at") || !deniedOutput.includes("TODOS_API_KEY")) {
+  if (deniedOutput.includes("Todos HTTP server running at") || !deniedOutput.includes("TODOS_API_KEY")) {
     console.error(deniedOutput);
     console.error("todos-serve started (or gave no actionable error) without an API credential — auth must fail closed.");
     process.exit(denied.status || 1);
@@ -418,14 +417,14 @@ function expectServeStartup(command: string, env: NodeJS.ProcessEnv): void {
 
   // 2. And it must still start for the documented local-dev path.
   const port = `${20700 + Math.floor(Math.random() * 1000)}`;
-  console.log(`$ timeout ${SERVE_PROBE_TIMEOUT_SECONDS} ${command} --port=${port} --host 127.0.0.1 --no-open --allow-anonymous`);
+  console.log(`$ timeout ${SERVE_PROBE_TIMEOUT_SECONDS} ${command} --port=${port} --host 127.0.0.1 --allow-anonymous`);
   const result = runCapture(
     "timeout",
-    [SERVE_PROBE_TIMEOUT_SECONDS, command, `--port=${port}`, "--host", "127.0.0.1", "--no-open", "--allow-anonymous"],
+    [SERVE_PROBE_TIMEOUT_SECONDS, command, `--port=${port}`, "--host", "127.0.0.1", "--allow-anonymous"],
     env,
   );
   const output = `${result.stdout}\n${result.stderr}`;
-  if (!output.includes("Todos Dashboard running at")) {
+  if (!output.includes("Todos HTTP server running at")) {
     console.error(output);
     console.error("todos-serve did not print a startup URL during install smoke.");
     process.exit(result.status || 1);

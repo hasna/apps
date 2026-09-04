@@ -33,7 +33,6 @@ WORKDIR /app
 # Root manifest + workspace member manifests (needed for the workspace to
 # resolve; the workspaces themselves are not built in the server image).
 COPY package.json bun.lock ./
-COPY dashboard/package.json ./dashboard/package.json
 COPY ai/package.json ./ai/package.json
 RUN bun install --frozen-lockfile --ignore-scripts
 
@@ -62,7 +61,6 @@ COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
-    TODOS_NO_OPEN=true \
     HOST=0.0.0.0 \
     PORT=19427
 COPY --from=build /app/dist ./dist

@@ -46,6 +46,6 @@ When API keys are configured:
 ## Best Practices
 
 - Set `TODOS_DB_PATH` to a location with restricted permissions
-- Use API keys when exposing the dashboard on a network
+- Use API keys when exposing the HTTP API on a network
 - Rotate API keys periodically
 - Use webhook secrets for payload verification

@@ -1,12 +1,8 @@
 /**
- * HTTP server for the Todos dashboard.
- * Serves the Vite-built React/shadcn dashboard from dashboard/dist/.
- * Provides REST API endpoints for task management.
+ * Local HTTP server for @hasna/todos.
+ * Provides REST API endpoints for task management (+ MCP Streamable HTTP).
  */
 
-import { existsSync } from "fs";
-import { join, dirname, extname } from "path";
-import { fileURLToPath } from "url";
 import { getDatabase } from "../db/database.js";
 import { hasActiveApiKeys, verifyApiKey, safeEqualStrings } from "../db/api-keys.js";
 import {
@@ -21,46 +17,6 @@ import {
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
-
-// Resolve the dashboard dist directory — check multiple locations
-function resolveDashboardDir(): string {
-  const candidates: string[] = [];
-
-  try {
-    const scriptDir = dirname(fileURLToPath(import.meta.url));
-    candidates.push(join(scriptDir, "..", "dashboard", "dist"));
-    candidates.push(join(scriptDir, "..", "..", "dashboard", "dist"));
-  } catch {
-    // import.meta.url may not resolve in all contexts
-  }
-
-  if (process.argv[1]) {
-    const mainDir = dirname(process.argv[1]);
-    candidates.push(join(mainDir, "..", "dashboard", "dist"));
-    candidates.push(join(mainDir, "..", "..", "dashboard", "dist"));
-  }
-
-  candidates.push(join(process.cwd(), "dashboard", "dist"));
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return join(process.cwd(), "dashboard", "dist");
-}
-
-export const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-};
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -194,20 +150,6 @@ export function json(data: unknown, status = 200, headers?: HeadersInit): Respon
   });
 }
 
-export function serveStaticFile(filePath: string): Response | null {
-  if (!existsSync(filePath)) return null;
-
-  const ext = extname(filePath);
-  const contentType = MIME_TYPES[ext] || "application/octet-stream";
-
-  return new Response(Bun.file(filePath), {
-    headers: {
-      "Content-Type": contentType,
-      ...SECURITY_HEADERS,
-    },
-  });
-}
-
 export function taskToSummary(task: Task, fields?: string[]) {
   const full = {
     id: task.id,
@@ -237,7 +179,6 @@ export function taskToSummary(task: Task, fields?: string[]) {
 }
 
 export interface StartServerOptions {
-  open?: boolean;
   host?: string;
   apiKey?: string;
   /**
@@ -250,7 +191,6 @@ export interface StartServerOptions {
 }
 
 export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
-  const shouldOpen = options?.open ?? true;
   const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
 
   // Initialize database
@@ -293,7 +233,7 @@ export async function startServer(port: number, options?: StartServerOptions): P
   function broadcastEvent(event: { type: string; task_id?: string; action: string; agent_id?: string | null; project_id?: string | null }) {
     const data = JSON.stringify({ ...event, timestamp: new Date().toISOString() });
     const eventName = `task.${event.action}`;
-    // Broadcast to dashboard clients — collect dead clients first, delete after iteration
+    // Broadcast to unfiltered SSE clients — collect dead clients first, delete after iteration
     const deadClients: ReadableStreamDefaultController[] = [];
     for (const controller of sseClients) {
       try { controller.enqueue(`data: ${data}\n\n`); }
@@ -312,23 +252,12 @@ export async function startServer(port: number, options?: StartServerOptions): P
     for (const client of deadFiltered) filteredSseClients.delete(client);
   }
 
-  const dashboardDir = resolveDashboardDir();
-  const dashboardExists = existsSync(dashboardDir);
-
-  if (!dashboardExists) {
-    console.error(`\nDashboard not found at: ${dashboardDir}`);
-    console.error(`Run this to build it:\n`);
-    console.error(`  cd dashboard && bun install && bun run build\n`);
-  }
-
   // Route context passed to all handlers
   const ctx: RouteContext = {
     port,
     sseClients,
     filteredSseClients,
     broadcastEvent,
-    dashboardExists,
-    dashboardDir,
     apiKey,
   };
 
@@ -747,10 +676,6 @@ export async function startServer(port: number, options?: StartServerOptions): P
         }
       }
 
-      // ── Static Files (Vite dashboard) ──
-      const staticRes = handlers.handleStaticFiles(path, method, ctx, jsonWithCors, serveStaticFile);
-      if (staticRes) return staticRes;
-
       return json({ error: "Not found" }, 404);
     },
   });
@@ -775,19 +700,5 @@ export async function startServer(port: number, options?: StartServerOptions): P
   ctx.port = boundPort;
 
   const serverUrl = `http://localhost:${boundPort}`;
-  console.log(`Todos Dashboard running at ${serverUrl}`);
-
-  if (shouldOpen) {
-    try {
-      const { exec } = await import("child_process");
-      const openCmd = process.platform === "darwin"
-        ? "open"
-        : process.platform === "win32"
-          ? "start"
-          : "xdg-open";
-      exec(`${openCmd} ${serverUrl}`);
-    } catch {
-      // Silently ignore if we can't open browser
-    }
-  }
+  console.log(`Todos HTTP server running at ${serverUrl}`);
 }

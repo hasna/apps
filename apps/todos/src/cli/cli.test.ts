@@ -190,7 +190,7 @@ describe("CLI integration", () => {
       for (const flag of ["--version", "-V"]) {
         const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
+          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -200,7 +200,7 @@ describe("CLI integration", () => {
 
         expect(exitCode).toBe(0);
         expect(stdout.trim()).toBe(expectedVersion);
-        expect(stderr).not.toContain("Todos Dashboard running");
+        expect(stderr).not.toContain("Todos HTTP server running");
         expect(stderr).not.toContain("MCP server error");
       }
     }
@@ -211,7 +211,7 @@ describe("CLI integration", () => {
       for (const flag of ["--help", "-h"]) {
         const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
+          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -227,7 +227,7 @@ describe("CLI integration", () => {
 
         expect(exitCode).toBe(0);
         expect(stdout).toContain("Usage:");
-        expect(stderr).not.toContain("Todos Dashboard running");
+        expect(stderr).not.toContain("Todos HTTP server running");
         expect(stderr).not.toContain("MCP server error");
       }
     }

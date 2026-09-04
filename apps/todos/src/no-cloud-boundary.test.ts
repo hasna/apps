@@ -79,7 +79,6 @@ describe("OSS no-cloud boundary", () => {
     expect(packageJson.name).toBe("@hasna/todos");
     expect(packageJson.publishConfig).toMatchObject({ access: "public" });
     expect(packageJson.repository.url).toBe("https://github.com/hasna/todos.git");
-    expect(packageJson.workspaces).toContain("dashboard");
     expect(packageJson.workspaces).toContain("ai");
     expect(packageJson.bin).not.toHaveProperty("todos-remote");
     expect(packageJson.exports).not.toHaveProperty("./remote");
@@ -197,7 +196,7 @@ function runtimeSourceFiles(dir: string): string[] {
 
 function packageSurfaceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
-    if ([".git", ".claude", ".codewith", ".hasna", ".takumi", ".venv", "node_modules", "dist", "coverage", "dashboard"].includes(entry)) {
+    if ([".git", ".claude", ".codewith", ".hasna", ".takumi", ".venv", "node_modules", "dist", "coverage"].includes(entry)) {
       return [];
     }
     const path = join(dir, entry);
