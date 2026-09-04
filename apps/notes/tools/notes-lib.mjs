@@ -12,9 +12,10 @@ import { hasnaEnv } from './notes-env.mjs';
 import { getDataRoot } from '../server/paths.mjs';
 
 export function dataRoot() {
-  // New local-library data is XDG-native through @hasna/paths. Exact app
-  // overrides remain explicit operator choices. Legacy roots are never read,
-  // copied, or selected as a side effect of an ordinary client/library call.
+  // New local-library data is XDG-native through the in-package resolver.
+  // Exact app overrides remain explicit operator choices. Legacy roots are
+  // never read, copied, or selected as a side effect of an ordinary
+  // client/library call.
   return getDataRoot();
 }
 

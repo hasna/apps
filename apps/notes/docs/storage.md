@@ -42,7 +42,7 @@ NOTES_TEST_DATABASE_URL=<throwaway-dsn> bun run test:pg
 
 ## XDG-native paths and migration
 
-Maintenance writes use `@hasna/paths`. Exact overrides retain
+Maintenance writes use the in-package XDG resolver. Exact overrides retain
 their established precedence: `HASNA_NOTES_HOME`, `HASNA_NOTES_ROOT`, then
 `NOTES_HOME`. Legacy `~/.hasna/notes` and `~/.hasna/apps/notes` roots are
 migration sources only and are never selected or copied on startup.

@@ -49,9 +49,10 @@ Pure Markdown/frontmatter formatting helpers are available only at
 
 ## Data paths and explicit migration
 
-Maintenance data paths resolve through `@hasna/paths`. Without an
-exact app override, the destination is the platform XDG data location, for
-example `$XDG_DATA_HOME/hasna/notes` on Linux or
+Maintenance data paths resolve through the in-package XDG resolver (the
+former `@hasna/paths` contract, kept in-package after that package was
+retired). Without an exact app override, the destination is the platform XDG
+data location, for example `$XDG_DATA_HOME/hasna/notes` on Linux or
 `~/Library/Application Support/Hasna/notes` on macOS. Exact overrides retain
 their precedence: `HASNA_NOTES_HOME`, `HASNA_NOTES_ROOT`, then `NOTES_HOME`.
 
