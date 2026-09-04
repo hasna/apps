@@ -4,7 +4,7 @@
   "name": "contacts",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.2",
+  "kitVersion": "1.0.0",
   "description": "Contact and company management for AI coding agents. Public CLI, MCP, and SDK clients use one explicitly configured authenticated HTTPS /v1 authority and never open SQLite or PostgreSQL. contacts-serve is the server-only PostgreSQL/API-key boundary.",
   "bins": [
     "contacts",

@@ -19,7 +19,7 @@ import { getDataRoot } from "../paths";
 
 /**
  * The local database file used when no path is configured: `<effective data
- * root>/messages.db` — the legacy `~/.hasna/messages/messages.db` until the
+ * root>/messages.db` — the resolver data root (ruling hasna/apps#1668); the
  * store is migrated to the resolver (XDG / macOS) data home or the operator
  * sets `HASNA_DATA_HOME`; the exact-app override `HASNA_MESSAGES_HOME` names
  * an explicit root. `src/paths.ts` owns the root resolution; the

@@ -3,7 +3,7 @@
   "name": "messages",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.13.4",
+  "kitVersion": "1.0.0",
   "description": "Direct agent-to-agent messaging with threads: send, thread, read and mark-read between named agents. CLI + MCP + HTTP API (messages-serve) + SDK client. The server storage backend is SQLite by default (zero-config) or PostgreSQL selected by HASNA_MESSAGES_DATABASE_URL — the data backend is the only runtime switch. Built for the internal harness, open-sourced in hasna/apps.",
   "bins": [
     "messages",

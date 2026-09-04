@@ -1,17 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-
+import { dataDir } from "@hasna/contracts/paths";
 import { getDbPath } from "../db/database.js";
+import { getDataRootForHome } from "./paths.js";
 import {
-  adoptResolverDataRoot,
-  getDataRoot,
-  getDataRootForHome,
-  getExactDataRoot,
-  getHomeDir,
   getLegacyDataRoot,
   getResolverDataRoot,
+  getDataRoot,
+  getHomeDir,
 } from "./paths.js";
 
 const ENV_KEYS = [
@@ -19,10 +17,10 @@ const ENV_KEYS = [
   "USERPROFILE",
   "HASNA_DATA_HOME",
   "HASNA_CACHE_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_STATE_HOME",
   "HASNA_REPOS_HOME",
   "HASNA_REPOS_DB_PATH",
-  "REPOS_DB_PATH",
-  "HASNA_REPOS_REQUIRE_EXPLICIT_DB_PATH",
 ] as const;
 
 let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
@@ -55,142 +53,84 @@ function isolateHome(): string {
   return tempHome;
 }
 
-describe("resolver (XDG) data-root resolution", () => {
-  test("home resolves HOME first, then the OS user database", () => {
+describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #1668)", () => {
+  test("home resolves HOME first", () => {
     const home = isolateHome();
     expect(getHomeDir()).toBe(home);
   });
 
-  test("resolver data root follows @hasna/paths under a fake HOME", () => {
+  test("the resolver data root is the contracts resolver root for this machine", () => {
     const home = isolateHome();
-    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "repos"));
-    expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "repos"));
-  });
-});
-
-describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
-  test("legacy ~/.hasna/repos stays the effective root until adopted", () => {
-    const home = isolateHome();
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(getLegacyDataRoot());
-    // The default db path agrees on the effective root.
-    expect(getDbPath()).toBe(join(home, ".hasna", "repos", "repos.db"));
+    expect(getResolverDataRoot()).toBe(dataDir({ app: "repos", home, env: process.env }));
   });
 
-  test("HASNA_DATA_HOME adopts the resolver (XDG) data root", () => {
+  test("on macOS the resolver (and therefore the effective) root is ~/.hasna/repos", () => {
+    const home = isolateHome();
+    const mac = dataDir({ app: "repos", home, platform: "darwin", env: process.env });
+    expect(mac).toBe(join(home, ".hasna", "repos"));
+    expect(getResolverDataRoot()).toBe(mac);
+    expect(getDataRoot()).toBe(mac);
+  });
+
+  test("on Linux the resolver root is the XDG data root", () => {
+    const home = isolateHome();
+    expect(dataDir({ app: "repos", home, platform: "linux", env: process.env })).toBe(
+      join(home, ".local", "share", "hasna", "repos"),
+    );
+  });
+
+  test("the effective root is the resolver root", () => {
+    const home = isolateHome();
+    expect(getDataRoot()).toBe(dataDir({ app: "repos", home, env: process.env }));
+  });
+
+  test("HASNA_DATA_HOME kind override moves the data root (app segment kept)", () => {
     isolateHome();
     const base = mkdtempSync(join(tmpdir(), "repos-data-home-")); cleanups.push(base);
     process.env.HASNA_DATA_HOME = base;
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
     expect(getDataRoot()).toBe(join(base, "repos"));
-    expect(getDbPath()).toBe(join(base, "repos", "repos.db"));
-  });
-
-  test("HASNA_DATA_HOME must not orphan a live legacy store (never invisible)", () => {
-    const home = isolateHome();
-    const legacy = join(home, ".hasna", "repos");
-    mkdirSync(legacy, { recursive: true });
-    writeFileSync(join(legacy, "repos.db"), "live-0.1.54-store");
-    const base = mkdtempSync(join(tmpdir(), "repos-data-home-live-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base;
-    // No store at the resolver root yet: adopting now would create an empty
-    // resolver database that hides the live legacy store — and the empty
-    // database would make the switch persist after HASNA_DATA_HOME is unset.
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(legacy);
-    expect(getDbPath()).toBe(join(legacy, "repos.db"));
-  });
-
-  test("HASNA_DATA_HOME adopts once the store is physically at the resolver root", () => {
-    const home = isolateHome();
-    const legacy = join(home, ".hasna", "repos");
-    mkdirSync(legacy, { recursive: true });
-    writeFileSync(join(legacy, "repos.db"), "live-0.1.54-store");
-    const base = mkdtempSync(join(tmpdir(), "repos-data-home-migrated-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base;
-    const migrated = join(base, "repos");
-    mkdirSync(migrated, { recursive: true });
-    writeFileSync(join(migrated, "repos.db"), "migrated-store");
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
-    expect(getDataRoot()).toBe(migrated);
-    expect(getDbPath()).toBe(join(migrated, "repos.db"));
-  });
-
-  test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
-    const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "repos");
-    mkdirSync(xdg, { recursive: true });
-    writeFileSync(join(xdg, "repos.db"), "existing-migrated-store");
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
-    expect(getDataRoot()).toBe(xdg);
-    expect(getDbPath()).toBe(join(xdg, "repos.db"));
   });
 
   test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
     const home = isolateHome();
     const cache = mkdtempSync(join(tmpdir(), "repos-cache-home-")); cleanups.push(cache);
     process.env.HASNA_CACHE_HOME = cache;
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(join(home, ".hasna", "repos"));
+    expect(getDataRoot()).toBe(dataDir({ app: "repos", home, env: process.env }));
   });
 
-  test("HASNA_REPOS_HOME exact override wins over both roots", () => {
+  test("the pre-ruling legacy root is spelled under ~/.hasna/repos", () => {
+    const home = isolateHome();
+    expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "repos"));
+  });
+});
+
+describe("exact-app overrides and store layering", () => {
+  test("HASNA_REPOS_HOME exact override wins over the resolver root", () => {
     isolateHome();
     const override = mkdtempSync(join(tmpdir(), "repos-hasna-home-")); cleanups.push(override);
-    const base = mkdtempSync(join(tmpdir(), "repos-data-home2-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base; // would adopt the XDG root, but the override must win
     process.env.HASNA_REPOS_HOME = override;
-    expect(getExactDataRoot()).toBe(override);
-    expect(getDataRoot()).toBe(override);
-    expect(getDbPath()).toBe(join(override, "repos.db"));
-  });
-
-  test("exact data-root overrides are resolved to absolute paths", () => {
-    isolateHome();
-    const base = mkdtempSync(join(tmpdir(), "repos-abs-")); cleanups.push(base);
-    const raw = join(base, "..", "repos-abs-rel");
-    process.env.HASNA_REPOS_HOME = raw;
-    expect(getExactDataRoot()).toBe(resolve(raw));
-    expect(getExactDataRoot()?.startsWith("/")).toBe(true);
+    expect(getDataRoot()).toBe(resolve(override));
   });
 
   test("HASNA_REPOS_DB_PATH file override wins over the effective data root", () => {
     isolateHome();
-    const override = mkdtempSync(join(tmpdir(), "repos-db-path-")); cleanups.push(override);
-    const file = join(override, "custom.db");
+    const file = join(tmpdir(), "repos-custom.db");
     process.env.HASNA_REPOS_DB_PATH = file;
-    expect(getDbPath()).toBe(resolve(file));
-  });
-});
-
-describe("getDataRootForHome — explicit-home variant keeps the same gating", () => {
-  test("legacy ~/.hasna/repos under the given home until adopted", () => {
-    isolateHome();
-    const otherHome = mkdtempSync(join(tmpdir(), "repos-other-home-")); cleanups.push(otherHome);
-    expect(getDataRootForHome(otherHome)).toBe(join(otherHome, ".hasna", "repos"));
+    expect(getDbPath()).toBe(file);
   });
 
-  test("HASNA_REPOS_HOME exact override wins over the home argument", () => {
+  test("getDataRootForHome — explicit-home variant resolves the resolver root under the given home", () => {
     isolateHome();
-    const otherHome = mkdtempSync(join(tmpdir(), "repos-other-home2-")); cleanups.push(otherHome);
-    const override = mkdtempSync(join(tmpdir(), "repos-home-for-")); cleanups.push(override);
+    const altHome = mkdtempSync(join(tmpdir(), "repos-alt-home-")); cleanups.push(altHome);
+    expect(getDataRootForHome(altHome)).toBe(resolve(dataDir({ app: "repos", home: altHome, env: process.env })));
+  });
+
+  test("getDataRootForHome — HASNA_REPOS_HOME exact override wins over the home argument", () => {
+    isolateHome();
+    const altHome = mkdtempSync(join(tmpdir(), "repos-alt-home2-")); cleanups.push(altHome);
+    const override = mkdtempSync(join(tmpdir(), "repos-hasna-home2-")); cleanups.push(override);
     process.env.HASNA_REPOS_HOME = override;
-    expect(getDataRootForHome(otherHome)).toBe(override);
+    expect(getDataRootForHome(altHome)).toBe(resolve(override));
   });
 
-  // Release-review P1 (cycle 2): the legacy-store guard must compare against
-  // the SAME home the resolver root was computed from. With env.HOME pointing
-  // elsewhere (no legacy store there) and a live store under the explicit
-  // home, the guard previously looked at env.HOME's legacy root and adopted —
-  // hiding the explicit-home store.
-  test("explicit-home variant never hides a live store under the given home", () => {
-    isolateHome();
-    const otherHome = mkdtempSync(join(tmpdir(), "repos-other-home3-")); cleanups.push(otherHome);
-    const legacy = join(otherHome, ".hasna", "repos");
-    mkdirSync(legacy, { recursive: true });
-    writeFileSync(join(legacy, "repos.db"), "live-explicit-home-store");
-    const base = mkdtempSync(join(tmpdir(), "repos-data-home-explicit-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base; // would adopt under env.HOME semantics
-    expect(getDataRootForHome(otherHome)).toBe(legacy);
-  });
 });

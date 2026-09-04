@@ -3,7 +3,7 @@
   "name": "calendar",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.2",
+  "kitVersion": "1.0.0",
   "description": "Partial Calendar domain migration: authenticated explicit HTTPS clients and PostgreSQL-only server. Embedded Events/channel/replay remain unresolved local integrations; explicit legacy db-migrate is LOCAL-ONLY and refused in api mode (no local database is created when HASNA_CALENDAR_API_URL is set).",
   "bins": [
     "calendar",

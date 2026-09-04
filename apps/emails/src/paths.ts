@@ -1,137 +1,24 @@
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-// --- Local path resolver -------------------------------------------------
-// @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
-import { homedir as pathsResolverHomedir } from "node:os";
-import { join as pathsResolverJoin } from "node:path";
-
-export type PathKind = "config" | "data" | "state" | "cache";
-
-const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
-};
-
-export interface PathsResolverOptions {
-  app: string;
-  internal?: boolean;
-  platform?: string;
-  home?: string;
-  env?: Record<string, string | undefined>;
-}
-
-const PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function pathsResolverAssertApp(app: string): void {
-  if (typeof app !== "string" || app.length === 0) {
-    throw new TypeError("paths: app must be a non-empty string");
-  }
-  if (!PATHS_RESOLVER_APP_SLUG_RE.test(app)) {
-    throw new TypeError(
-      `paths: invalid app slug "${app}" — expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`,
-    );
-  }
-}
-
-function pathsResolverAssertKind(kind: PathKind): void {
-  if (!(Object.keys(PATHS_RESOLVER_KIND_ENV) as string[]).includes(kind)) {
-    throw new TypeError(
-      `paths: invalid path kind "${kind}" — expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`,
-    );
-  }
-}
-
-function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertKind(kind);
-  const env: Record<string, string | undefined> = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
-  if (typeof override === "string" && override.length > 0) return override;
-  const home = options.home ?? pathsResolverHomedir();
-  const platform = options.platform ?? process.platform;
-  if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
-  }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
-}
-
-function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertApp(options.app);
-  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
-export function dataDir(options: PathsResolverOptions): string {
-  return pathsResolverResolve("data", options);
-}
-
 /**
- * Resolve the user's home directory: $HOME, then $USERPROFILE (Windows), then
- * the OS user database. A home that cannot be resolved is a hard error — never
- * a literal "~" path (relative to cwd) and never an "undefined"-prefixed path.
+ * Emails data-root resolution — thin app wrapper over the single paths
+ * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
+ * platform placement (`~/.hasna/emails` on macOS, XDG data root on Linux)
+ * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
+ * layers the emails-specific exact-app override on top. The old in-package
+ * resolver copy and the legacy/adoption dance were deleted with the ruling.
  */
-export function getHomeDir(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.HOME || env.USERPROFILE || homedir();
-  if (!home) {
-    throw new Error("Unable to resolve the user's home directory");
-  }
-  return home;
-}
+import { resolve } from "node:path";
+import { dataDir, effectiveHome } from "@hasna/contracts/paths";
+import { join } from "node:path";
+
+/** Resolve the user's home directory: $HOME, then $USERPROFILE, then the OS user database. */
+export const getHomeDir = effectiveHome;
 
 /**
- * The @hasna/paths-resolved (XDG / macOS home layout) data root for emails.
- * This is the forward-looking home the XDG migration (hotfixes plan
- * 0f49f56a, task P3.3) moves the store toward: `~/.local/share/hasna/emails`
- * on Linux, `~/Library/Application Support/Hasna/emails` on macOS. The home
- * override mirrors the pre-existing $HOME-first resolution so the resolver
- * follows the same home the legacy path does.
+ * The resolver data root for emails: kind overrides honored,
+ * `~/.hasna/emails` on macOS, `~/.local/share/hasna/emails` on Linux.
  */
 export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return dataDir({ app: "emails", home: getHomeDir(env), env });
-}
-
-/** The legacy (pre-XDG) data root: ~/.hasna/emails */
-export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return join(getHomeDir(env), ".hasna", "emails");
-}
-
-/**
- * Whether the resolver (XDG) data root should be adopted as the effective
- * data root. The resolver root is adopted only when the operator has set
- * `HASNA_DATA_HOME` (the data-kind override — a deliberate opt-in to the XDG
- * layout) or the store has already been physically migrated there
- * (`emails.db` exists). A machine that only redirects another kind (e.g.
- * cache to tmpfs) must NOT have its data home moved, and a live store at the
- * legacy home must never become invisible on upgrade.
- */
-export function adoptResolverDataRoot(
-  resolved: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const dataOverride = env.HASNA_DATA_HOME;
-  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
-  return existsSync(join(resolved, "emails.db"));
+  return dataDir({ app: "emails", home: effectiveHome(env), env });
 }
 
 /** The exact-app override root, when set: `HASNA_EMAILS_HOME`, then `EMAILS_HOME`. */
@@ -146,16 +33,26 @@ export function getExactDataRoot(env: NodeJS.ProcessEnv = process.env): string |
 }
 
 /**
+ * The pre-ruling legacy root (`~/.hasna/emails`). On macOS this equals the
+ * resolver root (ruling #1668 moved the resolver TO this layout); elsewhere
+ * it is kept only for the Windows `.emails` migration path and HOME
+ * canonicalization in `db/database.ts` and for migrating historically
+ * misplaced keyring files.
+ */
+export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return join(effectiveHome(env), ".hasna", "emails");
+}
+
+/**
  * The effective data root: an exact-app override (`HASNA_EMAILS_HOME`, then
- * `EMAILS_HOME`) wins unconditionally; otherwise the resolver (XDG) data
- * root once adopted; otherwise the legacy `~/.hasna/emails` default. The
- * store path (`HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` / `--db`) is layered
- * on top of this by the database layer, so an explicit store path always wins
- * regardless.
+ * `EMAILS_HOME`) wins unconditionally; otherwise the resolver data root
+ * (ruling #1668 — the resolver root IS the convention on every platform).
+ * The store path (`HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` / `--db`) is
+ * layered on top of this by the database layer, so an explicit store path
+ * always wins regardless.
  */
 export function getDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   const exact = getExactDataRoot(env);
   if (exact) return exact;
-  const resolved = getResolverDataRoot(env);
-  return adoptResolverDataRoot(resolved, env) ? resolve(resolved) : getLegacyDataRoot(env);
+  return resolve(getResolverDataRoot(env));
 }

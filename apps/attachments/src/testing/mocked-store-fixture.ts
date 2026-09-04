@@ -21,7 +21,11 @@ import {
   resolveDeliverableLinkType,
   resolveLocalShareBaseUrl,
 } from "../core/links";
+<<<<<<< HEAD
 import { sanitizeFilename } from "../core/security";
+=======
+import { createObjectKey, sanitizeFilename } from "../core/security";
+>>>>>>> 7d0a86135 (wip: contracts paths resolver + migrate src modules (ruling #1668))
 import { stagingKey } from "../core/artifact-keys";
 import {
   uploadFile as coreUploadFile,

@@ -3,7 +3,7 @@
   "name": "hooks",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.4",
+  "kitVersion": "1.0.0",
   "description": "Open source hooks library for AI coding agents. Storage is a data-backend switch, never a deployment mode: local SQLite at ~/.hasna/hooks/hooks.db by default, or PostgreSQL when HASNA_HOOKS_DATABASE_URL is set with HASNA_HOOKS_STORAGE_BACKEND=postgresql (src/db/storage-sync.ts). The retired HASNA_HOOKS_STORAGE_MODE / HOOKS_STORAGE_MODE deployment-mode variables are read as errors, not no-ops. The optional remote registry is a Cloudflare Workers API (D1 catalog + R2 artifacts, provisioned by `hooks cf deploy`) reached via HASNA_HOOKS_API_URL \u2014 an API route, not a storage backend. MCP is served by the `hooks mcp` subcommand (no separate mcp bin).",
   "bins": [
     "hooks",

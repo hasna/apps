@@ -3,7 +3,7 @@
   "name": "conversations",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.13.4",
+  "kitVersion": "1.0.0",
   "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_CONVERSATIONS_API_URL; conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL. The data backend is the only runtime switch.",
   "bins": [
     "conversations",

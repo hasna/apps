@@ -3,7 +3,7 @@
   "name": "telephony",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "1.0.0",
   "description": "Telephony platform for AI agents with SMS, WhatsApp, voice calls, TTS/STT, and real-time streaming. The data backend is the only runtime switch: SQLite in the effective telephony data home (~/.hasna/telephony/telephony.db by default, resolved via @hasna/paths; the XDG data home is adopted only once the store is migrated there or HASNA_DATA_HOME is set), or PostgreSQL when a database URL is configured, in which case the serve process reads and writes PostgreSQL directly.",
   "bins": [
     "telephony",

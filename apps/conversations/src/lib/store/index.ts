@@ -84,7 +84,7 @@ type Async<F extends (...args: never[]) => unknown> = (
 //
 // Measured on station01, 2026-07-30, at 0.5.9: with HASNA_CONVERSATIONS_API_URL
 // set and HASNA_CONVERSATIONS_API_KEY absent, `getStore()` handed back a LocalStore
-// over ~/.hasna/conversations/*.db and served a DIFFERENT dataset — 608 channels
+// over the legacy ~/.hasna layout's conversation db files and served a DIFFERENT dataset — 608 channels
 // instead of 844, newest message 2026-07-18 instead of today — with no error and no
 // flag. An agent reading that concludes the messages were never sent. It is the
 // same failure that got MCPs banned on this fleet (~/.claude/rules/no-mcps.md).

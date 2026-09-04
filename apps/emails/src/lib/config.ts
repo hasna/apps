@@ -17,10 +17,10 @@ import { isSensitiveKey } from "./redaction.js";
  * database open, wrong for a read that never touches one.
  *
  * The directory is the effective data root resolved through `src/paths.ts`
- * (XDG/macOS home layout via @hasna/paths): the legacy `~/.hasna/emails` stays
- * effective until the store is migrated to the resolver data home or the
- * operator sets the data-kind override `HASNA_DATA_HOME`; the exact-app
- * overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
+ * (single paths resolver in @hasna/contracts, ruling hasna/apps#1668): the
+ * resolver root IS the convention on every platform (`~/.hasna/emails` on
+ * macOS, XDG data root on Linux); the exact-app overrides
+ * `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
  */
 export function getEmailsDataDir(): string {
   return getDataRoot();
@@ -231,7 +231,7 @@ export function agentConfigKeyRefusal(key: string): string {
     + `${[...AGENT_WRITABLE_CONFIG_KEYS].join(", ")}. `
     + `Mode selection (emails_mode), credential keys, and the S3/AWS data-flow keys `
     + `are excluded on purpose. An operator sets those out of band — via the `
-    + `EMAILS_* environment variables, or by editing ~/.hasna/emails/config.json `
+    + `EMAILS_* environment variables, or by editing the emails config file at the data root `
     + `directly (this build registers no "emails config" command).`;
 }
 

@@ -4,7 +4,7 @@
   "name": "automations",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.12.0",
+  "kitVersion": "1.0.0",
   "description": "Deterministic automation control plane and daemon for Hasna open-source apps. It owns local automation specs, trigger materialization, deterministic run/action queue state, replay requests, daemon leases, and signed webhook materialization. Local paths resolve via @hasna/paths; the XDG data home is adopted once the store is migrated there or HASNA_DATA_HOME is set.",
   "bins": [
     "automations",

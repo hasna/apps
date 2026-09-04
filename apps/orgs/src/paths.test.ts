@@ -1,23 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-
+import { dataDir } from "@hasna/contracts/paths";
+import { getOrgAuditPath, getOrgDataDir, getOrgStorePath } from "./store.js";
 import {
-  adoptResolverDataRoot,
-  getDataRoot,
-  getExactDataRoot,
-  getHomeDir,
   getLegacyDataRoot,
   getResolverDataRoot,
+  getDataRoot,
+  getHomeDir,
 } from "./paths.js";
-import { getOrgAuditPath, getOrgDataDir, getOrgStorePath } from "./store.js";
 
 const ENV_KEYS = [
   "HOME",
   "USERPROFILE",
   "HASNA_DATA_HOME",
   "HASNA_CACHE_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_STATE_HOME",
   "HASNA_ORGS_HOME",
   "OPEN_ORGS_STORE",
   "OPEN_ORGS_AUDIT",
@@ -53,83 +53,74 @@ function isolateHome(): string {
   return tempHome;
 }
 
-describe("resolver (XDG) data-root resolution", () => {
-  test("home resolves HOME first, then the OS user database", () => {
+describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #1668)", () => {
+  test("home resolves HOME first", () => {
     const home = isolateHome();
     expect(getHomeDir()).toBe(home);
   });
 
-  test("resolver data root follows @hasna/paths under a fake HOME", () => {
+  test("the resolver data root is the contracts resolver root for this machine", () => {
     const home = isolateHome();
-    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "orgs"));
-    expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "orgs"));
-  });
-});
-
-describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
-  test("legacy ~/.hasna/orgs stays the effective root until adopted", () => {
-    const home = isolateHome();
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(getLegacyDataRoot());
-    expect(getOrgDataDir()).toBe(getLegacyDataRoot());
-    // The default store/audit paths agree on the effective root.
-    expect(getOrgStorePath()).toBe(join(home, ".hasna", "orgs", "orgs.json"));
-    expect(getOrgAuditPath()).toBe(join(home, ".hasna", "orgs", "audit.jsonl"));
+    expect(getResolverDataRoot()).toBe(dataDir({ app: "orgs", home, env: process.env }));
   });
 
-  test("HASNA_DATA_HOME adopts the resolver (XDG) data root", () => {
+  test("on macOS the resolver (and therefore the effective) root is ~/.hasna/orgs", () => {
+    const home = isolateHome();
+    const mac = dataDir({ app: "orgs", home, platform: "darwin", env: process.env });
+    expect(mac).toBe(join(home, ".hasna", "orgs"));
+    expect(getResolverDataRoot()).toBe(mac);
+    expect(getDataRoot()).toBe(mac);
+  });
+
+  test("on Linux the resolver root is the XDG data root", () => {
+    const home = isolateHome();
+    expect(dataDir({ app: "orgs", home, platform: "linux", env: process.env })).toBe(
+      join(home, ".local", "share", "hasna", "orgs"),
+    );
+  });
+
+  test("the effective root is the resolver root", () => {
+    const home = isolateHome();
+    expect(getDataRoot()).toBe(dataDir({ app: "orgs", home, env: process.env }));
+  });
+
+  test("HASNA_DATA_HOME kind override moves the data root (app segment kept)", () => {
     isolateHome();
     const base = mkdtempSync(join(tmpdir(), "orgs-data-home-")); cleanups.push(base);
     process.env.HASNA_DATA_HOME = base;
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
     expect(getDataRoot()).toBe(join(base, "orgs"));
-    expect(getOrgStorePath()).toBe(join(base, "orgs", "orgs.json"));
-  });
-
-  test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
-    const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "orgs");
-    mkdirSync(xdg, { recursive: true });
-    writeFileSync(join(xdg, "orgs.json"), "existing-migrated-store");
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
-    expect(getDataRoot()).toBe(xdg);
-    expect(getOrgStorePath()).toBe(join(xdg, "orgs.json"));
   });
 
   test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
     const home = isolateHome();
     const cache = mkdtempSync(join(tmpdir(), "orgs-cache-home-")); cleanups.push(cache);
     process.env.HASNA_CACHE_HOME = cache;
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(join(home, ".hasna", "orgs"));
+    expect(getDataRoot()).toBe(dataDir({ app: "orgs", home, env: process.env }));
   });
 
-  test("HASNA_ORGS_HOME exact override wins over both roots", () => {
+  test("the pre-ruling legacy root is spelled under ~/.hasna/orgs", () => {
+    const home = isolateHome();
+    expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "orgs"));
+  });
+});
+
+describe("exact-app overrides and store layering", () => {
+  test("HASNA_ORGS_HOME exact override wins over the resolver root", () => {
     isolateHome();
     const override = mkdtempSync(join(tmpdir(), "orgs-hasna-home-")); cleanups.push(override);
-    const base = mkdtempSync(join(tmpdir(), "orgs-data-home2-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base; // would adopt the XDG root, but the override must win
     process.env.HASNA_ORGS_HOME = override;
-    expect(getExactDataRoot()).toBe(override);
-    expect(getDataRoot()).toBe(override);
-    expect(getOrgStorePath()).toBe(join(override, "orgs.json"));
-  });
-
-  test("exact data-root overrides are resolved to absolute paths", () => {
-    isolateHome();
-    const base = mkdtempSync(join(tmpdir(), "orgs-abs-")); cleanups.push(base);
-    const raw = join(base, "..", "orgs-abs-rel");
-    process.env.HASNA_ORGS_HOME = raw;
-    expect(getExactDataRoot()).toBe(resolve(raw));
-    expect(getExactDataRoot()?.startsWith("/")).toBe(true);
+    expect(getDataRoot()).toBe(resolve(override));
+    expect(getOrgDataDir()).toBe(resolve(override));
   });
 
   test("OPEN_ORGS_STORE/OPEN_ORGS_AUDIT file overrides win over the effective data root", () => {
     isolateHome();
-    const override = mkdtempSync(join(tmpdir(), "orgs-store-")); cleanups.push(override);
-    process.env.OPEN_ORGS_STORE = join(override, "custom.json");
-    process.env.OPEN_ORGS_AUDIT = join(override, "custom-audit.jsonl");
-    expect(getOrgStorePath()).toBe(join(override, "custom.json"));
-    expect(getOrgAuditPath()).toBe(join(override, "custom-audit.jsonl"));
+    const store = join(tmpdir(), "open-orgs-store.db");
+    const audit = join(tmpdir(), "open-orgs-audit.jsonl");
+    process.env.OPEN_ORGS_STORE = store;
+    process.env.OPEN_ORGS_AUDIT = audit;
+    expect(getOrgStorePath()).toBe(store);
+    expect(getOrgAuditPath()).toBe(audit);
   });
+
 });

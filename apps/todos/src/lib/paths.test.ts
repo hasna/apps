@@ -1,87 +1,115 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
-
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { dataDir } from "@hasna/contracts/paths";
+import { getConfigPath, getDefaultDbPath, getTrainingDir } from "./paths.js";
 import {
-  getTodosDir,
-  getDefaultDbPath,
-  getConfigPath,
-  getTrainingDir,
   legacyHomeDir,
   resolverHome,
-  adoptResolverHome,
+  getTodosDir,
+  effectiveHome,
 } from "./paths.js";
 
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalDataHome: string | undefined;
-let testHome = "";
+const ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "HASNA_DATA_HOME",
+  "HASNA_CACHE_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_STATE_HOME",
+  "HASNA_TODOS_DB_PATH",
+  "TODOS_DB_PATH",
+] as const;
 
-beforeEach(() => {
-  originalHome = process.env["HOME"];
-  originalUserProfile = process.env["USERPROFILE"];
-  originalDataHome = process.env["HASNA_DATA_HOME"];
-  testHome = join(tmpdir(), `todos-paths-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  mkdirSync(testHome, { recursive: true });
-  process.env["HOME"] = testHome;
-  delete process.env["USERPROFILE"];
-  // Hermetic: the @hasna/paths resolver and the data-kind override must not
-  // inherit ambient values.
-  delete process.env["HASNA_DATA_HOME"];
-});
+let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+let tempHome: string | null = null;
+const cleanups: string[] = [];
 
 afterEach(() => {
-  if (originalHome === undefined) delete process.env["HOME"];
-  else process.env["HOME"] = originalHome;
-  if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
-  else process.env["USERPROFILE"] = originalUserProfile;
-  if (originalDataHome === undefined) delete process.env["HASNA_DATA_HOME"];
-  else process.env["HASNA_DATA_HOME"] = originalDataHome;
-  rmSync(testHome, { recursive: true, force: true });
+  for (const key of ENV_KEYS) {
+    const value = saved[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  saved = {};
+  for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (tempHome !== null) {
+    rmSync(tempHome, { recursive: true, force: true });
+    tempHome = null;
+  }
 });
 
-describe("paths resolver adoption", () => {
-  test("defaults to the legacy ~/.hasna/todos home when nothing opts into XDG", () => {
-    expect(legacyHomeDir()).toBe(join(testHome, ".hasna", "todos"));
-    expect(getTodosDir()).toBe(join(testHome, ".hasna", "todos"));
-    expect(getDefaultDbPath()).toBe(join(testHome, ".hasna", "todos", "todos.db"));
-    expect(getConfigPath()).toBe(join(testHome, ".hasna", "todos", "config.json"));
-    expect(getTrainingDir()).toBe(join(testHome, ".hasna", "todos", "training"));
+function isolateHome(): string {
+  if (tempHome !== null) throw new Error("isolateHome called twice without afterEach");
+  for (const key of ENV_KEYS) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+  tempHome = mkdtempSync(join(tmpdir(), "todos-paths-"));
+  process.env.HOME = tempHome;
+  delete process.env.USERPROFILE;
+  return tempHome;
+}
+
+describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #1668)", () => {
+  test("home resolves HOME first", () => {
+    const home = isolateHome();
+    expect(effectiveHome()).toBe(home);
   });
 
-  test("resolverHome resolves the @hasna/paths data home", () => {
-    expect(resolverHome()).toBe(join(testHome, ".local", "share", "hasna", "todos"));
+  test("the resolver data root is the contracts resolver root for this machine", () => {
+    const home = isolateHome();
+    expect(resolverHome()).toBe(dataDir({ app: "todos", home, env: process.env }));
   });
 
-  test("HASNA_DATA_HOME opts in and redirects the effective home to the resolver data home", () => {
-    process.env["HASNA_DATA_HOME"] = join(testHome, "xdg-data");
-    expect(adoptResolverHome(resolverHome())).toBe(true);
-    const dir = getTodosDir();
-    expect(dir).toBe(join(testHome, "xdg-data", "todos"));
-    expect(getDefaultDbPath()).toBe(join(testHome, "xdg-data", "todos", "todos.db"));
-    expect(existsSync(join(dir, "todos.db"))).toBe(false);
+  test("on macOS the resolver (and therefore the effective) root is ~/.hasna/todos", () => {
+    const home = isolateHome();
+    const mac = dataDir({ app: "todos", home, platform: "darwin", env: process.env });
+    expect(mac).toBe(join(home, ".hasna", "todos"));
+    expect(resolverHome()).toBe(mac);
+    expect(getTodosDir()).toBe(mac);
   });
 
-  test("a migrated todos.db at the resolver home adopts it", () => {
-    const resolved = resolverHome();
-    mkdirSync(resolved, { recursive: true });
-    writeFileSync(join(resolved, "todos.db"), "");
-    expect(adoptResolverHome(resolved)).toBe(true);
-    expect(getTodosDir()).toBe(resolved);
-    expect(getDefaultDbPath()).toBe(join(resolved, "todos.db"));
+  test("on Linux the resolver root is the XDG data root", () => {
+    const home = isolateHome();
+    expect(dataDir({ app: "todos", home, platform: "linux", env: process.env })).toBe(
+      join(home, ".local", "share", "hasna", "todos"),
+    );
   });
 
-  test("a migrated config.json at the resolver home adopts it", () => {
-    const resolved = resolverHome();
-    mkdirSync(resolved, { recursive: true });
-    writeFileSync(join(resolved, "config.json"), "{}");
-    expect(getTodosDir()).toBe(resolved);
+  test("the effective root is the resolver root", () => {
+    const home = isolateHome();
+    expect(getTodosDir()).toBe(dataDir({ app: "todos", home, env: process.env }));
   });
 
-  test("an empty HASNA_DATA_HOME is treated as unset and falls back to legacy", () => {
-    process.env["HASNA_DATA_HOME"] = "";
-    expect(adoptResolverHome(resolverHome())).toBe(false);
-    expect(getTodosDir()).toBe(join(testHome, ".hasna", "todos"));
+  test("HASNA_DATA_HOME kind override moves the data root (app segment kept)", () => {
+    isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "todos-data-home-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base;
+    expect(getTodosDir()).toBe(join(base, "todos"));
   });
+
+  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
+    const home = isolateHome();
+    const cache = mkdtempSync(join(tmpdir(), "todos-cache-home-")); cleanups.push(cache);
+    process.env.HASNA_CACHE_HOME = cache;
+    expect(getTodosDir()).toBe(dataDir({ app: "todos", home, env: process.env }));
+  });
+
+  test("the pre-ruling legacy root is spelled under ~/.hasna/todos", () => {
+    const home = isolateHome();
+    expect(legacyHomeDir()).toBe(join(home, ".hasna", "todos"));
+  });
+});
+
+describe("exact-app overrides and store layering", () => {
+  test("the default db path, training dir and config path follow the effective root", () => {
+    const home = isolateHome();
+    const root = dataDir({ app: "todos", home, env: process.env });
+    expect(getDefaultDbPath()).toBe(join(root, "todos.db"));
+    expect(getTrainingDir()).toBe(join(root, "training"));
+    expect(getConfigPath()).toBe(join(root, "config.json"));
+  });
+
 });
