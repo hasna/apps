@@ -2353,7 +2353,7 @@ describe("CLI integration", () => {
       HASNA_TODOS_API_URL: "https://todos.example.invalid",
       HASNA_TODOS_DATABASE_URL: "postgres://todo_user:super-secret@rds.example.invalid:5432/todos",
       HASNA_TODOS_DATABASE_SCHEMA: "opensource_todos_prod",
-      HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
+      HASNA_TODOS_S3_BUCKET: "todos-artifacts-test",
       HASNA_TODOS_S3_PREFIX: "todos/prod/",
       HASNA_TODOS_AWS_REGION: "us-east-1",
       HASNA_TODOS_SYNC_BATCH_SIZE: "25",
@@ -2395,7 +2395,7 @@ describe("CLI integration", () => {
       HASNA_TODOS_API_URL: "https://todos.example.invalid",
       HASNA_TODOS_API_KEY: "fixture-key",
       HASNA_TODOS_DATABASE_URL: "postgres://todo_user:super-secret@rds.example.invalid/todos",
-      HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
+      HASNA_TODOS_S3_BUCKET: "todos-artifacts-test",
       HASNA_TODOS_AWS_REGION: "us-east-1",
       TODOS_DATABASE_URL: "",
       TODOS_S3_BUCKET: "",
@@ -2422,7 +2422,7 @@ describe("CLI integration", () => {
     }
     const env = {
       HASNA_TODOS_ARTIFACTS_DIR: artifactRoot,
-      HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
+      HASNA_TODOS_S3_BUCKET: "todos-artifacts-test",
       HASNA_TODOS_AWS_REGION: "us-east-1",
     };
 

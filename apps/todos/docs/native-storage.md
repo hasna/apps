@@ -140,7 +140,17 @@ The public `@hasna/todos/storage` export now includes:
   signed `fetch` requests and caller-provided credentials.
 - `uploadRunArtifactsToS3` and `downloadRunArtifactsFromS3` for syncing
   locally stored `task_run_artifacts` bytes to and from S3 while keeping the
-  local artifact metadata rows as the source of truth.
+  local artifact metadata rows as the source of truth. Objects are
+  content-addressed under `artifacts/<task_id>/<sha256>` inside the configured
+  bucket prefix.
+- `uploadRunArtifactAtCreation` for the creation-time hop: when
+  `HASNA_TODOS_S3_BUCKET` (or the `TODOS_S3_BUCKET` fallback) is set, the CLI
+  `runs artifact` command, the MCP `add_task_run_artifact` tool, and the
+  environment-snapshot flows upload the stored bytes to S3 right after the
+  artifact row is created and record the remote reference on its metadata, so
+  `todos storage artifacts download` restores the bytes on any machine. The
+  hop is fail-soft: without a bucket or with missing credentials the artifact
+  stays local-only and creation never fails.
 
 These exports are dependency-light by design. The open package does not bundle
 platform billing, tenant tables, deployment code, or a cloud SDK. Internal

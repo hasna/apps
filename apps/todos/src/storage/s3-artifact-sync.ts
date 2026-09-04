@@ -12,7 +12,15 @@ export interface TodosRunArtifactRemoteRef {
   provider: "s3";
   bucket: string;
   key: string;
+  /** S3 object path relative to the configured bucket prefix. */
   relative_path: string;
+  /**
+   * Local content-address (`sha256/<xx>/<hash>`) the downloaded bytes restore
+   * to. `relative_path` is the object path; the local store is separately
+   * content-addressed, so a remote ref written before this field existed
+   * falls back to `relative_path`.
+   */
+  local_path?: string;
   url: string;
   sha256: string;
   size_bytes: number;
@@ -115,7 +123,7 @@ export async function uploadRunArtifactsToS3(
       }
 
       const ref = await options.store.putObject({
-        key: content.relative_path,
+        key: remoteArtifactKey(artifact.task_id, content.sha256),
         body: Buffer.from(content.base64, "base64"),
         contentType: mediaType(metadata) ?? "application/octet-stream",
         metadata: {
@@ -129,7 +137,8 @@ export async function uploadRunArtifactsToS3(
         provider: "s3",
         bucket: ref.bucket,
         key: ref.key,
-        relative_path: content.relative_path,
+        relative_path: remoteArtifactKey(artifact.task_id, content.sha256),
+        local_path: content.relative_path,
         url: ref.url,
         sha256: content.sha256,
         size_bytes: content.size_bytes,
@@ -244,7 +253,9 @@ export async function downloadRunArtifactsFromS3(
       const bytes = Buffer.from(await response.arrayBuffer());
       const report = importStoredArtifactContent({
         artifact_id: artifact.id,
-        relative_path: remote.relative_path,
+        // Restore into the local content-address; older remote refs without
+        // `local_path` restore into the object path itself.
+        relative_path: remote.local_path ?? remote.relative_path,
         sha256: remote.sha256,
         size_bytes: remote.size_bytes,
         base64: bytes.toString("base64"),
@@ -276,6 +287,19 @@ export async function downloadRunArtifactsFromS3(
 
 function emptyResult(): TodosRunArtifactSyncResult {
   return { uploaded: 0, downloaded: 0, skipped: 0, errors: [], artifacts: [] };
+}
+
+/**
+ * Content-address for a run artifact object, relative to the configured bucket
+ * prefix: `artifacts/<task_id>/<sha256>`. The digest is the whole name, so the
+ * object is immutable and identical bytes are never stored twice. Used both by
+ * the creation-time upload and by the batch `storage artifacts upload`.
+ */
+export function remoteArtifactKey(taskId: string, sha256: string): string {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+    throw new Error("run artifact digest must be a lowercase hex sha-256; refusing to build an object key from it");
+  }
+  return `artifacts/${taskId}/${sha256}`;
 }
 
 function planArtifact(
@@ -313,11 +337,11 @@ function listRunArtifacts(db: Database, filter: TodosRunArtifactSyncFilter = {})
   return rows.map((row) => ({ ...row, metadata: parseMetadata(row.metadata) }));
 }
 
-function updateArtifactMetadata(db: Database, id: string, metadata: Record<string, unknown>): void {
+export function updateArtifactMetadata(db: Database, id: string, metadata: Record<string, unknown>): void {
   db.run("UPDATE task_run_artifacts SET metadata = ? WHERE id = ?", [JSON.stringify(metadata), id]);
 }
 
-function parseMetadata(value: unknown): Record<string, unknown> {
+export function parseMetadata(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   if (typeof value !== "string") return {};
@@ -331,7 +355,7 @@ function parseMetadata(value: unknown): Record<string, unknown> {
   }
 }
 
-function remoteRef(metadata: Record<string, unknown>): TodosRunArtifactRemoteRef | null {
+export function remoteRef(metadata: Record<string, unknown>): TodosRunArtifactRemoteRef | null {
   const value = metadata["remote_artifact_store"];
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Partial<TodosRunArtifactRemoteRef>;

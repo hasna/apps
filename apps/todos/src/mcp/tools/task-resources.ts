@@ -26,6 +26,7 @@ import {
   addTaskRunFile,
   beginTaskRunTransaction,
   finishTaskRunTransaction,
+  getTaskRunArtifact,
   getTaskRunLedger,
   listTaskRuns,
   startTaskRun,
@@ -1527,7 +1528,12 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       async ({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, store_content, retention_days, agent_id }) => {
         try {
           const artifact = addTaskRunArtifact({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, store_content, retention_days, agent_id });
-          return { content: [{ type: "text" as const, text: JSON.stringify(artifact, null, 2) }] };
+          // Upload the stored bytes at creation when an artifact bucket is
+          // configured; fail-soft keeps the artifact local-only otherwise.
+          const { uploadRunArtifactAtCreation } = await import("../../storage/index.js");
+          await uploadRunArtifactAtCreation({ artifactId: artifact.id });
+          const recorded = getTaskRunArtifact(artifact.id) ?? artifact;
+          return { content: [{ type: "text" as const, text: JSON.stringify(recorded, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );
