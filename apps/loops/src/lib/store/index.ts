@@ -49,8 +49,9 @@ import {
   LoopMutationLookupCaps,
 } from "../operation-contract.js";
 import type { Goal, GoalPlanNode, GoalRun, GoalStatus } from "../goal/types.js";
-import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
+import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "../errors.js";
 import { publicWorkflowEvents } from "../workflow-events.js";
+import { runLoopNow } from "../scheduler.js";
 import { resolveCloudStorage } from "../cloud/resolve.js";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
@@ -151,6 +152,13 @@ export interface LoopStore {
   archiveLoop(idOrName: string): Promise<Loop>;
   unarchiveLoop(idOrName: string): Promise<Loop>;
   deleteLoop(idOrName: string): Promise<boolean>;
+  /**
+   * Hosted run-now (schedule mode): mark the loop active and due at the current
+   * time so a bound runner claims and executes it. Both transports share the
+   * same schedule semantics — nothing executes in the caller's process. Inline
+   * execution stays a scheduler concern on the on-box store.
+   */
+  runNow(idOrName: string): Promise<{ loop: Loop; scheduledFor: string }>;
 
   // ── Workflows ────────────────────────────────────────────────────────────────
   createWorkflow(input: CreateWorkflowInput): Promise<WorkflowSpec>;
@@ -293,6 +301,19 @@ export class LocalStore implements LoopStore {
   }
   async deleteLoop(idOrName: string): Promise<boolean> {
     return this.store.deleteLoop(idOrName);
+  }
+  async runNow(idOrName: string): Promise<{ loop: Loop; scheduledFor: string }> {
+    // Resolve first so an ambiguous name fails closed exactly like the hosted
+    // path; runLoopNow schedule mode then owns the archived guard and the
+    // due-now update. runnerId is unused in schedule mode.
+    const resolved = this.store.requireUniqueLoop(idOrName);
+    const result = await runLoopNow({
+      store: this.store,
+      idOrName: resolved.id,
+      runnerId: "store-schedule",
+      mode: "schedule",
+    });
+    return { loop: result.loop, scheduledFor: result.scheduledFor };
   }
 
   async createWorkflow(input: CreateWorkflowInput): Promise<WorkflowSpec> {
@@ -659,6 +680,32 @@ export class ApiStore implements LoopStore {
     if (!loop) return false;
     const raw = await this.t.request("DELETE", `/loops/${encodeURIComponent(loop.id)}`);
     return Boolean(pickObject<boolean>(raw, "deleted") ?? true);
+  }
+  async runNow(idOrName: string): Promise<{ loop: Loop; scheduledFor: string }> {
+    try {
+      const raw = await this.t.post(`/loops/${encodeURIComponent(idOrName)}/run-now`);
+      const loop = pickObject<Loop>(raw, "loop");
+      const scheduledFor = pickObject<string>(raw, "scheduledFor");
+      if (!loop || !scheduledFor) {
+        throw new Error("hosted run-now response missing loop or scheduledFor");
+      }
+      return { loop, scheduledFor };
+    } catch (error) {
+      const code =
+        error instanceof HasnaHttpError && error.body && typeof error.body === "object"
+          ? (error.body as { error?: unknown }).error
+          : undefined;
+      if (error instanceof HasnaHttpError && error.status === 409 && code === "ambiguous_name") {
+        throw new AmbiguousNameError(idOrName);
+      }
+      if (error instanceof HasnaHttpError && error.status === 409 && code === "loop_archived") {
+        throw new LoopArchivedError(idOrName);
+      }
+      if (error instanceof HasnaHttpError && error.status === 404 && code === "loop_not_found") {
+        throw new LoopNotFoundError(idOrName);
+      }
+      throw error;
+    }
   }
 
   // ── Workflows ────────────────────────────────────────────────────────────────

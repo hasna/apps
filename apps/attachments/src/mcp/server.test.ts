@@ -1,3 +1,9 @@
+beforeEach(() => {
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.HASNA_TODOS_API_KEY = "remote-key";
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
 import { describe, it, expect, mock, beforeAll, beforeEach, afterEach, afterAll, spyOn } from "bun:test";
 import { tmpdir } from "os";
 
@@ -269,6 +275,11 @@ mock.module("../core/cloud-v1.js", () => ({
 }));
 
 // Import server AFTER mocks are set up
+const { MockedStoreFixture } = await import("../testing/mocked-store-fixture");
+const actualStore = await import("../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../core/store.js", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
 const { createServer, getMcpHelp, getToolsForProfile } = await import("./server.js");
 
 // Restore all mocks after this file's tests complete
@@ -755,77 +766,11 @@ describe("MCP Server — get_link", () => {
   });
 });
 
-describe("MCP Server — configure_s3", () => {
+describe("MCP Server — retired configure_s3", () => {
   beforeEach(() => mockSetConfig.mockClear());
-
-  it("calls setConfig with s3 credentials", async () => {
-    const server = createServer();
-    const result = (await callTool(server, "configure_s3", {
-      bucket: "my-bucket",
-      region: "eu-west-1",
-      access_key: "AK" + "IATEST",
-      secret_key: "supersecret",
-    })) as { content: Array<{ text: string }> };
-
-    expect(mockSetConfig).toHaveBeenCalledTimes(1);
-    expect(mockSetConfig).toHaveBeenCalledWith({
-      s3: {
-        bucket: "my-bucket",
-        region: "eu-west-1",
-        accessKeyId: "AK" + "IATEST",
-        secretAccessKey: "supersecret",
-      },
-    });
-    expect(result.content[0]!.text).toBe("ok");
-  });
-
-  it("includes endpoint when base_url is provided", async () => {
-    const server = createServer();
-    await callTool(server, "configure_s3", {
-      bucket: "my-bucket",
-      region: "us-east-1",
-      access_key: "KEY",
-      secret_key: "SECRET",
-      base_url: "https://minio.example.com",
-    });
-
-    expect(mockSetConfig).toHaveBeenCalledWith({
-      s3: {
-        bucket: "my-bucket",
-        region: "us-east-1",
-        accessKeyId: "KEY",
-        secretAccessKey: "SECRET",
-        endpoint: "https://minio.example.com",
-      },
-    });
-  });
-
-  it("allows bucket and region without static keys for default credential-chain auth", async () => {
-    const server = createServer();
-    const result = (await callTool(server, "configure_s3", {
-      bucket: "role-bucket",
-      region: "us-east-1",
-    })) as { content: Array<{ text: string }> };
-
-    expect(mockSetConfig).toHaveBeenCalledWith({
-      s3: {
-        bucket: "role-bucket",
-        region: "us-east-1",
-      },
-    });
-    expect(result.content[0]!.text).toBe("ok");
-  });
-
-  it("rejects partial static key configuration", async () => {
-    const server = createServer();
-    const result = (await callTool(server, "configure_s3", {
-      bucket: "role-bucket",
-      region: "us-east-1",
-      access_key: "KEY",
-    })) as { isError?: boolean; content: Array<{ text: string }> };
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain("must be provided together");
+  for (const args of [{ bucket: "bucket", region: "region", access_key: "fixture", secret_key: "sensitive" }, { bucket: "bucket", region: "region", base_url: "https://example.test" }, { bucket: "bucket", region: "region" }, { bucket: "bucket", access_key: "partial" }]) it("never persists server credentials on the client", async () => {
+    const result = await callTool(createServer(), "configure_s3", args) as { isError?: boolean; content: Array<{text:string}> };
+    expect(result.isError).toBe(true); expect(mockSetConfig).not.toHaveBeenCalled(); expect(result.content[0]!.text).not.toContain("sensitive");
   });
 });
 
@@ -1130,6 +1075,7 @@ describe("MCP Server — link_to_task", () => {
   });
 
   it("calls PATCH on correct todos URL with attachment metadata", async () => {
+    process.env.HASNA_TODOS_API_URL = "https://custom.example.test";
     let capturedUrl = "";
     let capturedBody = "";
     globalThis.fetch = mock(async (url: unknown, opts: unknown) => {
@@ -1142,10 +1088,10 @@ describe("MCP Server — link_to_task", () => {
     await callTool(server, "link_to_task", {
       attachment_id: "att_test001",
       task_id: "TASK-001",
-      todos_url: "http://localhost:4000",
+      todos_url: "https://custom.example.test",
     });
 
-    expect(capturedUrl).toBe("http://localhost:4000/api/tasks/TASK-001");
+    expect(capturedUrl).toBe("https://custom.example.test/api/tasks/TASK-001");
     const body = JSON.parse(capturedBody);
     expect(body.metadata._attachments[0].id).toBe("att_test001");
     expect(body.metadata._attachments[0].filename).toBe("test.txt");
@@ -1181,7 +1127,7 @@ describe("MCP Server — link_to_task", () => {
     expect(result.content[0]!.text).toContain("TASK-999");
   });
 
-  it("defaults todos_url to http://localhost:3000", async () => {
+  it("defaults todos_url to https://todos.example.test", async () => {
     let capturedUrl = "";
     globalThis.fetch = mock(async (url: unknown) => {
       capturedUrl = String(url);
@@ -1194,7 +1140,7 @@ describe("MCP Server — link_to_task", () => {
       task_id: "TASK-001",
     });
 
-    expect(capturedUrl).toContain("http://localhost:3000");
+    expect(capturedUrl).toContain("https://todos.example.test");
   });
 });
 
@@ -1253,15 +1199,15 @@ describe("MCP Server — complete_task_with_files", () => {
     const result = (await callTool(server, "complete_task_with_files", {
       task_id: "TASK-001",
       paths: ["/tmp/screenshot.png", "/tmp/output.txt"],
-      todos_url: "http://localhost:3000",
+      todos_url: "https://todos.example.test",
     })) as { content: Array<{ text: string }> };
 
     expect(mockUploadFile).toHaveBeenCalledTimes(2);
     // GET + PATCH the task, then POST /complete
     expect(urls).toEqual([
-      "http://localhost:3000/api/tasks/TASK-001",
-      "http://localhost:3000/api/tasks/TASK-001",
-      "http://localhost:3000/api/tasks/TASK-001/complete",
+      "https://todos.example.test/api/tasks/TASK-001",
+      "https://todos.example.test/api/tasks/TASK-001",
+      "https://todos.example.test/api/tasks/TASK-001/complete",
     ]);
 
     // Evidence persisted into the task metadata (retrievable by resolve-evidence).
@@ -1352,7 +1298,7 @@ describe("MCP Server — complete_task_with_files", () => {
     expect(mockUploadFile).not.toHaveBeenCalled();
   });
 
-  it("defaults todos_url to http://localhost:3000", async () => {
+  it("defaults todos_url to https://todos.example.test", async () => {
     mockUploadFile.mockImplementationOnce(async () => ({
       id: "att_ev005",
       filename: "file.txt",
@@ -1377,7 +1323,7 @@ describe("MCP Server — complete_task_with_files", () => {
       paths: ["/tmp/file.txt"],
     });
 
-    expect(capturedUrl).toContain("http://localhost:3000");
+    expect(capturedUrl).toContain("https://todos.example.test");
   });
 });
 
@@ -1433,6 +1379,7 @@ describe("MCP Server — save_session", () => {
   });
 
   it("uses custom sessions_url when provided", async () => {
+    process.env.HASNA_SESSIONS_API_URL = "https://custom-sessions.example.test";
     let capturedUrl = "";
     globalThis.fetch = mock(async (url: unknown) => {
       capturedUrl = String(url);
@@ -1442,10 +1389,10 @@ describe("MCP Server — save_session", () => {
     const server = createServer();
     await callTool(server, "save_session", {
       session_id: "ses_custom",
-      sessions_url: "http://localhost:9999",
+      sessions_url: "https://custom-sessions.example.test",
     });
 
-    expect(capturedUrl).toContain("localhost:9999");
+    expect(capturedUrl).toContain("custom-sessions.example.test");
     expect(capturedUrl).toContain("ses_custom");
   });
 
@@ -1475,7 +1422,7 @@ describe("MCP Server — save_session", () => {
     })) as { content: Array<{ text: string }>; isError: boolean };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain("Failed to fetch session");
+    expect(result.content[0]!.text).toContain("Sessions request failed");
   });
 });
 

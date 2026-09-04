@@ -6,7 +6,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { ApiError } from './http.mjs';
-import { nextSeq, nowIso } from './db.mjs';
+import { nextSeq, nowIso } from './sql.mjs';
 
 function hash(content) {
   return createHash('sha256').update(content).digest('hex');

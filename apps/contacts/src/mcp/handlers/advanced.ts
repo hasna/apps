@@ -20,8 +20,6 @@ import {
   extractContactsFromEmailThread,
 } from "../../lib/signature-parser.js";
 import { scanDocument } from "../../lib/document-scanner.js";
-import { getImagesDir } from "../../lib/images.js";
-import { join } from "node:path";
 
 const json = (v: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(v, null, 2) }],
@@ -304,7 +302,7 @@ export const advancedHandlers: Record<string, ToolHandler> = {
     const { contact_id, image, format } = a as { contact_id: string; image: string; format?: string };
     await store.getContact(contact_id);
     const filename = await store.saveImage(contact_id, image, { format });
-    const avatarUrl = join(getImagesDir(), filename);
+    const avatarUrl = filename;
     await store.updateContact(contact_id, { avatar_url: avatarUrl });
     return json({ ok: true, contact_id, filename, avatar_url: avatarUrl });
   },
@@ -329,7 +327,7 @@ export const advancedHandlers: Record<string, ToolHandler> = {
     const { company_id, image, format } = a as { company_id: string; image: string; format?: string };
     await store.getCompany(company_id);
     const filename = await store.saveImage(company_id, image, { format });
-    const logoUrl = join(getImagesDir(), filename);
+    const logoUrl = filename;
     await store.updateCompany(company_id, { logo_url: logoUrl });
     return json({ ok: true, company_id, filename, logo_url: logoUrl });
   },

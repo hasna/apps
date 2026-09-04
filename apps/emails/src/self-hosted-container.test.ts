@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { packNpmArtifact } from "../scripts/npm-pack.mjs";
 
 const dockerfile = readFileSync(resolve(import.meta.dir, "../Dockerfile"), "utf8");
 const runtimeSmoke = readFileSync(
@@ -732,13 +733,8 @@ describe("self-hosted container TLS contract", () => {
 });
 
 describe("self-hosted container install contract", () => {
-  function hasSafePostinstallCopy(candidate: string): boolean {
-    const postinstall = packageJson.scripts?.postinstall;
-    if (typeof postinstall !== "string") return false;
-
-    const scriptMatch = postinstall.match(/(?:^|\s)\.\/(scripts\/[^\s'"`]+)(?:\s|$)/);
-    if (!scriptMatch) return false;
-    const postinstallScript = scriptMatch[1];
+  function hasSafeDependencyInstall(candidate: string): boolean {
+    if (packageJson.scripts?.postinstall !== undefined) return false;
 
     const dependenciesStart = candidate.search(/^FROM\s+\S+\s+AS\s+dependencies\s*$/m);
     const buildStart = candidate.search(/^FROM\s+\S+\s+AS\s+build\s*$/m);
@@ -749,8 +745,9 @@ describe("self-hosted container install contract", () => {
       .split("\n")
       .map((line) => line.trim());
     const installIndex = stageLines.indexOf("RUN bun install --production --frozen-lockfile");
-    const copyIndex = stageLines.indexOf(`COPY ${postinstallScript} ./${postinstallScript}`);
+    const copyIndex = stageLines.indexOf("COPY package.json bun.lock ./");
     if (installIndex < 0 || copyIndex < 0 || copyIndex >= installIndex) return false;
+    if (stageLines.some((line) => line.includes("ensure-private-data-dir.mjs"))) return false;
 
     const workdirIndex = stageLines.findLastIndex(
       (line, index) => index < copyIndex && line.startsWith("WORKDIR "),
@@ -758,8 +755,8 @@ describe("self-hosted container install contract", () => {
     return stageLines[workdirIndex] === "WORKDIR /app";
   }
 
-  test("copies the package postinstall script before the frozen production install", () => {
-    expect(hasSafePostinstallCopy(dockerfile)).toBeTrue();
+  test("copies package metadata before the frozen production install without a data-root hook", () => {
+    expect(hasSafeDependencyInstall(dockerfile)).toBeTrue();
   });
 
   test("keeps lockfile and packed manifest identities on the canonical Emails package and bins", () => {
@@ -771,20 +768,7 @@ describe("self-hosted container install contract", () => {
 
     const destination = mkdtempSync(resolve(tmpdir(), "emails-pack-identity-"));
     try {
-      const packedName = execFileSync("bun", [
-        "pm",
-        "pack",
-        "--ignore-scripts",
-        "--destination",
-        destination,
-        "--quiet",
-      ], {
-        cwd: resolve(import.meta.dir, ".."),
-        encoding: "utf8",
-      }).trim().split(/\r?\n/).at(-1);
-      expect(packedName).toBeTruthy();
-      if (!packedName) throw new Error("bun pm pack did not return a tarball name");
-      const packedTarball = resolve(destination, packedName);
+      const packedTarball = packNpmArtifact(resolve(import.meta.dir, ".."), destination);
       const packed = JSON.parse(execFileSync(
         "tar",
         ["-xOf", packedTarball, "package/package.json"],
@@ -799,17 +783,20 @@ describe("self-hosted container install contract", () => {
     } finally {
       rmSync(destination, { recursive: true, force: true });
     }
-  });
+    // The assertion above packs the real npm archive (packNpmArtifact), which on
+    // slower machines takes longer than bun's 5000ms default; npm-pack.test.ts
+    // uses the same 30s bound for real-archive work.
+  }, 30_000);
 
   test("rejects external-stage and wrong-stage copy bypasses", () => {
-    const safeCopy = "COPY scripts/ensure-private-data-dir.mjs ./scripts/ensure-private-data-dir.mjs";
+    const safeCopy = "COPY package.json bun.lock ./";
     expect(
-      hasSafePostinstallCopy(
+      hasSafeDependencyInstall(
         dockerfile.replace(safeCopy, `COPY --from=base ${safeCopy.slice("COPY ".length)}`),
       ),
     ).toBeFalse();
     expect(
-      hasSafePostinstallCopy(
+      hasSafeDependencyInstall(
         dockerfile
           .replace(`${safeCopy}\nRUN bun install`, "RUN bun install")
           .replace("FROM base AS build\nWORKDIR /app", `FROM base AS build\nWORKDIR /app\n${safeCopy}`),

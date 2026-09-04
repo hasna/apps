@@ -1,3 +1,13 @@
+import { beforeEach as configureIntegrationFixture } from "bun:test";
+configureIntegrationFixture(() => {
+  process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.example.test";
+  process.env.HASNA_ATTACHMENTS_API_KEY = "test-attachment-key";
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.TODOS_API_KEY = "remote-key";
+  delete process.env.HASNA_TODOS_API_KEY;
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
 import { describe, it, expect, mock, spyOn } from "bun:test";
 import {
   fetchTaskMeta,
@@ -97,7 +107,7 @@ describe("fetchTaskMeta", () => {
     // the TODOS_API_KEY fallback instead of the operator's live key.
     delete process.env.HASNA_TODOS_API_KEY;
     process.env["TODOS_API_KEY"] = "remote-key";
-    const meta = await fetchTaskMeta("TASK-001", "http://localhost:3000", fakeFetch);
+    const meta = await fetchTaskMeta("TASK-001", "https://todos.example.test", fakeFetch);
     delete process.env.TODOS_API_KEY;
     const [, init] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
     expect(new Headers(init.headers).get("x-api-key")).toBe("remote-key");
@@ -110,13 +120,13 @@ describe("fetchTaskMeta", () => {
 
   it("returns null on 404", async () => {
     const fakeFetch = makeFetch(404);
-    const meta = await fetchTaskMeta("TASK-999", "http://localhost:3000", fakeFetch);
+    const meta = await fetchTaskMeta("TASK-999", "https://todos.example.test", fakeFetch);
     expect(meta).toBeNull();
   });
 
   it("returns null when todos is unreachable (network error)", async () => {
     const fakeFetch = mock(async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
-    const meta = await fetchTaskMeta("TASK-001", "http://localhost:3000", fakeFetch);
+    const meta = await fetchTaskMeta("TASK-001", "https://todos.example.test", fakeFetch);
     expect(meta).toBeNull();
   });
 });
@@ -133,7 +143,7 @@ describe("fetchTaskHistory", () => {
       { timestamp: "2026-03-14T11:30:00Z", action: "completed", actor: "aurelius", progress: 100 },
     ]);
     process.env["HASNA_TODOS_API_KEY"] = "remote-key";
-    const history = await fetchTaskHistory("TASK-001", "http://localhost:3000", fakeFetch);
+    const history = await fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch);
     delete process.env.HASNA_TODOS_API_KEY;
     const [, init] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
     expect(new Headers(init.headers).get("x-api-key")).toBe("remote-key");
@@ -145,13 +155,13 @@ describe("fetchTaskHistory", () => {
 
   it("returns empty array when todos is unreachable", async () => {
     const fakeFetch = mock(async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
-    const history = await fetchTaskHistory("TASK-001", "http://localhost:3000", fakeFetch);
+    const history = await fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch);
     expect(history).toEqual([]);
   });
 
   it("returns empty array on non-200 response", async () => {
     const fakeFetch = makeFetch(500);
-    const history = await fetchTaskHistory("TASK-001", "http://localhost:3000", fakeFetch);
+    const history = await fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch);
     expect(history).toEqual([]);
   });
 });
@@ -165,6 +175,7 @@ describe("buildTaskJournal", () => {
     const att = makeAttachment();
     const fakeFetch = mock(async (url: unknown) => {
       const u = String(url);
+      if (u.includes("attachments.example.test")) return new Response(JSON.stringify({ items: [] }), { headers: { "content-type": "application/json" } });
       if (u.endsWith("/history")) {
         return {
           ok: true,
@@ -185,7 +196,7 @@ describe("buildTaskJournal", () => {
 
     const { journal, todosReachable } = await buildTaskJournal(
       "TASK-001",
-      { todosUrl: "http://localhost:3000" },
+      { todosUrl: "https://todos.example.test" },
       fakeFetch,
       () => store
     );
@@ -203,7 +214,7 @@ describe("buildTaskJournal", () => {
 
     const { journal, todosReachable } = await buildTaskJournal(
       "TASK-001",
-      { todosUrl: "http://localhost:3000" },
+      { todosUrl: "https://todos.example.test" },
       fakeFetch,
       () => store
     );
@@ -295,6 +306,7 @@ describe("task-journal CLI command", () => {
   it("outputs markdown by default for a task with history and attachments", async () => {
     const fakeFetch = mock(async (url: unknown) => {
       const u = String(url);
+      if (u.includes("attachments.example.test")) return new Response(JSON.stringify({ items: [] }), { headers: { "content-type": "application/json" } });
       if (u.endsWith("/history")) {
         return {
           ok: true,
@@ -318,12 +330,9 @@ describe("task-journal CLI command", () => {
       // We test the full CLI with a custom DB. Since we can't easily inject,
       // we'll test the formatter instead — CLI smoke-test just verifies it doesn't crash.
       const program = buildProgram();
-      // This may fail on DB open (fine — we check output partially)
-      try {
-        await program.parseAsync(["task-journal", "TASK-001"], { from: "user" });
-      } catch {
-        // DB open may fail in test env — that's acceptable for smoke test
-      }
+      await program.parseAsync(["task-journal", "TASK-001"], { from: "user" });
+      expect(capture.out.join("")).toContain("Fix auth bug");
+      expect(capture.err).toEqual([]);
     } finally {
       capture.restore();
       globalThis.fetch = originalFetch;

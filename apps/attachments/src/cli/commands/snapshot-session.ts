@@ -1,3 +1,4 @@
+import { serviceConfig, withServiceAuth } from "../../core/todos";
 import { Command } from "commander";
 import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
@@ -5,7 +6,7 @@ import { tmpdir } from "os";
 import { resolveStore } from "../../core/store";
 import { exitError } from "../utils";
 
-const DEFAULT_SESSIONS_URL = "http://localhost:3458";
+
 
 interface SessionMessage {
   role?: string;
@@ -56,8 +57,8 @@ ${body}
 
 async function fetchSessionMessages(sessionId: string, sessionsUrl: string): Promise<SessionMessage[]> {
   // Try /api/sessions/:id/messages first, fall back to /api/sessions/:id
-  const messagesUrl = `${sessionsUrl}/api/sessions/${sessionId}/messages`;
-  const res = await fetch(messagesUrl);
+  const messagesUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(sessionId)}/messages`;
+  const res = await fetch(messagesUrl, withServiceAuth("SESSIONS", messagesUrl));
 
   if (res.ok) {
     const data = await res.json() as unknown;
@@ -69,9 +70,10 @@ async function fetchSessionMessages(sessionId: string, sessionsUrl: string): Pro
     return [{ role: "raw", content: JSON.stringify(data) }];
   }
 
-  // Fallback: fetch the session itself
-  const sessionUrl = `${sessionsUrl}/api/sessions/${sessionId}`;
-  const res2 = await fetch(sessionUrl);
+  if (res.status !== 404) throw new Error(`Sessions request failed: HTTP ${res.status}`);
+  // Compatibility read only when the messages route is absent.
+  const sessionUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(sessionId)}`;
+  const res2 = await fetch(sessionUrl, withServiceAuth("SESSIONS", sessionUrl));
   if (!res2.ok) {
     throw new Error(`Failed to fetch session ${sessionId}: HTTP ${res2.status}`);
   }
@@ -85,7 +87,7 @@ export function registerSnapshotSession(program: Command): void {
   program
     .command("snapshot-session <session-id>")
     .description("Fetch a session transcript and upload it as an attachment")
-    .option("--sessions-url <url>", "Sessions REST API base URL", DEFAULT_SESSIONS_URL)
+    .option("--sessions-url <url>", "Sessions REST API base URL")
     .option("--format <fmt>", "Output format: markdown or html", "markdown")
     .option("--expiry <time>", "Link expiry: e.g. 7d, 24h, never")
     .option("--tag <tag>", "Tag/label for the attachment")
@@ -93,7 +95,7 @@ export function registerSnapshotSession(program: Command): void {
       async (
         sessionId: string,
         options: {
-          sessionsUrl: string;
+          sessionsUrl?: string;
           format: string;
           expiry?: string;
           tag?: string;
@@ -103,7 +105,7 @@ export function registerSnapshotSession(program: Command): void {
 
         let messages: SessionMessage[];
         try {
-          messages = await fetchSessionMessages(sessionId, options.sessionsUrl);
+          messages = await fetchSessionMessages(sessionId, options.sessionsUrl ?? serviceConfig("SESSIONS").url);
         } catch (err: unknown) {
           exitError(err instanceof Error ? err.message : String(err));
           return;

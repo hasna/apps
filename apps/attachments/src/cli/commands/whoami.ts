@@ -1,71 +1,10 @@
 import { Command } from "commander";
-import { existsSync } from "fs";
-import { getConfig, CONFIG_PATH } from "../../core/config";
-import { resolveStore } from "../../core/store";
+import { serviceDiagnostic } from "./service-diagnostic";
 
 export function registerWhoami(program: Command): void {
-  program
-    .command("whoami")
-    .description("Show setup summary and environment status")
-    .action(async () => {
-      // Version — read from package.json relative to the module, fallback to env var
-      let version = "unknown";
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const pkg = require("../../../package.json");
-        version = pkg.version ?? process.env.npm_package_version ?? "unknown";
-      } catch {
-        version = process.env.npm_package_version ?? "unknown";
-      }
-
-      const lines: string[] = [];
-      lines.push(`@hasna/attachments v${version}`);
-
-      // Config status
-      const configExists = existsSync(CONFIG_PATH);
-      if (!configExists) {
-        lines.push(`Config: not found \u2717`);
-        lines.push(`S3: not configured \u2717`);
-        lines.push(`Server: http://localhost:3459`);
-        lines.push(`Link type: presigned (default expiry: 7d)`);
-        lines.push(`Attachments: 0 total, 0 expired`);
-        process.stdout.write(lines.join("\n") + "\n");
-        return;
-      }
-
-      const config = getConfig();
-      lines.push(`Config: ${CONFIG_PATH} \u2713`);
-
-      // S3 status
-      if (config.s3.bucket && config.s3.region) {
-        lines.push(`S3: ${config.s3.bucket} (${config.s3.region}) \u2713`);
-      } else {
-        lines.push(`S3: not configured \u2717`);
-      }
-
-      // Server
-      lines.push(`Server: ${config.server.baseUrl}`);
-
-      // Defaults
-      lines.push(
-        `Link type: ${config.defaults.linkType} (default expiry: ${config.defaults.expiry})`
-      );
-
-      // Attachment counts via the resolved store (local db or /v1 API)
-      const store = resolveStore();
-      try {
-        const all = await store.list({ includeExpired: true });
-        const now = Date.now();
-        const expired = all.filter(
-          (a) => a.expiresAt !== null && a.expiresAt <= now
-        ).length;
-        lines.push(`Attachments: ${all.length} total, ${expired} expired`);
-      } catch {
-        lines.push(`Attachments: unable to read store`);
-      } finally {
-        store.close();
-      }
-
-      process.stdout.write(lines.join("\n") + "\n");
-    });
+  program.command("whoami").description("Verify authenticated HTTPS service access").action(async () => {
+    const result = await serviceDiagnostic();
+    process.stdout.write(result.lines.join("\n") + "\n");
+    if (!result.ok) process.exitCode = 1;
+  });
 }

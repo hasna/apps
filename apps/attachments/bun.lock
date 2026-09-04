@@ -10,7 +10,7 @@
         "@aws-sdk/lib-storage": "3.1007.0",
         "@aws-sdk/s3-request-presigner": "^3.1007.0",
         "@hasna/contracts": "^0.8.2",
-        "@hasna/events": "^0.1.16",
+        "@hasna/paths": "0.2.2",
         "@hono/node-server": "^1.19.14",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "@types/mime-types": "^3.0.1",
@@ -73,7 +73,7 @@
 
     "@hasna/contracts": ["@hasna/contracts@0.8.7", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-wLSmzL8vjx+tREowbQ0LJqj9i0wuQRKvzLT3cCD+897HikIu+6UFg7oBrYBmkSOvCTWM0Xs/+9hsl78hWZizUw=="],
 
-    "@hasna/events": ["@hasna/events@0.1.16", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-HX66T8JljVOoE/Li8WKLUFVozg0GIdZmgBalScfBFW5Vru4IcVSTNs07TmYH3kIJUe5tylItTqwzc02nvjqbfw=="],
+    "@hasna/paths": ["@hasna/paths@0.2.2", "", { "bin": { "paths": "dist/cli/index.js" } }, "sha512-gAlwQyt1PLCyprrXG+7YqbRsKWvmLmYZ3L0ggQlCLS4xkd/6+Iasxc3TmE3ZAXZk/6rsQ7Ag8INIu2Qz83Hy/g=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "4.12.27" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 
@@ -346,8 +346,6 @@
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "3.25.76" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
     "@hasna/contracts/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
-
-    "@hasna/events/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
     "@modelcontextprotocol/sdk/hono": ["hono@4.12.27", "", {}, "sha512-1yrb/+w6HWQJrUCLkJ2IF5jNIPvvFkblV5RNOYl6bV+OA6p9GLcMpHFFGTosSvHvcAUibuUukRqhlYI4z32C7Q=="],
 

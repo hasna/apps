@@ -1,9 +1,15 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getStore } from "../../store/index.js";
-import { getImagesDir } from "../../lib/images.js";
-import { join } from "node:path";
 import { renderTable, promptUser as prompt } from "../utils.js";
+
+const DOCUMENT_TYPES = [
+  "passport", "national_id", "tax_id", "ssn", "drivers_license",
+  "bank_account", "visa", "insurance", "contract", "certificate",
+  "medical_record", "prescription", "allergy_list", "vaccination",
+  "blood_type", "health_insurance", "medical_condition",
+  "emergency_contact_medical", "other",
+] as const;
 
 function collect(val: string, prev: string[]): string[] {
   return [...prev, val];
@@ -541,7 +547,7 @@ photoCmd
       const contact = await store.getContact(contactId);
       if (!contact) { console.error(chalk.red('Contact not found')); return; }
       const filename = await store.saveImage(contactId, imagePath);
-      const avatarUrl = join(getImagesDir(), filename);
+      const avatarUrl = filename;
       await store.updateContact(contactId, { avatar_url: avatarUrl });
       console.log(chalk.green(`Photo set for ${contact.display_name}: ${avatarUrl}`));
     } catch (e) {
@@ -606,7 +612,7 @@ logoCmd
       const company = await store.getCompany(companyId) as { name: string } | null;
       if (!company) { console.error(chalk.red('Company not found')); return; }
       const filename = await store.saveImage(companyId, imagePath);
-      const logoUrl = join(getImagesDir(), filename);
+      const logoUrl = filename;
       await store.updateCompany(companyId, { logo_url: logoUrl });
       console.log(chalk.green(`Logo set for ${company.name}: ${logoUrl}`));
     } catch (e) {
@@ -833,8 +839,7 @@ docsCmd
 docsCmd
   .command('types')
   .description('List all valid document types')
-  .action(async () => {
-    const { DOCUMENT_TYPES } = await import('../../db/documents.js');
+  .action(() => {
     console.log(chalk.bold.blue('\nDocument Types:\n'));
     for (const t of DOCUMENT_TYPES) {
       console.log(`  ${chalk.cyan(t)}`);

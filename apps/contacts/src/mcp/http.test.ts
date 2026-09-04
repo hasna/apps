@@ -42,20 +42,19 @@ describe("contacts MCP HTTP transport", () => {
     expect(await res.json()).toEqual({ status: "ok", name: "contacts" });
   });
 
-  test("MCP initialize + list_tags over Streamable HTTP", async () => {
+  test("MCP initialize succeeds but data access fails closed when unconfigured", async () => {
     const client = new Client({ name: "contacts-http-test", version: "0.0.0" });
     const transport = new StreamableHTTPClientTransport(
       new URL(`http://127.0.0.1:${port}/mcp`),
     );
     await client.connect(transport);
     const result = await client.callTool({ name: "list_tags", arguments: {} });
-    expect(result.isError).not.toBe(true);
-    const content = result.content as Array<{ type: string }> | undefined;
-    expect(content?.[0]?.type).toBe("text");
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/CONTACTS_API_NOT_CONFIGURED|RETIRED_CONTACTS_CLIENT_SELECTOR/);
     await client.close();
   });
 
-  test("serves multiple concurrent clients from one process", async () => {
+  test("fails closed consistently for multiple concurrent clients", async () => {
     const clients = await Promise.all(
       [1, 2, 3].map(async () => {
         const client = new Client({ name: "contacts-http-concurrent", version: "0.0.0" });
@@ -69,7 +68,8 @@ describe("contacts MCP HTTP transport", () => {
       }),
     );
     for (const result of clients) {
-      expect(result.isError).not.toBe(true);
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toMatch(/CONTACTS_API_NOT_CONFIGURED|RETIRED_CONTACTS_CLIENT_SELECTOR/);
     }
   });
 });

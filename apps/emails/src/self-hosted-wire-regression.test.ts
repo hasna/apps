@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Subprocess } from "bun";
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import ts from "typescript";
+import { buildPrepublishTestEnv } from "../scripts/prepublish-local-test.mjs";
 import {
   SelfHostedHttpError,
   selfHostedStoreFor,
@@ -385,13 +387,39 @@ function activeRuntimeEnvKeys(repoRoot: string): string[] {
   return [...keys].sort();
 }
 
-function hermeticHarnessEnvKeys(source: string): Set<string> {
-  const keys = new Set<string>();
-  for (const match of source.matchAll(/(?:^|\s)-u\s+([A-Z][A-Z0-9_]*)/g)) keys.add(match[1]!);
-  for (const match of source.matchAll(/^\s*([A-Z][A-Z0-9_]*)=(?:"[^"]*"|'[^']*'|[^\s\\]+)\s*\\?$/gm)) {
-    keys.add(match[1]!);
-  }
-  return keys;
+function unsanitizedRuntimeEnvKeys(
+  keys: string[],
+  buildEnv: (input: NodeJS.ProcessEnv, home: string) => NodeJS.ProcessEnv,
+): string[] {
+  // Discover product inputs from source, then exercise the actual environment
+  // builder. A shell-unset inventory cannot prove an allowlist-based harness.
+  // Only these execution/display inputs may retain an inherited value.
+  const inheritedExecutionKeys = new Set([
+    "PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+    "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "CI", "NO_COLOR", "FORCE_COLOR",
+  ]);
+  const isolatedHome = join(tmpdir(), "emails-runtime-input-probe");
+  const fixedInputs: NodeJS.ProcessEnv = {
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    XDG_CONFIG_HOME: join(isolatedHome, "config"),
+    XDG_DATA_HOME: join(isolatedHome, "data"),
+    XDG_CACHE_HOME: join(isolatedHome, "cache"),
+    XDG_STATE_HOME: join(isolatedHome, "state"),
+    TMPDIR: join(isolatedHome, "tmp"),
+    TEMP: join(isolatedHome, "tmp"),
+    TMP: join(isolatedHome, "tmp"),
+    npm_config_userconfig: join(isolatedHome, ".npmrc"),
+    AWS_EC2_METADATA_DISABLED: "true",
+    TZ: "UTC",
+  };
+  const inherited = Object.fromEntries(keys.map((key) => [key, `synthetic-inherited-${key}`]));
+  const actual = buildEnv(inherited, isolatedHome);
+  return keys.filter((key) => {
+    if (inheritedExecutionKeys.has(key)) return actual[key] !== inherited[key];
+    if (Object.hasOwn(fixedInputs, key)) return actual[key] !== fixedInputs[key];
+    return Object.hasOwn(actual, key);
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -734,12 +762,22 @@ describe("shared-process environment hygiene", () => {
   test("scrubs or fixes every active runtime environment input before the shared process starts", () => {
     const repoRoot = join(import.meta.dir, "..");
     const harness = readFileSync(join(repoRoot, "scripts", "run-hermetic-tests.sh"), "utf8");
-    const covered = hermeticHarnessEnvKeys(harness);
-    const missing = activeRuntimeEnvKeys(repoRoot).filter((key) => !covered.has(key));
-    expect(missing).toEqual([]);
-    expect(covered).toContain("EMAILS_SELF_HOSTED_HTTP_CONNECT_TIMEOUT");
-    expect(covered).toContain("EMAILS_SELF_HOSTED_HTTP_TIMEOUT");
-    expect(covered).toContain("EMAILS_SELF_HOSTED_HTTP_MAX_RESPONSE_BYTES");
+    // Both isolated and shared lanes must invoke the tested builder's entrypoint.
+    expect(harness.match(/^\s*bun scripts\/prepublish-local-test\.mjs --max-concurrency 1\b/gm)).toHaveLength(2);
+    expect(harness).not.toMatch(/^\s*(?:env\s+.*\s+)?bun test\b/m);
+    const active = activeRuntimeEnvKeys(repoRoot);
+    expect(active).toContain("EMAILS_SELF_HOSTED_HTTP_CONNECT_TIMEOUT");
+    expect(active).toContain("EMAILS_SELF_HOSTED_HTTP_TIMEOUT");
+    expect(active).toContain("EMAILS_SELF_HOSTED_HTTP_MAX_RESPONSE_BYTES");
+    expect(unsanitizedRuntimeEnvKeys(active, buildPrepublishTestEnv)).toEqual([]);
+
+    // Prove the guard rejects both accidental inheritance and a forced store.
+    const leaks = unsanitizedRuntimeEnvKeys(active, (input) => ({ ...input }));
+    expect(leaks).toContain("EMAILS_SELF_HOSTED_HTTP_TIMEOUT");
+    expect(leaks).toContain("EMAILS_SELF_HOSTED_API_KEY");
+    expect(unsanitizedRuntimeEnvKeys(["EMAILS_DB_PATH"], (input, home) => ({
+      ...buildPrepublishTestEnv(input, home), EMAILS_DB_PATH: ":memory:",
+    }))).toEqual(["EMAILS_DB_PATH"]);
   });
 });
 

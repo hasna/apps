@@ -52,7 +52,7 @@ export function createCloudRequestHandler(): (req: Request) => Promise<Response>
       const hasSecret = Boolean(resolveSigningSecret());
       try {
         if (!isCloudModeEnabled()) {
-          throw new Error("cloud storage mode is not configured");
+          throw new Error("the PostgreSQL server backend is not configured");
         }
         const dbOk = await pingCloud();
         const ok = dbOk && hasSecret;

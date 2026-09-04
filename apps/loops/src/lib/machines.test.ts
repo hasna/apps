@@ -8,6 +8,9 @@ const LOCAL_ID = "openloops-test-local-a71";
 const REMOTE_ID = "openloops-test-remote-b82";
 const REMOTE_HOSTNAME = "openloops-test-remote-host";
 
+const MACHINES_DELETED =
+  "@hasna/machines has been deleted (2026-09-03); machine-assigned loops are no longer supported. Remove the machine pin and run the loop locally.";
+
 describe("machines", () => {
   let root: string;
   let home: string;
@@ -49,76 +52,18 @@ describe("machines", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  test("listOpenMachines maps topology entries with local and route metadata", () => {
-    const machines = listOpenMachines();
-    const local = machines.find((machine) => machine.id === LOCAL_ID);
-    const remote = machines.find((machine) => machine.id === REMOTE_ID);
-    expect(local).toBeDefined();
-    expect(local?.local).toBe(true);
-    expect(local?.workspacePath).toBe("/workspace/local");
-    expect(remote).toBeDefined();
-    expect(remote?.local).toBe(false);
-    expect(remote?.route).toBe("ssh");
-    expect(remote?.hostname).toBe(REMOTE_HOSTNAME);
-    expect(remote?.workspacePath).toBe("/workspace/remote");
-    expect(remote?.tags).toEqual(["test"]);
-  });
-
-  test("resolveLoopMachine returns an ssh route ref for manifest-declared remotes", () => {
-    const ref = resolveLoopMachine(REMOTE_ID);
-    expect(ref.id).toBe(REMOTE_ID);
-    expect(ref.requestedId).toBeUndefined();
-    expect(ref.local).toBe(false);
-    expect(ref.route).toBe("ssh");
-    expect(ref.workspacePath).toBe("/workspace/remote");
-    expect(ref.packageVersion).toBeDefined();
-    expect(Number.isNaN(new Date(ref.resolvedAt!).getTime())).toBe(false);
-  });
-
-  test("resolveLoopMachine records the requested alias when resolving by hostname", () => {
-    const ref = resolveLoopMachine(REMOTE_HOSTNAME);
-    expect(ref.id).toBe(REMOTE_ID);
-    expect(ref.requestedId).toBe(REMOTE_HOSTNAME);
-    expect(ref.route).toBe("ssh");
-  });
-
-  test("resolveLoopMachine throws a routable error for unknown machines", () => {
-    expect(() => resolveLoopMachine("openloops-test-missing-zz9")).toThrow(
-      "OpenMachines route not found for machine: openloops-test-missing-zz9",
-    );
-  });
-
-  test("refreshLoopMachine re-resolves the ref by machine id", () => {
-    const original = resolveLoopMachine(REMOTE_ID);
-    const refreshed = refreshLoopMachine(original);
-    expect(refreshed.id).toBe(REMOTE_ID);
-    expect(refreshed.route).toBe("ssh");
-    expect(refreshed.workspacePath).toBe("/workspace/remote");
-  });
-
-  test("resolveMachineCommand fails closed instead of degrading to raw ssh for unknown machines", () => {
-    // Regression: preflight must resolve the target machine through the
-    // package-owned Machines canonical route. An id the topology cannot
-    // resolve must fail with a route error, never silently become
-    // `ssh <machine-id>` (which fails DNS on canonical machine names such as
-    // the apple03 -> station03 alias in the original defect).
-    expect(() => resolveMachineCommand("openloops-test-missing-zz9", "bash -s")).toThrow(
-      "OpenMachines route not found for machine: openloops-test-missing-zz9",
-    );
-  });
-
-  test("resolveMachineCommand targets the canonical route for manifest remotes", () => {
-    const plan = resolveMachineCommand(REMOTE_ID, "bash -s");
-    expect(plan.command).toBe("ssh");
-    expect(plan.args[0]).toBe("tester@openloops-remote.example");
-    expect(plan.args[1]).toBe("bash -s");
-    expect(plan.source).toBe("ssh");
-  });
-
-  test("resolveMachineCommand keeps local machine plans local", () => {
-    const plan = resolveMachineCommand(LOCAL_ID, "echo hi");
-    expect(plan.command).toBe("bash");
-    expect(plan.args).toEqual(["-c", "echo hi"]);
-    expect(plan.source).toBe("local");
+  test("every machine entry point fails loudly with the deleted-package error", () => {
+    // `@hasna/machines` was deleted from the public registry and from the tree
+    // (2026-09-03). Machine-assigned loops are no longer supported: each entry
+    // point must throw the same unavailable error, never silently fall back.
+    expect(() => listOpenMachines()).toThrow(MACHINES_DELETED);
+    expect(() => resolveLoopMachine(LOCAL_ID)).toThrow(MACHINES_DELETED);
+    expect(() => resolveLoopMachine(REMOTE_ID)).toThrow(MACHINES_DELETED);
+    expect(() => resolveLoopMachine(REMOTE_HOSTNAME)).toThrow(MACHINES_DELETED);
+    expect(() => resolveLoopMachine("openloops-test-missing-zz9")).toThrow(MACHINES_DELETED);
+    expect(() => refreshLoopMachine({ id: LOCAL_ID } as never)).toThrow(MACHINES_DELETED);
+    expect(() => resolveMachineCommand(LOCAL_ID, "echo hi")).toThrow(MACHINES_DELETED);
+    expect(() => resolveMachineCommand(REMOTE_ID, "bash -s")).toThrow(MACHINES_DELETED);
+    expect(() => resolveMachineCommand("openloops-test-missing-zz9", "bash -s")).toThrow(MACHINES_DELETED);
   });
 });

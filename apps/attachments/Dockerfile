@@ -3,7 +3,7 @@
 # @hasna/attachments — ARM64 (Fargate) container for attachments-serve.
 # PURE REMOTE (Amendment A1): the service talks to RDS Postgres + S3 directly.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1 AS build
+FROM oven/bun:1.3.14 AS build
 WORKDIR /app
 
 # Install dependencies against the committed lockfile. --ignore-scripts because
@@ -21,11 +21,10 @@ RUN bun run build
 RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-scripts
 
 # ---------------------------------------------------------------------------
-FROM oven/bun:1-slim AS runtime
+FROM oven/bun:1.3.14-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=8080 \
-    HASNA_ATTACHMENTS_STORAGE_MODE=cloud
+    PORT=8080
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

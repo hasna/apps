@@ -6,6 +6,10 @@
 
 - Make the worktree and clones roots configurable through the resolver (hotfixes plan 0f49f56a, task P5.1 / 7b8fc186). `worktreeRootDir()`, `clonesRootDir()`, and the primary-relocation canonical root now derive from `getDataRootForHome`, so `HASNA_REPOS_HOME`, an adopted `HASNA_DATA_HOME`, or a physically migrated store moves the worktrees (`<data-root>/worktrees`) and clones (`<data-root>/clones`) with the data. The account-database base is retained for the default legacy case, so a forged `$HOME` alone still cannot move the root — only the documented resolver overrides can. This unblocks migrating `~/.hasna/repos` to `~/.local/share/hasna/repos`: `repos worktree list <repo>` now resolves under the effective data root instead of the hardcoded `~/.hasna/repos/worktrees`.
 
+- The `HASNA_DATA_HOME` override no longer orphans a live legacy store: with `repos.db` still at the legacy root and none at the resolver root, the legacy root stays effective so the existing store never becomes invisible (the override takes effect once the store is physically migrated — move/copy `repos.db` — or the resolver root already holds one). A new empty resolver database is never created behind the operator's back, so the switch cannot persist by accident after the override is unset. The legacy-store guard compares against the same home the resolver root was computed from, so the explicit-home variant (`getDataRootForHome`) can never hide a live store under that home either.
+
+- `repos worktree adopt <path> --apply` (and the `add` reuse path) now fully re-claim a released lease row: the adopting machine's `machine_id`, `task_id`/`run_id` ownership, and a fresh `claimed_at` are written, so the re-claimed worktree no longer reads as foreign (`machine-mismatch`) or stale in `repos worktree list` and is not left eligible for takeover or cleanup. Re-issuing an `add` for a task whose lease was released with `--keep` re-claims the lease the same way.
+
 ## 0.1.55
 
 ### Patch Changes

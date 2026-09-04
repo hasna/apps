@@ -1,8 +1,12 @@
 # @hasna/calendar
 
 Universal calendar management for AI coding agents. The package ships a typed SDK,
-a `calendar` CLI, a Model Context Protocol server, and a local HTTP API server
-backed by SQLite.
+a `calendar` CLI, a Model Context Protocol server, and a PostgreSQL HTTP API server.
+
+This is a **partial migration**, not a whole-package remote-only release. Calendar
+domain operations are authenticated HTTPS clients. Embedded Events/channel/replay
+commands and explicit `db-migrate` retain their existing local semantics pending
+an approved migration contract; legacy data is not moved or deleted by this change.
 
 ## Install
 
@@ -15,115 +19,76 @@ The package requires Bun. Installed binaries:
 - `calendar` - CLI for orgs, agents, calendars, events, attendees, availability,
   memberships, and event-log commands from `@hasna/events`.
 - `calendar-mcp` - MCP server over stdio, or Streamable HTTP with `--http`.
-- `calendar-serve` - local HTTP API server.
+- `calendar-serve` - PostgreSQL HTTP API server.
 
 ## Storage And Configuration
 
-By default, calendar data is stored in SQLite at:
+Calendar domain CLI commands, MCP tools, root `getStore()`, and `./sdk` require
+both `HASNA_CALENDAR_API_URL` (explicit HTTPS) and `HASNA_CALENDAR_API_KEY`.
+The `CALENDAR_*` aliases are accepted only when nonblank and nonconflicting.
+Absent, partial, blank, malformed and conflicting configuration fails closed.
+Retired placement selectors are rejected. Network/authentication failures never
+fall back to a local domain database. Clients do not consume database DSNs.
 
-```text
-~/.hasna/calendar/calendar.db
-```
+Each client snapshots its authority and credential. Redirects and authentication
+header overrides are refused. Only reads may retry; server write deduplication
+is not established. Response errors do not expose server bodies.
 
-The database location can be controlled with environment variables:
+`calendar-serve` requires an app-scoped valid PostgreSQL URL before binding:
+`HASNA_CALENDAR_DATABASE_URL` or the nonconflicting `CALENDAR_DATABASE_URL`
+alias. The DSN must contain exactly one `sslmode=verify-full`; absent, weaker,
+duplicate or competing SSL/TLS parameters are rejected. Certificate and hostname
+verification are forced in the Bun driver. An explicit PEM trust bundle may be
+read from `HASNA_CALENDAR_PG_CA_FILE` or the existing `PGSSLROOTCERT` (values must
+agree). No plaintext production or test-mode exception is provided.
+`/v1` also requires `HASNA_CALENDAR_API_SIGNING_KEY` (or supported
+signing-secret alias). Schema changes remain explicit `calendar-serve migrate`
+operations, never automatic request-time migrations.
 
-- `CALENDAR_DB_PATH=/absolute/path/calendar.db` uses an explicit database file.
-- `CALENDAR_DB_SCOPE=project` stores data under the nearest git root at
-  `.calendar/calendar.db`.
-- If a `.calendar/calendar.db` exists in the current directory or a parent
-  directory, that database is reused.
-- `BUN_TEST=1` makes the SDK default to an in-memory database for tests.
+The HTTP server uses `CALENDAR_PORT` (default 19428); MCP HTTP mode uses
+`MCP_HTTP_PORT` (default 8803). A server with no serve credential disables
+`/mcp`; enabling it requires both a separate serve credential and a valid
+domain API URL/key.
 
-The HTTP server uses `CALENDAR_PORT` and defaults to `19428`. The MCP HTTP mode
-uses `MCP_HTTP_PORT` and defaults to `8803`.
+### Unresolved public integrations — package remains incomplete
 
-### Storage
+**Multi-tenant authorization is NOT established.** The current server checks
+Calendar app scopes but does not bind `principal.tid` to organization queries.
+Adversarial tests reproduce cross-organization reads/deletes. Do not interpret
+HTTPS authentication as tenant isolation or approve this package for a shared
+multi-tenant deployment. See `TENANCY-GAP.md` in the source tree for required
+product/API decisions; no tenant mapping or administrative scope was invented.
 
-There are no deployment modes. The data backend is selected by configuration on
-each side of the wire:
-
-**Server (`calendar-serve`)** — `HASNA_CALENDAR_DATABASE_URL` (or
-`CALENDAR_DATABASE_URL`) present selects the **PostgreSQL** backend; absent means
-**SQLite**. The serve process talks to Postgres directly via that URL plus
-`HASNA_CALENDAR_API_SIGNING_KEY`, and needs neither `HASNA_CALENDAR_API_URL` nor
-`HASNA_CALENDAR_API_KEY`. A generic `DATABASE_URL` from another project is not
-consulted at runtime; `calendar-serve migrate` accepts it because migration is
-already an explicit database operation.
-
-**Client (`calendar` CLI, `calendar-mcp`, the SDK)** — exactly two connections:
-
-| Configuration | Connection |
-| --- | --- |
-| `HASNA_CALENDAR_API_URL` **and** `HASNA_CALENDAR_API_KEY` (or the `CALENDAR_*` aliases) both set | hosted API — every read/write goes to `<API_URL>/v1` |
-| neither set | local — on-box SQLite |
-
-Setting only **one** of the pair is a **hard failure** (`resolveStorageClient`
-throws): the client refuses to pick a data store the configuration does not
-fully name. There is no default API host and no degraded path — silently
-falling back to a different store is how a single process used to end up
-reading two different datasets.
-
-The client never opens Postgres directly.
+- Embedded `events` and `channels` commands from `@hasna/events` still use
+  that package's local event/channel/delivery store. They are distinct from
+  Calendar scheduling events and have no matching Calendar API routes.
+- Explicit `db-migrate` retains its existing legacy SQLite copy semantics.
+  It is not a server import and does not establish remote authority.
+- `LocalStore` is no longer a public root export or a selectable domain
+  transport. Internal SQLite code remains for fixtures and the explicit legacy
+  command. No new runtime paths are introduced; legacy data stays untouched.
+- The canonical shared Contracts revision is unpublished. This package keeps
+  its existing released dependency and does not claim the new kit is released.
 
 ## SDK
 
-The root package export is side-effect free and exposes types, database helpers,
-and CRUD helpers for orgs, agents, calendars, events, attendees, availability,
-and memberships.
-
 ```ts
-import {
-  createOrg,
-  registerAgent,
-  createCalendar,
-  createEvent,
-  listEvents,
-  findConflicts,
-  searchEvents,
-  closeDatabase,
-  type Event,
-} from "@hasna/calendar";
+import { getStore } from "@hasna/calendar";
+import { createCalendarClient } from "@hasna/calendar/sdk";
 
-const org = createOrg({ name: "Platform" });
-const agent = registerAgent({ name: "spark01", org_id: org.id });
-const calendar = createCalendar({
-  org_id: org.id,
-  name: "Launch",
-  timezone: "Europe/Bucharest",
-});
+// Both validate the canonical environment pair before operating.
+const store = getStore();
+const org = await store.createOrg({ name: "Platform" });
+console.log(await store.listCalendars(org.id));
 
-const event: Event = createEvent({
-  calendar_id: calendar.id,
-  org_id: org.id,
-  title: "Release review",
-  start_at: "2026-06-24T14:00:00+03:00",
-  end_at: "2026-06-24T14:30:00+03:00",
-  created_by: agent.id,
-});
-
-console.log(listEvents({ org_id: org.id, limit: 10 }));
-console.log(findConflicts(calendar.id, { start: event.start_at, end: event.end_at }));
-console.log(searchEvents("release", org.id));
-
-closeDatabase();
+const sdk = createCalendarClient();
+const { events } = await sdk.listEvents({ org_id: org.id });
+console.log(events);
 ```
 
-Useful exported helpers include:
-
-- Database: `getDatabase`, `closeDatabase`, `resetDatabase`
-- Orgs: `createOrg`, `getOrg`, `getOrgBySlug`, `listOrgs`, `updateOrg`, `deleteOrg`
-- Agents: `registerAgent`, `getAgent`, `getAgentByName`, `listAgents`,
-  `heartbeat`, `updateAgent`, `deleteAgent`
-- Calendars: `createCalendar`, `getCalendar`, `listCalendars`,
-  `updateCalendar`, `deleteCalendar`
-- Events: `createEvent`, `getEvent`, `listEvents`, `updateEvent`,
-  `deleteEvent`, `searchEvents`, `findConflicts`, `findAgentConflicts`
-- Attendees: `createAttendee`, `getAttendeesForEvent`, `updateAttendee`,
-  `deleteAttendee`
-- Availability: `getAvailabilityForAgent`, `upsertAgentAvailability`,
-  `deleteAvailability`
-- Memberships: `createMembership`, `getMembershipsForOrg`, `getOrgsForAgent`,
-  `deleteMembershipByAgentAndOrg`
+All generated SDK methods retain their `/v1` response envelopes. The root
+store unwraps those envelopes into domain objects. There is no public local
+CRUD export.
 
 ## CLI
 
@@ -194,12 +159,12 @@ calendar member-remove <agent-id> <org-id>
 calendar agent-orgs <agent-id>
 ```
 
-The CLI also registers `events` and `webhooks` command groups from
+The CLI also registers `events` and `channels` command groups from
 `@hasna/events` for local event-log and webhook operations:
 
 ```sh
 calendar events --help
-calendar webhooks --help
+calendar channels --help
 ```
 
 ### Compact Output And Gradual Disclosure
@@ -359,7 +324,7 @@ resolved **once at startup, before the socket is bound**:
 | --- | --- | --- | --- | --- |
 | `CALENDAR_SERVE_API_KEY` (or `--api-key`) | `enforce` | credential required | authenticated | public |
 | hosted (an app-scoped database URL, `HASNA_CALENDAR_DATABASE_URL`) with no serve key | `local-plane-disabled` | **404 `LOCAL_PLANE_DISABLED`** — not mounted | authenticated | public |
-| loopback bind **and** `--allow-anonymous` (or `CALENDAR_ALLOW_ANONYMOUS=1`) | `anonymous-loopback` | anonymous, **loopback peers only** | authenticated | public |
+| absent or invalid PostgreSQL URL, even with `--allow-anonymous` | — | server refuses to bind | — | — |
 | anything else | — | **the server refuses to start, exit 1** | — | — |
 
 `--allow-anonymous` is refused outright for a non-loopback bind host, and even when
@@ -368,7 +333,7 @@ active a request is only served anonymously if its **raw transport peer** is loo
 
 On a **hosted** deployment, setting `CALENDAR_SERVE_API_KEY` without also setting
 `HASNA_CALENDAR_API_URL` + `HASNA_CALENDAR_API_KEY` is refused at startup
-(`SPLIT_STORE_PLANE`): `/v1` would be on Postgres while `/mcp` was on on-box SQLite.
+(`SPLIT_STORE_PLANE`): the MCP domain client is unconfigured; it never falls back to SQLite.
 
 `CALENDAR_SERVE_API_KEY` is intentionally a different variable from the client-flip
 `CALENDAR_API_KEY` / `HASNA_CALENDAR_API_KEY`: those point the CLI/MCP *at* a remote
@@ -378,12 +343,6 @@ of configuring the server's own auth.
 ### Running it
 
 ```sh
-# local dev, loopback only
-calendar-serve --allow-anonymous
-
-# local with a shared credential
-CALENDAR_SERVE_API_KEY=<key> calendar-serve
-
 # hosted (ECS/RDS): /v1 only, /mcp not served.
 # No HASNA_CALENDAR_API_URL / HASNA_CALENDAR_API_KEY here — those are client-side.
 HASNA_CALENDAR_DATABASE_URL=<dsn> calendar-serve

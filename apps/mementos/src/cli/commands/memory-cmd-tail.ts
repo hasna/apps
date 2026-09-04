@@ -12,6 +12,7 @@ import {
   sendNotification,
   type GlobalOpts,
 } from "../helpers.js";
+import { redactMemoryForOutput } from "../../lib/redact.js";
 
 export function registerTailCommand(program: Command): void {
   const handleError = makeHandleError(program);
@@ -65,7 +66,12 @@ export function registerTailCommand(program: Command): void {
           agent_id: agentId,
           project_id: projectId,
           on_memories: (memories: Memory[]) => {
-            for (const m of memories) {
+            for (const raw of memories) {
+              // Read-path redaction (todos e12c7659): tail streams stored rows
+              // to stdout; a credential-shaped key stored by any write path
+              // reaches the stream verbatim unless projected first. The
+              // notification surface gets the same safe copy.
+              const m = redactMemoryForOutput(raw);
               const isNew = m.created_at === m.updated_at && m.created_at >= startTime;
               if (jsonMode) {
                 console.log(JSON.stringify({ event: isNew ? "new" : "updated", memory: m }));

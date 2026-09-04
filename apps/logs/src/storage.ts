@@ -22,5 +22,4 @@ export {
   requireLocalStore,
   resolveStore,
   type Store,
-  type StoreMode,
 } from "./store/index.ts";

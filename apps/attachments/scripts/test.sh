@@ -13,8 +13,8 @@ set -e
 # / _MODE and at the API URL + key pair (see core/cloud-v1.ts:resolveStorageClient),
 # so with those exported the CLI/MCP tests silently ran against the real service
 # and 8 test files failed for environmental reasons on a clean checkout.
-export HASNA_ATTACHMENTS_STORAGE_MODE=local
-export ATTACHMENTS_CLIENT_MODE=local
+unset HASNA_ATTACHMENTS_STORAGE_MODE
+unset ATTACHMENTS_CLIENT_MODE
 unset HASNA_ATTACHMENTS_MODE
 unset HASNA_ATTACHMENTS_API_URL
 unset HASNA_ATTACHMENTS_API_KEY
@@ -24,6 +24,7 @@ unset HASNA_TODOS_API_KEY
 unset TODOS_API_KEY
 unset HASNA_TODOS_API_URL
 unset TODOS_API_URL
+unset HASNA_SESSIONS_API_URL SESSIONS_API_URL HASNA_SESSIONS_API_KEY SESSIONS_API_KEY
 
 PASS=0
 FAIL=0
@@ -41,7 +42,8 @@ if [[ "$1" == "--coverage" ]]; then
   COVERAGE_FLAG="--coverage"
 fi
 
-mapfile -t TEST_FILES < <(find src sdk scripts -type f -name "*.test.ts" | sort)
+TEST_FILES=()
+while IFS= read -r file; do TEST_FILES+=("$file"); done < <(find src sdk scripts -type f -name "*.test.ts" | sort)
 
 for file in "${TEST_FILES[@]}"; do
   if bun test $COVERAGE_FLAG "$file" 2>&1; then

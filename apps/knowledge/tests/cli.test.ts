@@ -555,6 +555,25 @@ describe('knowledge cli', () => {
     expect(out).toContain(packageJson.version);
   });
 
+  test('metadata commands are not blocked by a retired storage selector', () => {
+    // A stale provisioning fragment such as HASNA_KNOWLEDGE_STORAGE_MODE must
+    // not make the CLI unreadable: --version, --completions and help never
+    // touch storage, so an operator with a retired selector in the
+    // environment must still be able to read them.
+    const stale = { HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud' };
+    for (const args of [['--version'], ['--completions', 'bash'], ['help']]) {
+      const result = runCli(args, undefined, stale);
+      expect(result.exitCode, `${args.join(' ')} must exit 0 with a retired selector present`).toBe(0);
+    }
+
+    // A command that resolves storage or transport still fails loud and names
+    // the retired variable, so the fail-loud ratchet is preserved where it
+    // protects data selection.
+    const list = runCli(['list', '--limit', '1'], undefined, stale);
+    expect(list.exitCode).not.toBe(0);
+    expect(new TextDecoder().decode(list.stderr)).toMatch(/HASNA_KNOWLEDGE_STORAGE_MODE/);
+  });
+
   test('package exposes only knowledge CLI bins', () => {
     expect(packageJson.bin).toEqual({
       knowledge: 'bin/knowledge.js',

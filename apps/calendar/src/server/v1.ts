@@ -160,7 +160,9 @@ export async function handleV1Request(
             after: q.get("after") || undefined,
             before: q.get("before") || undefined,
             source_task_id: q.get("source_task_id") || undefined,
+            created_by: q.get("created_by") || undefined,
             limit: q.get("limit") ? Number(q.get("limit")) : undefined,
+            offset: q.get("offset") ? Number(q.get("offset")) : undefined,
           });
           return json({ events, count: events.length });
         }
@@ -219,7 +221,7 @@ export async function handleV1Request(
       }
       if (segments[3] === "heartbeat" && method === "POST") { const agent = await store.heartbeatAgent(id); return agent ? json({ agent }) : error(404, "agent not found"); }
       if (method === "GET") { const agent = await store.getAgent(id); return agent ? json({ agent }) : error(404, "agent not found"); }
-      if (method === "PATCH" || method === "PUT") { return json({ agent: await store.updateAgent(id, (await readJson(req)) ?? {}) }); }
+      if (method === "PATCH" || method === "PUT") { const agent = await store.updateAgent(id, (await readJson(req)) ?? {}); return agent ? json({ agent }) : error(404, "agent not found"); }
       if (method === "DELETE") { return json({ deleted: await store.deleteAgent(id) }); }
       return error(405, `method ${method} not allowed`);
     }

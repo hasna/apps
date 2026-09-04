@@ -1,210 +1,48 @@
-// HTTP `/v1` storage client for this app's hosted API.
-//
-// The client has exactly two connections, selected by configuration — there is
-// no deployment-mode variable:
-//
-//   hosted API   when BOTH HASNA_<APP>_API_URL and HASNA_<APP>_API_KEY are set
-//   local        otherwise (on-box SQLite)
-//
-// ...the resolver returns a ready HTTP client whose list/get/create/update/delete
-// calls hit `<API_URL>/v1/<resource>` with the API key. With neither variable
-// set it returns `{ transport: 'local', client: null }` so the app uses its
-// local SQLite store. Setting only ONE of the pair is a misconfiguration and
-// FAILS CLOSED (the resolver marks it `misconfigured` and `resolveStorageClient`
-// throws) — silently picking the local store while the operator asked for the
-// hosted API is how a process ended up reading a different dataset than it
-// reported.
-//
-// This module is a repo-local vendoring of the @hasna/contracts client storage
-// kit (createClientTransport + createHasnaStorageClient). It has no EXTERNAL
-// runtime imports, so the built CLI/MCP/SDK bundle carries the HTTP client with
-// zero extra runtime dependencies.
-//
-// SAFETY: the API key value is never logged, returned, or embedded anywhere; it
-// lives only inside the transport closure and travels only in request headers.
-
+// Calendar domain HTTPS seam; no claim of unpublished Contracts provenance.
+import { CalendarResponseError, validateResponseEnvelope } from "./response-envelope.js";
 export type Env = Record<string, string | undefined>;
-
-function envToken(name: string): string {
-  return name.toUpperCase().replace(/-/g, "_");
-}
-
-function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value) return { key, value };
-  }
-  return null;
-}
-
-function clientEnvKeys(name: string) {
-  const token = envToken(name);
-  return {
-    apiUrlKeys: [`HASNA_${token}_API_URL`, `${token}_API_URL`],
-    apiKeyKeys: [`HASNA_${token}_API_KEY`, `${token}_API_KEY`],
-  };
-}
-
-/** Normalize a base URL to `<origin>/v1`. */
-export function toV1BaseUrl(apiUrl: string): string {
-  const url = new URL(apiUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("API URL must use http or https.");
-  }
-  let path = url.pathname.replace(/\/+$/, "");
-  if (path.endsWith("/v1")) path = path.slice(0, -"/v1".length);
-  url.pathname = `${path}/v1`;
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/+$/, "");
-}
-
-export type ClientTransportKind = "local" | "http-api";
-
-export interface ClientTransportResolution {
-  transport: ClientTransportKind;
-  /** The env var the API URL came from (null when none is set). */
-  apiUrlSource: string | null;
-  /** The resolved `<origin>/v1` base URL (null when local or misconfigured). */
-  baseUrl: string | null;
-  apiKeyPresent: boolean;
-  apiKeySource: string | null;
-  /** True when the hosted API was requested but is not fully configured. */
-  misconfigured: boolean;
-  warning: string | null;
-}
-
-/**
- * Decide whether this client should read/write from the hosted HTTP API or
- * locally. Hosted IFF both an API URL and an API key are set. When exactly one
- * of the pair is set (or the URL is invalid), returns local with
- * `misconfigured: true` so callers can hard-fail instead of drifting.
- *
- * There is no degraded path: picking a different data store because the
- * configuration is incomplete is the bug this replaces.
- */
-export function resolveClientTransport(name: string, env: Env = process.env): ClientTransportResolution {
-  const keys = clientEnvKeys(name);
-  const urlHit = firstEnv(env, keys.apiUrlKeys);
-  const keyHit = firstEnv(env, keys.apiKeyKeys);
-
-  const warnings: string[] = [];
-
-  if (urlHit && keyHit) {
-    let baseUrl: string;
-    try {
-      baseUrl = toV1BaseUrl(urlHit.value);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      warnings.push(`Invalid API URL from ${urlHit.key}: ${message}.`);
-      return {
-        transport: "local",
-        apiUrlSource: urlHit.key,
-        baseUrl: null,
-        apiKeyPresent: true,
-        apiKeySource: keyHit.key,
-        misconfigured: true,
-        warning: warnings.join(" "),
-      };
-    }
-    return {
-      transport: "http-api",
-      apiUrlSource: urlHit.key,
-      baseUrl,
-      apiKeyPresent: true,
-      apiKeySource: keyHit.key,
-      misconfigured: false,
-      warning: null,
-    };
-  }
-
-  if (urlHit) {
-    warnings.push(
-      `${urlHit.key} is set but no API key is set (${keys.apiKeyKeys[0]}). Refusing to route to the hosted API; using local store.`,
-    );
-    return {
-      transport: "local",
-      apiUrlSource: urlHit.key,
-      baseUrl: null,
-      apiKeyPresent: false,
-      apiKeySource: null,
-      misconfigured: true,
-      warning: warnings.join(" "),
-    };
-  }
-
-  if (keyHit) {
-    warnings.push(
-      `${keyHit.key} is set but no API URL is set (${keys.apiUrlKeys[0]}). Refusing to route to the hosted API; using local store.`,
-    );
-    return {
-      transport: "local",
-      apiUrlSource: null,
-      baseUrl: null,
-      apiKeyPresent: true,
-      apiKeySource: keyHit.key,
-      misconfigured: true,
-      warning: warnings.join(" "),
-    };
-  }
-
-  return {
-    transport: "local",
-    apiUrlSource: null,
-    baseUrl: null,
-    apiKeyPresent: false,
-    apiKeySource: null,
-    misconfigured: false,
-    warning: null,
-  };
-}
-
-/** Thrown when a cloud HTTP request returns a non-2xx status. */
-export class HasnaHttpError extends Error {
-  readonly status: number;
-  readonly method: string;
-  readonly path: string;
-  readonly body: unknown;
-  constructor(method: string, path: string, status: number, body: unknown) {
-    super(`Cloud request failed: ${method} ${path} -> ${status}`);
-    this.name = "HasnaHttpError";
-    this.status = status;
-    this.method = method;
-    this.path = path;
-    this.body = body;
-  }
-}
-
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
-
 export type QueryParams = Record<string, string | number | boolean | null | undefined>;
-
-export interface RequestOptions {
-  query?: QueryParams;
-  idempotencyKey?: string;
-  timeoutMs?: number;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-  retries?: number;
+export interface RequestOptions { query?: QueryParams; idempotencyKey?: string; timeoutMs?: number; headers?: HeadersInit; signal?: AbortSignal | null; retries?: number; }
+export function toV1BaseUrl(value: string): string {
+  try {
+    if (typeof value !== "string" || /[\\\s]/.test(value)) throw 0;
+    const u = new URL(value);
+    if (u.protocol !== "https:" || !u.hostname || u.username || u.password || u.search || u.hash) throw 0;
+    const p = u.pathname.replace(/\/+$/, "");
+    u.pathname = p.endsWith("/v1") ? p : p + "/v1";
+    return u.href.replace(/\/$/, "");
+  } catch { throw new Error("Calendar API URL must be explicit HTTPS without userinfo, query or fragment."); }
 }
-
-const DEFAULT_RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
-const IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
-
-function appendQuery(path: string, query?: QueryParams): string {
-  if (!query) return path;
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value === null || value === undefined) continue;
-    params.append(key, String(value));
+export function validateApiKey(value: unknown): string {
+  if (typeof value !== "string" || !value || /[\s\x00-\x1f\x7f]/.test(value) || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) throw new Error("Calendar API key must be nonblank without whitespace, control characters or database URLs.");
+  return value;
+}
+function select(env: Env, keys: string[]) {
+  const hits = keys.filter(k => env[k] !== undefined);
+  if (!hits.length) throw new Error(keys[0] + " is required; no local domain fallback.");
+  if (hits.some(k => !env[k]?.trim() || env[k] !== env[k]?.trim())) throw new Error(keys[0] + " is blank or malformed.");
+  if (hits.some(k => env[k] !== env[hits[0]!])) throw new Error(keys[0] + " conflicts with its alias.");
+  return { key: hits[0]!, value: env[hits[0]!]! };
+}
+function configuration(name: string, env: Env) {
+  const token = name.toUpperCase().replace(/-/g, "_");
+  for (const s of ["MODE", "STORAGE_MODE", "BACKEND", "LOCAL", "SELF_HOSTED", "CLOUD"]) {
+    if (["HASNA_" + token + "_" + s, token + "_" + s].some(k => env[k] !== undefined)) throw new Error("Remove retired Calendar placement selectors and configure the HTTPS API URL and key.");
   }
-  const qs = params.toString();
-  if (!qs) return path;
-  return `${path}${path.includes("?") ? "&" : "?"}${qs}`;
+  const url = select(env, ["HASNA_" + token + "_API_URL", token + "_API_URL"]);
+  const key = select(env, ["HASNA_" + token + "_API_KEY", token + "_API_KEY"]);
+  return { baseUrl: toV1BaseUrl(url.value), apiKey: validateApiKey(key.value), urlSource: url.key, keySource: key.key };
 }
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
+export type ClientTransportKind = "http-api" | "unconfigured";
+export function resolveClientTransport(name: string, env: Env = process.env) {
+  try { const c = configuration(name, env); return { transport: "http-api" as ClientTransportKind, baseUrl: c.baseUrl, apiUrlSource: c.urlSource, apiKeyPresent: true, apiKeySource: c.keySource, misconfigured: false, warning: null }; }
+  catch (e) { return { transport: "unconfigured" as ClientTransportKind, baseUrl: null, apiUrlSource: null, apiKeyPresent: false, apiKeySource: null, misconfigured: true, warning: (e as Error).message }; }
+}
+export type ClientTransportResolution = ReturnType<typeof resolveClientTransport>;
+export class HasnaHttpError extends Error {
+  readonly body: unknown = undefined;
+  constructor(readonly method: string, readonly path: string, readonly status: number, _body?: unknown) { super("Calendar API request failed (" + status + ")."); this.name = "HasnaHttpError"; }
+}
 export interface HttpTransport {
   readonly baseUrl: string;
   request<T = unknown>(method: string, path: string, body?: unknown, opts?: RequestOptions): Promise<T>;
@@ -214,196 +52,71 @@ export interface HttpTransport {
   patch<T = unknown>(path: string, body?: unknown, opts?: RequestOptions): Promise<T>;
   del<T = unknown>(path: string, body?: unknown, opts?: RequestOptions): Promise<T>;
 }
-
-interface TransportOptions {
-  name: string;
-  baseUrl: string;
-  apiKey: string;
-  fetchImpl?: FetchLike;
-  timeoutMs?: number;
-  retries?: number;
-}
-
-export function createHttpTransport(options: TransportOptions): HttpTransport {
-  const fetchImpl: FetchLike = options.fetchImpl ?? ((input, init) => fetch(input, init));
-  const base = options.baseUrl.replace(/\/+$/, "");
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const defaultRetries = options.retries ?? 2;
-
+export function createHttpTransport(options: { name: string; baseUrl: string; apiKey: string; fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>; timeoutMs?: number; retries?: number }): HttpTransport {
+  const base = toV1BaseUrl(options.baseUrl), key = validateApiKey(options.apiKey);
+  const fetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const timeout = options.timeoutMs ?? 30000, defaults = options.retries ?? 2;
   async function request<T>(method: string, path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
+    if (!path.startsWith("/") || path.startsWith("//") || /[\\?#]/.test(path) || path.split("/").some(s => /^(\.|%2e){1,2}$/i.test(s))) throw new Error("Calendar request path escapes the API boundary.");
+    const url = new URL(base + path);
+    if (!url.href.startsWith(base + "/")) throw new Error("Calendar API boundary violation.");
+    for (const [k,v] of Object.entries(opts.query ?? {})) if (v != null) url.searchParams.set(k, String(v));
+    const headers = new Headers(opts.headers);
+    for (const h of ["authorization", "x-api-key", "host", "cookie", "proxy-authorization"]) if (headers.has(h)) throw new Error("Calendar authority headers cannot be overridden.");
+    headers.set("x-api-key", key); headers.set("authorization", "Bearer " + key); headers.set("accept", "application/json");
+    if (opts.idempotencyKey) headers.set("idempotency-key", opts.idempotencyKey);
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    if (payload !== undefined) headers.set("content-type", "application/json");
     const upper = method.toUpperCase();
-    const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
-    const url = `${base}${rel}`;
-    const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
-    const maxRetries = opts.retries ?? defaultRetries;
-    const maxAttempts = methodRetryable ? maxRetries + 1 : 1;
-
-    let lastError: Error | null = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const headers: Record<string, string> = {
-        "x-api-key": options.apiKey,
-        Authorization: `Bearer ${options.apiKey}`,
-        Accept: "application/json",
-        ...(opts.headers ?? {}),
-      };
-      if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
-      const init: RequestInit = { method: upper, headers };
-      if (body !== undefined) {
-        headers["Content-Type"] = "application/json";
-        init.body = JSON.stringify(body);
-      }
-      const controller = new AbortController();
-      const onAbort = () => controller.abort();
-      if (opts.signal) {
-        if (opts.signal.aborted) controller.abort();
-        else opts.signal.addEventListener("abort", onAbort, { once: true });
-      }
-      const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? timeoutMs);
-      init.signal = controller.signal;
-
-      let response: Response;
+    // Calendar's server has no write deduplication; never automatically retry writes.
+    const retries = ["GET", "HEAD"].includes(upper) ? opts.retries ?? defaults : 0;
+    if (!Number.isInteger(retries) || retries < 0 || retries > 5) throw new Error("Invalid Calendar retry limit.");
+    const timeoutMs = opts.timeoutMs ?? timeout, signal = opts.signal;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Invalid Calendar timeout.");
+    for (let attempt = 0; ; attempt++) {
+      if (signal?.aborted) throw new Error("Calendar request cancelled.");
+      const controller = new AbortController(), abort = () => controller.abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(abort, timeoutMs);
       try {
-        response = await fetchImpl(url, init);
-      } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error));
-        clearTimeout(timer);
-        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
-        // Caller-initiated abort is a cancellation, not a transient failure.
-        if (opts.signal?.aborted) throw err;
-        lastError = err;
-        if (methodRetryable && attempt < maxAttempts) {
-          await sleep(Math.min(2_000, 200 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 100));
-          continue;
-        }
-        throw err;
-      } finally {
-        clearTimeout(timer);
-        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
-      }
-
-      const text = await response.text();
-      let parsed: unknown = undefined;
-      if (text.length > 0) {
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          parsed = text;
-        }
-      }
-      if (!response.ok) {
-        const err = new HasnaHttpError(upper, rel, response.status, parsed);
-        if (methodRetryable && DEFAULT_RETRY_STATUSES.has(response.status) && attempt < maxAttempts) {
-          lastError = err;
-          await sleep(Math.min(2_000, 200 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 100));
-          continue;
-        }
-        throw err;
-      }
-      return parsed as T;
+        const response = await fetchImpl(url.href, { method: upper, headers: new Headers(headers), body: payload, redirect: "error", signal: controller.signal });
+        if (response.redirected) throw new Error("Calendar redirect rejected.");
+        if (!response.ok) throw new HasnaHttpError(upper, path, response.status);
+        const result = await response.json();
+        validateResponseEnvelope(upper, path, result);
+        return result as T;
+      } catch (e) {
+        if (e instanceof CalendarResponseError) throw e;
+        const retryable = !(e instanceof HasnaHttpError) || [408,425,429,500,502,503,504].includes(e.status);
+        if (signal?.aborted || !retryable || attempt >= retries) { if (e instanceof HasnaHttpError) throw e; throw new Error("Calendar API request failed; no local fallback."); }
+      } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
     }
-    throw lastError ?? new Error("request failed");
   }
-
-  return {
-    baseUrl: base,
-    request,
-    get: (path, opts) => request("GET", path, undefined, opts),
-    post: (path, body, opts) => request("POST", path, body, opts),
-    put: (path, body, opts) => request("PUT", path, body, opts),
-    patch: (path, body, opts) => request("PATCH", path, body, opts),
-    del: (path, body, opts) => request("DELETE", path, body, opts),
-  };
+  return Object.freeze({ baseUrl: base, request,
+    get: <T>(p: string,o?: RequestOptions) => request<T>("GET",p,undefined,o),
+    post: <T>(p: string,b?: unknown,o?: RequestOptions) => request<T>("POST",p,b,o),
+    put: <T>(p: string,b?: unknown,o?: RequestOptions) => request<T>("PUT",p,b,o),
+    patch: <T>(p: string,b?: unknown,o?: RequestOptions) => request<T>("PATCH",p,b,o),
+    del: <T>(p: string,b?: unknown,o?: RequestOptions) => request<T>("DELETE",p,b,o) });
 }
-
-function resourcePath(resource: string): string {
-  const trimmed = resource.replace(/^\/+|\/+$/g, "");
-  if (!trimmed) throw new Error("resource must be a non-empty path segment");
-  return `/${trimmed}`;
-}
-
-function entityPath(resource: string, id: string): string {
-  if (id === undefined || id === null || `${id}`.length === 0) {
-    throw new Error("id must be a non-empty string");
-  }
-  return `${resourcePath(resource)}/${encodeURIComponent(String(id))}`;
-}
-
-function newIdempotencyKey(): string {
-  const g = globalThis as { crypto?: { randomUUID?: () => string } };
-  if (g.crypto?.randomUUID) return g.crypto.randomUUID();
-  return `idmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
-}
-
 export interface StorageClient {
-  readonly name: string;
-  readonly baseUrl: string;
-  readonly transport: HttpTransport;
-  list<T = unknown>(resource: string, opts?: RequestOptions): Promise<T>;
-  get<T = unknown>(resource: string, id: string, opts?: RequestOptions): Promise<T | null>;
-  create<T = unknown>(resource: string, body: unknown, opts?: RequestOptions): Promise<T>;
-  update<T = unknown>(resource: string, id: string, patch: unknown, opts?: RequestOptions & { method?: "PATCH" | "PUT" }): Promise<T>;
-  delete<T = unknown>(resource: string, id: string, opts?: RequestOptions): Promise<T>;
+ readonly name: string; readonly baseUrl: string; readonly transport: HttpTransport;
+ list<T = unknown>(r: string, o?: RequestOptions): Promise<T>;
+ get<T = unknown>(r: string,id: string,o?: RequestOptions): Promise<T | null>;
+ create<T = unknown>(r: string,b: unknown,o?: RequestOptions): Promise<T>;
+ update<T = unknown>(r: string,id: string,b: unknown,o?: RequestOptions & {method?: "PATCH" | "PUT"}): Promise<T>;
+ delete<T = unknown>(r: string,id: string,o?: RequestOptions): Promise<T>;
 }
-
+function entity(r: string,id: string) { return "/" + r + "/" + encodeURIComponent(String(id)); }
 export function createStorageClient(name: string, transport: HttpTransport): StorageClient {
-  return {
-    name,
-    baseUrl: transport.baseUrl,
-    transport,
-    list: (resource, opts) => transport.get(resourcePath(resource), opts),
-    async get(resource, id, opts) {
-      try {
-        return await transport.get(entityPath(resource, id), opts);
-      } catch (error) {
-        if (error instanceof HasnaHttpError && error.status === 404) return null;
-        throw error;
-      }
-    },
-    create: (resource, body, opts = {}) =>
-      transport.post(resourcePath(resource), body, {
-        ...opts,
-        idempotencyKey: opts.idempotencyKey ?? newIdempotencyKey(),
-      }),
-    update: (resource, id, patch, opts = {}) => {
-      const { method = "PATCH", ...rest } = opts;
-      const call = method === "PUT" ? transport.put : transport.patch;
-      return call(entityPath(resource, id), patch, rest);
-    },
-    async delete(resource, id, opts) {
-      try {
-        return await transport.del(entityPath(resource, id), undefined, opts);
-      } catch (error) {
-        if (error instanceof HasnaHttpError && error.status === 404) return undefined as never;
-        throw error;
-      }
-    },
-  };
+ return Object.freeze({name, baseUrl: transport.baseUrl, transport,
+ list: <T>(r: string,o?: RequestOptions) => transport.get<T>("/"+r,o),
+ get: async <T>(r: string,id: string,o?: RequestOptions): Promise<T | null> => { try { return await transport.get<T>(entity(r,id),o); } catch(e) { if(e instanceof HasnaHttpError && e.status === 404) return null; throw e; } },
+ create: <T>(r: string,b: unknown,o?: RequestOptions) => transport.post<T>("/"+r,b,{...o,idempotencyKey:o?.idempotencyKey ?? crypto.randomUUID()}),
+ update: <T>(r: string,id: string,b: unknown,o?: RequestOptions & {method?: "PATCH" | "PUT"}) => transport.request<T>(o?.method ?? "PATCH",entity(r,id),b,o),
+ delete: <T>(r: string,id: string,o?: RequestOptions) => transport.del<T>(entity(r,id),undefined,o) });
 }
-
-export type ResolveStorageClientResult =
-  | { transport: "local"; client: null; resolution: ClientTransportResolution }
-  | { transport: "http-api"; client: StorageClient; resolution: ClientTransportResolution };
-
-/**
- * The one call the app's storage resolver makes. Reads the client env for
- * `name`; returns a ready HTTP client when an API URL + key are set, else
- * `{ transport: 'local', client: null }`. Throws if the hosted API was
- * requested but is misconfigured (so callers never silently read the wrong
- * dataset).
- */
-export function resolveStorageClient(name: string, env: Env = process.env): ResolveStorageClientResult {
-  const resolution = resolveClientTransport(name, env);
-  if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the hosted API.`);
-  }
-  if (resolution.transport === "local" || !resolution.baseUrl) {
-    return { transport: "local", client: null, resolution };
-  }
-  const keys = clientEnvKeys(name);
-  const apiKey = firstEnv(env, keys.apiKeyKeys)?.value;
-  if (!apiKey) {
-    throw new Error(`Client for '${name}' resolved to the hosted API without an API key.`);
-  }
-  const transport = createHttpTransport({ name, baseUrl: resolution.baseUrl, apiKey });
-  return { transport: "http-api", client: createStorageClient(name, transport), resolution };
+export function resolveStorageClient(name: string, env: Env = process.env) {
+ const c = configuration(name,env);
+ return {transport: "http-api" as const,client:createStorageClient(name,createHttpTransport({name,baseUrl:c.baseUrl,apiKey:c.apiKey})),resolution:resolveClientTransport(name,env)};
 }

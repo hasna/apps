@@ -26,7 +26,7 @@ import { closeDatabase } from "../db/database.js";
  */
 
 const CREDENTIAL = "serve-credential-for-tests-only";
-const DUMMY_DSN = "postgres://calendar_app@127.0.0.1:1/calendar_test";
+const DUMMY_DSN = "postgres://calendar_app@127.0.0.1:1/calendar_test?sslmode=verify-full";
 const DUMMY_SIGNING_SECRET = "signing-secret-for-tests-only";
 
 const CLIENT_FLIP_AND_HOSTED_VARS = [
@@ -214,22 +214,22 @@ describe("hosted posture (the calendar-prod shape): /mcp is not served at all", 
   });
 });
 
-describe("sqlite backend posture: the local plane requires the serve credential", () => {
+describe("PostgreSQL-only server posture", () => {
   test("no DSN, no credential: the server refuses to start", () => {
     applyEnv({});
-    expect(() => serve(0, { host: "127.0.0.1" })).toThrow(AuthNotConfiguredError);
+    expect(() => serve(0, { host: "127.0.0.1" })).toThrow("HASNA_CALENDAR_DATABASE_URL is required");
   });
 
-  test("/health reports the sqlite backend label", async () => {
-    const base = startServer({ CALENDAR_SERVE_API_KEY: CREDENTIAL });
+  test("/health reports the PostgreSQL backend label", async () => {
+    const base = startServer({ HASNA_CALENDAR_DATABASE_URL: DUMMY_DSN });
     const health = (await (await fetch(`${base}/health`)).json()) as { backend: string; status: string };
     expect(health.status).toBe("ok");
-    expect(health.backend).toBe("sqlite");
+    expect(health.backend).toBe("postgres");
   });
 });
 
 describe("enforce posture: /mcp requires the serve credential", () => {
-  const enforceEnv = { CALENDAR_SERVE_API_KEY: CREDENTIAL };
+  const enforceEnv = { CALENDAR_SERVE_API_KEY: CREDENTIAL, HASNA_CALENDAR_DATABASE_URL: DUMMY_DSN, HASNA_CALENDAR_API_URL: "https://calendar.example.test", HASNA_CALENDAR_API_KEY: "fixture-key" };
 
   test("anonymous POST /mcp is 401 and leaks no tool names", async () => {
     const base = startServer(enforceEnv);
@@ -256,27 +256,25 @@ describe("enforce posture: /mcp requires the serve credential", () => {
 
   test("probes stay public and never echo the credential", async () => {
     const base = startServer(enforceEnv);
-    await expectProbesPublic(base, { ready: true });
+    await expectProbesPublic(base, { ready: false });
   });
 });
 
 describe("anonymous-loopback posture", () => {
-  test("a loopback peer is allowed", async () => {
-    const base = startServer({ CALENDAR_ALLOW_ANONYMOUS: "1" });
-    const { status, body } = await mcpPost(base);
-    expect(status).toBe(200);
-    expect(body).toContain("create_org");
+  test("anonymous opt-in does not create a SQLite server", () => {
+    applyEnv({ CALENDAR_ALLOW_ANONYMOUS: "1" });
+    expect(() => serve(0, { host: "127.0.0.1" })).toThrow("HASNA_CALENDAR_DATABASE_URL is required");
   });
 
   test("serve() REFUSES to bind 0.0.0.0 with only --allow-anonymous", () => {
     applyEnv({ CALENDAR_ALLOW_ANONYMOUS: "1" });
-    expect(() => serve(0, { host: "0.0.0.0" })).toThrow(AuthNotConfiguredError);
+    expect(() => serve(0, { host: "0.0.0.0" })).toThrow("HASNA_CALENDAR_DATABASE_URL is required");
   });
 
   test("serve() REFUSES to start with nothing configured at all", () => {
     applyEnv({});
-    expect(() => serve(0, { host: "127.0.0.1" })).toThrow(AuthNotConfiguredError);
-    expect(() => serve(0, { host: "0.0.0.0" })).toThrow(AuthNotConfiguredError);
+    expect(() => serve(0, { host: "127.0.0.1" })).toThrow("HASNA_CALENDAR_DATABASE_URL is required");
+    expect(() => serve(0, { host: "0.0.0.0" })).toThrow("HASNA_CALENDAR_DATABASE_URL is required");
   });
 });
 

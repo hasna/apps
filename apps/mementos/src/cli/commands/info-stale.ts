@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { resolve } from "node:path";
 import { getStaleMemoriesPage } from "../../db/analytics.js";
 import { getProject } from "../../db/projects.js";
+import { redactCredentialKey, redactSecrets } from "../../lib/redact.js";
 import {
   resolveAgentFilter,
   DEFAULT_COMPACT_LIMIT,
@@ -83,25 +84,41 @@ export function registerStaleCommand(program: Command): void {
         );
         const displayRows = hasMore ? collected.slice(0, limit) : collected;
 
+        // Read-path redaction (todos e12c7659): `stale` is a read verb whose
+        // rows carry the raw stored key/value, so a credential-shaped key
+        // stored by any write path reaches stdout verbatim across both
+        // formats. The stale query returns a StaleMemory subset (no
+        // summary/tags/when_to_use/metadata), so the two free-text fields it
+        // does carry are projected through the same read-path redactors used
+        // everywhere else — conservative key/tag shape for the key, broad
+        // inline-text shape for the value. Coordination metadata (id,
+        // importance, scope, category, accessed_at, access_count, created_at)
+        // is preserved.
+        const sanitized = displayRows.map((row) => ({
+          ...row,
+          key: redactCredentialKey(row.key),
+          value: redactSecrets(row.value),
+        }));
+
         if (fmt === "json") {
           outputJson({
             stale_count: staleTotal,
-            returned: displayRows.length,
+            returned: sanitized.length,
             threshold_days: days,
             has_more: hasMore,
-            next_cursor: hasMore ? offset + displayRows.length : null,
-            memories: displayRows,
+            next_cursor: hasMore ? offset + sanitized.length : null,
+            memories: sanitized,
           });
           return;
         }
 
-        if (displayRows.length === 0) {
+        if (sanitized.length === 0) {
           console.log(chalk.yellow(`No stale memories found (threshold: ${days} days).`));
           return;
         }
 
-        console.log(chalk.bold(`\n  ${displayRows.length}${hasMore ? "+" : ""} stale memor${displayRows.length === 1 ? "y" : "ies"} (not accessed in ${days}+ days):`));
-        for (const row of displayRows) {
+        console.log(chalk.bold(`\n  ${sanitized.length}${hasMore ? "+" : ""} stale memor${sanitized.length === 1 ? "y" : "ies"} (not accessed in ${days}+ days):`));
+        for (const row of sanitized) {
           const accessed = row.accessed_at
             ? chalk.dim(row.accessed_at.split("T")[0])
             : chalk.red("never");
@@ -109,7 +126,7 @@ export function registerStaleCommand(program: Command): void {
           console.log(`  ${chalk.red(String(row.importance))} ${colorScope(row.scope as never)}/${colorCategory(row.category as never)} ${chalk.bold(row.key)} = ${value} ${chalk.dim(`(${accessed}, ${row.access_count} accesses)`)}`);
         }
         printPageHint({
-          shown: displayRows.length,
+          shown: sanitized.length,
           limit,
           offset,
           hasMore,

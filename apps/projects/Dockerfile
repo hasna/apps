@@ -6,7 +6,7 @@
 # Bun pinned to the monorepo's own version (package.json "packageManager" /
 # CI bun-version 1.3.14): the committed member bun.lock is written by bun
 # 1.3.14, and a frozen install under an older bun rejects it as "changed".
-FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS builder
+FROM --platform=linux/amd64 oven/bun:1.3.14-alpine AS builder
 # Assert the base image really is the pinned bun; a digest or tag drift then
 # fails the build instead of producing an image built by a different bun.
 RUN apk upgrade --no-cache \
@@ -29,7 +29,7 @@ RUN bun build src/serve/index.ts --outdir dist/serve --target bun --external pg 
  && bun build src/index.ts src/project-store.ts --outdir dist --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas
 
 # ---- runtime: production deps + built dist + migrations ----
-FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS runtime
+FROM --platform=linux/amd64 oven/bun:1.3.14-alpine AS runtime
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0

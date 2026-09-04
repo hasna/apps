@@ -13,7 +13,7 @@ import { join } from "path";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { createServeApp } from "./app.js";
 import { normalizeConfig, type AttachmentsConfig } from "../core/config.js";
-import type { PoolQueryClient } from "../generated/storage-kit/query.js";
+import type { PoolQueryClient } from "../server-storage/query.js";
 import type { PgAttachmentsStore } from "../db/pg-store.js";
 import { InMemoryAttachmentsStore, stubQueryClient } from "./serve.test-harness.test";
 import type { EmailSender } from "../core/email-gate.js";

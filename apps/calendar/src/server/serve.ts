@@ -1,9 +1,8 @@
 import { handleMcpFetch } from "../mcp/http.js";
-import { closeDatabase } from "../db/database.js";
 import { getPackageVersion } from "./version.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { handleV1Request } from "./v1.js";
-import { hasHostedDatabase, pingCloud, resolveBackend } from "./cloud.js";
+import { hasHostedDatabase, pingCloud, resolveBackend, closeCloud } from "./cloud.js";
 import {
   authorizeLocalPlane,
   describeAuthPosture,
@@ -13,6 +12,7 @@ import {
   type AuthPosture,
 } from "./auth-posture.js";
 import { resolveClientTransport } from "../store/http-storage.js";
+import { getStore } from "../store/index.js";
 
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -88,6 +88,10 @@ export function serve(port: number, options: ServeOptions = {}) {
       : "local",
   });
 
+  // A mounted MCP plane is a domain client and must validate its own HTTPS
+  // authority before binding. Disabled MCP does not require client credentials.
+  if (posture.mode !== "local-plane-disabled") getStore();
+
   const server = Bun.serve({
     port,
     hostname,
@@ -106,16 +110,13 @@ export function serve(port: number, options: ServeOptions = {}) {
         return json({ name: "calendar", version: getPackageVersion(), backend });
       }
       if (path === "/ready" && req.method === "GET") {
-        if (!hosted) {
-          return json({ status: "ready", backend, checks: { database: "sqlite" } });
-        }
         try {
           const ok = await pingCloud();
           return ok
             ? json({ status: "ready", backend, checks: { database: "ok" } })
             : json({ status: "not_ready", backend, checks: { database: "unreachable" } }, 503);
         } catch (e) {
-          return json({ status: "not_ready", backend, checks: { database: (e as Error).message } }, 503);
+          return json({ status: "not_ready", backend, checks: { database: "unreachable" } }, 503);
         }
       }
       if (path === "/openapi.json" && req.method === "GET") {
@@ -158,7 +159,7 @@ export function serve(port: number, options: ServeOptions = {}) {
 
   // Graceful shutdown
   process.on("SIGINT", () => {
-    closeDatabase();
+    void closeCloud();
     server.stop();
     process.exit(0);
   });
