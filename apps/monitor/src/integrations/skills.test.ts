@@ -494,8 +494,8 @@ describe("skills adapter — credential scrub (non-vacuous)", () => {
   });
 
   it("redacts a credential-shaped value not present in the environment", async () => {
-    // Built at runtime so no scanner-matching literal (anthropic key prefix)
-    // exists in the source; the adapter's shape net still sees the value.
+    // Built at runtime so no scanner-matching literal prefix exists in the
+    // source; the adapter's shape net still sees the value.
     const tokenShape = `sk-${"ant"}-abcdefghijklmnopqrstuvwxyz012345`;
     const runner: typeof runSkill = async () => ({
       exitCode: 0,
