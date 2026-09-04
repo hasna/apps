@@ -4,7 +4,7 @@
  * data directory and no SQLite file appears.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveFeedback } from "./feedback.js";
@@ -50,6 +50,18 @@ describe("saveFeedback in api mode", () => {
     saveFeedback({ message: "second" });
     saveFeedback({ message: "third" });
     expect(readFileSync(join(dataDir, "feedback.jsonl"), "utf-8").trim().split("\n")).toHaveLength(2);
+    expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual([]);
+  });
+});
+
+describe("saveFeedback api mode via the config file", () => {
+  test("an apiUrl written by `skills setup --api-url` selects api mode with no env var set", () => {
+    delete process.env.SKILLS_API_URL;
+    delete process.env.HASNA_SKILLS_API_URL;
+    writeFileSync(join(dataDir, "config.json"), JSON.stringify({ apiUrl: "https://skills.example.test" }));
+    const result = saveFeedback({ message: "from a configured station" });
+    expect(result.path).toBe(join(dataDir, "feedback.jsonl"));
+    expect(existsSync(join(dataDir, "feedback.jsonl"))).toBe(true);
     expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual([]);
   });
 });

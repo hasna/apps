@@ -4,11 +4,12 @@
  * instance named, not whatever the metadata row currently says.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_DIGEST_HEADER, PULL_MARKER_FILE, pullSkills, type SkillPullClient } from "./pull.js";
 import { packSkillBundle } from "./skill-bundle.js";
+import { revisionIdOf } from "./revision.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -30,9 +31,18 @@ describe("pullSkills name@version", () => {
     const v1 = makeSource("1.0.0");
     const v2 = makeSource("2.0.0");
     const requested: Array<string | undefined> = [];
+    // The genuine content-addressed revision of the CURRENT row (v2), so a bare pull proves it.
+    const currentRevision = revisionIdOf({ slug: "versioned-skill", displayName: "Versioned", description: "A versioned skill", category: "Development Tools", tags: [], source: "custom", kind: "executable", version: "2.0.0", skillMd: MD, bundleSha256: v2.packed.sha256, bundleByteSize: v2.packed.bytes.byteLength });
     const client: SkillPullClient = {
       async listSkills() { return [{ slug: "versioned-skill", name: "versioned-skill" }]; },
-      async getSkill() { return { kind: "executable", version: "2.0.0" }; },
+      // The metadata row is the CURRENT revision, with everything a revision proof needs -
+      // exactly the shape that made an older-version pull fail closed before the fix.
+      async getSkill() { return { kind: "executable", version: "2.0.0", revisionId: currentRevision, publishedSource: "custom", displayName: "Versioned", description: "A versioned skill", category: "Development Tools", tags: [], skillMd: MD }; },
+      async getSkillVersion(_slug: string, version: string) {
+        if (version === "1.0.0") return { bundleSha256: v1.packed.sha256 };
+        if (version === "2.0.0") return { bundleSha256: v2.packed.sha256 };
+        return null;
+      },
       async getSkillMd() { return MD; },
       async getBundle(_slug: string, version?: string) {
         requested.push(version);
@@ -64,6 +74,37 @@ describe("pullSkills name@version", () => {
       expect(missing.results[0].error).toContain("skills versions versioned-skill");
       // The earlier install is untouched by the failed pull.
       expect(readFileSync(join(root, "versioned-skill", "scripts", "run.ts"), "utf-8")).toBe("console.log('run 2.0.0')\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(v1.dir, { recursive: true, force: true });
+      rmSync(v2.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pullSkills name@version proofs", () => {
+  test("refuses bytes that do not match the registry's recorded digest for that version", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-pull-version-root-"));
+    const v1 = makeSource("1.0.0");
+    const v2 = makeSource("2.0.0");
+    const client: SkillPullClient = {
+      async listSkills() { return []; },
+      async getSkill() { return { kind: "executable", version: "2.0.0" }; },
+      async getSkillMd() { return MD; },
+      // The bytes are v2's but the registry says 1.0.0 is v1: a swapped body.
+      async getBundle() {
+        return new Response(v2.packed.bytes.buffer as ArrayBuffer, { headers: { [BUNDLE_DIGEST_HEADER]: v2.packed.sha256, "X-Skill-Version": "1.0.0" } });
+      },
+      async getSkillVersion() { return { bundleSha256: v1.packed.sha256 }; },
+    };
+    try {
+      const { results } = await pullSkills({ names: ["versioned-skill@1.0.0"], rootDir: root, client });
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toContain("Digest proof failed");
+      expect(readdirSync(root)).toEqual([]);
+      const bad = await pullSkills({ names: ["versioned-skill@../etc"], rootDir: root, client });
+      expect(bad.results[0].success).toBe(false);
+      expect(bad.results[0].error).toContain("not a valid skill version");
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(v1.dir, { recursive: true, force: true });

@@ -527,12 +527,13 @@ function skillKey(orgId: string, slug: string): string {
  * length-delimited, so the first two fields split unambiguously and the rest of
  * the string is the slug.)
  */
-function versionKey(orgId: string, slug: string, version: string): string {
-  return `${orgId}::${slug}@${version}`;
-}
-
 function pinKey(orgId: string, principal: string, slug: string): string {
   return `${orgId.length}:${orgId}:${principal.length}:${principal}:${slug}`;
+}
+
+/** Composite map key for a version row, length-prefixed for the same reason pinKey is. */
+function versionKey(orgId: string, slug: string, version: string): string {
+  return `${orgId.length}:${orgId}:${slug.length}:${slug}:${version}`;
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {

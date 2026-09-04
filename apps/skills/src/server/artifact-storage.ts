@@ -240,6 +240,12 @@ export class ArtifactStorage {
     return { storageKind: "s3", storageKey: key };
   }
 
+  /** Where putVersionObjects WOULD place a version, without writing: recorded on the row before the objects exist. */
+  versionPlacement(orgId: string, slug: string, version: string): { storageKind: BlobStorageKind; storageKey?: string } {
+    if (!this.bucket || !this.s3) return { storageKind: "db" };
+    return { storageKind: "s3", storageKey: this.versionKeyFor(orgId, slug, version, "bundle.tar.gz") };
+  }
+
   versionKeyFor(orgId: string, slug: string, version: string, file: string): string {
     return `${this.prefix}/skills/${encodeURIComponent(orgId)}/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/${file}`;
   }

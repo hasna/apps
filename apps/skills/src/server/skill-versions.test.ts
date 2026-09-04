@@ -10,12 +10,13 @@
  * retrievable, digest-verified, after the slug moved on; and other orgs see none of it.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { pushSkill, PushSkillError } from "../cli/commands/publish.js";
 import { RemoteSkillsClient } from "../lib/remote-client.js";
+import { PULL_MARKER_FILE, pullSkills } from "../lib/pull.js";
 import { sha256Hex } from "../lib/skill-bundle.js";
 import { createSkillsFetchHandler } from "./app.js";
 import { ArtifactStorage, type S3ClientLike } from "./artifact-storage.js";
@@ -161,6 +162,43 @@ for (const backend of backends) {
         expect(await client.getSkillVersion("release-notes", "9.9.9")).toBeNull();
         expect(await client.getBundle("release-notes", "9.9.9")).toBeNull();
 
+
+        // 5b. The CLI pull path, over HTTP, into a fresh machine corpus: an OLDER version
+        // installs with its own digest (no revision proof against the current row), and a
+        // bare pull then installs the current one.
+        const corpus = mkdtempSync(join(tmpdir(), "skills-versions-pull-corpus-"));
+        try {
+          const old = await pullSkills({ names: ["release-notes@2.1.0"], rootDir: corpus, client });
+          expect(old.results[0]).toMatchObject({ success: true, version: "2.1.0", contentHash: first.sha256 });
+          expect(readFileSync(join(corpus, "release-notes", "references", "style-guide.md"), "utf-8")).toBe("Use the imperative mood.\n");
+          const marker = JSON.parse(readFileSync(join(corpus, "release-notes", PULL_MARKER_FILE), "utf-8")) as { version: string; contentHash: string; revisionId?: string };
+          expect(marker).toMatchObject({ version: "2.1.0", contentHash: first.sha256 });
+          expect(marker.revisionId).toBeUndefined();
+          const latest = await pullSkills({ names: ["release-notes"], rootDir: corpus, client });
+          expect(latest.results[0]).toMatchObject({ success: true, version: "2.1.1", contentHash: forced.sha256 });
+          expect(latest.results[0].revisionId).toMatch(/^[0-9a-f]{64}$/);
+          const absent = await pullSkills({ names: ["release-notes@3.0.0"], rootDir: corpus, client });
+          expect(absent.results[0].success).toBe(false);
+          expect(absent.results[0].error).toContain("skills versions release-notes");
+        } finally {
+          rmSync(corpus, { recursive: true, force: true });
+        }
+
+        // 5c. Version strings are a closed alphabet on the way in and on the way out.
+        for (const bad of ["..", "a/b", "x".repeat(200), ".hidden"]) {
+          const attempt = await client.publishSkill(
+            { slug: "release-notes", displayName: "Release Notes", description: "d", category: "Content Generation", tags: [], kind: "instruction", version: bad, source: "custom", bundleSha256: first.sha256, contentHash: first.sha256 },
+            v1Bytes,
+            (await client.getSkill("release-notes"))?.revisionId as string,
+          );
+          expect([400, 409]).toContain(attempt.status);
+          expect(attempt.status).toBe(400);
+          expect(((await attempt.json()) as { code?: string }).code).toBe("INVALID_VERSION");
+        }
+        const traversal = await fetch(`${baseUrl}/api/v1/skills/release-notes/versions/..%2F..%2Fx/bundle`, { headers: { authorization: `Bearer ${TOKEN}` } });
+        expect([400, 404]).toContain(traversal.status);
+        expect(s3.keys().some((key) => key.includes(".."))).toBe(false);
+
         // 6. Another org sees nothing.
         const other = new RemoteSkillsClient(OTHER_TOKEN, baseUrl);
         expect(await other.listSkillVersions("release-notes")).toEqual([]);
@@ -172,6 +210,10 @@ for (const backend of backends) {
         expect(s3.keys()).toContain(`${PREFIX}/bundles/${ORG.orgId}/${first.sha256}.tar.gz`);
         expect(s3.keys()).toContain(`${PREFIX}/bundles/${ORG.orgId}/${forced.sha256}.tar.gz`);
         expect(await client.listSkillVersions("release-notes")).toHaveLength(2);
+        // 7b. ...but the CONTENT of a deleted slug is withheld, historic versions included.
+        const withheld = await fetch(`${baseUrl}/api/v1/skills/release-notes/versions/2.1.0/bundle`, { headers: { authorization: `Bearer ${TOKEN}` } });
+        expect(withheld.status).toBe(410);
+        expect(((await withheld.json()) as { code?: string }).code).toBe("SKILL_DELETED");
       } finally {
         server.stop(true);
         rmSync(root, { recursive: true, force: true });
