@@ -305,12 +305,10 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "events", reason: "Library-shaped (embedded event envelopes/channels); no server surface — manifest declares the api waiver, ships no serve bin." },
   { member: "guardrails", reason: "Library-shaped; no server surface." },
   { member: "models", reason: "Library-shaped; no server surface." },
-  { member: "monitor", reason: "CLI+MCP member (system monitoring); no server surface. Imported by #97 after the original census; aggregate task (todos 35e136f2)." },
   { member: "orgs", reason: "Registry-shaped; no server surface." },
   { member: "paths", reason: "Library-shaped (pure path helper); no server surface." },
   { member: "releases", reason: "CLI-only member; no server surface." },
   { member: "servers", reason: "CLI-only member (server lifecycle tooling); no server surface." },
-  { member: "skills", reason: "CLI-only member (skill corpus tooling); no server surface." },
   { member: "slides", reason: "Library-shaped; no server surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "statusline", reason: "CLI-only member; no server surface." },
   { member: "tables", reason: "Library-shaped; no server surface." },
@@ -424,7 +422,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "monitor",
-    cause: "bins_match_package: package.json ships bins monitor-server and monitor-web that the manifest does not declare (manifest declares monitor, monitor-mcp only). Imported by #97 after the original census; validated at kitVersion 0.8.5 (no pinned dep).",
+    cause: "bins_match_package: package.json ships bins monitor-server and monitor-serve that the manifest does not declare (manifest declares monitor, monitor-mcp, monitor-daemon). monitor-serve is the canonical rename shipped by #1602, but it cannot be declared yet: declaring a -serve bin flips a cli-with-store manifest to service-capable and invalidates the sqlite-only storage waiver (see the manifest contractAlignment conformanceBaseline, which pins this exact failure). monitor-web was dropped by the dashboard-removal wave (#1678) after this entry was written. Imported by #97 after the original census; validated at kitVersion 0.8.5 (no pinned dep).",
     task: "todos d2c6d20f-7c80-4b84-ae35-a92ce866bc14 (contracts task — monitor)",
   },
   {

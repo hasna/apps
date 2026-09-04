@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 // lazily only by `db-migrate`, after that command has refused to run in api
 // mode — so `new Database(...)` is unreachable whenever the API URL is set.
 import { getStore } from "../store/index.js";
+import { resolveClientTransport } from "../store/http-storage.js";
 import type { CalendarVisibility, EventStatus, EventBusyType, AttendeeStatus, OrgRole } from "../types/index.js";
 
 const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
@@ -442,6 +443,40 @@ listCommand("agent-orgs <agentId>")
         ? `${m.id}  org=${m.org_id}  role=${m.role}  created=${m.created_at}`
         : `${m.org_id}  ${m.role}`,
     });
+  });
+
+// ── Status ────────────────────────────────────────────────────────────────────
+
+calendarCommand("status")
+  .description("Show CLI version, store transport, and record counts")
+  .action(async (opts) => {
+    const report: Record<string, unknown> = {
+      service: "calendar",
+      version: packageJson.version,
+    };
+    let text = `calendar v${packageJson.version}`;
+    // Classify BEFORE any request: only a box with no resolvable API URL + key
+    // (the same check resolveStorageClient uses) reports "unconfigured". A
+    // configured box whose API call fails (401, 5xx, network down) is a
+    // transport error, never a config status — relabeling it "unconfigured"
+    // would hide the very drift this command exists to expose (hasna/apps#1602).
+    if (resolveClientTransport("calendar", process.env).transport === "unconfigured") {
+      report.transport = "unconfigured";
+      text = `calendar v${packageJson.version} — not configured (set HASNA_CALENDAR_API_URL plus a calendar API key)`;
+    } else {
+      try {
+        const store = getStore();
+        const [orgs, calendars] = await Promise.all([store.listOrgs(), store.listCalendars()]);
+        report.transport = store.transport;
+        report.counts = { orgs: orgs.length, calendars: calendars.length };
+        text = `calendar v${packageJson.version} — transport: ${store.transport}, orgs: ${orgs.length}, calendars: ${calendars.length}`;
+      } catch (err) {
+        report.transport = "error";
+        report.error = err instanceof Error ? err.message : String(err);
+        text = `calendar v${packageJson.version} — transport error (${report.error})`;
+      }
+    }
+    outputJsonOrText(report, text, opts);
   });
 
 // ── Local database (legacy, LOCAL-ONLY) ─────────────────────────────────────

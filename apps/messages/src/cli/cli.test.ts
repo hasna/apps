@@ -123,6 +123,18 @@ describe("messages CLI", () => {
     expect(res.status).not.toBe(0);
   });
 
+  test("every data command accepts --json (machine-readable surface)", async () => {
+    // Output is already JSON; --json must be accepted, not rejected by
+    // commander's unknown-option handling (hasna/apps#1602).
+    const register = runCli(["register", "--name", "jsoncli", "--json"]);
+    expect(register.status).toBe(0);
+    expect(JSON.parse(register.stdout)).toHaveProperty("agent");
+    const agents = runCli(["agents", "--json"]);
+    expect(agents.status).toBe(0);
+    const parsed = JSON.parse(agents.stdout) as Array<{ name: string }>;
+    expect(parsed.some((a) => a.name === "jsoncli")).toBe(true);
+  });
+
   test("delivery state machine over the CLI: stored -> delivered via receive -> read", async () => {
     // Distinct agents isolate this test from the shared temp DB.
     const sender = "caius";

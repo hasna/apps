@@ -165,8 +165,9 @@ export interface LoopsApiServerOptions {
   circuitBreakerThreshold?: CircuitBreakerThreshold;
   /**
    * API-key verifier (from `@hasna/contracts/auth`). When present, every
-   * request outside the open foundation probes (`/health`, `/ready`,
-   * `/version`, `/openapi.json`) must present a valid `loops:*` scoped key. This is
+   * request outside the open foundation probes (`/health`, `/healthz`,
+   * `/v1/health`, `/v1/healthz`, `/ready`, `/version`, `/v1/version`,
+   * `/openapi.json`) must present a valid `loops:*` scoped key. This is
    * the internet-facing auth path (no bearer token, no loopback bypass).
    */
   authenticator?: ApiAuthenticator;
@@ -263,7 +264,7 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
     async fetch(request) {
       const url = new URL(request.url);
       // ── Open foundation probes ({ status, version, storage, connection }) ──
-      if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
+      if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz" || url.pathname === "/v1/health" || url.pathname === "/v1/healthz")) {
         return Response.json(foundationEnvelope("ok"));
       }
       if (request.method === "GET" && (url.pathname === "/version" || url.pathname === "/v1/version")) {

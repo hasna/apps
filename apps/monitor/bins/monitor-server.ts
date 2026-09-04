@@ -14,9 +14,10 @@ function optionValue(longName: string, shortName: string): string | undefined {
 }
 
 if (args.includes("-h") || args.includes("--help")) {
-  console.log("Usage: monitor-server [options]");
+  console.log("Usage: monitor-serve [options]");
   console.log();
   console.log("Start the @hasna/monitor REST API server.");
+  console.log("(monitor-server is a deprecated alias of this same entrypoint; new scripts should call monitor-serve.)");
   console.log();
   console.log("Options:");
   console.log("  -p, --port <port>  API port (default: 3847 or PORT)");

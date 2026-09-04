@@ -324,10 +324,14 @@ different product: the schema, the organization scoping, and the run lifecycle a
 identical either way.
 
 ```bash
-skills-server                                            # SQLite at ~/.hasna/skills/server.db
-HASNA_SKILLS_DATABASE_URL=<path>/server.db skills-server
-HASNA_SKILLS_DATABASE_URL=postgres://user:CHANGEME@host/skills skills-server
+skills-serve                                              # SQLite at ~/.hasna/skills/server.db
+HASNA_SKILLS_DATABASE_URL=<path>/server.db skills-serve
+HASNA_SKILLS_DATABASE_URL=postgres://user:CHANGEME@host/skills skills-serve
 ```
+
+> **Bin naming:** the canonical server bin is `skills-serve`; `skills-server` remains
+> installed as a deprecated alias for one release (same entrypoint). `skills-worker`
+> and `skills-migrate` are additional documented surfaces.
 
 | `HASNA_SKILLS_DATABASE_URL` | Backend | Survives restart |
 | --- | --- | --- |
@@ -387,7 +391,7 @@ Three things the server will not do:
 against the same file — nothing more. A container without a persistent volume gets a
 database in its own ephemeral layer, and two replicas each get their *own* database
 rather than sharing one. Multi-replica and container deployments want Postgres; both
-`skills-server` and `skills-worker` print the database they opened on startup, so a
+`skills-serve` and `skills-worker` print the database they opened on startup, so a
 split-brain SQLite setup shows up as two different paths in the logs.
 
 <a id="storage-boundary"></a>

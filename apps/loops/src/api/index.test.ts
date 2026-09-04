@@ -171,6 +171,16 @@ describe("loops-api foundation", () => {
         connection: "file",
         service: "loops",
       });
+      // /v1/health is the same open foundation probe: no auth, no storage.
+      const v1 = await fetchHandler(new Request("http://loops.test/v1/health"));
+      expect(v1.status).toBe(200);
+      expect(await v1.json()).toEqual({
+        status: "ok",
+        version: packageVersion(),
+        storage: "postgresql",
+        connection: "file",
+        service: "loops",
+      });
     } finally {
       mutableBun.serve = originalServe;
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
@@ -676,6 +686,8 @@ describe("loops-api foundation", () => {
       for (const path of [
         "/health",
         "/healthz",
+        "/v1/health",
+        "/v1/healthz",
         "/ready",
         "/readyz",
         "/version",
