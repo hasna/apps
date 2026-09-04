@@ -140,6 +140,9 @@ describe("native app companion contract", () => {
           env: {
             HOME: join(directory, "home"),
             PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+            // Local mode is explicit: the companion registers into the on-box
+            // store under test, and the client never silently defaults to it.
+            HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
             HASNA_RECORDINGS_DB_PATH: join(directory, "recordings.db"),
             RECORDINGS_AUDIO_DIR: join(directory, "audio"),
           },

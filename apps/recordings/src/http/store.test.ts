@@ -21,10 +21,14 @@ function mockFetch(handler: (url: string, init: RequestInit) => { status: number
 }
 
 describe("client store resolution (two-backend env contract)", () => {
-  test("no env -> local", () => {
+  test("no env -> fails closed, naming the required variables and the local opt-in", () => {
     const r = resolveTransport(APP, {});
     expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(false);
+    expect(r.misconfigured).toBe(true);
+    expect(r.baseUrl).toBeNull();
+    expect(r.warning).toContain("HASNA_RECORDINGS_API_URL");
+    expect(r.warning).toContain("HASNA_RECORDINGS_API_KEY");
+    expect(r.warning).toContain("HASNA_RECORDINGS_CLIENT_STORE=sqlite");
   });
 
   test("url + key -> http with /v1 base", () => {
@@ -94,9 +98,16 @@ describe("client store resolution (two-backend env contract)", () => {
     expect(() => getStore({ HASNA_RECORDINGS_API_URL: "https://api.example.com" })).toThrow();
   });
 
-  test("getStore picks sqlite when env unset", () => {
-    const b = getStore({});
+  test("getStore fails closed when env is unset (no silent local fallback)", () => {
+    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_API_URL/);
+    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_API_KEY/);
+    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_CLIENT_STORE=sqlite/);
+  });
+
+  test("getStore picks sqlite only via the explicit opt-in override", () => {
+    const b = getStore({ HASNA_RECORDINGS_CLIENT_STORE: "sqlite" });
     expect(b.mode).toBe("sqlite");
+    expect(b.baseUrl).toBeNull();
   });
 
   test("getStore picks http when env set", () => {
@@ -547,7 +558,7 @@ describe("ApiStore recording counts", () => {
 
 describe("legacy Store count compatibility", () => {
   test("accepts and counts a structural Store without countRecordings", async () => {
-    const { countRecordings: _countRecordings, ...legacyBase } = getStore({});
+    const { countRecordings: _countRecordings, ...legacyBase } = getStore({ HASNA_RECORDINGS_CLIENT_STORE: "sqlite" });
     const rows = Array.from({ length: 23 }, (_, index) => ({ id: `legacy-${index}` }));
     const offsets: number[] = [];
     const legacyStore = {

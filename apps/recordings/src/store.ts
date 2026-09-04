@@ -7,10 +7,12 @@
 //
 // The transport is resolved from the environment by `resolveStoreClient`
 // (src/http/client.ts): the presence of BOTH HASNA_RECORDINGS_API_URL and
-// HASNA_RECORDINGS_API_KEY routes to the ApiStore; any other environment uses
-// the LocalStore. WHO operates the server, and whether its internal storage is
-// SQLite or PostgreSQL, is invisible here — the client has exactly two stores,
-// `sqlite` and `http`.
+// HASNA_RECORDINGS_API_KEY routes to the ApiStore. An environment that sets
+// neither fails CLOSED with an error naming the required variables — the
+// LocalStore is never a silent default and is read only through the explicit
+// `HASNA_RECORDINGS_CLIENT_STORE=sqlite` override. WHO operates the server,
+// and whether its internal storage is SQLite or PostgreSQL, is invisible here
+// — the client has exactly two stores, `sqlite` and `http`.
 //
 // SAFETY: the ApiStore authenticates with a bearer key ONLY. A raw database DSN
 // is NEVER read or accepted on the client. The key value is never logged.
