@@ -457,7 +457,7 @@ jobs:
   # Provision-or-verify the CLIENT API key for this app (hasna/apps#1595).
   #
   # A deploy that leaves a running, routed service nobody can call is not a
-  # finished deploy -- that is exactly what happened to messages-prod, and
+  # finished deploy -- that is exactly what happened to one prod service (the messages outage, #1589), and
   # projects/knowledge shipped keys the origin had already revoked while
   # Secrets Manager still held the dead value. This job reads
   # hasna/oss/skills/api-key, proves it still authenticates against the freshly

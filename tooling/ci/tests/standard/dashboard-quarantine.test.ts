@@ -43,8 +43,8 @@ import type { QuarantineSpec, AdmitInfo } from "./quarantine-pins.test.ts";
 /** Finding-scope surfaces: member path (relative to apps/) -> dependency.
  * Sibling dashboard lanes extend this list when their own findings land. */
 export const FINDING_SCOPES: Array<{ member: string; dependency: string }> = [
-  { member: "instructions/dashboard", dependency: "typescript-eslint" },
-  { member: "instructions/dashboard", dependency: "@types/react-dom" },
+  // members added when a dashboard surface ships with finding-scope findings;
+  // all bundled dashboards were removed on 2026-09-04 (#1669 wave), so none remain.
 ];
 
 const EXACT_PIN = /^\d+\.\d+\.\d+$/;
@@ -100,13 +100,14 @@ describe("standard-adherence: nested dashboard quarantine-window admissions", ()
       { spec: "19.2.5", admitted: { version: "19.2.5", publishedAt: "2026-08-23T21:05:23.671Z" }, fires: true },
     ];
     for (const s of specimens) {
-      const specs: QuarantineSpec[] = [{ member: "instructions/dashboard", dependency: "typescript-eslint", spec: s.spec }];
+      const specs: QuarantineSpec[] = [{ member: "example/dashboard", dependency: "typescript-eslint", spec: s.spec }];
       const { violations } = findQuarantineAdmissions(specs, new Map([["typescript-eslint", s.admitted]]), QUARANTINE_MS, FIXTURE_NOW);
       expect(violations.length > 0, `spec ${s.spec} should ${s.fires ? "fire" : "stay silent"}`).toBe(s.fires);
     }
   });
 
   test("finding-scope deps are declared as exact pre-window pins (HARD, offline)", () => {
+    if (FINDING_SCOPES.length === 0) { expect(FINDING_SCOPES.length).toBe(0); return; }
     const pkg = JSON.parse(fs.readFileSync(path.join(APPS_DIR, "instructions", "dashboard", "package.json"), "utf8")) as Record<string, unknown>;
     for (const { dependency } of FINDING_SCOPES) {
       const spec = declaredSpec(pkg, dependency);
@@ -116,6 +117,7 @@ describe("standard-adherence: nested dashboard quarantine-window admissions", ()
   });
 
   test("dashboard bun.lock exists and freezes the exact pins (HARD, offline)", () => {
+    if (FINDING_SCOPES.length === 0) { expect(FINDING_SCOPES.length).toBe(0); return; }
     const lockPath = path.join(APPS_DIR, "instructions", "dashboard", "bun.lock");
     expect(fs.existsSync(lockPath), `apps/instructions/dashboard/bun.lock must exist (it freezes resolution for a standalone branch of the dashboard; without it a fresh install resolves the manifest range)`).toBe(true);
     const lock = fs.readFileSync(lockPath, "utf8");
@@ -129,6 +131,7 @@ describe("standard-adherence: nested dashboard quarantine-window admissions", ()
   }, 30_000);
 
   test("no finding-scope nested dashboard spec admits a quarantine-window version; other admissions are censused (HARD, registry-backed)", async () => {
+    if (FINDING_SCOPES.length === 0) { expect(FINDING_SCOPES.length).toBe(0); return; }
     const scoped = scopedSpecs();
     if (scoped.some((s) => !s.spec)) return; // offline HARD test already fails on the missing declaration
     const deps = [...new Set(FINDING_SCOPES.map((s) => s.dependency))].sort();
