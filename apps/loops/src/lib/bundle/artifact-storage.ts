@@ -79,6 +79,18 @@ export class BundleArtifactStorage {
   /** True when a real bucket backs this storage; false for the local fallback. */
   readonly usesS3: boolean;
 
+  /**
+   * What a revision written through this storage should record as its kind.
+   *
+   * Derived from the placement that was actually chosen, never hard-coded: an
+   * install with no bucket writes its objects to a local directory, and a row
+   * claiming `s3` for bytes sitting on one station's disk is a lie told to
+   * exactly the operator the fallback exists to serve.
+   */
+  get storageKind(): BundlePlacement["storageKind"] {
+    return this.usesS3 ? "s3" : "db";
+  }
+
   constructor(options: BundleArtifactStorageOptions = {}) {
     const env = options.env ?? process.env;
     this.bucket = (options.bucket ?? env[BUNDLE_BUCKET_ENV])?.trim() || undefined;
@@ -122,7 +134,7 @@ export class BundleArtifactStorage {
    * and therefore uncollectable).
    */
   placement(tenantId: string, bundleName: string, version: number): BundlePlacement {
-    return { storageKind: "s3", storageKey: this.versionKey(tenantId, bundleName, version, BUNDLE_ARCHIVE_FILE) };
+    return { storageKind: this.storageKind, storageKey: this.versionKey(tenantId, bundleName, version, BUNDLE_ARCHIVE_FILE) };
   }
 
   /** Write manifest, then archive, then the latest pointer. Order is load-bearing (see the class doc). */
@@ -143,7 +155,7 @@ export class BundleArtifactStorage {
       "application/json",
     );
     await this.store.put(archiveKey, archive, BUNDLE_ARCHIVE_CONTENT_TYPE);
-    return { storageKind: "s3", storageKey: archiveKey };
+    return { storageKind: this.storageKind, storageKey: archiveKey };
   }
 
   /**
