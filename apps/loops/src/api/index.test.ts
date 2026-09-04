@@ -5769,3 +5769,95 @@ describe("hosted run-now endpoint (1fb09589)", () => {
     expect(document.components.schemas.RunNowResponse).toBeDefined();
   });
 });
+describe("DELETE /v1/loops/{id}", () => {
+  test("removes an existing loop with 200; unknown, repeated, and malformed ids return 404; bad encodings never 500", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const createResponse = await fetch(apiUrl(server, "/v1/loops"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          name: "delete-route-loop",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "/bin/true" },
+        }),
+      });
+      expect(createResponse.status).toBe(201);
+      const created = (await createResponse.json()) as { loop: { id: string } };
+      const id = created.loop.id;
+
+      // Existing id -> 200 { ok: true, deleted: true } and the loop is gone.
+      const deleteResponse = await fetch(apiUrl(server, `/v1/loops/${id}`), { method: "DELETE" });
+      expect(deleteResponse.status).toBe(200);
+      expect(await deleteResponse.json()).toMatchObject({ ok: true, deleted: true });
+      const afterDelete = await fetch(apiUrl(server, `/v1/loops/${id}`));
+      expect(afterDelete.status).toBe(404);
+
+      // Unknown id -> 404 loop_not_found, never 500 (the api bundle and the
+      // storage bundle each carry their own CodedError copy, so this used to
+      // fall through instanceof matching into internal_error).
+      const unknown = await fetch(apiUrl(server, `/v1/loops/${"0".repeat(32)}`), { method: "DELETE" });
+      expect(unknown.status).toBe(404);
+      expect(await unknown.json()).toMatchObject({ ok: false, error: "loop_not_found" });
+
+      // Idempotent repeat after deletion -> 404, never 500.
+      const repeat = await fetch(apiUrl(server, `/v1/loops/${id}`), { method: "DELETE" });
+      expect(repeat.status).toBe(404);
+      expect(await repeat.json()).toMatchObject({ ok: false, error: "loop_not_found" });
+
+      // Malformed (name-like, never-held) id -> 404, never 500.
+      const malformed = await fetch(apiUrl(server, "/v1/loops/not-an-id"), { method: "DELETE" });
+      expect(malformed.status).toBe(404);
+      expect(await malformed.json()).toMatchObject({ ok: false, error: "loop_not_found" });
+
+      // Bad percent-encoding in the id -> 422 invalid_path_segment, never 500.
+      const badEncoding = await fetch(apiUrl(server, "/v1/loops/%zz"), { method: "DELETE" });
+      expect(badEncoding.status).toBe(422);
+      expect(await badEncoding.json()).toMatchObject({ ok: false, error: "invalid_path_segment" });
+
+      // Empty id segment -> 403 route policy missing (no policy matches
+      // /v1/loops/), never 500.
+      const emptySegment = await fetch(apiUrl(server, "/v1/loops/"), { method: "DELETE" });
+      expect(emptySegment.status).not.toBe(500);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("a loop deleted with the DELETE route is removed from list and cannot be archived afterwards", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const created = await fetch(apiUrl(server, "/v1/loops"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          name: "delete-then-archive",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "/bin/true" },
+        }),
+      });
+      const createdBody = (await created.json()) as { loop: { id: string; name: string } };
+
+      const deleteResponse = await fetch(apiUrl(server, `/v1/loops/${createdBody.loop.id}`), { method: "DELETE" });
+      expect(deleteResponse.status).toBe(200);
+
+      const listResponse = await fetch(apiUrl(server, "/v1/loops?includeArchived=true"));
+      const listed = (await listResponse.json()) as { loops: { id: string }[] };
+      expect(listed.loops.map((loop) => loop.id)).not.toContain(createdBody.loop.id);
+
+      const archive = await fetch(apiUrl(server, `/v1/loops/${createdBody.loop.id}/archive`), { method: "POST" });
+      expect(archive.status).toBe(404);
+      expect(await archive.json()).toMatchObject({ ok: false, error: "loop_not_found" });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+});

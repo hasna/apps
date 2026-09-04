@@ -49,6 +49,22 @@ describe("route authorization inventory", () => {
     expect(new Set(ROUTE_POLICIES.map((policy) => policy.operationId)).size).toBe(ROUTE_POLICIES.length);
   });
 
+  test("DELETE /v1/loops/{id} is a destructive admin-scoped route (loops.remove auth parity)", () => {
+    const policy = routePolicy("DELETE", "/v1/loops/sample-id");
+    expect(policy).toMatchObject({
+      operationId: "loops.delete",
+      pathTemplate: "/v1/loops/{id}",
+      scopes: ["loops:delete"],
+      roles: ["admin", "operator", "service"],
+      tokenKinds: ["api_key", "service"],
+      risk: "destructive",
+    });
+    expect(policy?.roles).not.toContain("member");
+    expect(policy?.roles).not.toContain("readonly");
+    expect(policy?.roles).not.toContain("worker");
+    expect(policy?.tokenKinds).not.toContain("machine");
+  });
+
   test("keeps the OpenAPI operation inventory and authorization metadata in parity", () => {
     const paths = openApi.paths as Record<string, Record<string, Record<string, unknown>>>;
     for (const policy of ROUTE_POLICIES) {
